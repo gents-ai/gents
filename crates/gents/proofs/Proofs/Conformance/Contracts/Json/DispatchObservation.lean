@@ -1,6 +1,7 @@
-import Proofs.CanonicalOutput.Execution.DispatchObservationCases
+import Proofs.Runtime.CanonicalOutput.Execution.DispatchObservationCases
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.RequestExecutionLease
+import Proofs.Conformance.Family
 
 namespace Conformance.DispatchObservationContracts
 
@@ -70,20 +71,30 @@ def caseJson (entry : String × List Input) : String :=
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
-def spawnedTargetCasesJson : String :=
-  jsonArray [
-    "{\"name\":\"spawn_process_target_policy_denied\"" ++
-    ",\"parent_tool\":" ++ jsonString "spawn_process" ++
-    ",\"completion_probe_outcome\":" ++ jsonString (Conformance.RequestExecutionLeaseContracts.outcomeName completionProbeOutcome) ++
-    ",\"expected\":" ++ (match afterSpawnedTargetRejection with
-      | none => "null"
-      | some rejection =>
-          "{\"failed\":" ++ jsonOptionalBool (some rejection.failed) ++
-          ",\"started\":" ++ jsonOptionalBool (some rejection.started) ++
-          ",\"failure_class\":" ++ failureClassJson rejection.failureClass ++
-          ",\"spawned_admitted\":" ++ jsonOptionalBool (some rejection.spawnedAdmitted) ++
-          ",\"completion_accepted\":" ++
-            jsonOptionalBool (some rejection.completionAccepted) ++ "}") ++ "}"]
+structure SpawnedTargetInput where
+  parentTool : String
+  completionProbeOutcome : String
+  deriving Lean.ToJson
+
+structure SpawnedTargetOutput where
+  failed : Bool
+  started : Bool
+  failureClass : Option String
+  spawnedAdmitted : Bool
+  completionAccepted : Bool
+  deriving Lean.ToJson
+
+/-- The parent `spawn_process` call is denied by its spawned target's policy
+before the spawned call is admitted; the request is then completed. -/
+@[conformance_family]
+def spawnedTarget : Family SpawnedTargetInput (Option SpawnedTargetOutput) where
+  inputs := [⟨"spawn_process",
+    Conformance.RequestExecutionLeaseContracts.outcomeName completionProbeOutcome⟩]
+  model := fun _ => afterSpawnedTargetRejection.map fun rejection =>
+    { failed := rejection.failed, started := rejection.started
+      failureClass := rejection.failureClass.map (·.toDefraDB)
+      spawnedAdmitted := rejection.spawnedAdmitted
+      completionAccepted := rejection.completionAccepted }
 
 example : afterSpawnedTargetRejection.isSome = true := by native_decide
 

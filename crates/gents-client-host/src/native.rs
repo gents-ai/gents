@@ -27,7 +27,33 @@ impl Drop for StartupChild {
     }
 }
 
+/// Automatic editor startup performs no system interaction. The editor spawns
+/// this helper without a user gesture, so a credential dialog raised here would
+/// appear with nothing on screen to explain or dismiss it, and on macOS a
+/// missing login keychain turns an ordinary lookup into a destructive system
+/// dialog. The prohibition is therefore a property of the process, not of each
+/// credential call site: anything this installation reaches for later fails
+/// with a status that the editor renders as the explicit unlock action.
+/// `--allow-keychain-prompts` is the only lift, and the editor passes it only
+/// for the local-history unlock the user asked for.
+fn automatic_startup_prevents_system_interaction(editor_store: bool, interactive: bool) -> bool {
+    editor_store && !interactive
+}
+
+/// The returned guard must live as long as the process serves or attaches; the
+/// policy it installs is process-wide, so dropping it early would re-admit
+/// dialogs for every later credential access.
+fn prevent_startup_system_interaction(
+    editor_store: bool,
+    interactive: bool,
+) -> Result<Option<gents_service::process_resources::KeychainPromptProhibition>> {
+    automatic_startup_prevents_system_interaction(editor_store, interactive)
+        .then(gents_service::process_resources::prevent_keychain_prompts_guard)
+        .transpose()
+}
+
 pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -> Result<()> {
+    let _system_interaction = prevent_startup_system_interaction(editor_store, interactive)?;
     let build = installation_build().await?;
     let provider = editor_store.then(|| {
         Arc::new(crate::editor_store::Provider::new(
@@ -91,6 +117,7 @@ pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -
 /// Windows named pipes cannot close only their write side. Stdio EOF must
 /// release both pipe handles so the installation can retire the attachment.
 pub async fn attach(paths: DesktopPaths, editor_store: bool, interactive: bool) -> Result<()> {
+    let _system_interaction = prevent_startup_system_interaction(editor_store, interactive)?;
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
@@ -150,7 +177,7 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
                 bail!(message);
             }
             retire_installation(&paths, &previous).await?;
-            gents::store::local::home::wait_for_store_release(paths.root(), paths.node_data_dir()).await?;
+            gents_store::local::home::wait_for_store_release(paths.root(), paths.node_data_dir()).await?;
             gents_protocol::client_installation::State {
                 phase: gents_protocol::client_installation::Phase::Released,
                 attachments: 0,
@@ -469,5 +496,61 @@ mod tests {
                 "an unidentified host must not be selected for retirement"
             );
         }
+    }
+
+    #[test]
+    fn only_an_editor_store_startup_without_an_unlock_prohibits_system_interaction() {
+        for (editor_store, interactive, expected) in [
+            (true, false, true),
+            (true, true, false),
+            (false, false, false),
+            (false, true, false),
+        ] {
+            assert_eq!(
+                automatic_startup_prevents_system_interaction(editor_store, interactive),
+                expected,
+                "editor_store={editor_store} interactive={interactive}"
+            );
+        }
+    }
+
+    /// Reads and writes only the process-global interaction policy, which opens
+    /// no Keychain and can raise no dialog. It runs in a re-executed child so
+    /// the policy change cannot reach this test process or a concurrent test.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_automatic_editor_startup_cannot_raise_a_system_dialog() {
+        const CHILD: &str = "GENTS_CLIENT_HOST_STARTUP_UI_POLICY_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            use security_framework::os::macos::keychain::SecKeychain;
+
+            assert!(SecKeychain::user_interaction_allowed().unwrap());
+            let prohibition = prevent_startup_system_interaction(true, false).unwrap();
+            assert!(prohibition.is_some());
+            assert!(!SecKeychain::user_interaction_allowed().unwrap());
+            drop(prohibition);
+            assert!(SecKeychain::user_interaction_allowed().unwrap());
+            for (editor_store, interactive) in [(true, true), (false, false), (false, true)] {
+                let lifted = prevent_startup_system_interaction(editor_store, interactive).unwrap();
+                assert!(lifted.is_none());
+                assert!(SecKeychain::user_interaction_allowed().unwrap());
+                drop(lifted);
+            }
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "native::tests::an_automatic_editor_startup_cannot_raise_a_system_dialog",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

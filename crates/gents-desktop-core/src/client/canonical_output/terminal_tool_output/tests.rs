@@ -81,7 +81,7 @@ fn completed_spawn_retains_output_and_bounds_the_display() {
         .unwrap()
         .unwrap();
     assert!(result.ends_with(" final output"));
-    assert!(result.len() <= gents::truncation::LIVE_STREAM_CAPACITY_BYTES);
+    assert!(result.len() <= gents_loop::truncation::LIVE_STREAM_CAPACITY_BYTES);
     assert!(result.contains("[Showing last"));
 }
 

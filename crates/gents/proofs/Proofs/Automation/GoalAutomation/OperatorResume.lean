@@ -1,0 +1,277 @@
+import Proofs.Automation.GoalAutomation
+
+/-! #1354: transaction-boundary refinement, not a new Goal status machine.
+`children` projects existing AgentRequest rows; no new durable registry.
+A binding represents the immutable semantic fingerprint prepared by the one
+existing goal-continuation RequestSpec builder, after authenticated ancestry
+validation. Readiness is deliberately absent: this slice is ready-backend only.
+-/
+namespace GoalAutomation.OperatorResume
+
+structure Binding where
+  goal : Nat
+  owner : String
+  session : String
+  predecessor : Nat
+  predecessorDoc : Nat
+  correlation : Option String
+  sourceDocument : Option String
+  triggerContext : Option String
+  workspaceFingerprint : Option String
+  /-- Abstract full signed-semantic fingerprint, excluding runtime mutations. -/
+  semanticFingerprint : String
+  child : Nat
+  sequence : Nat
+  deriving DecidableEq, Repr
+
+structure Snapshot where
+  goal : Goals.State
+  sequence : Nat
+  lastContinuedFrom : Option Nat
+  latestRequest : Nat
+  children : List Binding
+  tokensUsed : Nat
+  tokenBudget : Option Nat
+  deriving DecidableEq, Repr
+
+structure Request where
+  expectedStatus : Goals.Status
+  expectedSequence : Nat
+  /-- Results of authenticated owner/canonical parent checks in the transaction. -/
+  authorized : Bool
+  parentBelongsToGoal : Bool
+  terminalParent : Bool
+  sessionIdle : Bool
+  /-- Prepared from parent for fresh publication; on retry reconstructed only
+      after verifying the stored child signature and independent stable ancestry.
+      This is not caller-controlled payload or recomputed mutable Goal text. -/
+  binding : Binding
+  deriving DecidableEq, Repr
+
+inductive Outcome where
+  | denied | stale | illegal | conflict | rolledBack | deferred | invalidEvidence | unavailable
+  | created | recovered
+  deriving DecidableEq, Repr
+
+/-- The resume transaction commits a client-owned request before detached ACP
+grants. The creator completes a pending publication; completed markers do not
+replay grants after a later revocation. Detached relationship operations are
+not fenced by this marker: a previously started worker can race a revocation
+and restore a grant, as in the SessionChild native ACP premise. -/
+def publicationPending (pending authorized grantsComplete : Bool) : Bool :=
+  pending && !(authorized && grantsComplete)
+
+theorem completed_publication_is_not_reopened (authorized grantsComplete : Bool) :
+    publicationPending false authorized grantsComplete = false := by rfl
+
+theorem publication_waits_for_successful_grants (authorized : Bool) :
+    publicationPending true authorized false = true := by simp [publicationPending]
+
+def sameKey (a b : Binding) : Bool :=
+  a.goal == b.goal && a.predecessor == b.predecessor
+
+/-- One transaction publishes both Goal resume and its child. `commit=false`
+includes staging failure/discard; an acknowledgement lost AFTER commit is
+`commit=true` followed by retry against the resulting durable snapshot. -/
+def resume (s : Snapshot) (r : Request) (commit : Bool) : Snapshot × Outcome :=
+  if !r.authorized || !r.parentBelongsToGoal then (s, .denied)
+  else match s.children.find? (sameKey r.binding) with
+  | some existing => if existing = r.binding then (s, .recovered) else (s, .conflict)
+  | none =>
+      if s.goal.status ≠ r.expectedStatus || s.sequence != r.expectedSequence then (s, .stale)
+      else if !r.terminalParent || !r.sessionIdle || r.binding.predecessor != s.latestRequest || r.binding.sequence != s.sequence + 1 then
+        (s, .illegal)
+      else match Goals.step? s.goal .resume with
+      | none => (s, .illegal)
+      | some post =>
+          if commit then
+            ({ s with goal := post, sequence := s.sequence + 1, lastContinuedFrom := some r.binding.predecessor, latestRequest := r.binding.child, children := r.binding :: s.children }, .created)
+          else (s, .rolledBack)
+
+/-- Account-target resume validates the selected backend only when it must
+publish a new child. A prior canonical child remains an idempotent receipt even
+if its backend is later disabled. -/
+def resumeOn (s : Snapshot) (r : Request) (targetAvailable : Bool) (commit : Bool) :
+    Snapshot × Outcome :=
+  if !r.authorized || !r.parentBelongsToGoal ||
+      (s.children.find? (sameKey r.binding)).isSome then resume s r commit
+  else if targetAvailable then resume s r commit
+  else (s, .unavailable)
+
+theorem unavailable_target_cannot_publish (s : Snapshot) (r : Request) (commit : Bool)
+    (noReceipt : (s.children.find? (sameKey r.binding)).isNone)
+    (authorized : r.authorized = true) (parent : r.parentBelongsToGoal = true) :
+    resumeOn s r false commit = (s, .unavailable) := by
+  cases h : s.children.find? (sameKey r.binding) with
+  | none => simp [resumeOn, h, authorized, parent]
+  | some existing => simp [h] at noReceipt
+
+theorem target_change_does_not_block_existing_receipt
+    (s : Snapshot) (r : Request) (commit : Bool)
+    (hasReceipt : (s.children.find? (sameKey r.binding)).isSome) :
+    resumeOn s r false commit = resume s r commit := by
+  cases h : s.children.find? (sameKey r.binding) with
+  | none => simp [h] at hasReceipt
+  | some existing => simp [resumeOn, h]
+
+
+def controllerWrite (s : Snapshot) (expectedStatus : Goals.Status)
+    (expectedSequence : Nat) (action : Goals.Action) : Snapshot :=
+  if s.goal.status = expectedStatus ∧ s.sequence = expectedSequence then
+    match Goals.step? s.goal action with
+    | none => s
+    | some post => { s with goal := post }
+  else s
+
+theorem unauthorized_resume_is_noop (s : Snapshot) (r : Request)
+    (h : r.authorized = false) (commit : Bool) : resume s r commit = (s, .denied) := by
+  simp [resume, h]
+
+theorem discarded_resume_publishes_nothing (s : Snapshot) (r : Request) :
+    (resume s r false).1 = s := by
+  unfold resume
+  split
+  · rfl
+  · split
+    · split <;> rfl
+    · split
+      · rfl
+      · split
+        · rfl
+        · split <;> rfl
+
+theorem stale_controller_epoch_is_noop (s : Snapshot) (status : Goals.Status)
+    (sequence : Nat) (action : Goals.Action) (h : s.sequence ≠ sequence) :
+    controllerWrite s status sequence action = s := by
+  simp [controllerWrite, h]
+
+theorem resume_preserves_budget_and_usage (s : Snapshot) (r : Request) (commit : Bool) :
+    (resume s r commit).1.tokensUsed = s.tokensUsed ∧
+    (resume s r commit).1.tokenBudget = s.tokenBudget := by
+  unfold resume
+  split
+  · exact ⟨rfl, rfl⟩
+  · split
+    · split <;> exact ⟨rfl, rfl⟩
+    · split
+      · exact ⟨rfl, rfl⟩
+      · split
+        · exact ⟨rfl, rfl⟩
+        · split
+          · exact ⟨rfl, rfl⟩
+          · split <;> exact ⟨rfl, rfl⟩
+
+theorem recovered_is_noop (s : Snapshot) (r : Request) (commit : Bool)
+    (h : (resume s r commit).2 = .recovered) : (resume s r commit).1 = s := by
+  unfold resume at *
+  split at * <;> try simp_all
+  split at *
+  · split at * <;> try simp_all
+  · split at * <;> try simp_all
+    split at * <;> try simp_all
+    split at * <;> try simp_all
+    split at * <;> try simp_all
+
+theorem created_publishes_atomically (s : Snapshot) (r : Request) (commit : Bool)
+    (h : (resume s r commit).2 = .created) :
+    (resume s r commit).1.goal.status =
+      (if s.goal.wrapupRequested ∧ !s.goal.wrapupCompleted
+        then .budgetLimited else .active) ∧
+    (resume s r commit).1.children = r.binding :: s.children ∧
+    (resume s r commit).1.sequence = s.sequence + 1 ∧
+    (resume s r commit).1.lastContinuedFrom = some r.binding.predecessor ∧
+    (resume s r commit).1.latestRequest = r.binding.child := by
+  unfold resume at *
+  split at * <;> try simp_all
+  split at *
+  · split at * <;> try simp_all
+  · split at * <;> try simp_all
+    split at * <;> try simp_all
+    split at * <;> try simp_all
+    rename_i post hpost
+    split at * <;> try simp_all
+    unfold Goals.step? at hpost
+    split at hpost <;> try simp_all
+    exact congrArg Goals.State.status hpost.2.symm
+
+theorem successful_commit_retry_recovers_same_child (s : Snapshot) (r : Request)
+    (h : (resume s r true).2 = .created) :
+    resume (resume s r true).1 r true = ((resume s r true).1, .recovered) := by
+  have publication := created_publishes_atomically s r true h
+  have auth : r.authorized = true ∧ r.parentBelongsToGoal = true := by
+    unfold resume at h
+    split at h
+    · simp at h
+    · rename_i allowed
+      simpa using allowed
+  generalize hx : (resume s r true).1 = post at *
+  simp only [resume, auth.1, auth.2, Bool.not_true, Bool.false_or, Bool.false_eq_true,
+    ↓reduceIte, publication.2.1]
+  simp [List.find?, sameKey]
+
+def configMaySetStatus (current target : Goals.Status) : Bool :=
+  !(current != .active && target == .active)
+
+theorem config_cannot_reactivate (current : Goals.Status) (h : current ≠ .active) :
+    configMaySetStatus current .active = false := by
+  cases current <;> try simp_all [configMaySetStatus]
+
+theorem active_config_remains_allowed : configMaySetStatus .active .active = true := rfl
+
+def receiptStatus (result : Snapshot × Outcome) : Option Goals.Status :=
+  match result.2 with
+  | .created | .recovered => some result.1.goal.status
+  | _ => none
+
+theorem recovered_receipt_observes_current_status (s : Snapshot) (r : Request) (commit : Bool)
+    (h : (resume s r commit).2 = .recovered) :
+    receiptStatus (resume s r commit) = some s.goal.status := by
+  have same := recovered_is_noop s r commit h
+  simp [receiptStatus, h, same]
+
+theorem created_receipt_reports_resumed_status (s : Snapshot) (r : Request) (commit : Bool)
+    (h : (resume s r commit).2 = .created) :
+    receiptStatus (resume s r commit) =
+      some (if s.goal.wrapupRequested ∧ !s.goal.wrapupCompleted
+        then .budgetLimited else .active) := by
+  have resumed := (created_publishes_atomically s r commit h).1
+  simp [receiptStatus, h, resumed]
+
+/-- The profiles an account resume moves: the profile that hit the usage limit
+(by backend id) and the compaction profile, which a switch never moves. -/
+structure OperatorProfiles where
+  limited : String
+  compaction : Option String
+  deriving DecidableEq, Repr
+
+def switchLimited (p : OperatorProfiles) (target : String) : OperatorProfiles :=
+  { p with limited := target }
+
+/-- A switch is due exactly when no canonical receipt exists for the request:
+`resume_goal_on_account` returns an existing receipt before it touches a profile. -/
+def switchesProfile (s : Snapshot) (r : Request) : Bool :=
+  (s.children.find? (sameKey r.binding)).isNone
+
+def resumeOnProfiles (s : Snapshot) (p : OperatorProfiles) (r : Request) (target : String) :
+    OperatorProfiles :=
+  if switchesProfile s r then switchLimited p target else p
+
+/-- One account resume: the Goal transition and the profile move that precede it. -/
+def accountResume (s : Snapshot) (p : OperatorProfiles) (r : Request) (target : String) :
+    Snapshot × OperatorProfiles × Outcome :=
+  let (post, outcome) := resumeOn s r true true
+  (post, resumeOnProfiles s p r target, outcome)
+
+def operatorMove (p : OperatorProfiles) : Option String → OperatorProfiles
+  | none => p
+  | some backend => switchLimited p backend
+
+theorem canonical_receipt_moves_no_profile (s : Snapshot) (p : OperatorProfiles)
+    (r : Request) (target : String) (h : switchesProfile s r = false) :
+    resumeOnProfiles s p r target = p := by
+  simp [resumeOnProfiles, h]
+
+theorem switch_moves_only_the_limited_profile (p : OperatorProfiles) (target : String) :
+    (switchLimited p target).compaction = p.compaction := rfl
+
+end GoalAutomation.OperatorResume

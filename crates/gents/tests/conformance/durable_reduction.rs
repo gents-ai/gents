@@ -1,13 +1,12 @@
 use super::ReplayAssociations;
-use crate::lean_vocab_test::lean_durable_reduction_cases;
-use defra_node::Node as EmbeddedNode;
-use gents::inference::llm::message::{
-    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
-    UserContent,
-};
-use gents::turn::provider_context_reduction::{
+use crate::session::provider_context_reduction::{
     load_for_request, persist, reduction_key, rendered_capture_cites_reduction,
     NewProviderContextReduction,
+};
+use defra_node::Node as EmbeddedNode;
+use gents_inference::llm::message::{
+    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
+    UserContent,
 };
 use gents_protocol::rendered_request::{AssemblyBuildPath, AssemblyTrace, ProvenanceManifest};
 use gents_protocol::transcript::SourceBoundary;
@@ -78,49 +77,54 @@ fn provenance(scope: &str, messages: Vec<Message>, keys: Vec<String>) -> String 
 
 #[tokio::test]
 async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
-    use gents::NodeIdentity as _;
-    let cases = lean_durable_reduction_cases();
-    assert!(!cases.is_empty(), "Lean emitted no durable-reduction cases");
-
-    for case in cases {
+    use gents_store::identity::NodeIdentity as _;
+    for case in gents_lean_vocab::families::contract_cases_durable_reduction::cases() {
+        let name = case.input.name.clone();
+        let turn_index = usize::try_from(case.input.turn_index).unwrap();
+        let ordinal = usize::try_from(case.input.ordinal).unwrap();
         let directory = tempfile::tempdir().unwrap();
-        let identity =
-            gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+        let identity = gents_store::identity::KeyIdentity::load_or_create(
+            directory.path().join("node.key"),
+            None,
+        )
+        .unwrap();
         let node = std::sync::Arc::new(
             EmbeddedNode::builder()
-                .with_node_identity_did(gents::NodeIdentity::did(&identity))
+                .with_node_identity_did(gents_store::identity::NodeIdentity::did(&identity))
                 .build()
                 .await
                 .unwrap(),
         );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
-        let binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
-        let agent = gents::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+        gents_store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
+        let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
+        let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
         let agent_did = agent.did().to_owned();
         let signer = agent.managed_agent_signer().unwrap();
-        let access = gents::ConfigAccess::local_managed_agent(
+        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
             node.clone(),
             agent_did.parse().unwrap(),
             agent.as_ref(),
         )
         .unwrap();
-        access.write("test.reduction.session", &format!(r#"mutation {{ create_AgentSession(input: {{session_id: "session-11", node_did: "{}", agent_did: "{}", created_at: "2026-01-01T00:00:00Z"}}) {{ _docID }} }}"#, gents::store::graphql::escape_graphql_string(identity.did()), gents::store::graphql::escape_graphql_string(&agent_did))).await.unwrap();
-        let request_doc_id = format!("request-doc-{}", case.request_doc_id);
+        access.write("test.reduction.session", &format!(r#"mutation {{ create_AgentSession(input: {{session_id: "session-11", node_did: "{}", agent_did: "{}", created_at: "2026-01-01T00:00:00Z"}}) {{ _docID }} }}"#, gents_store::graphql::escape_graphql_string(identity.did()), gents_store::graphql::escape_graphql_string(&agent_did))).await.unwrap();
+        let request_doc_id = format!("request-doc-{}", case.input.request_doc_id);
         let key = reduction_key(
             identity.did(),
             "session-11",
             &request_doc_id,
-            case.turn_index,
-            case.ordinal,
+            turn_index,
+            ordinal,
         )
         .unwrap();
 
         let mut parent_key = None;
-        if case.ordinal > 1 {
-            assert_eq!(case.ordinal, 2, "test fixture only models one predecessor");
-            let predecessor_claim = case.claim_commit.saturating_sub(1);
+        if ordinal > 1 {
+            assert_eq!(ordinal, 2, "test fixture only models one predecessor");
+            let predecessor_claim = case.input.claim_commit.saturating_sub(1);
             let predecessor_boundary = boundary(&request_doc_id, predecessor_claim);
-            let predecessor_checkpoint = checkpoint(case.checkpoint.saturating_sub(1));
+            let predecessor_checkpoint = checkpoint(case.input.checkpoint.saturating_sub(1));
             let predecessor_associations =
                 unassociated(&[Message::user("older")], &predecessor_checkpoint);
             let predecessor = persist(
@@ -135,7 +139,7 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
                     request_doc_id: &request_doc_id,
                     request_commit_cid: &format!("claim-cid-{predecessor_claim}"),
                     reduction_index: 1,
-                    turn_index: case.turn_index.saturating_sub(1),
+                    turn_index: turn_index.saturating_sub(1),
                     parent_reduction_key: None,
                     producer_call: None,
                     source_boundary: &predecessor_boundary,
@@ -154,8 +158,11 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
         }
 
         let mut prior_doc_id = None;
-        if let Some(prior_checkpoint) = case.prior_checkpoint {
-            let prior_claim = case.prior_claim_commit.unwrap_or(case.claim_commit);
+        if let Some(prior_checkpoint) = case.input.prior_checkpoint {
+            let prior_claim = case
+                .input
+                .prior_claim_commit
+                .unwrap_or(case.input.claim_commit);
             let prior_messages = checkpoint(prior_checkpoint);
             let prior_boundary = boundary(&request_doc_id, prior_claim);
             let prior_associations = unassociated(&[Message::user("old")], &prior_messages);
@@ -170,8 +177,8 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
                     request_id: "request-11",
                     request_doc_id: &request_doc_id,
                     request_commit_cid: &format!("claim-cid-{prior_claim}"),
-                    reduction_index: case.ordinal,
-                    turn_index: case.turn_index,
+                    reduction_index: ordinal,
+                    turn_index,
                     parent_reduction_key: None,
                     producer_call: None,
                     source_boundary: &prior_boundary,
@@ -189,19 +196,19 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
             prior_doc_id = Some(row.doc_id);
         }
 
-        let intended_checkpoint = checkpoint(case.checkpoint);
-        let (prefix, suffix) = if case.pair_closed {
+        let intended_checkpoint = checkpoint(case.input.checkpoint);
+        let (prefix, suffix) = if case.input.pair_closed {
             (vec![Message::user("old")], intended_checkpoint.clone())
         } else {
             open_pair_projection()
         };
-        let intended_checkpoint = if case.pair_closed {
+        let intended_checkpoint = if case.input.pair_closed {
             intended_checkpoint
         } else {
             suffix.clone()
         };
-        let intended_boundary = boundary(&request_doc_id, case.claim_commit);
-        let request_commit_cid = format!("claim-cid-{}", case.claim_commit);
+        let intended_boundary = boundary(&request_doc_id, case.input.claim_commit);
+        let request_commit_cid = format!("claim-cid-{}", case.input.claim_commit);
         let associations = unassociated(&prefix, &suffix);
         let result = persist(
             &node,
@@ -214,8 +221,8 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
                 request_id: "request-11",
                 request_doc_id: &request_doc_id,
                 request_commit_cid: &request_commit_cid,
-                reduction_index: case.ordinal,
-                turn_index: case.turn_index,
+                reduction_index: ordinal,
+                turn_index,
                 parent_reduction_key: parent_key.as_deref(),
                 producer_call: None,
                 source_boundary: &intended_boundary,
@@ -230,27 +237,13 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
         )
         .await;
 
-        let rust_outcome = match &result {
+        let outcome = match &result {
             Ok(row) if prior_doc_id.as_deref() == Some(row.doc_id.as_str()) => "idempotent",
             Ok(_) => "fresh",
-            Err(error) if !case.pair_closed => {
-                assert!(
-                    error.to_string().contains("open tool-call/result pair"),
-                    "{}: pair_open must be the pair-closure creation precondition, not another failure",
-                    case.name
-                );
-                "pair_open"
-            }
-            Err(error) => {
-                assert!(
-                    error.to_string().contains("conflicting immutable facts"),
-                    "{}: expected immutable-fact conflict, got {error:#}",
-                    case.name
-                );
-                "conflict"
-            }
+            Err(error) if error.to_string().contains("open tool-call/result pair") => "pair_open",
+            Err(error) if error.to_string().contains("conflicting immutable facts") => "conflict",
+            Err(error) => panic!("{name}: persist failed outside its modeled refusals: {error:#}"),
         };
-        assert_eq!(rust_outcome, case.outcome, "{} outcome drifted", case.name);
 
         let loaded = load_for_request(&access, &request_doc_id).await.unwrap();
         let durable_after = loaded.iter().any(|row| {
@@ -258,48 +251,47 @@ async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
                 && row.request_commit_cid == request_commit_cid
                 && row.checkpoint_messages().unwrap() == intended_checkpoint
         });
-        assert_eq!(
-            durable_after, case.durable_after,
-            "{} durability drifted",
-            case.name
-        );
-        if !case.pair_closed {
+        if !case.input.pair_closed {
             assert!(
                 !loaded.iter().any(|row| row.reduction_key == key),
-                "{}: recovery may only restore projections from a pair-closed store",
-                case.name
+                "{name}: recovery may only restore projections from a pair-closed store"
             );
         }
 
         let cited_keys = |cites: bool| if cites { vec![key.clone()] } else { Vec::new() };
-        let inference_provenance = if case.inference_supported {
+        let inference_provenance = if case.input.inference_supported {
             provenance(
                 "inference.1",
                 intended_checkpoint.clone(),
-                cited_keys(case.inference_cites),
+                cited_keys(case.input.inference_cites),
             )
         } else {
             serde_json::json!({"manifest_version": 999}).to_string()
         };
         let inference = rendered_capture_cites_reduction(
             "inference.1",
-            i64::try_from(case.turn_index).unwrap(),
+            i64::try_from(turn_index).unwrap(),
             &inference_provenance,
-            i64::try_from(case.turn_index).unwrap(),
+            i64::try_from(turn_index).unwrap(),
             &key,
         );
         let title = rendered_capture_cites_reduction(
             "title.1",
-            i64::try_from(case.turn_index).unwrap(),
-            &provenance("title.1", intended_checkpoint, cited_keys(case.title_cites)),
-            i64::try_from(case.turn_index).unwrap(),
+            i64::try_from(turn_index).unwrap(),
+            &provenance(
+                "title.1",
+                intended_checkpoint,
+                cited_keys(case.input.title_cites),
+            ),
+            i64::try_from(turn_index).unwrap(),
             &key,
         );
-        assert_eq!(
-            inference || title,
-            case.consumed,
-            "{} consumption drifted",
-            case.name
+        case.check(
+            gents_lean_vocab::families::contract_cases_durable_reduction::DurableReductionOutput {
+                outcome: outcome.to_owned(),
+                durable_after,
+                consumed: inference || title,
+            },
         );
         node.shutdown().await.expect("node shutdown");
     }

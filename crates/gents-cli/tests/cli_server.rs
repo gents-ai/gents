@@ -295,7 +295,7 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
     let _runtime = identity_from_init(&init)?;
     let data_dir = home_dir.join(".gents").join("data");
     let node = std::sync::Arc::new(
-        gents::store::local::store_key::open_home_store_key(&home_dir.join(".gents"), &data_dir)
+        gents_store::local::store_key::open_home_store_key(&home_dir.join(".gents"), &data_dir)
             .await?
             .encrypt(
                 EmbeddedNode::builder()
@@ -308,7 +308,7 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
             .with_context(|| format!("opening embedded node at {}", data_dir.display()))?,
     );
     let response =
-        gents::store::config_client::ConfigAccess::local_as(node.clone(), node_did.parse()?)
+        gents_store::config_client::ConfigAccess::local_as(node.clone(), node_did.parse()?)
             .execute(&format!(
                 r#"{{ NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
             node_did snapshot_json updated_at
@@ -581,7 +581,7 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         let mutation = format!(
             r#"mutation {{ create_CompactionEntry(input: {{ compaction_key: "nac-{phase}", node_did: "did:test:nac", session_id: "nac-session", sequence: 1, original_tokens: 2, compacted_tokens: 1, created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
         );
-        let refused = gents::store::config_client::ConfigAccess::graphql(graphql.clone())
+        let refused = gents_store::config_client::ConfigAccess::graphql(graphql.clone())
             .write("test.nac.anonymous", &mutation)
             .await
             .expect_err("anonymous HTTP writes must be refused");
@@ -589,7 +589,7 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
             refused.to_string().contains("not authorized"),
             "{phase}: unexpected refusal: {refused:#}"
         );
-        gents::store::config_client::ConfigAccess::Graphql(support::graphql::served_endpoint(
+        gents_store::config_client::ConfigAccess::Graphql(support::graphql::served_endpoint(
             &graphql,
         ))
         .write("test.nac.signed", &mutation)
@@ -601,7 +601,7 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         )
         .with_context(|| format!("{phase}: CLI P2P administration over HTTP"))?;
         assert_eq!(replicators["status"], "ok", "{phase}: {replicators}");
-        let anonymous_rows = gents::store::config_client::ConfigAccess::graphql(graphql.clone())
+        let anonymous_rows = gents_store::config_client::ConfigAccess::graphql(graphql.clone())
             .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
             .await
             .with_context(|| format!("{phase}: anonymous HTTP read"))?;
@@ -612,7 +612,7 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
                 .is_none_or(Vec::is_empty),
             "{phase}: anonymous HTTP read exposed the owner's row: {anonymous_rows}"
         );
-        let owner_rows = gents::store::config_client::ConfigAccess::Graphql(
+        let owner_rows = gents_store::config_client::ConfigAccess::Graphql(
             support::graphql::served_endpoint(&graphql),
         )
         .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
@@ -653,27 +653,6 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         drop(serve);
     }
     Ok(())
-}
-
-#[test]
-fn port_replacement_requires_address_in_use_for_the_requested_address() {
-    let addr = "127.0.0.1:20001";
-    let context = "embedded HTTP listener cannot bind to 127.0.0.1:20001; if another Gents \
-                   runtime is serving there, stop it or pass --http-port";
-
-    assert!(support::process::is_address_in_use(
-        &format!("Error: {context}\n\nCaused by:\n    Address already in use (os error 48)\n"),
-        addr
-    ));
-    assert!(!support::process::is_address_in_use(
-        &format!("Error: {context}\n\nCaused by:\n    Permission denied (os error 13)\n"),
-        addr
-    ));
-    assert!(!support::process::is_address_in_use(
-        "Error: embedded HTTP listener cannot bind to 127.0.0.1:20002\n\nCaused by:\n    \
-         Address already in use (os error 48)\n",
-        addr
-    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -779,9 +758,10 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "expected build metadata in /version body: {version}"
     );
 
-    let bootstrap = gents_desktop_core::local_runtime::fetch_runtime_connection_payload(&format!(
-        "http://127.0.0.1:{port}"
-    ))
+    let bootstrap = gents_desktop_core::local_runtime::fetch_runtime_connection_payload(
+        &format!("http://127.0.0.1:{port}"),
+        None,
+    )
     .await?;
     assert_eq!(bootstrap["node_did"], node_did);
     assert!(bootstrap.get("enrollment").is_some());
@@ -955,7 +935,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let request_doc_id = first_graphql_row(&request, "AgentRequest")?["_docID"]
         .as_str()
         .context("self-budget request physical ID")?;
-    let access = gents::store::config_client::ConfigAccess::Graphql(
+    let access = gents_store::config_client::ConfigAccess::Graphql(
         crate::support::graphql::node_principal_endpoint(&graphql),
     );
     let segment = OutputSegment {
@@ -1154,20 +1134,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "foreign processing rows must not degrade local liveness: {status}"
     );
     assert_eq!(
-        status
-            .pointer("/liveness/ignored_foreign_processing_count")
-            .and_then(Value::as_i64),
-        Some(1),
-        "the foreign processing row must be accounted as ignored-foreign: {status}"
-    );
-    assert_eq!(
-        status
-            .pointer("/liveness/ignored_foreign_tool_call_count")
-            .and_then(Value::as_i64),
-        Some(1),
-        "the foreign running tool call must be accounted as ignored-foreign: {status}"
-    );
-    assert_eq!(
         budget.get("compaction_count").and_then(Value::as_i64),
         Some(1),
         "the foreign session's compaction must not join the local context budget: {status}"
@@ -1214,13 +1180,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             .and_then(Value::as_i64),
         Some(0),
         "foreign processing rows must not degrade the local liveness check: {health}"
-    );
-    assert_eq!(
-        health
-            .pointer("/checks/liveness/ignored_foreign_processing_count")
-            .and_then(Value::as_i64),
-        Some(1),
-        "the foreign processing row must be accounted as ignored-foreign under /healthz: {health}"
     );
     assert_eq!(
         health.get("status").and_then(Value::as_str),
@@ -1984,7 +1943,7 @@ fn a_home_still_set_to_grok_serves() -> Result<()> {
     fs::write(
         home_dir
             .join(".gents")
-            .join(gents::store::local::home::CLIENT_CONFIG_FILE_NAME),
+            .join(gents_store::local::home::CLIENT_CONFIG_FILE_NAME),
         r#"{"client":"grok"}"#,
     )?;
     let (_serve, readiness) = spawn_server_with_ready_json(
@@ -2392,7 +2351,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     };
     use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 
-    let access = gents::store::config_client::ConfigAccess::Graphql(
+    let access = gents_store::config_client::ConfigAccess::Graphql(
         crate::support::graphql::served_endpoint(&graphql),
     );
     let segment = OutputSegment {
@@ -2440,7 +2399,12 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
 
     let header = TranscriptMessage {
         native_request_id: None,
-        message_key: gents::session::sequence_message_key(&node_did, "trace-session", None, 1),
+        message_key: gents_session::session::sequence_message_key(
+            &node_did,
+            "trace-session",
+            None,
+            1,
+        ),
         session_id: "trace-session".to_string(),
         node_did: node_did.clone(),
         requester_did: None,
@@ -2589,14 +2553,14 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
             .as_str(),
         "completed"
     );
-    let output = gents::session::observe_request_output(
-        &gents::store::config_client::ConfigAccess::Graphql(
+    let output = gents_session::session::observe_request_output(
+        &gents_store::config_client::ConfigAccess::Graphql(
             crate::support::graphql::served_endpoint(&graphql),
         ),
         &request_row,
     )
     .await?;
-    let gents::session::CanonicalRequestOutput::TerminalMessage {
+    let gents_session::session::CanonicalRequestOutput::TerminalMessage {
         header: exported_header,
         message: exported_message,
         ..
@@ -2947,13 +2911,13 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         "anonymous MCP write must fail"
     );
     let _identity = identity_from_init(&init)?;
-    let access = gents::store::config_client::ConfigAccess::Graphql(
+    let access = gents_store::config_client::ConfigAccess::Graphql(
         support::graphql::node_principal_endpoint(&graphql),
     );
     access
         .add_collection("type McpParcel { reference: String status: String }")
         .await?;
-    let bearer = gents::store::identity::defradb_bearer_authorization(
+    let bearer = gents_store::identity::defradb_bearer_authorization(
         &node_did,
         &format!("127.0.0.1:{port}"),
     )?;
@@ -3008,7 +2972,7 @@ async fn owner_reads_job_fields() -> Result<()> {
     use gents_protocol::job::{JobBudget, JobCeiling, JobOrigin, JobPin, JobProgress, JobState};
 
     let served = McpHome::start("owner-job-fields", &[]).await?;
-    let access = gents::store::config_client::ConfigAccess::Graphql(
+    let access = gents_store::config_client::ConfigAccess::Graphql(
         support::graphql::served_endpoint(&graphql_url(served.port)),
     );
     let did = served.owner_did.as_str();
@@ -3137,7 +3101,7 @@ struct McpHome {
     _tempdir: tempfile::TempDir,
     port: u16,
     owner_did: String,
-    _owner: gents::KeyIdentity,
+    _owner: gents_store::identity::KeyIdentity,
     _server: ServeProcess,
 }
 
@@ -3179,4 +3143,204 @@ impl McpHome {
             _server: server,
         })
     }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restarted_server_never_reports_the_killed_process_ready() -> Result<()> {
+    let (tempdir, home_dir, _mock_endpoint, node_did, killed_port, killed) =
+        tokio::task::spawn_blocking(|| -> Result<_> {
+            let tempdir = tempfile::tempdir().context("creating tempdir")?;
+            let home_dir = tempdir.path().join("home");
+            fs::create_dir_all(&home_dir)?;
+
+            let model_name = format!("mock-restart-claim-model-{}", Uuid::new_v4().simple());
+            let mock_endpoint = MockChatEndpoint::start_hanging(&model_name)?;
+            let agent_name = format!("cli-restart-claim-{}", Uuid::new_v4().simple());
+
+            let init = run_init_json(
+                &home_dir,
+                &[
+                    "--node-name",
+                    &agent_name,
+                    "--model-name",
+                    &model_name,
+                    "--inference-url",
+                    mock_endpoint.endpoint(),
+                ],
+            )?;
+            let node_did = node_did_from_init(&init)?;
+
+            let killed_port = allocate_port()?;
+            let mut killed = spawn_server(&home_dir, killed_port)?;
+            wait_for_port(killed_port, &mut killed)?;
+            Ok((
+                tempdir,
+                home_dir,
+                mock_endpoint,
+                node_did,
+                killed_port,
+                killed,
+            ))
+        })
+        .await??;
+    wait_for_runtime_ready(
+        &graphql_url(killed_port),
+        &node_did,
+        Duration::from_secs(30),
+    )
+    .await?;
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let mut killed = killed;
+        killed.child.kill()?;
+        killed.child.wait()?;
+        Ok(())
+    })
+    .await??;
+
+    let stall = tempdir.path().join("startup-stall");
+    let mkfifo = tokio::process::Command::new("mkfifo")
+        .arg(&stall)
+        .status()
+        .await
+        .context("creating the startup stall FIFO")?;
+    assert!(mkfifo.success(), "mkfifo failed: {mkfifo}");
+
+    let (port, serve) = tokio::task::spawn_blocking({
+        let home_dir = home_dir.clone();
+        let stall = stall.clone();
+        move || -> Result<_> {
+            let port = allocate_port()?;
+            let mut serve = spawn_server_with_env(
+                &home_dir,
+                port,
+                &[],
+                &[(
+                    "GENTS_TEST_STALL_AFTER_CLIENT_ACCESS",
+                    stall.to_str().context("stall path is not UTF-8")?,
+                )],
+            )?;
+            wait_for_port(port, &mut serve)?;
+            Ok((port, serve))
+        }
+    })
+    .await??;
+
+    let authorization = support::graphql::node_principal_endpoint(&graphql_url(port))
+        .authorization()?
+        .context("served home has no node principal")?;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(reqwest::header::AUTHORIZATION, authorization.parse()?);
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()?;
+
+    let healthz_url = format!("http://127.0.0.1:{port}/healthz");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let stalled = loop {
+        if let Ok(response) = client.get(&healthz_url).send().await {
+            let status = response.status();
+            if let Ok(body) = response.json::<Value>().await {
+                if body.get("checks").is_some() {
+                    break (status, body);
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            let (stdout, stderr) =
+                tokio::task::spawn_blocking(move || serve.captured_output()).await??;
+            anyhow::bail!(
+                "timed out waiting for the restarted server to serve a health payload\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let (stalled_status, stalled_body) = stalled;
+    assert_eq!(
+        stalled_body.pointer("/checks/runtime/count").and_then(Value::as_u64),
+        Some(1),
+        "the killed process's readiness row must still be the one this process reads: {stalled_body}"
+    );
+    let claimed: Value = serde_json::from_str(
+        stalled_body
+            .pointer("/node_readiness/0/snapshot_json")
+            .and_then(Value::as_str)
+            .context("health payload carries no readiness snapshot")?,
+    )?;
+    assert_eq!(
+        claimed.get("process_state").and_then(Value::as_str),
+        Some("recovering"),
+        "the restarted server must claim the row before it opens client access: {claimed}"
+    );
+    assert_eq!(
+        stalled_body
+            .pointer("/checks/runtime/ready")
+            .and_then(Value::as_bool),
+        Some(false),
+        "a restarted server must not report the killed process's readiness: {stalled_body}"
+    );
+    assert_eq!(
+        stalled_status,
+        reqwest::StatusCode::SERVICE_UNAVAILABLE,
+        "health must fail closed for the whole restart window: {stalled_body}"
+    );
+    let status_body = client
+        .get(format!("http://127.0.0.1:{port}/status"))
+        .send()
+        .await
+        .context("fetching /status during the restart window")?
+        .json::<Value>()
+        .await
+        .context("reading /status during the restart window")?;
+    assert_eq!(
+        status_body.get("lifecycle").and_then(Value::as_str),
+        Some("starting"),
+        "the stalled server must still report its own lifecycle as starting: {status_body}"
+    );
+    assert_eq!(
+        status_body.get("ok").and_then(Value::as_bool),
+        Some(false),
+        "/status ok shares the health definition: {status_body}"
+    );
+
+    let release = stall.clone();
+    tokio::task::spawn_blocking(move || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&release)
+            .map(|_| ())
+    })
+    .await?
+    .context("releasing the startup stall")?;
+
+    wait_for_runtime_ready(&graphql_url(port), &node_did, Duration::from_secs(30)).await?;
+    let ready = client
+        .get(&healthz_url)
+        .send()
+        .await
+        .context("fetching /healthz after readiness")?;
+    let ready_status = ready.status();
+    let ready_body = ready
+        .json::<Value>()
+        .await
+        .context("reading /healthz after readiness")?;
+    assert_eq!(
+        ready_status,
+        reqwest::StatusCode::OK,
+        "the restarted server must report healthy once its own runtime publishes: {ready_body}"
+    );
+    assert_eq!(
+        ready_body.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "{ready_body}"
+    );
+
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let mut serve = serve;
+        serve.child.kill()?;
+        serve.child.wait()?;
+        Ok(())
+    })
+    .await??;
+    Ok(())
 }

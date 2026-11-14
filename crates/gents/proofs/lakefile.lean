@@ -28,11 +28,11 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.PackInstallUpgrade,
   `Proofs.Conformance.PluginDelete,
   `Proofs.Conformance.ClientOptimisticSend,
+  `Proofs.Conformance.JobRead,
   `Proofs.Conformance.GoalClientDelivery,
   `Proofs.Conformance.ClientVoice,
   `Proofs.Conformance.EditorUndo,
   `Proofs.Conformance.EditorUndoCheckpoint,
-  `Proofs.Conformance.ClientDataPublication,
   `Proofs.Conformance.ObserverResync,
   `Proofs.Conformance.ClientWindowScope,
   `Proofs.Conformance.ClientRequestCacheIdentity,
@@ -41,25 +41,27 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.ClientPresentationAgreement,
   `Proofs.Conformance.ClientInterruptControl,
   `Proofs.Conformance.DesktopShellSecurity,
+  `Proofs.Conformance.ConnectThisDesktopScreen,
   `Proofs.Conformance.ClientPackWatch,
   `Proofs.Conformance.ClientAuthorityRestart,
-  `Proofs.Conformance.StorageWriteGate,
-  `Proofs.Conformance.StorageWriteGateAdmission,
-  `Proofs.Conformance.NativeCompletion,
-  `Proofs.Conformance.NativeClaimLifetime,
   `Proofs.Conformance.EvalRequestOutcome,
   `Proofs.Conformance.ToolArgumentFailure,
   `Proofs.Conformance.ParallelToolBatch,
   `Proofs.Conformance.ConfigurationAffected,
   `Proofs.Conformance.ResponsesTermination,
-  `Proofs.Conformance.NativeSpawn,
-  `Proofs.Conformance.StorageWriteGateStreamWaiter]
+  `Proofs.Conformance.NativeSpawn]
 
 @[default_target]
 target importClosure pkg : Unit := Job.async do
   proc { cmd := "python3", args := #[
     (pkg.dir / "../../../.github/scripts/check-lean-import-closure.py").toString,
     pkg.dir.toString] ++ proofRoots.map toString }
+
+@[default_target]
+target importLayers pkg : Unit := Job.async do
+  proc { cmd := "python3", args := #[
+    (pkg.dir / "../../../.github/scripts/check-lean-import-layers.py").toString,
+    pkg.dir.toString] }
 
 @[default_target]
 target canonicalOutputMap pkg : Unit := Job.async do

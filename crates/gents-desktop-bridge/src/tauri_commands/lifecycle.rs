@@ -122,6 +122,29 @@ where
         );
         return Err(error);
     }
+    // A remote-only desktop runs no repair, so its start sets aside another
+    // version's store too. Any other probe failure is left to the start,
+    // which reports it typed.
+    let repair_note = {
+        use super::managed_server::repair::{
+            client_store_is_from_other_version, set_aside_other_version_client_store,
+        };
+        let _lifecycle = state.managed_server_lifecycle.lock().await;
+        match client_store_is_from_other_version(&state).await {
+            Ok(false) => None,
+            Ok(true) => match set_aside_other_version_client_store(&state).await {
+                Ok(note) => Some(note),
+                Err(error) => {
+                    tracing::warn!(error = %error.message, "could not set aside another version's client store");
+                    None
+                }
+            },
+            Err(error) => {
+                tracing::warn!(error = %format!("{error:#}"), "could not check the client store's version");
+                None
+            }
+        }
+    };
 
     let progress_rx = claim_or_join_client_start(&app, &state);
 
@@ -136,9 +159,11 @@ where
 
     super::managed_server::pairing::start_running_managed_pairing(&state, Arc::clone(&core)).await;
 
-    build_client_snapshot_with_grants(Some(&core), &state.policy, grants)
+    let mut snapshot = build_client_snapshot_with_grants(Some(&core), &state.policy, grants)
         .await
-        .map_err(BridgeError::untyped)
+        .map_err(BridgeError::untyped)?;
+    snapshot.repair_note = repair_note;
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -251,6 +276,36 @@ where
         });
     }
     Ok(())
+}
+
+const NODE_RECONNECT_ANSWER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[tauri::command]
+pub async fn desktop_node_reconnect(
+    state: State<'_, DesktopAppState>,
+    node_did: Option<String>,
+) -> Result<Option<String>, BridgeError> {
+    let core = current_core(&state).ok_or_else(|| {
+        BridgeError::new(
+            BridgeErrorCode::ClientNotRunning,
+            "desktop client not initialized",
+        )
+    })?;
+    let Some(node_did) = node_did
+        .map(|did| did.trim().to_owned())
+        .filter(|did| !did.is_empty())
+    else {
+        core.request_runtime_reconnect(None).await;
+        return Ok(None);
+    };
+    Ok(tokio::time::timeout(
+        NODE_RECONNECT_ANSWER_TIMEOUT,
+        core.reconnect_runtime_now(&node_did),
+    )
+    .await
+    .ok()
+    .flatten()
+    .map(|status| status.as_str().to_owned()))
 }
 
 #[derive(serde::Serialize, ts_rs::TS)]

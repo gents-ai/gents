@@ -22,9 +22,16 @@ import {
   NOTIFY_RATE_WINDOW,
   type PluginNotifyDeps,
   speaksHere,
+  turnOnOffer,
 } from "@/lib/notify/plugins";
 import { pluginWindowLabel } from "../src/lib/nativeShell";
-import { clickRouter, type Notice, type NotifyPlatform } from "@/lib/notify/platform";
+import {
+  clickRouter,
+  notifyPlatform,
+  SYSTEM_BLOCKED,
+  type Notice,
+  type NotifyPlatform,
+} from "@/lib/notify/platform";
 import { createTeller } from "@/lib/notify/watch";
 import {
   bindNav,
@@ -131,12 +138,14 @@ describe("the owner of plugins' notifications", () => {
   let enabled: boolean;
   let speaks: boolean;
   let focused: boolean;
+  let blocked: boolean;
   let switched: Set<string>;
   let now: number;
   let told: (Notice & { to: Route })[];
   let shownInApp: { notice: Notice; open: () => void }[];
   let opened: Route[];
   let offered: string[] = [];
+  let offeredBlocked: boolean[] = [];
 
   const notifier = () =>
     createPluginNotifier({
@@ -144,23 +153,29 @@ describe("the owner of plugins' notifications", () => {
       speaks: () => speaks,
       switchedOn: (key, kind) => switched.has(`${key} ${kind}`),
       focused: () => focused,
+      blocked: async () => blocked,
       now: () => now,
       tell: (notice) => void told.push(notice),
       show: (notice, open) => void shownInApp.push({ notice, open }),
       open: (to) => void opened.push(to),
-      offer: (_caller, { kind }) => void offered.push(kind),
+      offer: (_caller, { kind }, isBlocked) => {
+        offered.push(kind);
+        offeredBlocked.push(isBlocked);
+      },
     } satisfies PluginNotifyDeps);
 
   beforeEach(() => {
     enabled = true;
     speaks = true;
     focused = false;
+    blocked = false;
     switched = new Set(["acme/kit/board task-assigned"]);
     now = 0;
     told = [];
     shownInApp = [];
     opened = [];
     offered = [];
+    offeredBlocked = [];
   });
 
   it("tells a switched-on kind, from its pack, with a click that opens the plugin's page", async () => {
@@ -295,6 +310,36 @@ describe("the owner of plugins' notifications", () => {
     expect(shownInApp.map((s) => s.notice)).toEqual([{ title: "acme/kit: x" }]);
     shownInApp[0]!.open();
     expect(opened).toEqual([{ name: "plugin", pluginId: "board", path: "tasks/4" }]);
+  });
+
+  it("resolves with where it went, and with the system's block instead of telling it", async () => {
+    const notify = notifier();
+    const ask = () => notify(BOARD, { kind: "task-assigned", title: "x" });
+    expect(await ask()).toEqual({ status: "sent", via: "system" });
+    blocked = true;
+    expect(await ask()).toEqual({ status: "blocked" });
+    expect(told).toHaveLength(1);
+    /* in front, the app shows it itself, whatever the system says */
+    focused = true;
+    expect(await ask()).toEqual({ status: "sent", via: "app" });
+    expect(shownInApp).toHaveLength(1);
+  });
+
+  it("says in its offer to turn a kind on when the system blocks notifications too", async () => {
+    switched = new Set();
+    blocked = true;
+    await expect(
+      notifier()(BOARD, { kind: "task-assigned", title: "x" }),
+    ).rejects.toThrow(/are off/);
+    expect(offeredBlocked).toEqual([true]);
+    const kind = BOARD.kinds[0]!;
+    expect(turnOnOffer(BOARD, kind, false)).toEqual({
+      title: "acme/kit wants to notify you about “Task assigned”",
+      description: "These are off until you turn them on.",
+    });
+    expect(turnOnOffer(BOARD, kind, true).description).toBe(
+      `These are off until you turn them on. ${SYSTEM_BLOCKED}`,
+    );
   });
 });
 
@@ -450,6 +495,7 @@ describe("a plugin that notifies, in its frame", () => {
       asked.push({ caller, request });
       if ((request as { kind?: string }).kind !== "task-assigned")
         throw new Error("board: ctx.notify: not declared");
+      return { status: "blocked" };
     },
   };
 
@@ -462,6 +508,7 @@ export default {
   register(ctx) {
     ctx.register({ id: 'page', area: PLUGIN_PAGE_AREA, render: () => null })
     ctx.notify({ kind: 'task-assigned', title: 'New task', target: 'tasks/4' })
+      .then((outcome) => ctx.storage.set('outcome', outcome))
       .then(() => ctx.notify({ kind: 'deploy', title: 'x' }))
       .then(() => ctx.storage.set('told', 'all'), (e) => ctx.storage.set('told', e.message))
   },
@@ -495,7 +542,7 @@ export default {
     vi.restoreAllMocks();
   });
 
-  it("asks under its pack's listing with its declared kinds, and hears each refusal", async () => {
+  it("asks under its pack's listing with its declared kinds, and hears each outcome and refusal", async () => {
     expect(
       await load(module(`[{ kind: 'task-assigned', label: 'Task assigned' }]`)),
     ).toBe("board");
@@ -518,6 +565,9 @@ export default {
     ]);
     expect(window.localStorage.getItem("gents.ux.board.told")).toBe(
       '"board: ctx.notify: not declared"',
+    );
+    expect(window.localStorage.getItem("gents.ux.board.outcome")).toBe(
+      '{"status":"blocked"}',
     );
   });
 
@@ -574,6 +624,29 @@ describe("the switches for plugins' notifications", () => {
     expect(pluginNotifyOn("other/kit/board", "task-assigned")).toBe(false);
     act(() => preferences.setPluginNotify("acme/kit/board", "task-assigned", false));
     expect(screen.getByRole("switch", { name: "Task assigned" })).not.toBeChecked();
+  });
+
+  it("say beside them when the system blocks the app's notifications", async () => {
+    withFlags({ notifications: true, "pack-notifications": true });
+    const { NotificationsGroup } =
+      await import("../src/ui/screens/settings/NotificationsGroup");
+    const permission = vi
+      .spyOn(notifyPlatform, "permission")
+      .mockResolvedValue("denied");
+    const view = render(<NotificationsGroup />);
+    expect(await screen.findByText("Blocked by the system")).toBeInTheDocument();
+    /* on the app's own row, and again beside the packs' kinds */
+    expect(screen.getAllByText(SYSTEM_BLOCKED)).toHaveLength(2);
+    view.unmount();
+    permission.mockResolvedValue("granted");
+    render(<NotificationsGroup />);
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Send a test notification" }),
+      ).toBeEnabled(),
+    );
+    expect(screen.queryByText("Blocked by the system")).toBeNull();
+    vi.restoreAllMocks();
   });
 
   it("stay hidden until notifications from packs are on", async () => {

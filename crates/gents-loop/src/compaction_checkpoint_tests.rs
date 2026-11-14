@@ -120,13 +120,14 @@ fn collect_texts(value: &Value, texts: &mut Vec<String>) {
 }
 
 async fn exercise(reject_guidance: bool) {
-    let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let case = contract["checkpoint_fallback_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["name"] == "scalar_current_work")
-        .unwrap();
+    let fallback = json!({
+        "goal": "Finish the user's task",
+        "current_work": "The last action and its exact result: café ✓",
+        "next_actions": ["Run the pending check"],
+    })
+    .to_string();
+    let canonical =
+        serde_json::to_value(summary::parse_fallback_checkpoint(&fallback).unwrap()).unwrap();
     for kind in [
         BackendProviderKind::ClaudeCliSubscription,
         BackendProviderKind::AnthropicApiKey,
@@ -134,8 +135,8 @@ async fn exercise(reject_guidance: bool) {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let model = ClaudeCheckpointModel {
             reject_guidance,
-            canonical: case["expected"].clone(),
-            fallback: case["raw"].as_str().unwrap().into(),
+            canonical: canonical.clone(),
+            fallback: fallback.clone(),
             requests: requests.clone(),
         };
         let mut config = crate::end_to_end_test::test_loop_config();
@@ -173,10 +174,10 @@ async fn exercise(reject_guidance: bool) {
         let reduced = result.exact_reduction().unwrap();
         assert!(reduced
             .checkpoint
-            .contains(case["expected"]["current_work"][0].as_str().unwrap()));
+            .contains(canonical["current_work"][0].as_str().unwrap()));
         assert!(reduced
             .checkpoint
-            .contains(case["expected"]["next_actions"][0].as_str().unwrap()));
+            .contains(canonical["next_actions"][0].as_str().unwrap()));
         let requests = requests.lock().unwrap();
         assert!(!requests.is_empty());
         assert_eq!(

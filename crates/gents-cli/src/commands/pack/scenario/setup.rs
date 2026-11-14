@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-use super::super::cli_process::path_arg;
 use super::super::server::spawn_server_with_args_and_env;
 use super::manifest::{PackSeed, ScenarioManifest};
 use super::validate::tool_package_needs_root;
-use gents::store::graphql::validate_collection_identifier;
+use gents_host::cli_process::path_arg;
+use gents_store::graphql::validate_collection_identifier;
 
 pub(super) struct DependencyInstall<'a> {
     pub(super) bin: &'a Path,
@@ -45,12 +45,13 @@ pub(super) async fn install_dependencies(
             args.push("--grant-authority".to_owned());
         }
         let dependency_pack =
-            super::super::resolve_pack_source(package, ctx.registry, ctx.home).await?;
+            gents_pack::pack::resolved_pack::resolve_pack_source(package, ctx.registry, ctx.home)
+                .await?;
         for slot in &dependency_pack.manifest().metadata.inference_slots {
             args.push("--inference-slot".to_owned());
             args.push(format!("{}={}", slot.name, ctx.inference_profile_id));
         }
-        super::super::cli_process::run_cli_json_with_env(
+        gents_host::cli_process::run_cli_json_with_env(
             ctx.bin,
             &args,
             environments.get(package).cloned().unwrap_or_default(),
@@ -63,10 +64,10 @@ pub(super) async fn install_dependencies(
 }
 
 pub(super) fn pre_store_with_packs(home: &Path, with_pack: &[PathBuf]) -> Result<()> {
-    let store = gents::pack::store::PackStore::new(home);
+    let store = gents_pack::pack::store::PackStore::new(home);
     for path in with_pack {
         if path.is_dir() {
-            let (bytes, header) = gents::pack::archive::pack_dir(path)
+            let (bytes, header) = gents_pack::pack::archive::pack_dir(path)
                 .with_context(|| format!("packing {}", path.display()))?;
             store.import(bytes.as_slice(), Some(&header.digest))?;
         } else {
@@ -120,10 +121,10 @@ pub(super) fn resolve_pack_tool_root(
 
 pub(super) fn seed_mutation(seed: &PackSeed, job_id: &str, prompt: &str) -> Result<String> {
     validate_collection_identifier(&seed.collection)?;
-    gents::store::graphql::validate_graphql_name(&seed.job_id_field)?;
-    gents::store::graphql::validate_graphql_name(&seed.prompt_field)?;
+    gents_store::graphql::validate_graphql_name(&seed.job_id_field)?;
+    gents_store::graphql::validate_graphql_name(&seed.prompt_field)?;
     for key in seed.fields.keys() {
-        gents::store::graphql::validate_graphql_name(key)?;
+        gents_store::graphql::validate_graphql_name(key)?;
     }
     let mut fields: serde_json::Map<String, serde_json::Value> = seed
         .fields
@@ -225,7 +226,7 @@ pub(super) fn allow_scenario_folders(
     pack: &Path,
     manifest: &ScenarioManifest,
     home: &Path,
-) -> Result<Vec<gents::plugin::allowed::AllowedDir>> {
+) -> Result<Vec<gents_pack::plugin::allowed::AllowedDir>> {
     if manifest.allowed_folders.is_empty() {
         return Ok(Vec::new());
     }
@@ -271,7 +272,7 @@ pub(super) fn allow_scenario_folders(
             if !inside(&canonical) {
                 return Err(outside(&canonical));
             }
-            gents::plugin::allowed::add(home, &canonical, folder.access)
+            gents_pack::plugin::allowed::add(home, &canonical, folder.access)
         })
         .collect()
 }
@@ -298,14 +299,14 @@ pub(super) fn spawn_server_with_pack(
 
 pub(super) fn stage_scenario_pack(
     pack: &Path,
-    distribution: &gents::pack::PackManifest,
+    distribution: &gents_pack::pack::PackManifest,
     node_did: &str,
     inference_profile_id: &str,
     initialized_default_agent_did: &str,
 ) -> Result<tempfile::TempDir> {
     let staged = tempfile::tempdir().context("staging authored scenario pack")?;
-    for path in
-        std::iter::once("manifest.json".to_owned()).chain(gents::pack::declared_paths(distribution))
+    for path in std::iter::once("manifest.json".to_owned())
+        .chain(gents_pack::pack::declared_paths(distribution))
     {
         let destination = staged.path().join(&path);
         std::fs::create_dir_all(destination.parent().context("scenario asset parent")?)?;
@@ -316,9 +317,9 @@ pub(super) fn stage_scenario_pack(
         .config
         .as_deref()
         .context("scenario pack requires configuration")?;
-    let authored = gents::pack::load_pack_authoring_config(
+    let authored = gents_pack::pack::load_pack_authoring_config(
         distribution,
-        &gents::pack::PackInstallOptions {
+        &gents_pack::pack::PackInstallOptions {
             node_did: node_did.to_owned(),
         },
         &|path| Ok(std::fs::read(pack.join(path))?),

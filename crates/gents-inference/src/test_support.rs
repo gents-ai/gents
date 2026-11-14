@@ -1,0 +1,205 @@
+pub mod embedded;
+pub use embedded::{
+    signed_test_node, signed_test_node_from_db, signed_test_node_without_agent,
+    signed_test_node_without_agent_from_db, test_db, test_db_as, test_db_at,
+    test_db_with_tool_policy, TestDb,
+};
+
+use gents_documents::test_support::{
+    ensure_test_node, set_test_default_agent_as, test_agent_documents,
+};
+use gents_store::test_support::held_runtime_identity;
+
+pub async fn capture_scripted_provider_request(
+    request: &rig::completion::CompletionRequest,
+    model: &str,
+) -> Result<(), rig::completion::CompletionError> {
+    use rig::http_client::HttpClientExt;
+    let body = rig::providers::openai::completion::CompletionRequest::try_from((
+        model.to_string(),
+        request.clone(),
+    ))
+    .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
+    let mut body = serde_json::to_value(body)
+        .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
+    body["stream"] = serde_json::Value::Bool(true);
+    body["stream_options"] = serde_json::json!({ "include_usage": true });
+    let inner = crate::rendered_request::transport::CountingInner::default();
+    let transport =
+        crate::rendered_request::transport::RenderedRequestCapturingHttpClient::new(inner.clone());
+    let outbound = rig::http_client::Request::builder()
+        .method("POST")
+        .uri("https://scripted-provider.invalid/v1/chat/completions")
+        .header("content-type", "application/json")
+        .body(bytes::Bytes::from(serde_json::to_vec(&body).map_err(
+            |error| rig::completion::CompletionError::ProviderError(error.to_string()),
+        )?))
+        .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
+    transport
+        .send_streaming(outbound)
+        .await
+        .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
+    assert_eq!(
+        inner.send_count(),
+        1,
+        "capture must authorize scripted provider send"
+    );
+    Ok(())
+}
+
+pub async fn ensure_test_default_agent(
+    node: &std::sync::Arc<defra_node::Node>,
+    owner: &str,
+) -> gents_protocol::agent_identity::AgentIdentityBinding {
+    ensure_test_node(node, owner).await;
+    if let Some(did) = gents_documents::load_default_agent_did(node, owner)
+        .await
+        .unwrap()
+    {
+        let agent = gents_documents::load_agent(node, owner, &did)
+            .await
+            .unwrap()
+            .expect("fixture default agent exists");
+        return gents_protocol::agent_identity::AgentIdentityBinding {
+            agent_did: agent.agent_did,
+            creation_nonce: agent.creation_nonce,
+        };
+    }
+    let binding = install_test_agent(node, owner, "Default fixture agent").await;
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(owner).unwrap(),
+    );
+    set_test_default_agent_as(&access, owner, &binding.agent_did).await;
+    binding
+}
+
+pub async fn install_test_agent(
+    node: &std::sync::Arc<defra_node::Node>,
+    owner: &str,
+    display_name: &str,
+) -> gents_protocol::agent_identity::AgentIdentityBinding {
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity");
+    let root = held_runtime_identity(node_did);
+    let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
+    install_test_agent_binding(node, owner, display_name, &binding).await;
+    binding
+}
+
+pub async fn install_test_agent_binding(
+    node: &std::sync::Arc<defra_node::Node>,
+    owner: &str,
+    display_name: &str,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    ensure_test_node(node, owner).await;
+    let actor = node
+        .node_identity_did()
+        .expect("fixture node has an identity");
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(actor).unwrap(),
+    );
+    install_test_agent_binding_with_access(owner, display_name, binding, &access).await;
+}
+
+pub async fn install_test_agent_binding_with_access(
+    owner: &str,
+    display_name: &str,
+    binding: &gents_protocol::agent_identity::AgentIdentityBinding,
+    access: &gents_store::config_client::ConfigAccess,
+) {
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    let documents = test_agent_documents(owner, display_name, binding)
+        .into_iter()
+        .map(|(collection, value)| DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        })
+        .collect();
+    let plan = DesiredStateApplyPlan::new(documents).unwrap();
+    access
+        .transact_write("test.install_agent", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    let backend = format!("{}:backend", binding.agent_did);
+    crate::backends::registry::set_backend_probe_status_as(access, owner, &backend, "healthy")
+        .await
+        .unwrap();
+}
+
+/// A static-configuration agent over `identity`, with the owner's defaults.
+/// `binding` fixes the agent identity; absent, one is provisioned.
+pub fn resolved_agent(
+    identity: std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
+    binding: Option<gents_protocol::agent_identity::AgentIdentityBinding>,
+) -> crate::resolved::ResolvedAgent {
+    use crate::resolved::{
+        MaxTurnsProvenance, ResolvedAgent, ResolvedConfiguration, DEFAULT_CONTEXT_WINDOW,
+        DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME,
+        DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
+    };
+    use gents_documents::inference_defaults::{
+        DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+    };
+    use std::time::Duration;
+    let binding = binding.unwrap_or_else(|| {
+        gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap()
+    });
+    let agent_identity =
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
+    let node = std::sync::Arc::new(gents_store::identity::RuntimeNode {
+        node_did: identity.did().to_string(),
+        identity,
+        default_agent_did: binding.agent_did.clone(),
+        display_name: None,
+        enabled: true,
+    });
+    ResolvedAgent {
+        configuration: ResolvedConfiguration::Static,
+        profile_id: None,
+        agent_did: binding.agent_did,
+        agent_identity,
+        node,
+        backend_id: None,
+        backend_provider_kind: crate::backends::provider::BackendProviderKind::OpenAiCompatible,
+        openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
+        backend_endpoint: "http://127.0.0.1:1/v1".to_string(),
+        backend_auth: gents_documents::BackendAuth::Unauthenticated,
+        claude_platform: None,
+        model_name: DEFAULT_MODEL_NAME.to_string(),
+        service_tier: None,
+        resolved_reasoning_efforts: None,
+        context_window: DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: DEFAULT_MAX_TURNS,
+        max_turns_provenance: MaxTurnsProvenance::Default,
+        system_prompt: String::new(),
+        compaction: None,
+        compaction_inference: None,
+        max_total_tokens: None,
+        stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
+        stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
+        provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
+        deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+        completion_retry: Default::default(),
+        sampling: Default::default(),
+        skills: Vec::new(),
+        oauth_pool: Vec::new(),
+    }
+}
+
+pub mod document_fixtures;

@@ -1,0 +1,297 @@
+import Proofs.Session.Hooks.Staging
+
+namespace Hooks.Resume
+
+/-- A request core created, with the DID that signed it. `trigger` names the
+trigger that caused it (a Goal for a Goal continuation), `reference` the
+assignment its signed input names (a Goal and that Goal's root, if any), and
+`terminal` whether it reached a terminal lifecycle state. -/
+structure Request where
+  id : Nat
+  agent : Actor
+  signer : Actor
+  trigger : Option Nat := none
+  reference : Option (Nat × Option Nat) := none
+  terminal : Bool := false
+  deriving DecidableEq, Repr
+
+/-- The part of core state a session resume touches: the session stop latch
+and the session's requests. -/
+structure Session where
+  stopped : Bool
+  requests : List Request
+  deriving DecidableEq, Repr
+
+/-- The arguments of the core operation `request.create`, as data: the
+unsigned request a plugin asks core to create. It names the agent the request
+runs as and names no signer, so a plugin cannot choose the authority the
+request is created under (decision 2026-11-11, maintainer-approved).
+
+Natively the arguments are `{"request": AgentRequestCreate}` without its
+signature; core fills the session and Agent document IDs and the session hop,
+binds client targets, signs with its own identity and creates the row. -/
+structure CreateArgs where
+  id : Nat
+  agent : Actor
+  trigger : Option Nat := none
+  reference : Option (Nat × Option Nat) := none
+  deriving DecidableEq, Repr
+
+/-- The pending request core creates from `args`, signed by `actor`. -/
+def CreateArgs.request (args : CreateArgs) (actor : Actor) : Request :=
+  { id := args.id, agent := args.agent, signer := actor, trigger := args.trigger,
+    reference := args.reference }
+
+/-- Core performs a requested creation under its own rule and the
+transaction's actor, stated like `Hooks.Safety.perform`: `mayCreate` is core's
+decision whether that actor could itself create the request (natively: the
+actor is the request's agent and core's signer, and document ACP admits the
+write), and the request is signed by that actor. The operation adds a request
+and touches nothing else, in particular not the stop latch, so a plugin that
+asks for a request in a stopped session still gets no claim of it
+(`Hooks.Safety.claimNext`).
+
+Decision 2026-11-11, maintainer-approved: `request.create` joins the
+vocabulary a plugin may request as an effect, under the same caller-authority
+rule as the stop operations. Hooks narrow authority and never widen it. -/
+def perform (mayCreate : Actor → CreateArgs → Session → Bool) (actor : Actor)
+    (args : CreateArgs) (session : Session) : Option Session :=
+  if mayCreate actor args session = true ∧ !(session.requests.any (·.id == args.id)) = true then
+    some { session with requests := args.request actor :: session.requests }
+  else none
+
+theorem create_needs_the_actors_own_authority (mayCreate : Actor → CreateArgs → Session → Bool)
+    (actor : Actor) (args : CreateArgs) (session : Session)
+    (denied : mayCreate actor args session = false) :
+    perform mayCreate actor args session = none := by
+  simp [perform, denied]
+
+/-- A created request is signed by the transaction's actor, and the rest of the
+session is unchanged. -/
+theorem created_request_is_signed_by_the_actor (mayCreate : Actor → CreateArgs → Session → Bool)
+    (actor : Actor) (args : CreateArgs) (session next : Session)
+    (performed : perform mayCreate actor args session = some next) :
+    mayCreate actor args session = true ∧
+      next = { session with requests := args.request actor :: session.requests } := by
+  unfold perform at performed
+  split at performed
+  · rename_i accepted
+    simp only [Option.some.injEq] at performed
+    exact ⟨accepted.1, performed.symm⟩
+  · cases performed
+
+private theorem reach_creates_only_as_actor (mayCreate : Actor → CreateArgs → Session → Bool)
+    (actor : Actor) (first last : Session) (reached : Reach (perform mayCreate) actor first last) :
+    last.stopped = first.stopped ∧
+      ∀ request ∈ last.requests, request ∈ first.requests ∨ request.signer = actor := by
+  induction reached with
+  | refl => exact ⟨rfl, fun request member => Or.inl member⟩
+  | step op performed _ ih =>
+    obtain ⟨_, rfl⟩ := created_request_is_signed_by_the_actor mayCreate actor op _ _ performed
+    obtain ⟨stopped, created⟩ := ih
+    refine ⟨stopped, fun request member => ?_⟩
+    rcases created request member with old | signed
+    · rcases List.mem_cons.mp old with rfl | earlier
+      · exact Or.inr rfl
+      · exact Or.inl earlier
+    · exact Or.inr signed
+
+private theorem failing_effect_applies_nothing {Doc Val Op Core : Type} [DecidableEq Doc]
+    (perform : Actor → Op → Core → Option Core) (actor : Actor) (effect : Effect Doc Val Op)
+    (fails : ∀ state, applyEffect perform actor state effect = none) :
+    ∀ (effects : List (Effect Doc Val Op)) (state : State Core Doc Val),
+      effect ∈ effects → applyEffects perform actor effects state = none := by
+  intro effects
+  induction effects with
+  | nil => intro _ member; cases member
+  | cons head rest ih =>
+    intro state member
+    simp only [applyEffects]
+    rcases List.mem_cons.mp member with rfl | later
+    · simp [fails state]
+    · cases applyEffect perform actor state head with
+      | none => rfl
+      | some next => exact ih next later
+
+/-- `control.session.resume`: core's own transition clears the stop latch once
+its quiescence rule (`settled`) holds, then the plugins at the point stage on
+the cleared snapshot, refusably (`Hooks.Catalog.controlSessionResume`), in the
+same transaction. -/
+def resume {Q Ev V Doc Val : Type} [DecidableEq Doc] (host : Host Session Q Doc Val CreateArgs)
+    (plugins : List (Plugin Q Ev V Doc Val CreateArgs)) (settled : Session → Bool)
+    (actor : Actor) (event : Ev) (state : State Session Doc Val) :
+    Except Refusal (State Session Doc Val × List V) :=
+  if settled state.core then
+    stage host plugins actor event { state with core := { state.core with stopped := false } }
+  else .error .core
+
+variable {Q Ev V Doc Val : Type} [DecidableEq Doc]
+
+/-- A plugin's refusal at resume commits nothing: the latch stays set and no
+request is created. -/
+theorem resume_refusal_commits_nothing (host : Host Session Q Doc Val CreateArgs)
+    (plugins : List (Plugin Q Ev V Doc Val CreateArgs)) (settled : Session → Bool)
+    (actor : Actor) (event : Ev) (state : State Session Doc Val)
+    (plugin : Plugin Q Ev V Doc Val CreateArgs) (member : plugin ∈ plugins) (reason : String)
+    (refused : plugin.hook.run host event
+      { state with core := { state.core with stopped := false } } = .refuse reason) :
+    settle state (resume host plugins settled actor event state) = state := by
+  unfold resume
+  split
+  · cases staged : stage host plugins actor event
+        { state with core := { state.core with stopped := false } } with
+    | error refusal => rfl
+    | ok result =>
+      obtain ⟨final, values⟩ := result
+      have decided := staged_values_are_snapshot_decisions host plugins actor event _ final values
+        staged
+      have present := List.mem_map_of_mem
+        (fun plugin => (plugin.hook.run host event
+          { state with core := { state.core with stopped := false } }).value?) member
+      rw [decided] at present
+      simp [refused, Outcome.value?] at present
+  · rfl
+
+/-- A creation the actor could not perform itself commits nothing: the whole
+resume, latch included, is not applied. -/
+theorem resume_failed_create_commits_nothing (mayCreate : Actor → CreateArgs → Session → Bool)
+    (select : Session → Store Doc Val → Q → List (Row Doc Val)) (allowed : Acp Doc)
+    (plugins : List (Plugin Q Ev V Doc Val CreateArgs)) (settled : Session → Bool)
+    (actor : Actor) (event : Ev) (state : State Session Doc Val)
+    (plugin : Plugin Q Ev V Doc Val CreateArgs) (member : plugin ∈ plugins) (args : CreateArgs)
+    (requested : Effect.core args ∈ (plugin.hook.run ⟨select, perform mayCreate, allowed⟩ event
+      { state with core := { state.core with stopped := false } }).effects)
+    (denied : ∀ session, mayCreate actor args session = false) :
+    settle state (resume ⟨select, perform mayCreate, allowed⟩ plugins settled actor event state) =
+      state := by
+  unfold resume
+  split
+  · cases staged : stage ⟨select, perform mayCreate, allowed⟩ plugins actor event
+        { state with core := { state.core with stopped := false } } with
+    | error refusal => rfl
+    | ok result =>
+      obtain ⟨final, values⟩ := result
+      have applied := staged_state_applies_every_plugin _ plugins actor event _ final values staged
+      have fails : ∀ staged : State Session Doc Val,
+          applyEffect (perform mayCreate) actor staged (Effect.core args : Effect Doc Val CreateArgs) =
+            none := by
+        intro staged
+        simp [applyEffect, create_needs_the_actors_own_authority mayCreate actor args _
+          (denied staged.core)]
+      rw [failing_effect_applies_nothing (perform mayCreate) actor _ fails _ _
+        (List.mem_flatMap.mpr ⟨plugin, member, requested⟩)] at applied
+      cases applied
+  · rfl
+
+/-- Creation never widens authority: a committed resume leaves the latch
+cleared, and every request it holds that the session did not hold before was
+created and signed under the transaction's actor. -/
+theorem resume_creates_only_as_the_actor (mayCreate : Actor → CreateArgs → Session → Bool)
+    (select : Session → Store Doc Val → Q → List (Row Doc Val)) (allowed : Acp Doc)
+    (plugins : List (Plugin Q Ev V Doc Val CreateArgs)) (settled : Session → Bool)
+    (actor : Actor) (event : Ev) (state final : State Session Doc Val) (values : List V)
+    (ok : resume ⟨select, perform mayCreate, allowed⟩ plugins settled actor event state =
+      .ok (final, values)) :
+    final.core.stopped = false ∧
+      ∀ request ∈ final.core.requests,
+        request ∈ state.core.requests ∨ request.signer = actor := by
+  unfold resume at ok
+  split at ok
+  · have reached := staging_moves_core_only_through_perform _ plugins actor event _ final values ok
+    exact reach_creates_only_as_actor mayCreate actor _ _ reached
+  · cases ok
+
+/-- Core's own rule runs first: unsettled work refuses the resume before any
+plugin is asked. -/
+theorem unsettled_resume_commits_nothing (host : Host Session Q Doc Val CreateArgs)
+    (plugins : List (Plugin Q Ev V Doc Val CreateArgs)) (settled : Session → Bool)
+    (actor : Actor) (event : Ev) (state : State Session Doc Val)
+    (unsettled : settled state.core = false) :
+    resume host plugins settled actor event state = .error .core := by
+  simp [resume, unsettled]
+
+/-- `request.create` as core performs it for a resume, with the staging of
+`request.create.stage` after the row exists (`Hooks.Catalog.requestCreateStage`):
+the restaging plugins' effects create the request through `perform`, then the
+point's listeners stage, refusably, on the state that holds it, with the
+created request in their event (`created` builds it from the session before
+and after), in the same transaction.
+
+A listener decides on the rows as they stand after the resume point's staging
+(a later point sees what earlier points staged, `Hooks.stage`), so a revision
+it holds of a row the resume already updated is current.
+
+Decision 2026-11-11, maintainer-approved: a paused, idle Goal with no
+assignment root is resumed, and the Goals plugin binds that root here, to the
+created continuation's document id, which exists only once core has created
+the row. A listener refusal or miss leaves the whole resume unapplied
+(`create_stage_refusal_leaves_resume_unapplied`).
+
+Native premise: core runs these listeners inside its `request.create`
+operation, right after the row is created; the model runs them once the
+resume point's staging is done. The two agree because the Goals plugin is the
+only plugin at `control.session.resume` and `request.create` is the last
+effect of its result. -/
+def resumeCreating {EvC : Type} (host : Host Session Q Doc Val CreateArgs)
+    (plugins : List (Plugin Q Ev V Doc Val CreateArgs))
+    (listeners : List (Plugin Q EvC Unit Doc Val CreateArgs)) (created : Session → Session → EvC)
+    (settled : Session → Bool) (actor : Actor) (event : Ev) (state : State Session Doc Val) :
+    Except Refusal (State Session Doc Val × List V) :=
+  match resume host plugins settled actor event state with
+  | .error refusal => .error refusal
+  | .ok (resumed, values) =>
+      match stage host listeners actor (created state.core resumed.core) resumed with
+      | .error refusal => .error refusal
+      | .ok (final, _) => .ok (final, values)
+
+/-- A refusal, invalid result or miss at `request.create.stage` leaves the
+whole resume unapplied: latch, created request and every staged row. -/
+theorem create_stage_refusal_leaves_resume_unapplied {EvC : Type}
+    (host : Host Session Q Doc Val CreateArgs) (plugins : List (Plugin Q Ev V Doc Val CreateArgs))
+    (listeners : List (Plugin Q EvC Unit Doc Val CreateArgs)) (created : Session → Session → EvC)
+    (settled : Session → Bool) (actor : Actor) (event : Ev) (state resumed : State Session Doc Val)
+    (values : List V) (ok : resume host plugins settled actor event state = .ok (resumed, values))
+    (refusal : Refusal)
+    (failed : stage host listeners actor (created state.core resumed.core) resumed =
+      .error refusal) :
+    settle state (resumeCreating host plugins listeners created settled actor event state) =
+      state := by
+  simp [resumeCreating, ok, failed, settle]
+
+/-- In particular a listener that refuses on the resumed state leaves the
+resume unapplied. -/
+theorem create_listener_refusal_leaves_resume_unapplied {EvC : Type}
+    (host : Host Session Q Doc Val CreateArgs) (plugins : List (Plugin Q Ev V Doc Val CreateArgs))
+    (listeners : List (Plugin Q EvC Unit Doc Val CreateArgs)) (created : Session → Session → EvC)
+    (settled : Session → Bool) (actor : Actor) (event : Ev) (state resumed : State Session Doc Val)
+    (values : List V) (ok : resume host plugins settled actor event state = .ok (resumed, values))
+    (listener : Plugin Q EvC Unit Doc Val CreateArgs) (member : listener ∈ listeners)
+    (reason : String)
+    (refused : listener.hook.run host (created state.core resumed.core) resumed = .refuse reason) :
+    settle state (resumeCreating host plugins listeners created settled actor event state) =
+      state := by
+  cases staged : stage host listeners actor (created state.core resumed.core) resumed with
+  | error refusal =>
+    exact create_stage_refusal_leaves_resume_unapplied host plugins listeners created settled
+      actor event state resumed values ok refusal staged
+  | ok result =>
+    obtain ⟨final, observed⟩ := result
+    have decided := staged_values_are_snapshot_decisions host listeners actor _ resumed final
+      observed staged
+    have present := List.mem_map_of_mem
+      (fun plugin => (plugin.hook.run host (created state.core resumed.core) resumed).value?)
+      member
+    rw [decided] at present
+    simp [refused, Outcome.value?] at present
+
+/-- Whatever the resume point refuses, the resume with creation staging
+refuses too. -/
+theorem resume_refusal_precedes_create_stage {EvC : Type}
+    (host : Host Session Q Doc Val CreateArgs) (plugins : List (Plugin Q Ev V Doc Val CreateArgs))
+    (listeners : List (Plugin Q EvC Unit Doc Val CreateArgs)) (created : Session → Session → EvC)
+    (settled : Session → Bool) (actor : Actor) (event : Ev) (state : State Session Doc Val)
+    (refusal : Refusal) (refused : resume host plugins settled actor event state = .error refusal) :
+    resumeCreating host plugins listeners created settled actor event state = .error refusal := by
+  simp [resumeCreating, refused]
+
+end Hooks.Resume

@@ -36,15 +36,6 @@ pub struct ClientHost {
 }
 
 impl ClientHost {
-    /// The node a windowless attachment's command acts on when it names
-    /// none: the client core's selection, which the bridge sets only while
-    /// exactly one window is open (`DesktopBridge::apply_window_selection`).
-    /// Window commands never read it; they resolve their own window's node
-    /// (`ClientWindowScope.commandNode`).
-    fn windowless_node(&self) -> Option<String> {
-        self.core.selected_node_did()
-    }
-
     /// The executable digest is compatibility metadata, never runtime identity
     /// or document authority. Embedded application hosts retain their own lifetime.
     pub fn for_installation(core: Arc<ClientCore>, build: String) -> Self {
@@ -132,7 +123,7 @@ impl ClientHost {
                 encode(record.is_managed_runtime())
             }
             ClientCommand::InferenceCatalog {} => {
-                encode(gents::inference::backends::setup::inference_setup_catalog())
+                encode(gents_inference::backends::setup::inference_setup_catalog())
             }
             ClientCommand::InferenceSetupState { node_did } => {
                 let record = self.require_connected_runtime(&node_did).await?;
@@ -210,7 +201,7 @@ impl ClientHost {
                 let access = self
                     .core
                     .operator_observation_graphql(&request.node_did)
-                    .map(gents::ConfigAccess::Graphql)
+                    .map(gents_store::config_client::ConfigAccess::Graphql)
                     .ok_or_else(|| {
                         anyhow::anyhow!("Connect this local runtime before managing its accounts.")
                     });
@@ -227,12 +218,12 @@ impl ClientHost {
                 self.require_configured_runtime(&request.node_did).await?;
                 let provider = crate::accounts::login::provider(request.method)?;
                 let signed = crate::accounts::login::sign_in(&self.pending_oauth_credentials,
-                    || self.core.operator_graphql(&request.node_did).map(gents::ConfigAccess::Graphql)
+                    || self.core.operator_graphql(&request.node_did).map(gents_store::config_client::ConfigAccess::Graphql)
                         .ok_or_else(|| anyhow::anyhow!("Connect this local runtime before managing its accounts.")),
                     &request.node_did, request.method, provider, request.label.as_deref(), &cancel,
                     async |url| crate::host_browser::open_url(url).await.map_err(|_| BridgeError::untyped("Could not open the sign-in page. Check your default browser and try again.")),
                 ).await?;
-                if self.core.refresh_store().await.is_err() {
+                if self.core.refresh_node(&request.node_did).await.is_err() {
                     tracing::warn!("Account saved; its client observation is unavailable");
                 }
                 encode(crate::accounts::SignInView::from(&signed))
@@ -242,13 +233,13 @@ impl ClientHost {
                 let access = self
                     .core
                     .operator_graphql(&request.node_did)
-                    .map(gents::ConfigAccess::Graphql)
+                    .map(gents_store::config_client::ConfigAccess::Graphql)
                     .ok_or_else(|| {
                         BridgeError::untyped(
                             "Connect this local runtime before managing its accounts.",
                         )
                     })?;
-                gents::inference::auth::credential::set_account_enabled(
+                gents_inference::auth::credential::set_account_enabled(
                     &access,
                     &request.node_did,
                     &request.credential_id,
@@ -256,7 +247,7 @@ impl ClientHost {
                 )
                 .await
                 .map_err(backend_error)?;
-                if self.core.refresh_store().await.is_err() {
+                if self.core.refresh_node(&request.node_did).await.is_err() {
                     tracing::warn!("Account disconnected; its client observation is unavailable");
                 }
                 encode(())
@@ -266,13 +257,13 @@ impl ClientHost {
                 let access = self
                     .core
                     .operator_graphql(&request.node_did)
-                    .map(gents::ConfigAccess::Graphql)
+                    .map(gents_store::config_client::ConfigAccess::Graphql)
                     .ok_or_else(|| {
                         BridgeError::untyped(
                             "Connect this local runtime before managing its accounts.",
                         )
                     })?;
-                gents::inference::auth::credential::set_account_label(
+                gents_inference::auth::credential::set_account_label(
                     &access,
                     &request.node_did,
                     &request.credential_id,
@@ -280,7 +271,7 @@ impl ClientHost {
                 )
                 .await
                 .map_err(backend_error)?;
-                if self.core.refresh_store().await.is_err() {
+                if self.core.refresh_node(&request.node_did).await.is_err() {
                     tracing::warn!("Account renamed; its client observation is unavailable");
                 }
                 encode(())
@@ -290,7 +281,7 @@ impl ClientHost {
                 let access = self
                     .core
                     .operator_graphql(&request.node_did)
-                    .map(gents::ConfigAccess::Graphql)
+                    .map(gents_store::config_client::ConfigAccess::Graphql)
                     .ok_or_else(|| {
                         BridgeError::untyped(
                             "Connect this local runtime before managing its accounts.",
@@ -305,7 +296,7 @@ impl ClientHost {
                 )
                 .await
                 .map_err(backend_error)?;
-                if self.core.refresh_store().await.is_err() {
+                if self.core.refresh_node(&request.node_did).await.is_err() {
                     tracing::warn!("Account removed; its client observation is unavailable");
                 }
                 encode(())
@@ -315,7 +306,7 @@ impl ClientHost {
                 let access = self
                     .core
                     .operator_graphql(&request.node_did)
-                    .map(gents::ConfigAccess::Graphql)
+                    .map(gents_store::config_client::ConfigAccess::Graphql)
                     .ok_or_else(|| {
                         anyhow::anyhow!("Connect this local runtime before managing its accounts.")
                     });
@@ -326,7 +317,7 @@ impl ClientHost {
                     &request.provider,
                 )
                 .await?;
-                if self.core.refresh_store().await.is_err() {
+                if self.core.refresh_node(&request.node_did).await.is_err() {
                     tracing::warn!("Account saved; its client observation is unavailable");
                 }
                 encode(crate::accounts::ProviderAccountView::from(&credential))
@@ -611,6 +602,9 @@ impl ClientHost {
             ClientCommand::Enroll { request } => {
                 encode(crate::commands::request_status_enrollment(&self.core, request).await?)
             }
+            ClientCommand::EnrollInvite { request } => {
+                encode(crate::commands::request_invite_enrollment(&self.core, request).await?)
+            }
             ClientCommand::SessionSnapshot(args) => encode(
                 crate::commands::session_snapshot(
                     &self.core,
@@ -658,7 +652,7 @@ impl ClientHost {
                 request_id,
                 node_did,
             } => encode(
-                crate::commands::retry_request(&self.core, &request_id, Some(&node_did))
+                crate::commands::retry_request(&self.core, &request_id, &node_did)
                     .await
                     .map_err(backend_error)?,
             ),
@@ -667,14 +661,11 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
-            ClientCommand::SessionProvenance { mut request } => {
-                request.node_did = request.node_did.or_else(|| self.windowless_node());
-                encode(
-                    crate::provenance::session_provenance_request(&self.core, request)
-                        .await
-                        .map_err(BridgeError::untyped)?,
-                )
-            }
+            ClientCommand::SessionProvenance { request } => encode(
+                crate::provenance::session_provenance_request(&self.core, request)
+                    .await
+                    .map_err(BridgeError::untyped)?,
+            ),
             ClientCommand::GoalControl { request } => {
                 encode(crate::commands::control_goal(&self.core, *request).await?)
             }
@@ -721,13 +712,8 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
-            ClientCommand::Interrupt { mut request } => {
-                request.node_did = request.node_did.or_else(|| self.windowless_node());
-                encode(
-                    crate::interrupt::interrupt_request(&self.core, &request)
-                        .await
-                        .map_err(BridgeError::untyped)?,
-                )
+            ClientCommand::Interrupt { request } => {
+                encode(crate::interrupt::interrupt_request(&self.core, &request).await?)
             }
             ClientCommand::ProcessControl { request } => {
                 encode(crate::process_control::process_control(&self.core, &request).await?)

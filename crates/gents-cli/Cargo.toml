@@ -21,7 +21,7 @@ path = "src/main.rs"
 # full gents+defradb+iroh link to execute nothing.
 live-e2e = []
 # Debug native desktop acceptance must never address the user's daily service.
-native-e2e = []
+native-e2e = ["gents-service/native-e2e"]
 heap-profiling = ["dep:tikv-jemallocator"]
 typescript = ["dep:ts-rs"]
 
@@ -49,17 +49,29 @@ clap.workspace = true
 gents-chatgpt-login.workspace = true
 gents-claude-login.workspace = true
 gents-desktop-core.workspace = true
+gents-service.workspace = true
+gents-host.workspace = true
 gents = { path = "../gents" }
+gents-store = { workspace = true }
+gents-documents = { workspace = true }
+gents-inference = { workspace = true }
+gents-p2p = { workspace = true }
+gents-pack = { workspace = true }
+gents-core-packs.workspace = true
+gents-session = { workspace = true }
+gents-tools = { workspace = true }
+gents-toolcalls = { workspace = true }
+gents-automation = { workspace = true }
+gents-observe = { workspace = true }
+gents-loop = { workspace = true }
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-protocol.workspace = true
 gents-shell.workspace = true
 defra-node = { workspace = true, features = ["http"] }
-defra-http.workspace = true
 defra-p2p-adapter.workspace = true
 futures-util = "0.3"
 flate2 = "1"
 iana-time-zone = "0.1"
-include_dir = "0.7"
 identity.workspace = true
 iroh.workspace = true
 query.workspace = true
@@ -84,7 +96,6 @@ serde_json.workspace = true
 shlex = "1.3"
 sha2.workspace = true
 serde_yaml.workspace = true
-subtle.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
@@ -101,8 +112,6 @@ tempfile = "3"
 tar = "0.4"
 notify = { version = "8.2", default-features = false, features = ["macos_kqueue"] }
 wait-timeout = "0.2"
-# `gents utils eval init` holds a draft's check params to each check's schema.
-jsonschema = { version = "0.46.5", default-features = false }
 
 # `gents config pack build` (src/commands/pack/build.rs) compiles a tool's source
 # through Afterburner's own compiler rather than growing a second one:
@@ -147,13 +156,22 @@ libc = "0.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Console"] }
 
 [dev-dependencies]
-gents = { path = "../gents", features = ["test-home-guard"] }
+gents-automation = { workspace = true, features = ["test-fixtures"] }
+gents-eval = { workspace = true, features = ["test-fixtures"] }
+jsonschema = { version = "0.46.5", default-features = false }
+gents = { path = "../gents", features = ["test-fixtures"] }
+gents-service = { workspace = true, features = ["test-home-guard"] }
+gents-host = { workspace = true, features = ["test-fixtures"] }
+gents-session = { workspace = true, features = ["test-fixtures"] }
+gents-pack = { workspace = true, features = ["test-fixtures"] }
+ctor = "0.2"
 acp.workspace = true
 crypto.workspace = true
 db.workspace = true
 defra-core.workspace = true
 futures = "0.3"
 gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true
 portable-pty = "0.9"
 ratatui = { version = "0.30", default-features = false }
 tui-test-rs = "0.1.1"

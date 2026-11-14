@@ -1,9 +1,8 @@
-use std::net::IpAddr;
 use std::path::PathBuf;
 
 use clap::Subcommand;
 
-use super::{P2pDiscoveryArg, P2pRelayModeArg};
+use gents_service::args::{ServiceAction, ServiceNetworkArgs, ServiceUpdateArgs};
 
 #[derive(Subcommand)]
 pub(crate) enum ServiceCommand {
@@ -61,38 +60,21 @@ pub(crate) enum ServiceCommand {
     Restart(ServiceTargetArgs),
     Enable(ServiceTargetArgs),
     Disable(ServiceTargetArgs),
+    #[command(
+        about = "Move the background service to another home and start its node there",
+        long_about = "Move the per-user background service to --home and start that home's node; the node the service served before stops. Other commands never move the service to another home that still exists. If the node does not start, the service is moved back"
+    )]
+    Repoint {
+        #[arg(
+            long,
+            help = "Node home directory the service should serve. Defaults to ~/.gents"
+        )]
+        home: Option<PathBuf>,
+    },
     #[command(about = "Show native supervisor state (not runtime health)")]
     Status(ServiceTargetArgs),
     #[command(about = "Remove the service definition while preserving runtime data")]
     Uninstall(ServiceTargetArgs),
-}
-
-#[derive(clap::Args)]
-pub(crate) struct ServiceUpdateArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(
-        long,
-        help = "Local verified Gents executable to stage; omit for configuration-only updates"
-    )]
-    pub(crate) executable: Option<PathBuf>,
-    #[arg(
-        long,
-        requires = "executable",
-        help = "Expected SHA-256 of --executable, obtained from a trusted source"
-    )]
-    pub(crate) sha256: Option<String>,
-    #[arg(
-        long,
-        help = "Idempotency key; reuse the same UUID only for the same update"
-    )]
-    pub(crate) operation_id: Option<uuid::Uuid>,
-    #[command(flatten)]
-    pub(crate) network: ServiceNetworkArgs,
-    #[arg(long)]
-    pub(crate) environment_file: Option<PathBuf>,
-    #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..=3600))]
-    pub(crate) drain_timeout_secs: u64,
 }
 
 #[derive(clap::Args)]
@@ -103,56 +85,15 @@ pub(crate) struct ServiceTargetArgs {
     pub(crate) executable: Option<PathBuf>,
 }
 
-#[derive(clap::Args, Default)]
-pub(crate) struct ServiceNetworkArgs {
-    #[arg(
-        long,
-        help = "HTTP listen address: loopback or one interface, such as this host's tailnet address. Requests still need a DID-signed bearer the node's access control admits"
-    )]
-    pub(crate) http_addr: Option<IpAddr>,
-    #[arg(long, help = "HTTP listen port")]
-    pub(crate) http_port: Option<u16>,
-    #[arg(long, help = "P2P listen address")]
-    pub(crate) p2p_bind_addr: Option<IpAddr>,
-    #[arg(long, help = "P2P listen port; 0 picks a random port at each start")]
-    pub(crate) p2p_port: Option<u16>,
-    #[arg(long, value_enum)]
-    pub(crate) p2p_relay_mode: Option<P2pRelayModeArg>,
-    #[arg(long, value_enum)]
-    pub(crate) p2p_discovery: Option<P2pDiscoveryArg>,
-    #[arg(
-        long,
-        help = "Clear the persisted network settings before applying the other network flags"
-    )]
-    pub(crate) reset_network: bool,
-}
-
-pub(crate) enum ServiceAction {
-    Install {
-        network: ServiceNetworkArgs,
-        environment_file: Option<PathBuf>,
-    },
-    Start {
-        enable: bool,
-    },
-    Stop {
-        keep_enabled: bool,
-    },
-    Restart,
-    Enable,
-    Disable,
-    Status,
-    Uninstall,
-}
-
 impl ServiceCommand {
     pub(crate) fn into_parts(self) -> (Option<PathBuf>, Option<PathBuf>, ServiceAction) {
         let (target, action) = match self {
             Self::Update(_)
             | Self::UpdateStatus { .. }
             | Self::UpdateRun { .. }
-            | Self::UpdateCheck { .. } => {
-                unreachable!("managed update commands are routed asynchronously")
+            | Self::UpdateCheck { .. }
+            | Self::Repoint { .. } => {
+                unreachable!("managed update and repoint commands are routed asynchronously")
             }
             Self::Install {
                 target,

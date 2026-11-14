@@ -4,24 +4,22 @@ use std::path::PathBuf;
 use anyhow::{Context as _, Result};
 use gents_eval::checks::CheckRegistry;
 
-use self::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDATION_PREFIX};
-use self::dossier::Dossier;
-use self::draft::parse_reply;
+use self::host::CliWriteHost;
 use self::turn::Turn;
-use self::validate::{assemble, validate, Assembled, Floors};
-use self::write::{case_table, commit, stage, Staged, Written};
 use super::{Deps, EvalContext};
 use crate::cli::EvalInitArgs;
-use crate::commands::pack::{resolve_pack_source, single_slot_agent, PackSource};
+use crate::commands::pack::single_slot_agent;
+use gents_eval::authoring::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDATION_PREFIX};
+use gents_eval::authoring::dossier::{self, Dossier};
+use gents_eval::authoring::draft::{self, parse_reply};
+use gents_eval::authoring::validate::{assemble, validate, Assembled, Floors};
+use gents_eval::authoring::write::{self, case_table, commit, stage, Staged, Written};
+use gents_pack::pack::resolved_pack::{resolve_pack_source, ResolvedPack};
 
-mod contract;
-pub(crate) mod dossier;
-pub(crate) mod draft;
+mod host;
 mod pilot;
 mod readiness;
 pub(crate) mod turn;
-pub(super) mod validate;
-mod write;
 
 pub(crate) struct InitContext<'a> {
     pub(crate) dossier: Dossier,
@@ -35,6 +33,12 @@ pub(crate) struct InitContext<'a> {
     pub(crate) subject_dir: PathBuf,
     pub(crate) profile: String,
     pub(crate) scope: crate::cli::EvalScopeArgs,
+}
+
+impl InitContext<'_> {
+    fn home(&self) -> PathBuf {
+        gents_service::home_state::resolve_home_dir(self.scope.home.as_deref())
+    }
 }
 
 pub(crate) struct InitOutcome {
@@ -85,7 +89,8 @@ pub(crate) async fn interview(
                     staged,
                     &ctx.out,
                     ctx.force,
-                    &crate::home_state::resolve_home_dir(ctx.scope.home.as_deref()),
+                    &ctx.home(),
+                    &CliWriteHost(ctx.home()),
                 )?;
                 print_written(ctx, &assembled, &written, out)?;
                 return Ok(InitOutcome {
@@ -154,7 +159,14 @@ async fn checked(
     };
     let assembled = assemble(&draft, definition_id, &ctx.owner, &ctx.dossier.slot)?;
     validate(&assembled, ctx.registry, &ctx.dossier, &ctx.floors)?;
-    let staged = stage(&assembled, summary, &ctx.dossier, pilot).await?;
+    let staged = stage(
+        &assembled,
+        summary,
+        &ctx.dossier,
+        pilot,
+        &CliWriteHost(ctx.home()),
+    )
+    .await?;
     Ok((assembled, staged))
 }
 
@@ -208,7 +220,7 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         "{} already exists; pass --force to replace it",
         args.out.display()
     );
-    let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let home_dir = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
     let graphql = match args
         .scope
         .graphql
@@ -217,7 +229,9 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         .filter(|graphql| !graphql.is_empty())
     {
         Some(graphql) => Some(graphql.to_owned()),
-        None => crate::read_runtime_state(&home_dir)?.map(|state| state.graphql),
+        None => {
+            gents_service::home_state::read_runtime_state(&home_dir)?.map(|state| state.graphql)
+        }
     };
     let served = match graphql {
         Some(graphql) => crate::graphql_access::graphql_endpoint_available(&graphql).await,
@@ -227,7 +241,7 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         served,
         "start `gents runtime server` for this home and retry: the author runs on a served home"
     );
-    write::recover_output(&args.out, &home_dir)?;
+    write::recover_output(&args.out, &home_dir, &CliWriteHost(home_dir.clone()))?;
     anyhow::ensure!(
         args.force || args.out.symlink_metadata().is_err(),
         "{} already exists; pass --force to replace it",
@@ -242,7 +256,7 @@ pub(crate) async fn run(
     deps: &Deps<'_>,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let gents::ConfigAccess::Graphql(graphql) = &ctx.access else {
+    let gents_store::config_client::ConfigAccess::Graphql(graphql) = &ctx.access else {
         anyhow::bail!(
             "start `gents runtime server` for this home and retry: the author runs on a served home"
         );
@@ -333,6 +347,7 @@ pub(crate) async fn run(
                 "interrupt: the pilot stops launching; the pack stays as written",
             ),
             options: deps.options.clone(),
+            proposer: None,
         };
         let piloted = pilot::pilot(
             ctx,
@@ -367,38 +382,39 @@ pub(crate) async fn run(
 }
 
 pub(crate) async fn install_pack_slot(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     owner: &str,
-    pack: &PackSource,
+    pack: &ResolvedPack,
     slot: &str,
     profile: &str,
-) -> Result<gents::pack::InstallReport> {
+) -> Result<gents_pack::pack::InstallReport> {
     let manifest = pack.manifest();
     let requested = std::collections::BTreeMap::from([(slot.to_owned(), profile.to_owned())]);
     anyhow::ensure!(manifest.metadata.dependencies.is_empty(),
         "eval author pack dependencies must be installed through `gents config pack install` on the runtime host");
-    let prepared = gents::pack::prepare_document_pack_archive(
+    let prepared = gents_pack::pack::prepare_document_pack_archive(
         access,
         owner,
         pack.archive(),
         &requested,
         &[],
-        gents::pack::InstalledVia::Operator,
+        gents_pack::pack::InstalledVia::Operator,
         None,
         &|_| None,
         &Default::default(),
     )
     .await
-    .map_err(gents::pack::PackChangeError::into_anyhow)?;
-    gents::pack::install_prepared_document_graph(
+    .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
+    gents_pack::pack::install_prepared_document_graph(
         access,
         owner,
         pack.archive(),
         &prepared,
-        gents::pack::DriftPolicy::Overwrite,
+        gents_pack::pack::DriftPolicy::Overwrite,
         None,
         false,
         true,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .map(|(report, _)| report)
@@ -406,12 +422,12 @@ pub(crate) async fn install_pack_slot(
 }
 
 pub(crate) fn pack_config(
-    pack: &PackSource,
+    pack: &ResolvedPack,
     owner: &str,
-) -> Result<gents::pack::AuthoredPackConfig> {
-    gents::pack::load_pack_authoring_config(
+) -> Result<gents_pack::pack::AuthoredPackConfig> {
+    gents_pack::pack::load_pack_authoring_config(
         pack.manifest(),
-        &gents::pack::PackInstallOptions {
+        &gents_pack::pack::PackInstallOptions {
             node_did: owner.to_owned(),
         },
         &|path| pack.asset(path).map(Vec::from),
@@ -424,8 +440,9 @@ pub(crate) fn pack_config(
 mod tests {
     use serde_json::json;
 
+    use gents_eval::authoring::fixtures::{dossier, good, OWNER};
+
     use super::turn::ScriptedTurn;
-    use super::validate::tests::{dossier, good, OWNER};
     use super::*;
 
     pub(crate) fn draft_block(cases: &[serde_json::Value]) -> String {
@@ -497,7 +514,7 @@ mod tests {
         assert_eq!(outcome.rounds, 1);
         let definition = outcome.assembled.unwrap().definition;
         assert!(definition.cases.iter().all(|case| {
-            matches!(&case.stages[0].capture[0], gents::documents::EvalCapture::Documents {
+            matches!(&case.stages[0].capture[0], gents_documents::EvalCapture::Documents {
                 collection, fields, ..
             } if collection == "AgentRequest" && fields.iter().any(|field| field == "request_id"))
         }));
@@ -551,14 +568,14 @@ mod tests {
         let fixture = crate::commands::eval::testing::Fixture::new().await;
         let access = &fixture.ctx.access;
         let owner = fixture.ctx.owner.as_str();
-        let read = |ids: [(gents::Collection, String); 3]| async move {
+        let read = |ids: [(gents_store::collection::Collection, String); 3]| async move {
             let mut documents = Vec::new();
             for (collection, id) in ids {
                 let id = id.as_str();
                 let found = access
                     .transact_write("cli.eval.init.test_read_author", |txn| {
                         Box::pin(async move {
-                            gents::store::config_client::read_desired_state_record_in_txn(
+                            gents_documents::read_desired_state_record_in_txn(
                                 txn, collection, owner, id,
                             )
                             .await
@@ -583,16 +600,27 @@ mod tests {
         let first_counts = install_pack_slot(access, owner, &author, &slot, "local")
             .await
             .unwrap();
-        assert_eq!(first_counts.applied.get(gents::Collection::Agent), 1);
+        assert_eq!(
+            first_counts
+                .applied
+                .get(gents_store::collection::Collection::Agent),
+            1
+        );
         let installed_agent = first_counts.agents["fixture-author"].clone();
         let installed = || {
             read([
-                (gents::Collection::Agent, installed_agent.clone()),
                 (
-                    gents::Collection::AgentContext,
+                    gents_store::collection::Collection::Agent,
+                    installed_agent.clone(),
+                ),
+                (
+                    gents_store::collection::Collection::AgentContext,
                     "fixture-author-context".to_owned(),
                 ),
-                (gents::Collection::Tools, "fixture-author-tools".to_owned()),
+                (
+                    gents_store::collection::Collection::Tools,
+                    "fixture-author-tools".to_owned(),
+                ),
             ])
         };
 
@@ -652,22 +680,24 @@ mod tests {
             std::env::var("GENTS_EVAL_INIT_HOME")
                 .expect("GENTS_EVAL_INIT_HOME names a home gents server already serves"),
         );
-        let state = crate::home_state::read_runtime_state(&home_dir)
+        let state = gents_service::home_state::read_runtime_state(&home_dir)
             .unwrap()
             .expect("a runtime state written by `gents runtime server`");
-        crate::load_client_identity().await.unwrap();
-        let graphql = crate::home_graphql_endpoint(&home_dir, state.graphql.clone()).unwrap();
-        let access = gents::ConfigAccess::Graphql(graphql.clone());
+        let graphql =
+            gents_service::home_state::home_graphql_endpoint(&home_dir, state.graphql.clone())
+                .await
+                .unwrap();
+        let access = gents_store::config_client::ConfigAccess::Graphql(graphql.clone());
         let owner = state.node_did.clone();
 
         let subject_dir = PathBuf::from(SMOKE_SUBJECT);
         let dossier = dossier::render(&subject_dir, Some(SMOKE_BEHAVIOR)).unwrap();
         let registry = CheckRegistry::builtin();
-        let selected = access.execute(&format!("{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents::store::graphql::escape_graphql_string(&owner))).await.unwrap();
+        let selected = access.execute(&format!("{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents_store::graphql::escape_graphql_string(&owner))).await.unwrap();
         let agent_did = selected["data"]["Node"][0]["default_agent_did"]
             .as_str()
             .expect("served default agent");
-        let selected = access.execute(&format!("{{ Agent(filter: {{ agent_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ inference_profile_id }} }}", gents::store::graphql::escape_graphql_string(agent_did))).await.unwrap();
+        let selected = access.execute(&format!("{{ Agent(filter: {{ agent_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ inference_profile_id }} }}", gents_store::graphql::escape_graphql_string(agent_did))).await.unwrap();
         let profile = selected["data"]["Agent"][0]["inference_profile_id"]
             .as_str()
             .expect("served agent profile")

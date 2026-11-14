@@ -69,9 +69,7 @@ pub(crate) struct OptimizationRunArgs {
     /// resume it.
     #[arg(long)]
     pub(crate) job_id: Option<String>,
-    /// `scripted:<file>`: a JSON array of `{"text", "rationale"}`, one per
-    /// round; a file holding fewer than `--rounds` is refused before the job
-    /// is frozen. `agent:<pack>[:<agent>]`: an agent of a pack
+    /// `agent:<pack>[:<agent>]`: an agent of a pack
     /// (`<pack>` resolves like `gents config pack install`, e.g. `prompt_proposer`
     /// or `gents/prompt_proposer@1.0.0`, or is a directory path), installed
     /// into the home and asked once per round on the served home.

@@ -1,19 +1,20 @@
 use std::collections::BTreeSet;
 
 use anyhow::{bail, Result};
-use gents::runtime::agent::p2p_reconcile::templates::{equality_filter, PairingFilters};
-use gents::runtime::agent::p2p_reconcile::{
+use gents_p2p::p2p_reconcile::templates::{equality_filter, PairingFilters};
+use gents_p2p::p2p_reconcile::{
     compute_owned_pairing_diff, to_replication_filters, update_applied_after_success, DiffOp,
     PairingActual as RuntimePairingActual,
 };
-use gents::store::graphql::escape_graphql_string;
+use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 
 use crate::support::{first_optional_row, test_db, TestDb};
 
-use super::invariants::ObservedSnapshot;
 use super::scenario::{Action, NodeId, Scenario};
-use super::{PairingActual, PairingApplied, PairingDesired};
+use gents_p2p::test_support::pairing_invariants::ObservedSnapshot;
+use gents_p2p::test_support::pairing_invariants::PairingActual;
+use gents_p2p::{p2p_reconcile::PairingApplied, p2p_reconcile::PairingDesired};
 
 pub struct HarnessNode {
     pub id: NodeId,
@@ -166,7 +167,7 @@ impl Harness {
 
     async fn wait_for_convergence(&mut self) -> Result<()> {
         let snapshot = self.current_snapshot().await?;
-        if crate::support::pairing_conformance::invariants::check_liveness(&snapshot) {
+        if gents_p2p::test_support::pairing_invariants::check_liveness(&snapshot) {
             self.history.push(snapshot);
             return Ok(());
         }
@@ -176,7 +177,7 @@ impl Harness {
         self.record_observation().await?;
 
         let snapshot = self.current_snapshot().await?;
-        if crate::support::pairing_conformance::invariants::check_liveness(&snapshot) {
+        if gents_p2p::test_support::pairing_invariants::check_liveness(&snapshot) {
             Ok(())
         } else {
             bail!(
@@ -449,7 +450,7 @@ async fn read_peer_pairing_applied_row(
             }}
         }}"#
     );
-    let access = gents::ConfigAccess::local_as(
+    let access = gents_store::config_client::ConfigAccess::local_as(
         node.db.node.clone(),
         identity::Did::new(node.db.node_identity.did())?,
     );
@@ -511,7 +512,8 @@ async fn write_peer_pairing_applied(
         }
     };
     let actor = identity::Did::new(node.db.node_identity.did())?;
-    let access = gents::ConfigAccess::local_as(node.db.node.clone(), actor.clone());
+    let access =
+        gents_store::config_client::ConfigAccess::local_as(node.db.node.clone(), actor.clone());
     access
         .transact_write("test.pairing_conformance.apply", |txn| {
             let mutation = &mutation;
@@ -523,7 +525,7 @@ async fn write_peer_pairing_applied(
                         &response,
                         "PeerPairingApplied",
                     )?;
-                    gents::store::config_client::maybe_link_deferred_operation_in_txn(
+                    gents_store::config_client::maybe_link_deferred_operation_in_txn(
                         txn,
                         "PeerPairingApplied",
                         &doc,

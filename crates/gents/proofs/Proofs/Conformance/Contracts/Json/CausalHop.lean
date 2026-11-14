@@ -1,22 +1,18 @@
-import Proofs.Request.CausalHop
-import Proofs.DurableLineage
-import Proofs.AgentSession
+import Proofs.Session.Request.CausalHop
+import Proofs.Session.DurableLineage
+import Proofs.Session.AgentSession
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.CausalHopContracts
 
-open Conformance.Contracts
+open Lean Conformance.Contracts
 
 def causeString : CausalHop.Cause → String
   | .root => "root"
   | .crossSession _ => "cross_session"
   | .returnEdge => "return"
   | .continuation => "continuation"
-
-def causeHopJson : CausalHop.Cause → String
-  | .crossSession causeHop => toString causeHop
-  | _ => "null"
-
 
 structure StepCase where
   name : String
@@ -91,35 +87,17 @@ def callHops : CausalHop.Pair → List CausalHop.Event → List Nat
   | _, [] => []
   | p, e :: rest => e.hop p :: callHops (e.apply p) rest
 
-def eventString : CausalHop.Event → String
-  | .aSendsB => "a_sends_b"
-  | .bSendsA => "b_sends_a"
-  | .returnToA => "return_to_a"
-  | .returnToB => "return_to_b"
+deriving instance Lean.ToJson for CausalHop.Event
+
+structure CallInput where
+  name : String
+  maxRequestHop : Option Nat
+  events : List CausalHop.Event
+  deriving Lean.ToJson
 
 def optionalNatJson : Option Nat → String
   | none => "null"
   | some value => toString value
-
-def callCaseJson (c : CallCase) : String :=
-  let hops := callHops ⟨0, 0⟩ c.events
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"max_request_hop\":" ++ optionalNatJson c.maxRequestHop
-    ++ ",\"events\":" ++ jsonArray (c.events.map (jsonString ∘ eventString))
-    ++ ",\"expected_hops\":" ++ jsonArray (hops.map toString)
-    ++ ",\"expected_admitted\":"
-      ++ jsonArray (hops.map (toString ∘ CausalHop.admitHop c.maxRequestHop)) ++ "}"
-
-def stepCaseJson (c : StepCase) : String :=
-  let hop := CausalHop.nextHop c.cause c.ownPredecessorHop
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"cause\":" ++ jsonString (causeString c.cause)
-    ++ ",\"cause_hop\":" ++ causeHopJson c.cause
-    ++ ",\"own_predecessor_hop\":" ++ toString c.ownPredecessorHop
-    ++ ",\"max_request_hop\":" ++ optionalNatJson c.maxRequestHop
-    ++ ",\"expected_hop\":" ++ toString hop
-    ++ ",\"expected_admitted\":" ++ toString (CausalHop.admitHop c.maxRequestHop hop) ++ "}"
-
 
 def chainHops : Nat → List CausalHop.Step → List Nat
   | _, [] => []
@@ -127,19 +105,52 @@ def chainHops : Nat → List CausalHop.Step → List Nat
       let hop := step.apply start
       hop :: chainHops hop rest
 
-def stepJson : CausalHop.Step → String
-  | .cross own => "{\"kind\":\"cross_session\",\"own_predecessor_hop\":" ++ toString own ++ "}"
-  | .cont => "{\"kind\":\"continuation\",\"own_predecessor_hop\":null}"
+inductive ChainStepKind where
+  | crossSession
+  | continuation
+  deriving Lean.ToJson
 
-def chainCaseJson (c : ChainCase) : String :=
-  let hops := chainHops 0 c.steps
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"max_request_hop\":" ++ optionalNatJson c.maxRequestHop
-    ++ ",\"steps\":" ++ jsonArray (c.steps.map stepJson)
-    ++ ",\"expected_hops\":" ++ jsonArray (hops.map toString)
-    ++ ",\"expected_admitted\":"
-      ++ jsonArray (hops.map (toString ∘ CausalHop.admitHop c.maxRequestHop)) ++ "}"
+structure ChainStepWire where
+  kind : ChainStepKind
+  ownPredecessorHop : Option Nat
+  deriving Lean.ToJson
 
+def ChainStepWire.ofModel : CausalHop.Step → ChainStepWire
+  | .cross own => { kind := .crossSession, ownPredecessorHop := some own }
+  | .cont => { kind := .continuation, ownPredecessorHop := none }
+
+def ChainStepWire.toModel (step : ChainStepWire) : CausalHop.Step :=
+  match step.kind with
+  | .crossSession => .cross (step.ownPredecessorHop.getD 0)
+  | .continuation => .cont
+
+structure ChainInput where
+  name : String
+  maxRequestHop : Option Nat
+  steps : List ChainStepWire
+  deriving Lean.ToJson
+
+structure HopTrace where
+  hops : List Nat
+  admitted : List Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def chain : Family ChainInput HopTrace where
+  inputs := chainCases.map fun c =>
+    { name := c.name, maxRequestHop := c.maxRequestHop, steps := c.steps.map ChainStepWire.ofModel }
+  model := fun i =>
+    let hops := chainHops 0 (i.steps.map ChainStepWire.toModel)
+    { hops, admitted := hops.map (CausalHop.admitHop i.maxRequestHop) }
+
+
+@[conformance_family]
+def call : Family CallInput HopTrace where
+  inputs := callCases.map fun c =>
+    { name := c.name, maxRequestHop := c.maxRequestHop, events := c.events }
+  model := fun i =>
+    let hops := callHops ⟨0, 0⟩ i.events
+    { hops, admitted := hops.map (CausalHop.admitHop i.maxRequestHop) }
 
 structure CreationCase where
   name : String
@@ -155,43 +166,22 @@ def creationCases : List CreationCase :=
   , ⟨"recreated_session", true, true, false, true⟩
   , ⟨"wrong_cause", true, true, true, false⟩ ]
 
-def creationCaseJson (c : CreationCase) : String :=
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"signature_valid\":" ++ toString c.signatureValid
-    ++ ",\"scope_matches\":" ++ toString c.scopeMatches
-    ++ ",\"physical_matches\":" ++ toString c.physicalMatches
-    ++ ",\"cause_matches\":" ++ toString c.causeMatches
-    ++ ",\"expected\":" ++ toString (DurableLineage.verifiedCreation
-      c.signatureValid (c.scopeMatches && c.physicalMatches) true c.causeMatches) ++ "}"
+deriving instance Lean.ToJson for CreationCase
+
+@[conformance_family]
+def creation : Family CreationCase Bool where
+  inputs := creationCases
+  model := fun c => DurableLineage.verifiedCreation
+    c.signatureValid (c.scopeMatches && c.physicalMatches) true c.causeMatches
 
 def creationSignerCases : List (Bool × Bool × String) :=
   [(true, true, "creator"), (true, true, "worker"), (true, true, "other"),
    (true, false, "creator"), (false, true, "creator"), (false, true, "worker")]
 
-def creationSignerCaseJson (c : Bool × Bool × String) : String :=
-  let (agentNew, hasRequester, signer) := c
-  let requester := if hasRequester then some 1 else none
-  let signerDid := if signer == "creator" then 1 else if signer == "worker" then 2 else 3
-  "{\"agent_new\":" ++ toString agentNew ++ ",\"has_requester\":" ++ toString hasRequester
-    ++ ",\"signer\":" ++ jsonString signer ++ ",\"expected\":"
-    ++ toString (AgentSession.creationReceiptSigner agentNew requester 2 == some signerDid) ++ "}"
-
 def jobCreationCases : List (Bool × Bool × Bool × Bool) :=
   [(true, true, true, true), (false, true, true, true),
    (true, false, true, true), (true, true, false, true),
    (true, true, true, false)]
-
-def jobCreationCaseJson (c : Bool × Bool × Bool × Bool) : String :=
-  let (parent, job, key, spawn) := c
-  "{\"parent\":" ++ toString parent ++ ",\"job\":" ++ toString job
-    ++ ",\"key\":" ++ toString key ++ ",\"spawn\":" ++ toString spawn
-    ++ ",\"expected\":" ++ toString (DurableLineage.verifiedJobCreation parent job key spawn) ++ "}"
-
-def deferredCreationCaseJson (c : Bool × Bool × Bool × Bool) : String :=
-  let (kind, receipt, opening, cause) := c
-  "{\"kind\":" ++ toString kind ++ ",\"receipt\":" ++ toString receipt
-    ++ ",\"opening\":" ++ toString opening ++ ",\"cause\":" ++ toString cause
-    ++ ",\"expected\":" ++ toString (DurableLineage.deferredCreationAllowed kind receipt opening cause) ++ "}"
 
 structure InterruptCase where
   name : String
@@ -209,19 +199,6 @@ def interruptCases : List InterruptCase :=
   , ⟨"task_trigger", "caller", "root", none, true, true⟩
   , ⟨"foreign_task_trigger", "caller", "root", none, false, true⟩
   , ⟨"own_session", "caller", "caller", some "caller", true, true⟩ ]
-
-def interruptCaseJson (c : InterruptCase) : String :=
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"caller_session\":" ++ jsonString c.callerSession
-    ++ ",\"target_session\":" ++ jsonString c.targetSession
-    ++ ",\"target_origin_cause\":"
-      ++ (match c.targetOriginCause with | some s => jsonString s | none => "null")
-    ++ ",\"same_node\":" ++ toString c.sameNode
-    ++ ",\"task_triggered\":" ++ toString c.taskTriggered
-    ++ ",\"expected_allowed\":"
-      ++ toString (DurableLineage.interruptAllowed c.callerSession c.targetSession
-        c.targetOriginCause c.sameNode c.taskTriggered) ++ "}"
-
 
 theorem interrupt_cases_cover_both_verdicts :
     interruptCases.any (fun c => DurableLineage.interruptAllowed c.callerSession
@@ -244,22 +221,52 @@ def writeCases : List WriteCase :=
   , ⟨"busy_session_queue_keeps_its_higher_hop", .queued, 0, 1⟩
   , ⟨"busy_session_is_steered_past_its_caller", .steering, 3, 1⟩ ]
 
-def writeCaseJson (c : WriteCase) : String :=
-  let write := DurableLineage.sessionMessageWrite c.delivery c.callerHop c.ownHop
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"delivery\":" ++ jsonString (match c.delivery with
-        | .request => "request" | .queued => "queue" | .steering => "steer")
-    ++ ",\"caller_hop\":" ++ toString c.callerHop
-    ++ ",\"own_hop\":" ++ toString c.ownHop
-    ++ ",\"expected_hop\":" ++ toString write.lineage.requestHop
-    ++ ",\"names_caller_tool_call\":" ++ toString write.lineage.hasParentToolCallDocId
-    ++ ",\"queued_after_active\":" ++ toString write.queuedAfterActive ++ "}"
+inductive WriteDelivery where
+  | request
+  | queue
+  | steer
+  deriving Lean.ToJson
+
+def WriteDelivery.ofModel : DurableLineage.Delivery → WriteDelivery
+  | .request => .request
+  | .queued => .queue
+  | .steering => .steer
+
+def WriteDelivery.toModel : WriteDelivery → DurableLineage.Delivery
+  | .request => .request
+  | .queue => .queued
+  | .steer => .steering
+
+structure WriteInput where
+  name : String
+  delivery : WriteDelivery
+  callerHop : Nat
+  ownHop : Nat
+  deriving Lean.ToJson
+
+structure WriteOutput where
+  hop : Nat
+  namesCallerToolCall : Bool
+  queuedAfterActive : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def write : Family WriteInput WriteOutput where
+  inputs := writeCases.map fun c =>
+    { name := c.name, delivery := WriteDelivery.ofModel c.delivery, callerHop := c.callerHop,
+      ownHop := c.ownHop }
+  model := fun i =>
+    let write := DurableLineage.sessionMessageWrite i.delivery.toModel i.callerHop i.ownHop
+    { hop := write.lineage.requestHop
+      namesCallerToolCall := write.lineage.hasParentToolCallDocId
+      queuedAfterActive := write.queuedAfterActive }
 
 structure SessionTargetCase where
   sameRequester : Bool
   sameNode : Bool
   caused : Bool
   allowedTarget : Bool
+  deriving Lean.ToJson
 
 def sessionTargetCases : List SessionTargetCase := do
   let sameRequester ← [false, true]
@@ -267,14 +274,6 @@ def sessionTargetCases : List SessionTargetCase := do
   let caused ← [false, true]
   let allowedTarget ← [false, true]
   pure ⟨sameRequester, sameNode, caused, allowedTarget⟩
-
-def sessionTargetCaseJson (c : SessionTargetCase) : String :=
-  "{\"same_requester\":" ++ toString c.sameRequester
-    ++ ",\"same_node\":" ++ toString c.sameNode
-    ++ ",\"caused\":" ++ toString c.caused
-    ++ ",\"allowed_target\":" ++ toString c.allowedTarget
-    ++ ",\"expected_allowed\":" ++ toString (DurableLineage.sessionTargetAllowed
-      c.sameRequester c.sameNode c.caused c.allowedTarget) ++ "}"
 
 structure SessionListCase where
   target : SessionTargetCase
@@ -286,19 +285,6 @@ def sessionListCases : List SessionListCase := do
   let verifiedStarterReceipt ← [false, true]
   let interruptAllowed ← [false, true]
   pure ⟨target, verifiedStarterReceipt, interruptAllowed⟩
-
-def sessionListCaseJson (c : SessionListCase) : String :=
-  let entry := DurableLineage.listedSession c.target.sameRequester c.target.sameNode
-    c.target.caused c.target.allowedTarget c.verifiedStarterReceipt c.interruptAllowed
-  "{\"same_requester\":" ++ toString c.target.sameRequester
-    ++ ",\"same_node\":" ++ toString c.target.sameNode
-    ++ ",\"caused\":" ++ toString c.target.caused
-    ++ ",\"allowed_target\":" ++ toString c.target.allowedTarget
-    ++ ",\"verified_starter_receipt\":" ++ toString c.verifiedStarterReceipt
-    ++ ",\"interrupt_allowed\":" ++ toString c.interruptAllowed
-    ++ ",\"expected_listed\":" ++ toString entry.isSome
-    ++ ",\"expected_can_message\":" ++ toString (entry.any (·.canMessage))
-    ++ ",\"expected_can_interrupt\":" ++ toString (entry.any (·.canInterrupt)) ++ "}"
 
 structure CapObservationCase where
   name : String
@@ -312,34 +298,113 @@ def capObservationCases : List CapObservationCase :=
   , ⟨"at_bound", some (some 1), 1⟩
   , ⟨"over_bound", some (some 1), 2⟩ ]
 
-def capObservationCaseJson (c : CapObservationCase) : String :=
-  let visible := c.observation.isSome
-  let cap := c.observation.getD none
-  let expected := CausalHop.admitObservedHop c.observation c.hop
-  "{\"name\":" ++ jsonString c.name
-    ++ ",\"visible\":" ++ toString visible
-    ++ ",\"cap\":" ++ optionalNatJson cap
-    ++ ",\"hop\":" ++ toString c.hop
-    ++ ",\"expected_bound\":" ++ optionalNatJson (CausalHop.observedHopBound c.observation)
-    ++ ",\"expected\":" ++ (match expected with
-      | none => "null"
-      | some value => toString value) ++ "}"
+structure CapObservationInput where
+  name : String
+  visible : Bool
+  cap : Option Nat
+  hop : Nat
+  deriving Lean.ToJson
 
-def contractJson : String :=
-  "{\"default_max_request_hop\":" ++ optionalNatJson CausalHop.defaultMaxRequestHop
-    ++ ",\"cap_observation_cases\":" ++ jsonArray (capObservationCases.map capObservationCaseJson)
-    ++ ",\"step_cases\":" ++ jsonArray (stepCases.map stepCaseJson)
-    ++ ",\"chain_cases\":" ++ jsonArray (chainCases.map chainCaseJson)
-    ++ ",\"call_cases\":" ++ jsonArray (callCases.map callCaseJson)
-    ++ ",\"interrupt_cases\":" ++ jsonArray (interruptCases.map interruptCaseJson)
-    ++ ",\"creation_cases\":" ++ jsonArray (creationCases.map creationCaseJson)
-    ++ ",\"creation_signer_cases\":" ++ jsonArray (creationSignerCases.map creationSignerCaseJson)
-    ++ ",\"job_creation_cases\":" ++ jsonArray (jobCreationCases.map jobCreationCaseJson)
-    ++ ",\"deferred_creation_cases\":" ++ jsonArray (jobCreationCases.map deferredCreationCaseJson)
-    ++ ",\"write_cases\":" ++ jsonArray (writeCases.map writeCaseJson)
-    ++ ",\"session_target_cases\":" ++ jsonArray (sessionTargetCases.map sessionTargetCaseJson)
-    ++ ",\"session_list_cases\":" ++ jsonArray (sessionListCases.map sessionListCaseJson) ++ "}"
+structure CapObservationOutput where
+  expected : Option Bool
+  bound : Option Nat
+  deriving Lean.ToJson
 
+@[conformance_family]
+def capObservation : Family CapObservationInput CapObservationOutput where
+  inputs := capObservationCases.map fun c =>
+    { name := c.name, visible := c.observation.isSome, cap := c.observation.getD none, hop := c.hop }
+  model := fun i =>
+    let observation := if i.visible then some i.cap else none
+    { expected := CausalHop.admitObservedHop observation i.hop
+      bound := CausalHop.observedHopBound observation }
+
+structure StepInput where
+  name : String
+  cause : String
+  causeHop : Option Nat
+  ownPredecessorHop : Nat
+  maxRequestHop : Option Nat
+  deriving Lean.ToJson
+
+structure StepOutput where
+  hop : Nat
+  admitted : Bool
+  deriving Lean.ToJson
+
+def causeOfWire : String → Option Nat → CausalHop.Cause
+  | "cross_session", some causeHop => .crossSession causeHop
+  | "return", _ => .returnEdge
+  | "continuation", _ => .continuation
+  | _, _ => .root
+
+def causeHopOf : CausalHop.Cause → Option Nat
+  | .crossSession causeHop => some causeHop
+  | _ => none
+
+def StepInput.ofCase (c : StepCase) : StepInput :=
+  { name := c.name
+    cause := causeString c.cause
+    causeHop := causeHopOf c.cause
+    ownPredecessorHop := c.ownPredecessorHop
+    maxRequestHop := c.maxRequestHop }
+
+@[conformance_family]
+def stepAdmission : Family StepInput StepOutput where
+  inputs := stepCases.map StepInput.ofCase
+  model := fun i =>
+    let hop := CausalHop.nextHop (causeOfWire i.cause i.causeHop) i.ownPredecessorHop
+    { hop, admitted := CausalHop.admitHop i.maxRequestHop hop }
+
+structure JobCreationInput where
+  parent : Bool
+  job : Bool
+  key : Bool
+  spawn : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def jobCreation : Family JobCreationInput Bool where
+  inputs := jobCreationCases.map fun (parent, job, key, spawn) =>
+    { parent, job, key, spawn }
+  model := fun i => DurableLineage.verifiedJobCreation i.parent i.job i.key i.spawn
+
+@[conformance_family]
+def sessionTarget : Family SessionTargetCase Bool where
+  inputs := sessionTargetCases
+  model := fun c =>
+    DurableLineage.sessionTargetAllowed c.sameRequester c.sameNode c.caused c.allowedTarget
+
+structure SessionListInput where
+  sameRequester : Bool
+  sameNode : Bool
+  caused : Bool
+  allowedTarget : Bool
+  verifiedStarterReceipt : Bool
+  interruptAllowed : Bool
+  deriving Lean.ToJson
+
+structure SessionListOutput where
+  listed : Bool
+  canMessage : Bool
+  canInterrupt : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def sessionList : Family SessionListInput SessionListOutput where
+  inputs := sessionListCases.map fun c =>
+    { sameRequester := c.target.sameRequester
+      sameNode := c.target.sameNode
+      caused := c.target.caused
+      allowedTarget := c.target.allowedTarget
+      verifiedStarterReceipt := c.verifiedStarterReceipt
+      interruptAllowed := c.interruptAllowed }
+  model := fun i =>
+    let entry := DurableLineage.listedSession i.sameRequester i.sameNode i.caused
+      i.allowedTarget i.verifiedStarterReceipt i.interruptAllowed
+    { listed := entry.isSome
+      canMessage := entry.any (·.canMessage)
+      canInterrupt := entry.any (·.canInterrupt) }
 
 theorem step_cases_cover_causes_and_outcomes :
     ["root", "cross_session", "return", "continuation"].all (fun cause =>
@@ -376,5 +441,66 @@ theorem ping_pong_with_returns_erases_to_model :
     callHops ⟨0, 0⟩ ((pingPongWithReturns 9).filter (fun e => !e.isReturn)) =
       (CausalHop.pingPongHops 9).drop 1 := by
   native_decide
+
+theorem default_max_request_hop_is_unbounded : CausalHop.defaultMaxRequestHop = none := rfl
+
+def defaultMaxRequestHopJson : String :=
+  optionalNatJson CausalHop.defaultMaxRequestHop
+
+def signerDid (signer : String) : Nat :=
+  if signer == "creator" then 1 else if signer == "worker" then 2 else 3
+
+structure CreationSignerInput where
+  agentNew : Bool
+  hasRequester : Bool
+  signer : String
+  deriving ToJson
+
+structure CreationSignerOutput where
+  expected : Bool
+  pluginJobExpected : Option Bool
+  deriving ToJson
+
+def signerAccepts (i : CreationSignerInput) : Bool :=
+  let requester := if i.hasRequester then some 1 else none
+  AgentSession.creationReceiptSigner i.agentNew requester 2 == some (signerDid i.signer)
+
+@[conformance_family]
+def creationSigner : Conformance.Family CreationSignerInput CreationSignerOutput where
+  inputs := creationSignerCases.map fun (agentNew, hasRequester, signer) =>
+    { agentNew, hasRequester, signer }
+  model := fun i =>
+    { expected := signerAccepts i
+      pluginJobExpected := if i.agentNew then some (signerAccepts i) else none }
+
+structure DeferredCreationInput where
+  kind : Bool
+  receipt : Bool
+  opening : Bool
+  cause : Bool
+  deriving ToJson
+
+@[conformance_family]
+def deferredCreation : Conformance.Family DeferredCreationInput Bool where
+  inputs := jobCreationCases.map fun (kind, receipt, opening, cause) =>
+    { kind, receipt, opening, cause }
+  model := fun i => DurableLineage.deferredCreationAllowed i.kind i.receipt i.opening i.cause
+
+structure InterruptInput where
+  callerSession : String
+  targetSession : String
+  targetOriginCause : Option String
+  sameNode : Bool
+  taskTriggered : Bool
+  deriving ToJson
+
+@[conformance_family]
+def interrupt : Conformance.Family InterruptInput Bool where
+  inputs := interruptCases.map fun c =>
+    { callerSession := c.callerSession, targetSession := c.targetSession,
+      targetOriginCause := c.targetOriginCause, sameNode := c.sameNode,
+      taskTriggered := c.taskTriggered }
+  model := fun i => DurableLineage.interruptAllowed i.callerSession i.targetSession
+    i.targetOriginCause i.sameNode i.taskTriggered
 
 end Conformance.CausalHopContracts

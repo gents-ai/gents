@@ -1,6 +1,6 @@
 use crate::optimization::job::JournalEntry;
 use crate::optimization::policy::{Decision, Mode};
-use gents::documents::EvalSplit;
+use gents_documents::EvalSplit;
 
 pub(super) fn runs_started(journal: &[JournalEntry], split: EvalSplit) -> Vec<String> {
     journal

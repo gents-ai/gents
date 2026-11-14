@@ -7,20 +7,24 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch, Mutex, Notify, Semaphore};
 
 use super::*;
-use crate::ensure_runtime_schemas;
-use crate::inference::admission::BackendAdmissionConfig;
-use crate::inference::backends::provider::BackendProviderKind;
-use crate::inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
-use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::runtime::agent::PendingAgent;
 use crate::runtime::status::RuntimeStatusHandle;
-use crate::store::graphql::escape_graphql_string;
-use crate::store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
-use crate::tools::surface::{AgentToolSurfaceConfig, ToolCeiling, ToolSurface};
+use gents_inference::admission::BackendAdmissionConfig;
+use gents_inference::backends::provider::BackendProviderKind;
+use gents_inference::resolved::ResolvedAgent;
+use gents_lean_vocab::families::contracts_runtime_reconcile_supervisor::ReconcileInput;
 use gents_protocol::row::AgentRequest;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
+use gents_store::schema::ensure_runtime_schemas;
+use gents_tools::surface::{AgentToolSurfaceConfig, AgentWithTools, ToolCeiling, ToolSurface};
 
-async fn test_node() -> Arc<defra_node::Node> {
-    Arc::new(crate::test_support::node_builder().build().await.unwrap())
+async fn test_node() -> gents_inference::test_support::TestDb {
+    gents_inference::test_support::test_db(
+        "reconcile",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await
 }
 
 fn test_identity(name: &str) -> KeyIdentity {
@@ -29,7 +33,7 @@ fn test_identity(name: &str) -> KeyIdentity {
 }
 
 fn stub_runtime_node() -> Arc<RuntimeNode> {
-    let identity: Arc<dyn crate::store::identity::NodeIdentity> = Arc::new(
+    let identity: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("stub-runtime-node-{}.key", uuid::Uuid::new_v4())),
             None,
@@ -69,6 +73,7 @@ fn runtime_status_handle(node: &Arc<defra_node::Node>, node_did: &str) -> Runtim
         node_did,
         Arc::new(AcceptingReadinessWriter),
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     runtime_status
 }
@@ -76,18 +81,18 @@ fn runtime_status_handle(node: &Arc<defra_node::Node>, node_did: &str) -> Runtim
 /// Revisions of one Agent share its provisioned binding and root identity, so they
 /// resolve to the same agent DID. Each fresh provisioning is a different Agent.
 struct AgentLineage {
-    root: Arc<dyn crate::store::identity::NodeIdentity>,
+    root: Arc<dyn gents_store::identity::NodeIdentity>,
     binding: gents_protocol::agent_identity::AgentIdentityBinding,
 }
 
 impl AgentLineage {
     fn provision(name: &str) -> Self {
-        let root: Arc<dyn crate::store::identity::NodeIdentity> = Arc::new(test_identity(name));
-        let binding = crate::store::identity::provision_agent_identity(root.as_ref()).unwrap();
+        let root: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(test_identity(name));
+        let binding = gents_store::identity::provision_agent_identity(root.as_ref()).unwrap();
         Self { root, binding }
     }
 
-    fn revision(&self, name: &str) -> ResolvedAgent {
+    fn revision(&self, name: &str) -> AgentWithTools {
         PendingAgent::new(name)
             .with_identity_binding_for_test(self.binding.clone())
             .build_with_identity_arc_for_test(self.root.clone())
@@ -97,7 +102,7 @@ impl AgentLineage {
 async fn snapshot_for_agents(
     node: &Arc<defra_node::Node>,
     default_agent_did: &str,
-    agents: Vec<Arc<ResolvedAgent>>,
+    agents: Vec<AgentWithTools>,
 ) -> ResolvedRuntimeSnapshot {
     snapshot_for_agents_with_node(node, default_agent_did, agents, stub_runtime_node()).await
 }
@@ -105,7 +110,7 @@ async fn snapshot_for_agents(
 async fn snapshot_for_agents_with_node(
     node: &Arc<defra_node::Node>,
     default_agent_did: &str,
-    agents: Vec<Arc<ResolvedAgent>>,
+    agents: Vec<AgentWithTools>,
     runtime_node: Arc<RuntimeNode>,
 ) -> ResolvedRuntimeSnapshot {
     let mut tool_surfaces = RapidHashMap::new();
@@ -116,11 +121,11 @@ async fn snapshot_for_agents_with_node(
                 node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &Default::default(),
+                &gents_tools::plugin_host::NoPluginHost,
             )
             .await
             .unwrap();
-        tool_surfaces.insert(agent_config.agent_did.clone(), Arc::new(tool_surface));
+        tool_surfaces.insert(agent_config.agent.agent_did.clone(), Arc::new(tool_surface));
     }
     ResolvedRuntimeSnapshot::from_parts(
         default_agent_did.to_string(),
@@ -134,7 +139,7 @@ async fn snapshot_for_agents_with_node(
 async fn snapshot_for_agents_with_admission(
     node: &Arc<defra_node::Node>,
     default_agent_did: &str,
-    agents: Vec<Arc<ResolvedAgent>>,
+    agents: Vec<AgentWithTools>,
     backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
 ) -> ResolvedRuntimeSnapshot {
     let mut tool_surfaces = RapidHashMap::new();
@@ -145,11 +150,11 @@ async fn snapshot_for_agents_with_admission(
                 node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &Default::default(),
+                &gents_tools::plugin_host::NoPluginHost,
             )
             .await
             .unwrap();
-        tool_surfaces.insert(agent_config.agent_did.clone(), Arc::new(tool_surface));
+        tool_surfaces.insert(agent_config.agent.agent_did.clone(), Arc::new(tool_surface));
     }
     ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         default_agent_did.to_string(),
@@ -171,7 +176,7 @@ fn backend_admission_config(
         max_concurrent,
         max_queue_depth,
         enabled: true,
-        probe_status: crate::inference::backends::registry::HEALTHY_PROBE_STATUS.to_string(),
+        probe_status: gents_inference::backends::registry::HEALTHY_PROBE_STATUS.to_string(),
         measured_unhealthy: false,
         config_fingerprint: format!("{backend_id}:{max_concurrent}:{max_queue_depth}"),
     }
@@ -210,144 +215,18 @@ fn background_child_request(index: usize, agent_did: &str) -> AgentRequest {
         workspace_authority: None,
         workspace_owner_node_did: None,
         workspace_seal_hash: None,
-    }
-}
-
-#[tokio::test]
-async fn operator_write_changes_snapshot_fingerprint() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let lineage = AgentLineage::provision("pairing-contract");
-    let mut initial_agent = lineage.revision("general");
-    initial_agent.system_prompt = "before operator write".to_string();
-    let mut updated_agent = lineage.revision("general");
-    updated_agent.system_prompt = "after operator write".to_string();
-    let current_resolved =
-        snapshot_for_agents(&node, "general", vec![Arc::new(initial_agent)]).await;
-    let proposed = snapshot_for_agents(&node, "general", vec![Arc::new(updated_agent)]).await;
-    let current = current_resolved.activate(1, RapidHashMap::new());
-    let diff = diff_counts(&current, &proposed);
-
-    assert_ne!(
-        current.configuration_fingerprint(),
-        proposed.configuration_fingerprint(),
-        "an operator write must change the configuration fingerprint"
-    );
-    assert_eq!(diff.updated, 1);
-    assert_eq!(diff.added, 0);
-    assert_eq!(diff.removed, 0);
-}
-
-#[tokio::test]
-async fn max_turns_provenance_only_edit_changes_snapshot_and_slot_fingerprints() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let runtime_node = stub_runtime_node();
-
-    let mut unset = PendingAgent::new("general")
-        .build_with_identity_for_test(test_identity("max-turns-provenance"));
-    unset.max_turns = DEFAULT_MAX_TURNS;
-    unset.max_turns_provenance = MaxTurnsProvenance::Default;
-    let mut explicit = unset.clone();
-    explicit.max_turns_provenance = MaxTurnsProvenance::ExecutionProfile;
-    assert_eq!(unset.max_turns, explicit.max_turns);
-
-    assert_ne!(
-        crate::turn::completion_factory::agent_slot_fingerprint(&unset),
-        crate::turn::completion_factory::agent_slot_fingerprint(&explicit),
-        "slot selection must rebuild when only max_turns provenance changed"
-    );
-
-    let unset = Arc::new(unset);
-    let explicit = Arc::new(explicit);
-    let unset_snapshot = snapshot_for_agents_with_node(
-        &node,
-        "general",
-        vec![Arc::clone(&unset)],
-        Arc::clone(&runtime_node),
-    )
-    .await;
-    let explicit_snapshot = snapshot_for_agents_with_node(
-        &node,
-        "general",
-        vec![Arc::clone(&explicit)],
-        Arc::clone(&runtime_node),
-    )
-    .await;
-
-    assert_ne!(
-        unset_snapshot.configuration_fingerprint(),
-        explicit_snapshot.configuration_fingerprint(),
-        "reconcile must not treat a provenance-only edit as a no-op"
-    );
-
-    let active_unset = unset_snapshot.activate(1, RapidHashMap::new());
-    let setting = diff_counts(&active_unset, &explicit_snapshot);
-    assert_eq!(setting.updated, 1);
-    assert_eq!(setting.added, 0);
-    assert_eq!(setting.removed, 0);
-
-    let explicit_snapshot =
-        snapshot_for_agents_with_node(&node, "general", vec![explicit], Arc::clone(&runtime_node))
-            .await;
-    let unset_snapshot =
-        snapshot_for_agents_with_node(&node, "general", vec![unset], runtime_node).await;
-    let active_explicit = explicit_snapshot.activate(1, RapidHashMap::new());
-    assert_ne!(
-        active_explicit.configuration_fingerprint(),
-        unset_snapshot.configuration_fingerprint(),
-        "clearing an explicit value equal to the default must also reconcile"
-    );
-    let clearing = diff_counts(&active_explicit, &unset_snapshot);
-    assert_eq!(clearing.updated, 1);
-    assert_eq!(clearing.added, 0);
-    assert_eq!(clearing.removed, 0);
-}
-
-#[tokio::test]
-async fn pairing_desired_read_failure_applies_no_operations() {
-    assert!(read_failure_is_noop_self_loop(test_node().await).await);
-}
-
-async fn read_failure_is_noop_self_loop(node: Arc<defra_node::Node>) -> bool {
-    use crate::runtime::agent::p2p_reconcile::{
-        reconcile_peer_tick, EmbeddedRemoteP2pAdmin, LoadedPairingApplied, PairingDesired,
-        PairingStateStore,
-    };
-
-    struct FailingDesiredStore;
-    #[async_trait::async_trait]
-    impl PairingStateStore for FailingDesiredStore {
-        async fn load_desired(&self, _peer_id: &str) -> anyhow::Result<Option<PairingDesired>> {
-            anyhow::bail!("simulated desired-state read failure")
-        }
-        async fn load_applied(&self, _peer_id: &str) -> anyhow::Result<LoadedPairingApplied> {
-            Ok(LoadedPairingApplied::default())
-        }
-        async fn persist_applied(
-            &self,
-            _peer_id: &str,
-            _applied: &LoadedPairingApplied,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn list_peer_ids(&self) -> anyhow::Result<BTreeSet<String>> {
-            Ok(BTreeSet::new())
-        }
-    }
-
-    let admin = EmbeddedRemoteP2pAdmin::new(node);
-    let store = FailingDesiredStore;
-    match reconcile_peer_tick(&admin, &store, "peer-a").await {
-        Ok(outcome) => outcome.desired_read_failed && outcome.ops_applied.is_empty(),
-        Err(_) => false,
+        executed_model_name: None,
+        executed_reasoning_effort: None,
+        executed_service_tier: None,
+        executed_inference_profile_id: None,
+        executed_runtime_generation: None,
     }
 }
 
 #[tokio::test]
 async fn reconcile_install_applies_added_agent() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("pairing-contract-install"));
     let current_resolved = ResolvedRuntimeSnapshot::from_parts(
@@ -357,7 +236,7 @@ async fn reconcile_install_applies_added_agent() {
         RapidHashMap::new(),
     )
     .with_node(stub_runtime_node());
-    let proposed = snapshot_for_agents(&node, "general", vec![Arc::new(agent_config)]).await;
+    let proposed = snapshot_for_agents(&node, "general", vec![agent_config]).await;
     let current = current_resolved.activate(1, RapidHashMap::new());
     let diff = diff_counts(&current, &proposed);
     let applied = proposed.clone().activate(2, RapidHashMap::new());
@@ -373,12 +252,11 @@ async fn reconcile_install_applies_added_agent() {
 
 #[tokio::test]
 async fn reconcile_teardown_applies_removed_agent() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("pairing-contract-teardown"));
-    let current_resolved =
-        snapshot_for_agents(&node, "general", vec![Arc::new(agent_config)]).await;
+    let current_resolved = snapshot_for_agents(&node, "general", vec![agent_config]).await;
     let proposed = ResolvedRuntimeSnapshot::from_parts(
         "general".to_string(),
         Vec::new(),
@@ -401,12 +279,10 @@ async fn reconcile_teardown_applies_removed_agent() {
 
 #[tokio::test]
 async fn slot_panic_restarts_agent() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_config = Arc::new(
-        PendingAgent::new("general")
-            .build_with_identity_for_test(test_identity("pairing-contract-slot-crash")),
-    );
+    let db = test_node().await;
+    let node = db.node.clone();
+    let agent_config = PendingAgent::new("general")
+        .build_with_identity_for_test(test_identity("pairing-contract-slot-crash"));
     let tool_surface = Arc::new(
         agent_config
             .tools
@@ -414,7 +290,7 @@ async fn slot_panic_restarts_agent() {
                 &node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &Default::default(),
+                &gents_tools::plugin_host::NoPluginHost,
             )
             .await
             .unwrap(),
@@ -424,7 +300,7 @@ async fn slot_panic_restarts_agent() {
     let runner = {
         let starts = starts.clone();
         let starts_tx = starts_tx.clone();
-        move |_agent: Arc<ResolvedAgent>,
+        move |_agent: AgentWithTools,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
@@ -491,12 +367,10 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
         }
     }
 
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_config = Arc::new(
-        PendingAgent::new("general")
-            .build_with_identity_for_test(test_identity("slot-abort-on-owner-drop")),
-    );
+    let db = test_node().await;
+    let node = db.node.clone();
+    let agent_config = PendingAgent::new("general")
+        .build_with_identity_for_test(test_identity("slot-abort-on-owner-drop"));
     let tool_surface = Arc::new(
         agent_config
             .tools
@@ -504,7 +378,7 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
                 &node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &Default::default(),
+                &gents_tools::plugin_host::NoPluginHost,
             )
             .await
             .unwrap(),
@@ -548,17 +422,17 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
 
 #[tokio::test]
 async fn agent_slot_fans_out_background_children_to_backend_capacity() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
 
     let mut agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("background-fanout"));
-    agent_config.backend_id = Some("backend-wide".to_string());
-    let agent_did = agent_config.agent_did.clone();
+    Arc::make_mut(&mut agent_config.agent).backend_id = Some("backend-wide".to_string());
+    let agent_did = agent_config.agent.agent_did.clone();
     let snapshot = snapshot_for_agents_with_admission(
         &node,
         &agent_did,
-        vec![Arc::new(agent_config)],
+        vec![agent_config],
         RapidHashMap::from_iter([(
             "backend-wide".to_string(),
             backend_admission_config("backend-wide", 3, 100),
@@ -571,7 +445,7 @@ async fn agent_slot_fans_out_background_children_to_backend_capacity() {
     let release = Arc::new(Semaphore::new(0));
     let runner = {
         let release = release.clone();
-        move |_agent: Arc<ResolvedAgent>,
+        move |_agent: AgentWithTools,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
@@ -687,8 +561,8 @@ async fn agent_slot_fans_out_background_children_to_backend_capacity() {
 
 #[tokio::test]
 async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let node_did = node
         .node_identity_did()
         .expect("fixture node has an identity");
@@ -696,9 +570,8 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
 
     let mut agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("capacity-general"));
-    agent_config.backend_id = Some("backend-general".to_string());
-    let agent_config = Arc::new(agent_config);
-    let agent_did = agent_config.agent_did.clone();
+    Arc::make_mut(&mut agent_config.agent).backend_id = Some("backend-general".to_string());
+    let agent_did = agent_config.agent.agent_did.clone();
     let initial_snapshot = snapshot_for_agents_with_admission(
         &node,
         &agent_did,
@@ -720,7 +593,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     )
     .await;
 
-    let runner = move |_agent: Arc<ResolvedAgent>,
+    let runner = move |_agent: AgentWithTools,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
                        _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
@@ -744,7 +617,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node.clone()),
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -806,11 +679,13 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
 /// fixture Agent gets the same node grants the admission fixtures give a managed Agent.
 async fn grant_fixture_agent_call_access(
     node: &Arc<defra_node::Node>,
-    signer: &crate::store::identity::ManagedAgentSigner,
+    signer: &gents_store::identity::ManagedAgentSigner,
 ) {
-    use crate::store::config_client::NodePermission;
-    let admin =
-        crate::ConfigAccess::local_as(node.clone(), identity::Did::new(signer.node_did()).unwrap());
+    use gents_store::config_client::NodePermission;
+    let admin = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(signer.node_did()).unwrap(),
+    );
     let actor = identity::Did::new(signer.did()).unwrap();
     for permission in [
         NodePermission::CollectionGet,
@@ -831,13 +706,16 @@ async fn grant_fixture_agent_call_access(
 /// session through the Agent's own signed access, as the Agent's requests are published.
 async fn seed_fixture_agent_session(
     node: &Arc<defra_node::Node>,
-    signer: &crate::store::identity::ManagedAgentSigner,
+    signer: &gents_store::identity::ManagedAgentSigner,
     session_id: &str,
 ) {
     let actor = identity::Did::new(signer.did()).unwrap();
-    let access =
-        crate::ConfigAccess::local_with_agent_signer(node.clone(), actor.clone(), signer.clone())
-            .unwrap();
+    let access = gents_store::config_client::ConfigAccess::local_with_agent_signer(
+        node.clone(),
+        actor.clone(),
+        signer.clone(),
+    )
+    .unwrap();
     let node_did = signer.node_did().to_string();
     let agent_did = signer.did().to_string();
     let session_id = session_id.to_string();
@@ -848,9 +726,9 @@ async fn seed_fixture_agent_session(
             let agent_did = &agent_did;
             let session_id = &session_id;
             Box::pin(async move {
-                let (agent_doc, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                let (agent_doc, _) = gents_documents::read_desired_state_record_in_txn(
                     txn,
-                    crate::Collection::Agent,
+                    gents_store::collection::Collection::Agent,
                     node_did,
                     agent_did,
                 )
@@ -864,8 +742,8 @@ async fn seed_fixture_agent_session(
                             "created_at": "2026-04-15T00:00:00Z"}}),
                     )
                     .await?;
-                let session_doc = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
-                crate::session::stage_session_relationships_in_txn(
+                let session_doc = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
+                gents_session::session::stage_session_relationships_in_txn(
                     txn,
                     &session_doc,
                     &agent_doc,
@@ -882,7 +760,7 @@ async fn seed_fixture_agent_session(
 #[tokio::test]
 async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     let (db, _user, _access, binding) =
-        crate::test_support::signed_test_node("reconcile-api-key-rotation").await;
+        crate::test_support::root::signed_test_node("reconcile-api-key-rotation").await;
     let node = db.node.clone();
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let node_did = db.node_identity.did().to_string();
@@ -891,23 +769,28 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     let mut agent_config = PendingAgent::new("general")
         .with_identity_binding_for_test(binding)
         .build_with_identity_arc_for_test(db.node_identity.clone());
-    let agent_did = agent_config.agent_did.clone();
-    let signer = agent_config.agent_identity.managed_agent_signer().unwrap();
+    let agent_did = agent_config.agent.agent_did.clone();
+    let signer = agent_config
+        .agent
+        .agent_identity
+        .managed_agent_signer()
+        .unwrap();
     grant_fixture_agent_call_access(&node, &signer).await;
     seed_fixture_agent_session(&node, &signer, "session-test").await;
-    agent_config.backend_id = Some("backend-general".to_string());
-    agent_config.backend_auth = crate::documents::BackendAuth::ApiKey {
+    Arc::make_mut(&mut agent_config.agent).backend_id = Some("backend-general".to_string());
+    Arc::make_mut(&mut agent_config.agent).backend_auth = gents_documents::BackendAuth::ApiKey {
         key: "fixture-old-key".into(),
     };
     let mut rotated = agent_config.clone();
-    rotated.backend_auth = crate::documents::BackendAuth::ApiKey {
+    Arc::make_mut(&mut rotated.agent).backend_auth = gents_documents::BackendAuth::ApiKey {
         key: "fixture-new-key".into(),
     };
     assert_eq!(format!("{agent_config:?}"), format!("{rotated:?}"));
     assert!(!format!("{rotated:?}").contains("fixture-new-key"));
-    let new_connection = crate::turn::completion_factory::agent_connection_fingerprint(&rotated);
+    let new_connection =
+        gents_inference::connection_fingerprint::agent_connection_fingerprint(&rotated.agent);
     assert_ne!(
-        crate::turn::completion_factory::agent_connection_fingerprint(&agent_config),
+        gents_inference::connection_fingerprint::agent_connection_fingerprint(&agent_config.agent),
         new_connection
     );
     let admission = |connection: String| {
@@ -918,22 +801,26 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     let initial_snapshot = snapshot_for_agents_with_admission(
         &node,
         &agent_did,
-        vec![Arc::new(agent_config.clone())],
-        admission(crate::turn::completion_factory::agent_connection_fingerprint(&agent_config)),
+        vec![agent_config.clone()],
+        admission(
+            gents_inference::connection_fingerprint::agent_connection_fingerprint(
+                &agent_config.agent,
+            ),
+        ),
     )
     .await
-    .with_node(agent_config.node.clone());
+    .with_node(agent_config.agent.node.clone());
     let rotated_snapshot = snapshot_for_agents_with_admission(
         &node,
         &agent_did,
-        vec![Arc::new(rotated)],
+        vec![rotated],
         admission(new_connection.clone()),
     )
     .await
-    .with_node(agent_config.node.clone());
+    .with_node(agent_config.agent.node.clone());
 
     let (built_tx, mut built_rx) = mpsc::unbounded_channel::<(u64, String)>();
-    let runner = move |agent_config: Arc<ResolvedAgent>,
+    let runner = move |agent_config: AgentWithTools,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
                        _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
@@ -941,8 +828,8 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
                        mut shutdown: watch::Receiver<bool>| {
         let built_tx = built_tx.clone();
         async move {
-            let key = match &agent_config.backend_auth {
-                crate::documents::BackendAuth::ApiKey { key } => key.clone(),
+            let key = match &agent_config.agent.backend_auth {
+                gents_documents::BackendAuth::ApiKey { key } => key.clone(),
                 _ => String::new(),
             };
             let _ = built_tx.send((generation, key));
@@ -962,7 +849,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
         }
     };
 
-    let registry = crate::inference::admission::AdmissionRegistry::new(node.clone());
+    let registry = gents_inference::admission::AdmissionRegistry::new(node.clone());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
@@ -1018,8 +905,8 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
         .acquire_with_connection_and_signer_for_test(
             "req-rotated-slot",
             "backend-general",
-            &agent_config,
-            crate::inference::admission::CallKind::Inference,
+            &agent_config.agent,
+            gents_inference::admission::CallKind::Inference,
             &new_connection,
             Some(signer),
         )
@@ -1037,10 +924,10 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
 
 #[tokio::test]
 async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
-    use crate::documents::BackendAuth;
+    use gents_documents::BackendAuth;
 
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let node_did = node
         .node_identity_did()
         .expect("fixture node has an identity");
@@ -1048,25 +935,21 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
 
     let mut agent_config =
         PendingAgent::new("general").build_with_identity_for_test(test_identity("switch-general"));
-    let agent_did = agent_config.agent_did.clone();
-    agent_config.backend_id = Some("claude".to_string());
-    agent_config.backend_auth = BackendAuth::NodeOAuth { account_ref: None };
+    let agent_did = agent_config.agent.agent_did.clone();
+    Arc::make_mut(&mut agent_config.agent).backend_id = Some("claude".to_string());
+    Arc::make_mut(&mut agent_config.agent).backend_auth =
+        BackendAuth::NodeOAuth { account_ref: None };
     let mut switched = agent_config.clone();
-    switched.backend_id = Some("claude-subscription-acct-b".to_string());
-    switched.backend_auth = BackendAuth::NodeOAuth {
+    Arc::make_mut(&mut switched.agent).backend_id = Some("claude-subscription-acct-b".to_string());
+    Arc::make_mut(&mut switched.agent).backend_auth = BackendAuth::NodeOAuth {
         account_ref: Some("acct-b".to_string()),
     };
     let runtime_node = stub_runtime_node();
-    let initial_snapshot = snapshot_for_agents_with_node(
-        &node,
-        &agent_did,
-        vec![Arc::new(agent_config)],
-        runtime_node.clone(),
-    )
-    .await;
-    let switched_snapshot =
-        snapshot_for_agents_with_node(&node, &agent_did, vec![Arc::new(switched)], runtime_node)
+    let initial_snapshot =
+        snapshot_for_agents_with_node(&node, &agent_did, vec![agent_config], runtime_node.clone())
             .await;
+    let switched_snapshot =
+        snapshot_for_agents_with_node(&node, &agent_did, vec![switched], runtime_node).await;
 
     let (done_tx, mut done_rx) =
         mpsc::unbounded_channel::<(String, u64, Option<String>, Option<String>)>();
@@ -1074,7 +957,7 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
     let release = Arc::new(Notify::new());
     let runner = {
         let release = release.clone();
-        move |agent_config: Arc<ResolvedAgent>,
+        move |agent_config: AgentWithTools,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
@@ -1100,8 +983,9 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
                     let _ = done_tx.send((
                         request.request_id,
                         generation,
-                        agent_config.backend_id.clone(),
+                        agent_config.agent.backend_id.clone(),
                         agent_config
+                            .agent
                             .backend_auth
                             .oauth_account_ref()
                             .map(str::to_owned),
@@ -1114,7 +998,7 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node.clone()),
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -1189,6 +1073,338 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
         .unwrap();
 }
 
+#[tokio::test]
+async fn model_effort_or_tier_change_restages_the_slot_and_drains_the_call_in_flight() {
+    use gents_documents::inference_defaults::ReasoningEffort;
+    use gents_inference::resolved::ServiceTier;
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    struct Settings {
+        model_name: &'static str,
+        reasoning_effort: Option<ReasoningEffort>,
+        service_tier: Option<ServiceTier>,
+    }
+    const ORIGINAL: Settings = Settings {
+        model_name: "model-a",
+        reasoning_effort: Some(ReasoningEffort::Low),
+        service_tier: None,
+    };
+    let changes = [
+        (
+            "model",
+            Settings {
+                model_name: "model-b",
+                ..ORIGINAL
+            },
+        ),
+        (
+            "effort",
+            Settings {
+                reasoning_effort: Some(ReasoningEffort::High),
+                ..ORIGINAL
+            },
+        ),
+        (
+            "service_tier",
+            Settings {
+                service_tier: Some(ServiceTier::Fast),
+                ..ORIGINAL
+            },
+        ),
+    ];
+
+    for (changed, switched_settings) in changes {
+        let db = test_node().await;
+        let node = db.node.clone();
+        let node_did = node
+            .node_identity_did()
+            .expect("fixture node has an identity");
+        let runtime_status = runtime_status_handle(&node, node_did);
+
+        let apply = |agent_config: &mut ResolvedAgent, settings: Settings| {
+            agent_config.model_name = settings.model_name.to_string();
+            agent_config.sampling.reasoning_effort = settings.reasoning_effort;
+            agent_config.service_tier = settings.service_tier;
+        };
+        let mut agent_config = PendingAgent::new("general")
+            .build_with_identity_for_test(test_identity(&format!("settings-{changed}")));
+        let agent_did = agent_config.agent.agent_did.clone();
+        Arc::make_mut(&mut agent_config.agent).backend_id = Some("backend-a".to_string());
+        apply(Arc::make_mut(&mut agent_config.agent), ORIGINAL);
+        let mut switched = agent_config.clone();
+        apply(Arc::make_mut(&mut switched.agent), switched_settings);
+
+        let runtime_node = stub_runtime_node();
+        let initial_snapshot = snapshot_for_agents_with_node(
+            &node,
+            &agent_did,
+            vec![agent_config],
+            runtime_node.clone(),
+        )
+        .await;
+        let switched_snapshot =
+            snapshot_for_agents_with_node(&node, &agent_did, vec![switched], runtime_node).await;
+
+        type Observed = (String, u64, gents_protocol::row::ExecutedInferenceSettings);
+        let (done_tx, mut done_rx) = mpsc::unbounded_channel::<Observed>();
+        let (held_tx, mut held_rx) = mpsc::unbounded_channel::<String>();
+        let release = Arc::new(Notify::new());
+        let runner = {
+            let release = release.clone();
+            move |agent_config: AgentWithTools,
+                  _tool_surface: Arc<ToolSurface>,
+                  request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                  _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
+                  generation: u64,
+                  mut shutdown: watch::Receiver<bool>| {
+                let (done_tx, held_tx, release) =
+                    (done_tx.clone(), held_tx.clone(), release.clone());
+                async move {
+                    loop {
+                        let request = tokio::select! {
+                            _ = shutdown.changed() => return Ok(()),
+                            message = async {
+                                let mut receiver = request_rx.lock().await;
+                                receiver.recv().await
+                            } => match message {
+                                Some(request) => request,
+                                None => return Ok(()),
+                            },
+                        };
+                        if request.request_id == "held" {
+                            let _ = held_tx.send(request.request_id.clone());
+                            release.notified().await;
+                        }
+                        let _ = done_tx.send((
+                            request.request_id,
+                            generation,
+                            agent_config.agent.executed_inference(generation),
+                        ));
+                    }
+                }
+            }
+        };
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let supervisor = GenerationSupervisor::bootstrap(
+            initial_snapshot,
+            gents_inference::admission::AdmissionRegistry::new(node.clone()),
+            crate::runtime::agent::retry::RetryPolicy {
+                max_retries: 3,
+                base_delay_ms: 5,
+                max_delay_ms: 25,
+            },
+            runner,
+            runtime_status,
+            shutdown_rx.clone(),
+            None,
+        )
+        .await
+        .unwrap();
+        let initial = supervisor.current_snapshot();
+        let mut held = background_child_request(0, &agent_did);
+        held.request_id = "held".to_string();
+        initial.dispatchers[&agent_did].send(held).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), held_rx.recv())
+            .await
+            .expect("the old slot claims the first request")
+            .unwrap();
+
+        let (active_tx, mut active_rx) = watch::channel(initial.clone());
+        let (proposal_tx, proposal_rx) = mpsc::channel(4);
+        let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
+        proposal_tx.send(switched_snapshot).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), active_rx.changed())
+            .await
+            .expect("a settings change publishes a generation while a call is in flight")
+            .unwrap();
+        let updated = active_rx.borrow().clone();
+        drop(initial);
+
+        let mut queued = background_child_request(1, &agent_did);
+        queued.request_id = "queued".to_string();
+        updated.dispatchers[&agent_did].send(queued).await.unwrap();
+        let next = tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
+            .await
+            .expect("the queued request runs on the new slot")
+            .unwrap();
+        assert_eq!(next.0, "queued");
+        assert_eq!(next.1, updated.generation);
+        assert_eq!(next.2.model_name, switched_settings.model_name);
+        assert_eq!(
+            next.2.reasoning_effort.as_deref(),
+            switched_settings
+                .reasoning_effort
+                .map(ReasoningEffort::as_str)
+        );
+        assert_eq!(
+            next.2.service_tier.as_deref(),
+            switched_settings.service_tier.map(ServiceTier::as_str)
+        );
+        assert_eq!(next.2.runtime_generation, Some(updated.generation));
+
+        release.notify_one();
+        let drained = tokio::time::timeout(Duration::from_secs(5), done_rx.recv())
+            .await
+            .expect("the call in flight finishes on the retired slot")
+            .unwrap();
+        assert_eq!(drained.0, "held");
+        assert_ne!(drained.1, updated.generation);
+        assert_eq!(drained.2.model_name, ORIGINAL.model_name);
+        assert_eq!(
+            drained.2.reasoning_effort.as_deref(),
+            ORIGINAL.reasoning_effort.map(ReasoningEffort::as_str),
+            "the call in flight keeps the effort it was dispatched with"
+        );
+        assert_eq!(
+            drained.2.service_tier.as_deref(),
+            ORIGINAL.service_tier.map(ServiceTier::as_str),
+            "the call in flight keeps the tier it was dispatched with"
+        );
+        assert_ne!(drained.2.runtime_generation, Some(updated.generation));
+
+        let _ = shutdown_tx.send(true);
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("supervisor should stop on shutdown")
+            .unwrap()
+            .unwrap();
+        node.shutdown().await.unwrap();
+    }
+}
+
+#[derive(Default)]
+struct CapturingReadinessWriter(
+    StdMutex<Vec<gents_protocol::node_readiness::NodeReadinessSnapshot>>,
+);
+
+#[async_trait::async_trait]
+impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for CapturingReadinessWriter {
+    async fn upsert(
+        &self,
+        _node_did: &str,
+        snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
+        _updated_at: &str,
+    ) -> Result<()> {
+        self.0.lock().unwrap().push(snapshot.clone());
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn published_readiness_carries_the_generations_effective_inference() {
+    use gents_documents::inference_defaults::ReasoningEffort;
+    use gents_inference::resolved::ServiceTier;
+    use gents_protocol::node_readiness::{
+        NodeReadinessRow, ReasoningEffortBinding, ServiceTierBinding,
+    };
+
+    let db = test_node().await;
+    let node = db.node.clone();
+    let node_did = node
+        .node_identity_did()
+        .expect("fixture node has an identity")
+        .to_owned();
+    let writer = Arc::new(CapturingReadinessWriter::default());
+    let (owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
+        node.clone(),
+        &node_did,
+        writer.clone(),
+        Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
+
+    let mut agent_config = PendingAgent::new("general")
+        .build_with_identity_for_test(test_identity("readiness-effective-inference"));
+    let agent_did = agent_config.agent.agent_did.clone();
+    Arc::make_mut(&mut agent_config.agent).backend_id = Some("backend-a".to_string());
+    Arc::make_mut(&mut agent_config.agent).model_name = "model-a".to_string();
+    Arc::make_mut(&mut agent_config.agent)
+        .sampling
+        .reasoning_effort = Some(ReasoningEffort::Low);
+    Arc::make_mut(&mut agent_config.agent).service_tier = Some(ServiceTier::Fast);
+    Arc::make_mut(&mut agent_config.agent).profile_id = Some("profile-a".to_string());
+    let snapshot =
+        snapshot_for_agents_with_node(&node, &agent_did, vec![agent_config], stub_runtime_node())
+            .await;
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let supervisor = GenerationSupervisor::bootstrap(
+        snapshot,
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
+        crate::runtime::agent::retry::RetryPolicy {
+            max_retries: 1,
+            base_delay_ms: 1,
+            max_delay_ms: 2,
+        },
+        |_agent_config, _tool_surface, _request_rx, _capacity, _generation, _shutdown| async {
+            Ok(())
+        },
+        runtime_status.clone(),
+        shutdown_rx,
+        None,
+    )
+    .await
+    .unwrap();
+    let active = supervisor.current_snapshot();
+    runtime_status
+        .readiness()
+        .initialize(&agent_did)
+        .await
+        .unwrap();
+    runtime_status
+        .readiness()
+        .publish_snapshot(active.as_ref())
+        .await
+        .unwrap();
+
+    let published = writer
+        .0
+        .lock()
+        .unwrap()
+        .last()
+        .cloned()
+        .expect("the publisher wrote a snapshot");
+    let row = NodeReadinessRow {
+        node_did: node_did.clone(),
+        snapshot_json: serde_json::to_string(&published).unwrap(),
+        updated_at: "2026-01-01T00:00:00Z".to_string(),
+    };
+    let decoded = gents_protocol::node_readiness::decode_node_readiness_snapshot(&row, &node_did)
+        .expect("the runtime writes a snapshot its own decoder accepts");
+    let entry = decoded
+        .agents
+        .iter()
+        .find(|entry| entry.agent_did == agent_did)
+        .expect("the staged agent is published");
+    let effective = entry
+        .effective_inference
+        .as_ref()
+        .expect("a ready agent publishes the settings its slot will bind");
+    assert_eq!(effective.model_name, "model-a");
+    assert_eq!(effective.backend_id.as_deref(), Some("backend-a"));
+    assert_eq!(effective.profile_id.as_deref(), Some("profile-a"));
+    assert_eq!(effective.reasoning_effort.as_deref(), Some("low"));
+    assert_eq!(
+        effective.service_tier,
+        ServiceTierBinding::Selected {
+            tier: "fast".to_string()
+        }
+    );
+    assert_eq!(
+        effective.reasoning_effort_dispatch,
+        ReasoningEffortBinding::Sent {
+            effort: "low".to_string()
+        }
+    );
+    assert_eq!(decoded.active_generation, active.generation);
+
+    let _ = shutdown_tx.send(true);
+    drop(supervisor);
+    owner.close().await.unwrap();
+    node.shutdown().await.unwrap();
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct RuntimeStatusRow {
     reconcile_phase: String,
@@ -1197,7 +1413,7 @@ struct RuntimeStatusRow {
 }
 
 async fn fetch_runtime_status(node: &Arc<defra_node::Node>, node_did: &str) -> RuntimeStatusRow {
-    let access = crate::store::config_client::ConfigAccess::local_as(
+    let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(node_did).unwrap(),
     );
@@ -1237,36 +1453,30 @@ async fn await_settled_runtime_status(
     .expect("supervisor publishes its terminal status after the active snapshot")
 }
 
-#[tokio::test]
-async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
-    let publish = lean_runtime_reconcile_case("publish_changed_snapshot");
-    assert!(publish.legal);
-
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+async fn rotate_dispatcher_on_agent_change(input: &ReconcileInput) -> (u64, String) {
+    let db = test_node().await;
+    let node = db.node.clone();
     let node_did = node
         .node_identity_did()
         .expect("fixture node has an identity");
     // The NodeRuntime status row publishes under a visible, registered Node parent.
-    crate::test_support::ensure_test_node(&node, node_did).await;
+    gents_documents::test_support::ensure_test_node(&node, node_did).await;
     let runtime_status = runtime_status_handle(&node, node_did);
 
     let starts = Arc::new(StdMutex::new(RapidHashMap::<String, usize>::new()));
     let lineage = AgentLineage::provision("general");
     let agent_did = lineage.binding.agent_did.clone();
     let mut initial_agent = lineage.revision("general");
-    initial_agent.system_prompt = "initial prompt".to_string();
+    Arc::make_mut(&mut initial_agent.agent).system_prompt = "initial prompt".to_string();
     let mut updated_agent = lineage.revision("general");
-    updated_agent.system_prompt = "updated prompt".to_string();
+    Arc::make_mut(&mut updated_agent.agent).system_prompt = "updated prompt".to_string();
 
-    let initial_snapshot =
-        snapshot_for_agents(&node, &agent_did, vec![Arc::new(initial_agent)]).await;
-    let updated_snapshot =
-        snapshot_for_agents(&node, &agent_did, vec![Arc::new(updated_agent)]).await;
+    let initial_snapshot = snapshot_for_agents(&node, &agent_did, vec![initial_agent]).await;
+    let updated_snapshot = snapshot_for_agents(&node, &agent_did, vec![updated_agent]).await;
 
     let runner = {
         let starts = starts.clone();
-        move |agent_config: Arc<ResolvedAgent>,
+        move |agent_config: AgentWithTools,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
@@ -1277,7 +1487,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
                 *starts
                     .lock()
                     .unwrap()
-                    .entry(agent_config.agent_did.clone())
+                    .entry(agent_config.agent.agent_did.clone())
                     .or_default() += 1;
                 loop {
                     tokio::select! {
@@ -1299,7 +1509,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node.clone()),
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -1313,10 +1523,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
     .await
     .unwrap();
     let active_snapshot = supervisor.current_snapshot();
-    assert_eq!(
-        active_snapshot.generation,
-        publish.pre_active_generation as u64
-    );
+    assert_eq!(active_snapshot.generation, input.pre_active_generation);
     assert!(active_snapshot.dispatchers.contains_key(&agent_did));
     let (active_tx, mut active_rx) = watch::channel(active_snapshot);
     let (proposal_tx, proposal_rx) = mpsc::channel(4);
@@ -1348,10 +1555,6 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
         .unwrap();
     let updated_active = active_rx.borrow().clone();
     assert_eq!(
-        updated_active.generation,
-        publish.post_active_generation as u64
-    );
-    assert_eq!(
         updated_active
             .agents
             .get(&agent_did)
@@ -1360,7 +1563,6 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
         "updated prompt"
     );
     let status = await_settled_runtime_status(&node, node_did).await;
-    assert_eq!(status.reconcile_phase, publish.post_phase.as_str());
     assert_eq!(status.last_reconcile_result, "applied");
     assert!(status.last_reconcile_error.is_empty());
 
@@ -1388,32 +1590,27 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
         .expect("supervisor should stop on shutdown")
         .unwrap()
         .unwrap();
+    (updated_active.generation, status.reconcile_phase)
 }
 
-#[tokio::test]
-async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
-    let apply_failed = lean_runtime_reconcile_case("apply_failed_clears_pending");
-    assert!(apply_failed.legal);
-
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+async fn keep_previous_generation_after_failed_apply(input: &ReconcileInput) -> (u64, String) {
+    let db = test_node().await;
+    let node = db.node.clone();
     let node_did = node
         .node_identity_did()
         .expect("fixture node has an identity");
     // The NodeRuntime status row publishes under a visible, registered Node parent.
-    crate::test_support::ensure_test_node(&node, node_did).await;
+    gents_documents::test_support::ensure_test_node(&node, node_did).await;
     let runtime_status = runtime_status_handle(&node, node_did);
 
     let lineage = AgentLineage::provision("general");
     let agent_did = lineage.binding.agent_did.clone();
     let initial_agent = lineage.revision("general");
     let mut updated_agent = lineage.revision("general");
-    updated_agent.system_prompt = "updated prompt".to_string();
+    Arc::make_mut(&mut updated_agent.agent).system_prompt = "updated prompt".to_string();
 
-    let initial_snapshot =
-        snapshot_for_agents(&node, &agent_did, vec![Arc::new(initial_agent)]).await;
-    let valid_updated_snapshot =
-        snapshot_for_agents(&node, &agent_did, vec![Arc::new(updated_agent)]).await;
+    let initial_snapshot = snapshot_for_agents(&node, &agent_did, vec![initial_agent]).await;
+    let valid_updated_snapshot = snapshot_for_agents(&node, &agent_did, vec![updated_agent]).await;
     let mut extra_tool_surface_snapshot = valid_updated_snapshot.clone();
     extra_tool_surface_snapshot.tool_surfaces.insert(
         "extra".to_string(),
@@ -1430,13 +1627,13 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         .contains("keysets differ"));
     let invalid_snapshot = ResolvedRuntimeSnapshot::from_parts(
         agent_did.clone(),
-        valid_updated_snapshot.agents.values().cloned().collect(),
+        valid_updated_snapshot.agents_with_tools().unwrap(),
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
     .with_node(stub_runtime_node());
 
-    let runner = move |_agent: Arc<ResolvedAgent>,
+    let runner = move |_agent: AgentWithTools,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
                        _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
@@ -1460,7 +1657,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node.clone()),
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -1474,6 +1671,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     .await
     .unwrap();
     let initial_active = supervisor.current_snapshot();
+    assert_eq!(initial_active.generation, input.pre_active_generation);
     let (active_tx, mut active_rx) = watch::channel(initial_active.clone());
     let (proposal_tx, proposal_rx) = mpsc::channel(4);
 
@@ -1482,15 +1680,8 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     proposal_tx.send(invalid_snapshot).await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(!active_rx.has_changed().unwrap());
-    assert_eq!(
-        active_rx.borrow().generation,
-        apply_failed.post_active_generation as u64
-    );
-    let failed_status = fetch_runtime_status(&node, node_did).await;
-    assert_eq!(
-        failed_status.reconcile_phase,
-        apply_failed.post_phase.as_str()
-    );
+    let failed_generation = active_rx.borrow().generation;
+    let failed_status = await_settled_runtime_status(&node, node_did).await;
     assert_eq!(failed_status.last_reconcile_result, "error");
     assert!(!failed_status.last_reconcile_error.is_empty());
 
@@ -1511,6 +1702,24 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         .expect("supervisor should stop on shutdown")
         .unwrap()
         .unwrap();
+    (failed_generation, failed_status.reconcile_phase)
+}
+
+#[tokio::test]
+async fn generation_supervisor_steps_match_lean_runtime_reconcile_cases() {
+    for case in gents_lean_vocab::families::contracts_runtime_reconcile_supervisor::cases() {
+        let (post_active_generation, post_phase) = match case.input.action.as_str() {
+            "publish" => rotate_dispatcher_on_agent_change(&case.input).await,
+            "applyFailed" => keep_previous_generation_after_failed_apply(&case.input).await,
+            other => panic!("the supervisor fixture cannot drive {other}"),
+        };
+        case.check(
+            gents_lean_vocab::families::contracts_runtime_reconcile_supervisor::ReconcileSupervisorOutput {
+                post_phase,
+                post_active_generation,
+            },
+        );
+    }
 }
 
 struct FailGenerationSourceWriter {
@@ -1624,24 +1833,21 @@ impl SlotFailurePolicy for FailSecondRegistrationPolicy {
 
 #[tokio::test]
 async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let lineage = AgentLineage::provision("register-failure");
     let agent_did = lineage.binding.agent_did.clone();
-    let initial = Arc::new(lineage.revision("general"));
+    let initial = lineage.revision("general");
     let mut changed = lineage.revision("general");
-    changed.system_prompt = "changed".to_string();
-    let added = Arc::new(
-        PendingAgent::new("second")
-            .build_with_identity_for_test(test_identity("register-failure-second")),
-    );
+    Arc::make_mut(&mut changed.agent).system_prompt = "changed".to_string();
+    let added = PendingAgent::new("second")
+        .build_with_identity_for_test(test_identity("register-failure-second"));
     let initial_snapshot = snapshot_for_agents(&node, &agent_did, vec![initial]).await;
-    let replacement_snapshot =
-        snapshot_for_agents(&node, &agent_did, vec![Arc::new(changed), added]).await;
+    let replacement_snapshot = snapshot_for_agents(&node, &agent_did, vec![changed, added]).await;
     let started_generations = Arc::new(StdMutex::new(Vec::new()));
     let runner = {
         let started_generations = started_generations.clone();
-        move |_agent: Arc<ResolvedAgent>,
+        move |_agent: AgentWithTools,
               _tool_surface: Arc<ToolSurface>,
               _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
@@ -1660,11 +1866,12 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
             .expect("fixture node has an identity"),
         Arc::new(AcceptingReadinessWriter),
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node),
+        gents_inference::admission::AdmissionRegistry::new(node),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -1713,33 +1920,28 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
 
 #[tokio::test]
 async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let runtime_node = stub_runtime_node();
     let initial = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("retired-drain-failure"));
-    let agent_did = initial.agent_did.clone();
+    let agent_did = initial.agent.agent_did.clone();
     let mut replacement = initial.clone();
-    replacement.system_prompt = "replacement generation".to_string();
-    let initial_snapshot = snapshot_for_agents_with_node(
-        &node,
-        &agent_did,
-        vec![Arc::new(initial)],
-        runtime_node.clone(),
-    )
-    .await;
+    Arc::make_mut(&mut replacement.agent).system_prompt = "replacement generation".to_string();
+    let initial_snapshot =
+        snapshot_for_agents_with_node(&node, &agent_did, vec![initial], runtime_node.clone()).await;
     let replacement_snapshot =
-        snapshot_for_agents_with_node(&node, &agent_did, vec![Arc::new(replacement)], runtime_node)
-            .await;
+        snapshot_for_agents_with_node(&node, &agent_did, vec![replacement], runtime_node).await;
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
         node.clone(),
         node.node_identity_did()
             .expect("fixture node has an identity"),
         Arc::new(AcceptingReadinessWriter),
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
-    let runner = move |_agent: Arc<ResolvedAgent>,
+    let runner = move |_agent: AgentWithTools,
                        _tool_surface: Arc<ToolSurface>,
                        _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
                        _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
@@ -1758,7 +1960,7 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node.clone()),
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -1809,16 +2011,15 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
 
 #[tokio::test]
 async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let lineage = AgentLineage::provision("source-failure");
     let agent_did = lineage.binding.agent_did.clone();
-    let initial = Arc::new(lineage.revision("general"));
+    let initial = lineage.revision("general");
     let mut replacement = lineage.revision("general");
-    replacement.system_prompt = "replacement".to_string();
+    Arc::make_mut(&mut replacement.agent).system_prompt = "replacement".to_string();
     let initial_snapshot = snapshot_for_agents(&node, &agent_did, vec![initial]).await;
-    let replacement_snapshot =
-        snapshot_for_agents(&node, &agent_did, vec![Arc::new(replacement)]).await;
+    let replacement_snapshot = snapshot_for_agents(&node, &agent_did, vec![replacement]).await;
 
     let fatal_attempted = Arc::new(Notify::new());
     let fatal_release = Arc::new(Semaphore::new(0));
@@ -1834,6 +2035,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
         "did:test:source-failure-rollback",
         writer,
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     runtime_status.initialize_startup(&agent_did).await.unwrap();
     let slot_failure_policy = Arc::new(PublisherBackedSlotFailurePolicy {
@@ -1843,7 +2045,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
         let generation_one_exit = generation_one_exit.clone();
         let generation_two_exit = generation_two_exit.clone();
         let generation_two_waiting_exit = generation_two_waiting_exit.clone();
-        move |_agent: Arc<ResolvedAgent>,
+        move |_agent: AgentWithTools,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
@@ -1876,7 +2078,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node),
+        gents_inference::admission::AdmissionRegistry::new(node),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -1960,8 +2162,8 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
 
 #[tokio::test]
 async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let source_attempted = Arc::new(Notify::new());
     let source_release = Arc::new(Semaphore::new(0));
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
@@ -1972,15 +2174,15 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
             release: source_release.clone(),
         }),
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     let lineage = AgentLineage::provision("closed-watch");
     let agent_did = lineage.binding.agent_did.clone();
-    let initial = Arc::new(lineage.revision("general"));
+    let initial = lineage.revision("general");
     let mut replacement = lineage.revision("general");
-    replacement.system_prompt = "replacement".to_string();
+    Arc::make_mut(&mut replacement.agent).system_prompt = "replacement".to_string();
     let initial_snapshot = snapshot_for_agents(&node, &agent_did, vec![initial]).await;
-    let replacement_snapshot =
-        snapshot_for_agents(&node, &agent_did, vec![Arc::new(replacement)]).await;
+    let replacement_snapshot = snapshot_for_agents(&node, &agent_did, vec![replacement]).await;
     let exited = Arc::new(AtomicUsize::new(0));
     let generation_one_exit = Arc::new(Semaphore::new(0));
     let generation_two_exit = Arc::new(Semaphore::new(0));
@@ -1990,7 +2192,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
         let generation_one_exit = generation_one_exit.clone();
         let generation_two_exit = generation_two_exit.clone();
         let generation_two_waiting_exit = generation_two_waiting_exit.clone();
-        move |_agent: Arc<ResolvedAgent>,
+        move |_agent: AgentWithTools,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
@@ -2029,7 +2231,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node),
+        gents_inference::admission::AdmissionRegistry::new(node),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -2093,8 +2295,8 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
 
 #[tokio::test]
 async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let node_did = node
         .node_identity_did()
         .expect("fixture node has an identity");
@@ -2109,68 +2311,71 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     });
 
     let binding =
-        crate::store::identity::provision_agent_identity(runtime_node.identity.as_ref()).unwrap();
+        gents_store::identity::provision_agent_identity(runtime_node.identity.as_ref()).unwrap();
     let agent_identity =
-        crate::store::identity::resolve_agent_identity(runtime_node.identity.as_ref(), &binding)
+        gents_store::identity::resolve_agent_identity(runtime_node.identity.as_ref(), &binding)
             .unwrap();
     let agent_did = binding.agent_did.clone();
-    let initial_agent = Arc::new(ResolvedAgent {
-        configuration: crate::inference::resolved::ResolvedConfiguration::Static,
-        profile_id: None,
-        skills: Vec::new(),
-        oauth_pool: Vec::new(),
-        agent_did: agent_did.clone(),
-        node: runtime_node.clone(),
-        agent_identity,
-        backend_id: Some("backend-general".to_string()),
-        backend_provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
-        backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
-        claude_platform: None,
-        backend_auth: crate::documents::BackendAuth::Unauthenticated,
-        model_name: "default".to_string(),
-        service_tier: None,
-        resolved_reasoning_efforts: None,
-        context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens: crate::inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
-        max_turns: crate::inference::resolved::DEFAULT_MAX_TURNS,
-        max_turns_provenance: crate::inference::resolved::MaxTurnsProvenance::Default,
-        system_prompt: "initial".to_string(),
-        tools: AgentToolSurfaceConfig::meta_only(),
-        compaction: None,
-        compaction_inference: None,
-        max_total_tokens: None,
-        stream_batch_ms: crate::inference::resolved::DEFAULT_STREAM_BATCH_MS,
-        stream_liveness_timeout: Duration::from_secs(
-            crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
-        ),
-        deadline_duration: Duration::from_secs(
-            crate::inference::resolved::DEFAULT_DEADLINE_DURATION_SECS,
-        ),
-        provider_idle_timeout: Duration::from_secs(
-            crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
-        ),
-        completion_retry:
-            crate::runtime::agent::completion_retry::CompletionRetryProfileFields::default(),
-        sampling: crate::inference::resolved::SamplingConfig::default(),
-    });
-    let updated_tools: crate::documents::Tools = serde_json::from_value(serde_json::json!({
+    let initial_agent = AgentWithTools::new(
+        ResolvedAgent {
+            configuration: gents_inference::resolved::ResolvedConfiguration::Static,
+            profile_id: None,
+            skills: Vec::new(),
+            oauth_pool: Vec::new(),
+            agent_did: agent_did.clone(),
+            node: runtime_node.clone(),
+            agent_identity,
+            backend_id: Some("backend-general".to_string()),
+            backend_provider_kind: BackendProviderKind::OpenAiCompatible,
+            openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
+            backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
+            claude_platform: None,
+            backend_auth: gents_documents::BackendAuth::Unauthenticated,
+            model_name: "default".to_string(),
+            service_tier: None,
+            resolved_reasoning_efforts: None,
+            context_window: gents_inference::resolved::DEFAULT_CONTEXT_WINDOW,
+            max_output_tokens: gents_inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
+            max_turns: gents_inference::resolved::DEFAULT_MAX_TURNS,
+            max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
+            system_prompt: "initial".to_string(),
+            compaction: None,
+            compaction_inference: None,
+            max_total_tokens: None,
+            stream_batch_ms: gents_inference::resolved::DEFAULT_STREAM_BATCH_MS,
+            stream_liveness_timeout: Duration::from_secs(
+                gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+            ),
+            deadline_duration: Duration::from_secs(
+                gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
+            ),
+            provider_idle_timeout: Duration::from_secs(
+                gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+            ),
+            completion_retry: gents_loop::completion_retry::CompletionRetryProfileFields::default(),
+            sampling: gents_inference::resolved::SamplingConfig::default(),
+        },
+        AgentToolSurfaceConfig::meta_only(),
+    );
+    let updated_tools: gents_documents::Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "general-tools",
         "node_did": runtime_node.node_did,
         "host": {"files": {"mode": "ReadOnly"}},
         "built_ins": {"enable_context_budget": true}
     }))
     .unwrap();
-    let updated_agent = Arc::new(ResolvedAgent {
-        tools: AgentToolSurfaceConfig::from_tools_document(
-            "general",
-            &updated_tools,
-            &ToolCeiling::readonly(),
-            Vec::new(),
-        )
-        .unwrap(),
-        ..initial_agent.as_ref().clone()
-    });
+    let updated_agent = AgentWithTools {
+        tools: Arc::new(
+            AgentToolSurfaceConfig::from_tools_document(
+                "general",
+                &updated_tools,
+                &ToolCeiling::readonly(),
+                Vec::new(),
+            )
+            .unwrap(),
+        ),
+        ..initial_agent.clone()
+    };
 
     let initial_snapshot = snapshot_for_agents(&node, &agent_did, vec![initial_agent]).await;
     let updated_snapshot = snapshot_for_agents(&node, &agent_did, vec![updated_agent]).await;
@@ -2178,7 +2383,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let observed_tool_names = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
     let runner = {
         let observed_tool_names = observed_tool_names.clone();
-        move |_agent: Arc<ResolvedAgent>,
+        move |_agent: AgentWithTools,
               tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
@@ -2210,7 +2415,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node.clone()),
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -2295,20 +2500,18 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         }
     }
 
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let runtime_status = runtime_status_handle(
         &node,
         node.node_identity_did()
             .expect("fixture node has an identity"),
     );
-    let agent_config = Arc::new(
-        PendingAgent::new("general")
-            .build_with_identity_for_test(test_identity("policy-retirement-559")),
-    );
-    let agent_did = agent_config.agent_did.clone();
+    let agent_config = PendingAgent::new("general")
+        .build_with_identity_for_test(test_identity("policy-retirement-559"));
+    let agent_did = agent_config.agent.agent_did.clone();
     let initial_snapshot = snapshot_for_agents(&node, &agent_did, vec![agent_config.clone()]).await;
-    let runner = |_agent: Arc<ResolvedAgent>,
+    let runner = |_agent: AgentWithTools,
                   _tool_surface: Arc<ToolSurface>,
                   _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
                   _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
@@ -2325,7 +2528,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node.clone()),
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -2342,11 +2545,9 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
     let (proposal_tx, proposal_rx) = mpsc::channel(4);
     let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
 
-    let replacement = Arc::new(
-        PendingAgent::new("replacement")
-            .build_with_identity_for_test(test_identity("policy-replacement-559")),
-    );
-    let replacement_did = replacement.agent_did.clone();
+    let replacement = PendingAgent::new("replacement")
+        .build_with_identity_for_test(test_identity("policy-replacement-559"));
+    let replacement_did = replacement.agent.agent_did.clone();
     let replacement_snapshot =
         snapshot_for_agents(&node, &replacement_did, vec![replacement]).await;
     proposal_tx.send(replacement_snapshot).await.unwrap();
@@ -2382,48 +2583,50 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
 
 async fn plugin_resolution_surfaces(
     node: &Arc<defra_node::Node>,
-) -> (Arc<ResolvedAgent>, Arc<ToolSurface>, Arc<ToolSurface>) {
+) -> (AgentWithTools, Arc<ToolSurface>, Arc<ToolSurface>) {
     let mut agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("plugin-resolution-fingerprint"));
-    let tools: crate::documents::Tools = serde_json::from_value(serde_json::json!({
-        "tools_id": format!("{}:tools", agent_config.agent_did),
-        "node_did": agent_config.node_did(),
+    let tools: gents_documents::Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": format!("{}:tools", agent_config.agent.agent_did),
+        "node_did": agent_config.agent.node_did(),
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
     }))
     .unwrap();
-    agent_config.tools = AgentToolSurfaceConfig::from_tools_document(
-        &agent_config.agent_did.clone(),
-        &tools,
-        &ToolCeiling::meta_only(),
-        Vec::new(),
-    )
-    .unwrap();
-    let agent_config = Arc::new(agent_config);
+    agent_config.tools = Arc::new(
+        AgentToolSurfaceConfig::from_tools_document(
+            &agent_config.agent.agent_did.clone(),
+            &tools,
+            &ToolCeiling::meta_only(),
+            Vec::new(),
+        )
+        .unwrap(),
+    );
 
     let absent_home = tempfile::tempdir().unwrap();
-    let absent_plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
-        absent_home.path().to_path_buf(),
-    )));
+    let absent_plugins = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+        Some(absent_home.path().to_path_buf()),
+    ));
     let installed_home = tempfile::tempdir().unwrap();
-    let record: crate::plugin::store::InstalledPlugin = serde_json::from_value(serde_json::json!({
-        "namespace": "fixture",
-        "name": "list_files",
-        "version": "0.1.0",
-        "digest": format!("sha256:{}", "a".repeat(64)),
-        "language": "rust",
-        "declaration": {
+    let record: gents_pack::plugin::store::InstalledPlugin =
+        serde_json::from_value(serde_json::json!({
+            "namespace": "fixture",
             "name": "list_files",
-            "description": "lists files",
-            "artifact": "plugins/list_files.afb",
+            "version": "0.1.0",
+            "digest": format!("sha256:{}", "a".repeat(64)),
             "language": "rust",
-            "input_schema": {"type": "object"}
-        }
-    }))
-    .unwrap();
-    crate::plugin::store::write_record(installed_home.path(), &record).unwrap();
-    let installed_plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
-        installed_home.path().to_path_buf(),
-    )));
+            "declaration": {
+                "name": "list_files",
+                "description": "lists files",
+                "artifact": "plugins/list_files.afb",
+                "language": "rust",
+                "input_schema": {"type": "object"}
+            }
+        }))
+        .unwrap();
+    gents_pack::plugin::store::write_record(installed_home.path(), &record).unwrap();
+    let installed_plugins = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+        Some(installed_home.path().to_path_buf()),
+    ));
 
     let absent = Arc::new(
         agent_config
@@ -2432,7 +2635,7 @@ async fn plugin_resolution_surfaces(
                 node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &absent_plugins,
+                &*absent_plugins,
             )
             .await
             .unwrap(),
@@ -2444,12 +2647,12 @@ async fn plugin_resolution_surfaces(
                 node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &installed_plugins,
+                &*installed_plugins,
             )
             .await
             .unwrap(),
     );
-    let plugin_ref = crate::documents::PluginToolRef {
+    let plugin_ref = gents_documents::PluginToolRef {
         tool_calls: false,
         plugin: "fixture/list_files".to_string(),
         digest: None,
@@ -2466,15 +2669,15 @@ async fn plugin_resolution_surfaces(
 
 #[tokio::test]
 async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_slot() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let runtime_node = stub_runtime_node();
     let (agent_config, absent_surface, installed_surface) = plugin_resolution_surfaces(&node).await;
 
     let snapshot_for = |surface: Arc<ToolSurface>| {
         ResolvedRuntimeSnapshot::from_parts(
             "general".to_string(),
-            vec![Arc::clone(&agent_config)],
+            vec![agent_config.clone()],
             RapidHashMap::from_iter([("general".to_string(), surface)]),
             RapidHashMap::new(),
         )
@@ -2496,7 +2699,7 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let slot = spawn_slot(
-        Arc::clone(&agent_config),
+        agent_config.clone(),
         Arc::clone(&absent_surface),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
@@ -2525,8 +2728,9 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
         .expect("installed record");
     reinstalled.declaration.description = "lists files, reworded".to_owned();
     let home = tempfile::tempdir().unwrap();
-    crate::plugin::store::write_record(home.path(), &reinstalled).unwrap();
-    let plugins = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_path_buf()));
+    gents_pack::plugin::store::write_record(home.path(), &reinstalled).unwrap();
+    let plugins =
+        gents_toolcalls::plugin::executor::PluginExecutor::new(Some(home.path().to_path_buf()));
     let reinstalled_surface = Arc::new(
         agent_config
             .tools

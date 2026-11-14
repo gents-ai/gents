@@ -1,3 +1,5 @@
+use gents_service::args::ToolPackageArg;
+use gents_service::state::StoredInitConfig;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -10,15 +12,16 @@ use crate::commands::init::{
 };
 use crate::desired_state;
 use crate::shared::*;
-use crate::{
-    default_key_path, print_json, read_init_config, resolve_config_access, resolve_home_dir,
-    DEFAULT_NODE_NAME,
-};
+use crate::{print_json, resolve_config_access};
+use gents_host::defaults::DEFAULT_NODE_NAME;
+use gents_service::home_state::default_key_path;
+use gents_service::home_state::read_init_config;
+use gents_service::home_state::resolve_home_dir;
 
 pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let node_name = resolve_provision_node_name(&args);
-    let owner = crate::home_state::load_client_identity().await?;
+    let owner = gents_service::home_state::client_identity_for(&home_dir).await?;
     let identity = ensure_home_identity(
         &home_dir,
         owner.did(),
@@ -28,7 +31,7 @@ pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
         args.bootstrap_macos_secure_enclave,
         args.keychain_label.as_deref(),
         args.secure_enclave_label.as_deref(),
-        crate::cli::args::store_key_custody(args.store_key_custody),
+        gents_host::args::store_key_custody(args.store_key_custody),
     )
     .await?;
 
@@ -123,7 +126,7 @@ async fn ensure_home_identity(
     bootstrap_macos_secure_enclave: bool,
     keychain_label: Option<&str>,
     secure_enclave_label: Option<&str>,
-    store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice,
+    store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice,
 ) -> Result<ProvisionIdentityReport> {
     let bootstrap_count = [
         bootstrap_file_identity,
@@ -151,7 +154,7 @@ async fn ensure_home_identity(
         );
     }
 
-    let data_dir = crate::default_data_dir(home_dir);
+    let data_dir = gents_service::home_state::default_data_dir(home_dir);
     let store_lock = crate::commands::init::lock_init_store(home_dir, &data_dir, false)?;
     if let Some(report) = read_init_config(home_dir)?.and_then(report_from_stored_identity) {
         return Ok(report);
@@ -196,7 +199,7 @@ fn existing_identity_report(
     if config.node_did.trim().is_empty() {
         return Ok(None);
     }
-    crate::home_state::load_initialized_home_identity(home_dir, &config)?;
+    gents_service::home_state::load_initialized_home_identity(home_dir, &config)?;
     Ok(report_from_stored_identity(config))
 }
 
@@ -242,10 +245,11 @@ mod tests {
 
     #[tokio::test]
     async fn existing_provision_identity_remains_readable_while_runtime_holds_the_store() {
-        use gents::NodeIdentity as _;
+        use gents_store::identity::NodeIdentity as _;
         let temp = tempfile::tempdir().unwrap();
         let owner =
-            gents::KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
+            gents_store::identity::KeyIdentity::load_or_create(temp.path().join("owner.key"), None)
+                .unwrap();
         let owner = owner.did();
         let home = temp.path().join("home");
         let original = ensure_home_identity(
@@ -257,12 +261,12 @@ mod tests {
             false,
             None,
             None,
-            gents::store::local::store_key::StoreKeyCustodyChoice::File,
+            gents_store::local::store_key::StoreKeyCustodyChoice::File,
         )
         .await
         .unwrap();
-        let before = std::fs::read(gents::store::local::home::init_config_path(&home)).unwrap();
-        let runtime_lock = gents::store::local::home::lock_home_store(&home).unwrap();
+        let before = std::fs::read(gents_store::local::home::init_config_path(&home)).unwrap();
+        let runtime_lock = gents_store::local::home::lock_home_store(&home).unwrap();
         let observed = ensure_home_identity(
             &home,
             owner,
@@ -272,7 +276,7 @@ mod tests {
             false,
             None,
             None,
-            gents::store::local::store_key::StoreKeyCustodyChoice::File,
+            gents_store::local::store_key::StoreKeyCustodyChoice::File,
         )
         .await
         .unwrap();
@@ -280,15 +284,15 @@ mod tests {
         assert_eq!(observed.node_did, original.node_did);
         assert_eq!(observed.node_name, "owner");
         assert_eq!(
-            std::fs::read(gents::store::local::home::init_config_path(&home)).unwrap(),
+            std::fs::read(gents_store::local::home::init_config_path(&home)).unwrap(),
             before
         );
         drop(runtime_lock);
 
         let new_home = temp.path().join("new-home");
-        let data = crate::default_data_dir(&new_home);
+        let data = gents_service::home_state::default_data_dir(&new_home);
         std::fs::create_dir_all(&data).unwrap();
-        let _held = gents::store::local::home::lock_store(&new_home, &data).unwrap();
+        let _held = gents_store::local::home::lock_store(&new_home, &data).unwrap();
         let error = match ensure_home_identity(
             &new_home,
             owner,
@@ -298,14 +302,14 @@ mod tests {
             false,
             None,
             None,
-            gents::store::local::store_key::StoreKeyCustodyChoice::File,
+            gents_store::local::store_key::StoreKeyCustodyChoice::File,
         )
         .await
         {
             Ok(_) => panic!("bootstrap must hold the exclusive store lock"),
             Err(error) => error,
         };
-        assert!(gents::store::local::home::store_lock_held(error.as_ref()).is_some());
-        assert!(!gents::store::local::home::init_config_path(&new_home).exists());
+        assert!(gents_store::local::home::store_lock_held(error.as_ref()).is_some());
+        assert!(!gents_store::local::home::init_config_path(&new_home).exists());
     }
 }

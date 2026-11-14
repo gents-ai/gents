@@ -2,39 +2,38 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::inference::llm::rig_compat::ProviderClient;
-use crate::inference::llm::tool::ToolDyn;
 use anyhow::Result;
+use gents_inference::llm::rig_compat::ProviderClient;
+use gents_loop::tool::ToolDyn;
 use tokio::sync::{mpsc, watch, Mutex};
 
-use crate::inference::admission::AdmissionRegistry;
 use crate::runtime::agent::daemon::{AgentDaemon, AgentDaemonInit};
-use crate::tools::call::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
-use crate::tools::surface::{self, ToolRuntimeContext, ToolSurface};
 use crate::turn::completion_factory::build_admitted_model;
 use crate::turn::prompt::LayeredPromptBuilder;
+use gents_inference::admission::AdmissionRegistry;
 use gents_protocol::row::AgentRequest;
+use gents_toolcalls::call::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
+use gents_tools::surface::{self, ToolRuntimeContext, ToolSurface};
 
 #[derive(Clone)]
 pub(super) struct RuntimeContext {
     pub(super) node: Arc<defra_node::Node>,
     pub(super) tool_runtime: ToolRuntimeContext,
     pub(super) admission_registry: AdmissionRegistry,
-    pub(super) backend_health: crate::inference::backends::health::BackendHealthMap,
-    pub(super) hook_failure_policy: crate::tools::call::hook::FailurePolicy,
+    pub(super) backend_health: gents_inference::backends::health::BackendHealthMap,
+    pub(super) hook_failure_policy: gents_toolcalls::call::hook::FailurePolicy,
     pub(super) rendered_request_capture_factory:
-        Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
+        Option<gents_inference::rendered_request::RenderedRequestCaptureFactory>,
     pub(super) background_execution_registry: BackgroundExecutionRegistry,
     pub(super) inference_observations:
-        crate::observe::inference_observation::InferenceObservationRegistry,
+        gents_inference::inference_observation::InferenceObservationRegistry,
     pub(super) startup_barrier: Arc<StartupBarrier>,
     pub(super) startup_readiness: crate::runtime::startup_readiness::StartupReadinessOptions,
     pub(super) runtime_status: crate::runtime::status::RuntimeStatusHandle,
     pub(super) operator_tool_root: Option<PathBuf>,
     /// The runtime's single job driver, created once in `run_agent_owned`.
-    pub(super) job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
-    pub(super) enrollment_authority:
-        crate::runtime::agent::p2p_reconcile::EnrollmentAuthorityHandle,
+    pub(super) job_driver: Arc<gents_toolcalls::background::job::driver::JobDriver>,
+    pub(super) enrollment_authority: gents_p2p::p2p_reconcile::EnrollmentAuthorityHandle,
 }
 
 pub(super) struct AgentResolution {
@@ -48,7 +47,7 @@ pub struct StartupBarrier {
 }
 
 impl StartupBarrier {
-    pub(super) fn new(agents: &[Arc<crate::inference::resolved::ResolvedAgent>]) -> Self {
+    pub(super) fn new(agents: &[Arc<gents_inference::resolved::ResolvedAgent>]) -> Self {
         let pending: BTreeSet<(String, u64)> = agents
             .iter()
             .map(|agent_config| (agent_config.agent_did.clone(), 1))
@@ -119,18 +118,22 @@ impl StartupBarrier {
 impl RuntimeContext {
     pub(super) async fn run_agent(
         &self,
-        agent_config: Arc<crate::inference::resolved::ResolvedAgent>,
+        agent: gents_tools::surface::AgentWithTools,
         tool_surface: Arc<ToolSurface>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
         capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
         slot_generation: u64,
         shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
+        let gents_tools::surface::AgentWithTools {
+            agent: agent_config,
+            tools: tool_config,
+        } = agent;
         let tool_names = tool_surface.tool_names();
         let api_key = if agent_config.backend_auth.uses_node_oauth()
             || matches!(
                 &agent_config.backend_auth,
-                crate::documents::BackendAuth::Credential { .. }
+                gents_documents::BackendAuth::Credential { .. }
             ) {
             "no-key".to_owned()
         } else {
@@ -146,13 +149,13 @@ impl RuntimeContext {
         let tool_runtime = self.tool_runtime.for_agent(&agent_config);
         let mut loop_tools = tool_surface.build_tools(&tool_runtime).await?;
         if tool_surface.includes_skills() && !agent_config.skills.is_empty() {
-            let ceiling = crate::documents::skills::skill_tool_ceiling(
+            let ceiling = gents_documents::skills::skill_tool_ceiling(
                 tool_surface.tool_names(),
                 tool_surface.allowed_mcp_service_ids(),
                 tool_surface.includes_meta_tools(),
             );
             loop_tools.push(Box::new(
-                crate::tools::native::skills::LoadSkillTool::for_agent(
+                gents_tools::native::skills::LoadSkillTool::for_agent(
                     agent_config.skills.clone(),
                     ceiling,
                     &agent_config.configuration,
@@ -172,7 +175,7 @@ impl RuntimeContext {
             "building agent runtime"
         );
 
-        let client = crate::inference::llm::backend_client::build_backend_client(
+        let client = gents_inference::llm::backend_client::build_backend_client(
             self.tool_runtime.usage_cache.clone(),
             self.node.clone(),
             agent_config.as_ref(),
@@ -184,9 +187,10 @@ impl RuntimeContext {
         let replay_issuer = client.replay_issuer()?;
         let account_hops = client.account_hops();
 
-        crate::inference::llm::backend_client::with_backend_client!(client, |client| {
+        gents_inference::llm::backend_client::with_backend_client!(client, |client| {
             Box::pin(self.run_agent_with_client(
                 agent_config,
+                tool_config,
                 provider_family,
                 replay_issuer,
                 account_hops,
@@ -199,7 +203,9 @@ impl RuntimeContext {
                 loop_tools.clone(),
                 background_tool_registry,
                 tool_surface.remote_tools().cloned(),
-                tool_surface.job_tools(),
+                gents_toolcalls::background::job::JobBinding::bind_all(
+                    tool_surface.plugin_resolutions(),
+                ),
                 tool_surface.output_obligations(),
                 tool_surface.root_execution_guard().cloned(),
                 client,
@@ -211,7 +217,8 @@ impl RuntimeContext {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_agent_with_client<C>(
         &self,
-        agent_config: Arc<crate::inference::resolved::ResolvedAgent>,
+        agent_config: Arc<gents_inference::resolved::ResolvedAgent>,
+        tool_config: Arc<gents_tools::surface::AgentToolSurfaceConfig>,
         provider_family: Option<String>,
         replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
         account_hops: u32,
@@ -223,10 +230,10 @@ impl RuntimeContext {
         preamble: String,
         loop_tools: Arc<Vec<Box<dyn ToolDyn>>>,
         background_tool_registry: BackgroundToolRegistry,
-        remote_tools: Option<crate::documents::RemoteTools>,
-        job_tools: rapidhash::RapidHashMap<String, crate::tools::background::job::JobBinding>,
-        output_obligations: Vec<(String, crate::documents::WriteToolOutputObligation)>,
-        root_execution_guard: Option<crate::tools::surface::RootExecutionGuard>,
+        remote_tools: Option<gents_documents::RemoteTools>,
+        job_tools: rapidhash::RapidHashMap<String, gents_toolcalls::background::job::JobBinding>,
+        output_obligations: Vec<(String, gents_documents::WriteToolOutputObligation)>,
+        root_execution_guard: Option<gents_tools::surface::RootExecutionGuard>,
         client: C,
     ) -> Result<()>
     where
@@ -237,11 +244,12 @@ impl RuntimeContext {
             self.admission_registry.clone(),
             agent_config.as_ref(),
         ));
-        let request_admission = crate::request::admission::AgentRequestAdmissionVerifier::new(
-            self.node.clone(),
-            agent_config.node_identity().clone(),
-            self.enrollment_authority.clone(),
-        );
+        let request_admission =
+            gents_session::request::admission::AgentRequestAdmissionVerifier::new(
+                self.node.clone(),
+                agent_config.node_identity().clone(),
+                self.enrollment_authority.clone(),
+            );
         let summary_compactor = crate::turn::completion_factory::build_compaction_engine(
             self.tool_runtime.usage_cache.clone(),
             self.node.clone(),
@@ -252,13 +260,17 @@ impl RuntimeContext {
         .await?;
         let capture_factory = match &self.rendered_request_capture_factory {
             Some(factory) => factory.clone(),
-            None => crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
-                self.node.clone(), agent_config.agent_identity.as_ref(),
-            )?,
+            None => {
+                gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                    self.node.clone(),
+                    agent_config.agent_identity.as_ref(),
+                )?
+            }
         };
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: self.node.clone(),
             agent_config,
+            tool_config,
             provider_family,
             model,
             preamble,
@@ -297,70 +309,93 @@ impl RuntimeContext {
 #[cfg(test)]
 mod startup_barrier_tests {
     use super::*;
+    use gents_lean_vocab::families::runtime_startup_barrier_obligations as family;
 
-    fn agent_config(agent_did: &str) -> Arc<crate::inference::resolved::ResolvedAgent> {
-        Arc::new(
-            crate::runtime::agent::PendingAgent::new(agent_did).build_with_identity_for_test(
-                crate::KeyIdentity::load_or_create(
+    fn agent_config(agent_did: &str) -> Arc<gents_inference::resolved::ResolvedAgent> {
+        let mut agent = crate::runtime::agent::PendingAgent::new(agent_did)
+            .build_with_identity_for_test(
+                gents_store::identity::KeyIdentity::load_or_create(
                     std::env::temp_dir()
                         .join(format!("barrier-{agent_did}-{}.key", uuid::Uuid::new_v4())),
                     None,
                 )
                 .unwrap(),
-            ),
-        )
+            )
+            .agent;
+        Arc::make_mut(&mut agent).agent_did = agent_did.to_owned();
+        agent
+    }
+
+    /// Readiness as seen by a waiter that was already waiting when the last
+    /// operation ran; a completed waiter is replaced by a fresh one.
+    fn waiter_ready<'a>(
+        barrier: &'a StartupBarrier,
+        waiter: &mut Option<futures::future::LocalBoxFuture<'a, ()>>,
+    ) -> bool {
+        let pending = waiter.get_or_insert_with(|| Box::pin(barrier.wait_ready()));
+        let ready = futures::FutureExt::now_or_never(pending.as_mut()).is_some();
+        if ready {
+            *waiter = None;
+        }
+        ready
+    }
+
+    async fn observation<'a>(
+        barrier: &'a StartupBarrier,
+        waiter: &mut Option<futures::future::LocalBoxFuture<'a, ()>>,
+        released: Option<bool>,
+    ) -> family::Observation {
+        family::Observation {
+            pending: barrier
+                .pending_standings
+                .lock()
+                .await
+                .iter()
+                .map(|(agent, generation)| family::Slot {
+                    agent: agent.clone(),
+                    generation: *generation,
+                })
+                .collect(),
+            ready: waiter_ready(barrier, waiter),
+            released,
+        }
     }
 
     #[tokio::test]
-    async fn empty_seed_is_immediately_ready() {
-        let barrier = StartupBarrier::new(&[]);
-        tokio::time::timeout(std::time::Duration::from_secs(1), barrier.wait_ready())
-            .await
-            .expect("an empty barrier must not wait");
-    }
-
-    #[tokio::test]
-    async fn release_before_and_after_wait_both_complete() {
-        let (a, b) = (agent_config("a"), agent_config("b"));
-        let barrier = Arc::new(StartupBarrier::new(&[a.clone(), b.clone()]));
-
-        barrier.mark_agent_ready(&a.agent_did, 1).await;
-
-        let waiter = {
-            let barrier = barrier.clone();
-            tokio::spawn(async move { barrier.wait_ready().await })
-        };
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        barrier.mark_agent_ready(&b.agent_did, 1).await;
-
-        tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
-            .await
-            .expect("waiter must observe the final release")
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn demotion_and_supersession_release_without_readiness() {
-        let (healthy, unbuildable, retired) = (
-            agent_config("healthy"),
-            agent_config("unbuildable"),
-            agent_config("retired"),
-        );
-        let barrier = Arc::new(StartupBarrier::new(&[
-            healthy.clone(),
-            unbuildable.clone(),
-            retired.clone(),
-        ]));
-
-        barrier.mark_agent_ready(&healthy.agent_did, 1).await;
-        barrier.mark_agent_demoted(&unbuildable.agent_did, 1).await;
-        assert!(barrier.is_pending(&retired.agent_did, 1).await);
-        barrier.mark_agent_superseded(&retired.agent_did, 1).await;
-        assert!(!barrier.is_pending(&retired.agent_did, 1).await);
-
-        tokio::time::timeout(std::time::Duration::from_secs(1), barrier.wait_ready())
-            .await
-            .expect("all release classes together must free the barrier");
-        assert!(barrier.pending_agents().await.is_empty());
+    async fn generated_startup_obligations_release_only_the_selected_generation() {
+        for case in family::cases::<String>() {
+            let agents = case
+                .input
+                .seed
+                .iter()
+                .map(|agent| agent_config(agent))
+                .collect::<Vec<_>>();
+            let barrier = StartupBarrier::new(&agents);
+            let mut waiter = None;
+            let mut observed = vec![observation(&barrier, &mut waiter, None).await];
+            for action in &case.input.actions {
+                let slot = &action.slot;
+                let released = match action.operation.as_str() {
+                    "register" => {
+                        barrier.register_agent(&slot.agent, slot.generation).await;
+                        None
+                    }
+                    "ready" => Some(barrier.mark_agent_ready(&slot.agent, slot.generation).await),
+                    "demote" => Some(
+                        barrier
+                            .mark_agent_demoted(&slot.agent, slot.generation)
+                            .await,
+                    ),
+                    "supersede" => Some(
+                        barrier
+                            .mark_agent_superseded(&slot.agent, slot.generation)
+                            .await,
+                    ),
+                    other => panic!("unknown modeled startup operation {other}"),
+                };
+                observed.push(observation(&barrier, &mut waiter, released).await);
+            }
+            case.check(observed);
+        }
     }
 }

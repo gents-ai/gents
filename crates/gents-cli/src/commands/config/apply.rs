@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gents::Collection;
+use gents_store::collection::Collection;
 use std::path::Path;
 
 use crate::cli::*;
@@ -15,9 +15,10 @@ use crate::{
 pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
-    let schemas = crate::commands::schema::apply_pack_schemas_if_present(&access, &args.root)
-        .await
-        .context("config apply: pack-local schemas/")?;
+    let schemas =
+        gents_pack::pack::schema_apply::apply_pack_schemas_if_present(&access, &args.root)
+            .await
+            .context("config apply: pack-local schemas/")?;
 
     let bound = super::binding::load_bound_manifest(super::binding::ManifestBindingOptions {
         root: &args.root,
@@ -34,7 +35,7 @@ pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
     if report
         .schemas
         .as_ref()
-        .is_some_and(crate::commands::schema::PackSchemaPhase::changed)
+        .is_some_and(gents_pack::pack::schema_apply::PackSchemaPhase::changed)
         && report.status == "noop"
     {
         report.status = "applied";

@@ -8,16 +8,16 @@ use serde_json::{json, Value};
 
 use crate::runner::embedded::home::EmbeddedHome;
 use crate::runner::executor::{InferenceBinding, TrialFixtures, TrialSpec};
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{InferenceSampling, PackConfig};
-use gents::pack::{
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_documents::{InferenceSampling, PackConfig};
+use gents_pack::pack::{
     declared_paths, digest_declared_assets, install_pack_documents,
     load_pack_install_config_with_provisioner, BoundPackConfig, DriftPolicy, InstalledVia,
     PackIdentity, PackInferenceBindings, PackInstallOptions, PackManifest,
 };
-use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::store::graphql::validate_collection_identifier;
-use gents::{Collection, ConfigAccess};
+use gents_store::graphql::validate_collection_identifier;
+use gents_store::{collection::Collection, config_client::ConfigAccess};
 
 pub(super) async fn install(
     spec: &TrialSpec,
@@ -45,7 +45,7 @@ pub(super) async fn install(
     // that node's init User (`Recipient.initUser`): the native admin whose
     // client key installs the pack, including the Tools projections that stage
     // schema authority an enrolled User may not grant.
-    gents::store::identity::GrantSet::HouseholdOwner
+    gents_store::identity::GrantSet::HouseholdOwner
         .grant(&schema_access, &::identity::Did::new(&spec.evaluator_did)?)
         .await
         .context("granting the evaluator the trial node's household ownership")?;
@@ -67,7 +67,7 @@ pub(super) async fn install(
     )
     .await
     .context("bootstrapping the evaluator-owned trial node")?;
-    let provisioner = gents::pack::AgentProvisioner::local(&home.node, home.identity.as_ref());
+    let provisioner = gents_pack::pack::AgentProvisioner::local(&home.node, home.identity.as_ref());
     let config = load_pack_install_config_with_provisioner(
         &planning_access,
         &manifest,
@@ -111,14 +111,12 @@ pub(super) async fn install(
             .with_context(|| format!("installing pack schema {path:?}"))?;
     }
     // The Agent parent must exist under the evaluator before the pack is installed.
-    let mut trial_node = config.node.clone();
-    trial_node.default_agent_did = None;
     apply(
         &access,
         "eval.trial.create_node",
         &DesiredStateApplyPlan::new(vec![desired(
             Collection::Node,
-            serde_json::to_value(trial_node)?,
+            serde_json::to_value(&config.node)?,
         )])?,
     )
     .await
@@ -127,7 +125,7 @@ pub(super) async fn install(
         .transact_readonly("eval.trial.node_owner", |txn| {
             let node_did = &node_did;
             Box::pin(async move {
-                gents::store::config_client::read_desired_state_record_in_txn(
+                gents_documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::Node,
                     node_did,
@@ -156,37 +154,53 @@ pub(super) async fn install(
     )
     .await
     .context("installing the trial inference binding")?;
-    install_pack_documents(&access, &node_did, &identity, &config, DriftPolicy::Refuse)
-        .await
-        .context(TRIAL_PACK_INSTALL)?;
+    install_pack_documents(
+        &access,
+        &node_did,
+        &identity,
+        &config,
+        DriftPolicy::Refuse,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .context(TRIAL_PACK_INSTALL)?;
+    let engineer = config.agents.iter().any(|agent| {
+        agent.agent_did == agent_did
+            && agent
+                .tags
+                .iter()
+                .any(|tag| tag == gents_tools::builtin::self_config::ENGINEER_AGENT_TAG)
+    });
     access
-        .transact_write("eval.trial.grant_self_configuration", |txn| {
+        .transact_write("eval.trial.provision_selected_agent", |txn| {
             let node_did = &node_did;
             let agent_did = &agent_did;
             Box::pin(async move {
-                gents::store::config_client::grant_selected_self_configuration(
-                    txn, node_did, agent_did,
-                )
-                .await
+                if engineer {
+                    gents_documents::provision_engineer(txn, node_did, agent_did).await
+                } else {
+                    gents_documents::grant_selected_self_configuration(txn, node_did, agent_did)
+                        .await
+                }
             })
         })
         .await
-        .context("granting the selected trial Agent self-configuration")?;
-    let mut selected = config.node.clone();
-    selected.default_agent_did = Some(agent_did.clone());
+        .context("provisioning the selected trial Agent")?;
     apply(
         &access,
         "eval.trial.select_agent",
         &DesiredStateApplyPlan::new(vec![desired(
-            Collection::Node,
-            serde_json::to_value(selected)?,
+            Collection::DefaultAgentSelection,
+            serde_json::to_value(gents_documents::DefaultAgentSelection::new(
+                &node_did, &agent_did,
+            ))?,
         )])?,
     )
     .await?;
     // The selected Agent is the trial node's default Agent
     // (`Recipient.defaultAgent`), which holds the relationship-management set
     // that projects a new Agent's baseline when it creates one.
-    gents::store::identity::GrantSet::PolicyDelegate
+    gents_store::identity::GrantSet::PolicyDelegate
         .grant(&schema_access, &::identity::Did::new(&agent_did)?)
         .await
         .context("granting the selected trial Agent policy delegation")?;
@@ -205,7 +219,7 @@ pub(super) async fn install(
     install_workspace_root(&access, &node_did, workspace, &root_readers).await?;
     let mut fixtures = spec.fixtures.clone();
     for fixture in &mut fixtures.documents {
-        gents::pack::bind_agent_references(&mut fixture.document, &identity.agent_bindings)?;
+        gents_pack::pack::bind_agent_references(&mut fixture.document, &identity.agent_bindings)?;
         fixture.document = bind_fixture_actors(&fixture.document, &node_did, &spec.evaluator_did);
         for reader in &mut fixture.session_readers {
             *reader = identity
@@ -243,7 +257,7 @@ pub(super) async fn install(
 }
 
 pub(crate) async fn grant_trial_operations(home: &EmbeddedHome, target: &str) -> Result<()> {
-    use gents::store::config_client::NodePermission;
+    use gents_store::config_client::NodePermission;
 
     let owner = ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(home.did())?);
     let target = ::identity::Did::new(target)?;
@@ -300,7 +314,15 @@ pub(super) async fn apply(
     access
         .transact_write(operation, |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await
 }
@@ -396,7 +418,7 @@ async fn install_workspace_root(
     let root = workspace
         .to_str()
         .with_context(|| format!("{} is not UTF-8", workspace.display()))?;
-    gents::tools::surface::set_workspace_root_with_readers(
+    gents_tools::surface::set_workspace_root_with_readers(
         access,
         node_did,
         root,
@@ -414,8 +436,8 @@ async fn install_fixtures(
     fixtures: &TrialFixtures,
     workspace: &Path,
     home: &EmbeddedHome,
-    bindings: &gents::pack::PackAgentBindings,
-    evaluator: &dyn gents::store::identity::NodeIdentity,
+    bindings: &gents_pack::pack::PackAgentBindings,
+    evaluator: &dyn gents_store::identity::NodeIdentity,
     pack: Option<(&PackManifest, &BTreeMap<String, Vec<u8>>)>,
 ) -> Result<()> {
     let trial_did = home.did();
@@ -442,7 +464,7 @@ async fn install_fixtures(
                 .find(|binding| binding.agent_did == agent_did)
                 .context("expired request fixture references an unknown agent binding")?;
             let agent =
-                gents::store::identity::resolve_agent_identity(home.identity.as_ref(), binding)?;
+                gents_store::identity::resolve_agent_identity(home.identity.as_ref(), binding)?;
             expired_request::install(access, &document, home, evaluator, agent.as_ref()).await?;
             continue;
         }
@@ -466,7 +488,7 @@ async fn install_fixtures(
                 .find(|binding| binding.agent_did == did)
                 .context("agent-owned fixture references an unknown agent binding")?;
             let identity =
-                gents::store::identity::resolve_agent_identity(home.identity.as_ref(), binding)?;
+                gents_store::identity::resolve_agent_identity(home.identity.as_ref(), binding)?;
             Some(ConfigAccess::local_managed_agent(
                 home.node.clone(),
                 ::identity::Did::new(did)?,
@@ -546,15 +568,15 @@ async fn install_session_fixture(
     access.transact_write("eval.trial.fixture_session", |txn| {
         let (session, input, target, readers) = (&session, &input, &target, &readers);
         Box::pin(async move {
-            let (agent_doc, _) = gents::store::config_client::read_desired_state_record_in_txn(
+            let (agent_doc, _) = gents_documents::read_desired_state_record_in_txn(
                 txn, Collection::Agent, &session.node_did, &session.agent_did,
             ).await?.context("fixture session agent is unavailable")?;
             let response = txn.execute_client_signed_create(
                 "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
                 &json!({"input": input}), gents_protocol::schemas::AGENT_SESSION,
             ).await?;
-            let doc = gents::store::graphql::created_doc_id(&response, "AgentSession")?;
-            gents::session::stage_session_relationships_in_txn(txn, &doc, &agent_doc, target).await?;
+            let doc = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
+            gents_session::session::stage_session_relationships_in_txn(txn, &doc, &agent_doc, target).await?;
             for reader in readers {
                 txn.add_actor_relationship("AgentSession", &doc, "reader", reader).await?;
             }
@@ -569,8 +591,8 @@ async fn install_session_fixture(
 const TRIAL_PACK_INSTALL: &str = "installing the trial pack; the eval runner takes no --overwrite or --keep, so a document the pack ships that the trial node already holds with other content (the runner installs the trial's inference binding itself) must be renamed in or dropped from the pack";
 
 pub(super) async fn install_schema(access: &ConfigAccess, sdl: &str) -> Result<()> {
-    let plan = gents::store::config_client::preview_schema_install(access, sdl).await?;
-    gents::store::config_client::apply_schema_install(access, sdl, &plan.artifact_digest).await?;
+    let plan = gents_store::config_client::preview_schema_install(access, sdl).await?;
+    gents_store::config_client::apply_schema_install(access, sdl, &plan.artifact_digest).await?;
     Ok(())
 }
 
@@ -629,9 +651,7 @@ pub(super) async fn create_document(
                 } else {
                     txn.execute_with_variables(mutation, variables).await?
                 };
-                Ok::<_, anyhow::Error>(gents::store::graphql::created_doc_id(
-                    &response, collection,
-                )?)
+                Ok::<_, anyhow::Error>(gents_store::graphql::created_doc_id(&response, collection)?)
             })
         })
         .await

@@ -1,7 +1,7 @@
 use super::*;
-use gents::NodeIdentity;
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
+use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
 const NOW: &str = "2026-10-21T00:00:00Z";
@@ -10,7 +10,7 @@ const NOW: &str = "2026-10-21T00:00:00Z";
 /// one: bound to the Agent-owned session document, related to it so the
 /// session's readers (the enrolled User) observe it.
 async fn set_goal(
-    home: &crate::shared::test_support::ClientHome,
+    home: &gents_host::test_support::ClientHome,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
     session: &str,
     goal: Option<&str>,
@@ -22,13 +22,15 @@ async fn set_goal(
         let current = agent
             .transact_readonly("test.manual_task.current_goal", |txn| {
                 let node_did = &node_did;
-                Box::pin(gents::goal::load_canonical_goal_in_txn(
+                Box::pin(gents_automation::goal::load_canonical_goal_in_txn(
                     txn, node_did, session,
                 ))
             })
             .await?;
         if let Some(current) = current {
-            anyhow::ensure!(gents::goal::delete_goal_from_access(&agent, &current).await?);
+            anyhow::ensure!(
+                gents_automation::goal::delete_goal_from_access(&agent, &current).await?
+            );
         }
         return Ok(());
     };
@@ -37,7 +39,7 @@ async fn set_goal(
             let (node_did, agent_did) = (&node_did, &agent_did);
             Box::pin(async move {
                 let current =
-                    gents::goal::load_canonical_goal_in_txn(txn, node_did, session).await?;
+                    gents_automation::goal::load_canonical_goal_in_txn(txn, node_did, session).await?;
                 if let Some(current) = current {
                     txn.execute_with_variables(
                         &format!(
@@ -50,7 +52,7 @@ async fn set_goal(
                     return Ok(());
                 }
                 let session_doc =
-                    gents::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
                         txn, node_did, session,
                     )
                     .await?
@@ -68,7 +70,7 @@ async fn set_goal(
                         }}),
                     )
                     .await?;
-                let doc = gents::store::graphql::created_doc_id(&created, "Goal")?;
+                let doc = gents_store::graphql::created_doc_id(&created, "Goal")?;
                 txn.add_resource_relationship("Goal", &doc, "parent", "sessions", &session_doc)
                     .await?;
                 txn.add_actor_relationship("Goal", &doc, "working_agent", &agent_did.parse()?)
@@ -83,14 +85,14 @@ async fn set_goal(
 /// tool source that lets a creator Agent retire the Goals it owns
 /// (`GrantSets.GrantSet.permissions`, `Configuration.goal_creator_deletes_its_goal`).
 async fn enable_goal_creation(
-    home: &crate::shared::test_support::ClientHome,
+    home: &gents_host::test_support::ClientHome,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
 ) -> Result<()> {
-    use gents::documents::{apply_desired_state_plan, AgentContext, BuiltInTools, Tools};
-    use gents::store::config_client::{
+    use gents_documents::{apply_desired_state_plan, AgentContext, BuiltInTools, Tools};
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use gents::Collection;
+    use gents_store::collection::Collection;
     let node_did = home.node_did().to_owned();
     let agent_did = binding.agent_did.clone();
     let tools_id = format!("{agent_did}:tools");
@@ -140,7 +142,13 @@ async fn enable_goal_creation(
                     })
                     .collect(),
                 )?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await
@@ -149,62 +157,59 @@ async fn enable_goal_creation(
 /// The Task invocation's request, signed by the enrolled User as
 /// `enqueue_task_run` signs it.
 async fn signed_request(
-    home: &crate::shared::test_support::ClientHome,
+    home: &gents_host::test_support::ClientHome,
     agent_did: &str,
     fire: &TriggerFire,
     input: RequestInput,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     let user = &home.user;
-    let requester = gents::session::client_requester_scope(
+    let requester = gents_session::session::client_requester_scope(
         &home.access,
         home.node_did(),
         &fire.session_id,
         user.did(),
     )
     .await?;
-    gents::request::lifecycle::build_signed_client_request(
+    gents_session::request::lifecycle::build_signed_client_request(
         &home.access,
-        gents::RequestSpec {
+        gents_session::request::lifecycle::RequestSpec {
             input,
             retry_key: Some(fire.fire_key.clone()),
-            trigger_lineage: gents::request::lifecycle::TriggerLineage {
+            trigger_lineage: gents_session::request::lifecycle::TriggerLineage {
                 trigger_kind: Some("manual".into()),
                 ..Default::default()
             },
-            ..gents::RequestSpec::new(
+            ..gents_session::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
-                gents::RequestIdentity {
+                gents_session::request::lifecycle::RequestIdentity {
                     request_id: fire.request_id.clone(),
                     node_did: home.node_did().into(),
                     requester_did: Some(requester),
                     agent_did: agent_did.into(),
                     session_id: fire.session_id.clone(),
                     content: "Task work".into(),
-                    execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin:
+                        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: NOW.into(),
                 },
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
             )
         },
-        gents::RequestSigner::Identity(user),
+        gents_session::request::lifecycle::RequestSigner::Identity(user),
     )
     .await
 }
 
 #[tokio::test]
 async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> Result<()> {
-    let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
-    let cases = snapshot["goal_first_request_binding_cases"]
-        .as_array()
-        .unwrap();
-    assert_eq!(cases.len(), 14);
-    let home = crate::shared::test_support::ClientHome::new().await;
+    let home = gents_host::test_support::ClientHome::new().await;
     let binding = home.agent("Engineer").await;
     enable_goal_creation(&home, &binding).await?;
     let access = &home.access;
     let owner = home.node_did().to_owned();
-    for case in cases {
-        let session = format!("manual-task:{}", case["name"].as_str().unwrap());
+    for case in gents_lean_vocab::families::goal_first_request_binding_manual_task::cases() {
+        let task = &case.input;
+        let session = format!("manual-task:{}", task.name);
         home.agent_session(&binding, &session).await;
         let initial = gents_protocol::goal::deterministic_goal_id(&owner, &session);
         let goal_id = |value: &str| {
@@ -218,25 +223,23 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
             &home,
             &binding,
             &session,
-            case["current_task_goal"].as_str().map(goal_id).as_deref(),
+            task.current_task_goal.as_deref().map(goal_id).as_deref(),
         )
         .await?;
         let selected = prepare_task_run_goal_id(access, &owner, &session, true, None).await?;
-        assert_eq!(
-            selected,
-            Some(goal_id(case["expected_task_goal"].as_str().unwrap())),
-            "{case}"
-        );
+        let task_goal = selected
+            .clone()
+            .context("goal-backed Task selects a Goal")?;
         set_goal(
             &home,
             &binding,
             &session,
-            case["observed_task_goal"].as_str().map(goal_id).as_deref(),
+            task.observed_task_goal.as_deref().map(goal_id).as_deref(),
         )
         .await?;
         let identity = FireIdentity {
             owner_did: owner.clone(),
-            trigger_id: format!("manual:task:{}", case["name"].as_str().unwrap()),
+            trigger_id: format!("manual:task:{}", task.name),
             source_collection: "Task".into(),
             source_doc_id: "task-document".into(),
         };
@@ -262,12 +265,16 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
         let request = signed_request(&home, &binding.agent_did, &fire, input.clone()).await?;
         assert_eq!(request.input, input);
         let admitted =
-            gents::request::lifecycle::write_task_delivery(access, &fire, true, &request).await;
-        assert_eq!(
-            admitted.is_ok(),
-            case["task_binding_valid"] == true,
-            "{case}: {:?}",
-            admitted.as_ref().err()
+            gents_automation::triggers::write_task_delivery(access, &fire, true, &request).await;
+        case.check(
+            gents_lean_vocab::families::goal_first_request_binding_manual_task::TaskOutput {
+                task_goal: if task_goal == initial {
+                    "initial-goal".to_owned()
+                } else {
+                    task_goal
+                },
+                task_binding_valid: admitted.is_ok(),
+            },
         );
         let row = lookup_request_by_retry_key(access, &owner, &fire.fire_key).await?;
         if let Err(error) = admitted {
@@ -275,7 +282,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
                 format!("{error:#}").contains("Task Goal assignment changed"),
                 "{error:#}"
             );
-            assert!(row.is_none(), "{case}");
+            assert!(row.is_none(), "{task:?}");
             let persisted = access
                 .execute(&format!(
                     "{{TriggerFire(filter: {{fire_key: {{_eq: \"{}\"}}}}) {{goal_id}}}}",
@@ -287,16 +294,16 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
                     .as_array()
                     .unwrap()
                     .is_empty(),
-                "{case}"
+                "{task:?}"
             );
         } else {
             let row = row.context("admitted signed request is missing")?;
-            assert_eq!(row.input, Some(input.clone()), "{case}");
-            if case["name"] == "task-after-client-replacement" {
+            assert_eq!(row.input, Some(input.clone()), "{task:?}");
+            if task.name == "task-after-client-replacement" {
                 set_goal(&home, &binding, &session, None).await?;
                 let retained = prepare_task_run_input(
                     access,
-                    &gents::store::identity::RegisteredIdentity::from_registered_did(
+                    &gents_store::identity::RegisteredIdentity::from_registered_did(
                         access.actor_did().context("test actor")?,
                         None,
                     )?,
@@ -315,7 +322,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
                 let retry = signed_request(&home, &binding.agent_did, &fire, retained).await?;
                 assert_eq!(retry.admission.signature, request.admission.signature);
                 let replay =
-                    gents::request::lifecycle::write_task_delivery(access, &fire, true, &retry)
+                    gents_automation::triggers::write_task_delivery(access, &fire, true, &retry)
                         .await?;
                 assert!(replay.duplicate);
                 assert_eq!(Some(replay.request.doc_id), row.doc_id);

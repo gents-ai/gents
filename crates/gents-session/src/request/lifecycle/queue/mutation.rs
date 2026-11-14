@@ -1,0 +1,100 @@
+use super::*;
+
+use crate::request::lifecycle::materialize::{
+    build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec,
+};
+use crate::request::lifecycle::{TriggerLineage, WorkspaceLineage};
+
+pub struct SessionRequestFields<'a> {
+    pub agent_did: &'a str,
+    pub content: &'a str,
+    pub execution_origin: ExecutionOrigin,
+    pub input: RequestInput,
+    pub request_id: &'a str,
+    pub created_at: &'a str,
+    pub retry_key: Option<&'a str>,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn session_request_create_mutation(
+    parent: &AgentRequest,
+    fields: SessionRequestFields<'_>,
+    signer: &gents_store::identity::ManagedAgentSigner,
+) -> Result<String> {
+    session_request_create_mutation_at_hop_with_signer(
+        parent,
+        parent.request_hop,
+        fields,
+        Some(signer),
+    )
+    .await
+}
+
+pub async fn session_request_create_mutation_at_hop_with_signer(
+    parent: &AgentRequest,
+    hop: u32,
+    fields: SessionRequestFields<'_>,
+    signer: Option<&gents_store::identity::ManagedAgentSigner>,
+) -> Result<String> {
+    let SessionRequestFields {
+        agent_did,
+        content,
+        execution_origin,
+        input,
+        request_id,
+        created_at,
+        retry_key,
+    } = fields;
+    anyhow::ensure!(
+        !parent.request_id.trim().is_empty() && !parent.doc_id.trim().is_empty(),
+        "cannot enqueue runtime control continuation from an unbound parent request"
+    );
+    let admission =
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
+            agent_did,
+            &parent.request_id,
+        );
+    let identity = RequestIdentity {
+        requester_did: parent.requester_did.clone(),
+        request_id: request_id.to_string(),
+        node_did: parent.node_did.clone(),
+        agent_did: agent_did.to_string(),
+        session_id: parent.session_id.clone(),
+        content: content.to_string(),
+        execution_origin,
+        created_at: created_at.to_string(),
+    };
+    let spec = RequestSpec {
+        workspace: Some(WorkspaceLineage {
+            workspace_id: parent.workspace_id.clone(),
+            workspace_owner_node_did: parent.workspace_owner_node_did.clone(),
+            workspace_authority: parent.workspace_authority.clone(),
+            workspace_seal_hash: parent.workspace_seal_hash.clone(),
+        }),
+        trigger_lineage: TriggerLineage {
+            correlation: parent.caused_by_correlation.clone(),
+            trigger_context: parent.caused_by_trigger_context.clone(),
+            ..Default::default()
+        },
+        parent: Some(ParentLink {
+            depth: hop,
+            parent_request_id: parent.request_id.clone(),
+            parent_request_doc_id: parent.doc_id.clone(),
+            ..Default::default()
+        }),
+        input,
+        retry_key: retry_key.map(ToOwned::to_owned),
+        ..RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            identity,
+            admission,
+        )
+    };
+    let signer = signer.context("queued continuation requires a managed Agent signer")?;
+    anyhow::ensure!(
+        signer.did() == parent.agent_did,
+        "queued continuation signer differs from parent Agent"
+    );
+    let create = build_signed_request(spec, RequestSigner::Identity(signer)).await?;
+    create.graphql_mutation().map_err(anyhow::Error::msg)
+}

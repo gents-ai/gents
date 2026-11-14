@@ -1,22 +1,23 @@
 use super::{
-    append_inference_selection, ensure_inference_available, resolve_inference, AgentDocument,
+    append_inference_selection, ensure_inference_available, resolve_inference,
     DocumentResolveContext, DocumentRuntimeView,
 };
 use anyhow::{anyhow, Result};
 use defra_node::Node as EmbeddedNode;
+use gents_documents::Agent as AgentDocument;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
-use crate::inference::resolved::ResolvedAgent;
 use crate::runtime::agent::tool_selection_from_document;
-use crate::runtime::snapshot::UnavailableAgent;
-use crate::tools::surface::{AgentToolConfig, ResolvedToolSelection, ToolSurface};
+use gents_automation::triggers::runtime_snapshot::UnavailableAgent;
+use gents_documents::AgentToolConfig;
+use gents_tools::surface::{AgentWithTools, ResolvedToolSelection, ToolSurface};
 
 type AgentContextDocuments = (
-    Option<crate::documents::AgentContext>,
-    Option<crate::documents::CompactionConfig>,
-    Option<crate::inference::resolved::ResolvedInference>,
+    Option<gents_documents::AgentContext>,
+    Option<gents_documents::CompactionConfig>,
+    Option<gents_inference::resolved::ResolvedInference>,
     ResolvedToolSelection,
     AgentToolConfig,
 );
@@ -25,8 +26,8 @@ pub(super) async fn backend_admission_configs(
     context: &DocumentResolveContext,
     view: &DocumentRuntimeView,
 ) -> Result<(
-    RapidHashMap<String, crate::inference::admission::BackendAdmissionConfig>,
-    RapidHashMap<String, crate::inference::backends::health::BackendHealthSnapshot>,
+    RapidHashMap<String, gents_inference::admission::BackendAdmissionConfig>,
+    RapidHashMap<String, gents_inference::backends::health::BackendHealthSnapshot>,
 )> {
     let measured_health = context.backend_health.snapshot().await;
     let mut backend_admission_configs = RapidHashMap::new();
@@ -35,7 +36,7 @@ pub(super) async fn backend_admission_configs(
         if let Some(observation) = view.backend_observations.get(&backend.backend_id) {
             backend_admission_configs.insert(
                 backend.backend_id.clone(),
-                crate::inference::admission::BackendAdmissionConfig::from_backend(
+                gents_inference::admission::BackendAdmissionConfig::from_backend(
                     backend,
                     observation,
                 )?
@@ -55,11 +56,11 @@ pub(super) fn agent_context_documents(
     view: &DocumentRuntimeView,
     backend_admission_configs: &RapidHashMap<
         String,
-        crate::inference::admission::BackendAdmissionConfig,
+        gents_inference::admission::BackendAdmissionConfig,
     >,
     measured_health: &RapidHashMap<
         String,
-        crate::inference::backends::health::BackendHealthSnapshot,
+        gents_inference::backends::health::BackendHealthSnapshot,
     >,
     agent_config: &AgentDocument,
 ) -> Result<AgentContextDocuments> {
@@ -111,7 +112,7 @@ pub(super) fn agent_context_documents(
             selected.query_tools = merged.query_tools;
             selected.write_tools = merged.write_tools;
             selected.surface_of_tool = merged.surface_of_tool;
-            let agents = crate::tools::surface::AgentToolConfig::from_document_with_targets(
+            let agents = AgentToolConfig::from_document_with_targets(
                 tools,
                 view.agent_targets.values().map(|record| &record.value),
             )?;
@@ -129,13 +130,13 @@ pub(super) fn agent_context_documents(
 pub(super) fn agent_configuration_documents(
     view: &DocumentRuntimeView,
     behavior_record: &super::super::DocumentRecord<AgentDocument>,
-    inference: &crate::inference::resolved::ResolvedInference,
-    summary: Option<&crate::inference::resolved::ResolvedInference>,
-    resolved_context: Option<&crate::documents::AgentContext>,
-) -> Result<Vec<crate::inference::resolved::SelectedConfigurationDocument>> {
+    inference: &gents_inference::resolved::ResolvedInference,
+    summary: Option<&gents_inference::resolved::ResolvedInference>,
+    resolved_context: Option<&gents_documents::AgentContext>,
+) -> Result<Vec<gents_inference::resolved::SelectedConfigurationDocument>> {
     let mut configuration_documents =
-        vec![crate::inference::resolved::SelectedConfigurationDocument {
-            collection: crate::Collection::Agent,
+        vec![gents_inference::resolved::SelectedConfigurationDocument {
+            collection: gents_store::collection::Collection::Agent,
             doc_id: behavior_record.doc_id.clone(),
             logical_id: None,
         }];
@@ -148,8 +149,8 @@ pub(super) fn agent_configuration_documents(
             .contexts
             .get(&context.context_id)
             .ok_or_else(|| anyhow!("resolved AgentContext disappeared"))?;
-        configuration_documents.push(crate::inference::resolved::SelectedConfigurationDocument {
-            collection: crate::Collection::AgentContext,
+        configuration_documents.push(gents_inference::resolved::SelectedConfigurationDocument {
+            collection: gents_store::collection::Collection::AgentContext,
             doc_id: context_record.doc_id.clone(),
             logical_id: None,
         });
@@ -159,8 +160,8 @@ pub(super) fn agent_configuration_documents(
                 .get(id)
                 .ok_or_else(|| anyhow!("resolved Skill disappeared"))?;
             configuration_documents.push(
-                crate::inference::resolved::SelectedConfigurationDocument {
-                    collection: crate::Collection::Skill,
+                gents_inference::resolved::SelectedConfigurationDocument {
+                    collection: gents_store::collection::Collection::Skill,
                     doc_id: record.doc_id.clone(),
                     logical_id: Some(id.clone()),
                 },
@@ -172,8 +173,8 @@ pub(super) fn agent_configuration_documents(
                 .get(id)
                 .ok_or_else(|| anyhow!("resolved CompactionConfig disappeared"))?;
             configuration_documents.push(
-                crate::inference::resolved::SelectedConfigurationDocument {
-                    collection: crate::Collection::Compaction,
+                gents_inference::resolved::SelectedConfigurationDocument {
+                    collection: gents_store::collection::Collection::Compaction,
                     doc_id: record.doc_id.clone(),
                     logical_id: None,
                 },
@@ -185,8 +186,8 @@ pub(super) fn agent_configuration_documents(
                 .get(tools_id)
                 .ok_or_else(|| anyhow!("resolved Tools disappeared"))?;
             configuration_documents.push(
-                crate::inference::resolved::SelectedConfigurationDocument {
-                    collection: crate::Collection::Tools,
+                gents_inference::resolved::SelectedConfigurationDocument {
+                    collection: gents_store::collection::Collection::Tools,
                     doc_id: tools_record.doc_id.clone(),
                     logical_id: None,
                 },
@@ -200,12 +201,12 @@ pub(super) async fn resolve_behavior_surfaces(
     node: &Arc<EmbeddedNode>,
     context: &DocumentResolveContext,
     own_node_did: &str,
-    agents: Vec<Arc<ResolvedAgent>>,
+    agents: Vec<AgentWithTools>,
     unavailable_agents: &mut RapidHashMap<String, UnavailableAgent>,
-) -> Vec<(Arc<ResolvedAgent>, ToolSurface)> {
+) -> Vec<(AgentWithTools, ToolSurface)> {
     let candidate_agent_dids = agents
         .iter()
-        .map(|agent_config| agent_config.agent_did.clone())
+        .map(|agent_config| agent_config.agent.agent_did.clone())
         .collect::<RapidHashSet<_>>();
     let mut behavior_surfaces = Vec::with_capacity(agents.len());
     for agent_config in agents {
@@ -215,14 +216,14 @@ pub(super) async fn resolve_behavior_surfaces(
                 node,
                 own_node_did,
                 &candidate_agent_dids,
-                &context.plugins,
+                &*context.plugins,
             )
             .await
         {
             Ok(tool_surface) => behavior_surfaces.push((agent_config, tool_surface)),
             Err(error) => {
                 unavailable_agents.insert(
-                    agent_config.agent_did.clone(),
+                    agent_config.agent.agent_did.clone(),
                     UnavailableAgent::new(
                         AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
                         error.to_string(),
@@ -237,14 +238,11 @@ pub(super) async fn resolve_behavior_surfaces(
 
 pub(super) fn retain_active_agent_targets(
     own_node_did: &str,
-    behavior_surfaces: Vec<(Arc<ResolvedAgent>, ToolSurface)>,
-) -> (
-    Vec<Arc<ResolvedAgent>>,
-    RapidHashMap<String, Arc<ToolSurface>>,
-) {
+    behavior_surfaces: Vec<(AgentWithTools, ToolSurface)>,
+) -> (Vec<AgentWithTools>, RapidHashMap<String, Arc<ToolSurface>>) {
     let active_agent_dids = behavior_surfaces
         .iter()
-        .map(|(agent_config, _)| agent_config.agent_did.clone())
+        .map(|(agent_config, _)| agent_config.agent.agent_did.clone())
         .collect::<RapidHashSet<_>>();
     let mut agents = Vec::with_capacity(behavior_surfaces.len());
     let mut tool_surfaces = RapidHashMap::with_capacity(behavior_surfaces.len());
@@ -254,7 +252,7 @@ pub(super) fn retain_active_agent_targets(
                 && !active_agent_dids.contains(&target.agent_did)
             {
                 tracing::warn!(
-                    agent_did = %agent_config.agent_did,
+                    agent_did = %agent_config.agent.agent_did,
                     target_name = %target.name,
                     target_agent_did = %target.agent_did,
                     "dropping LOCAL agent target: target agent is not active \
@@ -263,7 +261,7 @@ pub(super) fn retain_active_agent_targets(
             }
         }
         tool_surface.retain_agent_targets(own_node_did, &active_agent_dids);
-        tool_surfaces.insert(agent_config.agent_did.clone(), Arc::new(tool_surface));
+        tool_surfaces.insert(agent_config.agent.agent_did.clone(), Arc::new(tool_surface));
         agents.push(agent_config);
     }
     (agents, tool_surfaces)
@@ -275,21 +273,29 @@ pub(super) fn attach_watcher_identities(
     unavailable_agents: &mut RapidHashMap<String, UnavailableAgent>,
 ) {
     // Availability and locally verifiable identity are independent: the watcher
-    // must still observe work for a disabled or otherwise unrunnable agent.
+    // must still observe work for an otherwise unrunnable agent. DefraDB
+    // answers a disabled agent's request scan without its AgentRequest rows,
+    // so scanning as one fails on every pass.
     for (agent_did, reason) in unavailable_agents {
+        if reason.public_reason
+            == gents_protocol::node_readiness::AgentReadinessUnavailableReason::AgentDisabled
+        {
+            continue;
+        }
         let Some(record) = view.agents.get(agent_did) else {
             continue;
         };
         if record.value.node_did != context.identity.did() {
             continue;
         }
-        if let Ok(identity) = crate::store::identity::resolve_agent_identity(
+        if let Ok(identity) = gents_store::identity::resolve_agent_identity(
             context.identity.as_ref(),
             &record.value.identity_binding(),
         ) {
             if identity.did() != context.identity.did() {
-                reason.watcher_identity =
-                    Some(crate::runtime::snapshot::ResolvedWatcherIdentity(identity));
+                reason.watcher_identity = Some(
+                    gents_automation::triggers::runtime_snapshot::ResolvedWatcherIdentity(identity),
+                );
             }
         }
     }

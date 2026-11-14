@@ -4,12 +4,10 @@ use anyhow::Context;
 use std::sync::Arc;
 
 use chrono::Utc;
-use gents::inference::backends::registry::lookup_backend_observation_in_txn;
-use gents::store::config_client::{list_inference_backends_in_txn, ConfigAccess};
-use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
-use gents_protocol::job::JobControlOutcome;
+use gents_protocol::job::{JobControlOutcome, JobState, JobView};
 use gents_protocol::process_control::{OperatorProcessControlRequest, ProcessControlOutcome};
+use gents_store::config_client::ConfigAccess;
 use tauri::State;
 
 use crate::commands::mcp_health::{load_mcp_services_with_health, probe_mcp_service};
@@ -95,107 +93,31 @@ async fn fetch_background_tool_calls(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<Vec<ToolCallRow>, BridgeError> {
-    let query = background_tool_calls_query(node_did);
-
-    let response = access
-        .execute(&query)
+    let mut view = gents_session::views::transcript::ToolCallRows::background(
+        gents_session::views::transcript::Scope::Node(node_did.to_owned()),
+    );
+    view.limit = Some(BACKGROUND_TOOL_CALL_LIMIT as u64);
+    let rows = access
+        .read_view(&view)
         .await
         .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
-
-    let data = response
-        .get("data")
-        .ok_or_else(|| BridgeError::untyped("AgentToolCall query returned no data"))?;
-    let rows = data
-        .get("AgentToolCall")
-        .and_then(|t| t.as_array())
-        .cloned()
-        .unwrap_or_default();
-
     Ok(rows
         .into_iter()
         .map(|row| ToolCallRow {
-            tool_call_doc_id: row
-                .get("_docID")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            request_id: row
-                .get("request_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            tool_call_id: row
-                .get("tool_call_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            tool_name: row
-                .get("tool_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            lifecycle_state: row
-                .get("lifecycle_state")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            status: row
-                .get("status")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            started_at: row
-                .get("started_at")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            completed_at: row
-                .get("completed_at")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            deadline_at: row
-                .get("deadline_at")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            await_mode: row
-                .get("await_mode")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            stuck_since: row
-                .get("stuck_since")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            job: row.get("job_pin").is_some_and(|pin| !pin.is_null()),
+            tool_call_doc_id: row.doc_id,
+            request_id: row.request_id.unwrap_or_default(),
+            tool_call_id: row.tool_call_id.unwrap_or_default(),
+            tool_name: row.tool_name.unwrap_or_default(),
+            lifecycle_state: row.lifecycle_state,
+            status: row.status,
+            started_at: row.started_at,
+            completed_at: row.completed_at,
+            deadline_at: row.deadline_at,
+            await_mode: row.await_mode,
+            stuck_since: row.stuck_since,
+            job: row.job_pin.is_some(),
         })
         .collect())
-}
-
-fn background_tool_calls_query(node_did: &str) -> String {
-    let escaped_node_did = escape_graphql_string(node_did);
-
-    format!(
-        r#"
-        query {{
-            AgentToolCall(
-                filter: {{
-                    await_mode: {{ _eq: "background" }},
-                    lifecycle_state: {{ _in: ["pending", "running"] }},
-                    node_did: {{ _eq: "{escaped_node_did}" }}
-                }},
-                limit: {BACKGROUND_TOOL_CALL_LIMIT}
-            ) {{
-                _docID
-                request_id
-                tool_call_id
-                tool_name
-                lifecycle_state
-                status
-                started_at
-                completed_at
-                deadline_at
-                await_mode
-                stuck_since
-                job_pin
-            }}
-        }}
-    "#
-    )
 }
 
 #[cfg(test)]
@@ -215,14 +137,6 @@ mod background_tool_query_tests {
         let product = serde_json::to_value(view).unwrap();
         assert_eq!(product["activeNativeExecutors"][0]["toolName"], "Bash");
         assert!(product.get("active_native_executors").is_none());
-    }
-
-    #[test]
-    fn background_query_selects_job_pin() {
-        let query = background_tool_calls_query("did:key:z6Mk");
-
-        assert!(query.contains("job_pin"));
-        assert!(!query.contains("job_step_state"));
     }
 }
 
@@ -275,11 +189,11 @@ where
             target: "gents_desktop::interrupt",
             request_id = %request.request_id,
             node_did = %request.node_did.as_deref().unwrap_or(""),
-            error,
+            error = %error,
             "desktop interrupt action failed"
         ),
     }
-    result.map_err(|error| BridgeError::untyped(error.to_string()))
+    result
 }
 
 #[tauri::command]
@@ -311,6 +225,40 @@ pub async fn desktop_job_control(
         ),
     }
     result
+}
+
+#[tauri::command]
+pub async fn desktop_jobs_list(
+    state: State<'_, DesktopAppState>,
+    node_did: String,
+    states: Option<Vec<JobState>>,
+    plugin: Option<String>,
+    session_id: Option<String>,
+) -> Result<Vec<JobView>, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
+    crate::job_view::jobs_list(
+        &core,
+        gents_protocol::operations::job::JobListInput {
+            node_did,
+            states,
+            plugin,
+            session_id,
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn desktop_job_view(
+    state: State<'_, DesktopAppState>,
+    node_did: String,
+    address: Option<String>,
+    row_doc_id: Option<String>,
+) -> Result<JobView, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
+    crate::job_view::job_view(&core, &node_did, address, row_doc_id).await
 }
 
 #[tauri::command]
@@ -352,26 +300,20 @@ pub async fn list_backends_with_health_for_core(
             ))
         })?;
     let access = ConfigAccess::Graphql(endpoint);
-    let backends = access
-        .transact_readonly("desktop.backend_health", |txn| {
-            let node_did = &node_did;
-            Box::pin(async move {
-                let backends = list_inference_backends_in_txn(txn, node_did).await?;
-                let mut observations = Vec::with_capacity(backends.len());
-                for backend in backends {
-                    let observation =
-                        lookup_backend_observation_in_txn(txn, node_did, &backend.backend_id)
-                            .await?;
-                    observations.push((backend, observation));
-                }
-                Ok::<_, anyhow::Error>(observations)
-            })
-        })
-        .await
-        .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
+    let backends = gents_inference::views::backends::read_inventory(
+        &access,
+        &gents_inference::views::backends::BackendList::new(&node_did),
+    )
+    .await
+    .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
 
     let mut views = Vec::with_capacity(backends.len());
-    for (backend, observation) in backends {
+    for row in backends {
+        let backend = row
+            .metadata
+            .into_backend()
+            .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        let observation = row.observation;
         let recent_calls = fetch_recent_calls(&access, &node_did, &backend.backend_id)
             .await
             .map_err(|err| err.to_string())?;
@@ -433,93 +375,41 @@ async fn fetch_recent_calls(
     node_did: &str,
     backend_id: &str,
 ) -> Result<Vec<InferenceCallSummaryView>, anyhow::Error> {
-    let escaped_id = escape_graphql_string(backend_id);
-    let escaped_node = escape_graphql_string(node_did);
-    let query = format!(
-        r#"query {{
-            InferenceCall(
-                filter: {{ node_did: {{ _eq: "{escaped_node}" }}, backend_id: {{ _eq: "{escaped_id}" }} }},
-                order: {{ queued_at: DESC }},
-                limit: {limit}
-            ) {{
-                call_id
-                call_seq
-                call_kind
-                call_state
-                failure_reason
-                queued_at
-                started_at
-                ended_at
-                queue_depth_at_enqueue
-                prompt_tokens
-                completion_tokens
-                cached_input_tokens cache_creation_input_tokens reasoning_output_tokens
-                provider_total_tokens usage_completeness
-            }}
-        }}"#,
-        limit = RECENT_CALLS_PER_BACKEND,
-    );
-
-    let resp = access
-        .execute(&query)
+    let rows = access
+        .read_view(
+            &gents_inference::views::activity::InferenceCalls::new(node_did)
+                .recent_backend(backend_id)
+                .limit(RECENT_CALLS_PER_BACKEND as u64),
+        )
         .await
         .with_context(|| format!("list InferenceCall for backend {backend_id}"))?;
-
-    Ok(resp
-        .get("data")
-        .and_then(|data| data.get("InferenceCall"))
-        .and_then(|value| value.as_array())
-        .map(|rows| rows.iter().map(parse_call_row).collect::<Vec<_>>())
-        .unwrap_or_default())
+    Ok(rows.into_iter().map(parse_call_row).collect())
 }
 
-fn parse_call_row(row: &serde_json::Value) -> InferenceCallSummaryView {
+fn parse_call_row(
+    row: gents_inference::views::activity::InferenceCallRow,
+) -> InferenceCallSummaryView {
     InferenceCallSummaryView {
-        call_id: row
-            .get("call_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        call_seq: row.get("call_seq").and_then(|v| v.as_i64()).unwrap_or(0),
-        call_kind: row
-            .get("call_kind")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        call_state: row
-            .get("call_state")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        failure_reason: row
-            .get("failure_reason")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned),
-        queued_at: row
-            .get("queued_at")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned),
-        started_at: row
-            .get("started_at")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned),
-        ended_at: row
-            .get("ended_at")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned),
-        queue_depth_at_enqueue: row.get("queue_depth_at_enqueue").and_then(|v| v.as_i64()),
-        prompt_tokens: row.get("prompt_tokens").and_then(|v| v.as_i64()),
-        completion_tokens: row.get("completion_tokens").and_then(|v| v.as_i64()),
-        cached_input_tokens: row.get("cached_input_tokens").and_then(|v| v.as_i64()),
-        cache_creation_input_tokens: row
-            .get("cache_creation_input_tokens")
-            .and_then(|v| v.as_i64()),
-        reasoning_output_tokens: row.get("reasoning_output_tokens").and_then(|v| v.as_i64()),
-        provider_total_tokens: row.get("provider_total_tokens").and_then(|v| v.as_i64()),
-        usage_completeness: row
-            .get("usage_completeness")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned),
+        call_id: row.call_id,
+        call_seq: row.call_seq.unwrap_or_default(),
+        call_kind: row.call_kind.unwrap_or_default(),
+        call_state: row.call_state,
+        failure_reason: row.failure_reason,
+        queued_at: row.queued_at,
+        started_at: row.started_at,
+        ended_at: row.ended_at,
+        queue_depth_at_enqueue: row.queue_depth_at_enqueue,
+        prompt_tokens: row.usage.prompt_tokens,
+        completion_tokens: row.usage.completion_tokens,
+        cached_input_tokens: row.usage.cached_input_tokens,
+        cache_creation_input_tokens: row.usage.cache_creation_input_tokens,
+        reasoning_output_tokens: row.usage.reasoning_output_tokens,
+        provider_total_tokens: row.usage.provider_total_tokens,
+        usage_completeness: row.usage.usage_completeness.map(|value| match value {
+            gents_protocol::usage::UsageCompleteness::Missing => "missing".to_owned(),
+            gents_protocol::usage::UsageCompleteness::Partial => "partial".to_owned(),
+            gents_protocol::usage::UsageCompleteness::Complete => "complete".to_owned(),
+        }),
     }
 }
 

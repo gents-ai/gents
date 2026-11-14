@@ -98,7 +98,7 @@ fn automated_store() -> ClientStore {
             }
         })),
         content: Some(
-            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into(),
+            gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into(),
         ),
         ..request("wake", "sess-1", 4)
     };
@@ -164,7 +164,7 @@ fn automated_store() -> ClientStore {
             "doc-wake",
             7,
             MessageRole::User,
-            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         ),
         (
             "authored:doc-goal:prompt",
@@ -212,11 +212,12 @@ fn external_inputs_keep_their_sender_and_internal_inputs_remain_inspectable() {
                 RequestOriginView::SessionMessage { .. } => "automated:sessionMessage".into(),
                 RequestOriginView::Trigger { .. } => "automated:trigger".into(),
                 RequestOriginView::GoalContinuation { .. } => "automated:goal".into(),
-                RequestOriginView::BackgroundCompletion { notification: true } => {
-                    "automated:notification".into()
-                }
+                RequestOriginView::BackgroundCompletion {
+                    notification: true, ..
+                } => "automated:notification".into(),
                 RequestOriginView::BackgroundCompletion {
                     notification: false,
+                    ..
                 } => "automated:wake".into(),
             },
             other => format!("{other:?}"),
@@ -396,7 +397,7 @@ fn active_background_request_keeps_interrupt_and_queue_visible_after_public_comp
             "key":"background_completion:sess-1", "background_completion_wake_version":1
         }})),
         content: Some(
-            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into(),
+            gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into(),
         ),
         ..request("wake", "sess-1", 1)
     };
@@ -437,7 +438,7 @@ fn active_background_request_keeps_interrupt_and_queue_visible_after_public_comp
     assert!(snapshot.pending_turn.is_none());
     let serialized = serde_json::to_string(&snapshot.timeline_items).unwrap();
     assert!(!serialized
-        .contains(gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT));
+        .contains(gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT));
     let summaries = session_summaries(&[header], &store.requests, "did:test:amy", &[], &[]);
     assert_eq!(summaries[0].latest_request_id.as_deref(), Some("wake"));
     assert_eq!(summaries[0].turn_state.as_deref(), Some("running"));
@@ -468,7 +469,7 @@ fn queued_and_folded_observations_retain_the_active_owners_trigger() {
             observed.lifecycle_state = Some(RequestLifecycleState::Superseded);
             observed.superseded_by_request = Some("owner".into());
             observed.superseded_by_request_doc_id = Some("doc-owner".into());
-            observed.failure_reason = Some(gents::request::lifecycle::FOLDED_REASON.into());
+            observed.failure_reason = Some(gents_session::request::lifecycle::FOLDED_REASON.into());
         }
         let mut header = session();
         header.observation = Some(SessionObservation {

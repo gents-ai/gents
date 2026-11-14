@@ -100,7 +100,7 @@ describe("desktop attachments", () => {
     );
   });
 
-  it("shows a pre-submission failure inline and keeps the selected image for an explicit retry", async () => {
+  it("keeps a refused image in the saved message, where Retry resends it", async () => {
     const { sendChatMessage } = setup();
     sendChatMessage.mockRejectedValueOnce(
       new Error("This runtime does not support attachment input"),
@@ -116,13 +116,16 @@ describe("desktop attachments", () => {
     fireEvent.click(
       within(screen.getByTestId("composer")).getByRole("button", { name: "Send" }),
     );
+    const saved = await screen.findByRole("status", { name: "Saved message" });
     await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "does not support attachment input",
-      ),
+      expect(saved).toHaveTextContent("does not support attachment input"),
     );
-    expect(screen.getByTestId("attachment-tray")).toHaveTextContent("pixel.png");
+    expect(saved).toHaveTextContent("pixel.png");
+    expect(screen.queryByTestId("attachment-tray")).not.toBeInTheDocument();
     expect(sendChatMessage).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(saved).getByRole("button", { name: "Retry message" }));
+    await waitFor(() => expect(sendChatMessage).toHaveBeenCalledTimes(2));
+    expect(sendChatMessage.mock.calls[1][0]).toEqual(sendChatMessage.mock.calls[0][0]);
   });
 
   it("does not resurrect an attachment removed while its file is still loading", async () => {

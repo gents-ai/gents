@@ -4,6 +4,7 @@ use super::launch::{fail_managed_start, launch_managed_server, LaunchFailure, Na
 use super::native::{
     ensure_launchable_here, launchable_native_service, native_service, run_native,
 };
+use super::native::{install_action, service_action};
 use super::pairing::{pairing_is_ready, pairing_target, start_running_managed_pairing};
 use super::port::{
     ensure_default_port_identity, matching_external_server, observe_port_readiness,
@@ -22,7 +23,9 @@ use crate::state::{current_core, DesktopAppState};
 use crate::types::{ManagedServerStartRequest, ManagedServerStatus};
 use gents_desktop_core::local_runtime::{init_standard_local_runtime, DesktopInitOptions};
 use gents_desktop_core::preference::StoredManagedServer;
+use gents_protocol::operations::service::ServiceLifecycleAction;
 use gents_protocol::serve_lifecycle::outdated_runtime_message;
+use gents_service::args::ServiceAction;
 use tauri::{AppHandle, Runtime};
 
 pub(super) async fn start_managed_server<'a, R>(
@@ -54,18 +57,22 @@ where
         request.tool_root.as_deref(),
         stored.as_ref(),
     )?;
-    refuse_renaming_home(&node_home, node_name).await?;
-    gents::store::local::home::ensure_home_identity_can_serve(&node_home).map_err(|error| {
+    refuse_renaming_home(
+        &node_home,
+        node_name,
+        super::reset::unfinished_local_setup(state, Some(&node_home)).await,
+    )
+    .await?;
+    gents_store::local::home::ensure_home_identity_can_serve(&node_home).map_err(|error| {
         BridgeError::untyped(gents_protocol::error_chain::ErrorChain(&error).to_string())
     })?;
 
     let service = native_service(app, state)?;
     let managed_selection = run_native(service, |service| {
-        if let Some(id) = service.pending_update()? {
-            anyhow::bail!("Managed runtime update {id} is in progress. Reconnect after it finishes, or run `gents runtime service update-status --home <node-home> {id}` with this node's home to resume its supervisor.");
-        }
+        gents_service::lifecycle::admit(&service, ServiceLifecycleAction::Start)?;
         service.has_managed_executable()
-    }).await?;
+    })
+    .await?;
     let mut carried_wait = None;
     let mut replace_loaded_job = false;
     let reader = user_status_signer(state, &node_home).await;
@@ -94,6 +101,7 @@ where
                 }
                 replace_loaded_job = !managed_selection
                     && (outdated.is_some()
+                        || (initial_native.job_loaded && !initial_native.installed)
                         || (initial_native.job_loaded
                             && !initial_native.running
                             && run_native(native_service(app, state)?, |service| {
@@ -141,6 +149,7 @@ where
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
         }
         external.pairing_ready = pairing_is_ready(state, external.node_did.as_deref()).await;
+        reconnect_started_runtime(state, &external).await;
         return Ok(external);
     }
     let lifecycle = _lifecycle;
@@ -156,9 +165,12 @@ where
             return Ok(());
         }
         if replace_loaded_job {
-            run_native(native_service(app, state)?, |service| service.stop(false)).await?;
+            run_native(native_service(app, state)?, |service| {
+                service_action(&service, ServiceAction::Stop { keep_enabled: true })
+            })
+            .await?;
         }
-        if gents_server::server_host::initialized_home(&node_home) {
+        if gents_service::server_host::initialized_home(&node_home) {
             ensure_default_port_identity(
                 &node_home,
                 user_status_signer(state, &node_home).await.as_ref(),
@@ -195,7 +207,7 @@ where
         )
         .await?;
         run_native(launchable_native_service(app, state)?, |service| {
-            service.install()
+            service_action(&service, install_action())
         })
         .await?;
         Ok(())
@@ -279,5 +291,15 @@ where
         status_from(&managed, stored.as_ref(), Some(&native), None, None)
     };
     status.pairing_ready = pairing_is_ready(state, status.node_did.as_deref()).await;
+    reconnect_started_runtime(state, &status).await;
     Ok(status)
+}
+
+pub(super) async fn reconnect_started_runtime(
+    state: &DesktopAppState,
+    status: &ManagedServerStatus,
+) {
+    if let (Some(core), Some(node_did)) = (current_core(state), status.node_did.as_deref()) {
+        core.request_runtime_reconnect(Some(node_did)).await;
+    }
 }

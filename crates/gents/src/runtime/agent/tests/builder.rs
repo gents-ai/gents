@@ -1,31 +1,6 @@
-use std::sync::Arc;
-
 use super::super::*;
 use super::support::*;
-use crate::tools::surface::ToolCeiling;
-
-#[tokio::test]
-async fn builder_requires_backend_admission_before_checking_node_identity() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    let identity = Arc::new(test_identity("builder-unsigned-node"));
-
-    let error = match Gents::builder()
-        .node(node)
-        .identity(identity)
-        .agent("policy-ops")
-        .done()
-        .build()
-        .await
-    {
-        Ok(_) => panic!("builder should reject a node without backend protection admission"),
-        Err(error) => error,
-    };
-
-    assert_eq!(
-        error.to_string(),
-        "fresh backend protection provenance is required"
-    );
-}
+use gents_tools::surface::ToolCeiling;
 
 #[tokio::test]
 async fn builder_includes_custom_tools_in_resolved_tool_surface() {
@@ -40,7 +15,7 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
     )
     .await;
 
-    let binding = crate::store::identity::provision_agent_identity_authorized(
+    let binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         identity.as_ref(),
         &identity::Did::new(owner.actor_did().expect("signed fixture owner")).unwrap(),
@@ -73,7 +48,11 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
 
     let tool_surface = agent.agents()[0]
         .tools
-        .resolve(&node, identity.did(), &Default::default())
+        .resolve(
+            &node,
+            identity.did(),
+            &gents_tools::plugin_host::NoPluginHost,
+        )
         .await
         .unwrap();
     assert!(tool_surface
@@ -119,11 +98,11 @@ async fn builder_rejects_backend_vetoed_by_measured_health() {
     )
     .await;
 
-    let backend_health = crate::inference::backends::health::BackendHealthMap::new();
+    let backend_health = gents_inference::backends::health::BackendHealthMap::new();
     backend_health
         .set_for_test(
             "builder-vetoed-backend",
-            crate::inference::backends::health::BackendHealthState::Unhealthy,
+            gents_inference::backends::health::BackendHealthState::Unhealthy,
             3,
         )
         .await;

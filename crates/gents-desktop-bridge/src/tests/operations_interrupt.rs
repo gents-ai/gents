@@ -1,11 +1,11 @@
 use crate::interrupt::interrupt_request;
 use crate::tests::support::{
-    reject_admission, served_desktop, served_desktop_pair, submit_request, try_submit_request,
+    reject_admission, served_desktop, served_desktop_pair, submit_request,
 };
 use crate::types::DesktopInterruptRequest;
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 
 fn user_cancel(request_id: &str, node: Option<&str>) -> DesktopInterruptRequest {
     DesktopInterruptRequest {
@@ -67,48 +67,36 @@ async fn interrupt_uses_hosting_runtime_and_preserves_other_requests() {
         .unwrap();
     assert!(second.already_interrupted);
     assert_eq!(second.interrupt_requested_at, first.interrupt_requested_at);
+    let done = submit_request(core, &served.runtime, &served.agent, "done-session", "done").await;
+    reject_admission(&served.runtime, &served.agent, &done, "fixture rejection").await;
+    let finished = interrupt_request(core, &user_cancel("done", Some(node)))
+        .await
+        .unwrap();
+    assert!(finished.accepted && finished.already_interrupted);
+    assert!(finished.interrupt_requested_at.is_none());
+    assert!(latch(core, node, "done").await.is_none());
     served.shutdown().await;
 }
 
 #[tokio::test]
-async fn interrupt_refuses_ambiguous_terminal_and_non_user_causes() {
-    let served = served_desktop().await;
-    let (core, node) = (&served.core, served.node_did());
-    // Client admission refuses a second request under an identity the User
-    // already holds, so the interrupt owner's ambiguity refusal can no longer
-    // be reached through a desktop submission; the twin is refused instead.
-    submit_request(core, &served.runtime, &served.agent, "one", "twins").await;
-    let twin = try_submit_request(core, &served.runtime, &served.agent, "two", "twins")
-        .await
-        .unwrap_err();
-    assert!(format!("{twin:#}").contains("already held"), "{twin:#}");
-    assert!(
-        interrupt_request(core, &user_cancel("twins", Some(node)))
-            .await
-            .unwrap()
-            .accepted
-    );
-    let done = submit_request(core, &served.runtime, &served.agent, "done-session", "done").await;
-    reject_admission(&served.runtime, &served.agent, &done, "fixture rejection").await;
-    assert!(interrupt_request(core, &user_cancel("done", Some(node)))
-        .await
-        .unwrap_err()
-        .contains("already terminal"));
-    assert!(latch(core, node, "done").await.is_none());
-    let mut invalid = user_cancel("done", Some(node));
+async fn interrupt_refuses_non_user_causes_and_an_unselected_runtime() {
+    let (core, _directory) = crate::tests::support::boot_core().await;
+    let mut invalid = user_cancel("done", Some("did:test:node"));
     invalid.cause = "deadline".into();
-    assert!(interrupt_request(core, &invalid)
+    assert!(interrupt_request(&core, &invalid)
         .await
         .unwrap_err()
+        .message
         .contains("userCancelled"));
     assert!(
-        interrupt_request(core, &user_cancel("done", None))
+        interrupt_request(&core, &user_cancel("done", None))
             .await
             .unwrap_err()
+            .message
             .contains("Select the hosting runtime"),
         "the owner never falls back to the core's shared selection"
     );
-    served.shutdown().await;
+    core.shutdown().await.unwrap();
 }
 
 #[tokio::test]

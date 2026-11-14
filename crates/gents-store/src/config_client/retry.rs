@@ -1,0 +1,570 @@
+use std::time::Duration;
+
+use super::error::{ConfigClientError, TransactionConflict};
+use super::write_telemetry::ConflictSource;
+use crate::graphql::GraphqlResponseError;
+
+pub(super) const TRANSACT_CONFLICT_MAX_RETRIES: u32 = 3;
+pub(super) const RECEIPT_WRITE_MAX_RETRIES: u32 = 4;
+/// `Background.receiptContentionAttempts`: outlasts the running children that
+/// may write while the owned loop admits one call at a time, plus the one
+/// execution lease renewal that may commit during the attempt series (an
+/// admission reads and writes the request document, and renewals are at least
+/// half a lease apart). This is bounded retry, not a progress guarantee under
+/// concurrent sibling admissions, a lease shorter than twice the attempt
+/// series, or unbounded concurrent writes.
+pub(super) const REQUEST_SIBLING_MAX_ATTEMPTS: u32 =
+    gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT as u32 + 2;
+
+/// Exposes the DefraDB access error a transaction callback failed with, so the
+/// transaction owner classifies conflicts and storage failures by type. A
+/// caller error that wraps [`ConfigClientError`] or [`GraphqlResponseError`]
+/// returns it here by matching its own variants; erased (`anyhow` or boxed)
+/// callback errors are searched by [`access_error_in`].
+pub trait TransactionFailure {
+    fn config_client_error(&self) -> Option<&ConfigClientError>;
+
+    /// [`ConfigClientError::is_permission_denied`] for the access error this
+    /// failure carries; a failure without one is not a denial.
+    fn permission_denied(&self) -> bool {
+        self.config_client_error()
+            .is_some_and(ConfigClientError::is_permission_denied)
+    }
+
+    /// The note of the callback's request to run the transaction again
+    /// ([`ConfigClientError::RerunRequested`]). An owner enum that carries
+    /// an erased error answers from that error's whole `source()` chain.
+    fn rerun_requested(&self) -> Option<&super::RerunNote> {
+        self.config_client_error()
+            .and_then(ConfigClientError::rerun_note)
+    }
+}
+
+impl TransactionFailure for ConfigClientError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        Some(self)
+    }
+}
+
+impl TransactionFailure for GraphqlResponseError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            GraphqlResponseError::Access(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl<T> TransactionFailure for Box<T>
+where
+    T: TransactionFailure,
+{
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        (**self).config_client_error()
+    }
+
+    fn rerun_requested(&self) -> Option<&super::RerunNote> {
+        (**self).rerun_requested()
+    }
+}
+
+impl TransactionFailure for Box<dyn std::error::Error + Send + Sync> {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        access_error_in(self.as_ref())
+    }
+
+    fn rerun_requested(&self) -> Option<&super::RerunNote> {
+        rerun_request_in(self.as_ref())
+    }
+}
+
+/// The first access owner in an erased error's chain. Both owners wrap each
+/// other transparently, so each is asked for its access error rather than
+/// found by `source()` alone; a boxed `#[source]` is on the chain as the box,
+/// so the box is asked too. No other owner is asked: a variant of another
+/// owner that holds an access error exposes it as its `#[source]`
+/// (`AccessClassification.Error.exposed`), since a transparent variant would
+/// take it off the chain.
+pub(super) fn access_error_in<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a ConfigClientError> {
+    gents_protocol::error_chain::find_map_source(error, |cause| {
+        asked::<ConfigClientError>(cause)
+            .or_else(|| asked::<Box<ConfigClientError>>(cause))
+            .or_else(|| asked::<GraphqlResponseError>(cause))
+            .or_else(|| asked::<Box<GraphqlResponseError>>(cause))
+    })
+}
+
+fn asked<'a, O>(cause: &'a (dyn std::error::Error + 'static)) -> Option<&'a ConfigClientError>
+where
+    O: TransactionFailure + std::error::Error + 'static,
+{
+    cause.downcast_ref::<O>()?.config_client_error()
+}
+
+/// The first request to run again in an erased error's chain. It is found by
+/// its own type rather than by asking a `ConfigClientError`: the request rides
+/// one level below the store's error (`RerunRequest` as the source of
+/// `ConfigClientError::RerunRequested`), so a transparent owner variant, which
+/// hides only the error it wraps, cannot hide it (maintainer decision of
+/// 2026-11-11, recorded on `Hooks.rerunSurvives` in `MustCommit.lean`).
+pub(super) fn rerun_request_in<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a super::RerunNote> {
+    gents_protocol::error_chain::find_map_source(error, |cause| {
+        cause
+            .downcast_ref::<super::RerunRequest>()
+            .map(super::RerunRequest::note)
+    })
+}
+
+pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {
+    ConfigClientError::TransactionConflict(TransactionConflict { origin })
+}
+
+pub(super) fn classified_transaction_conflict<E>(error: &E) -> Option<ConflictSource>
+where
+    E: TransactionFailure + ?Sized,
+{
+    error.config_client_error()?.transaction_conflict()
+}
+
+impl ConfigClientError {
+    /// The pinned DefraDB mutation adapter reports an inaccessible or missing
+    /// document with this shared GraphQL message and no structured error code.
+    /// Both cases are permanent for this attempted write, not storage failures,
+    /// and the adapter does not say which one occurred.
+    pub fn is_missing_or_denied_write(&self) -> bool {
+        matches!(self,
+            ConfigClientError::EmbeddedGraphqlErrors { errors }
+            if !errors.is_empty() && errors.iter().all(|item|
+                item.message == "document not found: document not found or not authorized to access"))
+    }
+}
+
+pub(super) fn transaction_storage_failure(error: ConfigClientError) -> ConfigClientError {
+    if error.transaction_conflict().is_some()
+        || error.is_missing_or_denied_write()
+        || matches!(
+            error,
+            ConfigClientError::ClientAgentSignerRequired | ConfigClientError::ClientSignerMismatch
+        )
+    {
+        error
+    } else {
+        ConfigClientError::StorageFailure(Box::new(error))
+    }
+}
+
+pub(super) fn is_transaction_storage_failure<E>(error: &E) -> bool
+where
+    E: TransactionFailure + ?Sized,
+{
+    error
+        .config_client_error()
+        .is_some_and(ConfigClientError::is_storage_failure)
+}
+
+pub(super) fn transaction_backoff(retry_index: u32) -> Duration {
+    Duration::from_millis(100u64.saturating_mul(1u64 << retry_index.min(10)))
+}
+
+pub(super) fn request_sibling_backoff(retry_index: u32) -> Duration {
+    use rand::Rng as _;
+    Duration::from_millis(20 * u64::from(retry_index + 1) + rand::rng().random_range(0..20))
+}
+
+pub(super) fn receipt_write_backoff(retry_index: u32) -> Duration {
+    Duration::from_millis(50u64.saturating_mul(u64::from(retry_index) + 1))
+}
+
+pub(super) fn is_retryable_ambiguous_write(error: &(dyn std::error::Error + 'static)) -> bool {
+    !crate::graphql::is_storage_full(error)
+        && (gents_protocol::graphql::graphql_error_is_retryable(error)
+            || access_error_in(error).is_some_and(|error| {
+                error.transaction_conflict().is_some() || error.is_retryable_database_conflict()
+            }))
+}
+
+/// External premise: DefraDB's HTTP commit handler answers a store conflict
+/// with `409 Conflict` and says so only in its body text.
+pub(super) fn is_transaction_conflict_text(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    text.contains("transaction conflict") && (text.contains("retry") || text.contains("try again"))
+}
+
+pub(super) fn graphql_value_is_transaction_conflict(value: &serde_json::Value) -> bool {
+    // Share the embedded DB's classification, including its JSON null/absent representation of no result.
+    <query::QueryResponse as serde::Deserialize>::deserialize(value)
+        .is_ok_and(|response| response.is_transaction_conflict())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn access(error: ConfigClientError) -> ConfigClientError {
+        ConfigClientError::Response(GraphqlResponseError::Access(Box::new(error)))
+    }
+
+    fn erased(error: ConfigClientError) -> Box<dyn std::error::Error + Send + Sync> {
+        #[derive(Debug, thiserror::Error)]
+        #[error("callback step")]
+        struct Step(#[source] ConfigClientError);
+        Box::new(Step(error))
+    }
+
+    #[test]
+    fn missing_or_mismatched_client_signer_is_not_a_storage_failure() {
+        let missing = transaction_storage_failure(ConfigClientError::ClientAgentSignerRequired);
+        assert!(!missing.is_storage_failure());
+        assert!(matches!(
+            missing,
+            ConfigClientError::ClientAgentSignerRequired
+        ));
+        let mismatch = transaction_storage_failure(ConfigClientError::ClientSignerMismatch);
+        assert!(!mismatch.is_storage_failure());
+        assert!(matches!(mismatch, ConfigClientError::ClientSignerMismatch));
+    }
+
+    #[test]
+    fn conflict_and_storage_classification_sees_through_access_wrappers() {
+        let conflict = || transaction_conflict(ConflictSource::StructuredCode);
+        let storage = || transaction_storage_failure(ConfigClientError::InjectedReadStorageFailure);
+        for error in [conflict(), access(conflict()), access(access(conflict()))] {
+            assert_eq!(
+                error.transaction_conflict(),
+                Some(ConflictSource::StructuredCode)
+            );
+            assert!(!error.is_storage_failure());
+            assert_eq!(
+                classified_transaction_conflict(&erased(error)),
+                Some(ConflictSource::StructuredCode)
+            );
+        }
+        for error in [storage(), access(storage())] {
+            assert!(error.is_storage_failure());
+            assert_eq!(error.transaction_conflict(), None);
+            assert!(is_transaction_storage_failure(&erased(error)));
+        }
+        let response = GraphqlResponseError::Access(Box::new(conflict()));
+        assert_eq!(
+            classified_transaction_conflict(&response),
+            Some(ConflictSource::StructuredCode)
+        );
+        assert!(!is_transaction_storage_failure(&erased(
+            ConfigClientError::InjectedReadStorageFailure
+        )));
+    }
+
+    #[test]
+    fn abandoned_native_operations_classify_through_every_wrapper() {
+        use super::super::NativeOperationAbandoned as Abandoned;
+        let phases: [fn(Abandoned) -> ConfigClientError; 7] = [
+            ConfigClientError::PoisonedByAbandonedOperation,
+            ConfigClientError::ExecuteCallerTimeout,
+            ConfigClientError::ExecutionTaskEnded,
+            ConfigClientError::CommitAfterAbandonedOperation,
+            ConfigClientError::RollbackDeferred,
+            ConfigClientError::AutoCommitCallerTimeout,
+            ConfigClientError::AutoCommitTaskEnded,
+        ];
+        for phase in phases {
+            let wrapped = [
+                phase(Abandoned),
+                transaction_storage_failure(phase(Abandoned)),
+                access(phase(Abandoned)),
+                ConfigClientError::HttpQuery {
+                    endpoint: "http://node/graphql".into(),
+                    source: Box::new(transaction_storage_failure(phase(Abandoned))),
+                },
+            ];
+            for error in wrapped {
+                assert!(error.native_operation_abandoned(), "{error:?}");
+            }
+        }
+        assert!(
+            !transaction_storage_failure(ConfigClientError::InjectedReadStorageFailure)
+                .native_operation_abandoned()
+        );
+    }
+
+    #[test]
+    fn insecure_identity_keys_classify_through_access_wrappers() {
+        let identity = || {
+            ConfigClientError::from(crate::identity::IdentityError::InsecureKey(
+                crate::identity::InsecureKeyPermissions {
+                    path: "/k".into(),
+                    mode: 0o644,
+                },
+            ))
+        };
+        for error in [
+            identity(),
+            access(identity()),
+            transaction_storage_failure(identity()),
+        ] {
+            assert_eq!(error.insecure_key().map(|key| key.mode), Some(0o644));
+        }
+        assert!(ConfigClientError::InjectedReadStorageFailure
+            .insecure_key()
+            .is_none());
+    }
+
+    #[test]
+    fn database_conflicts_replay_on_every_access_path() {
+        assert_eq!(
+            gents_protocol::database_error::TXN_CONFLICT_CODE,
+            query::executor::TXN_CONFLICT_ERROR_CODE
+        );
+        let failure = |code: &str| {
+            gents_protocol::database_error::GraphqlFailure::new(
+                "read",
+                serde_json::json!([{"message": "opaque", "extensions": {"code": code}}]),
+            )
+        };
+        let http_read = |code: &str| ConfigClientError::HttpQuery {
+            endpoint: "http://node/graphql".into(),
+            source: Box::new(ConfigClientError::Protocol(
+                gents_protocol::graphql::GraphqlError::Database(failure(code)),
+            )),
+        };
+        let embedded = |code: &str| ConfigClientError::EmbeddedGraphqlErrors {
+            errors: vec![query::QueryResponseError::new("opaque").with_code(code)],
+        };
+        for conflict in [
+            http_read(query::executor::TXN_CONFLICT_ERROR_CODE),
+            ConfigClientError::Database(failure(query::executor::TXN_CONFLICT_ERROR_CODE)),
+            access(embedded(query::executor::TXN_CONFLICT_ERROR_CODE)),
+        ] {
+            assert!(conflict.is_retryable_database_conflict(), "{conflict:?}");
+            assert!(conflict.is_graphql_rejection(), "{conflict:?}");
+            assert!(is_retryable_ambiguous_write(erased(conflict).as_ref()));
+        }
+        for rejection in [
+            http_read(query::executor::TXN_RETRY_EXHAUSTED_ERROR_CODE),
+            embedded(query::executor::TXN_RETRY_EXHAUSTED_ERROR_CODE),
+        ] {
+            assert!(rejection.is_graphql_rejection(), "{rejection:?}");
+            assert!(!rejection.is_retryable_database_conflict(), "{rejection:?}");
+            assert!(!is_retryable_ambiguous_write(erased(rejection).as_ref()));
+        }
+    }
+
+    #[test]
+    fn only_typed_conflicts_are_replayable() {
+        let typed = transaction_conflict(ConflictSource::StructuredCode);
+        assert_eq!(
+            classified_transaction_conflict(&typed),
+            Some(ConflictSource::StructuredCode)
+        );
+        assert_eq!(
+            classified_transaction_conflict(&Box::<dyn std::error::Error + Send + Sync>::from(
+                typed
+            )),
+            Some(ConflictSource::StructuredCode)
+        );
+        assert_eq!(
+            classified_transaction_conflict(&Box::<dyn std::error::Error + Send + Sync>::from(
+                "transaction conflict; please retry"
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn structured_graphql_code_is_required() {
+        assert!(graphql_value_is_transaction_conflict(&serde_json::json!({
+            "errors": [{"message": "opaque", "extensions": {"code": "TXN_CONFLICT"}}]
+        })));
+        assert!(!graphql_value_is_transaction_conflict(&serde_json::json!({
+            "errors": [{"message": "transaction conflict; please retry"}]
+        })));
+        assert!(graphql_value_is_transaction_conflict(&serde_json::json!({
+            "data": null,
+            "errors": [{"message": "opaque", "extensions": {"code": "TXN_CONFLICT"}}]
+        })));
+        assert!(!graphql_value_is_transaction_conflict(&serde_json::json!({
+            "data": {"update_X": [{"_docID": "doc"}]},
+            "errors": [{"message": "opaque", "extensions": {"code": "TXN_CONFLICT"}}]
+        })));
+    }
+
+    #[test]
+    fn conflict_shape_matches_pinned_defradb_serialization() {
+        let response = query::QueryResponse::transaction_conflict("opaque");
+        let value = serde_json::to_value(response).expect("serialize DefraDB response");
+        assert_eq!(value.get("data"), Some(&serde_json::Value::Null));
+        assert!(graphql_value_is_transaction_conflict(&value));
+
+        let success = serde_json::to_value(query::QueryResponse::success(serde_json::json!({
+            "create_X": [{"_docID": "doc"}]
+        })))
+        .expect("serialize successful DefraDB response");
+        assert!(success.get("errors").is_none());
+    }
+
+    #[test]
+    fn malformed_or_mixed_replies_are_not_replayable() {
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!({"errors": "TXN_CONFLICT"}),
+            serde_json::json!({"errors": [{"extensions": {"code": "TXN_CONFLICT"}}]}),
+            serde_json::json!({"data": null, "errors": [
+                {"message": "conflict", "extensions": {"code": "TXN_CONFLICT"}},
+                {"message": "another error"}
+            ]}),
+        ] {
+            assert!(!graphql_value_is_transaction_conflict(&value), "{value}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod storage_failure_tests {
+    use super::*;
+
+    #[test]
+    fn full_storage_does_not_enter_ambiguous_write_retries() {
+        gents_lean_vocab::families::storage_failure_contracts_ambiguous_write::replay(|i| {
+            let error = ConfigClientError::Response(GraphqlResponseError::from(
+                gents_protocol::database_error::GraphqlFailure::new(
+                    "write",
+                    serde_json::json!([
+                        {"message": i.message, "extensions": {"code": i.code}},
+                        {"message": "conflict", "extensions": {"code": gents_protocol::database_error::TXN_CONFLICT_CODE}}
+                    ]),
+                ),
+            ));
+            gents_lean_vocab::families::storage_failure_contracts_ambiguous_write::RetryOutput {
+                stop_automatic_retry: !is_retryable_ambiguous_write(&error),
+            }
+        });
+        #[derive(Debug, thiserror::Error)]
+        #[error("native transaction")]
+        struct NativeTransaction(#[source] storage::corekv::Error);
+        let error = NativeTransaction(storage::corekv::Error::from(std::io::Error::new(
+            std::io::ErrorKind::StorageFull,
+            "please retry",
+        )));
+        assert!(crate::graphql::is_storage_full(&error));
+        assert!(!is_retryable_ambiguous_write(&error));
+    }
+
+    use crate::config_client::{ConfigAccess, GraphqlEndpoint, IdempotentTransactionRetry};
+    use axum::extract::State;
+    use axum::http::StatusCode;
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use serde_json::{json, Value};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[derive(Default)]
+    struct Counts {
+        begins: AtomicUsize,
+        writes: AtomicUsize,
+        commits: AtomicUsize,
+        rollbacks: AtomicUsize,
+    }
+
+    #[derive(Clone)]
+    struct Failure {
+        begin: bool,
+        body: Value,
+        counts: Arc<Counts>,
+    }
+
+    async fn begin(State(failure): State<Failure>) -> (StatusCode, Json<Value>) {
+        failure.counts.begins.fetch_add(1, Ordering::SeqCst);
+        if failure.begin {
+            (StatusCode::INSUFFICIENT_STORAGE, Json(failure.body))
+        } else {
+            (StatusCode::OK, Json(json!({"id": "retained-transaction"})))
+        }
+    }
+
+    async fn write(State(failure): State<Failure>) -> Json<Value> {
+        failure.counts.writes.fetch_add(1, Ordering::SeqCst);
+        Json(json!({"data": {"create_StorageProbe": [{"_docID": "probe"}]}}))
+    }
+
+    async fn commit(State(failure): State<Failure>) -> (StatusCode, Json<Value>) {
+        failure.counts.commits.fetch_add(1, Ordering::SeqCst);
+        (StatusCode::INSUFFICIENT_STORAGE, Json(failure.body))
+    }
+
+    async fn rollback(State(failure): State<Failure>) -> Json<Value> {
+        failure.counts.rollbacks.fetch_add(1, Ordering::SeqCst);
+        Json(json!({}))
+    }
+
+    #[tokio::test]
+    async fn storage_full_http_transactions_stop_without_replaying_or_discarding_consumed_handles()
+    {
+        for case in gents_lean_vocab::families::storage_failure_contracts_full_transaction::cases()
+        {
+            let mut observed = Vec::new();
+            for fail_begin in [false, true] {
+                let counts = Arc::new(Counts::default());
+                let failure = Failure {
+                    begin: fail_begin,
+                    body: json!({"code": case.input.code, "error": case.input.message}),
+                    counts: Arc::clone(&counts),
+                };
+                let app = Router::new()
+                    .route("/api/v0/tx", post(begin))
+                    .route("/api/v0/graphql", post(write))
+                    .route("/api/v0/tx/{id}", post(commit).delete(rollback))
+                    .with_state(failure);
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+                let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+                    axum::serve(listener, app).await.unwrap();
+                }));
+                let access = ConfigAccess::Graphql(GraphqlEndpoint::anonymous(endpoint));
+                let error = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    access.transact_idempotent(
+                        IdempotentTransactionRetry::FiveAttempts,
+                        "test.storage_full.transaction",
+                        |txn| {
+                            Box::pin(async move {
+                                txn.execute(
+                                    "mutation { create_StorageProbe(input: {value: 1}) { _docID } }",
+                                )
+                                .await?;
+                                Ok::<_, crate::config_client::ConfigClientError>(())
+                            })
+                        },
+                    ),
+                )
+                .await
+                .unwrap()
+                .unwrap_err();
+                let entered = usize::from(!fail_begin);
+                assert_eq!(counts.writes.load(Ordering::SeqCst), entered);
+                assert_eq!(counts.commits.load(Ordering::SeqCst), entered);
+                assert_eq!(
+                    counts.rollbacks.load(Ordering::SeqCst),
+                    0,
+                    "a returned commit failure consumed its handle"
+                );
+                observed.push((
+                    crate::graphql::is_storage_full(&error),
+                    counts.begins.load(Ordering::SeqCst) == 1,
+                ));
+            }
+            assert_eq!(observed[0], observed[1], "{:?}", case.input);
+            let (full, stop_automatic_retry) = observed[0];
+            case.check(
+                gents_lean_vocab::families::storage_failure_contracts_full_transaction::TransactionOutput {
+                    full,
+                    stop_automatic_retry,
+                },
+            );
+        }
+    }
+}

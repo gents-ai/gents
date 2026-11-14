@@ -30,7 +30,7 @@ impl DesktopPaths {
                 .join("gents")
                 .join("desktop"),
         };
-        gents::store::local::home::refuse_real_gents_home(&root, DESKTOP_HOME_ENV);
+        gents_store::local::home::refuse_real_gents_home(&root, DESKTOP_HOME_ENV);
         Ok(Self::from_root(root))
     }
 
@@ -75,6 +75,12 @@ impl DesktopPaths {
 
     pub fn peer_directory_path(&self) -> &Path {
         &self.peer_directory_path
+    }
+
+    /// Saved peers of a local node whose home is gone, kept until the next
+    /// archive of client state moves them into its backup.
+    pub fn retired_local_peers_path(&self) -> PathBuf {
+        self.root.join("local-peers.json")
     }
 
     pub fn principal_metadata_path(&self) -> &Path {
@@ -125,6 +131,7 @@ impl DesktopPaths {
             self.principal_metadata_path.clone(),
             self.identity_key_path.clone(),
             self.iroh_secret_key_path.clone(),
+            self.retired_local_peers_path(),
         ]
     }
 }

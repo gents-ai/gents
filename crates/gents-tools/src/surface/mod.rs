@@ -1,0 +1,799 @@
+mod agent_with_tools;
+mod behavior_config;
+mod build;
+mod explain;
+mod modes;
+mod output_budget;
+mod pack_readers;
+mod policy;
+pub mod presets;
+mod root_admission;
+mod root_publication;
+pub mod root_selection;
+mod runtime_context;
+mod selection;
+mod source_policy;
+pub mod starter_recipes;
+mod timeouts;
+
+pub use agent_with_tools::AgentWithTools;
+pub use behavior_config::AgentToolSurfaceConfig;
+pub use build::measured_available_mcp_service_ids;
+pub use build::measured_mcp_services_for_access;
+#[doc(hidden)]
+pub use build::resolve_effective_tool_root;
+pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
+use gents_protocol::tool_names::{
+    CONTEXT_BUDGET_TOOL_NAME, DEFRA_QUERY_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
+};
+pub use modes::ToolCeiling;
+pub use output_budget::configured_output_budget;
+pub use policy::configured_self_config_category_set;
+pub(crate) use policy::ToolNodeOperationSource;
+pub use policy::{
+    EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
+    TOOL_POLICY_V1,
+};
+
+pub(crate) fn configured_node_operation_sources(
+    tools: &gents_documents::Tools,
+    surfaces: &[gents_documents::DatastoreToolSurfaceDocument],
+    ceiling: &ToolCeiling,
+) -> anyhow::Result<Vec<ToolNodeOperationSource>> {
+    let mut selection = selection::ResolvedToolSelection::from_document(tools)?;
+    if let Ok(merged) = gents_documents::merge_datastore_tool_surfaces(tools, surfaces) {
+        selection.query_tools = merged.query_tools;
+        selection.write_tools = merged.write_tools;
+    }
+    let agents = AgentToolConfig::from_document(tools)?;
+    let policy =
+        policy::ToolPolicySurface::from_selection(&selection, &agents).meet(ceiling.policy());
+    Ok(policy.covered_node_operation_sources(selection.enable_pack_install))
+}
+pub(crate) fn configured_plugin_refs(
+    tools: &gents_documents::Tools,
+    ceiling: &ToolCeiling,
+) -> anyhow::Result<Vec<gents_documents::PluginToolRef>> {
+    let selection = selection::ResolvedToolSelection::from_document(tools)?;
+    let agents = AgentToolConfig::from_document(tools)?;
+    let policy =
+        policy::ToolPolicySurface::from_selection(&selection, &agents).meet(ceiling.policy());
+    Ok(selection
+        .plugin_tools
+        .into_iter()
+        .filter(|plugin| policy.plugin_tools.permits(&plugin.tool_name().to_owned()))
+        .collect())
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use pack_readers::FAIL_GRANTS_FOR;
+pub use pack_readers::{
+    grant_pack_root_readers, grant_reader_command, pack_root_readers, planned_root_agents,
+    publish_root_command, root_review, PackRootReader, PackRoots,
+};
+pub use root_admission::RootExecutionGuard;
+#[doc(hidden)]
+pub use root_admission::{
+    admit_authored_root, canonicalize_tools_root, ensure_configured_root_published,
+    ensure_root_published_for_node, load_workspace_root_policy, project_workspace_root_policy,
+    refuse_too_broad_root, TooBroadRoot, WorkspaceRootDocument, WorkspaceRootPolicy,
+};
+pub use root_admission::{
+    agent_tool_root_reader, agents_tool_root_readers, tool_root_reader, ToolRootReader,
+};
+pub(crate) use root_admission::{
+    load_workspace_root_policy_in_txn, published_root_covering_in_txn, reader_grant_step,
+    tools_root_reader_in_txn,
+};
+pub use root_publication::{
+    change_workspace_root_reader, delete_workspace_root, grant_workspace_root_reader,
+    list_workspace_roots, publish_workspace_root, remove_workspace_root,
+    revoke_workspace_root_reader, set_workspace_root, set_workspace_root_with_readers,
+    show_workspace_root, WorkspaceRootWriteError,
+};
+pub use runtime_context::ToolRuntimeContext;
+pub use selection::BackgroundToolConfig;
+pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSelection};
+pub use timeouts::{BackgroundTimeoutPolicy, BackgroundTimeouts, BoundedTimeout, ToolTimeouts};
+
+use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use gents_documents::{BashMode, FileToolMode};
+use gents_loop::tool::ToolDyn;
+
+use crate::builtin::defra_query::{build_defra_query_tool, BoundedQueryTool, CollectionScope};
+use crate::builtin::defra_write::BoundedWriteTool;
+use crate::mcp::meta::build_meta_tools;
+use crate::native::{
+    agent_tool_names, background_tool_names, build_agent_tools, build_background_tools,
+    build_context_budget_tool, build_goal_tools, build_session_history_tool, CliToolConfig,
+    ToolSet,
+};
+use gents_documents::{AgentTargetDocument, AgentToolConfig, QueryToolDecl, WriteToolDecl};
+
+const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
+
+#[derive(Clone)]
+pub struct ToolSurface {
+    host_tools: ToolSet,
+    root_execution_guard: Option<RootExecutionGuard>,
+    include_meta_tools: bool,
+    include_goal_tools: bool,
+    include_goal_creation: bool,
+    allowed_mcp_service_ids: Vec<String>,
+    remote_tools: Option<gents_documents::RemoteTools>,
+    agent_tools: AgentToolConfig,
+    background_tools: BackgroundToolConfig,
+    custom_tools: Vec<CustomToolFactory>,
+    pub(crate) enable_context_budget_tool: bool,
+    pub(crate) enable_session_history_tool: bool,
+    pub(crate) enable_schema_tool: bool,
+    pub(crate) enable_p2p_tool: bool,
+    pub(crate) enable_p2p_mutations: bool,
+    pub(crate) enable_defra_query: bool,
+    pub(crate) defra_query_scope: CollectionScope,
+    pub(crate) application_write_collections: Vec<String>,
+    pub(crate) write_tools: Vec<WriteToolDecl>,
+    pub(crate) query_tools: Vec<QueryToolDecl>,
+    pub(crate) surface_of_tool: std::collections::BTreeMap<String, String>,
+    pub(crate) plugin_tools: Vec<gents_documents::PluginToolRef>,
+    /// The plugin tools above resolved against the host plugin store when the
+    /// surface was resolved. It feeds the runtime configuration fingerprint and
+    /// slot comparison through this struct's Debug, so installing, removing or
+    /// replacing a plugin re-admits an Agent whose build failed on the missing
+    /// tool. `None` records a not-installed or pin-mismatched plugin and never
+    /// makes an Agent unavailable: building tools stays the fail-closed gate.
+    pub(crate) plugin_resolutions: Vec<(
+        gents_documents::PluginToolRef,
+        Option<gents_pack::plugin::store::InstalledPlugin>,
+    )>,
+    pub(crate) enable_skills: bool,
+    pub(crate) self_config: SelfConfigToolConfig,
+    pub(crate) lsp: Option<crate::native::lsp::LspToolConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SelfConfigToolConfig {
+    pub enabled: bool,
+    pub agent_did: String,
+    pub categories: std::collections::BTreeSet<String>,
+    pub no_lockout: bool,
+    pub preview: bool,
+    pub enable_pack_install: bool,
+    pub enable_pack_authority: bool,
+    pub process_ceiling: SelfConfigProcessCeiling,
+    /// The request's selected plugin tools, which `config plugin run` calls
+    /// as the agent's own tool call would.
+    pub selected_plugins: Vec<gents_documents::PluginToolRef>,
+    /// The plugin tool names the process ceiling admits; `None` when it
+    /// admits every plugin. `config plugin run` calls no plugin outside it,
+    /// selected or not: an installed plugin runs with its installed grants.
+    pub ceiling_plugins: Option<std::collections::BTreeSet<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize)]
+pub struct SelfConfigProcessCeiling {
+    pub file_mode: FileToolMode,
+    pub bash_mode: BashMode,
+    pub root: Option<PathBuf>,
+}
+
+impl ToolSurface {
+    pub fn root_execution_guard(&self) -> Option<&RootExecutionGuard> {
+        self.root_execution_guard.as_ref()
+    }
+
+    pub fn source_fill_fields(&self) -> std::collections::BTreeSet<String> {
+        let mut fields = self
+            .write_tools
+            .iter()
+            .flat_map(|decl| decl.fields.iter())
+            .chain(
+                self.query_tools
+                    .iter()
+                    .flat_map(|decl| decl.filter_fields.iter()),
+            )
+            .chain(
+                self.plugin_tools
+                    .iter()
+                    .flat_map(|plugin| plugin.input_fields.iter()),
+            )
+            .filter_map(|field| match &field.fill {
+                Some(gents_documents::WriteToolFieldFill::SourceField(source)) => {
+                    Some(source.clone())
+                }
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        if self
+            .write_tools
+            .iter()
+            .any(|decl| decl.collection == gents_protocol::row::MAILBOX_COLLECTION)
+        {
+            // Mailbox-capable event-trigger stages require explicit human-owner
+            // lineage from the source document.
+            fields.insert("requester_did".to_string());
+        }
+        fields
+    }
+
+    pub fn output_obligations(&self) -> Vec<(String, gents_documents::WriteToolOutputObligation)> {
+        self.write_tools
+            .iter()
+            .filter_map(|decl| {
+                decl.output_obligation
+                    .clone()
+                    .map(|obligation| (decl.tool_name.clone(), obligation))
+            })
+            .collect()
+    }
+
+    pub fn host_tools(&self) -> &ToolSet {
+        &self.host_tools
+    }
+
+    pub fn includes_meta_tools(&self) -> bool {
+        self.include_meta_tools
+    }
+
+    pub fn includes_goal_tools(&self) -> bool {
+        self.include_goal_tools
+    }
+
+    pub fn includes_goal_creation(&self) -> bool {
+        self.include_goal_tools && self.include_goal_creation
+    }
+
+    pub fn includes_skills(&self) -> bool {
+        self.enable_skills
+    }
+
+    pub fn remote_tools(&self) -> Option<&gents_documents::RemoteTools> {
+        self.remote_tools.as_ref()
+    }
+
+    pub fn allowed_mcp_service_ids(&self) -> &[String] {
+        &self.allowed_mcp_service_ids
+    }
+
+    pub fn plugin_resolutions(
+        &self,
+    ) -> &[(
+        gents_documents::PluginToolRef,
+        Option<gents_pack::plugin::store::InstalledPlugin>,
+    )] {
+        &self.plugin_resolutions
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn agent_tools(&self) -> &AgentToolConfig {
+        &self.agent_tools
+    }
+
+    pub fn agent_targets(&self) -> &[AgentTargetDocument] {
+        if self.agent_tools.enabled {
+            &self.agent_tools.targets
+        } else {
+            &[]
+        }
+    }
+
+    pub fn background_tools(&self) -> &BackgroundToolConfig {
+        &self.background_tools
+    }
+
+    pub fn retain_agent_targets(
+        &mut self,
+        own_node_did: &str,
+        active_agent_dids: &RapidHashSet<String>,
+    ) {
+        self.agent_tools.targets.retain(|target| {
+            if target.target_node_did == own_node_did {
+                active_agent_dids.contains(&target.agent_did)
+            } else {
+                true
+            }
+        });
+    }
+
+    pub fn tool_names(&self) -> Vec<String> {
+        let mut names = self.host_tools.tool_names();
+        if self.self_config.enabled {
+            names.push("provider_limits".into());
+        }
+        if self.include_meta_tools {
+            names.extend(crate::mcp::meta::presented_tool_names(
+                self.remote_tools.as_ref().unwrap_or(&Default::default()),
+                &self.allowed_mcp_service_ids,
+            ));
+        }
+        names.extend(agent_tool_names(&self.agent_tools));
+        names.extend(background_tool_names(&self.background_tools));
+        names.extend(self.custom_tools.iter().map(|tool| tool.name().to_string()));
+        if self.enable_context_budget_tool {
+            names.push(CONTEXT_BUDGET_TOOL_NAME.to_string());
+        }
+        if self.enable_schema_tool {
+            names.push(gents_protocol::tool_names::SCHEMA_TOOL_NAME.to_string());
+        }
+        if self.enable_p2p_tool {
+            names.push(crate::builtin::p2p::P2P_TOOL_NAME.to_string());
+        }
+        if self.enable_session_history_tool {
+            names.push(SESSION_HISTORY_TOOL_NAME.to_string());
+        }
+        if self.enable_defra_query {
+            names.push(DEFRA_QUERY_TOOL_NAME.to_string());
+        }
+        if !self.application_write_collections.is_empty() {
+            names.push(gents_protocol::plugin::WRITE_TOOL_NAME.into());
+        }
+        if self.lsp.is_some() {
+            names.push(gents_protocol::tool_names::LSP_TOOL_NAME.to_string());
+        }
+        if self.include_goal_tools {
+            names.push(gents_protocol::goal_names::GET_GOAL_TOOL_NAME.to_string());
+            names.push(gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME.to_string());
+            if self.include_goal_creation {
+                names.push(gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME.to_string());
+            }
+        }
+        names.extend(crate::builtin::self_config::self_config_tool_names(
+            &self.self_config,
+        ));
+        for decl in &self.write_tools {
+            if decl.is_well_formed() {
+                names.push(decl.tool_name.clone());
+            }
+        }
+        for decl in &self.query_tools {
+            if decl.is_well_formed() {
+                names.push(decl.tool_name.clone());
+            }
+        }
+        names.extend(
+            self.plugin_tools
+                .iter()
+                .map(|plugin| plugin.tool_name().to_string()),
+        );
+        build::dedupe_strings(names)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lsp_config(&self) -> Option<&crate::native::lsp::LspToolConfig> {
+        self.lsp.as_ref()
+    }
+
+    pub async fn build_tools(&self, runtime: &ToolRuntimeContext) -> Result<Vec<Box<dyn ToolDyn>>> {
+        if let Some(guard) = &self.root_execution_guard {
+            let agent = runtime
+                .agent_identity
+                .as_deref()
+                .context("workspace root requires a held Agent identity")?;
+            guard.validate(&runtime.node, agent).await?;
+        }
+        let writethrough = self.lsp.as_ref().map(|config| {
+            crate::native::lsp::LspWritethrough::new(runtime.lsp_pool.clone(), config.clone())
+        });
+        let mut tools = self
+            .host_tools
+            .build_native_tools_with_writethrough(writethrough)?;
+        if self.self_config.enabled {
+            tools.push(Box::new(
+                gents_inference::usage_observation::ProviderLimitsTool {
+                    node: runtime.node.clone(),
+                    node_did: runtime.node_did.clone(),
+                    cache: runtime.usage_cache.clone(),
+                },
+            ));
+        }
+        if self.include_meta_tools {
+            tools.extend(
+                build_meta_tools(
+                    runtime.node.clone(),
+                    runtime.mcp_pool.clone(),
+                    runtime.health_map.clone(),
+                    runtime.local_hostname.clone(),
+                    runtime.local_subnet.clone(),
+                    runtime.node_did.clone(),
+                    identity::Did::new(
+                        runtime
+                            .agent_identity
+                            .as_ref()
+                            .context("MCP tools require the selected agent identity")?
+                            .did(),
+                    )?,
+                    self.allowed_mcp_service_ids.clone(),
+                    self.remote_tools.clone().unwrap_or_default(),
+                    runtime.configuration.clone(),
+                )
+                .await?,
+            );
+        }
+        tools.extend(build_agent_tools(self.agent_tools.clone()));
+        tools.extend(build_background_tools(self.background_tools.clone()));
+        for tool in &self.custom_tools {
+            tools.push(tool.build()?);
+        }
+        if self.enable_context_budget_tool {
+            tools.push(build_context_budget_tool(
+                runtime.node.clone(),
+                runtime.node_did.clone(),
+            ));
+        }
+        if self.enable_schema_tool {
+            let agent = runtime
+                .agent_identity
+                .as_ref()
+                .context("schema tools require the selected agent identity")?;
+            anyhow::ensure!(
+                agent.did() != runtime.node_did,
+                "schema tools cannot use the runtime node identity"
+            );
+            tools.push(Box::new(
+                crate::builtin::schema_help::SchemaTool::for_managed_agent(
+                    runtime.node.clone(),
+                    &runtime.node_did,
+                    runtime.plugin_home(),
+                    agent.as_ref(),
+                )?
+                .with_tools_category(
+                    self.self_config.enabled && self.self_config.categories.contains("tools"),
+                ),
+            ));
+        }
+        if self.enable_p2p_tool {
+            let mut tool = crate::builtin::p2p::P2pTool::new(
+                runtime.node.clone(),
+                runtime.identity.clone(),
+                runtime.agent_identity.clone(),
+                self.enable_p2p_mutations,
+            );
+            if let Some(agent) = runtime
+                .agent_identity
+                .as_ref()
+                .filter(|agent| agent.did() != runtime.node_did)
+            {
+                tool = tool.with_approver(
+                    gents_store::config_client::ConfigAccess::local_managed_agent(
+                        runtime.node.clone(),
+                        identity::Did::new(agent.did())?,
+                        agent.as_ref(),
+                    )?,
+                );
+            }
+            tools.push(Box::new(tool));
+        }
+        if self.enable_session_history_tool {
+            tools.push(build_session_history_tool(
+                runtime.node.clone(),
+                runtime.node_did.clone(),
+                identity::Did::new(
+                    runtime
+                        .agent_identity
+                        .as_ref()
+                        .context("model tools require the selected agent identity")?
+                        .did(),
+                )?,
+            ));
+        }
+        let datastore_actor = if self.enable_defra_query
+            || !self.application_write_collections.is_empty()
+            || !self.query_tools.is_empty()
+            || !self.write_tools.is_empty()
+        {
+            let identity = runtime
+                .agent_identity
+                .as_ref()
+                .context("datastore tools require the selected agent identity")?;
+            anyhow::ensure!(
+                identity.did() != runtime.node_did,
+                "datastore tools cannot use the runtime node identity"
+            );
+            Some(identity::Did::new(identity.did().to_owned())?)
+        } else {
+            None
+        };
+        if self.enable_defra_query {
+            tools.push(build_defra_query_tool(
+                runtime.node.clone(),
+                self.defra_query_scope.clone(),
+                datastore_actor.clone().expect("query actor was validated"),
+                self.self_config.enabled && self.self_config.categories.contains("tools"),
+            ));
+        }
+        if !self.application_write_collections.is_empty() {
+            tools.push(
+                runtime.plugins.application_write_tool(
+                    gents_store::config_client::ConfigAccess::local_managed_agent(
+                        runtime.node.clone(),
+                        datastore_actor.clone().expect("write actor was validated"),
+                        runtime
+                            .agent_identity
+                            .as_ref()
+                            .context("write tool Agent identity missing")?
+                            .as_ref(),
+                    )?,
+                    self.application_write_collections.iter().cloned().collect(),
+                    datastore_actor.clone(),
+                )?,
+            );
+        }
+        if let Some(lsp) = &self.lsp {
+            tools.push(Box::new(crate::native::lsp::LspTool::new(
+                lsp.clone(),
+                runtime.lsp_pool.clone(),
+            )?));
+        }
+        if self.include_goal_tools {
+            tools.extend(build_goal_tools(self.include_goal_creation));
+        }
+        let node_binding = if self.self_config.enabled
+            && gents_protocol::schemas::IDENTITY_POLICY_BINDINGS
+                .iter()
+                .any(|(name, resource)| {
+                    *resource == "configuration" && (*name == "AgentContext" || *name == "Tools")
+                }) {
+            let runtime_identity = runtime
+                .identity
+                .as_ref()
+                .context("self-configuration requires the runtime identity")?;
+            Some(
+                crate::builtin::self_config::runtime_node_binding(
+                    &runtime.node,
+                    &runtime.node_did,
+                    runtime_identity.as_ref(),
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        tools.extend(
+            crate::builtin::self_config::build_self_config_tools_with_runtime(
+                runtime.usage_cache.clone(),
+                runtime.node.clone(),
+                runtime.node_did.clone(),
+                runtime.agent_identity.clone(),
+                runtime.identity.clone(),
+                &SelfConfigToolConfig {
+                    selected_plugins: self.plugin_tools.clone(),
+                    ..self.self_config.clone()
+                },
+                runtime.plugins.clone(),
+                runtime.tasks.clone(),
+                node_binding,
+            ),
+        );
+        let mut registered_names: RapidHashSet<String> =
+            tools.iter().map(|tool| tool.name()).collect();
+        for decl in &self.write_tools {
+            gents_documents::mailbox_write_decl::validate_mailbox_write_decl(decl)?;
+            if !decl.is_well_formed() || !decl.output_obligation_is_well_formed() {
+                anyhow::bail!(
+                    "write tool `{}` reached registration with an invalid declaration",
+                    decl.tool_name
+                );
+            }
+            if !registered_names.insert(decl.tool_name.clone()) {
+                anyhow::bail!(
+                    "write tool `{}` reached registration with a duplicate tool name",
+                    decl.tool_name
+                );
+            }
+            if decl.collection == gents_protocol::row::MAILBOX_COLLECTION {
+                let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+                    runtime.node.clone(),
+                    datastore_actor.clone().expect("write actor was validated"),
+                    runtime
+                        .agent_identity
+                        .as_ref()
+                        .context("mailbox Agent identity missing")?
+                        .as_ref(),
+                )?;
+                tools.push(Box::new(
+                    gents_session::session::mailbox::MailboxCreateTool::new(
+                        runtime.node.clone(),
+                        decl.notification
+                            .clone()
+                            .context("missing notification policy")?,
+                    )
+                    .with_access(access)
+                    .with_surface_source(
+                        gents_documents::DatastoreToolSource {
+                            owner: runtime.node_did.clone(),
+                            surface_id: self
+                                .surface_of_tool
+                                .get(&decl.tool_name)
+                                .context("mailbox datastore source missing")?
+                                .clone(),
+                            declaration: gents_documents::SurfaceToolDecl::Create(decl.clone()),
+                        },
+                    ),
+                ) as Box<dyn ToolDyn>);
+            } else {
+                let tool = BoundedWriteTool::new(
+                    gents_store::config_client::ConfigAccess::local_managed_agent(
+                        runtime.node.clone(),
+                        datastore_actor.clone().expect("write actor was validated"),
+                        runtime
+                            .agent_identity
+                            .as_ref()
+                            .context("write tool Agent identity missing")?
+                            .as_ref(),
+                    )?,
+                    decl.clone(),
+                )
+                .declared_by(Some(
+                    self.surface_of_tool
+                        .get(&decl.tool_name)
+                        .context("datastore write source missing")?
+                        .clone(),
+                ))
+                .with_surface_owner(runtime.node_did.clone());
+                tool.ensure_well_formed().map_err(|error| {
+                    anyhow::anyhow!(
+                        "write tool `{}` on collection `{}`: {error:#}. Declared by datastore surface `{}`; inspect with config datastore get, then use datastore update to correct its fields or schema collection update to correct the existing collection",
+                        decl.tool_name, decl.collection, self.surface_of_tool.get(&decl.tool_name).map(String::as_str).unwrap_or("unresolved")
+                    )
+                })?;
+                tools.push(Box::new(tool) as Box<dyn ToolDyn>);
+            }
+        }
+        for decl in &self.query_tools {
+            let tool = BoundedQueryTool::new(
+                gents_store::config_client::ConfigAccess::local_as(
+                    runtime.node.clone(),
+                    datastore_actor.clone().expect("query actor was validated"),
+                ),
+                decl.clone(),
+            )
+            .with_actor(datastore_actor.clone().expect("query actor was validated"))
+            .declared_by(Some(
+                self.surface_of_tool
+                    .get(&decl.tool_name)
+                    .context("datastore query source missing")?
+                    .clone(),
+            ))
+            .with_surface_owner(runtime.node_did.clone());
+            if !tool.is_well_formed() {
+                anyhow::bail!(
+                    "query tool `{}` reached registration with an invalid declaration",
+                    decl.tool_name
+                );
+            }
+            if !registered_names.insert(tool.name()) {
+                anyhow::bail!(
+                    "query tool `{}` reached registration with a duplicate tool name",
+                    decl.tool_name
+                );
+            }
+            tools.push(Box::new(tool) as Box<dyn ToolDyn>);
+        }
+        for plugin in &self.plugin_tools {
+            let tool = runtime.plugins.clone().plugin_tool(
+                plugin,
+                self.host_tools
+                    .read_root()
+                    .map(std::path::Path::to_path_buf),
+                runtime.node.clone(),
+                &runtime.node_did,
+                runtime
+                    .agent_identity
+                    .as_ref()
+                    .map(|identity| identity.did()),
+            )?;
+            if !registered_names.insert(tool.name()) {
+                anyhow::bail!(
+                    "plugin tool `{}` has the same name as another tool; rename one of them",
+                    tool.name()
+                );
+            }
+            tools.push(tool);
+        }
+        Ok(tools)
+    }
+}
+
+impl std::fmt::Debug for ToolSurface {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolSurface")
+            .field("host_tools", &self.host_tools)
+            .field("include_meta_tools", &self.include_meta_tools)
+            .field("include_goal_tools", &self.include_goal_tools)
+            .field("include_goal_creation", &self.include_goal_creation)
+            .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
+            .field("remote_tools", &self.remote_tools)
+            .field("agent_tools", &self.agent_tools)
+            .field("background_tools", &self.background_tools)
+            .field(
+                "custom_tools",
+                &self
+                    .custom_tools
+                    .iter()
+                    .map(|tool| tool.name())
+                    .collect::<Vec<_>>(),
+            )
+            .field(
+                "enable_context_budget_tool",
+                &self.enable_context_budget_tool,
+            )
+            .field("enable_schema_tool", &self.enable_schema_tool)
+            .field("enable_p2p_tool", &self.enable_p2p_tool)
+            .field("enable_p2p_mutations", &self.enable_p2p_mutations)
+            .field(
+                "enable_session_history_tool",
+                &self.enable_session_history_tool,
+            )
+            .field("enable_defra_query", &self.enable_defra_query)
+            .field("defra_query_scope", &self.defra_query_scope)
+            .field("write_tools", &self.write_tools)
+            .field("query_tools", &self.query_tools)
+            .field("plugin_tools", &self.plugin_tools)
+            .field("plugin_resolutions", &self.plugin_resolutions)
+            .field("enable_skills", &self.enable_skills)
+            .field("self_config", &self.self_config)
+            .field(
+                "lsp_digest",
+                &self.lsp.as_ref().map(|config| config.digest.as_str()),
+            )
+            .field(
+                "lsp_options",
+                &self.lsp.as_ref().map(|config| {
+                    (
+                        config.format_on_write,
+                        config.diagnostics_on_write,
+                        config.diagnostics_on_edit,
+                        config.diagnostics_deduplicate,
+                        config.idle_timeout,
+                    )
+                }),
+            )
+            .finish()
+    }
+}
+
+pub fn resolve_agent_target_descriptions(tool_surface: &ToolSurface) -> Vec<(String, String)> {
+    tool_surface
+        .agent_targets()
+        .iter()
+        .map(|target| {
+            (
+                target.name.clone(),
+                target
+                    .description
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect()
+}
+
+pub fn cli_tool(
+    name: impl Into<String>,
+    binary_path: impl Into<PathBuf>,
+    description: impl Into<String>,
+) -> CliToolConfig {
+    CliToolConfig {
+        name: name.into(),
+        binary_path: binary_path.into(),
+        description: description.into(),
+        allowed_argv_prefixes: Vec::new(),
+        env_vars: RapidHashMap::new(),
+        working_dir: None,
+        timeout_secs: DEFAULT_CLI_TIMEOUT_SECS,
+        max_output_chars: crate::native::DEFAULT_MAX_COMMAND_CHARS,
+    }
+}
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+mod document_explanation_tests;
+
+#[cfg(test)]
+mod tool_operation_tests;

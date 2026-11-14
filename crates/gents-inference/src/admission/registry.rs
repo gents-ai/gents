@@ -1,0 +1,244 @@
+use rapidhash::{HashMapExt, RapidHashMap};
+use std::sync::{Arc, Mutex};
+
+use defra_node::Node as EmbeddedNode;
+
+use super::client::{current_context, AdmissionError};
+#[cfg(any(test, feature = "test-fixtures"))]
+use super::client::{scope_request, AdmissionCallContext, CallKind};
+use super::config::BackendAdmissionConfig;
+use super::controller::{BackendAdmissionController, CapacityPool, InferenceCallRecord};
+use super::permit::AdmissionPermit;
+use super::persistence::persist_terminal_call;
+use gents_store::drop_cleanup::{CleanupTracker, DropCleanup};
+
+#[cfg(test)]
+#[path = "registry_contract_tests.rs"]
+mod contract_tests;
+
+#[cfg(test)]
+pub(super) const TEST_SLOT_CONNECTION: &str = "test-slot-connection";
+
+#[derive(Clone)]
+pub struct AdmissionRegistry {
+    inner: Arc<AdmissionRegistryInner>,
+}
+
+struct AdmissionRegistryInner {
+    node: Arc<EmbeddedNode>,
+    runtime_instance_id: String,
+    backends: Mutex<RapidHashMap<String, BackendAdmission>>,
+    drop_cleanup: CleanupTracker,
+}
+
+struct BackendAdmission {
+    pool: Arc<CapacityPool>,
+    admitting: Option<Arc<BackendAdmissionController>>,
+}
+
+impl AdmissionRegistry {
+    pub fn new(node: Arc<EmbeddedNode>) -> Self {
+        Self {
+            inner: Arc::new(AdmissionRegistryInner {
+                node,
+                runtime_instance_id: uuid::Uuid::new_v4().to_string(),
+                backends: Mutex::new(RapidHashMap::new()),
+                drop_cleanup: CleanupTracker::new(),
+            }),
+        }
+    }
+
+    /// Resolves once every terminal row owed by a dropped permit or queued
+    /// guard of this registry is durable. The tracker counts in production so
+    /// the owner can be flushed; only its tests await the point today.
+    #[cfg(test)]
+    pub(crate) async fn drop_cleanup_idle(&self) {
+        self.inner.drop_cleanup.idle().await;
+    }
+
+    fn backends(&self) -> std::sync::MutexGuard<'_, RapidHashMap<String, BackendAdmission>> {
+        self.inner
+            .backends
+            .lock()
+            .expect("AdmissionRegistry state lock poisoned")
+    }
+
+    pub fn reconcile(
+        &self,
+        generation: u64,
+        configs: &RapidHashMap<String, BackendAdmissionConfig>,
+    ) {
+        let mut backends = self.backends();
+        for (backend_id, config) in configs {
+            if !config.is_available() {
+                continue;
+            }
+            let entry = backends
+                .entry(backend_id.clone())
+                .or_insert_with(|| BackendAdmission {
+                    pool: CapacityPool::open(config.max_concurrent),
+                    admitting: None,
+                });
+            if entry
+                .admitting
+                .as_ref()
+                .is_some_and(|current| current.matches(config))
+            {
+                continue;
+            }
+            entry.pool.configure(config.max_concurrent);
+            tracing::info!(
+                backend_id = %backend_id,
+                from_generation = entry.admitting.as_ref().map(|current| current.generation),
+                to_generation = generation,
+                max_concurrent = config.max_concurrent,
+                "installed backend admission controller"
+            );
+            entry.admitting = Some(BackendAdmissionController::new(
+                generation,
+                config.clone(),
+                entry.pool.clone(),
+            ));
+        }
+        for (backend_id, entry) in backends.iter_mut() {
+            let available = configs
+                .get(backend_id)
+                .is_some_and(BackendAdmissionConfig::is_available);
+            if !available {
+                if let Some(retired) = entry.admitting.take() {
+                    tracing::info!(
+                        backend_id = %backend_id,
+                        generation = retired.generation,
+                        "closed backend admission"
+                    );
+                    entry.pool.close();
+                }
+            }
+        }
+        backends.retain(|_, entry| entry.admitting.is_some() || !entry.pool.is_retired());
+    }
+
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn acquire_with_connection_and_signer_for_test(
+        &self,
+        request_id: impl Into<String>,
+        backend_id: impl Into<String>,
+        agent: &crate::resolved::ResolvedAgent,
+        call_kind: CallKind,
+        connection: &str,
+        signer: Option<gents_store::identity::ManagedAgentSigner>,
+    ) -> Result<AdmissionPermit, AdmissionError> {
+        use std::sync::atomic::AtomicU64;
+        let context = AdmissionCallContext {
+            request_id: request_id.into(),
+            request_doc_id: "doc-test".to_string(),
+            backend_id: backend_id.into(),
+            agent_did: agent.agent_did.clone(),
+            node_did: agent.node_did().to_owned(),
+            session_id: "session-test".to_string(),
+            requester_did: None,
+            request_purpose: gents_protocol::request_admission::RequestPurpose::Normal,
+            call_kind,
+            attempt: 1,
+            call_seq: Arc::new(AtomicU64::new(0)),
+            current_call: Arc::new(std::sync::Mutex::new(None)),
+            inference_token: None,
+            terminal_failure_reason: None,
+        };
+        scope_request(context, async {
+            self.acquire_current_call_with_signer(connection, None, None, signer)
+                .await
+        })
+        .await
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_for_test(
+        &self,
+        backend_id: &str,
+    ) -> Option<Arc<BackendAdmissionController>> {
+        self.backends()
+            .get(backend_id)
+            .and_then(|entry| entry.admitting.clone())
+    }
+
+    #[cfg(test)]
+    pub(super) fn pool_for_test(&self, backend_id: &str) -> Option<Arc<CapacityPool>> {
+        self.backends()
+            .get(backend_id)
+            .map(|entry| entry.pool.clone())
+    }
+
+    pub(super) async fn acquire_current_call_with_signer(
+        &self,
+        connection: &str,
+        model_name: Option<&str>,
+        profile_id: Option<&str>,
+        agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
+    ) -> Result<AdmissionPermit, AdmissionError> {
+        let context = current_context()?;
+        if let Some(signer) = &agent_signer {
+            if signer.did() != context.agent_did || signer.node_did() != context.node_did {
+                return Err(AdmissionError(
+                    "inference call differs from managed Agent signer".into(),
+                ));
+            }
+        } else {
+            return Err(AdmissionError(
+                "inference call requires a managed Agent signer".into(),
+            ));
+        }
+        let cancel_observer = context.inference_token.clone();
+        let terminal_failure_observer = context.terminal_failure_reason.clone();
+        let pending = context.next_call(
+            &self.inner.runtime_instance_id,
+            model_name,
+            profile_id,
+            agent_signer,
+        );
+        if pending.backend_id.trim().is_empty() {
+            return Err(AdmissionError(format!(
+                "agent {} has no backend binding",
+                pending.agent_did
+            )));
+        }
+
+        let controller = self
+            .backends()
+            .get(&pending.backend_id)
+            .and_then(|entry| entry.admitting.clone());
+
+        match controller {
+            Some(controller) => {
+                controller
+                    .acquire(
+                        self.inner.node.clone(),
+                        pending,
+                        connection,
+                        DropCleanup::tracked(&self.inner.drop_cleanup),
+                        cancel_observer,
+                        terminal_failure_observer,
+                    )
+                    .await
+            }
+            None => {
+                let backend_id = pending.backend_id.clone();
+                let call = InferenceCallRecord::without_controller(pending);
+                if let Err(error) = persist_terminal_call(
+                    self.inner.node.clone(),
+                    call,
+                    "cancelled",
+                    Some("BackendGone"),
+                    None,
+                )
+                .await
+                {
+                    tracing::warn!(error = %error, "failed to persist backend-gone inference call");
+                }
+                Err(AdmissionError(format!(
+                    "BackendGone: backend admission controller is not active for backend {backend_id}; it is not configured or not available"
+                )))
+            }
+        }
+    }
+}

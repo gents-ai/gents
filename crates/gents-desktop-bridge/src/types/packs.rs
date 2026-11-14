@@ -17,6 +17,9 @@ pub struct InstalledPackView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source: Option<gents_pack::pack::PackSource>,
     pub latest: Option<String>,
     pub outdated: Option<bool>,
     pub error: Option<String>,
@@ -214,7 +217,7 @@ pub struct PackHostToolRootReviewView {
 #[derive(Debug, Serialize, Deserialize, TS)]
 pub struct PackInferenceNeedsView {
     pub slots: Vec<PackInferenceSlotNeedView>,
-    pub profiles: Vec<gents::pack::PackInferenceProfileOption>,
+    pub profiles: Vec<gents_pack::pack::PackInferenceProfileOption>,
     /// The required slots the install would refuse as unbound.
     pub unbound: Vec<String>,
 }
@@ -256,7 +259,7 @@ pub struct PackAuthorityAskView {
     pub asks: String,
 }
 
-/// The Engineer's default packs as the local node's home has them.
+/// The Engineer's core packs as the local node's home has them.
 #[derive(Debug, Serialize, Deserialize, TS)]
 pub struct DefaultPacksView {
     pub packs: Vec<DefaultPackView>,
@@ -267,16 +270,11 @@ pub struct DefaultPackView {
     pub pack: String,
     /// What the pack is for.
     pub purpose: String,
-    /// What the Engineer lacks while the pack is not installed.
+    /// What the Engineer lacks while the pack is not enabled.
     pub without: String,
     pub state: DefaultPackState,
     pub version: Option<String>,
-    /// The archive an approval installs; the approval names it back.
-    pub digest: Option<String>,
-    pub requested: Vec<PackAuthorityAskView>,
-    /// What approving turns on beyond the requested permissions.
-    pub turns_on: Vec<String>,
-    /// Why an unavailable pack could not be resolved.
+    /// Why an unavailable pack cannot be installed.
     pub reason: Option<String>,
 }
 
@@ -284,13 +282,13 @@ pub struct DefaultPackView {
 #[serde(rename_all = "snake_case")]
 pub enum DefaultPackState {
     Installed,
-    NeedsApproval,
-    Ready,
+    NotEnabled,
+    Missing,
     Unavailable,
 }
 
-/// What an approval left: every default pack's state after it, and the packs
-/// it could not install.
+/// What enabling left: every core pack's state after it, and the packs it
+/// could not enable.
 #[derive(Debug, Serialize, Deserialize, TS)]
 pub struct DefaultPacksApprovalView {
     pub packs: Vec<DefaultPackView>,
@@ -301,8 +299,8 @@ pub struct DefaultPacksApprovalView {
 pub struct DefaultPackFailureView {
     pub pack: String,
     pub error: String,
-    /// The pack is installed, with its permissions granted, and a later
-    /// step failed: approving it again finishes it.
+    /// The pack is installed and a later step failed: enabling it again
+    /// finishes it.
     #[serde(default)]
     pub installed: bool,
 }
@@ -361,7 +359,7 @@ pub struct PackAccountIdentityView {
 #[derive(Debug, Serialize, Deserialize, TS)]
 pub struct PackPluginSlotsView {
     pub plugins: Vec<PackPluginSlotView>,
-    pub profiles: Vec<gents::pack::PackInferenceProfileOption>,
+    pub profiles: Vec<gents_pack::pack::PackInferenceProfileOption>,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
@@ -374,7 +372,7 @@ pub struct PackPluginSlotView {
 #[derive(Debug, Serialize, Deserialize, TS)]
 pub struct PackPluginBindingView {
     pub plugin: String,
-    pub bound: Option<gents::plugin::model_calls::ModelBinding>,
+    pub bound: Option<gents_pack::plugin::model_binding::ModelBinding>,
 }
 
 /// The JSON `gents automation job promote` reports for a promoted dynamic run.

@@ -190,7 +190,8 @@ describe("session loading projection", () => {
           {
             state: "waiting",
             lastError: null,
-            connectedPeerCount: 1,
+            runtimeCount: 1,
+            connectedRuntimeCount: 1,
             activationErrorCount: 0,
             cause: "discovery_degraded",
             nextAction: "wait",

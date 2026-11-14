@@ -1,0 +1,100 @@
+use anyhow::{Context, Result};
+use defra_node::Node as EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
+use serde_json::Value;
+
+use gents_protocol::row::AgentRequest;
+use gents_store::config_client::ConfigApplyTxn;
+use gents_store::graphql::escape_graphql_string;
+
+use super::ExecutionOrigin;
+use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
+
+mod atomic_inputs;
+mod coalescing;
+mod draining;
+mod edit_submission;
+mod enqueue;
+mod folding;
+mod input;
+mod intake;
+mod management;
+pub mod mutation;
+mod position;
+mod submission;
+
+pub use atomic_inputs::background_completion_gate;
+pub use atomic_inputs::next_append_sequence_in_transaction;
+pub use atomic_inputs::persist_background_completion_with_message_canonical_with_access;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use atomic_inputs::persist_background_completion_with_message_waking_with_access;
+use atomic_inputs::steering_transaction_attempt;
+#[cfg(test)]
+use atomic_inputs::transaction_created_doc_id;
+pub use atomic_inputs::ToolNotificationPublication;
+pub use coalescing::parent_agent_did;
+pub use coalescing::supersede_pending_mutation;
+use coalescing::{queue_row_to_enqueued_request, row_matches_coalesced_source_and_key};
+pub use coalescing::{
+    reconcile_coalesced_pending_request, reconcile_coalesced_pending_request_for_with_access,
+};
+pub use draining::drain_all_pending_session_requests_in_txn;
+pub(crate) use draining::drain_automated_wakeups_in_txn;
+pub use edit_submission::{
+    publish_edit_command, submit_pending_user_edit, submit_pending_user_steer,
+};
+pub use enqueue::enqueue_local_steering_request;
+#[cfg(test)]
+pub(crate) use enqueue::enqueue_steering_request;
+pub(crate) use folding::PendingInputChanged;
+pub use folding::FOLDED_REASON;
+pub(crate) use folding::{
+    consume_folded_in_txn, ensure_folded_consumed_in_txn, select_fold_in_claim_txn,
+    FoldedConsumption,
+};
+pub use folding::{
+    fold_candidates, folded_input_key, heads_user_turn, load_consumed_folded_inputs, FoldedInput,
+};
+pub use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use input::queue_is_automated_wakeup;
+pub use input::row_is_automated_wakeup;
+pub(crate) use input::{background_wake_queue, is_automated_wakeup, row_queue};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use intake::pending_in_txn;
+pub(crate) use intake::{pending_ids_in_txn, pending_with_new_candidate_in_txn};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use intake::{pending_rows_in_txn, steering_compatible};
+pub use intake::{steer_reachable, SteerAdmissionRefusal};
+pub use intake::{steering_inputs, steering_snapshot};
+pub use management::{
+    apply_pending_user_edit_in_txn, persisted_replacements_in_txn,
+    validate_pending_user_edit_in_txn, PersistedReplacements,
+};
+pub use management::{
+    pending_steer_edit, pending_user_queue, pending_user_queue_projection,
+    prepare_pending_user_edit, PendingQueueEntry, PendingQueueProjection, PendingQueueSnapshot,
+    REMOVED_REASON, REPLACED_REASON,
+};
+#[cfg(test)]
+use management::{replace_pending_user_messages, PendingEditActor};
+pub use management::{PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt};
+#[cfg(test)]
+use mutation::session_request_create_mutation;
+use mutation::session_request_create_mutation_at_hop_with_signer;
+use mutation::SessionRequestFields;
+pub use position::validate_position;
+pub(crate) use position::{effective_slots, InvalidQueuePosition};
+pub use submission::{prepare_user_message_input, queue_user_message_input, UserMessageInputError};
+
+#[derive(Debug)]
+pub struct EnqueuedBackgroundCompletionInput {
+    pub request: Option<EnqueuedAgentRequest>,
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub message_sequence: u32,
+    pub created_request: bool,
+}
+
+#[cfg(test)]
+mod tests;

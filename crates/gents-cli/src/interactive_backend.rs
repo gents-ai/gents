@@ -2,10 +2,9 @@ use std::io::{IsTerminal, Write as _};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use gents::inference::backends::setup::{
+use gents_inference::backends::setup::{
     inference_setup_catalog, InferenceAuthMethod, InferenceAuthOption, InferenceProviderId,
 };
-use serde_json::Value;
 
 use crate::cli::args::{BackendPresetArg, InitArgs, OpenAiWireApiArg};
 
@@ -141,7 +140,7 @@ async fn pick_backend(next_screen: fn()) -> Result<BackendSelection> {
 
 /// A wrong answer is not repeated back: a key pasted at this prompt must not reach scrollback
 /// a second time.
-async fn ask_choice(count: usize) -> Result<usize> {
+pub(crate) async fn ask_choice(count: usize) -> Result<usize> {
     loop {
         match parse_choice(&prompt_line("> ").await?, count) {
             Some(index) => return Ok(index),
@@ -245,19 +244,22 @@ async fn detect_local_server() -> Option<String> {
 /// Discovery probes optional local endpoints before prompting; an absent or
 /// unresponsive endpoint must not hold the interactive setup indefinitely.
 async fn probe_models(base: &str) -> Option<String> {
-    let response = reqwest::Client::new()
-        .get(format!("{}/models", base.trim_end_matches('/')))
+    let client = reqwest::Client::builder()
         .timeout(Duration::from_millis(700))
-        .send()
-        .await
+        .build()
         .ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    let body: Value = response.json().await.ok()?;
-    body.pointer("/data/0/id")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
+    gents_inference::backends::provider::discover_models(
+        &client,
+        gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible,
+        base,
+        None,
+        None,
+    )
+    .await
+    .ok()?
+    .into_iter()
+    .next()
+    .map(|model| model.model_name)
 }
 
 pub(crate) async fn confirm(question: &str, default_yes: bool) -> bool {
@@ -330,7 +332,7 @@ async fn read_hidden_line() -> Result<String> {
 fn set_terminal_echo(on: bool) -> bool {
     let mut command = std::process::Command::new("stty");
     command.arg(if on { "echo" } else { "-echo" });
-    gents::tools::exec::native_spawn::status_std(&mut command)
+    gents_session::exec::native_spawn::status_std(&mut command)
         .map(|status| status.success())
         .unwrap_or(false)
 }
@@ -355,8 +357,8 @@ async fn read_line() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use gents::inference::backends::setup::connection_spec;
-    use gents::OpenAiWireApi;
+    use gents_inference::backends::setup::connection_spec;
+    use gents_loop::openai_wire::OpenAiWireApi;
 
     use super::*;
     use crate::{resolve_backend_config_with_preset, BackendResolutionMode};

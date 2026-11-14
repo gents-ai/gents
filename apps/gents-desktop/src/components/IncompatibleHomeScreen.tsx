@@ -93,7 +93,9 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
               >
                 {home.fullReset
                   ? "Reset Gents on this Mac"
-                  : "This home needs a fresh start"}
+                  : report.reason === "unfinishedSetup"
+                    ? "An earlier setup didn’t finish"
+                    : "This home needs a fresh start"}
               </h2>
               {home.fullReset ? (
                 <p className="text-sm">
@@ -101,6 +103,12 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                   pairings, and its local service. Browser storage and caches are
                   cleared in both modes. Gents will close to finish the reset; reopen it
                   after the completion message.
+                </p>
+              ) : report.reason === "unfinishedSetup" ? (
+                <p className="text-sm" data-testid="incompatible-home-unfinished">
+                  This node home was created but never started, so nothing has been kept
+                  in it. Back it up to start again under a new name; everything in it
+                  moves to a dated backup and nothing is deleted.
                 </p>
               ) : unsafeKey ? (
                 <p className="text-sm" data-testid="incompatible-home-unsafe-key">

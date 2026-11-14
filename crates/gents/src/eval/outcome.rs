@@ -55,7 +55,7 @@ impl OutcomeKind {
     }
 }
 
-/// `Proofs/Eval.lean` `ProviderReason`: why a provider call did not produce a
+/// `Proofs/Runtime/Eval.lean` `ProviderReason`: why a provider call did not produce a
 /// usable answer. A `provider` outcome needs one, because a candidate prompt
 /// can cause a context overflow but not an outage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -84,7 +84,7 @@ impl ProviderReason {
     }
 }
 
-/// `Proofs/Eval.lean` `EvidenceClass`: what one outcome is evidence of.
+/// `Proofs/Runtime/Eval.lean` `EvidenceClass`: what one outcome is evidence of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceClass {
@@ -145,21 +145,21 @@ pub fn subject_causable(kind: OutcomeKind, reason: Option<ProviderReason>) -> bo
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod conformance {
+    use super::{EvidenceClass, OutcomeKind, ProviderReason};
 
     #[test]
-    fn no_subject_causable_outcome_is_excluded() {
-        for kind in OutcomeKind::ALL {
-            for reason in [
-                None,
-                Some(ProviderReason::Rejected),
-                Some(ProviderReason::Unavailable),
-            ] {
-                if subject_causable(kind, reason) {
-                    assert_eq!(classify(kind, reason), EvidenceClass::Fail);
-                }
-            }
-        }
+    fn outcome_kinds_are_the_lean_outcome_kinds() {
+        gents_lean_vocab::families::eval_outcome_kind_vocabulary::replay(&OutcomeKind::ALL);
+    }
+
+    #[test]
+    fn provider_reasons_are_the_lean_provider_reasons() {
+        gents_lean_vocab::families::eval_provider_reason_vocabulary::replay(&ProviderReason::ALL);
+    }
+
+    #[test]
+    fn evidence_classes_are_the_lean_evidence_classes() {
+        gents_lean_vocab::families::eval_evidence_class_vocabulary::replay(&EvidenceClass::ALL);
     }
 }

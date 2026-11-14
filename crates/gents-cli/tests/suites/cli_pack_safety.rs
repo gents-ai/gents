@@ -35,7 +35,7 @@ fn document_pack(
         config["tools"][0]["integrations"] = json!({"plugins": [reference]});
     }
     std::fs::write(root.join("pack_config.json"), serde_json::to_vec(&config)?)?;
-    Ok(gents::pack::archive::pack_dir(root)?.0)
+    Ok(gents_pack::pack::archive::pack_dir(root)?.0)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -142,7 +142,8 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
         &home,
         &["config", "pack", "install", fixture.to_str().unwrap()],
     )?;
-    let plugin = gents::plugin::store::read_record(&home.join(".gents"), "fixture", "job_fixture")?;
+    let plugin =
+        gents_pack::plugin::store::read_record(&home.join(".gents"), "fixture", "job_fixture")?;
     document_pack(
         &root,
         "1.2.0",
@@ -315,6 +316,7 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
         spawn_server_with_env(&home, port, &[], &[("GENTS_DESKTOP_HOME", &user_home_arg)])?;
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home, &graphql, Duration::from_secs(30)).await?;
 
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../gents/tests/fixtures/packs/job_plugin_fixture");
@@ -345,16 +347,6 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
         )
     })
     .await?;
-    let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
-    let expected = snapshot["hosted_plugin_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["reviewed"] == true && case["plan"] == true && case["native"] == true)
-        .unwrap()["allowed"]
-        .as_bool()
-        .unwrap();
-    assert_eq!(outcome.is_ok(), expected);
     let outcome = outcome?;
     assert_eq!(outcome["apply"]["plugins"][0]["name"], "job_fixture");
     assert!(
@@ -362,7 +354,7 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
         "plugin-only installation must not install schemas"
     );
     let installed =
-        gents::plugin::store::read_record(&home.join(".gents"), "fixture", "job_fixture")?;
+        gents_pack::plugin::store::read_record(&home.join(".gents"), "fixture", "job_fixture")?;
     assert!(installed
         .declaration
         .data
@@ -370,7 +362,7 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
         .ops
         .iter()
         .any(|op| op == "delete"));
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
     let user = gents_desktop_core::client::PrincipalIdentity::load_existing(
         &gents_desktop_core::client::DesktopPaths::from_root(user_home.join("cli")),
     )?;
@@ -378,8 +370,8 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
         user.did() != owner,
         "client must use its held User identity"
     );
-    let access = gents::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(&graphql, user.did())
+    let access = gents_store::config_client::ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(&graphql, user.did())
             .with_client_signing_capability(user.client_signing_capability()?)?,
     );
     let graph = access

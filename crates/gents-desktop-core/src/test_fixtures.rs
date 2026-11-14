@@ -6,14 +6,13 @@
 
 use std::sync::Arc;
 
-use gents::documents::apply_desired_state_plan;
 use gents::runtime::embedded::EmbeddedHome;
-use gents::store::collection::Collection;
-use gents::store::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint,
-};
-use gents::store::identity::{GrantSet, KeyIdentity, NodeIdentity};
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_protocol::agent_identity::AgentIdentityBinding;
+use gents_store::collection::Collection;
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents_store::identity::{GrantSet, KeyIdentity, NodeIdentity};
 
 /// A real runtime home served over authenticated DefraDB HTTP with node ACP.
 pub struct ServedRuntimeHome {
@@ -102,10 +101,13 @@ impl ServedRuntimeHome {
 
     /// The User's endpoint in the shape `ClientCore::operator_access` builds.
     pub fn user_endpoint(&self) -> GraphqlEndpoint {
-        GraphqlEndpoint::as_principal(self.graphql(), self.user.did())
-            .with_client_signing_capability(self.user.client_signing_capability().unwrap())
-            .unwrap()
-            .with_client_signed_agent_creates()
+        gents::runtime::lifecycle_hooks::compose_endpoint(
+            GraphqlEndpoint::as_principal(self.graphql(), self.user.did())
+                .with_client_signing_capability(self.user.client_signing_capability().unwrap())
+                .unwrap()
+                .with_client_signed_agent_creates(),
+        )
+        .unwrap()
     }
 
     pub fn user_access(&self) -> ConfigAccess {
@@ -253,9 +255,8 @@ impl ServedRuntimeHome {
     /// The managed Agent's own signed local access, holding the baseline
     /// grants production projects from its Agent document.
     pub async fn agent_access(&self, binding: &AgentIdentityBinding) -> ConfigAccess {
-        let agent =
-            gents::store::identity::resolve_agent_identity(self.runtime().as_ref(), binding)
-                .unwrap();
+        let agent = gents_store::identity::resolve_agent_identity(self.runtime().as_ref(), binding)
+            .unwrap();
         GrantSet::AgentBaseline
             .grant(
                 &self.runtime_access(),
@@ -277,7 +278,7 @@ impl ServedRuntimeHome {
             .user_access()
             .execute(&format!(
                 r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
-                gents::store::graphql::escape_graphql_string(&binding.agent_did)
+                gents_store::graphql::escape_graphql_string(&binding.agent_did)
             ))
             .await
             .unwrap();
@@ -316,7 +317,7 @@ impl ServedRuntimeHome {
                         )
                         .await?;
                     let session_doc =
-                        gents::store::graphql::created_doc_id(&response, "AgentSession")?;
+                        gents_store::graphql::created_doc_id(&response, "AgentSession")?;
                     txn.add_resource_relationship(
                         "AgentSession",
                         &session_doc,
@@ -350,6 +351,30 @@ impl ServedRuntimeHome {
             "creation_nonce": binding.creation_nonce,
             "inference_profile_id": profile_id,
         })
+    }
+
+    pub async fn agent_value_for_create(
+        &self,
+        binding: &AgentIdentityBinding,
+        profile_id: &str,
+    ) -> serde_json::Value {
+        let context_id = format!("{}:context", binding.agent_did);
+        self.apply_as_user(
+            "test.served_runtime.agent_context",
+            vec![(
+                Collection::AgentContext,
+                serde_json::json!({
+                    "node_did": self.node_did(),
+                    "context_id": context_id,
+                    "system_prompt": "Follow the test user's request.",
+                }),
+            )],
+        )
+        .await;
+        let mut agent = self.agent_value(binding, profile_id);
+        agent["display_name"] = serde_json::json!("Fixture Agent");
+        agent["context_id"] = serde_json::json!(context_id);
+        agent
     }
 
     /// A fresh DID that no Node or Agent on this store uses yet.
@@ -396,7 +421,15 @@ impl ServedRuntimeHome {
         self.user_access()
             .transact_write(operation, |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
             })
             .await
             .unwrap();
@@ -445,6 +478,14 @@ impl HeldRequest {
 }
 
 impl GatedRuntimeProxy {
+    /// Selects a node's snapshot read: the one request that reads the Node
+    /// together with its readiness and its datastore tool surfaces.
+    pub fn node_snapshot(body: &str) -> bool {
+        [": Node(", ": NodeReadiness(", ": DatastoreToolSurface("]
+            .iter()
+            .all(|root| body.contains(root))
+    }
+
     pub async fn start(upstream_graphql: &str, held: fn(&str) -> bool) -> Self {
         let upstream = upstream_graphql
             .strip_prefix("http://")
@@ -711,4 +752,138 @@ impl Drop for ReplyLossProxy {
     fn drop(&mut self) {
         self.task.abort();
     }
+}
+
+/// v0.19.0's declarations of one runtime-local and one enrollment collection,
+/// unchanged at v1.0.0-rc1 apart from a renamed field: both branchable, and
+/// with no identity policy.
+const OTHER_VERSION_SCHEMA: [(&str, &str); 2] = [
+    (
+        "CompactionConfig",
+        r#"type CompactionConfig @branchable @index(fields: ["agent_did", "compaction_id"], unique: true) {
+    compaction_id: String
+    agent_did: String @index
+    display_name: String
+    strategy: String
+    threshold: Float
+    keep_recent_tokens: Int
+    tool_result_max_chars: Int
+    summary_max_output_tokens: Int
+    summary_file_list_max: Int
+    inference_profile_id: String @index
+    tags: [String!]
+    updated_at: DateTime @index(direction: DESC)
+}"#,
+    ),
+    (
+        "NetworkEnrollmentRequest",
+        r#"type NetworkEnrollmentRequest @branchable {
+    protocol_version: Int @immutable
+    request_id: String @index(unique: true) @immutable
+    request_digest: String @index @immutable
+    offer_id: String @index @immutable
+    offer_token: String @immutable
+    challenge: String @index(unique: true) @immutable
+    network_id: String @index @immutable
+    admin_did: String @index @immutable
+    server_peer: String @immutable
+    candidate_did: String @index @immutable
+    candidate_peer: String @index @immutable
+    candidate_ticket: String @immutable
+    owner_agent: String @index @immutable
+    profile: String @immutable
+    client_nonce: String @immutable
+    issued_at: DateTime @immutable
+    expires_at: DateTime @immutable
+    candidate_sig: String @immutable
+}"#,
+    ),
+];
+
+/// A client store with another version's schema, written through the
+/// migration owner with that version's declarations. `enrolled` adds the
+/// enrollment row onboarding wrote, which this build's document projector
+/// refuses while the store opens; without it the store opens and the
+/// migration owner refuses it. `encrypted` records a file-custody key first,
+/// as a store this build's upgrade already encrypted.
+pub async fn write_other_version_client_store(
+    paths: &crate::client::DesktopPaths,
+    enrolled: bool,
+    encrypted: bool,
+) {
+    use gents_store::local::store_key::{StoreEncryption, StoreKeyCustodyChoice};
+    paths.ensure_root_dirs().await.unwrap();
+    let identity = crate::client::PrincipalIdentity::load_or_create(paths)
+        .await
+        .unwrap();
+    let mut builder = defra_node::Node::builder()
+        .data_path(paths.node_data_dir())
+        .with_storage_backend(defra_node::StorageBackend::Regolith)
+        .with_node_identity_did(identity.did());
+    if encrypted {
+        let record = StoreEncryption::prepare(
+            StoreKeyCustodyChoice::File,
+            paths.store_key_path(),
+            paths.node_data_dir(),
+        )
+        .unwrap();
+        std::fs::write(
+            paths.store_encryption_path(),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        let key = record
+            .initialize(paths.store_key_path(), paths.node_data_dir())
+            .unwrap();
+        builder = key.encrypt(builder);
+    }
+    let node = builder.build().await.unwrap();
+    let baseline = OTHER_VERSION_SCHEMA.map(|(name, sdl)| gents_migration::BaselineCollection {
+        name,
+        sdl,
+        expected_version: None,
+        expected_state: gents_migration::CollectionExpectation::dag_only(),
+    });
+    let registry = gents_migration::Registry {
+        baseline: &baseline,
+        steps: &[],
+        ordinary_indexes: &[],
+    };
+    gents_migration::ensure_migrations_with_registry(&node, &registry)
+        .await
+        .unwrap();
+    if enrolled {
+        let created = node
+            .execute(r#"mutation { create_NetworkEnrollmentRequest(input: { request_id: "onboarding" }) { _docID } }"#)
+            .await;
+        assert!(!created.has_errors(), "{:?}", created.errors);
+    }
+    node.shutdown().await.unwrap();
+}
+
+/// Runs this build's encryption upgrade on a plaintext client store and stops
+/// before the client records its key, as a start interrupted after the
+/// upgrade promoted its stage. Returns the record that start would write.
+pub async fn encrypt_client_store_without_its_record(
+    paths: &crate::client::DesktopPaths,
+) -> gents_store::local::store_key::StoreEncryption {
+    use gents_store::local::store_key::{upgrade, StoreEncryption, StoreKeyCustodyChoice};
+    let data = paths.node_data_dir();
+    let record = StoreEncryption::prepare(
+        StoreKeyCustodyChoice::File,
+        paths.store_key_path(),
+        &upgrade::staging_path(data),
+    )
+    .unwrap();
+    upgrade::begin(data, &record).unwrap();
+    let key = record
+        .initialize(
+            paths.store_key_path(),
+            &upgrade::key_store_path(data).unwrap(),
+        )
+        .unwrap();
+    upgrade::encrypt_existing(data, &record, &key)
+        .await
+        .unwrap();
+    record
 }

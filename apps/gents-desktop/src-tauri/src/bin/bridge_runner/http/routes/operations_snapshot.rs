@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Result};
 use chrono::Utc;
-use gents::store::config_client::ConfigAccess;
 use gents_desktop_bridge::snapshot::operations_snapshot::{
     project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
 };
@@ -8,12 +7,13 @@ use gents_desktop_bridge::types::{
     DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest, NativeExecutorStatusView,
     RuntimeLivenessView,
 };
+use gents_store::config_client::ConfigAccess;
 
 pub(super) async fn operations_snapshot_response(
     access: &ConfigAccess,
     request: DesktopOperationsSnapshotRequest,
 ) -> Result<DesktopOperationsSnapshot> {
-    let native_executors = gents::tools::exec::status::active_native_executors()
+    let native_executors = gents_session::exec::status::active_native_executors()
         .into_iter()
         .map(|executor| NativeExecutorStatusView {
             id: executor.id as i64,

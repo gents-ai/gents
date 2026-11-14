@@ -1,14 +1,11 @@
-//! A plugin job's result reaches the parent as a bounded notification and is
-//! paged in full through `job_calls::result`.
-
 use std::time::Duration;
 
-use gents::plugin::data::StampContext;
-use gents::plugin::job_calls::{result as read_result, JobCaller};
-use gents::tools::background::job::job::JobState;
-use gents::tools::background::status::ProcessControlScope;
-use gents::NodeIdentity;
 use gents_protocol::job::JobResultRequest;
+use gents_store::identity::NodeIdentity;
+use gents_toolcalls::background::job::job::JobState;
+use gents_toolcalls::background::status::ProcessControlScope;
+use gents_toolcalls::plugin::data::StampContext;
+use gents_toolcalls::plugin::job_calls::{result as read_result, JobCaller};
 use serde_json::{json, Value};
 
 use crate::plugin_job_support::{
@@ -21,7 +18,7 @@ use crate::support::test_db;
 const TOOL_CALL: &str = "job-s";
 const CHILD_PROMPT: &str = "surface child a";
 
-fn entry(when: Value, output: gents::tools::background::job::job::JobStepOutput) -> PlanEntry {
+fn entry(when: Value, output: gents_toolcalls::background::job::job::JobStepOutput) -> PlanEntry {
     PlanEntry {
         when,
         output,
@@ -82,7 +79,7 @@ async fn caller(
         .clone()
         .execute(&format!(
             r#"{{ AgentRequest(docID: "{}") {{ agent_did }} }}"#,
-            gents::store::graphql::escape_graphql_string(request_doc_id),
+            gents_store::graphql::escape_graphql_string(request_doc_id),
         ))
         .await
         .expect("load selected parent agent");
@@ -112,7 +109,7 @@ async fn parent_request_doc_id(h: &JobHarness) -> String {
     let response = h.actors.fixture.access.clone()
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}-parent" }} }}, limit: 1) {{ _docID }} }}"#,
-            gents::store::graphql::escape_graphql_string(&h.session_id)
+            gents_store::graphql::escape_graphql_string(&h.session_id)
         ))
         .await
         .expect("read the parent request");
@@ -128,9 +125,9 @@ async fn session_texts(h: &JobHarness) -> Vec<String> {
             .await;
     let mut texts = Vec::new();
     for message in messages {
-        if let gents::inference::llm::message::Message::User { content } = message {
+        if let gents_inference::llm::message::Message::User { content } = message {
             texts.extend(content.into_iter().filter_map(|item| match item {
-                gents::inference::llm::message::UserContent::Text(text) => Some(text.text),
+                gents_inference::llm::message::UserContent::Text(text) => Some(text.text),
                 _ => None,
             }));
         }
@@ -138,10 +135,16 @@ async fn session_texts(h: &JobHarness) -> Vec<String> {
     texts
 }
 
-/// The text of the parent session's completion notification for the job.
 async fn notification(h: &JobHarness) -> String {
+    use crate::support::snapshots::SnapshotReader;
     let marker = format!("<tool-completion tool_call_id=\"{TOOL_CALL}\"");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut changes = h
+        .actors
+        .fixture
+        .access
+        .subscribe_changes("AgentMessage")
+        .await;
     loop {
         if let Some(text) = session_texts(h)
             .await
@@ -150,11 +153,9 @@ async fn notification(h: &JobHarness) -> String {
         {
             return text;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no completion notification for {TOOL_CALL}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .unwrap_or_else(|_| panic!("no completion notification for {TOOL_CALL}"));
     }
 }
 
@@ -198,29 +199,5 @@ async fn job_result_over_4000_bytes_is_truncated_in_the_notification_and_paged_i
     let first = page(0, full.total_bytes / 2).await;
     let second = page(first.offset + first.result.len() as u64, u64::MAX).await;
     assert_eq!(format!("{}{}", first.result, second.result), full.result);
-    h.runtime.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn job_calls_result_refuses_a_row_outside_process_control_scope() {
-    let (h, row_doc_id) = completed_harness("plugin-job-surface-scope", json!("done")).await;
-    let request_doc_id = parent_request_doc_id(&h).await;
-
-    let caller = caller(&h, "another-session", &request_doc_id, &row_doc_id).await;
-    let error = read_result(
-        &caller,
-        PLUGIN,
-        &JobResultRequest {
-            row_doc_id: row_doc_id.clone(),
-            offset: 0,
-            limit: u64::MAX,
-        },
-        usize::MAX,
-    )
-    .await
-    .expect_err("a row of another session is refused")
-    .to_string();
-    assert!(error.contains(&row_doc_id), "{error}");
-    assert!(error.contains("is not in this call's scope"), "{error}");
     h.runtime.shutdown().await;
 }

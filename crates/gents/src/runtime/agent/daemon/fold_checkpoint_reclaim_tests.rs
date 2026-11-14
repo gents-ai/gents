@@ -1,13 +1,13 @@
 async fn create_user_message(
     db: &crate::support::TestDb,
-    author: (&crate::KeyIdentity, &crate::ConfigAccess),
+    author: (&gents_store::identity::KeyIdentity, &gents_store::config_client::ConfigAccess),
     agent_config: &ResolvedAgent,
     session_id: &str,
     content: &str,
     queued_after: Option<&str>,
     retry_parent: Option<&AgentRequest>,
 ) -> AgentRequest {
-    use crate::request::lifecycle::{
+    use gents_session::request::lifecycle::{
         ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
     };
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
@@ -44,27 +44,27 @@ async fn create_user_message(
         retry_count: 1,
         max_retries: 3,
     });
-    let create = crate::request::lifecycle::build_signed_client_request(
+    let create = gents_session::request::lifecycle::build_signed_client_request(
         client,
         spec,
         RequestSigner::Identity(user),
     )
     .await
     .unwrap();
-    crate::request::lifecycle::submit_client_request(client, &create)
+    gents_session::request::lifecycle::submit_client_request(client, &create)
         .await
         .unwrap();
     let response = client
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(&request_id)
+            gents_store::graphql::escape_graphql_string(&request_id)
         ))
         .await
         .unwrap();
     let doc_id = response["data"]["AgentRequest"][0]["_docID"]
         .as_str()
         .unwrap();
-    crate::request::admission::load_request_for_admission_test_as(
+    gents_session::request::admission::load_request_for_admission_test_as(
         &db.node,
         doc_id,
         &agent_config.agent_did,
@@ -74,16 +74,16 @@ async fn create_user_message(
 }
 
 async fn authored_user_entries(
-    access: &crate::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request: &AgentRequest,
-) -> Vec<(String, crate::inference::llm::message::Message)> {
+) -> Vec<(String, gents_inference::llm::message::Message)> {
     let response = access.execute(&format!(
         r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }}, role: {{ _eq: "user" }} }}, order: {{ sequence: ASC }}) {{ _docID message_key }} }}"#,
-        crate::store::graphql::escape_graphql_string(&request.doc_id)
+        gents_store::graphql::escape_graphql_string(&request.doc_id)
     )).await.unwrap();
     let mut entries = Vec::new();
     for row in response["data"]["AgentMessage"].as_array().unwrap() {
-        let (_, message) = crate::session::load_canonical_message(
+        let (_, message) = gents_session::session::load_canonical_message(
             access,
             row["_docID"].as_str().unwrap(),
             &request.node_did,
@@ -102,13 +102,13 @@ async fn admit_client_claim(
     request: &AgentRequest,
 ) -> (
     AgentRequest,
-    crate::request::admission::AgentRequestAdmissionVerifier,
-    Option<crate::request::admission::ClientClaimAdmission>,
+    gents_session::request::admission::AgentRequestAdmissionVerifier,
+    Option<gents_session::request::admission::ClientClaimAdmission>,
 ) {
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+    let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         config.node_identity().clone(),
-        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+        gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
     );
     let (request, admission) = verifier
         .verify_fresh_for_claim_with_identity(request, config.agent_identity.as_ref())
@@ -145,9 +145,9 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             None,
         )
         .await;
-        let folded_key = crate::request::lifecycle::queue::folded_input_key(&folded.doc_id);
+        let folded_key = gents_session::request::lifecycle::queue::folded_input_key(&folded.doc_id);
 
-        let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
             node.clone(),
             agent_config.agent_identity.as_ref(),
             Duration::ZERO,
@@ -159,7 +159,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             .await
             .unwrap();
         assert!(folded_admission.is_some());
-        let mut first = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
+        let mut first = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
             head.clone(),
             30,
@@ -172,7 +172,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         first.set_fold_admitted(vec![folded.doc_id.clone()]);
         assert_eq!(
             first.claim_with_identity().await.unwrap(),
-            crate::request::lifecycle::ClaimOutcome::Claimed
+            gents_session::request::lifecycle::ClaimOutcome::Claimed
         );
         first.begin_owned_execution(&writer).await.unwrap();
         let input = [
@@ -184,14 +184,14 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 .publish_authored_message(
                     &first,
                     key,
-                    &crate::inference::llm::message::Message::user(content),
+                    &gents_inference::llm::message::Message::user(content),
                 )
                 .await
                 .unwrap();
         }
         if persist_checkpoint {
             let commit_cid = first.request_commit_cid().unwrap().to_owned();
-            let boundary = crate::turn::provider_context_reduction::capture_source_boundary(
+            let boundary = gents_session::session::provider_context_reduction::capture_source_boundary(
                 &agent_access,
                 &session_id,
                 agent_config.node_did(),
@@ -201,23 +201,23 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             )
             .await
             .unwrap();
-            let prefix = vec![crate::inference::llm::message::Message::user(
+            let prefix = vec![gents_inference::llm::message::Message::user(
                 "an earlier, larger history",
             )];
             let suffix = vec![
-                crate::inference::llm::message::Message::user(head.content.clone()),
-                crate::inference::llm::message::Message::user(folded.content.clone()),
+                gents_inference::llm::message::Message::user(head.content.clone()),
+                gents_inference::llm::message::Message::user(folded.content.clone()),
             ];
-            let row = |_| crate::turn::provider_context_reduction::ReplayRowAssociation {
+            let row = |_| gents_session::session::provider_context_reduction::ReplayRowAssociation {
                 source: None,
                 physical_header: None,
                 block_indices: Vec::new(),
             };
             let signer = agent_config.agent_identity.managed_agent_signer().unwrap();
-            crate::turn::provider_context_reduction::persist(
+            gents_session::session::provider_context_reduction::persist(
                 &node,
                 &signer,
-                crate::turn::provider_context_reduction::NewProviderContextReduction {
+                gents_session::session::provider_context_reduction::NewProviderContextReduction {
                     agent_did: &agent_config.agent_did,
                     node_did: agent_config.node_did(),
                     requester_did: Some(user.did()),
@@ -234,7 +234,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                     retained_suffix: &suffix,
                     checkpoint_messages: &suffix,
                     replay_associations:
-                        &crate::turn::provider_context_reduction::ReplayAssociations {
+                        &gents_session::session::provider_context_reduction::ReplayAssociations {
                             required: Vec::new(),
                             prefix_rows: prefix.iter().map(row).collect(),
                             retained_rows: suffix.iter().map(row).collect(),
@@ -251,7 +251,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         reclaimed.deadline = None;
         drop(first);
         assert_eq!(
-            crate::turn::provider_context_reduction::load_unconsumed_for_request(
+            gents_session::session::provider_context_reduction::load_unconsumed_for_request(
                 &agent_access,
                 &head.doc_id
             )
@@ -264,7 +264,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             "test.fold_checkpoint_reclaim",
             &format!(
                 r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "pending", deadline: null }}) {{ _docID }} }}"#,
-                crate::store::graphql::escape_graphql_string(&head.doc_id)
+                gents_store::graphql::escape_graphql_string(&head.doc_id)
             ),
         )
         .await
@@ -282,6 +282,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
+            tool_config: Arc::new(Default::default()),
             agent_config: agent_config.clone(),
             provider_family: None,
             model: Arc::new(WakeInputModel {
@@ -295,7 +296,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                     node.clone(), agent_config.agent_identity.as_ref(),
                 ).unwrap(),
             ),
@@ -307,10 +308,10 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 agent_config.node_did().to_string(),
             ),
             slot_generation: 1,
-            request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+            request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 request_identity,
-                crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+                gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
             ),
         })
         .unwrap();
@@ -337,7 +338,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 .iter()
                 .map(|(key, content)| (
                     gents_protocol::output::rows::authored_message_key(&head.doc_id, key),
-                    crate::inference::llm::message::Message::user(content.clone()),
+                    gents_inference::llm::message::Message::user(content.clone()),
                 ))
                 .collect::<Vec<_>>(),
             "{case}: each authored key exactly once with its admitted content"
@@ -356,7 +357,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         assert!(first_at < folded_at, "{case}: queue order");
         if persist_checkpoint {
             assert!(
-                crate::turn::provider_context_reduction::load_unconsumed_for_request(
+                gents_session::session::provider_context_reduction::load_unconsumed_for_request(
                     &agent_access,
                     &head.doc_id
                 )
@@ -385,6 +386,7 @@ async fn scripted_daemon(
     let preamble = prompt_builder.preamble().to_string();
     AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(WakeInputModel {
@@ -398,7 +400,7 @@ async fn scripted_daemon(
         prompt_builder,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+            gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
                 agent_config.agent_identity.as_ref(),
             )
@@ -412,10 +414,10 @@ async fn scripted_daemon(
             agent_config.node_did().to_string(),
         ),
         slot_generation: 1,
-        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+        request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             agent_config.node_identity().clone(),
-            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+            gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
         ),
     })
     .unwrap()
@@ -427,10 +429,14 @@ async fn scripted_daemon(
 /// its own turn.
 #[tokio::test]
 async fn generated_retry_selection_cases_bind_to_the_daemon() {
-    let cases = crate::lean_vocab_test::lean_retry_selection_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        assert_eq!(case.selected.len(), 1, "{}: one queued message", case.name);
+    for case in gents_lean_vocab::families::fold_queue_contracts_retry_selection::cases() {
+        let input = &case.input;
+        assert_eq!(
+            input.selected.len(),
+            1,
+            "{}: one queued message",
+            input.name
+        );
         let (db, user, client, agent_config) = held_daemon_fixture("daemon-retry-selection").await;
         let node = db.node.clone();
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -444,7 +450,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             None,
         )
         .await;
-        let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+        let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
             node.clone(),
             agent_config.agent_identity.as_ref(),
             Duration::ZERO,
@@ -452,7 +458,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         .unwrap();
         let (parent, _verifier, admission) =
             admit_client_claim(&node, &agent_config, &parent).await;
-        let mut failed = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
+        let mut failed = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
             parent.clone(),
             30,
@@ -463,22 +469,22 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         failed.set_client_claim_admission(admission);
         assert_eq!(
             failed.claim_with_identity().await.unwrap(),
-            crate::request::lifecycle::ClaimOutcome::Claimed
+            gents_session::request::lifecycle::ClaimOutcome::Claimed
         );
         failed.begin_owned_execution(&writer).await.unwrap();
-        if case.parent_published {
+        if input.parent_published {
             writer
                 .publish_authored_message(
                     &failed,
                     "prompt",
-                    &crate::inference::llm::message::Message::user(parent.content.clone()),
+                    &gents_inference::llm::message::Message::user(parent.content.clone()),
                 )
                 .await
                 .unwrap();
         }
         failed
             .terminalize_owned(
-                crate::request::lifecycle::RequestTerminalOutcome::Failed,
+                gents_session::request::lifecycle::RequestTerminalOutcome::Failed,
                 gents_protocol::output::TerminalOutput::NoMessage,
                 Some("provider unavailable"),
             )
@@ -506,7 +512,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             None,
         )
         .await;
-        let queued_key = crate::request::lifecycle::queue::folded_input_key(&queued.doc_id);
+        let queued_key = gents_session::request::lifecycle::queue::folded_input_key(&queued.doc_id);
         let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut daemon = scripted_daemon(&node, &agent_config, &provider_inputs).await;
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -516,13 +522,13 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             .unwrap();
         let retry_diagnostic = client.execute(
             &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason }} }}"#,
-                crate::store::graphql::escape_graphql_string(&retry.doc_id)),
+                gents_store::graphql::escape_graphql_string(&retry.doc_id)),
         ).await.unwrap();
         assert_eq!(
             persisted_request_state(&client, &retry.doc_id).await,
             gents_protocol::request_lifecycle::RequestLifecycleState::Completed,
             "{}: {:?}",
-            case.name,
+            input.name,
             retry_diagnostic
         );
         let retry_keys = authored_user_entries(&client, &retry)
@@ -531,42 +537,31 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             .map(|(key, _)| key)
             .collect::<Vec<_>>();
         let retry_input = provider_inputs.lock().unwrap()[0].clone();
-        assert_eq!(
-            retry_keys.is_empty(),
-            case.resume,
-            "{}: a resumed retry publishes no input",
-            case.name
-        );
-        let answered = !case.answered.is_empty();
-        assert_eq!(
-            retry_keys.contains(&gents_protocol::output::rows::authored_message_key(
-                &retry.doc_id,
-                &queued_key
-            )),
-            answered,
-            "{}: the retry publishes the selected message only when it answers it",
-            case.name
-        );
+        let resume = retry_keys.is_empty();
+        let answered = retry_keys.contains(&gents_protocol::output::rows::authored_message_key(
+            &retry.doc_id,
+            &queued_key,
+        ));
         assert_eq!(
             retry_input.contains(&queued.content),
             answered,
-            "{}: the selected message reaches the retry's provider only when answered",
-            case.name
+            "{}: the selected message reaches the retry's provider only when the retry publishes it",
+            input.name
         );
         if answered {
             assert_eq!(
                 persisted_request_state(&client, &queued.doc_id).await,
                 gents_protocol::request_lifecycle::RequestLifecycleState::Superseded,
                 "{}",
-                case.name
+                input.name
             );
-            assert_eq!(provider_inputs.lock().unwrap().len(), 1, "{}", case.name);
+            assert_eq!(provider_inputs.lock().unwrap().len(), 1, "{}", input.name);
         } else {
             assert_eq!(
                 persisted_request_state(&client, &queued.doc_id).await,
                 gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
                 "{}: the unanswered message stays queued",
-                case.name
+                input.name
             );
             daemon
                 .process_request(queued.clone(), shutdown_rx)
@@ -576,17 +571,27 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
                 persisted_request_state(&client, &queued.doc_id).await,
                 gents_protocol::request_lifecycle::RequestLifecycleState::Completed,
                 "{}",
-                case.name
+                input.name
             );
             let inputs = provider_inputs.lock().unwrap().clone();
             assert_eq!(
                 inputs.len(),
                 2,
                 "{}: it runs exactly once, on its own turn",
-                case.name
+                input.name
             );
-            assert!(inputs[1].contains(&queued.content), "{}", case.name);
+            assert!(inputs[1].contains(&queued.content), "{}", input.name);
         }
         node.shutdown().await.expect("node shutdown");
+        case.check(
+            gents_lean_vocab::families::fold_queue_contracts_retry_selection::RetrySelectionOutput {
+                resume,
+                answered: if answered {
+                    input.selected.clone()
+                } else {
+                    Vec::new()
+                },
+            },
+        );
     }
 }

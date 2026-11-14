@@ -1,5 +1,5 @@
 mod builder;
-mod command_policy;
+mod canonical_execution_native_adapter;
 mod document_loading;
 mod supervision;
 mod support;

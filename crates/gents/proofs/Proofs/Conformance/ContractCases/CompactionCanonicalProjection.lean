@@ -1,4 +1,5 @@
-import Proofs.CanonicalOutput.Execution.CompactionCases
+import Proofs.Runtime.CanonicalOutput.Execution.CompactionCases
+import Proofs.Conformance.Family
 
 namespace Conformance.ContractCases.CompactionCanonicalProjection
 
@@ -151,5 +152,27 @@ theorem fresh_expectations : freshCases.map (fun w =>
     [("projection_error", none), ("estimate_error", none), ("dispatch", some 20),
      ("over_threshold", none), ("no_output_capacity", none), ("dispatch", some 10)] := by
   native_decide
+
+deriving instance Lean.ToJson for FreshCase
+
+structure FreshObservation where
+  result : String
+  outputTokens : Option Nat
+  projectedSource : Option (List Nat)
+  deriving Lean.ToJson
+
+/-- model-production-gap: production admits a fresh provider request inside
+gents-loop request assembly (`ensure_context_can_dispatch` and
+`threshold_decision` over the serialized provider request), where projection
+and token estimation are the provider's own calls; no production function
+takes a supplied projection outcome and estimate, so a failed projection, a
+failed estimate or a chosen token count cannot be driven. -/
+@[conformance_family]
+def repairedAdmissionUnreached : Family FreshCase FreshObservation where
+  inputs := freshCases
+  model := fun w =>
+    let result := freshResult w
+    { result := freshResultName result, outputTokens := freshOutput result
+      projectedSource := freshProjectedSource result }
 
 end Conformance.ContractCases.CompactionCanonicalProjection

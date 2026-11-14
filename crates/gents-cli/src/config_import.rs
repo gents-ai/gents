@@ -1,9 +1,9 @@
 use anyhow::Result;
-use gents::documents::apply_desired_state_plan;
-use gents::store::config_client::{
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{
     read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::Collection;
+use gents_store::collection::Collection;
 use serde_json::Value;
 
 use crate::config_bundle::select_apply_collection_docs;
@@ -12,20 +12,6 @@ use crate::config_writes::ConfigAccess;
 use crate::config_writes::ConfigApplyTxn;
 use crate::desired_state::{self, DesiredApplyBundle};
 use crate::shared::{ConfigApplyCounts, ConfigExportBundle};
-
-pub(crate) async fn apply_delete_collection(
-    txn: &ConfigApplyTxn<'_>,
-    collection: Collection,
-    node_did: &str,
-    ids: &[String],
-) -> Result<usize> {
-    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(
-        ids.iter()
-            .map(|id| (collection, node_did.to_owned(), id.clone()))
-            .collect(),
-    )?;
-    Ok(apply_selected_plan(txn, &plan).await?.get(collection))
-}
 
 pub(crate) fn diff_has_pending_apply(
     counts: &desired_state::DesiredStateDiffCollectionsCounts,
@@ -73,7 +59,8 @@ pub(crate) async fn apply_desired_state_changes(
                 .map(|id| (collection, bundle.node_did.clone(), id.clone())),
         );
     }
-    let plan = DesiredStateApplyPlan::new(documents)?.with_removals(removals)?;
+    let mut plan = DesiredStateApplyPlan::new(documents)?.with_removals(removals)?;
+    gents_inference::operations::admit_plan_in_txn(txn, &mut plan).await?;
     apply_selected_plan(txn, &plan).await
 }
 
@@ -91,7 +78,9 @@ async fn apply_selected_plan(
         }
     }
     // Enumeration order is deterministic; it does not establish reference safety.
-    let applied = apply_desired_state_plan(txn, plan).await?;
+    let applied =
+        apply_desired_state_plan(txn, plan, &gents_inference::resolved::ProviderProfilePolicy)
+            .await?;
     for collection in Collection::ALL {
         counts.add(collection, applied.get(collection));
     }

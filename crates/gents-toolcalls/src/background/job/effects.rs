@@ -1,0 +1,1381 @@
+//! Pre-commit scratch files and slot interrupts. `admit_scratch` is Lean
+//! `scratchAdmitted`; `write_scratch` admits each file through it.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::{bail, Context, Result};
+use defra_node::Node as EmbeddedNode;
+use gents_protocol::job::{JobEffects, JobScratch, JobSpawn};
+use gents_protocol::request_admission::AgentRequestCreate;
+use sha2::{Digest, Sha256};
+
+use crate::background::job::admit::{StepChild, StepContext, StepRow};
+use gents_protocol::job::keys::{job_message_key, job_session_id, job_spawn_key};
+use gents_protocol::request_lifecycle::next_request_hop;
+use gents_protocol::request_lifecycle::RequestHopCause;
+use gents_protocol::request_lifecycle::SessionMessageCause;
+use gents_protocol::request_lifecycle::SessionMessageTarget;
+use gents_protocol::session::SessionScope;
+
+const SCRATCH_MAX_BYTES: u64 = 1_048_576;
+const SCRATCH_MAX_FILES: u32 = 32;
+
+pub fn admit_scratch(
+    cwd: &str,
+    cwd_allowed: &dyn Fn(&str) -> bool,
+    tool_call_id: &str,
+    name: &str,
+    size: u64,
+    count: u32,
+) -> Option<String> {
+    if !scratch_name(name)
+        || !scratch_name(tool_call_id)
+        || size > SCRATCH_MAX_BYTES
+        || count > SCRATCH_MAX_FILES
+    {
+        return None;
+    }
+    let path = format!("{cwd}/.gents/workflows/runs/{tool_call_id}/{name}");
+    cwd_allowed(&path).then_some(path)
+}
+
+pub(super) fn scratch_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains('/')
+}
+
+pub fn write_scratch(cwd: &Path, tool_call_id: &str, files: &[JobScratch]) -> Result<()> {
+    let cwd_str = cwd.to_str().context("cwd is not utf-8")?;
+    for file in files {
+        let dir = cwd.join(".gents/workflows/runs").join(tool_call_id);
+        let count = distinct_count(&dir, &file.name);
+        let size = u64::try_from(file.content.len()).unwrap_or(u64::MAX);
+        let path = admit_scratch(
+            cwd_str,
+            &|path| stays_under(cwd, path),
+            tool_call_id,
+            &file.name,
+            size,
+            count,
+        )
+        .context("scratch file refused")?;
+        let path = PathBuf::from(&path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, file.content.as_bytes())?;
+    }
+    Ok(())
+}
+
+fn distinct_count(dir: &Path, name: &str) -> u32 {
+    let mut names = BTreeSet::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_file() {
+                if let Some(file_name) = entry.file_name().to_str() {
+                    names.insert(file_name.to_owned());
+                }
+            }
+        }
+    }
+    names.insert(name.to_owned());
+    u32::try_from(names.len()).unwrap_or(u32::MAX)
+}
+
+fn stays_under(cwd: &Path, path: &str) -> bool {
+    let Ok(mut resolved) = cwd.canonicalize() else {
+        return false;
+    };
+    let Ok(relative) = Path::new(path).strip_prefix(cwd) else {
+        return false;
+    };
+    for component in relative.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => {
+                resolved.push(part);
+                match std::fs::symlink_metadata(&resolved) {
+                    Ok(meta) if meta.file_type().is_symlink() => return false,
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => return false,
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+pub async fn interrupt_slots(
+    node: &Arc<EmbeddedNode>,
+    access: &gents_store::config_client::ConfigAccess,
+    caller_agent_did: &str,
+    caller: &SessionScope,
+    slots: &[SessionScope],
+) -> Result<()> {
+    for target in slots {
+        if let Some(reason) = gents_session::session::message::interrupt_refusal(
+            node,
+            caller_agent_did,
+            caller,
+            target,
+        )
+        .await?
+        {
+            anyhow::bail!(reason);
+        }
+        gents_session::session::message::interrupt_session_with_access(node, access, target)
+            .await?;
+    }
+    Ok(())
+}
+
+pub(crate) struct JobContext<'a> {
+    pub(crate) ctx: &'a StepContext,
+    pub(crate) row: &'a StepRow,
+    pub(crate) cause: &'a SessionMessageCause,
+    pub(crate) goals: &'a dyn gents_session::session::message::SessionMessageGoals,
+}
+
+pub(crate) async fn stage_effects_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    job: &JobContext<'_>,
+    fresh: &[&JobSpawn],
+    effects: &JobEffects,
+) -> Result<()> {
+    stage_recorded_effects_in_txn(txn, job, fresh, effects)
+        .await
+        .map(|_| ())
+}
+
+/// `stage_effects_in_txn` returning the staged requests. A failed step commit
+/// may still have landed: the caller keeps these for `recover_step_commit`.
+pub(crate) async fn stage_recorded_effects_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    job: &JobContext<'_>,
+    fresh: &[&JobSpawn],
+    effects: &JobEffects,
+) -> Result<Vec<AgentRequestCreate>> {
+    let mut staged = Vec::new();
+    for spawn in fresh {
+        staged.push(stage_spawn(txn, job, spawn).await?);
+    }
+    let mut issued = BTreeMap::<(String, u32), u32>::new();
+    for message in &effects.message {
+        let (slot, attempt, target, admitted) = {
+            let child =
+                latest(job.row, &message.slot).context("no admitted attempt for message slot")?;
+            (
+                child.slot.clone(),
+                child.attempt,
+                child.target.clone(),
+                child.messages,
+            )
+        };
+        let seen = issued.entry((slot.clone(), attempt)).or_insert(admitted);
+        let k = 1 + *seen;
+        *seen += 1;
+        let session_id = job_session_id(&job.row.root, &slot, attempt);
+        let hop = message_hop(txn, job, &target.0, &session_id).await?;
+        staged.push(
+            stage_request(
+                txn,
+                job.goals,
+                job.cause,
+                &target.0,
+                &target.1,
+                session_id,
+                &message.text,
+                None,
+                job_message_key(&job.row.root, &slot, attempt, k),
+                hop,
+                None,
+                true,
+            )
+            .await?,
+        );
+    }
+    Ok(staged)
+}
+
+/// Staging commits atomically with the step, so after a commit error the step
+/// landed only if every staged retry key holds its staged fingerprint; a step
+/// that staged nothing has no witness and keeps the commit error.
+pub(crate) async fn recover_step_commit(
+    node: &std::sync::Arc<EmbeddedNode>,
+    identity: Option<identity::Did>,
+    commit_error: anyhow::Error,
+    staged: &[AgentRequestCreate],
+) -> Result<()> {
+    let recovery = gents_store::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        identity,
+        "plugin_job.recover_step_commit",
+        move |txn| {
+            Box::pin(async move {
+                for create in staged {
+                    let retry_key = create.retry_key.as_deref().context("staged request lacks a retry_key")?;
+                    match one_request(txn, retry_key).await? {
+                        None => return Ok(false),
+                        Some(existing) if same_fingerprint(&existing, create) => {}
+                        Some(_) => bail!("job staging integrity error: retry key {retry_key} does not match the staged request"),
+                    }
+                }
+                Ok(!staged.is_empty())
+            })
+        },
+    )
+    .await;
+    match recovery {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(commit_error),
+        Err(recovery_error) => Err(anyhow::anyhow!(
+            "job step recovery failed after ambiguous commit: {recovery_error:#}; original commit error: {commit_error:#}"
+        )),
+    }
+}
+
+fn latest<'a>(row: &'a StepRow, slot: &str) -> Option<&'a StepChild> {
+    row.children
+        .iter()
+        .filter(|child| {
+            child.slot == slot
+                && child.retry_key == job_spawn_key(&row.root, &child.slot, child.attempt)
+        })
+        .max_by_key(|child| child.attempt)
+}
+
+/// Admission resolved a relative spawn cwd against the pinned cwd; the child
+/// gets that path, not one its own admission would resolve against the server
+/// process's cwd. An empty pinned cwd records a caller without one, so a child
+/// that names no directory of its own carries none either.
+fn spawn_cwd(base: &str, dir: Option<&str>) -> Option<String> {
+    match dir {
+        Some(dir) => Some(Path::new(base).join(dir).to_string_lossy().into_owned()),
+        None if base.is_empty() => None,
+        None => Some(base.to_owned()),
+    }
+}
+
+async fn stage_spawn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    job: &JobContext<'_>,
+    spawn: &JobSpawn,
+) -> Result<AgentRequestCreate> {
+    let (node_did, agent_did) = super::admit::resolve_target(job.ctx, &spawn.target)
+        .cloned()
+        .context("spawn target is not a known AgentTarget id")?;
+    let own = job
+        .ctx
+        .target_hops
+        .iter()
+        .find(|(pair, _)| pair.0 == node_did && pair.1 == agent_did)
+        .map_or(0, |(_, hop)| *hop);
+    let hop = next_request_hop(
+        RequestHopCause::CrossSession {
+            cause_hop: job.row.caller_hop,
+        },
+        own,
+    );
+    let base = job
+        .row
+        .pin
+        .as_ref()
+        .map_or(&job.row.caller_cwd, |pin| &pin.cwd);
+    let cwd = spawn_cwd(base, spawn.cwd.as_deref());
+    stage_request(
+        txn,
+        job.goals,
+        job.cause,
+        &node_did,
+        &agent_did,
+        job_session_id(&job.row.root, &spawn.slot, spawn.attempt),
+        &spawn.prompt,
+        Some(spawn.title.as_str()),
+        job_spawn_key(&job.row.root, &spawn.slot, spawn.attempt),
+        hop,
+        cwd,
+        false,
+    )
+    .await
+}
+
+async fn message_hop(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    job: &JobContext<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<u32> {
+    let own =
+        gents_session::session::load_session_current_hop_in_txn(txn, node_did, session_id).await?;
+    Ok(next_request_hop(
+        RequestHopCause::CrossSession {
+            cause_hop: job.row.caller_hop,
+        },
+        own,
+    ))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fields of the staged AgentRequest"
+)]
+async fn stage_request(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    goals: &dyn gents_session::session::message::SessionMessageGoals,
+    cause: &SessionMessageCause,
+    node_did: &str,
+    agent_did: &str,
+    session_id: String,
+    content: &str,
+    title: Option<&str>,
+    retry_key: String,
+    hop: u32,
+    cwd: Option<String>,
+    existing_destination: bool,
+) -> Result<AgentRequestCreate> {
+    anyhow::ensure!(
+        node_did == cause.caller_node_did,
+        "cross-runtime agent delivery is not supported; a job stages requests only on its own runtime"
+    );
+    let existing = one_request(txn, &retry_key).await?;
+    let mut input = gents_protocol::request_input::RequestInput {
+        cwd,
+        session_creation: (!existing_destination)
+            .then_some(gents_protocol::request_input::SessionCreationIntent::PluginJob),
+        ..Default::default()
+    };
+    if let Some(existing) = &existing {
+        input.goal_assignment = existing
+            .input
+            .as_ref()
+            .and_then(|input| input.goal_assignment.clone());
+    } else if existing_destination {
+        // The staged request is requested by the job's Agent, so the
+        // destination session is scoped by that Agent, not the caller node.
+        input = goals
+            .prepare_goal_input_in_txn(
+                txn,
+                node_did,
+                &session_id,
+                agent_did,
+                Some(&cause.caller_agent_did),
+                input,
+            )
+            .await?;
+    }
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let signer = txn
+        .managed_agent_signer()
+        .context("plugin job message requires a managed Agent signer")?;
+    let create =
+        gents_session::request::lifecycle::materialize::build_session_message_request_with_input(
+            cause,
+            &SessionMessageTarget {
+                node_did: node_did.to_owned(),
+                agent_did: agent_did.to_owned(),
+                session_id: session_id.clone(),
+            },
+            content,
+            title,
+            &request_id,
+            Some(retry_key.clone()),
+            hop,
+            input,
+            &signer,
+        )
+        .await?;
+    if let Some(existing) = existing {
+        if same_fingerprint(&existing, &create) {
+            return Ok(create);
+        }
+        bail!("job staging integrity error: retry key {retry_key} does not match the admitted request");
+    }
+    let plan = gents_session::session::message::Plan::request(session_id, hop, create.clone());
+    gents_session::session::message::stage_planned_write_in_txn(txn, goals, cause, &plan).await?;
+    Ok(create)
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fields of the staged AgentRequest"
+)]
+pub async fn stage_request_fixture(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    goals: &dyn gents_session::session::message::SessionMessageGoals,
+    cause: &SessionMessageCause,
+    node_did: &str,
+    agent_did: &str,
+    session_id: String,
+    content: &str,
+    title: Option<&str>,
+    retry_key: String,
+    hop: u32,
+    cwd: Option<String>,
+    existing_destination: bool,
+) -> Result<AgentRequestCreate> {
+    stage_request(
+        txn,
+        goals,
+        cause,
+        node_did,
+        agent_did,
+        session_id,
+        content,
+        title,
+        retry_key,
+        hop,
+        cwd,
+        existing_destination,
+    )
+    .await
+}
+
+type StoredRequest = gents_protocol::row::AgentRequestRow;
+
+async fn one_request(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    retry_key: &str,
+) -> Result<Option<StoredRequest>> {
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(Selection::owned(
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+    ))
+    .filter(Filter::eq(fields::RETRY_KEY, retry_key))
+    .render();
+    let response = txn.run(&rendered).await?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "job staging integrity error: retry key {retry_key} is not unique"
+    );
+    let stored: Option<StoredRequest> = rows
+        .into_iter()
+        .next()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("decoding job request fingerprint")?;
+    if let Some(stored) = &stored {
+        gents_store::identity::request_receipt::verify_request_receipt_signature(stored)?;
+    }
+    Ok(stored)
+}
+
+fn same_fingerprint(existing: &StoredRequest, create: &AgentRequestCreate) -> bool {
+    existing.node_did.as_deref() == Some(create.node_did.as_str())
+        && existing.agent_did.as_deref() == Some(create.agent_did.as_str())
+        && existing.session_id.as_deref() == Some(create.session_id.as_str())
+        && existing.content.as_deref().map(body_digest) == Some(body_digest(&create.content))
+        && existing.request_hop == Some(i64::from(create.request_hop))
+        && existing
+            .input
+            .as_ref()
+            .and_then(|input| input.goal_assignment.as_ref())
+            == create.input.goal_assignment.as_ref()
+}
+
+/// The sender header carries its send time, so a re-staged message compares
+/// only what follows it.
+fn body_digest(content: &str) -> String {
+    let body = content
+        .strip_prefix("[message ")
+        .and_then(|rest| rest.split_once("]\n\n"))
+        .map_or(content, |(_, body)| body);
+    format!("{:x}", Sha256::digest(body.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use defra_node::Node as EmbeddedNode;
+
+    use super::{admit_scratch, interrupt_slots, spawn_cwd, write_scratch};
+    use gents_protocol::job::JobScratch;
+    use gents_protocol::session::SessionScope;
+    use gents_store::config_client::ConfigAccess;
+
+    fn file(name: &str, content: &str) -> JobScratch {
+        JobScratch {
+            name: name.to_owned(),
+            content: content.to_owned(),
+        }
+    }
+
+    fn read(path: &Path) -> Vec<u8> {
+        std::fs::read(path).unwrap()
+    }
+
+    #[test]
+    fn a_caller_without_a_cwd_spawns_children_without_one() {
+        assert_eq!(spawn_cwd("", None), None);
+        assert_eq!(spawn_cwd("", Some("sub")), Some("sub".to_owned()));
+        assert_eq!(spawn_cwd("/work", None), Some("/work".to_owned()));
+        assert_eq!(
+            spawn_cwd("/work", Some("sub")),
+            Some("/work/sub".to_owned())
+        );
+    }
+
+    #[test]
+    fn scratch_file_lands_under_runs_tool_call_id_before_commit() {
+        let cwd = tempfile::tempdir().unwrap();
+        write_scratch(cwd.path(), "call-1", &[file("notes.md", "hello")]).unwrap();
+        let path = cwd.path().join(".gents/workflows/runs/call-1/notes.md");
+        assert_eq!(read(&path), b"hello");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scratch_traversal_and_symlink_escape_are_refused() {
+        let cwd = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        assert!(write_scratch(cwd.path(), "call-1", &[file("../escape.md", "no")]).is_err());
+        assert!(!cwd.path().join("escape.md").exists());
+        assert!(!outside.path().join("escape.md").exists());
+        std::os::unix::fs::symlink(outside.path(), cwd.path().join(".gents")).unwrap();
+        assert!(write_scratch(cwd.path(), "call-1", &[file("notes.md", "no")]).is_err());
+        assert!(!outside
+            .path()
+            .join("workflows/runs/call-1/notes.md")
+            .exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scratch_link_component_that_does_not_resolve_is_refused() {
+        let cwd = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let missing = outside.path().join("missing");
+        std::os::unix::fs::symlink(&missing, cwd.path().join(".gents")).unwrap();
+        assert!(write_scratch(cwd.path(), "call-1", &[file("notes.md", "no")]).is_err());
+        assert!(!missing.exists());
+        std::fs::remove_file(cwd.path().join(".gents")).unwrap();
+        std::fs::create_dir_all(cwd.path().join(".gents/workflows")).unwrap();
+        std::os::unix::fs::symlink(&missing, cwd.path().join(".gents/workflows/runs")).unwrap();
+        assert!(write_scratch(cwd.path(), "call-1", &[file("notes.md", "no")]).is_err());
+        assert!(!missing.exists());
+        std::fs::remove_file(cwd.path().join(".gents/workflows/runs")).unwrap();
+        std::fs::create_dir_all(cwd.path().join(".gents/workflows/runs/call-1")).unwrap();
+        std::os::unix::fs::symlink(
+            &missing,
+            cwd.path().join(".gents/workflows/runs/call-1/notes.md"),
+        )
+        .unwrap();
+        assert!(write_scratch(cwd.path(), "call-1", &[file("notes.md", "no")]).is_err());
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn scratch_33rd_file_is_refused() {
+        let cwd = tempfile::tempdir().unwrap();
+        for index in 0..32 {
+            write_scratch(cwd.path(), "call-1", &[file(&format!("n{index}.txt"), "x")]).unwrap();
+        }
+        assert!(write_scratch(cwd.path(), "call-1", &[file("n32.txt", "x")]).is_err());
+        assert!(!cwd
+            .path()
+            .join(".gents/workflows/runs/call-1/n32.txt")
+            .exists());
+    }
+
+    #[test]
+    fn scratch_file_over_1_mib_is_refused() {
+        let cwd = tempfile::tempdir().unwrap();
+        let big = "a".repeat(1_048_577);
+        assert!(write_scratch(cwd.path(), "call-1", &[file("big.bin", &big)]).is_err());
+        assert!(!cwd
+            .path()
+            .join(".gents/workflows/runs/call-1/big.bin")
+            .exists());
+    }
+
+    fn scratch_files_under(
+        root: &Path,
+        dir: &Path,
+        cwd: &str,
+        files: &mut Vec<gents_lean_vocab::families::plugin_scratch_writes::WrittenFile>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scratch_files_under(root, &path, cwd, files);
+            } else {
+                let content = read(&path);
+                files.push(
+                    gents_lean_vocab::families::plugin_scratch_writes::WrittenFile {
+                        path: format!(
+                            "{cwd}/{}",
+                            path.strip_prefix(root).unwrap().to_str().unwrap()
+                        ),
+                        write: u64::from(content[0] - b'0'),
+                    },
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scratch_writes_match_the_lean_model() {
+        gents_lean_vocab::families::plugin_scratch_writes::replay(|trace| {
+            let cwd = tempfile::tempdir().unwrap();
+            let written = trace
+                .writes
+                .iter()
+                .enumerate()
+                .map(|(index, write)| {
+                    let mut content = index.to_string();
+                    content.push_str(&"x".repeat(usize::try_from(write.size).unwrap() - 1));
+                    write_scratch(
+                        cwd.path(),
+                        &write.tool_call_id,
+                        &[file(&write.name, &content)],
+                    )
+                    .is_ok()
+                })
+                .collect();
+            let mut files = Vec::new();
+            scratch_files_under(cwd.path(), cwd.path(), &trace.cwd, &mut files);
+            files.sort_by(|a, b| a.path.cmp(&b.path));
+            gents_lean_vocab::families::plugin_scratch_writes::Outcome { written, files }
+        });
+    }
+
+    /// Reads the request's interrupt latch as `access`; an Agent-owned
+    /// request is visible only to its owning Agent's access.
+    async fn stamp(access: &ConfigAccess, doc_id: &str) -> Option<String> {
+        let escaped = gents_store::graphql::escape_graphql_string(doc_id);
+        let response = access
+            .execute(&format!(
+                "{{AgentRequest(filter:{{_docID:{{_eq:\"{escaped}\"}}}}){{interrupt_requested_at}}}}"
+            ))
+            .await
+            .unwrap();
+        response["data"]["AgentRequest"][0]["interrupt_requested_at"]
+            .as_str()
+            .map(str::to_owned)
+    }
+
+    use crate::background::job::admit::{HostFacts, StepCall, StepChild, StepContext, StepRow};
+    use crate::background::status::ProcessControlScope;
+    use crate::call::lifecycle::admission_fixture::{
+        published_admission, PublishedAdmissionOptions,
+    };
+    use gents_protocol::job::keys::{job_message_key, job_session_id, job_spawn_key};
+    use gents_protocol::job::{
+        DynamicMode, JobCeiling, JobChildState, JobEffects, JobMessage, JobOrigin, JobPin,
+        JobPolicy, JobSpawn, JobState,
+    };
+    use gents_protocol::request_lifecycle::SessionMessageCause;
+    use gents_tools::surface::EndpointScope;
+
+    struct Harness {
+        node: Arc<EmbeddedNode>,
+        access: gents_store::config_client::ConfigAccess,
+        path: std::path::PathBuf,
+        cause: SessionMessageCause,
+        ctx: StepContext,
+        row: StepRow,
+        /// The caller's managed Agent, which is also the `general` target.
+        agent: Arc<dyn gents_store::identity::NodeIdentity>,
+        runtime: Arc<dyn gents_store::identity::NodeIdentity>,
+    }
+
+    async fn harness(name: &str) -> Harness {
+        let admission = published_admission(PublishedAdmissionOptions {
+            name: name.to_owned(),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let tool = &admission.tool;
+        let request_doc_id = tool.request_doc_id().unwrap().to_owned();
+        let caller = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+            &tool.access().unwrap(),
+            &request_doc_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let cause = SessionMessageCause {
+            caller_node_did: admission.node_did.clone(),
+            caller_agent_did: caller.agent_did.clone(),
+            caller_session_id: caller.session_id.clone(),
+            caller_requester_did: caller.requester_did.clone(),
+            caller_request_id: caller.request_id,
+            caller_request_doc_id: request_doc_id,
+            caller_hop: 0,
+            tool_call_id: tool.tool_call_id().to_owned(),
+            tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
+            correlation: None,
+        };
+        let stored =
+            gents_documents::load_agent(&admission.node, &admission.node_did, &caller.agent_did)
+                .await
+                .unwrap()
+                .expect("caller Agent");
+        let agent = gents_store::identity::resolve_agent_identity(
+            admission.runtime.as_ref(),
+            &gents_protocol::agent_identity::AgentIdentityBinding {
+                agent_did: stored.agent_did,
+                creation_nonce: stored.creation_nonce,
+            },
+        )
+        .unwrap();
+        let ctx = context(&admission.node_did, &caller.agent_did);
+        // Child session creation verifies each spawn against the job row's
+        // pin, so the harness job is its own chain root with that pin stored.
+        let mut row = running_row();
+        row.root = cause.tool_call_doc_id.clone();
+        row.row_doc_id = row.root.clone();
+        let mut job_pin = pin();
+        job_pin.chain_root_doc_id = row.root.clone();
+        row.pin = Some(job_pin.clone());
+        tool.access()
+            .unwrap()
+            .transact_write("test.job_harness_pin", |txn| {
+                let doc = &row.row_doc_id;
+                let pin = &job_pin;
+                Box::pin(async move {
+                    crate::background::job::records::write_pin_in_txn(txn, doc, pin).await
+                })
+            })
+            .await
+            .unwrap();
+        Harness {
+            node: admission.node.clone(),
+            access: tool.access().unwrap(),
+            path: admission.path.clone(),
+            cause,
+            ctx,
+            row,
+            agent,
+            runtime: admission.runtime.clone(),
+        }
+    }
+
+    impl Harness {
+        async fn close(self) {
+            self.node.shutdown().await.expect("shut down test node");
+            std::fs::remove_dir_all(&self.path).unwrap();
+        }
+    }
+
+    fn ceiling() -> JobCeiling {
+        JobCeiling {
+            targets: vec!["general".to_owned()],
+            max_live: 4,
+            max_spawns: 10,
+            max_messages_per_slot: 8,
+            result_bytes: 1024,
+            max_wall_secs: 60,
+        }
+    }
+
+    fn facts() -> HostFacts {
+        HostFacts {
+            engine_digest: "engine".to_owned(),
+            plugin_ref: "ns/plugin".to_owned(),
+            cwd: "/work".to_owned(),
+            args_digest: "args".to_owned(),
+            chain_root: "root".to_owned(),
+            origin: JobOrigin::Installed,
+            adopted_at: 1,
+            resume_of: None,
+            replayed_from: None,
+            ceiling_at_pin: ceiling(),
+        }
+    }
+
+    fn pin() -> JobPin {
+        JobPin {
+            script_id: "script".to_owned(),
+            source_digest: "source".to_owned(),
+            origin: JobOrigin::Installed,
+            engine_digest: "engine".to_owned(),
+            plugin_ref: "ns/plugin".to_owned(),
+            agent_budget: 10,
+            handle: "handle".to_owned(),
+            cwd: "/work".to_owned(),
+            adopted_at: 1,
+            args_digest: "args".to_owned(),
+            chain_root_doc_id: "root".to_owned(),
+            resume_of: None,
+            replayed_from: None,
+            ceiling_at_pin: ceiling(),
+        }
+    }
+
+    /// Target id `general` names the caller's own Agent: a child session's
+    /// relationships are staged from that Agent's stored document.
+    fn context(node_did: &str, agent_did: &str) -> StepContext {
+        StepContext {
+            live: ceiling(),
+            available: true,
+            caller_targets: EndpointScope::All,
+            job_targets: EndpointScope::All,
+            policy: JobPolicy {
+                dynamic: DynamicMode::Run,
+                dynamic_targets: vec!["general".to_owned()],
+                trusted_packs: Vec::new(),
+            },
+            engine_digest: "engine".to_owned(),
+            engine_provenance_operator: true,
+            max_hop: Some(8),
+            target_hops: vec![((node_did.to_owned(), agent_did.to_owned()), 0)],
+            target_ids: vec![(
+                "general".to_owned(),
+                (node_did.to_owned(), agent_did.to_owned()),
+            )],
+            live_background: 0,
+            started_by_job: false,
+            cwd_allowed: Vec::new(),
+            within: Vec::new(),
+            script_digest: None,
+            adoption_facts: facts(),
+            caller_scope: ProcessControlScope {
+                request_id: "request".to_owned(),
+                session_id: "session".to_owned(),
+                node_did: node_did.to_owned(),
+                requester_did: None,
+            },
+            control_targets: Vec::new(),
+            resume_targets: Vec::new(),
+            resume_facts: facts(),
+            caller_node_did: None,
+        }
+    }
+
+    fn running_row() -> StepRow {
+        StepRow {
+            root: "root".to_owned(),
+            row_doc_id: "row".to_owned(),
+            caller_session: "session".to_owned(),
+            caller_cwd: "/caller".to_owned(),
+            handle: "handle".to_owned(),
+            caller_hop: 0,
+            call: StepCall {
+                argv: vec!["run".to_owned()],
+                args: None,
+                script: None,
+                agent_budget: None,
+            },
+            root_call: None,
+            resume: None,
+            pin: Some(pin()),
+            children: Vec::new(),
+            spent: 0,
+            observed_terminal: 0,
+            consecutive_failures: 0,
+            state: JobState::Running,
+        }
+    }
+
+    fn spawn(slot: &str, attempt: u32, prompt: &str, title: &str, cwd: Option<&str>) -> JobSpawn {
+        JobSpawn {
+            slot: slot.to_owned(),
+            attempt,
+            target: "general".to_owned(),
+            prompt: prompt.to_owned(),
+            title: title.to_owned(),
+            cwd: cwd.map(str::to_owned),
+        }
+    }
+
+    fn job_effects(spawn: Vec<JobSpawn>, message: Vec<JobMessage>) -> JobEffects {
+        JobEffects {
+            state: None,
+            pin: None,
+            resume: None,
+            spawn,
+            message,
+            interrupt: Vec::new(),
+            progress: None,
+            writes: Vec::new(),
+            scratch: Vec::new(),
+        }
+    }
+
+    async fn stage(
+        harness: &Harness,
+        fresh: &[JobSpawn],
+        effects: &JobEffects,
+        row: &StepRow,
+    ) -> anyhow::Result<()> {
+        let fresh_refs: Vec<&JobSpawn> = fresh.iter().collect();
+        let job = super::JobContext {
+            ctx: &harness.ctx,
+            row,
+            cause: &harness.cause,
+            goals: &gents_session::session::message::NoSessionMessageGoals,
+        };
+        let job = &job;
+        let fresh_refs = &fresh_refs;
+        harness
+            .access
+            .transact_write("plugin_job.stage_effects", move |txn| {
+                Box::pin(
+                    async move { super::stage_effects_in_txn(txn, job, fresh_refs, effects).await },
+                )
+            })
+            .await
+    }
+
+    async fn by_key(access: &ConfigAccess, key: &str) -> Vec<serde_json::Value> {
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{
+                _docID content request_hop created_at
+                caused_by_parent_request_id caused_by_parent_request_doc_id
+                caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
+                input
+            }} }}"#,
+            gents_store::graphql::escape_graphql_string(key)
+        );
+        let response = access.execute(&query).await.unwrap();
+        response["data"]["AgentRequest"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn input_of(row: &serde_json::Value) -> serde_json::Value {
+        match &row["input"] {
+            serde_json::Value::String(text) => serde_json::from_str(text).unwrap(),
+            other => other.clone(),
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_creates_one_request_with_the_job_row_as_calling_edge() {
+        let harness = harness("job-stage-edge").await;
+        let kept = spawn("kept", 0, "do this", "Kept", None);
+        let skipped = spawn("old", 0, "skip", "Old", None);
+        let effects = job_effects(vec![kept.clone(), skipped.clone()], Vec::new());
+        stage(&harness, &[kept], &effects, &harness.row)
+            .await
+            .unwrap();
+        let rows = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
+        assert_eq!(rows.len(), 1);
+        assert!(
+            by_key(&harness.access, &job_spawn_key(&harness.row.root, "old", 0))
+                .await
+                .is_empty()
+        );
+        let row = &rows[0];
+        assert_eq!(
+            row["caused_by_parent_request_id"],
+            harness.cause.caller_request_id
+        );
+        assert_eq!(
+            row["caused_by_parent_request_doc_id"],
+            harness.cause.caller_request_doc_id
+        );
+        assert_eq!(
+            row["caused_by_parent_tool_call_id"],
+            harness.cause.tool_call_id
+        );
+        assert_eq!(
+            row["caused_by_parent_tool_call_doc_id"],
+            harness.cause.tool_call_doc_id
+        );
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn signed_staged_slot_can_be_interrupted_only_by_its_caller() {
+        let harness = harness("job-slot-authority").await;
+        // The claim admits the child's cwd from disk, so it must exist.
+        let child = spawn("worker", 0, "work", "Worker", harness.path.to_str());
+        stage(
+            &harness,
+            std::slice::from_ref(&child),
+            &job_effects(vec![child.clone()], Vec::new()),
+            &harness.row,
+        )
+        .await
+        .unwrap();
+        let key = job_spawn_key(&harness.row.root, "worker", 0);
+        let rows = by_key(&harness.access, &key).await;
+        let doc = rows[0]["_docID"].as_str().unwrap();
+        let response = harness
+            .access
+            .execute(&format!(
+                "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
+                gents_store::graphql::escape_graphql_string(doc),
+                gents_protocol::row::AGENT_REQUEST_FIELDS,
+            ))
+            .await
+            .unwrap();
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+        // The child is client-admitted by the job's Agent; its claim carries
+        // the verified admission, as the request watcher's does.
+        let (_authority_owner, authority) =
+            gents_p2p::p2p_reconcile::enrollment_authority_channel();
+        let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
+            harness.node.clone(),
+            harness.runtime.clone(),
+            authority,
+        );
+        let (request, admission) = verifier
+            .verify_fresh_for_claim_with_identity(&row.try_into().unwrap(), harness.agent.as_ref())
+            .await
+            .unwrap();
+        let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
+            harness.node.clone(),
+            request,
+            60,
+        );
+        lifecycle
+            .bind_managed_agent(harness.agent.as_ref())
+            .unwrap();
+        lifecycle.set_client_claim_admission(admission);
+        assert_eq!(
+            lifecycle.claim_with_identity().await.unwrap(),
+            gents_session::request::lifecycle::ClaimOutcome::Claimed
+        );
+        let writer = gents_session::request::streaming::DefraStreamWriter::new_for_lifecycle(
+            harness.node.clone(),
+            &lifecycle,
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        let caller = SessionScope {
+            node_did: harness.cause.caller_node_did.clone(),
+            session_id: harness.cause.caller_session_id.clone(),
+            requester_did: harness.cause.caller_requester_did.clone(),
+        };
+        // The job's Agent signs its child, so it is the child's requester.
+        let target = SessionScope {
+            node_did: harness.cause.caller_node_did.clone(),
+            session_id: job_session_id(&harness.row.root, "worker", 0),
+            requester_did: Some(harness.cause.caller_agent_did.clone()),
+        };
+        let foreign = SessionScope {
+            session_id: "other-session".into(),
+            ..caller.clone()
+        };
+        assert!(interrupt_slots(
+            &harness.node,
+            &harness.access,
+            &harness.cause.caller_agent_did,
+            &foreign,
+            std::slice::from_ref(&target)
+        )
+        .await
+        .is_err());
+        assert!(stamp(&harness.access, doc).await.is_none());
+        interrupt_slots(
+            &harness.node,
+            &harness.access,
+            &harness.cause.caller_agent_did,
+            &caller,
+            std::slice::from_ref(&target),
+        )
+        .await
+        .unwrap();
+        let latched = stamp(&harness.access, doc).await;
+        assert!(latched.is_some());
+        interrupt_slots(
+            &harness.node,
+            &harness.access,
+            &harness.cause.caller_agent_did,
+            &caller,
+            &[target],
+        )
+        .await
+        .unwrap();
+        assert_eq!(stamp(&harness.access, doc).await, latched);
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_later_same_key_spawn_that_admission_dropped_is_not_staged() {
+        let harness = harness("job-stage-same-key").await;
+        let first = spawn("kept", 0, "first", "Kept", None);
+        let later = spawn("kept", 0, "later", "Kept", None);
+        let effects = job_effects(vec![first.clone(), later], Vec::new());
+        stage(&harness, &[first], &effects, &harness.row)
+            .await
+            .unwrap();
+        let rows = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0]["content"],
+            format!(
+                "{}\n\nfirst",
+                gents_session::request::lifecycle::materialize::session_message_sender_header(
+                    &harness.cause,
+                    rows[0]["created_at"].as_str().unwrap()
+                )
+            )
+        );
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn ambiguous_step_commit_recovers_only_the_same_staged_requests() {
+        let harness = harness("job-stage-recover").await;
+        let kept = spawn("kept", 0, "first", "Kept", None);
+        let effects = job_effects(vec![kept.clone()], Vec::new());
+        let fresh = [&kept];
+        let job = super::JobContext {
+            ctx: &harness.ctx,
+            row: &harness.row,
+            cause: &harness.cause,
+            goals: &gents_session::session::message::NoSessionMessageGoals,
+        };
+        let (job, fresh, effects) = (&job, &fresh, &effects);
+        let staged = harness
+            .access
+            .transact_write("plugin_job.stage_effects", move |txn| {
+                Box::pin(async move {
+                    super::stage_recorded_effects_in_txn(txn, job, fresh, effects).await
+                })
+            })
+            .await
+            .unwrap();
+        let lost = || anyhow::anyhow!("commit acknowledgement lost");
+        // Production recovers as the job's caller Agent, which owns the children.
+        let caller = || Some(identity::Did::new(harness.cause.caller_agent_did.clone()).unwrap());
+        super::recover_step_commit(&harness.node, caller(), lost(), &staged)
+            .await
+            .unwrap();
+        let mut absent = staged.clone();
+        absent[0].retry_key = Some(job_spawn_key(&harness.row.root, "never", 0));
+        let error = super::recover_step_commit(&harness.node, caller(), lost(), &absent)
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "commit acknowledgement lost");
+        let error = super::recover_step_commit(&harness.node, caller(), lost(), &[])
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "commit acknowledgement lost");
+        let mut changed = staged.clone();
+        changed[0].content = "second".to_owned();
+        let error = super::recover_step_commit(&harness.node, caller(), lost(), &changed)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("integrity"), "{error:#}");
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn spawn_replay_with_the_same_fingerprint_is_a_no_op() {
+        let harness = harness("job-stage-replay").await;
+        let kept = spawn("kept", 0, "same", "Kept", None);
+        let effects = job_effects(vec![kept.clone()], Vec::new());
+        stage(
+            &harness,
+            std::slice::from_ref(&kept),
+            &effects,
+            &harness.row,
+        )
+        .await
+        .unwrap();
+        let first = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
+        stage(&harness, &[kept], &effects, &harness.row)
+            .await
+            .unwrap();
+        let second = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0]["_docID"], first[0]["_docID"]);
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn spawn_fingerprint_mismatch_is_an_integrity_error() {
+        let harness = harness("job-stage-mismatch").await;
+        let kept = spawn("kept", 0, "first", "Kept", None);
+        let effects = job_effects(vec![kept.clone()], Vec::new());
+        stage(
+            &harness,
+            std::slice::from_ref(&kept),
+            &effects,
+            &harness.row,
+        )
+        .await
+        .unwrap();
+        let changed = spawn("kept", 0, "second", "Kept", None);
+        let again = job_effects(vec![changed.clone()], Vec::new());
+        let error = stage(&harness, &[changed], &again, &harness.row)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("integrity"), "{error:#}");
+        let rows = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0]["content"],
+            format!(
+                "{}\n\nfirst",
+                gents_session::request::lifecycle::materialize::session_message_sender_header(
+                    &harness.cause,
+                    rows[0]["created_at"].as_str().unwrap()
+                )
+            )
+        );
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn message_k_is_one_plus_the_admitted_messages_of_the_slot_attempt() {
+        let harness = harness("job-stage-message").await;
+        // A message is delivered into the slot attempt's existing session.
+        let opened = spawn("slot", 0, "first", "Slot", None);
+        stage(
+            &harness,
+            std::slice::from_ref(&opened),
+            &job_effects(vec![opened.clone()], Vec::new()),
+            &harness.row,
+        )
+        .await
+        .unwrap();
+        let mut row = harness.row.clone();
+        row.children.push(StepChild {
+            retry_key: job_spawn_key(&harness.row.root, "slot", 0),
+            slot: "slot".to_owned(),
+            attempt: 0,
+            target: (
+                harness.cause.caller_node_did.clone(),
+                harness.cause.caller_agent_did.clone(),
+            ),
+            state: JobChildState::Live,
+            messages: 2,
+        });
+        let effects = job_effects(
+            Vec::new(),
+            vec![JobMessage {
+                slot: "slot".to_owned(),
+                text: "third".to_owned(),
+            }],
+        );
+        stage(&harness, &[], &effects, &row).await.unwrap();
+        let key = job_message_key(&harness.row.root, "slot", 0, 3);
+        let rows = by_key(&harness.access, &key).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0]["content"],
+            format!(
+                "{}\n\nthird",
+                gents_session::request::lifecycle::materialize::session_message_sender_header(
+                    &harness.cause,
+                    rows[0]["created_at"].as_str().unwrap()
+                )
+            )
+        );
+        assert!(by_key(
+            &harness.access,
+            &job_message_key(&harness.row.root, "slot", 0, 1)
+        )
+        .await
+        .is_empty());
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn child_carries_the_spawn_title_guest_prompt_and_admitted_cwd() {
+        let harness = harness("job-stage-child").await;
+        let kept = spawn("kept", 0, "guest prompt", "Spawn Title", Some("/admitted"));
+        let effects = job_effects(vec![kept.clone()], Vec::new());
+        stage(&harness, &[kept], &effects, &harness.row)
+            .await
+            .unwrap();
+        let rows = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0]["content"],
+            format!(
+                "{}\n\nguest prompt",
+                gents_session::request::lifecycle::materialize::session_message_sender_header(
+                    &harness.cause,
+                    rows[0]["created_at"].as_str().unwrap()
+                )
+            )
+        );
+        let input = input_of(&rows[0]);
+        assert_eq!(input["initial_title"]["text"], "Spawn Title");
+        assert_eq!(input["cwd"], "/admitted");
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn child_of_a_relative_cwd_gets_the_path_admission_checked() {
+        let harness = harness("job-stage-relative-cwd").await;
+        let kept = spawn(
+            "kept",
+            0,
+            "guest prompt",
+            "Spawn Title",
+            Some("review_seeded_bug"),
+        );
+        let effects = job_effects(vec![kept.clone()], Vec::new());
+        stage(&harness, &[kept], &effects, &harness.row)
+            .await
+            .unwrap();
+        let rows = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
+        assert_eq!(input_of(&rows[0])["cwd"], "/work/review_seeded_bug");
+        harness.close().await;
+    }
+
+    /// Lean `scratchAdmitted` through the scratch admission
+    /// `plugin_job::effects::admit_scratch`.
+    #[test]
+    fn generated_plugin_job_resource_cases_drive_scratch() {
+        gents_lean_vocab::families::plugin_resources_scratch_admissions::replay(|i| {
+            let allowed = i.cwd_allowed;
+            admit_scratch(
+                &i.cwd,
+                &|_path: &str| allowed,
+                &i.tool_call_id,
+                &i.name,
+                i.size,
+                u32::try_from(i.count).unwrap(),
+            )
+        });
+    }
+}

@@ -15,6 +15,16 @@ bs58 = "0.5"
 chrono.workspace = true
 crypto.workspace = true
 gents = { path = "../gents" }
+gents-store = { workspace = true }
+gents-documents = { workspace = true }
+gents-inference = { workspace = true }
+gents-p2p = { workspace = true }
+gents-session = { workspace = true }
+gents-tools = { workspace = true }
+gents-toolcalls = { workspace = true }
+gents-automation = { workspace = true }
+gents-observe = { workspace = true }
+gents-loop = { workspace = true }
 gents-migration = { path = "../gents-migration" }
 gents-protocol.workspace = true
 defra-node = { workspace = true, features = ["http", "p2p"] }
@@ -48,10 +58,12 @@ typescript = ["gents/typescript"]
 test-fixtures = []
 
 [dev-dependencies]
+gents-automation = { workspace = true, features = ["test-fixtures"] }
 # Enables the served-runtime fixture for this crate's integration tests.
 gents-desktop-core = { path = ".", features = ["test-fixtures"] }
 gents = { path = "../gents", features = ["test-home-guard"] }
 defra-core.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true
 wiremock = "0.6"

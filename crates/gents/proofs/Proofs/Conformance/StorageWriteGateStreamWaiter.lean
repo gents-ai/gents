@@ -1,36 +1,39 @@
-import Proofs.StorageWriteGate.StreamWaiter
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Store.StorageWriteGate.StreamWaiter
+import Proofs.Conformance.Family
 
 namespace Conformance.StorageWriteGateStreamWaiter
-open StorageWriteGate.StreamWaiter Conformance.Contracts
+open StorageWriteGate.StreamWaiter
 
-structure Case where
+deriving instance Lean.ToJson for StorageWriteGate.StreamWaiter.Event
+
+structure Input where
   name : String
   events : List Event
+  deriving Lean.ToJson
 
-def borrowedDropCase : Case :=
+def borrowedDropCase : Input :=
   ⟨"borrowed_next_drop_stalls_reserved_stream",
     [.pollNext, .consumerWait, .flushPoll, .releaseInitialGuard,
       .dropBorrowedNext, .flushOnlyPoll]⟩
 
-def generatorDropCase : Case :=
+def generatorDropCase : Input :=
   ⟨"generator_drop_cancels_reservation",
     [.pollNext, .consumerWait, .flushPoll, .releaseInitialGuard,
       .dropBorrowedNext, .dropGenerator, .progressFlush]⟩
 
-def copollCase : Case :=
+def copollCase : Input :=
   ⟨"co_poll_stream_then_flush",
     [.pollNext, .consumerWait, .flushPoll, .releaseInitialGuard,
       .dropBorrowedNext, .progressPoll, .streamWriteReturned, .progressFlush]⟩
 
-def flushFirstCase : Case :=
+def flushFirstCase : Input :=
   ⟨"fifo_flush_waiter_first",
     [.consumerWait, .flushPoll, .pollNext, .releaseInitialGuard, .flushOnlyPoll,
       .dropBorrowedNext]⟩
 
-def cases : List Case := [borrowedDropCase, generatorDropCase, copollCase, flushFirstCase]
+def cases : List Input := [borrowedDropCase, generatorDropCase, copollCase, flushFirstCase]
 
-def finalState (c : Case) : State := run waiting c.events
+def finalState (c : Input) : State := run waiting c.events
 
 def borrowedDropStalls : State := finalState borrowedDropCase
 
@@ -38,56 +41,34 @@ def generatorDropUnblocks : State := finalState generatorDropCase
 
 def copollUnblocks : State := finalState copollCase
 
-def eventName : Event → String
-  | .pollNext => "poll_next"
-  | .consumerWait => "consumer_wait"
-  | .dropBorrowedNext => "drop_borrowed_next"
-  | .releaseInitialGuard => "release_initial_guard"
-  | .flushPoll => "flush_poll"
-  | .progressPoll => "progress_poll"
-  | .progressFlush => "progress_flush"
-  | .streamWriteReturned => "stream_write_returned"
-  | .flushWriteReturned => "flush_write_returned"
-  | .dropGenerator => "drop_generator"
-  | .flushOnlyPoll => "flush_only_poll"
-
-def waiterName : Waiter → String
-  | .idle => "idle"
-  | .queued => "queued"
-  | .reserved => "reserved"
-  | .acquired => "acquired"
-  | .cancelled => "cancelled"
-
-def ownerName : Owner → String
-  | .stream => "stream"
-  | .flush => "flush"
-
 def ownerOperation (s : State) : String :=
   if s.initialGuardHeld then "initial_guard"
   else if s.streamWaiter == .acquired then "stream"
   else if s.flushWaiter == .acquired then "flush"
   else "none"
 
-def caseJson (c : Case) : String :=
-  let final := finalState c
-  "{\"name\":" ++ jsonString c.name ++
-  ",\"events\":" ++ jsonStringArray (c.events.map eventName) ++
-  ",\"stream_waiter\":" ++ jsonString (waiterName final.streamWaiter) ++
-  ",\"flush_waiter\":" ++ jsonString (waiterName final.flushWaiter) ++
-  ",\"queue_order\":" ++ jsonStringArray (final.queue.map ownerName) ++
-  ",\"gate_held\":" ++ (if final.gateHeld then "true" else "false") ++
-  ",\"initial_guard_held\":" ++ (if final.initialGuardHeld then "true" else "false") ++
-  ",\"owner_operation\":" ++ jsonString (ownerOperation final) ++
-  ",\"stream_acquired\":" ++ (if final.streamAcquired then "true" else "false") ++
-  ",\"flush_acquire_ready\":" ++ (if final.flushWaiter == .acquired then "true" else "false") ++
-  ",\"buffered_item_count\":" ++ toString (if final.bufferedItem then 1 else 0) ++
-  ",\"generator_dropped\":" ++ (if final.generatorAlive then "false" else "true") ++
-  ",\"generator_alive\":" ++ (if final.generatorAlive then "true" else "false") ++
-  ",\"borrowed_next\":" ++ (if final.borrowedNext then "true" else "false") ++
-  ",\"consumer_waiting\":" ++ (if final.consumerWaiting then "true" else "false") ++
-  ",\"buffered_item\":" ++ (if final.bufferedItem then "true" else "false") ++ "}"
+structure Output where
+  gateHeld : Bool
+  initialGuardHeld : Bool
+  ownerOperation : String
+  streamAcquired : Bool
+  flushAcquireReady : Bool
+  bufferedItemCount : Nat
+  generatorDropped : Bool
+  deriving Lean.ToJson
 
-def casesJson : String := jsonArray (cases.map caseJson)
+@[conformance_family]
+def schedule : Conformance.Family Input Output where
+  inputs := cases
+  model := fun i =>
+    let final := finalState i
+    { gateHeld := final.gateHeld
+      initialGuardHeld := final.initialGuardHeld
+      ownerOperation := ownerOperation final
+      streamAcquired := final.streamAcquired
+      flushAcquireReady := final.flushWaiter == .acquired
+      bufferedItemCount := if final.bufferedItem then 1 else 0
+      generatorDropped := !final.generatorAlive }
 
 theorem borrowed_next_drop_preserves_waiter :
     borrowedDropStalls.streamWaiter = .reserved ∧
@@ -118,5 +99,3 @@ theorem fifo_case_uses_modelled_queue :
   decide
 
 end Conformance.StorageWriteGateStreamWaiter
-
-def main : IO Unit := IO.println Conformance.StorageWriteGateStreamWaiter.casesJson

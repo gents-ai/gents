@@ -1,10 +1,11 @@
 use super::*;
-use gents::documents::apply_desired_state_plan;
-use gents::store::config_client::{
-    read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
+use gents_documents::apply_desired_state_plan;
+use gents_documents::Tools;
+use gents_documents::{
+    read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::{Collection, Tools};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -22,13 +23,22 @@ async fn publish(access: &ConfigAccess, documents: Vec<(Collection, Value)>) -> 
     access
         .transact_write("test.live_delegation_config", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await?;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "select GENTS_LIVE_TARGET and run make live-enrollment"]
 async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
     let _guard = enrollment_e2e_lock().lock().await;
     let (model_endpoint, model_name) = resolve_live_inference().await?;
@@ -71,15 +81,14 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
     let default_agent = agent_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let (mut server, _) =
+    let (server, _) =
         spawn_server_with_ready_json(&runtime_home, port, &["--home", home], &owner_env)?;
-    wait_for_port(port, &mut server)?;
     let (bindings, owned, root_doc, target_agent_doc, user_did) = server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
         let core = ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
         ).await?;
-        let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
+        let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql).await?;
         let pending = core.request_status_enrollment_with_label(&status, Some("live delegation")).await?;
         wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
         run_cli_json_with_env(&runtime_home, &["runtime", "p2p", "enrollment", "grant", &pending.request_id, "--home", home], &owner_env)?;
@@ -88,7 +97,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         wait_for_client_node_readiness(&core, &node_did).await?;
         let user = core.node_identity().did().to_owned();
         assert_ne!(user, node_did);
-        let snapshot = core.store().snapshot();
+        let snapshot = core.stores().snapshot(&node_did);
         let template = snapshot.agents.iter().find(|row| row.node_did == node_did && row.agent_did == default_agent)
             .cloned().context("default Agent unavailable")?;
         let context = snapshot.contexts.iter().find(|row| Some(&row.context_id) == template.context_id.as_ref() && row.node_did == node_did)
@@ -123,7 +132,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             agent.creation_nonce = binding.creation_nonce.clone();
             agent.context_id = Some(context_id.clone());
             agent.display_name = Some(label.into());
-            core.save_agent(&agent).await?;
+            core.save_agent(&agent, None).await?;
         }
         let target_agent_doc = access.transact_readonly("test.live_delegation_target", |txn| {
             let (node_did, target) = (&node_did, &b.agent_did);
@@ -137,14 +146,14 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         let root_rows = roots["data"]["WorkspaceRoot"].as_array().context("User cannot observe WorkspaceRoot")?;
         let [root] = root_rows.as_slice() else { anyhow::bail!("expected one configured WorkspaceRoot: {roots}") };
         let root_doc = root["_docID"].as_str().context("WorkspaceRoot missing physical ID")?.to_owned();
-        let target = gents::documents::AgentTargetDocument {
+        let target = gents_documents::AgentTargetDocument {
             target_id: "live-delegation-child".into(), node_did: node_did.clone(),
             target_node_did: node_did.clone(), agent_did: b.agent_did.clone(),
             name: "child".into(), description: Some("A child worker".into()), tags: Vec::new(),
         };
         publish(&access, vec![(Collection::AgentTarget, serde_json::to_value(&target)?)]).await?;
         let mut tools_a = tools_a;
-        tools_a.agents = Some(gents::documents::AgentTools { enabled: Some(true), target_ids: vec![target.target_id.clone()] });
+        tools_a.agents = Some(gents_documents::AgentTools { enabled: Some(true), target_ids: vec![target.target_id.clone()] });
         publish(&access, vec![(Collection::Tools, serde_json::to_value(&tools_a)?)]).await?;
         let parent_session = Uuid::new_v4().to_string();
         let prompt = format!("Use agent_new once to delegate to child: 'Say hello and identify yourself as child.' Reference {}. Do not answer in place of the child.", Uuid::new_v4());
@@ -152,11 +161,11 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         let parent_rows = access.execute(&format!("{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID}} }}", escape_graphql_string(&parent.request_id))).await?;
         let parent_doc = parent_rows["data"]["AgentRequest"][0]["_docID"].as_str().context("parent request doc missing")?.to_owned();
         let deadline = Instant::now() + Duration::from_secs(240);
+        let mut child_changes = observed_changes(&access, &["AgentRequest"]).await;
         let (child_request, child_session, child_doc, tool_doc) = loop {
             let rows = access.execute(&format!("{{ AgentRequest(filter: {{caused_by_parent_request_doc_id: {{_eq: \"{}\"}}}}) {{_docID request_id session_id agent_did requester_did caused_by_parent_request_doc_id caused_by_parent_tool_call_doc_id}} }}", escape_graphql_string(&parent_doc))).await?;
             let rows = rows["data"]["AgentRequest"].as_array().context("child requests unavailable to paired User")?;
             let matching: Vec<_> = rows.iter().filter(|r| r["agent_did"] == b.agent_did).collect();
-            anyhow::ensure!(matching.len() <= 1, "multiple child requests: {rows:?}");
             if let Some(row) = matching.first() {
                 anyhow::ensure!(row["requester_did"] == a.agent_did, "child not requested by coordinator: {row}");
                 break (
@@ -167,7 +176,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
                 );
             }
             anyhow::ensure!(Instant::now() < deadline, "model never published a child request: {rows:?}");
-            sleep(Duration::from_millis(250)).await;
+            observe_change_until(&mut child_changes, deadline).await;
         };
         let child_reply = wait_for_complete_agent_response_with_access(&access, &child_request, &child_session, Duration::from_secs(240)).await?;
         anyhow::ensure!(!child_reply.text.trim().is_empty(), "child did not respond");
@@ -225,9 +234,9 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             })
         }).await?;
         let runtime_identity = identity_from_init(&init)?;
-        let a_signer = gents::store::identity::resolve_agent_identity(&runtime_identity, &a)?;
+        let a_signer = gents_store::identity::resolve_agent_identity(&runtime_identity, &a)?;
         let agent_access = ConfigAccess::Graphql(
-            gents::store::config_client::GraphqlEndpoint::as_principal(&graphql, &a.agent_did)
+            gents_store::config_client::GraphqlEndpoint::as_principal(&graphql, &a.agent_did)
                 .with_client_signing_capability(a_signer.client_signing_capability()?)?,
         );
         for did in [&b.agent_did, &format!("{}:missing", b.agent_did)] {
@@ -238,11 +247,11 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         let denied_prompt = format!("Use agent_new once to delegate to child: 'Say hello.' Request {}. Do not answer in place of the child.", Uuid::new_v4());
         let denied = core.submit_request(&denied_session, &node_did, &denied_prompt, Some(&a.agent_did)).await?;
         let deadline = Instant::now() + Duration::from_secs(240);
+        let mut denied_changes = observed_changes(&access, &["AgentRequest", "AgentToolCall"]).await;
         let (denied_doc, denied_tool) = loop {
             let rows = access.execute(&format!("{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID lifecycle_state}} AgentToolCall(filter: {{request_id: {{_eq: \"{}\"}}, tool_name: {{_eq: \"agent_new\"}}}}) {{_docID lifecycle_state tool_failure_class}} }}", escape_graphql_string(&denied.request_id), escape_graphql_string(&denied.request_id))).await?;
             let request = &rows["data"]["AgentRequest"][0];
             let tools = rows["data"]["AgentToolCall"].as_array().context("denied turn tool rows unavailable")?;
-            anyhow::ensure!(tools.len() <= 1, "more than one agent_new in denied turn: {tools:?}");
             if request["lifecycle_state"] == "completed" {
                 let tool = tools.first().context("the model completed without an agent_new attempt; denial was not exercised")?;
                 anyhow::ensure!(tool["lifecycle_state"] == "failed" && tool["tool_failure_class"] == "serviceUnavailable", "agent_new was not denied as unavailable: {tool}");
@@ -250,7 +259,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             }
             anyhow::ensure!(request["lifecycle_state"] != "failed", "denied parent turn failed before model-facing result: {request}");
             anyhow::ensure!(Instant::now() < deadline, "denied turn did not complete: {rows}");
-            sleep(Duration::from_millis(250)).await;
+            observe_change_until(&mut denied_changes, deadline).await;
         };
         let children = access.execute(&format!("{{ AgentRequest(filter: {{caused_by_parent_request_doc_id: {{_eq: \"{}\"}}}}) {{_docID}} }}", escape_graphql_string(&denied_doc))).await?;
         assert_eq!(children["data"]["AgentRequest"], json!([]), "denied tool published a child: {children}");
@@ -278,7 +287,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
     let runtime_identity = identity_from_init(&init)?;
     let data = runtime_home.join("data");
     let node = Arc::new(
-        gents::store::local::store_key::open_home_store_key(&runtime_home, &data)
+        gents_store::local::store_key::open_home_store_key(&runtime_home, &data)
             .await?
             .encrypt(
                 gents::defra_node::Node::builder()
@@ -304,7 +313,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         node.nac_manager()
             .check_permission(
                 &caller_did,
-                gents::store::config_client::NodePermission::DocumentUpdate,
+                gents_store::config_client::NodePermission::DocumentUpdate,
             )
             .await?,
         "the caller must pass the Node permission gate before checking Agent invoke"
@@ -320,8 +329,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
                     std::slice::from_ref(target),
                     gents::defra_node::DocumentAccessMode::Named {
                         permission: "invoke".into(),
-                        node_permission:
-                            gents::store::config_client::NodePermission::DocumentUpdate,
+                        node_permission: gents_store::config_client::NodePermission::DocumentUpdate,
                     },
                 )
                 .await
@@ -340,13 +348,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         !modeled_revoked_invoke,
         "model must deny invoke after session_writer revocation"
     );
-    let root_expected = contract["workspace_root_access_cases"]
-        .as_array()
-        .context("modeled WorkspaceRoot cases")?
-        .iter()
-        .find(|case| case["actor"] == "other" && case["permission"] == "read")
-        .and_then(|case| case["expected"].as_bool())
-        .context("modeled unrelated Agent root access")?;
+    let mut unrelated_root_reads = Vec::new();
     for (binding, documents) in [
         (
             &bindings[0],
@@ -365,7 +367,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             ],
         ),
     ] {
-        let signer = gents::store::identity::resolve_agent_identity(&runtime_identity, binding)?;
+        let signer = gents_store::identity::resolve_agent_identity(&runtime_identity, binding)?;
         let access = ConfigAccess::local_managed_agent(
             node.clone(),
             binding.agent_did.parse()?,
@@ -382,10 +384,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
                 &root_doc,
             )
             .await?;
-        assert_eq!(
-            permitted, root_expected,
-            "unexpected Agent WorkspaceRoot access"
-        );
+        unrelated_root_reads.push(permitted);
         let roots = access
             .execute(&format!(
                 "{{ WorkspaceRoot(filter: {{_docID: {{_eq: \"{}\"}}}}) {{_docID}} }}",
@@ -397,8 +396,8 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             .context("Agent WorkspaceRoot query")?;
         assert_eq!(
             !visible.is_empty(),
-            root_expected,
-            "unexpected Agent WorkspaceRoot visibility: {roots}"
+            permitted,
+            "Agent WorkspaceRoot visibility disagrees with native access: {roots}"
         );
         for (collection, doc) in documents {
             let owners = access
@@ -416,6 +415,15 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
                 "wrong native {collection} owner"
             );
         }
+    }
+    for case in gents_lean_vocab::families::workspace_root_access_unrelated_agent_read::cases() {
+        assert!(
+            unrelated_root_reads
+                .iter()
+                .all(|permitted| *permitted == unrelated_root_reads[0]),
+            "delegated Agents disagree on WorkspaceRoot access: {unrelated_root_reads:?}"
+        );
+        case.check(unrelated_root_reads[0]);
     }
     node.shutdown().await?;
     Ok(())

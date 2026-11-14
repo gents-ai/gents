@@ -1,4 +1,4 @@
-import Proofs.Request
+import Proofs.Session.Request
 import Proofs.Conformance.ContractTypes
 import Proofs.Conformance.ContractCases.Types
 

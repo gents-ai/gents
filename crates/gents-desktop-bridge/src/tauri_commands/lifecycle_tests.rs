@@ -86,7 +86,7 @@ async fn a_retry_reports_a_previous_start_that_is_still_closing() {
 fn an_older_client_store_fails_start_as_an_incompatible_local_store() {
     let node = std::path::Path::new("/tmp/desktop/node");
     let refused = anyhow::Error::new(
-        gents::store::schema::migration::MigrationError::UnknownLineage {
+        gents_store::schema::migration::MigrationError::UnknownLineage {
             collection: "AgentSession".into(),
             versions: "bafy-old".into(),
         },
@@ -95,13 +95,15 @@ fn an_older_client_store_fails_start_as_an_incompatible_local_store() {
     let (error, store) = classify_client_start_error(&refused, node);
     assert_eq!(error.code, BridgeErrorCode::IncompatibleLocalStore);
     assert!(
-        error.message.contains("/tmp/desktop/node"),
+        error
+            .message
+            .contains("local data at /tmp/desktop/node was made by an older version"),
         "{}",
         error.message
     );
     assert_eq!(
         store.map(|store| store.kind),
-        Some(gents::store::local::storage_backend::IncompatibleStoreKind::UnknownLineage)
+        Some(gents_protocol::operations::install_repair::IncompatibleStoreKind::UnknownLineage)
     );
 
     let refused =
@@ -120,7 +122,7 @@ fn test_state() -> (tempfile::TempDir, DesktopAppState) {
     let config = crate::config::BridgeConfig {
         home: crate::config::HomePolicy::FixedRoot(temp.path().join("desktop")),
         bootstrap: crate::config::BootstrapPolicy::PairedRemoteOnly,
-        store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
+        store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
         ..Default::default()
     };
     let policy = crate::state::resolve_policy(&config, None).expect("policy");
@@ -129,45 +131,25 @@ fn test_state() -> (tempfile::TempDir, DesktopAppState) {
 
 #[tokio::test]
 async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_returns() {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../gents/tests/fixtures/native_claim_lifetime.json"
-    ))
-    .expect("generated native claim lifetime fixture");
-    let case = fixture
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["name"] == "client_shutdown_cancel_retains_claim_until_return")
-        .expect("Lean client shutdown cancellation case");
-    let events = case["events"].as_array().unwrap();
-    let expected_events = [
-        "native_started",
-        "caller_cancelled",
-        "native_returned",
-        "access_released",
-        "lifecycle_guard_released",
-        "gate_release_requested",
-    ]
-    .map(|event| serde_json::Value::String(event.to_owned()));
-    assert_eq!(events, expected_events.as_slice());
-    let observation_for = |event: &str| {
-        let index = events
-            .iter()
-            .position(|candidate| candidate == event)
-            .expect("event in generated trace");
-        &case["observations"][index]
-    };
-    let lifecycle_guard_held_for = |event: &str| {
-        observation_for(event)["lifecycle_guard_held"]
-            .as_bool()
-            .expect("lifecycle guard observation in generated trace")
-    };
-    let claim_held_for = |event: &str| {
-        observation_for(event)["claim_held"]
-            .as_bool()
-            .expect("claim observation in generated trace")
-    };
+    for case in gents_lean_vocab::families::native_claim_lifetime_client_exclusion_scenario::cases::<
+        String,
+        String,
+    >() {
+        case.check(
+            cancelled_exclusion_waiter_observations()
+                .await
+                .into_iter()
+                .map(|(claim_held, lifecycle_guard_held)| gents_lean_vocab::families::native_claim_lifetime_client_exclusion_scenario::ExclusionView {
+                    claim_held,
+                    lifecycle_guard_held,
+                })
+                .collect(),
+        );
+    }
+}
 
+async fn cancelled_exclusion_waiter_observations() -> Vec<(bool, bool)> {
+    let mut observed = Vec::new();
     let (_temp, state) = test_state();
     let state = Arc::new(state);
     let paths = state.policy.desktop_paths.clone();
@@ -209,16 +191,12 @@ async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_r
         .expect("owned exclusion shutdown task started");
     waiter.abort();
     assert!(waiter.await.unwrap_err().is_cancelled());
-    assert_eq!(
-        gents::store::local::home::lock_store(&home, &data).is_err(),
-        claim_held_for("caller_cancelled")
-    );
-    assert_eq!(
+    observed.push((
+        gents_store::local::home::lock_store(&home, &data).is_err(),
         Arc::clone(&state.client_lifecycle)
             .try_lock_owned()
             .is_err(),
-        lifecycle_guard_held_for("caller_cancelled")
-    );
+    ));
 
     allow_shutdown.notify_one();
     tokio::time::timeout(
@@ -227,16 +205,12 @@ async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_r
     )
     .await
     .expect("client shutdown releases the store claim before exclusion ends");
-    assert_eq!(
-        gents::store::local::home::lock_store(&home, &data).is_err(),
-        claim_held_for("access_released")
-    );
-    assert_eq!(
+    observed.push((
+        gents_store::local::home::lock_store(&home, &data).is_err(),
         Arc::clone(&state.client_lifecycle)
             .try_lock_owned()
             .is_err(),
-        lifecycle_guard_held_for("access_released")
-    );
+    ));
 
     allow_owner_return.notify_one();
     let lifecycle_guard = tokio::time::timeout(
@@ -246,17 +220,14 @@ async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_r
     .await
     .expect("exclusion guard releases after its shutdown owner returns");
     drop(lifecycle_guard);
-    assert_eq!(
-        Arc::clone(&state.client_lifecycle)
-            .try_lock_owned()
-            .is_err(),
-        lifecycle_guard_held_for("lifecycle_guard_released")
-    );
-    assert_eq!(
-        gents::store::local::home::lock_store(&home, &data).is_err(),
-        claim_held_for("lifecycle_guard_released"),
-        "the native store claim is released before the lifecycle guard"
-    );
+    let lifecycle_guard_held = Arc::clone(&state.client_lifecycle)
+        .try_lock_owned()
+        .is_err();
+    observed.push((
+        gents_store::local::home::lock_store(&home, &data).is_err(),
+        lifecycle_guard_held,
+    ));
+    observed
 }
 
 #[tokio::test]
@@ -315,63 +286,13 @@ async fn a_client_start_cannot_open_the_store_while_a_reset_excludes_it() {
     assert!(opened.load(std::sync::atomic::Ordering::SeqCst));
 }
 
-#[tokio::test]
-async fn a_plaintext_client_upgrade_returns_a_started_core_with_lifecycle_exclusion() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let paths = gents_desktop_core::client::DesktopPaths::from_root(temp.path());
-    let legacy = gents::defra_node::Node::builder()
-        .data_path(paths.node_data_dir())
-        .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
-        .build()
-        .await
-        .expect("legacy client store");
-    legacy.shutdown().await.unwrap();
-    drop(legacy);
-
-    let lifecycle_owner = Arc::new(tokio::sync::Mutex::new(()));
-    let lifecycle = Arc::clone(&lifecycle_owner).lock_owned().await;
-    let (core, lifecycle) = start_client_core_async(
-        paths.clone(),
-        gents::store::local::store_key::StoreKeyCustodyChoice::File,
-        lifecycle,
-    )
-    .await
-    .expect("plaintext upgrade must complete through the native startup boundary");
-    assert!(
-        lifecycle_owner.try_lock().is_err(),
-        "successful startup transfers lifecycle exclusion with the core"
-    );
-    assert!(paths.store_encryption_path().is_file());
-    assert!(paths.store_key_path().is_file());
-    assert!(
-        gents::store::local::store_key::upgrade::pending_record(paths.node_data_dir())
-            .unwrap()
-            .is_none()
-    );
-    for entry in [paths.store_encryption_path(), paths.store_key_path()] {
-        assert!(
-            paths
-                .client_state_entries()
-                .iter()
-                .any(|path| path == entry),
-            "the reset retires {}",
-            entry.display()
-        );
-    }
-    let core = Arc::new(core);
-    core.shutdown().await.expect("shutdown upgraded client");
-    drop(core);
-    drop(lifecycle);
-    assert!(lifecycle_owner.try_lock().is_ok());
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store() {
     use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().expect("tempdir");
     let paths = gents_desktop_core::client::DesktopPaths::from_root(temp.path());
-    gents::store::identity::load_or_create_file_identity(paths.identity_key_path()).unwrap();
+    gents_store::identity::load_or_create_file_identity(paths.identity_key_path()).unwrap();
     std::fs::set_permissions(
         paths.identity_key_path(),
         std::fs::Permissions::from_mode(0o644),
@@ -381,7 +302,7 @@ async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store()
     let lifecycle = Arc::new(tokio::sync::Mutex::new(())).lock_owned().await;
     let Err((error, store)) = start_client_core_async(
         paths.clone(),
-        gents::store::local::store_key::StoreKeyCustodyChoice::File,
+        gents_store::local::store_key::StoreKeyCustodyChoice::File,
         lifecycle,
     )
     .await
@@ -389,15 +310,11 @@ async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store()
         panic!("an insecure key must not start the client");
     };
     assert_eq!(error.code, BridgeErrorCode::IncompatibleLocalStore);
-    assert!(
-        error.message.contains("unsafe file permissions"),
-        "{}",
-        error.message
-    );
+    assert!(error.message.contains("chmod 600"), "{}", error.message);
     let store = store.expect("typed refusal");
     assert_eq!(
         store.kind,
-        gents::store::local::storage_backend::IncompatibleStoreKind::InsecureKey
+        gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey
     );
     assert_eq!(store.data_path, paths.identity_key_path());
     assert_eq!(
@@ -409,4 +326,48 @@ async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store()
         0o644
     );
     assert!(!paths.peer_directory_path().exists());
+}
+
+#[tokio::test]
+async fn a_remote_only_start_sets_aside_another_versions_client_store() {
+    use crate::config::{BootstrapPolicy, BridgeConfig, HomePolicy};
+    use tauri::Manager as _;
+    let temp = tempfile::tempdir().unwrap();
+    let policy = crate::state::resolve_policy(
+        &BridgeConfig {
+            home: HomePolicy::FixedRoot(temp.path().join("client")),
+            bootstrap: BootstrapPolicy::PairedRemoteOnly,
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    let paths = policy.desktop_paths.clone();
+    gents_desktop_core::test_fixtures::write_other_version_client_store(&paths, true, false).await;
+    let identity = std::fs::read(paths.identity_key_path()).unwrap();
+    let app = tauri::test::mock_builder()
+        .manage(DesktopAppState::new(policy))
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let snapshot = desktop_client_start(app.handle().clone(), app.state::<DesktopAppState>())
+        .await
+        .expect("the client starts on a fresh store");
+    let note = snapshot
+        .repair_note
+        .expect("the start names what it set aside");
+    assert!(note.contains("another Gents version"), "{note}");
+    assert!(snapshot.client.is_some());
+    assert_eq!(std::fs::read(paths.identity_key_path()).unwrap(), identity);
+    let backup = std::fs::read_dir(temp.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.join("node/MANIFEST").is_file())
+        .expect("the backup holds the old store");
+    assert!(note.contains(&backup.display().to_string()), "{note}");
+    drop(
+        exclusion::exclude_client(&app.state::<DesktopAppState>())
+            .await
+            .unwrap(),
+    );
 }

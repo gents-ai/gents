@@ -1,306 +1,104 @@
-#[cfg(test)]
-use super::document_patches::load_rows;
 use super::*;
+use gents_documents::views::agents::AgentList;
+use gents_documents::views::config::{
+    AgentContextList, AgentTargetList, CompactionConfigList, DatastoreToolSurfaceList,
+    DefaultAgentSelectionList, NodeList, SkillList, ToolsList,
+};
+use gents_documents::views::tasks::{EventSourceList, ScheduleList, TaskList, TriggerList};
+use gents_inference::views::backends::{BackendList, ObservationList};
+use gents_inference::views::profiles::ProfileList;
+use gents_inference::views::settings::{ExecutionList, SamplingList};
+use gents_session::views::requests::{RequestOrder, RequestRows};
+use gents_session::views::transcript::Scope;
+use gents_store::config_client::ConfigAccess;
+use gents_store::views::runtime::{NodeReadinessList, NodeRuntimeList};
 use rapidhash::{HashSetExt, RapidHashSet};
-
-fn node_filter(node_did: Option<&str>) -> String {
-    node_did
-        .map(|did| format!("node_did: {{ _eq: \"{}\" }}", escape_graphql_string(did)))
-        .unwrap_or_default()
-}
-
-fn snapshot_request_args(node_did: Option<&str>) -> String {
-    let node = node_filter(node_did);
-    let live = gents_protocol::request_lifecycle::RequestLifecycleState::nonterminal_graphql_list();
-    format!("(filter: {{ {node} lifecycle_state: {{ _in: {live} }} }})")
-}
-
-pub(crate) fn snapshot_query(node_did: Option<&str>) -> Result<String> {
-    let args = node_did
-        .map(|_| format!("(filter: {{ {} }})", node_filter(node_did)))
-        .unwrap_or_default();
-    let request_args = snapshot_request_args(node_did);
-    let mailbox_node = node_filter(node_did);
-    let mailbox_args = format!("(filter: {{ {mailbox_node} status: {{ _eq: \"open\" }} }})");
-    let trigger_fields =
-        gents::store::config_client::config_projection(gents::Collection::Trigger, None)?
-            .0
-            .join(" ");
-    let backend_fields = INFERENCE_BACKEND_FIELDS;
-    Ok(format!("query DesktopSnapshot {{
-      nodes: {NODE_NAME}{args} {{ {NODE_FIELDS} }}
-      agents: {AGENT_NAME}{args} {{ {AGENT_FIELDS} }}
-      runtimes: {NODE_RUNTIME_NAME}{args} {{ {NODE_RUNTIME_FIELDS} }}
-      node_readiness: {NODE_READINESS_NAME}{args} {{ {NODE_READINESS_FIELDS} }}
-      requests: {AGENT_REQUEST_NAME}{request_args} {{ {AGENT_REQUEST_FIELDS} }}
-      mailbox_items: {MAILBOX_ITEM_NAME}{mailbox_args} {{ {MAILBOX_ITEM_FIELDS} }}
-      goals: {GOAL_NAME}{args} {{ {GOAL_FIELDS} }}
-      sessions: {AGENT_SESSION_NAME}{args} {{ {AGENT_SESSION_FIELDS} }}
-      tools: {TOOLS_NAME}{args} {{ {TOOLS_FIELDS} }}
-      contexts: AgentContext{args} {{ {AGENT_CONTEXT_FIELDS} }}
-      compactions: CompactionConfig{args} {{ {COMPACTION_CONFIG_FIELDS} }}
-      triggers: {TRIGGER_NAME}{args} {{ {trigger_fields} {TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS} }}
-      tasks: {TASK_NAME}{args} {{ {TASK_FIELDS} }}
-      schedules: {SCHEDULE_NAME}{args} {{ {SCHEDULE_FIELDS} }}
-      skills: {SKILL_NAME}{args} {{ {SKILL_FIELDS} }}
-      inference_backends: {INFERENCE_BACKEND_NAME}{args} {{ {backend_fields} }}
-      backend_observations: {INFERENCE_BACKEND_OBSERVATION_NAME}{args} {{ node_did {INFERENCE_BACKEND_OBSERVATION_FIELDS} }}
-      inference_profiles: {INFERENCE_PROFILE_NAME}{args} {{ {INFERENCE_PROFILE_FIELDS} }}
-      inference_sampling: InferenceSampling{args} {{ {INFERENCE_SAMPLING_FIELDS} }}
-      inference_execution: InferenceExecution{args} {{ {INFERENCE_EXECUTION_FIELDS} }}
-      tool_service_registries: {TOOL_SERVICE_REGISTRY_NAME}{args} {{ {TOOL_SERVICE_REGISTRY_FIELDS} }}
-      event_sources: EventSource{args} {{ {EVENT_SOURCE_FIELDS} }}
-      agent_targets: {AGENT_TARGET_NAME}{args} {{ {AGENT_TARGET_FIELDS} }}
-      datastore_tool_surfaces: DatastoreToolSurface{args} {{ {DATASTORE_TOOL_SURFACE_FIELDS} }}
-    }}"))
-}
-
-#[cfg(test)]
-pub(crate) fn snapshot_rows(data: &Value, source_node_did: Option<&str>) -> Result<ClientStore> {
-    snapshot_rows_with_requests(data, source_node_did, snapshot_request_rows(data)?)
-}
-
-pub(super) fn snapshot_rows_with_requests(
-    data: &Value,
-    source_node_did: Option<&str>,
-    requests: Vec<AgentRequestRow>,
-) -> Result<ClientStore> {
-    let (trigger_observations, trigger_observation_source_node_dids): (
-        Vec<TriggerObservation>,
-        Vec<Option<String>>,
-    ) = parse_observation_query_rows_with_source(
-        data,
-        "triggers",
-        TRIGGER_OBSERVATION_FIELDS,
-        Some("node_did"),
-    )?;
-    let (schedule_observations, schedule_observation_source_node_dids): (
-        Vec<ScheduleObservation>,
-        Vec<Option<String>>,
-    ) = parse_observation_query_rows_with_source(
-        data,
-        "triggers",
-        SCHEDULE_OBSERVATION_FIELDS,
-        Some("node_did"),
-    )?;
-    let (backend_observations, backend_observation_source_node_dids) =
-        parse_backend_observation_rows(data, "backend_observations")?;
-    let triggers: Vec<Trigger> = parse_projected_query_rows(
-        data,
-        "triggers",
-        TRIGGER_FIELDS,
-        &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
-    )?;
-    let metadata: Vec<gents::documents::InferenceBackendMetadata> =
-        parse_projected_query_rows(data, "inference_backends", INFERENCE_BACKEND_FIELDS, "")?;
-    let inference_backends: Vec<InferenceBackend> = metadata
-        .into_iter()
-        .map(|metadata| metadata.into_backend().map_err(anyhow::Error::from))
-        .collect::<Result<_>>()?;
-    let scope = |len: usize| {
-        source_node_did
-            .map(|did| vec![Some(did.to_owned()); len])
-            .unwrap_or_default()
-    };
-    let trigger_source_node_dids = scope(triggers.len());
-    let inference_backend_source_node_dids = scope(inference_backends.len());
-    macro_rules! rows {
-        ($ty:ty, $key:literal) => {
-            parse_query_rows::<$ty>(data, $key)?
-        };
-    }
-    let sessions: Vec<AgentSession> = rows!(AgentSession, "sessions");
-    let tasks: Vec<Task> = rows!(Task, "tasks");
-    let schedules: Vec<Schedule> = rows!(Schedule, "schedules");
-    let skills: Vec<SkillDocument> = rows!(SkillDocument, "skills");
-    let tools: Vec<Tools> = rows!(Tools, "tools");
-    let contexts: Vec<AgentContext> = rows!(AgentContext, "contexts");
-    let compactions: Vec<CompactionConfig> = rows!(CompactionConfig, "compactions");
-    let inference_profiles: Vec<InferenceProfile> = rows!(InferenceProfile, "inference_profiles");
-    let inference_sampling: Vec<InferenceSampling> = rows!(InferenceSampling, "inference_sampling");
-    let inference_execution: Vec<InferenceExecution> =
-        rows!(InferenceExecution, "inference_execution");
-    let tool_service_registries: Vec<ToolServiceRegistry> =
-        rows!(ToolServiceRegistry, "tool_service_registries");
-    let event_sources: Vec<EventSource> = rows!(EventSource, "event_sources");
-    let agent_targets: Vec<AgentTargetDocument> = rows!(AgentTargetDocument, "agent_targets");
-    let datastore_tool_surfaces: Vec<DatastoreToolSurfaceDocument> =
-        rows!(DatastoreToolSurfaceDocument, "datastore_tool_surfaces");
-    let source = |len| scope(len);
-    let session_source_node_dids = source(sessions.len());
-    let task_source_node_dids = source(tasks.len());
-    let schedule_source_node_dids = source(schedules.len());
-    let skill_source_node_dids = source(skills.len());
-    let tools_source_node_dids = source(tools.len());
-    let context_source_node_dids = source(contexts.len());
-    let compaction_source_node_dids = source(compactions.len());
-    let inference_profile_source_node_dids = source(inference_profiles.len());
-    let inference_sampling_source_node_dids = source(inference_sampling.len());
-    let inference_execution_source_node_dids = source(inference_execution.len());
-    let tool_service_registry_source_node_dids = source(tool_service_registries.len());
-    let event_source_source_node_dids = source(event_sources.len());
-    let agent_target_source_node_dids = source(agent_targets.len());
-    let datastore_tool_surface_source_node_dids = source(datastore_tool_surfaces.len());
-    Ok(ClientStore::from_rows(ClientStoreRows {
-        nodes: rows!(Node, "nodes"),
-        agents: rows!(Agent, "agents"),
-        runtimes: rows!(NodeRuntimeRow, "runtimes"),
-        node_readiness: rows!(NodeReadinessRow, "node_readiness"),
-        requests,
-        mailbox_items: rows!(MailboxItemRow, "mailbox_items"),
-        goals: rows!(GoalRow, "goals"),
-        sessions,
-        session_source_node_dids,
-        tasks,
-        task_source_node_dids,
-        schedules,
-        schedule_source_node_dids,
-        schedule_observations,
-        schedule_observation_source_node_dids,
-        triggers,
-        trigger_source_node_dids,
-        trigger_observations,
-        trigger_observation_source_node_dids,
-        skills,
-        skill_source_node_dids,
-        tools,
-        tools_source_node_dids,
-        contexts,
-        context_source_node_dids,
-        compactions,
-        compaction_source_node_dids,
-        inference_backends,
-        inference_backend_source_node_dids,
-        backend_observations,
-        backend_observation_source_node_dids,
-        inference_profiles,
-        inference_profile_source_node_dids,
-        inference_sampling,
-        inference_sampling_source_node_dids,
-        inference_execution,
-        inference_execution_source_node_dids,
-        tool_service_registries,
-        tool_service_registry_source_node_dids,
-        event_sources,
-        event_source_source_node_dids,
-        agent_targets,
-        agent_target_source_node_dids,
-        datastore_tool_surfaces,
-        datastore_tool_surface_source_node_dids,
-        ..ClientStoreRows::default()
-    }))
-}
-
-const TASK_REQUEST_FIELDS: &str = AGENT_REQUEST_FIELDS;
 
 /// A session head request's doc id, node DID, session id, requester DID and
 /// request id; the field order is the sort order.
 pub(super) type RequestHeadScope = (String, String, String, Option<String>, String);
 
-fn request_head_scopes(data: &Value) -> Result<Vec<RequestHeadScope>> {
-    let sessions: Vec<AgentSession> = parse_query_rows(data, "sessions")?;
-    let mut scopes = Vec::new();
-    for session in sessions {
-        let Some(head) = session
-            .observation
-            .as_ref()
-            .and_then(|observation| observation.latest_request.as_ref())
-        else {
-            continue;
-        };
-        scopes.push((
-            head.request_doc_id.clone(),
-            session.node_did,
-            session.session_id,
-            session.requester_did,
-            head.request_id.clone(),
-        ));
-    }
+fn request_head_scopes(sessions: &[AgentSession]) -> Vec<RequestHeadScope> {
+    let mut scopes = sessions
+        .iter()
+        .filter_map(|session| {
+            let head = session.observation.as_ref()?.latest_request.as_ref()?;
+            Some((
+                head.request_doc_id.clone(),
+                session.node_did.clone(),
+                session.session_id.clone(),
+                session.requester_did.clone(),
+                head.request_id.clone(),
+            ))
+        })
+        .collect::<Vec<_>>();
     scopes.sort();
     scopes.dedup();
-    Ok(scopes)
+    scopes
 }
 
-pub(super) fn session_head_queries(scopes: &[RequestHeadScope]) -> Vec<String> {
-    let mut docs = scopes
+pub(super) fn scoped_session_heads(
+    rows: Vec<AgentRequestRow>,
+    scopes: &[RequestHeadScope],
+) -> Vec<AgentRequestRow> {
+    let expected = scopes
         .iter()
-        .map(|(doc_id, _, _, _, _)| doc_id.as_str())
-        .collect::<Vec<_>>();
-    docs.sort_unstable();
-    docs.dedup();
-    docs.chunks(128)
-        .map(|chunk| {
-            let docs = chunk
-                .iter()
-                .map(|doc| format!("\"{}\"", escape_graphql_string(doc)))
-                .collect::<Vec<_>>()
-                .join(",");
-            format!(
-                "query DesktopSessionHeads {{ requests: AgentRequest(docIDs: [{docs}]) {{ {AGENT_REQUEST_FIELDS} }} }}"
+        .map(|(doc, node, session, requester, id)| {
+            (
+                doc.as_str(),
+                node.as_str(),
+                session.as_str(),
+                requester.as_deref(),
+                id.as_str(),
             )
         })
-        .collect()
-}
-
-fn missing_session_head_scopes(
-    scopes: &[RequestHeadScope],
-    seeds: &[AgentRequestRow],
-) -> Vec<RequestHeadScope> {
-    let seeded_docs = seeds
-        .iter()
-        .filter_map(|row| row.doc_id.as_deref())
         .collect::<RapidHashSet<_>>();
-    scopes
-        .iter()
-        .filter(|(doc_id, _, _, _, _)| !seeded_docs.contains(doc_id.as_str()))
-        .cloned()
+    rows.into_iter()
+        .filter(|row| {
+            row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal)
+                && row
+                    .doc_id
+                    .as_deref()
+                    .zip(row.node_did.as_deref())
+                    .zip(row.session_id.as_deref())
+                    .is_some_and(|((doc, node), session)| {
+                        expected.contains(&(
+                            doc,
+                            node,
+                            session,
+                            row.requester_did.as_deref(),
+                            row.request_id.as_str(),
+                        ))
+                    })
+        })
         .collect()
 }
 
-pub(super) fn task_request_queries(data: &Value, node_did: Option<&str>) -> Vec<String> {
-    let Some(triggers) = data.get("triggers").and_then(Value::as_array) else {
-        return Vec::new();
-    };
-    let mut scopes = triggers
+pub(super) async fn complete_access_snapshot_requests(
+    access: &ConfigAccess,
+    node_did: &str,
+    sessions: &[AgentSession],
+    triggers: &[Trigger],
+    mut seeds: Vec<AgentRequestRow>,
+) -> Result<Vec<AgentRequestRow>> {
+    let head_scopes = request_head_scopes(sessions);
+    let mut trigger_ids = triggers
         .iter()
-        .filter_map(|row| {
-            let node = row.get("node_did")?.as_str()?;
-            if node_did.is_some_and(|expected| expected != node) {
-                return None;
-            }
-            let trigger = row.get("trigger_id")?.as_str()?;
-            (!node.trim().is_empty() && !trigger.trim().is_empty())
-                .then(|| (node.to_owned(), trigger.to_owned()))
-        })
+        .filter(|trigger| trigger.node_did == node_did)
+        .map(|trigger| trigger.trigger_id.clone())
         .collect::<Vec<_>>();
-    scopes.sort();
-    scopes.dedup();
-    scopes
-        .chunks(32)
-        .map(|chunk| {
-            let fields = chunk
-                .iter()
-                .enumerate()
-                .map(|(index, (node, trigger))| {
-                    format!(
-                        "trigger_{index}: AgentRequest(filter: {{ node_did: {{ _eq: \"{}\" }}, caused_by_trigger_id: {{ _eq: \"{}\" }}, purpose: {{ _eq: \"normal\" }} }}, order: [{{ node_did: ASC }}, {{ caused_by_trigger_id: ASC }}, {{ purpose: ASC }}, {{ created_at: DESC }}, {{ request_id: DESC }}, {{ session_id: ASC }}], limit: 8) {{ {TASK_REQUEST_FIELDS} }}",
-                        escape_graphql_string(node),
-                        escape_graphql_string(trigger),
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("query DesktopTaskRequestHeads {{ {fields} }}")
-        })
-        .collect()
-}
-
-/// The pinned planner requires the equality prefix in index ordering and
-/// cannot combine that ordering with the implicit physical-document suffix.
-/// Refine only the cutoff tie so physical twins retain the full-store order.
-fn task_request_boundary_queries(rows: &[AgentRequestRow]) -> Result<Vec<String>> {
+    trigger_ids.sort();
+    trigger_ids.dedup();
+    let views = trigger_ids
+        .into_iter()
+        .map(|trigger| RequestRows::trigger_candidates(Scope::Node(node_did.to_owned()), trigger))
+        .collect::<Vec<_>>();
+    let mut task_rows = Vec::new();
+    for batch in views.chunks(32) {
+        task_rows.extend(access.read_views(batch).await?.into_iter().flatten());
+    }
     let mut groups = std::collections::BTreeMap::new();
-    for row in rows {
+    for row in &task_rows {
         let node = row
             .node_did
             .as_deref()
@@ -314,452 +112,44 @@ fn task_request_boundary_queries(rows: &[AgentRequestRow]) -> Result<Vec<String>
             .or_insert_with(Vec::new)
             .push(row);
     }
-    let mut selections = Vec::new();
+    let mut boundaries = Vec::new();
     for ((node, trigger), rows) in groups {
         if rows.len() < 8 {
             continue;
         }
         anyhow::ensure!(rows.len() == 8, "task candidate page exceeded its limit");
         let boundary = rows.last().expect("nonempty candidate page");
-        let filter = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-            "node_did": {"_eq": node}, "caused_by_trigger_id": {"_eq": trigger},
-            "purpose": {"_eq": "normal"},
-            "created_at": {"_eq": boundary.created_at},
-            "request_id": {"_eq": boundary.request_id},
-            "session_id": {"_eq": boundary.session_id},
-        }))?;
-        selections.push(format!("AgentRequest(filter: {filter}, order: {{ _docID: ASC }}, limit: 8) {{ {TASK_REQUEST_FIELDS} }}"));
-    }
-    Ok(selections
-        .chunks(32)
-        .map(|chunk| {
-            let roots = chunk
-                .iter()
-                .enumerate()
-                .map(|(index, selection)| format!("trigger_{index}: {selection}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            format!("query DesktopTaskRequestBoundary {{ {roots} }}")
-        })
-        .collect())
-}
-
-fn dedupe_request_seeds(rows: &mut Vec<AgentRequestRow>) {
-    let mut seen = RapidHashSet::new();
-    rows.retain(|row| {
-        row.doc_id
-            .as_ref()
-            .is_none_or(|doc| seen.insert(doc.clone()))
-    });
-}
-
-pub(super) fn scoped_session_heads(
-    rows: Vec<AgentRequestRow>,
-    scopes: &[RequestHeadScope],
-) -> Vec<AgentRequestRow> {
-    let expected = scopes
-        .iter()
-        .map(|(doc, node, session, requester, request_id)| {
-            (
-                doc.as_str(),
-                node.as_str(),
-                session.as_str(),
-                requester.as_deref(),
-                request_id.as_str(),
-            )
-        })
-        .collect::<RapidHashSet<_>>();
-    rows.into_iter()
-        .filter(|row| {
-            row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal)
-                && row.doc_id.as_ref().is_some_and(|doc| {
-                    row.node_did
-                        .as_deref()
-                        .zip(row.session_id.as_deref())
-                        .is_some_and(|(node, session)| {
-                            expected.contains(&(
-                                doc.as_str(),
-                                node,
-                                session,
-                                row.requester_did.as_deref(),
-                                row.request_id.as_str(),
-                            ))
-                        })
-                })
-        })
-        .collect()
-}
-
-pub(super) fn complete_request_rows(data: &Value, root: &str) -> Result<Vec<AgentRequestRow>> {
-    let (rows, complete) = parse_query_rows_with_completeness::<AgentRequestRow>(data, root)?;
-    anyhow::ensure!(complete, "request query {root} returned malformed rows");
-    Ok(rows)
-}
-
-fn snapshot_request_rows(data: &Value) -> Result<Vec<AgentRequestRow>> {
-    if data.get("requests").is_none() {
-        return Ok(Vec::new());
-    }
-    complete_request_rows(data, "requests")
-}
-
-fn parse_task_request_rows(data: &Value) -> Result<Vec<AgentRequestRow>> {
-    let Some(fields) = data.as_object() else {
-        bail!("task request query returned a non-object payload");
-    };
-    let mut requests = Vec::new();
-    for root in fields.keys().filter(|root| root.starts_with("trigger_")) {
-        let rows = complete_request_rows(data, root)?;
-        anyhow::ensure!(
-            rows.iter().all(|row| {
-                gents_protocol::request_admission::RequestPurpose::is_public(row.purpose)
-                    && row.doc_id.as_deref().is_some_and(|id| !id.is_empty())
-            }),
-            "task request query returned a non-public or unidentified row"
+        boundaries.push(
+            RequestRows::new(Scope::Node(node.to_owned()))
+                .public()
+                .trigger(trigger)
+                .created_at(boundary.created_at.clone())
+                .request_ids(vec![boundary.request_id.clone()])
+                .session_id(boundary.session_id.clone())
+                .order(RequestOrder::Physical)
+                .limit(8),
         );
-        requests.extend(rows);
     }
-    Ok(requests)
-}
-
-pub(super) async fn complete_local_snapshot_requests(
-    node: &EmbeddedNode,
-    data: &Value,
-    node_did: Option<&str>,
-) -> Result<Vec<AgentRequestRow>> {
-    let head_scopes = request_head_scopes(data)?;
-    let mut seeds = snapshot_request_rows(data)?;
-    let mut task_rows = Vec::new();
-    for query in task_request_queries(data, node_did) {
-        let response = execute_local_graphql_query(node, &query, "recent trigger requests").await?;
-        task_rows.extend(parse_task_request_rows(&response)?);
-    }
-    for query in task_request_boundary_queries(&task_rows)? {
-        let response =
-            execute_local_graphql_query(node, &query, "task request cutoff ties").await?;
-        seeds.extend(parse_task_request_rows(&response)?);
+    for batch in boundaries.chunks(32) {
+        seeds.extend(access.read_views(batch).await?.into_iter().flatten());
     }
     seeds.extend(task_rows);
-    dedupe_request_seeds(&mut seeds);
-    let missing_heads = missing_session_head_scopes(&head_scopes, &seeds);
-    for query in session_head_queries(&missing_heads) {
-        let response = execute_local_graphql_query(node, &query, "session request heads").await?;
-        seeds.extend(scoped_session_heads(
-            complete_request_rows(&response, "requests")?,
-            &head_scopes,
-        ));
+    let mut seen = RapidHashSet::new();
+    seeds.retain(|row| row.doc_id.as_ref().is_none_or(|id| seen.insert(id.clone())));
+    let missing = head_scopes
+        .iter()
+        .filter(|(doc, _, _, _, _)| !seen.contains(doc))
+        .map(|(doc, _, _, _, _)| doc.clone())
+        .collect::<Vec<_>>();
+    for batch in missing.chunks(128) {
+        let rows = access
+            .read_view(&RequestRows::new(Scope::Node(node_did.to_owned())).doc_ids(batch.to_vec()))
+            .await?;
+        seeds.extend(scoped_session_heads(rows, &head_scopes));
     }
-    dedupe_request_seeds(&mut seeds);
-    let requests = if seeds.is_empty() {
-        seeds
-    } else {
-        super::close_request_rows(node, seeds).await?
-    };
-    Ok(requests)
-}
-
-async fn complete_access_snapshot_requests(
-    access: &gents::store::config_client::ConfigAccess,
-    data: &Value,
-    node_did: Option<&str>,
-) -> Result<Vec<AgentRequestRow>> {
-    let head_scopes = request_head_scopes(data)?;
-    let mut seeds = snapshot_request_rows(data)?;
-    let mut task_rows = Vec::new();
-    for query in task_request_queries(data, node_did) {
-        let response =
-            execute_access_graphql_query(access, &query, "recent trigger requests").await?;
-        task_rows.extend(parse_task_request_rows(&response)?);
-    }
-    for query in task_request_boundary_queries(&task_rows)? {
-        let response =
-            execute_access_graphql_query(access, &query, "task request cutoff ties").await?;
-        seeds.extend(parse_task_request_rows(&response)?);
-    }
-    seeds.extend(task_rows);
-    dedupe_request_seeds(&mut seeds);
-    let missing_heads = missing_session_head_scopes(&head_scopes, &seeds);
-    for query in session_head_queries(&missing_heads) {
-        let response =
-            execute_access_graphql_query(access, &query, "session request heads").await?;
-        seeds.extend(scoped_session_heads(
-            complete_request_rows(&response, "requests")?,
-            &head_scopes,
-        ));
-    }
-    dedupe_request_seeds(&mut seeds);
-    let requests = if seeds.is_empty() {
-        seeds
-    } else {
-        super::close_request_rows_on(access, seeds).await?
-    };
-    Ok(requests)
-}
-
-pub(crate) fn parse_projected_query_rows<T>(
-    data: &Value,
-    root: &str,
-    fields: &str,
-    sibling_fields: &str,
-) -> Result<Vec<T>>
-where
-    T: DeserializeOwned,
-{
-    parse_projected_query_rows_with_source(data, root, fields, sibling_fields, None)
-        .map(|(rows, _)| rows)
-}
-
-pub(crate) fn parse_projected_query_rows_with_source<T>(
-    data: &Value,
-    root: &str,
-    fields: &str,
-    sibling_fields: &str,
-    source_field: Option<&str>,
-) -> Result<(Vec<T>, Vec<Option<String>>)>
-where
-    T: DeserializeOwned,
-{
-    parse_rows_with_source(data, root, fields, sibling_fields, source_field, false)
-}
-
-pub(super) fn parse_backend_observation_rows(
-    data: &Value,
-    root: &str,
-) -> Result<(Vec<InferenceBackendObservation>, Vec<Option<String>>)> {
-    let (rows, sources): (Vec<Value>, _) = parse_observation_query_rows_with_source(
-        data,
-        root,
-        INFERENCE_BACKEND_OBSERVATION_FIELDS,
-        Some("node_did"),
-    )?;
-    let mut observations = Vec::with_capacity(rows.len());
-    let mut observation_sources = Vec::with_capacity(rows.len());
-    for (row, source) in rows.into_iter().zip(sources) {
-        match gents::inference::backends::registry::decode_backend_observation(row) {
-            Ok(observation) => {
-                observations.push(observation);
-                observation_sources.push(source);
-            }
-            Err(error) => {
-                tracing::warn!(target: "gents_desktop_core::query", root, error = %error,
-                    "backend catalog observation unavailable");
-            }
-        }
-    }
-    Ok((observations, observation_sources))
-}
-
-pub(crate) fn parse_observation_query_rows_with_source<T>(
-    data: &Value,
-    root: &str,
-    fields: &str,
-    source_field: Option<&str>,
-) -> Result<(Vec<T>, Vec<Option<String>>)>
-where
-    T: DeserializeOwned,
-{
-    parse_rows_with_source(data, root, fields, "", source_field, true)
-}
-
-fn parse_rows_with_source<T>(
-    data: &Value,
-    root: &str,
-    fields: &str,
-    sibling_fields: &str,
-    source_field: Option<&str>,
-    exact_projection: bool,
-) -> Result<(Vec<T>, Vec<Option<String>>)>
-where
-    T: DeserializeOwned,
-{
-    let (parsed, sources, _) = parse_rows_with_source_completeness(
-        data,
-        root,
-        fields,
-        sibling_fields,
-        source_field,
-        exact_projection,
-    )?;
-    Ok((parsed, sources))
-}
-
-pub(super) fn parse_query_rows_with_completeness<T>(
-    data: &Value,
-    root: &str,
-) -> Result<(Vec<T>, bool)>
-where
-    T: DeserializeOwned,
-{
-    let (rows, _, complete) = parse_rows_with_source_completeness(data, root, "", "", None, false)?;
-    Ok((rows, complete))
-}
-
-fn parse_projected_query_rows_with_completeness<T>(
-    data: &Value,
-    root: &str,
-    fields: &str,
-    sibling_fields: &str,
-) -> Result<(Vec<T>, bool)>
-where
-    T: DeserializeOwned,
-{
-    let (rows, _, complete) =
-        parse_rows_with_source_completeness(data, root, fields, sibling_fields, None, false)?;
-    Ok((rows, complete))
-}
-
-fn parse_rows_with_source_completeness<T>(
-    data: &Value,
-    root: &str,
-    fields: &str,
-    sibling_fields: &str,
-    source_field: Option<&str>,
-    exact_projection: bool,
-) -> Result<(Vec<T>, Vec<Option<String>>, bool)>
-where
-    T: DeserializeOwned,
-{
-    let rows = data
-        .get(root)
-        .ok_or_else(|| anyhow!("query result missing root field {root}"))?;
-    match rows {
-        Value::Null => Ok((Vec::new(), Vec::new(), true)),
-        Value::Array(rows) => {
-            let fields: Vec<&str> = fields.split_whitespace().collect();
-            let sibling_fields: Vec<&str> = sibling_fields.split_whitespace().collect();
-            let mut parsed = Vec::with_capacity(rows.len());
-            let mut sources = Vec::with_capacity(rows.len());
-            let mut complete = true;
-            for row in rows {
-                let source = source_field
-                    .and_then(|field| row.get(field))
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned);
-                let Some(object) = row.as_object() else {
-                    complete = false;
-                    tracing::warn!(target: "gents_desktop_core::query", root, "skipping malformed query row");
-                    continue;
-                };
-                let projected = Value::Object(
-                    object
-                        .iter()
-                        .filter(|(key, _)| {
-                            if exact_projection {
-                                fields.contains(&key.as_str())
-                            } else {
-                                !sibling_fields.contains(&key.as_str())
-                                    || fields.contains(&key.as_str())
-                            }
-                        })
-                        .map(|(key, value)| (key.clone(), value.clone()))
-                        .collect(),
-                );
-                match serde_json::from_value(projected) {
-                    Ok(row) => {
-                        parsed.push(row);
-                        sources.push(source);
-                    }
-                    Err(error) => {
-                        complete = false;
-                        tracing::warn!(target: "gents_desktop_core::query", root, error = %error, "skipping malformed query row")
-                    }
-                }
-            }
-            Ok((parsed, sources, complete))
-        }
-        other => Err(anyhow!(
-            "query result for {root} returned non-array payload: {other}"
-        )),
-    }
-}
-
-#[cfg(test)]
-pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
-    let query = snapshot_query(None)?;
-    let data = execute_local_graphql_query(node, &query, "desktop snapshot").await?;
-    let requests = complete_local_snapshot_requests(node, &data, None).await?;
-    snapshot_rows_with_requests(&data, None, requests)
-}
-
-/// Every reachable runtime's snapshot merged by node. A runtime that refuses
-/// the read is listed in `refused` and contributes no rows; it does not
-/// discard another runtime's snapshot.
-#[derive(Default)]
-pub struct PeerSnapshots {
-    pub store: ClientStore,
-    pub refused: Vec<String>,
-}
-
-pub async fn load_full_snapshot_with_peer_records(
-    peers: &[PeerRecord],
-    capability: &gents::store::config_client::ClientSigningCapability,
-) -> PeerSnapshots {
-    let mut snapshots = PeerSnapshots::default();
-    for peer in peers {
-        let Some(graphql) = crate::local_runtime::operator_endpoint(peer, capability) else {
-            continue;
-        };
-        let access = gents::store::config_client::ConfigAccess::Graphql(graphql);
-        match load_node_snapshot_on(&access, &peer.node_did).await {
-            Ok(remote) => {
-                snapshots.store = snapshots.store.replace_node_scope(&peer.node_did, remote)
-            }
-            Err(error) => {
-                tracing::warn!(node_did = %peer.node_did, error = %error,
-                    "runtime snapshot unavailable");
-                if error.refused() {
-                    snapshots.refused.push(peer.node_did.clone());
-                }
-            }
-        }
-    }
-    snapshots
-}
-
-/// The top-level aliases of [`snapshot_query`]; a served runtime omits the
-/// ones the reader may not read.
-pub(crate) const SNAPSHOT_ROOTS: &[&str] = &[
-    "nodes",
-    "agents",
-    "runtimes",
-    "node_readiness",
-    "requests",
-    "mailbox_items",
-    "goals",
-    "sessions",
-    "tools",
-    "contexts",
-    "compactions",
-    "triggers",
-    "tasks",
-    "schedules",
-    "skills",
-    "inference_backends",
-    "backend_observations",
-    "inference_profiles",
-    "inference_sampling",
-    "inference_execution",
-    "tool_service_registries",
-    "event_sources",
-    "agent_targets",
-    "datastore_tool_surfaces",
-];
-
-/// Reads an omitted snapshot root as an empty one.
-///
-/// External premise: the pinned served runtime answers a reader whose grant
-/// was revoked with HTTP 200, no `errors`, and `data` without the roots it
-/// may not read, while rows ACP filters for an authorized reader come back
-/// as an empty list. Both are native ACP hiding what the reader may not
-/// read (`RuntimeConnectionObservation.SnapshotOutcome`): the client shows
-/// nothing there and never infers a denial or reconnects for it.
-fn omitted_roots_read_empty(mut data: Value) -> Value {
-    if let Some(object) = data.as_object_mut() {
-        for root in SNAPSHOT_ROOTS {
-            object.entry(*root).or_insert(Value::Null);
-        }
-    }
-    data
+    let mut seen = RapidHashSet::new();
+    seeds.retain(|row| row.doc_id.as_ref().is_none_or(|id| seen.insert(id.clone())));
+    super::close_request_rows_on(access, seeds).await
 }
 
 /// How a runtime snapshot read failed
@@ -797,168 +187,221 @@ impl SnapshotReadError {
 }
 
 pub async fn load_node_snapshot_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &ConfigAccess,
     node_did: &str,
 ) -> std::result::Result<ClientStore, SnapshotReadError> {
-    let query = snapshot_query(Some(node_did))?;
-    let data = omitted_roots_read_empty(
-        execute_access_graphql_query(access, &query, "runtime desktop snapshot").await?,
-    );
-    let requests = complete_access_snapshot_requests(access, &data, Some(node_did)).await?;
-    Ok(if access.actor_did().is_some() {
-        authenticated_node_snapshot_rows(&data, node_did, requests)?
-    } else {
-        snapshot_rows_with_requests(&data, Some(node_did), requests)?
-    })
+    load_node_snapshot(access, node_did)
+        .await
+        .map_err(SnapshotReadError::from)
 }
 
-pub(super) fn authenticated_node_snapshot_rows(
-    data: &Value,
-    node_did: &str,
-    requests: Vec<AgentRequestRow>,
-) -> Result<ClientStore> {
-    let mut snapshot = snapshot_rows_with_requests(data, Some(node_did), requests)?;
-    let config = operator_config_store_from_data_with_requests(
-        data,
-        node_did,
-        Vec::new(),
-        OperatorConfigScope::Inference,
-    )?;
-    snapshot.operator_config_authoritative_node_dids =
-        config.operator_config_authoritative_node_dids;
-    Ok(snapshot)
-}
-
-#[derive(Clone, Copy)]
-enum OperatorConfigScope {
-    #[cfg(test)]
-    Full,
-    Inference,
+async fn load_node_snapshot(access: &ConfigAccess, node_did: &str) -> Result<ClientStore> {
+    let (
+        nodes,
+        default_agent_selections,
+        agents,
+        runtimes,
+        node_readiness,
+        requests,
+        mailbox_items,
+        goals,
+        sessions,
+        tools,
+        contexts,
+        compactions,
+        trigger_rows,
+        tasks,
+        schedules,
+        skills,
+        backends,
+        observations,
+        inference_profiles,
+        inference_sampling,
+        inference_execution,
+        tool_service_registries,
+        event_sources,
+        agent_targets,
+        datastore_tool_surfaces,
+    ) = access
+        .read_views(&(
+            NodeList::new(node_did),
+            DefaultAgentSelectionList::new(node_did),
+            AgentList::new(node_did),
+            NodeRuntimeList::new(node_did),
+            NodeReadinessList::new(node_did),
+            RequestRows::new(Scope::Node(node_did.to_owned())).nonterminal(),
+            gents_automation::views::MailboxRows::new(node_did).open(),
+            gents_automation::views::GoalRows::new(node_did),
+            gents_session::views::SessionList {
+                input: gents_protocol::operations::session::SessionListInput {
+                    node_did: Some(node_did.to_owned()),
+                    include_archived: true,
+                    ..Default::default()
+                },
+            },
+            ToolsList::new(node_did),
+            AgentContextList::new(node_did),
+            CompactionConfigList::new(node_did),
+            TriggerList::new(node_did),
+            TaskList::new(node_did),
+            ScheduleList::new(node_did),
+            SkillList::new(node_did),
+            BackendList::new(node_did),
+            ObservationList::new(node_did),
+            ProfileList::new(node_did),
+            SamplingList::new(node_did),
+            ExecutionList::new(node_did),
+            gents_tools::mcp::views::Services {
+                node_did,
+                service_id: None,
+                enabled_only: false,
+            },
+            EventSourceList::new(node_did),
+            AgentTargetList::new(node_did),
+            DatastoreToolSurfaceList::new(node_did),
+        ))
+        .await?;
+    let mut triggers = Vec::with_capacity(trigger_rows.len());
+    let mut trigger_observations = Vec::with_capacity(trigger_rows.len());
+    let mut schedule_observations = Vec::with_capacity(trigger_rows.len());
+    for row in trigger_rows {
+        let (trigger, observation, schedule) = row.into_parts();
+        triggers.push(trigger);
+        trigger_observations.push(observation);
+        schedule_observations.push(schedule);
+    }
+    let sessions = sessions
+        .into_iter()
+        .map(|row| row.session)
+        .collect::<Vec<_>>();
+    let requests =
+        complete_access_snapshot_requests(access, node_did, &sessions, &triggers, requests).await?;
+    let inference_backends = backends
+        .into_iter()
+        .map(|row| row.metadata.into_backend().map_err(anyhow::Error::from))
+        .collect::<Result<Vec<_>>>()?;
+    let backend_observations = observations
+        .into_iter()
+        .map(|row| row.observation)
+        .collect::<Vec<_>>();
+    let tasks = tasks.into_iter().map(|row| row.task).collect::<Vec<_>>();
+    let schedules = schedules
+        .into_iter()
+        .map(|row| row.schedule)
+        .collect::<Vec<_>>();
+    let skills = skills
+        .into_iter()
+        .map(|row| row.document)
+        .collect::<Vec<_>>();
+    let tools = tools
+        .into_iter()
+        .map(|row| row.document)
+        .collect::<Vec<_>>();
+    let contexts = contexts
+        .into_iter()
+        .map(|row| row.document)
+        .collect::<Vec<_>>();
+    let compactions = compactions
+        .into_iter()
+        .map(|row| row.document)
+        .collect::<Vec<_>>();
+    let inference_profiles = inference_profiles
+        .into_iter()
+        .map(|row| row.profile)
+        .collect::<Vec<_>>();
+    let inference_sampling = inference_sampling
+        .into_iter()
+        .map(|row| row.settings)
+        .collect::<Vec<_>>();
+    let inference_execution = inference_execution
+        .into_iter()
+        .map(|row| row.settings)
+        .collect::<Vec<_>>();
+    let event_sources = event_sources
+        .into_iter()
+        .map(|row| row.event_source)
+        .collect::<Vec<_>>();
+    let agent_targets = agent_targets
+        .into_iter()
+        .map(|row| row.document)
+        .collect::<Vec<_>>();
+    let datastore_tool_surfaces = datastore_tool_surfaces
+        .into_iter()
+        .map(|row| row.document)
+        .collect::<Vec<_>>();
+    Ok(ClientStore::from_rows(ClientStoreRows {
+        nodes: nodes.into_iter().map(|row| row.document).collect(),
+        default_agent_selections: default_agent_selections
+            .into_iter()
+            .map(|row| row.document)
+            .collect(),
+        agents: agents.into_iter().map(|row| row.agent).collect(),
+        runtimes,
+        node_readiness,
+        requests,
+        mailbox_items,
+        goals,
+        sessions,
+        tasks,
+        schedules,
+        schedule_observations,
+        triggers,
+        trigger_observations,
+        skills,
+        tools,
+        contexts,
+        compactions,
+        inference_backends,
+        backend_observations,
+        inference_profiles,
+        inference_sampling,
+        inference_execution,
+        tool_service_registries,
+        event_sources,
+        agent_targets,
+        datastore_tool_surfaces,
+        operator_config_authoritative_node_dids: [node_did.to_owned()].into_iter().collect(),
+        ..Default::default()
+    }))
 }
 
 pub async fn load_inference_configuration(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &ConfigAccess,
     node_did: &str,
 ) -> Result<ClientStore> {
-    let did = escape_graphql_string(node_did);
-    let did_filter = format!("filter: {{ node_did: {{ _eq: \"{did}\" }} }}");
-    let backend_fields = INFERENCE_BACKEND_FIELDS;
-    let query = format!(
-        "query DesktopInferenceConfig {{ nodes: {NODE_NAME}({did_filter}) {{ {NODE_FIELDS} }}
-            agents: {AGENT_NAME}({did_filter}) {{ {AGENT_FIELDS} }}
-            inference_backends: {INFERENCE_BACKEND_NAME}({did_filter}) {{ {backend_fields} }}
-            backend_observations: {INFERENCE_BACKEND_OBSERVATION_NAME}({did_filter}) {{ node_did {INFERENCE_BACKEND_OBSERVATION_FIELDS} }}
-            inference_profiles: InferenceProfile({did_filter}) {{ {INFERENCE_PROFILE_FIELDS} }} }}"
-    );
-    let data = execute_access_graphql_query(access, &query, "inference config").await?;
-    operator_config_store_from_data_with_requests(
-        &data,
-        node_did,
-        Vec::new(),
-        OperatorConfigScope::Inference,
-    )
-}
-
-#[cfg(test)]
-pub(crate) fn operator_config_store_from_data(data: &Value, node_did: &str) -> Result<ClientStore> {
-    operator_config_store_from_data_with_requests(
-        data,
-        node_did,
-        snapshot_request_rows(data)?,
-        OperatorConfigScope::Full,
-    )
-}
-
-fn operator_config_store_from_data_with_requests(
-    data: &Value,
-    node_did: &str,
-    requests: Vec<AgentRequestRow>,
-    scope: OperatorConfigScope,
-) -> Result<ClientStore> {
-    let (nodes, nodes_complete) = parse_query_rows_with_completeness(data, "nodes")?;
-    let (agents, agents_complete) = parse_query_rows_with_completeness(data, "agents")?;
-    let (inference_profiles, profiles_complete) =
-        parse_query_rows_with_completeness(data, "inference_profiles")?;
-    let (metadata, backends_complete): (Vec<gents::documents::InferenceBackendMetadata>, _) =
-        parse_projected_query_rows_with_completeness(
-            data,
-            "inference_backends",
-            INFERENCE_BACKEND_FIELDS,
-            "",
-        )?;
-    let inference_backends = metadata
+    let (nodes, selections, agents, backends, observations, profiles) = access
+        .read_views(&(
+            NodeList::new(node_did),
+            DefaultAgentSelectionList::new(node_did),
+            AgentList::new(node_did),
+            BackendList::new(node_did),
+            ObservationList::new(node_did),
+            ProfileList::new(node_did),
+        ))
+        .await?;
+    let backend_observations = observations
         .into_iter()
-        .map(|metadata| metadata.into_backend().map_err(anyhow::Error::from))
-        .collect::<Result<_>>()?;
-    let (backend_observations, backend_observation_source_node_dids) =
-        parse_backend_observation_rows(data, "backend_observations")?;
-    let mut common = ClientStoreRows {
-        nodes,
-        agents,
-        inference_profiles,
-        inference_backends,
+        .map(|row| row.observation)
+        .collect::<Vec<_>>();
+    Ok(ClientStore::from_rows(ClientStoreRows {
+        nodes: nodes.into_iter().map(|row| row.document).collect(),
+        default_agent_selections: selections.into_iter().map(|row| row.document).collect(),
+        agents: agents.into_iter().map(|row| row.agent).collect(),
+        inference_backends: backends
+            .into_iter()
+            .map(|row| row.metadata.into_backend().map_err(anyhow::Error::from))
+            .collect::<Result<_>>()?,
+        inference_profiles: profiles.into_iter().map(|row| row.profile).collect(),
         backend_observations,
-        backend_observation_source_node_dids,
+        operator_config_authoritative_node_dids: [node_did.to_owned()].into_iter().collect(),
         ..Default::default()
-    };
-    if nodes_complete && agents_complete && profiles_complete && backends_complete {
-        common
-            .operator_config_authoritative_node_dids
-            .insert(node_did.to_owned());
-    }
-    if matches!(scope, OperatorConfigScope::Inference) {
-        return Ok(ClientStore::from_rows(common));
-    }
-    let (schedule_observations, schedule_observation_source_node_dids) =
-        parse_observation_query_rows_with_source(
-            data,
-            "triggers",
-            SCHEDULE_OBSERVATION_FIELDS,
-            Some("node_did"),
-        )?;
-    let (trigger_observations, trigger_observation_source_node_dids) =
-        parse_observation_query_rows_with_source(
-            data,
-            "triggers",
-            TRIGGER_OBSERVATION_FIELDS,
-            Some("node_did"),
-        )?;
-    let rows = ClientStoreRows {
-        runtimes: parse_query_rows(data, "runtimes")?,
-        node_readiness: parse_query_rows(data, "node_readiness")?,
-        contexts: parse_query_rows(data, "contexts")?,
-        tools: parse_query_rows(data, "tools")?,
-        inference_sampling: parse_query_rows(data, "inference_sampling")?,
-        inference_execution: parse_query_rows(data, "inference_execution")?,
-        tasks: parse_query_rows(data, "tasks")?,
-        schedules: parse_query_rows(data, "schedules")?,
-        schedule_observations,
-        schedule_observation_source_node_dids,
-        triggers: parse_projected_query_rows(
-            data,
-            "triggers",
-            TRIGGER_FIELDS,
-            &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
-        )?,
-        trigger_observations,
-        trigger_observation_source_node_dids,
-        skills: parse_query_rows(data, "skills")?,
-        compactions: parse_query_rows(data, "compactions")?,
-        tool_service_registries: parse_query_rows(data, "tool_service_registries")?,
-        event_sources: parse_query_rows(data, "event_sources")?,
-        agent_targets: parse_query_rows(data, "agent_targets")?,
-        datastore_tool_surfaces: parse_query_rows(data, "datastore_tool_surfaces")?,
-        sessions: parse_query_rows(data, "sessions")?,
-        requests,
-        ..common
-    };
-    Ok(ClientStore::from_rows(rows))
+    }))
 }
 
 pub async fn load_node_scoped_snapshot_with_peer_records(
     node_did: &str,
     peers: &[PeerRecord],
-    capability: &gents::store::config_client::ClientSigningCapability,
+    capability: &gents_store::config_client::ClientSigningCapability,
 ) -> Result<ClientStore> {
     let endpoint = peers
         .iter()
@@ -966,98 +409,8 @@ pub async fn load_node_scoped_snapshot_with_peer_records(
         .and_then(|peer| crate::local_runtime::operator_endpoint(peer, capability))
         .with_context(|| format!("runtime {node_did} has no authenticated database endpoint"))?;
     Ok(load_node_snapshot_on(
-        &gents::store::config_client::ConfigAccess::Graphql(endpoint),
+        &gents_store::config_client::ConfigAccess::Graphql(endpoint),
         node_did,
     )
     .await?)
-}
-
-#[cfg(test)]
-pub async fn load_node_runtimes(node: &EmbeddedNode) -> Result<Vec<NodeRuntimeRow>> {
-    load_rows(
-        node,
-        NODE_RUNTIME_NAME,
-        &format!("query {{ {NODE_RUNTIME_NAME} {{ {NODE_RUNTIME_FIELDS} }} }}"),
-    )
-    .await
-}
-
-#[cfg(test)]
-pub(crate) async fn load_agent_tool_calls(node: &EmbeddedNode) -> Result<Vec<AgentToolCallRow>> {
-    load_rows(
-        node,
-        AGENT_TOOL_CALL_NAME,
-        &format!("query {{ {AGENT_TOOL_CALL_NAME} {{ {AGENT_TOOL_CALL_FIELDS} }} }}"),
-    )
-    .await
-}
-
-#[cfg(test)]
-mod remote_failure_tests {
-    use super::*;
-    use gents::store::identity::KeyIdentity;
-    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
-
-    #[tokio::test]
-    async fn full_snapshot_isolates_one_runtime_denial() {
-        let directory = tempfile::tempdir().unwrap();
-        let key_path = directory.path().join("client.key");
-        let client = tokio::task::spawn_blocking(move || {
-            KeyIdentity::load_or_create(key_path, None).unwrap()
-        })
-        .await
-        .unwrap();
-        let healthy_did = "did:test:healthy";
-        let source =
-            std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::client::schema::ensure_runtime_schemas(&source)
-            .await
-            .unwrap();
-        gents::store::config_client::ConfigAccess::local(source.clone())
-            .write(
-                "test.snapshot.healthy",
-                &format!("mutation {{ create_Node(input: {{node_did: \"{healthy_did}\", display_name: \"healthy\", enabled: true, created_at: \"now\", created_by: \"test\"}}) {{ _docID }} }}"),
-            )
-            .await
-            .unwrap();
-        let healthy_data = execute_local_graphql_query(
-            &source,
-            &snapshot_query(Some(healthy_did)).unwrap(),
-            "test snapshot",
-        )
-        .await
-        .unwrap();
-        let healthy = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "data": healthy_data })),
-            )
-            .mount(&healthy)
-            .await;
-        let denied = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "errors": [{"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}]
-            })))
-            .expect(1)
-            .mount(&denied)
-            .await;
-        let mut denied_peer = PeerRecord::new("denied", "", "did:test:denied");
-        denied_peer.graphql = Some(format!("{}/api/v0/graphql", denied.uri()));
-        let mut healthy_peer = PeerRecord::new("healthy", "", healthy_did);
-        healthy_peer.graphql = Some(format!("{}/api/v0/graphql", healthy.uri()));
-        let snapshots = load_full_snapshot_with_peer_records(
-            &[denied_peer, healthy_peer],
-            &client.client_signing_capability().unwrap(),
-        )
-        .await;
-        assert_eq!(snapshots.refused, vec!["did:test:denied".to_owned()]);
-        assert!(snapshots
-            .store
-            .nodes
-            .iter()
-            .any(|node| node.node_did == healthy_did));
-        source.shutdown().await.unwrap();
-    }
 }

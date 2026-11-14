@@ -2,11 +2,12 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use gents::store::config_client::{
-    desired_state_document_digest, ConfigApplyTxn, DesiredStateApplyDocument,
-    DesiredStateApplyPlan, DesiredStateExpectation,
+use gents_documents::{
+    desired_state_document_digest, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    DesiredStateExpectation,
 };
-use gents::Collection;
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigApplyTxn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -85,7 +86,7 @@ pub(crate) fn is_closure_collection(collection: Collection) -> bool {
 }
 
 pub async fn capture_closure(txn: &ConfigApplyTxn<'_>, owner: &str) -> Result<Closure> {
-    let references = gents::ConfigReferences::load_in_txn(txn, owner).await?;
+    let references = gents_documents::ConfigReferences::load_in_txn(txn, owner).await?;
     let mut closure: Closure = references
         .documents()
         .filter(|((collection, _), _)| is_closure_collection(*collection))
@@ -233,15 +234,16 @@ fn remapped_by_trial(collection: Collection, field: Option<&str>, pack_document:
                 && pack_document
                     .get(field)
                     .and_then(Value::as_str)
-                    .is_some_and(|id| id.starts_with(gents::pack::INFERENCE_SLOT_REFERENCE_PREFIX))
+                    .is_some_and(|id| {
+                        id.starts_with(gents_pack::pack::INFERENCE_SLOT_REFERENCE_PREFIX)
+                    })
         }
         _ => false,
     }
 }
 
 fn comparable(collection: Collection, document: &Value, pack_document: &Value) -> Result<Value> {
-    let (_, projected) =
-        gents::store::config_client::config_projection(collection, Some(document))?;
+    let (_, projected) = gents_documents::config_projection(collection, Some(document))?;
     let mut projected = projected.context("canonical projection missing")?;
     if let Some(object) = projected.as_object_mut() {
         object.retain(|field, _| !remapped_by_trial(collection, Some(field), pack_document));

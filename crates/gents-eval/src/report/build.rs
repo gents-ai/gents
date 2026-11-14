@@ -17,7 +17,7 @@ use crate::{
     DefinitionRef, EvidenceClass, Invalidation, OutcomeKind, ProviderReason, RunHeader, RunRecord,
     StageCompletion, SubjectRef, TrialRecord, TrialScore, TrialUsage, VerdictRecord,
 };
-use gents::documents::{EvalDefinition, EvalReducer, EvalSplit, EvalTier};
+use gents_documents::{EvalDefinition, EvalReducer, EvalSplit, EvalTier};
 
 /// Bumped when a field's meaning changes; an added field does not bump it.
 pub const REPORT_VERSION: u32 = 1;
@@ -537,7 +537,7 @@ mod tests {
     use crate::report::evidence::CellUsage;
     use crate::report::report_refused;
     use crate::{OutcomeKind, RunHeader, TrialUsage, VerdictRecord};
-    use gents::documents::EvalSplit;
+    use gents_documents::EvalSplit;
 
     fn classes(report: &EvalReport) -> Vec<SlotClass> {
         report.cells[0]

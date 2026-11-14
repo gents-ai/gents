@@ -80,7 +80,7 @@ async fn check_shared_installation(home: &str) {
         }
     };
     assert!(
-        gents::store::local::home::store_lock_held(error.as_ref()).is_some(),
+        gents_store::local::home::store_lock_held(error.as_ref()).is_some(),
         "{error:#}"
     );
     first.close().await;
@@ -135,8 +135,8 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
     );
     let peer = core.local_peer_id().to_owned();
     let client_did = core.node_identity().did().to_owned();
-    let did = gents::store::graphql::escape_graphql_string(&client_did);
-    gents::store::config_client::ConfigAccess::write_local(
+    let did = gents_store::graphql::escape_graphql_string(&client_did);
+    gents_store::config_client::ConfigAccess::write_local(
         &core.node_arc(),
         "installation_upgrade.seed",
         &format!(
@@ -234,7 +234,7 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
             frame.unwrap();
         }
         loop {
-            match gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
+            match gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
                 Ok(lock) => {
                     drop(lock);
                     break;
@@ -255,7 +255,7 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
     );
     assert_eq!(reopened.local_peer_id(), peer);
     assert_eq!(reopened.node_identity().did(), client_did);
-    let rows = gents::store::config_client::ConfigAccess::local(reopened.node_arc())
+    let rows = gents_store::config_client::ConfigAccess::local(reopened.node_arc())
         .execute("{ AgentSession { session_id } }")
         .await
         .unwrap();

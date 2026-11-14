@@ -230,9 +230,7 @@ mod tests {
     use super::*;
     use crate::runner::ScriptedExecutor;
     use crate::OutcomeKind;
-    use gents::defra_node::Node as EmbeddedNode;
-    use gents::store::config_client::ConfigAccess;
-    use std::sync::Arc;
+    use gents_store::config_client::ConfigAccess;
 
     #[test]
     fn unspecified_nullability_defaults_and_extra_fields_are_not_requirements() {
@@ -265,7 +263,12 @@ mod tests {
 
     #[tokio::test]
     async fn native_schema_evidence_grades_indexes_relations_and_wrong_contracts() {
-        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let node_db = gents_inference::test_support::test_db(
+            "native-schema-evidence-grades-indexes-re",
+            gents_automation::lifecycle_hooks::composition(),
+        )
+        .await;
+        let node = node_db.node.clone();
         let access = ConfigAccess::local(node.clone());
         let sdl = r#"
           type Author { name: String books: [Book] }

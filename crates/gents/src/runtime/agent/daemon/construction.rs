@@ -4,8 +4,8 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use super::{auxiliary_tasks, AgentDaemon, AgentDaemonInit};
-use crate::inference::compaction::{ProviderReductionEngine, ReductionEngine, ReductionOptions};
-use crate::inference::llm::rig_compat::ProviderModel;
+use gents_inference::compaction::{ProviderReductionEngine, ReductionEngine, ReductionOptions};
+use gents_inference::llm::rig_compat::ProviderModel;
 
 impl<M> AgentDaemon<M>
 where
@@ -15,6 +15,7 @@ where
         let AgentDaemonInit {
             node,
             agent_config,
+            tool_config,
             provider_family,
             model,
             preamble,
@@ -33,7 +34,7 @@ where
             agent_config.as_ref(),
             preamble.clone(),
             0,
-            crate::inference::rendered_request::CaptureScopeKind::Compaction,
+            gents_inference::rendered_request::CaptureScopeKind::Compaction,
         );
         compaction_config.max_turns = 0;
         let compactor = Arc::new(ProviderReductionEngine::new(
@@ -41,12 +42,13 @@ where
             compaction_config,
         ));
         let compaction_options =
-            crate::inference::compaction::reduction_options_for_agent(&agent_config)?;
+            gents_inference::compaction::reduction_options_for_agent(&agent_config)?;
 
         Ok(Self {
             node,
             backend_health: None,
             agent_config,
+            tool_config,
             provider_family: provider_family.clone(),
             replay_issuer: None,
             account_hops: 0,
@@ -79,7 +81,7 @@ where
 
     pub(in crate::runtime::agent) fn with_inference_observations(
         mut self,
-        registry: crate::observe::inference_observation::InferenceObservationRegistry,
+        registry: gents_inference::inference_observation::InferenceObservationRegistry,
     ) -> Self {
         self.inference_observations = registry;
         self
@@ -87,7 +89,7 @@ where
 
     pub(in crate::runtime::agent) fn with_backend_health(
         mut self,
-        health: crate::inference::backends::health::BackendHealthMap,
+        health: gents_inference::backends::health::BackendHealthMap,
     ) -> Self {
         self.backend_health = Some(health);
         self
@@ -120,7 +122,7 @@ where
         mut self,
         root: Option<PathBuf>,
     ) -> Self {
-        crate::tools::workspace::install_process_operator_tool_root(root.clone());
+        gents_session::workspace::install_process_operator_tool_root(root.clone());
         self.operator_tool_root = root;
         self
     }
@@ -132,7 +134,7 @@ where
 
     pub(in crate::runtime::agent) fn with_root_execution_guard(
         mut self,
-        guard: Option<crate::tools::surface::RootExecutionGuard>,
+        guard: Option<gents_tools::surface::RootExecutionGuard>,
     ) -> Self {
         self.root_execution_guard = guard;
         self
@@ -140,7 +142,7 @@ where
 
     pub(in crate::runtime::agent) fn with_tool_surface_runtime_policy(
         self,
-        guard: Option<crate::tools::surface::RootExecutionGuard>,
+        guard: Option<gents_tools::surface::RootExecutionGuard>,
         operator_root: Option<PathBuf>,
     ) -> Self {
         self.with_root_execution_guard(guard)
@@ -153,7 +155,7 @@ where
         request: &gents_protocol::row::AgentRequest,
     ) -> Result<Option<serde_json::Value>> {
         let context = crate::claude_request_context::for_request(
-            &crate::store::config_client::ConfigAccess::local_as(
+            &gents_store::config_client::ConfigAccess::local_as(
                 self.node.clone(),
                 identity::Did::new(request.agent_did.clone())?,
             ),
@@ -188,7 +190,7 @@ where
 
     pub(in crate::runtime::agent) fn with_remote_tools(
         mut self,
-        tools: Option<crate::documents::RemoteTools>,
+        tools: Option<gents_documents::RemoteTools>,
     ) -> Self {
         self.remote_tools = tools;
         self
@@ -196,7 +198,7 @@ where
 
     pub(in crate::runtime::agent) fn with_job_tools(
         mut self,
-        job_tools: rapidhash::RapidHashMap<String, crate::tools::background::job::JobBinding>,
+        job_tools: rapidhash::RapidHashMap<String, gents_toolcalls::background::job::JobBinding>,
     ) -> Self {
         self.job_tools = job_tools;
         self
@@ -204,7 +206,7 @@ where
 
     pub(in crate::runtime::agent) fn with_job_driver(
         mut self,
-        driver: Arc<crate::tools::background::job::driver::JobDriver>,
+        driver: Arc<gents_toolcalls::background::job::driver::JobDriver>,
     ) -> Self {
         self.job_driver = Some(driver);
         self
@@ -212,7 +214,7 @@ where
 
     pub(in crate::runtime::agent) fn with_output_obligations(
         mut self,
-        obligations: Vec<(String, crate::documents::WriteToolOutputObligation)>,
+        obligations: Vec<(String, gents_documents::WriteToolOutputObligation)>,
     ) -> Self {
         self.output_obligations = Arc::new(obligations);
         self

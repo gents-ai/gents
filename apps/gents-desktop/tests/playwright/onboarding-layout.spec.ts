@@ -23,7 +23,7 @@ test("remote connection fields fit a narrow viewport with the keyboard open", as
   page,
 }) => {
   await page.getByRole("radio", { name: /Remote connect/ }).click();
-  const address = page.getByRole("textbox", { name: "Server address" });
+  const address = page.getByRole("textbox", { name: "Invitation or server address" });
   await address.fill("https://gents.example.net:8787");
   await page.evaluate(() => {
     Object.defineProperties(window.visualViewport, {
@@ -56,7 +56,7 @@ test("keyboard submission accepts the native owner's bare server address", async
   page,
 }) => {
   await page.getByRole("radio", { name: /Remote connect/ }).click();
-  const address = page.getByRole("textbox", { name: "Server address" });
+  const address = page.getByRole("textbox", { name: "Invitation or server address" });
   await address.fill("100.69.4.79:9191");
   await address.press("Enter");
   await expect(page.getByRole("heading", { name: "Waiting for access" })).toBeVisible();

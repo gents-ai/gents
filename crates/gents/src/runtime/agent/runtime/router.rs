@@ -4,20 +4,25 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use tokio::sync::{watch, OwnedRwLockReadGuard, RwLock};
 
-use crate::request::lifecycle::{ExecutionOrigin, RequestLifecycle};
-use crate::request::watcher::{DefraWatcher, Watcher};
-use crate::runtime::agent::RuntimeSnapshotObserver;
-use crate::runtime::snapshot::{
+use crate::runtime::status::RuntimeStatusHandle;
+use gents_automation::triggers::runtime_snapshot::{
     effective_agent_admission, ActiveRuntimeSnapshot, EffectiveAgentAdmission,
 };
-use crate::runtime::status::RuntimeStatusHandle;
+use gents_automation::triggers::snapshot_observer::RuntimeSnapshotObserver;
 use gents_protocol::row::AgentRequest;
+use gents_session::request::lifecycle::{ExecutionOrigin, RequestLifecycle};
+use gents_session::request::watcher::{DefraWatcher, Watcher};
 
 use super::context::AgentResolution;
 
 pub(in crate::runtime::agent) mod configuration_admission;
 use configuration_admission::{
     routed_configuration_admission, ConfigurationAdmission, DeferredRequests,
+};
+pub(in crate::runtime::agent) mod session_selection;
+use session_selection::{
+    session_selection_disposition, SessionSelection, SessionSelectionDisposition,
+    UnresolvedSessions, UNRESOLVED_SESSION_ATTEMPT_BOUND,
 };
 
 #[derive(Clone)]
@@ -115,7 +120,7 @@ pub(super) struct RouterConfig {
     pub(super) admission_gate: RuntimeAdmissionGate,
     pub(super) runtime_status: RuntimeStatusHandle,
     pub(super) runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
-    pub(super) backend_health: crate::inference::backends::health::BackendHealthMap,
+    pub(super) backend_health: gents_inference::backends::health::BackendHealthMap,
 }
 
 pub(super) async fn run_router(config: RouterConfig) -> Result<()> {
@@ -146,6 +151,7 @@ pub(super) async fn run_router(config: RouterConfig) -> Result<()> {
         admission_gate: admission_gate.clone(),
         runtime_status,
         runtime_snapshot_observer,
+        unresolved_session_bound: UNRESOLVED_SESSION_ATTEMPT_BOUND,
     })
     .await;
     if result.is_err() {
@@ -166,6 +172,7 @@ pub(in crate::runtime::agent) struct RouterInputs<W> {
     pub(in crate::runtime::agent) runtime_status: RuntimeStatusHandle,
     pub(in crate::runtime::agent) runtime_snapshot_observer:
         Option<Arc<dyn RuntimeSnapshotObserver>>,
+    pub(in crate::runtime::agent) unresolved_session_bound: u32,
 }
 
 pub(in crate::runtime::agent) async fn run_router_with_watcher<W>(
@@ -183,12 +190,14 @@ where
         admission_gate,
         runtime_status,
         runtime_snapshot_observer,
+        unresolved_session_bound,
     } = inputs;
     let mut active_snapshot = active_snapshot_rx.borrow().clone();
     let mut admission_changed = admission_gate.subscribe();
     let mut readiness_changed = runtime_status.readiness().subscribe_observation();
     let mut pending_request = None;
     let mut deferred = DeferredRequests::default();
+    let mut unresolved = UnresolvedSessions::default();
 
     loop {
         let Some((request, routed_snapshot, admission_observation)) =
@@ -218,38 +227,72 @@ where
             return Ok(());
         };
 
-        let resolution = match resolve_agent_for_request(&node, &request).await {
-            Ok(Some(resolution)) => resolution,
-            Ok(None) => {
-                tracing::warn!(request_id = %request.request_id, session_id = %request.session_id,
-                    agent_did = %request.agent_did, "session selection unavailable; leaving request pending");
-                continue;
-            }
+        let resolved = match resolve_agent_for_request(&node, &request).await {
+            Ok(resolved) => resolved,
             Err(error) => {
                 tracing::warn!(request_id = %request.request_id, session_id = %request.session_id,
                     agent_did = %request.agent_did, error = %error, "session selection lookup failed; leaving request pending");
                 continue;
             }
         };
-        if let Some(reason) = resolution.rejection_reason.as_deref() {
-            tracing::warn!(
-                request_id = %request.request_id,
-                session_id = %request.session_id,
-                agent_did = %resolution.agent_did,
-                reason = %reason,
-                "rejecting request before dispatch"
-            );
-            fail_routed_request_from_snapshot(
-                &routed_snapshot,
-                node.clone(),
-                node_did.as_str(),
-                request,
-                resolution.agent_did.as_str(),
-                reason,
-            )
-            .await?;
-            continue;
-        }
+        let selection = match &resolved {
+            None => SessionSelection::Unavailable,
+            Some(resolution) if resolution.rejection_reason.is_some() => {
+                SessionSelection::Mismatched
+            }
+            Some(_) => SessionSelection::Matched,
+        };
+        let attempts = if selection == SessionSelection::Unavailable {
+            unresolved.record(&request.request_id)
+        } else {
+            unresolved.forget(&request.request_id);
+            0
+        };
+        let resolution = match (
+            session_selection_disposition(selection, attempts, unresolved_session_bound),
+            resolved,
+        ) {
+            (SessionSelectionDisposition::Claim, Some(resolution)) => resolution,
+            (SessionSelectionDisposition::Claim, None) | (SessionSelectionDisposition::Wait, _) => {
+                tracing::warn!(request_id = %request.request_id, session_id = %request.session_id,
+                    agent_did = %request.agent_did, attempts,
+                    "session selection unavailable; leaving request pending");
+                continue;
+            }
+            (SessionSelectionDisposition::Reject, resolution) => {
+                let agent_did = resolution.as_ref().map_or_else(
+                    || request.agent_did.clone(),
+                    |value| value.agent_did.clone(),
+                );
+                let reason = resolution
+                    .and_then(|value| value.rejection_reason)
+                    .unwrap_or_else(|| {
+                        format!(
+                            "session {} is not readable for this request after {unresolved_session_bound} routing attempts",
+                            request.session_id
+                        )
+                    });
+                tracing::warn!(
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    agent_did = %agent_did,
+                    reason = %reason,
+                    "rejecting request before dispatch"
+                );
+                let request_id = request.request_id.clone();
+                fail_routed_request_from_snapshot(
+                    &routed_snapshot,
+                    node.clone(),
+                    node_did.as_str(),
+                    request,
+                    agent_did.as_str(),
+                    &reason,
+                )
+                .await?;
+                unresolved.forget(&request_id);
+                continue;
+            }
+        };
 
         let startup_diagnostic = admission_observation.demotion_reason(&resolution.agent_did);
         match effective_agent_admission(
@@ -527,12 +570,12 @@ pub(super) async fn resolve_agent_for_request(
 ) -> Result<Option<AgentResolution>> {
     let agent_did = request.agent_did.clone();
     let actor = identity::Did::new(&agent_did)?;
-    let Some(session_agent_did) = crate::session::load_session_agent_selection(
+    let Some(session_agent_did) = gents_session::session::load_session_agent_selection(
         node,
         &actor,
         &request.node_did,
         &request.session_id,
-        request.requester_did.as_deref(),
+        (!request.purpose.is_auxiliary()).then_some(request.requester_did.as_deref()),
     )
     .await?
     else {
@@ -567,9 +610,11 @@ async fn fail_routed_request_from_snapshot(
         return Ok(());
     };
     let actor = identity::Did::new(agent_did)?;
-    if let Err(error) =
-        crate::ConfigAccess::local_managed_agent(node.clone(), actor, identity.as_ref())
-    {
+    if let Err(error) = gents_store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        actor,
+        identity.as_ref(),
+    ) {
         tracing::warn!(request_id = %request.request_id, agent_did, %error, "routed request Agent signing capability unavailable; leaving request pending");
         return Ok(());
     }
@@ -589,7 +634,7 @@ pub(super) async fn fail_routed_request(
     node_did: &str,
     request: AgentRequest,
     agent_did: &str,
-    agent_identity: &dyn crate::store::identity::NodeIdentity,
+    agent_identity: &dyn gents_store::identity::NodeIdentity,
     error_message: &str,
 ) -> Result<()> {
     anyhow::ensure!(
@@ -601,17 +646,19 @@ pub(super) async fn fail_routed_request(
             Ok(origin) => origin,
             Err(error) => {
                 let reason = format!("request admission denied: {error:#}");
-                let outcome = crate::request::admission::terminalize_pending_request_rejection(
-                    &node,
-                    &request.doc_id,
-                    node_did,
-                    agent_did,
-                    agent_identity,
-                    &reason,
-                    "terminalize_invalid_execution_origin_before_route_rejection",
-                )
-                .await?;
-                if outcome == crate::request::admission::PendingRejectionOutcome::NotMatched {
+                let outcome =
+                    gents_session::request::admission::terminalize_pending_request_rejection(
+                        &node,
+                        &request.doc_id,
+                        node_did,
+                        agent_did,
+                        agent_identity,
+                        &reason,
+                        "terminalize_invalid_execution_origin_before_route_rejection",
+                    )
+                    .await?;
+                if outcome == gents_session::request::admission::PendingRejectionOutcome::NotMatched
+                {
                     tracing::warn!(
                         request_id = %request.request_id,
                         "request rejection did not match a visible pending request"

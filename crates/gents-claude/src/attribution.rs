@@ -36,6 +36,8 @@ const MAX_INDEX: u64 = 10_000_000;
 
 /// Claude Code `Te()` provider kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(rename_all = "snake_case"))]
 pub enum Provider {
     /// Anthropic's own API.
     FirstParty,
@@ -101,6 +103,8 @@ pub fn gateway_mark(token: &str) -> &'static str {
 
 /// A tagged project id and the settings layer it came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(deny_unknown_fields))]
 pub struct Project {
     /// Tagged project id (`claude_proj_...`).
     pub id: String,
@@ -110,6 +114,8 @@ pub struct Project {
 
 /// Every input of the attribution header.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(deny_unknown_fields))]
 pub struct Fields {
     /// Client version, `cc_version` before the fingerprint.
     pub version: String,

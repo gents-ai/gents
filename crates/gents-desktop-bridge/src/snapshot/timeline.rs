@@ -15,7 +15,7 @@ pub(super) fn normalize_timeline_text(value: Option<&str>) -> String {
     value.map(str::trim).unwrap_or_default().to_string()
 }
 
-fn tool_status_kind(status: Option<&str>) -> String {
+pub(super) fn tool_status_kind(status: Option<&str>) -> String {
     match status.unwrap_or_default().to_ascii_lowercase().as_str() {
         "completed" | "complete" | "success" => "success".to_string(),
         "failed" | "error" | "cancelled" | "timedout" => "error".to_string(),
@@ -399,7 +399,7 @@ mod tests {
             tool_call_key: "start-1".to_string(),
             request_id: Some("parent-1".to_string()),
             message_sequence: Some(2),
-            tool_name: Some(gents::tools::native::AGENT_NEW_TOOL_NAME.to_string()),
+            tool_name: Some(gents_protocol::tool_names::AGENT_NEW_TOOL_NAME.to_string()),
             tool_call_id: Some("start-1".to_string()),
             args: Some(r#"{"agent":"researcher","prompt":"trace the request flow"}"#.to_string()),
             partial_output_tail: None,
@@ -482,11 +482,11 @@ mod tests {
         for text in [
             "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"completed\"><result>finished</result></tool-completion>",
             "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"failed\"><result>error: no bin target named `verad`</result><reason>tool_failed</reason></tool-completion>",
-            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         ] {
             let message = MessageView {
                 runtime_control: true,
-                origin: Some(crate::types::RequestOriginView::BackgroundCompletion { notification: false }),
+                origin: Some(crate::types::RequestOriginView::BackgroundCompletion { notification: false, tool_call_doc_id: None, tool_name: None, status_kind: None }),
                 input_text: Some(text.into()),
                 ..user_message("internal-completion", 1, text)
             };
@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn user_text_that_looks_like_a_control_message_still_renders() {
-        let content = gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
+        let content = gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         let messages = vec![user_message("literal-user-text", 1, content)];
 
         let timeline = build_rendered_timeline(&messages, &[], &[]);

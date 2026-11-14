@@ -1,0 +1,13 @@
+{
+  "defs": "def plugin($name): .manifest.plugins[] | select(.name == $name);",
+  "jq": [
+    {
+      "name": "HTTP research tools need no native service",
+      "expr": "[.manifest.plugins[] | select(.name != \"browser_exec\")] | length == 3 and all(.[]; .service == null and .manifold.fs == \"None\" and .manifold.net.OutboundHttp == null and .manifold.env == \"None\" and .manifold.child_process == false and .manifold.http_timeout_ms == 10000)"
+    },
+    {
+      "name": "browser service exposes its operations and requires native authority",
+      "expr": "(plugin(\"browser_exec\")) | .input_schema.additionalProperties == false and (.input_schema.properties.op.enum | sort) == ([\"exec\",\"read\",\"doctor\",\"help\",\"close\",\"discover\",\"connect\",\"status\",\"tabs\",\"disconnect\"] | sort) and .service.skip_when == {\"op\":\"help\"} and .manifold.child_process == true and .manifold.net.OutboundHttp == [\"http://127.0.0.1:18765\"] and .service.optional == true"
+    }
+  ]
+}

@@ -1,0 +1,102 @@
+import Lean
+
+namespace Identity.AgentBlockSigning
+
+/-- Managed Agent signing authority requires the held runtime root, a validated
+Agent binding, and the same originating node and actor at the write owner.
+DefraDB separately authorizes the actor. A registered DID alone does not carry
+root or Agent signing authority. -/
+inductive Route where
+  | native | agent | refuse
+  deriving BEq, DecidableEq, Repr
+
+def route (managed valid rootHeld : Bool) (node actor : String)
+    (signer bindingNode : Option String) : Route :=
+  if !managed then
+    if actor.isEmpty || (!node.isEmpty && actor == node) then .native else .refuse
+  else if rootHeld && valid && !node.isEmpty && bindingNode == some node &&
+      !actor.isEmpty && signer == some actor then .agent
+  else .refuse
+
+theorem node_keeps_native (valid held : Bool) (node : String)
+    (signer bindingNode : Option String) :
+    route false valid held node node signer bindingNode = .native := by
+  simp [route]
+
+theorem invalid_binding_never_signs (held : Bool) (node actor : String)
+    (signer bindingNode : Option String) :
+    route true false held node actor signer bindingNode = .refuse := by
+  simp [route]
+
+theorem missing_root_never_signs (valid : Bool) (node actor : String)
+    (signer bindingNode : Option String) :
+    route true valid false node actor signer bindingNode = .refuse := by
+  simp [route]
+
+theorem managed_never_falls_back (valid held : Bool) (node actor : String)
+    (signer bindingNode : Option String) :
+    route true valid held node actor signer bindingNode ≠ .native := by
+  simp [route]
+  split <;> decide
+
+theorem matched_agent_signs (node actor : String)
+    (nonemptyNode : node.isEmpty = false) (nonemptyActor : actor.isEmpty = false) :
+    route true true true node actor (some actor) (some node) = .agent := by
+  simp [route, nonemptyNode, nonemptyActor]
+
+/-- The config tool (self-config and its `policy` resource) always asks for
+the managed route: every read and write it issues is signed by the invoking
+Agent's own managed signer, or refused. Decision: an Agent never configures as
+the Node and never as its bare DID; full native admin stays with the client key
+(`Identity.GrantSets.only_init_user_is_admin`). The Node DID is not an Agent,
+so an invoking actor equal to the Node is refused before the route. -/
+def configToolRoute (valid rootHeld : Bool) (node actor : String)
+    (signer bindingNode : Option String) : Route :=
+  if !node.isEmpty && actor == node then .refuse
+  else route true valid rootHeld node actor signer bindingNode
+
+theorem config_tool_never_native (valid held : Bool) (node actor : String)
+    (signer bindingNode : Option String) :
+    configToolRoute valid held node actor signer bindingNode ≠ .native := by
+  unfold configToolRoute
+  split
+  · decide
+  · exact managed_never_falls_back valid held node actor signer bindingNode
+
+theorem config_tool_refuses_missing_signer (valid held : Bool) (node actor : String)
+    (bindingNode : Option String) :
+    configToolRoute valid held node actor none bindingNode = .refuse := by
+  unfold configToolRoute
+  split
+  · rfl
+  · simp [route]
+
+theorem config_tool_refuses_node_actor (valid held : Bool) (node : String)
+    (signer bindingNode : Option String) (nonempty : node.isEmpty = false) :
+    configToolRoute valid held node node signer bindingNode = .refuse := by
+  simp [configToolRoute, nonempty]
+
+structure Case where
+  name : String
+  managed : Bool
+  valid : Bool
+  rootHeld : Bool
+  node : String
+  actor : String
+  signer : Option String
+  bindingNode : Option String
+
+def cases : List Case :=
+  [ ⟨"managed-agent", true, true, true, "node", "agent-a", some "agent-a", some "node"⟩
+  , ⟨"missing-key", true, true, true, "node", "agent-a", none, some "node"⟩
+  , ⟨"sibling-key", true, true, true, "node", "agent-a", some "agent-b", some "node"⟩
+  , ⟨"invalid-binding", true, false, true, "node", "agent-a", some "agent-a", some "node"⟩
+  , ⟨"spoofed-root", true, true, false, "node", "agent-a", some "agent-a", some "node"⟩
+  , ⟨"foreign-runtime", true, true, true, "foreign-node", "agent-a", some "agent-a", some "node"⟩
+  , ⟨"empty-actor", true, true, true, "node", "", some "agent-a", some "node"⟩
+  , ⟨"ordinary-node", false, false, false, "node", "node", none, none⟩
+  , ⟨"ordinary-default-node", false, false, false, "node", "", none, none⟩
+  , ⟨"unconfigured-explicit-actor", false, false, false, "", "agent-a", none, none⟩
+  , ⟨"ordinary-user-key-is-not-adopted", false, true, false, "node", "user", some "user", none⟩ ]
+
+end Identity.AgentBlockSigning

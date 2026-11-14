@@ -8,12 +8,13 @@ use gents_protocol::row::{
     project_node_readiness_source, AgentReadinessSourceEntry, AgentReadinessUnavailableReason,
     NodeReadinessProcessState, NodeReadinessSnapshot,
 };
+
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::runtime::agent::ProcessLifecycleState;
-use crate::runtime::snapshot::ActiveRuntimeSnapshot;
-use crate::store::graphql::escape_graphql_string;
+use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
+use gents_store::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentAdmissionObservation {
@@ -78,8 +79,17 @@ pub(crate) struct NodeReadinessPublisherOwner {
 }
 
 const MAX_PERSIST_ATTEMPTS: usize = 5;
-const MIN_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(250);
+const MIN_PERSIST_ATTEMPT_TIMEOUT_MS: u64 = 250;
+const MIN_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(MIN_PERSIST_ATTEMPT_TIMEOUT_MS);
 const PRODUCTION_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
+const PRODUCTION_RETRY_DELAY: Duration = Duration::from_secs(1);
+
+pub(crate) const PRODUCTION_COMMAND_TIMEOUT: Duration = Duration::from_millis(
+    (PRODUCTION_PERSIST_ATTEMPT_TIMEOUT.as_secs() + PRODUCTION_RETRY_DELAY.as_secs())
+        * 1000
+        * MAX_PERSIST_ATTEMPTS as u64
+        + MIN_PERSIST_ATTEMPT_TIMEOUT_MS,
+);
 
 #[async_trait::async_trait]
 pub(crate) trait NodeReadinessWriter: Send + Sync {
@@ -193,7 +203,7 @@ impl NodeReadinessPublisherHandle {
         Self::start_with_writer_and_timeout(
             Arc::new(DefraNodeReadinessWriter { node }),
             node_did,
-            Duration::from_secs(1),
+            PRODUCTION_RETRY_DELAY,
             Some(PRODUCTION_PERSIST_ATTEMPT_TIMEOUT),
         )
     }
@@ -223,7 +233,7 @@ impl NodeReadinessPublisherHandle {
         Self::start_with_writer_and_timeout(
             Arc::new(DefraNodeReadinessWriter { node }),
             node_did,
-            Duration::from_secs(1),
+            PRODUCTION_RETRY_DELAY,
             None,
         )
     }
@@ -311,6 +321,10 @@ impl NodeReadinessPublisherHandle {
                         .get(&agent_did)
                         .map(|unavailable| unavailable.public_reason),
                     startup_demoted: false,
+                    effective_inference: snapshot
+                        .agents
+                        .get(&agent_did)
+                        .map(|agent| agent.effective_inference()),
                 };
                 (agent_did, entry)
             })
@@ -508,6 +522,7 @@ async fn run_publisher(
                                 AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                             ),
                             startup_demoted: false,
+                            effective_inference: None,
                         },
                     )]),
                     slot_generations: BTreeMap::new(),
@@ -830,7 +845,7 @@ async fn persist_candidate(
 }
 
 fn is_fatal_node_readiness_write(error: &anyhow::Error) -> bool {
-    if crate::store::graphql::is_storage_full(error.as_ref()) {
+    if gents_store::graphql::is_storage_full(error.as_ref()) {
         return true;
     }
     #[cfg(test)]
@@ -842,6 +857,67 @@ fn is_fatal_node_readiness_write(error: &anyhow::Error) -> bool {
         let _ = error;
         false
     }
+}
+
+pub(crate) async fn claim_node_readiness_for_new_process(
+    node: &std::sync::Arc<defra_node::Node>,
+    node_did: &str,
+) -> Result<()> {
+    use gents_protocol::document_query::{
+        fields::node_readiness as readiness_fields, Filter, Input, Update,
+    };
+    anyhow::ensure!(
+        node.node_identity_did() == Some(node_did),
+        "readiness claim DID does not match the configured node identity"
+    );
+    let actor = identity::Did::new(node_did)?;
+    let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let updated_at = Utc::now().to_rfc3339();
+    access
+        .transact_write("readiness.claim", |txn| {
+            let actor = &actor;
+            let updated_at = &updated_at;
+            Box::pin(async move {
+                let Some(row) =
+                    gents_store::config_client::node_readiness::observe_published_readiness(
+                        txn, actor,
+                    )
+                    .await?
+                else {
+                    return Ok::<_, anyhow::Error>(());
+                };
+                let Ok(mut snapshot) =
+                    gents_protocol::node_readiness::decode_node_readiness_snapshot(&row, node_did)
+                else {
+                    return Ok(());
+                };
+                if matches!(
+                    snapshot.process_state,
+                    NodeReadinessProcessState::Shutdown | NodeReadinessProcessState::Recovering
+                ) {
+                    return Ok(());
+                }
+                tracing::info!(
+                    node_did,
+                    claimed_process_state = snapshot.process_state.as_str(),
+                    "claiming the readiness row a previous process left behind"
+                );
+                snapshot.process_state = NodeReadinessProcessState::Recovering;
+                let snapshot_json = serde_json::to_string(&snapshot)?;
+                let update = Update::matching(
+                    Filter::eq(readiness_fields::NODE_DID, node_did),
+                    Input::new()
+                        .set(readiness_fields::SNAPSHOT_JSON, snapshot_json.as_str())
+                        .set(readiness_fields::UPDATED_AT, updated_at.as_str()),
+                )
+                .render();
+                let response = txn.run(&update).await?;
+                gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeReadiness")
+                    .context("readiness document disappeared while claiming")?;
+                Ok(())
+            })
+        })
+        .await
 }
 
 pub(crate) async fn upsert_node_readiness(
@@ -859,7 +935,7 @@ pub(crate) async fn upsert_node_readiness(
         "readiness publisher DID does not match the configured node identity"
     );
     let actor = identity::Did::new(node_did)?;
-    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
     let snapshot_json = serde_json::to_string(snapshot)?;
     let escaped_did = escape_graphql_string(node_did);
     let escaped_snapshot = escape_graphql_string(&snapshot_json);
@@ -950,7 +1026,7 @@ pub(crate) async fn upsert_node_readiness(
         );
     }
     if let Err(error) =
-        crate::store::config_client::recover_deferred_node_operations(node, node_did).await
+        gents_store::config_client::recover_deferred_node_operations(node, node_did).await
     {
         tracing::warn!(node_did, error = %error, "deferred node operation relationship recovery failed");
     }
@@ -976,3 +1052,123 @@ mod tests;
 #[cfg(test)]
 #[path = "node_readiness_publisher/deep_history_tests.rs"]
 mod deep_history_tests;
+
+#[cfg(test)]
+mod candidate_conformance {
+    use super::*;
+    use gents_lean_vocab::families::runtime_readiness_persistence_commit_candidates as family;
+    use std::collections::VecDeque;
+
+    struct Writer {
+        results: std::sync::Mutex<VecDeque<String>>,
+        persisted: std::sync::Mutex<Vec<String>>,
+    }
+    #[async_trait::async_trait]
+    impl NodeReadinessWriter for Writer {
+        async fn upsert(&self, _: &str, snapshot: &NodeReadinessSnapshot, _: &str) -> Result<()> {
+            let result = self
+                .results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("modeled write outcome");
+            match result.as_str() {
+                "ok" => {
+                    self.persisted.lock().unwrap().push(
+                        serde_json::to_value(snapshot.process_state)
+                            .unwrap()
+                            .as_str()
+                            .unwrap()
+                            .into(),
+                    );
+                    Ok(())
+                }
+                "full" => Err(gents_protocol::database_error::StorageFull.into()),
+                "timeout" => std::future::pending().await,
+                "fail" => anyhow::bail!("injected write failure"),
+                other => panic!("unmodeled write result {other}"),
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn generated_readiness_commits_keep_failed_candidates_unpublished() {
+        for case in family::cases() {
+            let writer = Arc::new(Writer {
+                results: Default::default(),
+                persisted: Default::default(),
+            });
+            let erased: Arc<dyn NodeReadinessWriter> = writer.clone();
+            let mut state = PublisherState {
+                node_did: "did:test:node".into(),
+                process_state: NodeReadinessProcessState::Uninitialized,
+                router_generation: 0,
+                source: Some(ReadinessSource {
+                    active_generation: 0,
+                    default_agent_did: "agent".into(),
+                    entries: BTreeMap::from([(
+                        "agent".into(),
+                        AgentReadinessSourceEntry {
+                            effective_inference: None,
+
+                            agent_did: "agent".into(),
+                            dispatcher_present: false,
+                            unavailable_reason: Some(
+                                AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
+                            ),
+                            startup_demoted: false,
+                        },
+                    )]),
+                    slot_generations: BTreeMap::new(),
+                }),
+                registered_slots: BTreeSet::new(),
+                demotions: BTreeMap::new(),
+                persisted: None,
+                updated_at: String::new(),
+                persist_attempt_timeout: Some(Duration::from_millis(1)),
+            };
+            let (observation, observed) = watch::channel(AgentAdmissionObservation::default());
+            let mut result = Vec::new();
+            for update in &case.input.updates {
+                *writer.results.lock().unwrap() = update.writes.iter().cloned().collect();
+                let cancel = CancellationToken::new();
+                if update.cancelled {
+                    cancel.cancel();
+                }
+                let mut candidate = state.clone();
+                candidate.process_state =
+                    serde_json::from_value(serde_json::json!(update.process)).unwrap();
+                let committed = commit_candidate(
+                    &erased,
+                    &mut state,
+                    candidate,
+                    &observation,
+                    Duration::ZERO,
+                    &cancel,
+                )
+                .await;
+                let current = observed.borrow().clone();
+                result.push(family::Observation {
+                    accepted: committed.is_ok(),
+                    storage_full: committed
+                        .as_ref()
+                        .err()
+                        .is_some_and(|error| gents_store::graphql::is_storage_full(error.as_ref())),
+                    process: serde_json::to_value(current.process_state)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .into(),
+                    source_generation: current.source_generation,
+                    demotions: current
+                        .demotions
+                        .into_iter()
+                        .map(|(agent, reason)| format!("{agent}:{reason}"))
+                        .collect(),
+                    persisted: writer.persisted.lock().unwrap().clone(),
+                });
+            }
+            case.check(result);
+        }
+    }
+}

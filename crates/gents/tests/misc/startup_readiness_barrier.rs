@@ -4,11 +4,12 @@ use anyhow::Result;
 use events::EventName;
 use gents::defra_node::Node as EmbeddedNode;
 use gents::runtime::startup_readiness::StartupReadinessOptions;
-use gents::store::graphql::escape_graphql_string;
-use gents::{DocumentRuntimeOptions, Gents, ProcessLifecycleState, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents, ProcessLifecycleState};
 use gents_protocol::row::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
 };
+use gents_store::graphql::escape_graphql_string;
+use gents_tools::surface::ToolCeiling;
 use tokio::sync::watch;
 
 use crate::support::fixtures::bind_managed_agent_backend;
@@ -92,7 +93,7 @@ impl gents::runtime::startup_readiness::StartupBuildFailureObserver
 
 async fn wait_for_node_readiness(
     node: &EmbeddedNode,
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     agent_did: &str,
     state: AgentReadinessState,

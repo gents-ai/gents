@@ -1,352 +1,209 @@
-use crate::support::*;
-
-use std::fs;
-use std::time::Duration;
-
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use serde_json::Value;
-use uuid::Uuid;
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let home_dir = tempdir.path().join("home");
-    fs::create_dir_all(&home_dir)?;
-    let model_name = format!("mock-goal-cli-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockChatEndpoint::start(&model_name, "goal session opened")?;
-    let port = allocate_port()?;
-    let graphql = graphql_url(port);
-    let agent_name = format!("cli-goal-{}", Uuid::new_v4().simple());
-    let init = run_init_json(
-        &home_dir,
-        &[
-            "--node-name",
-            &agent_name,
-            "--model-name",
-            &model_name,
-            "--inference-url",
-            mock_endpoint.endpoint(),
-        ],
-    )?;
-    let node_did = node_did_from_init(&init)?;
-    let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+use super::cli_core_fixture::LiveCli;
 
-    let session_id = format!("goal-session-{}", Uuid::new_v4().simple());
-    // A goal binds to an existing session; the User opens it with a request
-    // and lets that turn settle before configuring the goal.
-    run_cli_json(
-        &home_dir,
-        &[
-            "utils",
-            "debug",
-            "request",
-            "submit",
-            "--graphql",
-            &graphql,
-            "--node-did",
-            &node_did,
-            "--session-id",
-            &session_id,
-            "--content",
-            "Open the goal session.",
-        ],
-    )?;
-    let objective = "Finish the CLI durable goal";
-    let set = run_cli_json(
-        &home_dir,
-        &[
+async fn start_paused_goal(
+    live: &LiveCli,
+    session: &str,
+    objective: &str,
+    budget: Option<&str>,
+) -> Result<(Value, String)> {
+    let fifo = live.home.join("goal-release");
+    let status = tokio::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .await?;
+    ensure!(status.success(), "creating goal release FIFO");
+    let mut writer = tokio::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .await?;
+    let args = serde_json::json!({
+        "command": format!("IFS= read -r line < '{}'; printf 'goal fixture released'", fifo.display()),
+        "args": [],
+    });
+    let hold = format!("Call bash_unrestricted directly, exactly once, with these arguments: {args}. Do not call spawn_process or any other tool. Wait for the result, then acknowledge briefly.");
+    let started = live
+        .json(&[
             "automation",
             "goal",
-            "set",
+            "start",
             "--graphql",
-            &graphql,
+            &live.graphql,
             "--session",
-            &session_id,
+            session,
             "--objective",
-            objective,
-            "--status",
-            "active",
-            "--token-budget",
-            "5000",
-        ],
-    )?;
-    assert_eq!(
-        set.get("objective").and_then(Value::as_str),
-        Some(objective)
+            &hold,
+        ])
+        .await?;
+    let predecessor = started["request_id"]
+        .as_str()
+        .context("goal start request")?
+        .to_owned();
+    let query = format!(
+        r#"{{AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "bash_unrestricted"}}}}) {{lifecycle_state}}}}"#,
+        crate::support::escape_graphql_string(&predecessor)
     );
-    assert_eq!(set.get("status").and_then(Value::as_str), Some("active"));
-    assert_eq!(set.get("token_budget").and_then(Value::as_i64), Some(5000));
-
-    let paused = run_cli_json(
-        &home_dir,
-        &[
-            "automation",
-            "goal",
-            "set",
-            "--graphql",
-            &graphql,
-            "--session",
-            &session_id,
-            "--status",
-            "paused",
-        ],
-    )?;
-    assert_eq!(paused.get("status").and_then(Value::as_str), Some("paused"));
-    assert_eq!(
-        paused.get("objective").and_then(Value::as_str),
-        Some(objective)
-    );
-
-    let rejected = run_cli_failure_stderr(
-        &home_dir,
-        &[
-            "automation",
-            "goal",
-            "set",
-            "--graphql",
-            &graphql,
-            "--session",
-            &session_id,
-            "--status",
-            "active",
-        ],
-    )?;
-    assert!(rejected.contains("resume-request"), "{rejected}");
-
-    let shown = run_cli_json(
-        &home_dir,
-        &[
-            "automation",
-            "goal",
-            "show",
-            "--graphql",
-            &graphql,
-            "--session",
-            &session_id,
-        ],
-    )?;
-    assert_eq!(
-        shown.get("objective").and_then(Value::as_str),
-        Some(objective)
-    );
-    assert_eq!(shown.get("status").and_then(Value::as_str), Some("paused"));
-    assert_eq!(
-        shown.get("continuation_sequence"),
-        paused.get("continuation_sequence")
-    );
-
-    let unbudgeted = run_cli_json(
-        &home_dir,
-        &[
-            "automation",
-            "goal",
-            "set",
-            "--graphql",
-            &graphql,
-            "--session",
-            &session_id,
-            "--clear-token-budget",
-        ],
-    )?;
-    assert!(unbudgeted.get("token_budget").is_some_and(Value::is_null));
-
-    graphql_query(
-        &graphql,
-        &format!(
-            r#"mutation {{
-                create_Goal(input: {{
-                    goal_id: "duplicate-{}",
-                    session_id: "{}",
-                    node_did: "{}",
-                    objective: "replicated twin",
-                    status: "paused",
-                    created_at: "2026-07-16T00:00:00Z"
-                }}) {{ _docID }}
-            }}"#,
-            Uuid::new_v4().simple(),
-            escape_graphql_string(&session_id),
-            escape_graphql_string(&node_did),
-        ),
+    gents::support::live_inference::wait_for_rows(
+        &live.access,
+        "AgentToolCall",
+        &query,
+        Duration::from_secs(30),
+        |data| {
+            data["AgentToolCall"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row["lifecycle_state"] == "running"))
+        },
     )
-    .await?;
-
-    let cleared = run_cli_json(
-        &home_dir,
-        &[
-            "automation",
-            "goal",
-            "clear",
-            "--graphql",
-            &graphql,
-            "--session",
-            &session_id,
-        ],
-    )?;
-    assert_eq!(cleared.get("deleted").and_then(Value::as_bool), Some(true));
-
-    let query = graphql_query(
-        &graphql,
-        &format!(
-            r#"{{ Goal(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ goal_id }} }}"#,
-            escape_graphql_string(&session_id)
-        ),
-    )
-    .await?;
-    assert_eq!(
-        query
-            .pointer("/data/Goal")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(0)
-    );
-    Ok(())
+    .await;
+    let mut args = vec![
+        "automation",
+        "goal",
+        "set",
+        "--graphql",
+        &live.graphql,
+        "--session",
+        session,
+        "--objective",
+        objective,
+        "--status",
+        "paused",
+    ];
+    if let Some(budget) = budget {
+        args.extend(["--token-budget", budget]);
+    }
+    let paused = live.json(&args).await?;
+    writer.write_all(b"released\n").await?;
+    live.terminal(&predecessor).await?;
+    Ok((paused, predecessor))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let home_dir = tempdir.path().join("home");
-    fs::create_dir_all(&home_dir)?;
-    let model_name = format!("mock-resume-cli-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockChatEndpoint::start(&model_name, "Durable predecessor complete.")?;
-    let port = allocate_port()?;
-    let graphql = graphql_url(port);
-    let agent_name = format!("cli-resume-{}", Uuid::new_v4().simple());
-    let init = run_init_json(
-        &home_dir,
-        &[
-            "--node-name",
-            &agent_name,
-            "--model-name",
-            &model_name,
-            "--inference-url",
-            mock_endpoint.endpoint(),
-        ],
-    )?;
-    let node_did = node_did_from_init(&init)?;
-    let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
-    let session_id = format!("resume-session-{}", Uuid::new_v4().simple());
-
-    let submitted = run_cli_json(
-        &home_dir,
-        &[
-            "utils",
-            "debug",
-            "request",
-            "submit",
-            "--graphql",
-            &graphql,
-            "--node-did",
-            &node_did,
-            "--session-id",
-            &session_id,
-            "--content",
-            "Finish this predecessor before operator recovery.",
-            "--timeout-secs",
-            "30",
-            "--poll-secs",
-            "1",
-        ],
-    )?;
-    assert_eq!(
-        submitted.pointer("/output/kind").and_then(Value::as_str),
-        Some("terminal_message")
-    );
-    let predecessor = submitted
-        .get("request_id")
-        .and_then(Value::as_str)
-        .context("signed submission request ID")?;
-    let paused = run_cli_json(
-        &home_dir,
-        &[
-            "automation",
-            "goal",
-            "set",
-            "--graphql",
-            &graphql,
-            "--session",
-            &session_id,
-            "--objective",
-            "Resume from this completed signed predecessor.",
-            "--status",
-            "paused",
-            "--token-budget",
-            "1",
-        ],
-    )?;
-    assert_eq!(paused.get("status").and_then(Value::as_str), Some("paused"));
-    let resume_args = [
-        "automation",
-        "goal",
-        "resume-request",
-        "--graphql",
-        &graphql,
-        "--session",
-        &session_id,
-        "--from",
-        predecessor,
-    ];
-    let first = run_cli_json(&home_dir, &resume_args)?;
-    assert_eq!(first.get("created").and_then(Value::as_bool), Some(true));
-    let child_id = first
-        .get("request_id")
-        .and_then(Value::as_str)
-        .context("resume receipt request ID")?;
-    let second = run_cli_json(&home_dir, &resume_args)?;
-    assert_eq!(second.get("created").and_then(Value::as_bool), Some(false));
-    assert_eq!(second.get("request_id"), first.get("request_id"));
-    assert_eq!(second.get("doc_id"), first.get("doc_id"));
-    assert_eq!(second.get("goal_id"), first.get("goal_id"));
-
-    let response = graphql_query(
-        &graphql,
-        &format!(
-            r#"{{
-        AgentRequest(filter: {{ {} }}) {{
-            _docID request_id session_id node_did caused_by_trigger_kind
-            caused_by_parent_request_id caused_by_parent_request_doc_id
-        }}
-    }}"#,
-            gents::session::public_request_filter(&format!(
-                r#"caused_by_parent_request_id: {{ _eq: "{}" }}"#,
-                escape_graphql_string(predecessor)
+#[ignore = "select GENTS_LIVE_TARGET and run the live CLI target"]
+async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Result<()> {
+    let live = LiveCli::start("live-cli-goal-config", true).await?;
+    let result = async {
+        let session = uuid::Uuid::new_v4().to_string();
+        live.request(
+            &session,
+            "Acknowledge the new session briefly; do not call tools.",
+        )
+        .await?;
+        let objective = "Finish the CLI durable goal after an explicit resumption";
+        let (paused, _) = start_paused_goal(&live, &session, objective, Some("5000")).await?;
+        ensure!(
+            paused["objective"] == objective
+                && paused["status"] == "paused"
+                && paused["token_budget"] == 5000,
+            "goal configuration did not persist: {paused}"
+        );
+        let rejected = live
+            .failure(&[
+                "automation",
+                "goal",
+                "set",
+                "--graphql",
+                &live.graphql,
+                "--session",
+                &session,
+                "--status",
+                "active",
+            ])
+            .await?;
+        ensure!(
+            rejected.contains("resume-request"),
+            "implicit resume did not name the explicit action: {rejected}"
+        );
+        let shown = live
+            .json(&[
+                "automation",
+                "goal",
+                "show",
+                "--graphql",
+                &live.graphql,
+                "--session",
+                &session,
+            ])
+            .await?;
+        ensure!(
+            shown["objective"] == objective
+                && shown["status"] == "paused"
+                && shown["continuation_sequence"] == paused["continuation_sequence"],
+            "rejected resume changed the Goal: {shown}"
+        );
+        let unbudgeted = live
+            .json(&[
+                "automation",
+                "goal",
+                "set",
+                "--graphql",
+                &live.graphql,
+                "--session",
+                &session,
+                "--clear-token-budget",
+            ])
+            .await?;
+        ensure!(
+            unbudgeted.get("token_budget").is_some_and(Value::is_null),
+            "budget was not cleared: {unbudgeted}"
+        );
+        let cleared = live
+            .json(&[
+                "automation",
+                "goal",
+                "clear",
+                "--graphql",
+                &live.graphql,
+                "--session",
+                &session,
+            ])
+            .await?;
+        ensure!(
+            cleared["deleted"] == true,
+            "goal clear did not delete: {cleared}"
+        );
+        let rows = live
+            .access
+            .execute(&format!(
+                r#"{{Goal(filter: {{session_id: {{_eq: "{}"}}}}) {{goal_id}}}}"#,
+                crate::support::escape_graphql_string(&session)
             ))
-        ),
-    )
-    .await?;
-    let children = response
-        .pointer("/data/AgentRequest")
-        .and_then(Value::as_array)
-        .context("physical resume children")?;
-    assert_eq!(
-        children.len(),
-        1,
-        "one child of this predecessor: {response}"
-    );
-    let child = &children[0];
-    assert_eq!(
-        child.get("request_id").and_then(Value::as_str),
-        Some(child_id)
-    );
-    assert_eq!(
-        child.get("session_id").and_then(Value::as_str),
-        Some(session_id.as_str())
-    );
-    assert_eq!(
-        child.get("node_did").and_then(Value::as_str),
-        Some(node_did.as_str())
-    );
-    assert_eq!(
-        child.get("caused_by_trigger_kind").and_then(Value::as_str),
-        Some("goal")
-    );
-    assert!(child
-        .get("caused_by_parent_request_doc_id")
-        .and_then(Value::as_str)
-        .is_some_and(|id| !id.is_empty()));
-    Ok(())
+            .await?;
+        ensure!(
+            rows["data"]["Goal"].as_array().is_some_and(Vec::is_empty),
+            "Goal remained after clear: {rows}"
+        );
+        Ok(())
+    }
+    .await;
+    live.finish(result).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "select GENTS_LIVE_TARGET and run the live CLI target"]
+async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() -> Result<()> {
+    let live = LiveCli::start("live-cli-goal-resume", true).await?;
+    let result = async {
+        let session = uuid::Uuid::new_v4().to_string();
+        live.request(&session, "Acknowledge this session briefly; do not call tools.").await?;
+        let (_, predecessor) = start_paused_goal(&live, &session,
+            "Call update_goal with status complete, then acknowledge briefly.", None).await?;
+        let args = ["automation", "goal", "resume-request", "--graphql", &live.graphql, "--session", &session, "--from", &predecessor];
+        let first = live.json(&args).await?;
+        let second = live.json(&args).await?;
+        ensure!(first["created"] == true && second["created"] == false, "resume did not replay the original receipt: {first} {second}");
+        for field in ["request_id", "doc_id", "goal_id"] { ensure!(first[field] == second[field], "resume changed {field}"); }
+        let child = first["request_id"].as_str().context("resume child")?;
+        live.terminal(child).await?;
+        let rows = live.access.execute(&format!(r#"{{AgentRequest(filter: {{caused_by_parent_request_id: {{_eq: "{}"}}, caused_by_trigger_kind: {{_eq: "goal"}}}}) {{request_id session_id node_did caused_by_parent_request_doc_id}}}}"#, crate::support::escape_graphql_string(&predecessor))).await?;
+        let children = rows["data"]["AgentRequest"].as_array().context("resume children")?;
+        ensure!(children.len() == 1 && children[0]["request_id"] == child && children[0]["session_id"] == session && children[0]["node_did"] == live.node, "resume did not retain one exact child: {rows}");
+        ensure!(children[0]["caused_by_parent_request_doc_id"].as_str().is_some_and(|s| !s.is_empty()), "resume omitted its physical predecessor");
+        Ok(())
+    }.await;
+    live.finish(result).await
 }

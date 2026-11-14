@@ -1,46 +1,196 @@
+import Proofs.Conformance.Identity.SessionChild
+import Proofs.Conformance.RemoteDelivery
+import Proofs.Conformance.StagedPermissionObjects
+import Proofs.Conformance.SessionStopAdmission
+import Proofs.Conformance.SessionInputEditMalformed
+import Proofs.Conformance.StartupReadiness
+import Proofs.Conformance.ProviderViewCallKeys
+import Proofs.Conformance.ToolSurfaceArtifact
+import Proofs.Conformance.WorkspaceFileConsent
+import Proofs.Conformance.AuthoringFileMode
+import Proofs.Conformance.DiscoveryFieldVisibility
+import Proofs.Conformance.DatastoreProtection
+import Proofs.Conformance.Identity.DelegatedPublicationRecovery
+import Proofs.Conformance.SelfConfigStructured
+import Proofs.Conformance.Recovery.PeriodicRegistry
+import Proofs.Conformance.ProcessControlTerminal
+import Proofs.Conformance.ToolCallTimeoutAfterSweep
+import Proofs.Conformance.PluginJobCallerInterrupt
+import Proofs.Conformance.BackgroundDiagnostics
+import Proofs.Conformance.QueueEditSkillContext
+import Proofs.Conformance.SessionStaleCompletion
+import Proofs.Conformance.WorkspaceDirtyTrunk
+import Proofs.Conformance.WorkspaceOverlayCwd
+import Proofs.Conformance.SessionOrigin
+import Proofs.Conformance.MailboxContent
+import Proofs.Conformance.ManualRequest
+import Proofs.Conformance.PendingRejection
+import Proofs.Conformance.ManagedExecSpawn
+import Proofs.Conformance.PluginBind
+import Proofs.Conformance.OperatorProtection
+import Proofs.Conformance.EnrollmentMemberRenewal
+import Proofs.Conformance.ClaudeAuditStop
+import Proofs.Conformance.ProviderInputCalibration
+import Proofs.Conformance.UsageCacheRuntime
+import Proofs.Conformance.RenderedCaptureBlockTurns
+import Proofs.Conformance.EventGroupClock
+import Proofs.Conformance.GoalResetResumeAccount
+import Proofs.Conformance.GoalOperatorResumeProfiles
+import Proofs.Conformance.Identity.SessionInputEdit
+import Proofs.Conformance.Identity.ClientTransport
+import Proofs.Conformance.PluginDataWrites
+import Proofs.Conformance.PluginHostCalls
+import Proofs.Conformance.CallbackAdmission
+import Proofs.Conformance.GoalResetAccount
+import Proofs.Conformance.WakeRedriveSweep
+import Proofs.Conformance.ToolAdmission
+import Proofs.Conformance.StartupPublication
+import Proofs.Conformance.RequestRepairScope
+import Proofs.Conformance.InterruptRequestDrain
+import Proofs.Conformance.RootCandidates
+import Proofs.Conformance.ToolRoot
+import Proofs.Conformance.MCPHealthShutdown
+import Proofs.Conformance.DatastoreWrite
+import Proofs.Conformance.LspConsent
+import Proofs.Conformance.ConfigurationDiscovery
+import Proofs.Conformance.P2pAdministration
+import Proofs.Conformance.Views
+import Proofs.Conformance.AgentViews
+import Proofs.Conformance.InferenceViews
+import Proofs.Conformance.PluginGrantDeclaration
+import Proofs.Conformance.EnrollmentRenewalNotices
+import Proofs.Conformance.Scope
+import Proofs.Conformance.EnrollmentAutoRenewal
+import Proofs.Conformance.EnrollmentCore
+import Proofs.Conformance.PairingSweepScheduling
+import Proofs.Conformance.Identity.Operations
+import Proofs.Conformance.ToolDispatch
+import Proofs.Conformance.RequestAssembly
+import Proofs.Conformance.UsageWrite
+import Proofs.Conformance.SessionMessageKill
+import Proofs.Conformance.InferenceObservationRegistry
+import Proofs.Conformance.EagerStreaming
+import Proofs.Conformance.BackendHealthRetention
+import Proofs.Conformance.BackendProbeSchedule
+import Proofs.Conformance.BackendHealthAdmission
+import Proofs.Conformance.CaptureScope
+import Proofs.Conformance.InferenceSlotAccounting
+import Proofs.Conformance.FleetSlotAccounting
+import Proofs.Conformance.Identity.AgentBaseline
+import Proofs.Conformance.InferenceDroppedPermit
+import Proofs.Conformance.EventSourceCursor
+import Proofs.Conformance.Identity.AgentTargetAccess
+import Proofs.Conformance.Identity.WorkspaceCompletion
+import Proofs.Conformance.SessionObservation
+import Proofs.Conformance.SourceBoundary
+import Proofs.Conformance.LateDelivery
+import Proofs.Conformance.WorkspaceProvision
+import Proofs.Conformance.BaseFreezeRecovery
+import Proofs.Conformance.Identity.ReceiverGrant
+import Proofs.Conformance.Identity.WorkspaceRoot
+import Proofs.Conformance.Identity.WorkspaceAndFileRequests
+import Proofs.Conformance.Identity.WorkspaceCapability
+import Proofs.Conformance.Identity.MailboxAccess
+import Proofs.Conformance.Identity.SessionChildLocalSelfPublication
+import Proofs.Conformance.Identity.NodeProvisioning
+import Proofs.Conformance.Identity.WorkspaceRootAccess
+import Proofs.Conformance.HomeResolution
+import Proofs.Conformance.GraphqlName
+import Proofs.Conformance.ClaudeRefresh
+import Proofs.Conformance.Identity.BlockScope
+import Proofs.Conformance.AccountResolver
+import Proofs.Conformance.Identity.NetworkProtocol
+import Proofs.Conformance.ClaudePromptAssembly
+import Proofs.Conformance.Identity.WorkspaceCallbackSelection
+import Proofs.Conformance.Identity.OwnerStaged
+import Proofs.Conformance.Identity.DirectoryPublication
+import Proofs.Conformance.Identity.ClientAgentJournal
+import Proofs.Conformance.Identity.ClientAgentCreation
+import Proofs.Conformance.Identity.SessionChildRecovery
+import Proofs.Conformance.Identity.OwnerRegistration
+import Proofs.Conformance.Identity.CreatedAgentAccess
+import Proofs.Conformance.Identity.ApplicationPairingAccess
+import Proofs.Conformance.ApplicationPairing
+import Proofs.Conformance.Identity.EnrollmentGrantTraces
+import Proofs.Conformance.Functions.Automation
+import Proofs.Conformance.Functions.Clients
+import Proofs.Conformance.Functions.Documents
+import Proofs.Conformance.Functions.Inference
+import Proofs.Conformance.Functions.Pack
+import Proofs.Conformance.Functions.P2P
+import Proofs.Conformance.Functions.Runtime
+import Proofs.Conformance.Functions.Session
+import Proofs.Conformance.Functions.ToolCalls
+import Proofs.Conformance.Functions.Tools
+import Proofs.Conformance.Functions.Shared
+import Proofs.Conformance.Functions.Store
+import Proofs.Conformance.Pack
+import Proofs.Conformance.StorageWriteGate
+import Proofs.Conformance.StorageWriteGateAdmission
+import Proofs.Conformance.StorageWriteGateStreamWaiter
+import Proofs.Conformance.NativeCompletion
+import Proofs.Conformance.NativeClaimLifetime
 import Proofs.Conformance.UpdateHandoff
-import Proofs.CanonicalOutput.Execution.AdmissionHandoffCases
+import Proofs.Conformance.AdmissionHandoff
 import Proofs.Conformance.Contracts.Json.TerminalSelection
 import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
+import Proofs.Conformance.ClientAgentReadiness
 import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.ClientSessionDeliveryCases
-import Proofs.ClientShell.OptimisticSend
+import Proofs.Clients.ClientShell.OptimisticSend
 import Proofs.Conformance.ClientChatReadinessCases
 import Proofs.Conformance.ClientSyncHealthCases
 import Proofs.Conformance.AccessReview
 import Proofs.Conformance.BackendWake
 import Proofs.Conformance.OperatorPaths
 import Proofs.Conformance.WorkspaceCommandRoot
+import Proofs.Conformance.WorkspaceFire
 import Proofs.Conformance.CommandIsolation
 import Proofs.Conformance.CompactionCheckpoint
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientTelemetry
-import Proofs.Conformance.ClientObservationScope
 import Proofs.Conformance.InferenceObservation
-import Proofs.Identity.PublicationConformance
-import Proofs.Identity.DelegatedPublicationCases
-import Proofs.Identity.DelegatedFinality
-import Proofs.Identity.AutomationConformance
-import Proofs.Identity.OperationsConformance
-import Proofs.Identity.EvalRecords
-import Proofs.Identity.OptimizationPromotion
-import Proofs.Identity.DirectoryPublication
-import Proofs.Identity.StartupReadiness
-import Proofs.Identity.NodeProvisioningConformance
-import Proofs.Identity.GrantSetsConformance
-import Proofs.Identity.EnrollmentGrantConformance
-import Proofs.Identity.ClientAgentCreation
-import Proofs.Identity.AgentBlockSigning
-import Proofs.Identity.ClientAgentJournal
-import Proofs.Identity.NodeFileRequests
-import Proofs.Identity.MailboxAccess
-import Proofs.Identity.WorkspaceAndFileRequests
-import Proofs.Identity.PackPlacementReaders
-import Proofs.Identity.AgentTargetAccess
-import Proofs.Triggers.NativeRoute
-import Proofs.Identity.SessionInputEdit
-import Proofs.EventDelivery.WatcherConformance
+import Proofs.Conformance.Identity.Publication
+import Proofs.Conformance.Identity.GoalLinks
+import Proofs.Session.Identity.DelegatedPublicationCases
+import Proofs.Store.Identity.DelegatedFinality
+import Proofs.Conformance.Identity.CallbackParent
+import Proofs.Conformance.Identity.AgentIdentity
+import Proofs.Conformance.Identity.SessionPublication
+import Proofs.Conformance.Identity.DelegatedFinality
+import Proofs.Conformance.Identity.EvalRecords
+import Proofs.Conformance.Identity.OptimizationPromotion
+import Proofs.Store.Identity.DirectoryPublication
+import Proofs.Conformance.Identity.StartupReadiness
+import Proofs.Store.Identity.NodeProvisioningConformance
+import Proofs.Store.Identity.GrantSetsConformance
+import Proofs.Store.Identity.ClientAgentCreation
+import Proofs.Store.Identity.AgentBlockSigning
+import Proofs.Conformance.Identity.Delegation
+import Proofs.Conformance.Identity.AgentBlockSigning
+import Proofs.Conformance.Identity.WorkspaceDatastoreWrite
+import Proofs.ToolCalls.Identity.ClientAgentJournal
+import Proofs.Conformance.Identity.NodeFileRequests
+import Proofs.Conformance.RequestTransition
+import Proofs.Conformance.TriggerDeliveryLatestAdmission
+import Proofs.Conformance.WatcherScopedScan
+import Proofs.Conformance.Identity.RevokeFollowsGrant
+import Proofs.Conformance.PairingOwnedDiff
+import Proofs.Conformance.PairingDataPlane
+import Proofs.Conformance.PairingTick
+import Proofs.Conformance.SchemaObligations
+import Proofs.Conformance.DesiredStatePlan
+import Proofs.Conformance.PluginStoreNotice
+import Proofs.Conformance.NativeCompletionTrace
+import Proofs.Store.Identity.MailboxAccess
+import Proofs.Store.Identity.WorkspaceAndFileRequests
+import Proofs.Conformance.Identity.PackPlacementReaders
+import Proofs.Store.Identity.AgentTargetAccess
+import Proofs.Conformance.NativeRoute
+import Proofs.Session.Identity.SessionInputEdit
+import Proofs.Automation.EventDelivery.WatcherConformance
+import Proofs.Conformance.WatcherActors
 import Proofs.Conformance.ClientInstallation
 import Proofs.Conformance.RuntimeServiceReplacement
 import Proofs.Conformance.ClientSettings
@@ -51,6 +201,9 @@ import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.Initialization
 import Proofs.Conformance.EnrollmentPendingRequests
+import Proofs.Conformance.EnrollmentInvite
+import Proofs.Conformance.WorkspacePermissionResolution
+import Proofs.Conformance.OpenOutputShape
 import Proofs.Conformance.EnrollmentCandidateName
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
@@ -60,6 +213,7 @@ import Proofs.Conformance.RepeatedToolFailure
 import Proofs.Conformance.ToolTimeouts
 import Proofs.Conformance.PluginResources
 import Proofs.Conformance.PluginJob
+import Proofs.Conformance.PluginJobStep
 import Proofs.Conformance.MailboxNotification
 import Proofs.Conformance.MailboxReply
 import Proofs.Conformance.MailboxQuestion
@@ -71,7 +225,20 @@ import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.FileReviewRoutes
 import Proofs.Conformance.FileInventory
 import Proofs.Conformance.TaskHooks
+import Proofs.Conformance.Hooks
+import Proofs.Conformance.HookDecisions
 import Proofs.Conformance.StoreEncryptionUpgrade
+import Proofs.Conformance.TransactionReplay
+import Proofs.Conformance.SubscriptionStream
+import Proofs.Conformance.ReceiptRecovery
+import Proofs.Conformance.HomeRetirement
+import Proofs.Conformance.StoreKeyCustody
+import Proofs.Conformance.BackgroundExecutionRegistry
+import Proofs.Conformance.BackgroundWaitChange
+import Proofs.Conformance.InvocationReply
+import Proofs.Conformance.InterruptedDiagnostic
+import Proofs.Conformance.HookInterrupt
+import Proofs.Conformance.PluginJobDispatch
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
 import Proofs.Conformance.Contracts.Json.CatalogRefresh
@@ -86,6 +253,7 @@ import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
 import Proofs.Conformance.Contracts.Json.ComposedInvariants
 import Proofs.Conformance.Contracts.Json.Workspace
+import Proofs.Conformance.PairingReconcileSupervisor
 import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
 import Proofs.Conformance.Contracts.Json.SelfConfigAgent
@@ -99,29 +267,39 @@ import Proofs.Conformance.ProviderUsage
 import Proofs.Conformance.TitleAdmission
 import Proofs.Conformance.TitleText
 import Proofs.Conformance.Contracts.Json.PromptAssembly
+import Proofs.Conformance.PromptAssemblyBudget
+import Proofs.Conformance.PromptAssemblyRepair
+import Proofs.Conformance.ProviderToolIdentity
+import Proofs.Conformance.ReasoningDeltas
+import Proofs.Conformance.AggregateBudget
+import Proofs.Conformance.StateMachines
+import Proofs.Conformance.HookPersistence
 import Proofs.Conformance.Contracts.Json.RenderedCapture
-import Proofs.Conformance.Contracts.Json.DurableReduction
+import Proofs.Conformance.ContractCases.DurableReduction
 import Proofs.Conformance.Contracts.Json.BackgroundWakeRows
 import Proofs.Conformance.Contracts.Json.SessionDocuments
 import Proofs.Conformance.Contracts.Json.RequestInput
 import Proofs.Conformance.Contracts.Json.AggregateBudget
-import Proofs.Conformance.Contracts.Json.RollingCompaction
-import Proofs.Conformance.Contracts.Json.ReductionEngine
-import Proofs.Conformance.Contracts.Json.CompactionProjectionJoin
+import Proofs.Conformance.ContractCases.RollingCompaction
+import Proofs.Conformance.ContractCases.ReductionEngine
+import Proofs.Conformance.ContractCases.RenderedCapture
+import Proofs.Conformance.ContractCases.CompactionProjectionJoin
 import Proofs.Conformance.Contracts.Json.CompactionCanonicalProjection
-import Proofs.CompletionRetry.Contracts
-import Proofs.AccountRotation.Contracts
+import Proofs.Conformance.CompletionRetry.Contracts
+import Proofs.Conformance.AccountRotation.Contracts
+import Proofs.Conformance.AccountStore
+import Proofs.Conformance.UsageRead
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.EventGroups
 import Proofs.Conformance.ClientShell.Contracts
 import Proofs.Conformance.ClientLiveDelta
-import Proofs.ApplyReconcile.ContractCases
-import Proofs.Conformance.Deviations
+import Proofs.Conformance.ApplyReconcile.ContractCases
 import Proofs.Conformance.CoverageLedger
-import Proofs.Identity.Conformance
-import Proofs.Identity.SessionChild
-import Proofs.Request.RemoteDelivery
-import Proofs.Request.CrossActorAuthorization
+import Proofs.Conformance.Identity.Conformance
+import Proofs.Store.Identity.SessionChild
+import Proofs.Session.Request.RemoteDelivery
+import Proofs.Session.Request.CrossActorAuthorization
+import Proofs.Conformance.CrossActorAuthorization
 import Proofs.Conformance.EventDelivery
 import Proofs.Conformance.TriggerDelivery
 import Proofs.Conformance.GoalOperatorResume
@@ -139,6 +317,10 @@ import Proofs.Conformance.GoalRequestAssignment
 import Proofs.Conformance.GoalDeliveryInput
 import Proofs.Conformance.GoalToolContext
 import Proofs.Conformance.GoalEdit
+import Proofs.Conformance.SchemaArgumentRepairFamily
+import Proofs.Conformance.ReasoningAudit
+import Proofs.Conformance.CanonicalOutputProjection
+import Proofs.Conformance.AuxiliaryOutput
 import Proofs.Conformance.GoalClientControl
 import Proofs.Conformance.GoalClientMutation
 import Proofs.Conformance.GoalClientDelivery
@@ -159,195 +341,43 @@ import Proofs.Conformance.Contracts.Json.CausalHop
 import Proofs.Conformance.Contracts.Json.PayloadPresentation
 import Proofs.Conformance.Eval
 import Proofs.Conformance.Optimization
-import Proofs.ScopeTemplates.Derivation
+import Proofs.Documents.ScopeTemplates.Derivation
+import Proofs.Conformance.ScopeCollectionRules
+import Proofs.Conformance.Identity.SecretPublication
+import Proofs.Conformance.LspServerStart
+import Proofs.Conformance.WorkspacePermissions
+
+import Proofs.Conformance.InstallRepair
+import Proofs.Conformance.RepairBackups
+import Proofs.Conformance.DesktopConnect
 
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
-def scopeRulesJson (rules : List ScopeTemplates.CollectionRule) : String :=
-  jsonArray (rules.map fun rule =>
-    "{\"collection\":" ++ jsonString rule.collection
-      ++ ",\"field\":" ++ jsonString rule.field
-      ++ ",\"source\":" ++ jsonString (match rule.source with
-          | .localDid => "localDid" | .homeDid => "homeDid") ++ "}")
-
-def nodeRouteCasesJson : String :=
-  jsonArray (([ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient]).flatMap fun direction =>
-    ["did:key:owner", "did:key:quoted\"owner"].map fun owner =>
-      let predicate := (ScopeTemplates.clientRouteFilters direction "did:key:reader" owner).find?
-        (fun item => item.collection == "Node")
-      "{\"direction\":" ++ jsonString (match direction with
-        | .clientToRuntime => "client-to-runtime" | .runtimeToClient => "runtime-to-client") ++
-      ",\"owner\":" ++ jsonString owner ++
-      ",\"allowed\":" ++ boolJson ((ScopeTemplates.clientRouteCollections direction).contains "Node") ++
-      ",\"node_did\":" ++ (predicate.bind fun item =>
-        (item.clauses.find? fun clause => clause.field == "node_did").map (fun clause => jsonString clause.value)).getD "null" ++ "}")
-
-def scopePredicateJson (predicate : ScopeTemplates.CollectionPredicate) : String :=
-  "{\"collection\":" ++ jsonString predicate.collection ++
-  ",\"clauses\":" ++ jsonArray (predicate.clauses.map fun clause =>
-    "{\"field\":" ++ jsonString clause.field ++ ",\"operator\":" ++ jsonString clause.operator ++
-    ",\"value\":" ++ jsonString clause.value ++ "}") ++ "}"
-
-def scopeTemplateCasesJson : String :=
-  jsonArray (ScopeTemplates.builtinCatalog.flatMap fun template =>
-    [ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient].map fun direction =>
-      "{\"id\":" ++ jsonString template.id ++
-      ",\"direction\":" ++ jsonString (match direction with
-        | .clientToRuntime => "client-to-runtime" | .runtimeToClient => "runtime-to-client") ++
-      ",\"collections\":" ++ jsonArray (template.collections.map jsonString) ++
-      ",\"delivery\":" ++ jsonString (match template.delivery with | .push => "push") ++
-      ",\"filters\":" ++ jsonArray ((ScopeTemplates.directionalScopeFilters template direction
-        "did:key:reader" "did:key:owner").map scopePredicateJson) ++ "}")
-
 /-- The snapshot's concatenation chains are bounded to keep model execution
 within Lean's interpreter recursion limit. -/
 def snapshotPromptTailJson : String :=
   ""
-    ++ "\"prompt_assembly_retention_cases\":"
-      ++ promptAssemblyRetentionCasesJson ++ ","
-    ++ "\"prompt_assembly_compaction_trigger_cases\":"
-      ++ promptAssemblyCompactionTriggerCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_map_cases\":"
-      ++ promptAssemblyClaudeMapCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_body_cases\":"
-      ++ promptAssemblyClaudeBodyCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_attribution_cases\":"
-      ++ promptAssemblyClaudeAttributionCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_cache_cases\":"
-      ++ promptAssemblyClaudeCacheCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_origin_cases\":"
-      ++ promptAssemblyClaudeOriginCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_field_cases\":"
-      ++ promptAssemblyClaudeFieldCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_field_row_cases\":"
-      ++ promptAssemblyClaudeFieldRowCasesJson ++ ","
-    ++ "\"claude_output_config_cases\":" ++ Conformance.CompactionCheckpoint.outputCasesJson.compress ++ ","
-    ++ "\"checkpoint_fallback_cases\":" ++ Conformance.CompactionCheckpoint.checkpointCasesJson.compress ++ ","
-    ++ "\"checkpoint_list_fields\":" ++ Conformance.CompactionCheckpoint.listFieldsJson.compress ++ ","
-    ++ "\"prompt_assembly_claude_stream_cases\":"
-      ++ promptAssemblyClaudeStreamCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_thinking_stream_cases\":"
-      ++ promptAssemblyClaudeThinkingStreamCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_replay_cases\":"
-      ++ promptAssemblyClaudeReplayCasesJson ++ ","
-    ++ "\"prompt_assembly_claude_checkpoint_cases\":"
-    ++ promptAssemblyClaudeCheckpointCasesJson ++ ","
-    ++ "\"prompt_assembly_reasoning_suffix_cases\":"
-    ++ promptAssemblyReasoningSuffixCasesJson ++ ","
-    ++ "\"prompt_assembly_replay_shape_cases\":"
-    ++ promptAssemblyReplayShapeCasesJson ++ ","
-    ++ "\"prompt_assembly_replay_prefix_cases\":"
-    ++ promptAssemblyReplayPrefixCasesJson ++ ","
-    ++ "\"protected_replay_compaction_cases\":"
-    ++ protectedReplayCompactionCasesJson ++ ","
 
+set_option maxHeartbeats 2000000 in
+/-- Every family's schema elaborates in one list term, whose definitional
+checks grow with the family count past the default heartbeat budget. -/
 def snapshotCaptureTailJson : String :=
   ""
-    ++ "\"rendered_capture_cases\":"
-      ++ renderedCaptureCasesJson ++ ","
-    ++ "\"rendered_capture_storage_cases\":"
-      ++ renderedCaptureStorageCasesJson ++ ","
-    ++ "\"durable_reduction_cases\":"
-      ++ durableReductionCasesJson ++ ","
-    ++ "\"rolling_compaction_cases\":"
-      ++ rollingCompactionCasesJson ++ ","
-    ++ "\"reduction_engine_cases\":"
-      ++ reductionEngineCasesJson ++ ","
-    ++ "\"compaction_projection_join_cases\":"
-      ++ compactionProjectionJoinCasesJson ++ ","
-    ++ "\"compaction_canonical_projection_cases\":"
-      ++ compactionCanonicalProjectionCasesJson ++ ","
-    ++ "\"repaired_projection_admission_cases\":"
-      ++ repairedProjectionAdmissionCasesJson ++ ","
-    ++ "\"rendered_capture_key_cases\":"
-      ++ renderedCaptureKeyCasesJson ++ ","
-    ++ "\"auxiliary_session_child_binding_cases\":"
-      ++ Identity.SessionChild.childScopeCasesJson ++ ","
-    ++ "\"capture_block_scope_cases\":"
-      ++ Identity.SessionChild.blockScopeCasesJson ++ ","
-    ++ "\"goal_link_cases\":"
-      ++ Identity.SessionChild.goalLinkCasesJson ++ ","
-      ++ "\"session_child_cases\":"
-      ++ Identity.SessionChild.sessionChildCasesJson ++ ","
-    ++ "\"local_self_publication_cases\":"
-      ++ Identity.SessionChild.localSelfPublicationCasesJson ++ ","
-    ++ "\"client_request_publication_cases\":"
-      ++ Identity.SessionChild.clientRequestPublicationCasesJson ++ ","
-    ++ "\"capture_scope_cases\":"
-      ++ captureScopeCasesJson ++ ","
-    ++ "\"capture_order_cases\":"
-      ++ captureOrderCasesJson ++ ","
-    ++ "\"aggregate_token_budget_cases\":"
-      ++ aggregateTokenBudgetCasesJson ++ ","
-    ++ "\"task_hook_admission_cases\":"
-      ++ Conformance.TaskHooksContracts.admissionCasesJson ++ ","
-    ++ "\"store_encryption_upgrade_cases\":"
-      ++ Conformance.StoreEncryptionUpgrade.casesJson ++ ","
-    ++ "\"task_hook_run_cases\":"
-      ++ Conformance.TaskHooksContracts.runCasesJson ++ ","
-    ++ "\"task_hook_recovery_cases\":"
-      ++ Conformance.TaskHooksContracts.recoveryCasesJson ++ ","
-    ++ "\"compaction_reducer_cases\":"
-      ++ jsonArray
-        (Compaction.compactionReducerCases.map compactionReducerCaseJson) ++ ","
-    ++ "\"compaction_cursor_cases\":"
-      ++ jsonArray
-        (Compaction.compactionCursorCases.map compactionCursorCaseJson) ++ ","
-    ++ "\"mcp_health_cases\":"
-      ++ jsonArray
-        (Proofs.MCPHealth.transitionCases.map mcpHealthCaseJson) ++ ","
-    ++ "\"backend_health_cases\":"
-      ++ jsonArray
-        (Proofs.BackendHealth.transitionCases.map backendHealthCaseJson) ++ ","
-    ++ "\"backend_probe_schedule_cases\":"
-      ++ jsonArray
-        (Proofs.BackendHealth.scheduleCases.map backendProbeScheduleCaseJson) ++ ","
+    ++ "\"families\":" ++ (conformance_families%).compress ++ ","
+    ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
 
 def snapshotCoverageTailJson : String :=
   ""
-    ++ "\"follow_up_hooks\":"
-      ++ followUpHooksJson ++ ","
-    ++ "\"trigger_delivery\":" ++ Conformance.TriggerDelivery.casesJson ++ ","
-    ++ "\"event_group_capture_case_count\":" ++ toString Conformance.EventDelivery.eventGroupCaptureCaseCount ++ ","
-    ++ "\"event_group_capture_cases\":" ++ Conformance.EventDelivery.eventGroupCaptureCasesJson ++ ","
-    ++ "\"event_group_clock_case_count\":" ++ toString Conformance.EventDelivery.eventGroupClockCaseCount ++ ","
-    ++ "\"event_group_clock_cases\":" ++ Conformance.EventDelivery.eventGroupClockCasesJson ++ ","
-    ++ "\"event_delivery_transition_case_count\":"
-      ++ toString Conformance.EventDelivery.transitionCaseCount ++ ","
-    ++ "\"event_delivery_transition_cases\":"
-      ++ Conformance.EventDelivery.transitionCasesJson ++ ","
-    ++ "\"event_delivery_source_instances\":"
-      ++ Conformance.EventDelivery.sourceInstancesJson ++ ","
-    ++ "\"event_delivery_convergence_traces\":"
-      ++ Conformance.EventDelivery.convergenceTracesJson ++ ","
-    ++ "\"watcher_actor_cases\":"
-      ++ EventDelivery.WatcherConformance.actorCasesJson ++ ","
-    ++ "\"watcher_scoped_scan_cases\":"
-      ++ EventDelivery.WatcherConformance.casesJson ++ ","
     ++ "\"coverage_ledger\":"
       ++ coverageLedgerJson
     ++ ",\"feature_surface_requirements\":"
       ++ featureSurfaceRequirementsJson
     ++ ",\"feature_matrix\":"
       ++ featureMatrixJson
-    ++ ",\"identity_structural_cases\":"
-      ++ Identity.Conformance.structuralCasesJson
-    ++ ",\"identity_permission_cases\":"
-      ++ Identity.Conformance.identityPermissionCasesJson
     ++ ",\"identity_household_cases\":"
       ++ Identity.Conformance.householdCasesJson
-    ++ ",\"identity_task_session_publication_cases\":"
-      ++ Identity.Conformance.taskSessionPublicationCasesJson
-    ++ ",\"identity_client_session_reservation_cases\":"
-      ++ Identity.Conformance.clientSessionReservationCasesJson
-    ++ ",\"identity_atomic_client_request_cases\":"
-      ++ Identity.SessionChild.atomicClientRequestCasesJson
-    ++ ",\"identity_derivation_cases\":"
-      ++ Identity.Conformance.derivationCasesJson
-    ++ ",\"identity_contracts\":"
-      ++ Identity.Conformance.identityContractsJson
     ++ "}"
 
 def snapshotJsonTail : String :=
@@ -356,757 +386,65 @@ def snapshotJsonTail : String :=
 def snapshotGoalCasesJson : String :=
   ""
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
-    ++ "\"storage_failure_cases\":" ++ Conformance.StorageFailureContracts.casesJson ++ ","
-    ++ "\"root_admission_cases\":"
-      ++ Conformance.RootAdmissionContracts.casesJson ++ ","
-    ++ "\"vocabularies\":"
-      ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
-    ++ "\"state_machines\":"
-      ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
-    ++ "\"pairing_reconcile_cases\":" ++ pairingReconcileCasesJson ++ ","
-    ++ "\"session_message_goal_input_cases\":"
-      ++ Conformance.GoalRequestAssignmentContracts.messageInputCasesJson ++ ","
-    ++ "\"goal_delivery_input_cases\":"
-      ++ Conformance.GoalDeliveryInput.json ++ ","
-    ++ "\"goal_first_request_binding_cases\":"
-      ++ Conformance.GoalFirstRequestBinding.json ++ ","
-    ++ "\"goal_continuation_assignment_cases\":"
-      ++ Conformance.GoalFirstRequestBinding.continuationsJson ++ ","
-    ++ "\"goal_input_binding_cases\":"
-      ++ Conformance.GoalRequestAssignmentContracts.inputCasesJson ++ ","
-    ++ "\"goal_fresh_session_input_cases\":"
-      ++ Conformance.GoalRequestAssignmentContracts.freshSessionCasesJson ++ ","
-    ++ "\"goal_assignment_history_cases\":"
-      ++ Conformance.GoalRequestAssignmentContracts.historyCasesJson ++ ","
-    ++ "\"goal_request_assignment_cases\":"
-      ++ Conformance.GoalRequestAssignmentContracts.casesJson ++ ","
-    ++ "\"goal_wake_receipt_cases\":"
-      ++ Conformance.GoalWakeReceiptContracts.casesJson ++ ","
-    ++ "\"goal_wake_coalescing_cases\":"
-      ++ Conformance.GoalWakeCoalescingContracts.casesJson ++ ","
-    ++ "\"goal_wake_ancestry_cases\":"
-      ++ Conformance.GoalWakeAncestryContracts.casesJson ++ ","
-    ++ "\"goal_tool_context_cases\":"
-      ++ Conformance.GoalToolContextContracts.casesJson ++ ","
-    ++ "\"goal_request_scope_cases\":"
-      ++ Conformance.GoalRequestAncestryContracts.scopeCasesJson ++ ","
-    ++ "\"goal_request_ancestry_cases\":"
-      ++ Conformance.GoalRequestAncestryContracts.casesJson ++ ","
-    ++ "\"goal_queue_assignment_cases\":"
-      ++ Conformance.GoalQueueAssignmentContracts.casesJson ++ ","
-    ++ "\"goal_request_head_cases\":"
-      ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
-    ++ "\"durable_observation_cases\":"
-      ++ Conformance.NativeRefinement.observationCasesJson ++ ","
-    ++ "\"plugin_job_commit_kill_cases\":"
-      ++ Conformance.PluginJob.commitKillCasesJson ++ ","
-    ++ "\"client_process_claim_cases\":"
-      ++ Conformance.NativeRefinement.clientProcessClaimCasesJson ++ ","
-    ++ "\"client_process_receipt_cases\":"
-      ++ Conformance.NativeRefinement.clientProcessReceiptCasesJson ++ ","
-    ++ "\"client_control_grant_cases\":"
-      ++ Conformance.NativeRefinement.clientControlGrantCasesJson ++ ","
-    ++ "\"tool_admission_handoff_cases\":"
-      ++ CanonicalOutput.Execution.AdmissionHandoff.Cases.casesJson ++ ","
     ++ "\"delegated_publication_cases\":"
       ++ Identity.DelegatedPublication.Cases.casesJson ++ ","
-    ++ "\"delegated_finality_cases\":"
-      ++ Identity.DelegatedFinality.casesJson ++ ","
-    ++ "\"client_signed_control_cases\":"
-      ++ Conformance.NativeRefinement.clientSignedControlCasesJson ++ ","
-    ++ "\"process_stop_action_cases\":"
-      ++ Conformance.NativeRefinement.processStopActionCasesJson ++ ","
-    ++ "\"background_process_identity_cases\":"
-      ++ Conformance.NativeRefinement.processIdentityCasesJson ++ ","
-    ++ "\"plugin_target_resolution_cases\":"
-      ++ Conformance.NativeRefinement.targetCasesJson ++ ","
 
 def snapshotGoalMutationCasesJson : String :=
   ""
-    ++ "\"goal_edit_cases\":" ++ Conformance.GoalEditContracts.casesJson ++ ","
-    ++ "\"goal_client_control_cases\":" ++ Conformance.GoalClientControlContracts.casesJson ++ ","
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
-    ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
-    ++ "\"goal_client_delivery_cases\":" ++ Conformance.GoalClientDeliveryContracts.casesJson.compress ++ ","
-    ++ "\"goal_observation_cases\":" ++ Conformance.GoalObservationContracts.casesJson ++ ","
-    ++ "\"goal_session_observation_cases\":" ++ Conformance.GoalSessionObservationContracts.casesJson ++ ","
-    ++ "\"goal_session_fold_cases\":" ++ Conformance.GoalSessionObservationContracts.foldCasesJson ++ ","
-    ++ "\"workspace_permission_write_cases\":" ++ workspacePermissionWriteCasesJson ++ ","
-    ++ "\"workspace_permission_cases\":" ++ workspacePermissionCasesJson ++ ","
-    ++ "\"workspace_command_root_cases\":" ++ Conformance.WorkspaceCommandRoot.casesJson.compress ++ ","
-    ++ "\"operator_path_cases\":" ++ Conformance.OperatorPaths.casesJson.compress ++ ","
-    ++ "\"access_review_cases\":" ++ Conformance.AccessReview.casesJson.compress ++ ","
-    ++ "\"access_review_task_cases\":" ++ Conformance.AccessReview.taskCasesJson.compress ++ ","
-    ++ "\"plugin_approval_cases\":" ++ Conformance.PluginApproval.casesJson.compress ++ ","
-    ++ "\"workspace_command_grant_answers\":" ++ Conformance.WorkspaceCommandGrants.answersJson.compress ++ ","
-    ++ "\"workspace_command_grant_lookups\":" ++ Conformance.WorkspaceCommandGrants.lookupsJson.compress ++ ","
-    ++ "\"workspace_command_grant_revocations\":" ++ Conformance.WorkspaceCommandGrants.revocationsJson.compress ++ ","
-    ++ "\"goal_objective_whitespace_codepoints\":"
-      ++ Conformance.GoalEditContracts.whitespaceCodepointsJson ++ ","
-    ++ "\"goal_claimed_publication_cases\":"
-      ++ Conformance.GoalClaimedPublicationContracts.casesJson ++ ","
-    ++ "\"goal_claimed_identity_cases\":"
-      ++ Conformance.GoalClaimedPublicationContracts.identityCasesJson ++ ","
-    ++ "\"goal_claimed_target_cases\":"
-      ++ Conformance.GoalClaimedPublicationContracts.targetCasesJson ++ ","
-    ++ "\"goal_resume_publication_cases\":" ++ Conformance.GoalOperatorResumeContracts.publicationCasesJson ++ ","
-    ++ "\"goal_operator_resume_cases\":"
-      ++ Conformance.GoalOperatorResumeContracts.resumeCasesJson ++ ","
-    ++ "\"goal_operator_resume_on_cases\":"
-      ++ Conformance.GoalOperatorResumeContracts.resumeOnCasesJson ++ ","
-    ++ "\"goal_config_reactivation_cases\":"
-      ++ Conformance.GoalOperatorResumeContracts.configCasesJson ++ ","
-    ++ "\"goal_reset_resume_cases\":"
-      ++ Conformance.GoalResetResumeContracts.casesJson ++ ","
 
 def snapshotRequestCasesJson : String :=
   ""
-    ++ "\"request_transition_cases\":"
-      ++ jsonArray (requestTransitionCases.map lifecycleTransitionCaseJson) ++ ","
-    ++ "\"provider_eof_cases\":"
-      ++ Conformance.RequestExecutionLeaseContracts.providerEofCasesJson ++ ","
-    ++ "\"request_execution_lease_cases\":"
-      ++ Conformance.RequestExecutionLeaseContracts.leaseCasesJson ++ ","
-    ++ "\"request_execution_lease_observed_cases\":"
-      ++ Conformance.RequestExecutionLeaseContracts.observedLeaseCasesJson ++ ","
-    ++ "\"request_execution_lease_trace_cases\":"
-      ++ Conformance.RequestExecutionLeaseContracts.leaseTraceCasesJson ++ ","
     ++ "\"canonical_execution_gate_cases\":"
       ++ Conformance.ExecutionGateContracts.casesJson ++ ","
-    ++ "\"interrupt_queue_cases\":"
-      ++ Conformance.InterruptQueueContracts.casesJson ++ ","
-    ++ "\"session_control_cases\":"
-      ++ Conformance.SessionControlContracts.casesJson ++ ","
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
-    ++ "\"session_input_edit_client_observation_cases\":"
-      ++ FoldQueueContracts.inputEditClientObservationCasesJson ++ ","
-    ++ "\"queue_management_cases\":" ++ FoldQueueContracts.managementCasesJson ++ ","
-    ++ "\"steering_publication_cases\":" ++ FoldQueueContracts.steeringPublicationCasesJson ++ ","
-    ++ "\"fold_queue_cases\":"
-      ++ Conformance.FoldQueueContracts.casesJson ++ ","
-    ++ "\"fold_turn_input_cases\":"
-      ++ Conformance.FoldQueueContracts.turnInputCasesJson ++ ","
-    ++ "\"handover_fold_cases\":"
-      ++ Conformance.FoldQueueContracts.handoverCasesJson ++ ","
-    ++ "\"fold_publication_cases\":"
-      ++ Conformance.FoldQueueContracts.publicationCasesJson ++ ","
-    ++ "\"retry_selection_cases\":"
-      ++ Conformance.FoldQueueContracts.retrySelectionCasesJson ++ ","
     ++ "\"canonical_dispatch_observation_cases\":"
       ++ Conformance.DispatchObservationContracts.casesJson ++ ","
-    ++ "\"canonical_spawned_target_rejection_cases\":"
-      ++ Conformance.DispatchObservationContracts.spawnedTargetCasesJson ++ ","
-    ++ "\"canonical_worker_capacity_cases\":"
-      ++ Conformance.WorkerCapacityContracts.casesJson ++ ","
-    ++ "\"canonical_payload_presentation_cases\":"
-      ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
-    ++ "\"terminal_diagnostic_presentation_cases\":"
-      ++ Conformance.TerminalDiagnosticContracts.casesJson ++ ","
-    ++ "\"terminal_diagnostic_replay_cases\":"
-      ++ Conformance.TerminalDiagnosticReplayContracts.casesJson ++ ","
-    ++ "\"inference_registry_cases\":"
-      ++ Conformance.InferenceRegistry.casesJson ++ ","
-    ++ "\"process_transition_cases\":"
-      ++ jsonArray (processTransitionCases.map lifecycleTransitionCaseJson) ++ ","
-    ++ "\"trigger_dispatch_case_count\":"
-      ++ toString Conformance.TriggerContracts.triggerDispatchCaseCount ++ ","
-    ++ "\"trigger_dispatch_cases\":"
-      ++ Conformance.TriggerContracts.triggerDispatchCasesJson ++ ","
-    ++ "\"event_group_case_count\":"
-      ++ toString Conformance.EventGroupContracts.eventGroupCaseCount ++ ","
-    ++ "\"event_group_cases\":"
-      ++ Conformance.EventGroupContracts.eventGroupCasesJson ++ ","
-    ++ "\"goal_decision_cases\":"
-      ++ goalDecisionCasesJson ++ ","
-    ++ "\"goal_readiness_gate_cases\":"
-      ++ goalReadinessGateCasesJson ++ ","
-    ++ "\"goal_claimed_readiness_cases\":"
-      ++ Conformance.GoalClaimedReadiness.casesJson ++ ","
-    ++ "\"goal_transition_cases\":"
-      ++ goalTransitionCasesJson ++ ","
-    ++ "\"goal_create_cases\":" ++ goalCreateCasesJson ++ ","
-    ++ "\"task_goal_publication_cases\":" ++ taskGoalPublicationCasesJson ++ ","
-    ++ "\"task_goal_recovery_cases\":" ++ taskGoalRecoveryCasesJson ++ ","
-    ++ "\"goal_submission_cases\":" ++ goalSubmissionCasesJson ++ ","
-    ++ "\"goal_backed_runtime_cases\":" ++ runtimeGoalPublicationCasesJson ++ ","
-    ++ "\"goal_continuation_materialization_cases\":"
-      ++ goalContinuationMaterializationCasesJson ++ ","
 
 def snapshotSessionCasesJson : String :=
   ""
-    ++ "\"file_inventory_closure_cases\":"
-      ++ fileInventoryClosureCasesJson ++ ","
-    ++ "\"enrollment_auto_renewal_cases\":" ++ autoRenewalCasesJson ++ ","
-    ++ "\"enrollment_renewal_intent_cases\":" ++ renewalIntentCasesJson ++ ","
-    ++ "\"enrollment_cases\":"
-      ++ enrollmentCasesJson ++ ","
-    ++ "\"enrollment_durable_projection_cases\":"
-      ++ enrollmentDurableProjectionCasesJson ++ ","
-    ++ "\"enrollment_pending_request_cases\":"
-      ++ Conformance.EnrollmentPendingRequests.casesJson ++ ","
-    ++ "\"enrollment_absent_peer_cases\":"
-      ++ Conformance.EnrollmentPendingRequests.absentPeerCasesJson ++ ","
-    ++ "\"client_chat_readiness_cases\":"
-      ++ Conformance.ChatReadinessCases.casesJson ++ ","
-    ++ "\"client_route_pairing_legs\":"
-      ++ Conformance.ChatReadinessCases.legsJson ++ ","
-    ++ "\"client_chat_readiness_causes\":"
-      ++ Conformance.ChatReadinessCases.causesJson ++ ","
-    ++ "\"client_sync_health_cases\":"
-      ++ Conformance.ClientSyncHealthCases.casesJson ++ ","
-    ++ "\"enrollment_route_readiness_cases\":"
-      ++ Conformance.EnrollmentPendingRequests.routeCasesJson ++ ","
-    ++ "\"enrollment_startup_cases\":"
-      ++ Conformance.EnrollmentPendingRequests.startupCasesJson ++ ","
-    ++ "\"enrollment_candidate_name_cases\":"
-      ++ Conformance.EnrollmentCandidateName.casesJson ++ ","
-    ++ "\"enrollment_encoding_cases\":"
-      ++ enrollmentEncodingCasesJson ++ ","
-    ++ "\"enrollment_digest_cases\":"
-      ++ enrollmentDigestCasesJson ++ ","
-    ++ "\"discovery_scope_cases\":" ++ Conformance.ConfigurationScope.discoveryCasesJson ++ ","
-    ++ "\"budget_rehydration_cases\":" ++ budgetRehydrationCasesJson ++ ","
-    ++ "\"configuration_scope_cases\":" ++ Conformance.ConfigurationScope.casesJson ++ ","
-    ++ "\"initial_inference_cases\":" ++ Conformance.Initialization.casesJson ++ ","
-    ++ "\"session_document_cases\":" ++ sessionDocumentsJson ++ ","
-    ++ "\"plugin_job_opening_cases\":" ++ pluginJobOpeningCasesJson ++ ","
-    ++ "\"session_reply_preview_cases\":" ++ Conformance.SessionReplyPreview.casesJson ++ ","
-    ++ "\"background_wake_row_cases\":" ++ backgroundWakeRowsCasesJson ++ ","
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
-    ++ "\"agent_request_admission_cases\":"
-      ++ agentRequestAdmissionCasesJson ++ ","
-    ++ "\"title_request_admission_cases\":"
-      ++ titleRequestAdmissionCasesJson ++ ","
-    ++ "\"title_request_purpose_wire_cases\":"
-      ++ titlePurposeWireCasesJson ++ ","
-    ++ "\"title_text_cases\":" ++ Conformance.TitleText.casesJson ++ ","
-    ++ "\"title_usage_cases\":"
-      ++ Conformance.TitleUsage.casesJson ++ ","
-    ++ "\"provider_limit_read_cases\":"
-      ++ Conformance.ProviderUsage.limitReadCasesJson ++ ","
-    ++ "\"provider_usage_cases\":"
-      ++ Conformance.ProviderUsage.casesJson ++ ","
-    ++ "\"title_admission_join_cases\":"
-      ++ Conformance.TitleAdmission.casesJson ++ ","
-    ++ "\"frontend_client_shell_case_count\":"
-      ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
-    ++ "\"frontend_client_shell_cases\":"
-      ++ Conformance.ClientShellContracts.frontendClientShellCasesJson ++ ","
-    ++ "\"desktop_client_shell_case_count\":"
-      ++ toString Conformance.ClientShellContracts.desktopClientShellCaseCount ++ ","
-    ++ "\"desktop_client_shell_cases\":"
-      ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
-    ++ "\"client_installation_cases\":"
-      ++ Conformance.ClientInstallation.casesJson ++ ","
-    ++ "\"client_installation_compatibility_cases\":"
-      ++ Conformance.ClientInstallation.compatibilityCasesJson ++ ","
-    ++ "\"update_handoff_cases\":" ++ Conformance.UpdateHandoff.casesJson ++ ","
-    ++ "\"runtime_service_replacement_cases\":"
-      ++ Conformance.RuntimeServiceReplacement.casesJson ++ ","
-    ++ "\"client_telemetry_cases\":" ++ Conformance.ClientTelemetry.casesJson ++ ","
-    ++ "\"client_observation_scope_cases\":"
-      ++ Conformance.ClientObservationScope.casesJson ++ ","
-    ++ "\"inference_observation_cases\":"
-      ++ Conformance.InferenceObservation.casesJson ++ ","
-    ++ "\"inference_visibility_cases\":"
-      ++ Conformance.InferenceObservation.visibilityCasesJson ++ ","
-    ++ "\"inference_route_cases\":"
-      ++ Conformance.InferenceObservation.routeCasesJson ++ ","
 
 def snapshotIdentityCasesJson : String :=
   ""
-    ++ "\"identity_publication_cases\":"
-      ++ Identity.PublicationConformance.casesJson ++ ","
-    ++ "\"identity_grant_set_cases\":"
-      ++ Identity.GrantSetsConformance.setCasesJson ++ ","
     ++ "\"identity_grant_recipient_cases\":"
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
-    ++ "\"identity_delegation_cases\":"
-      ++ Identity.GrantSetsConformance.delegationCasesJson ++ ","
-    ++ "\"identity_agent_baseline_cases\":"
-      ++ Identity.GrantSetsConformance.baselineCasesJson ++ ","
-    ++ "\"identity_enrollment_grant_cases\":"
-      ++ Identity.EnrollmentGrantConformance.casesJson ++ ","
-    ++ "\"identity_agent_creation_exposure_cases\":"
-      ++ Identity.NodeProvisioningConformance.agentCreationExposureCasesJson ++ ","
-    ++ "\"identity_created_agent_access_cases\":"
-      ++ Identity.NodeProvisioningConformance.createdAgentAccessCasesJson ++ ","
-    ++ "\"identity_agent_creator_cases\":"
-      ++ Identity.NodeProvisioningConformance.agentCreatorCasesJson ++ ","
-    ++ "\"identity_client_agent_creation_cases\":"
-      ++ Identity.ClientAgentCreation.casesJson ++ ","
-    ++ "\"identity_client_document_creation_cases\":"
-      ++ Identity.ClientAgentCreation.documentCreateCasesJson ++ ","
-    ++ "\"identity_agent_block_signing_cases\":"
-      ++ Identity.AgentBlockSigning.casesJson ++ ","
-    ++ "\"mailbox_runtime_notice_case\":" ++ Identity.MailboxAccess.runtimeNoticeCasesJson ++ ","
-    ++ "\"mailbox_sweep_actor_cases\":" ++ Identity.MailboxAccess.sweepActorCasesJson ++ ","
-    ++ "\"mailbox_claimed_recipient_cases\":" ++ Identity.MailboxAccess.claimedRecipientCasesJson ++ ","
-    ++ "\"workspace_root_completeness_cases\":" ++ Identity.WorkspaceAndFileRequests.rootCompletenessCasesJson ++ ","
-    ++ "\"workspace_completion_actor_cases\":" ++ Identity.WorkspaceAndFileRequests.completionActorCasesJson ++ ","
-    ++ "\"workspace_completion_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceCompletionAccessCasesJson ++ ","
-    ++ "\"workspace_agent_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceAgentSelectionCasesJson ++ ","
-    ++ "\"workspace_liveness_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceLivenessCasesJson ++ ","
-    ++ "\"workspace_child_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildCasesJson ++ ","
-    ++ "\"workspace_quickstart_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.quickstartSelectedAgentCasesJson ++ ","
-    ++ "\"workspace_callback_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.callbackSelectedAgentCasesJson ++ ","
-    ++ "\"pack_placement_reader_cases\":" ++ Identity.PackPlacementReaders.casesJson ++ ","
-    ++ "\"agent_target_access_cases\":" ++ Identity.AgentTargetAccess.casesJson ++ ","
-    ++ "\"native_route_cases\":" ++ Triggers.NativeRoute.casesJson ++ ","
-    ++ "\"workspace_datastore_write_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceDatastoreWriteCasesJson ++ ","
-    ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","
-    ++ "\"workspace_child_revocation_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildRevocationCasesJson ++ ","
-    ++ "\"workspace_admission_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceAdmissionCasesJson ++ ","
-    ++ "\"workspace_cleanup_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceCleanupCasesJson ++ ","
-    ++ "\"workspace_publication_cases\":" ++ Identity.WorkspaceAndFileRequests.workspacePublicationCasesJson ++ ","
-    ++ "\"workspace_quickstart_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceQuickstartCasesJson ++ ","
-    ++ "\"mailbox_native_policy\":" ++ Identity.MailboxAccess.nativeCasesJson ++ ","
-    ++ "\"node_file_request_access_cases\":" ++ Identity.NodeFileRequests.requestAccessCasesJson ++ ","
-    ++ "\"callback_workspace_actor_cases\":" ++ Identity.WorkspaceAndFileRequests.callbackActorCasesJson ++ ","
-    ++ "\"session_input_edit_native_discovery_cases\":" ++ Identity.SessionInputEdit.discoveryCasesJson ++ ","
-    ++ "\"session_input_edit_native_claim_cases\":" ++ Identity.SessionInputEdit.claimCasesJson ++ ","
-    ++ "\"identity_private_journal_policy\":"
-      ++ Identity.ClientAgentJournal.privatePolicyCasesJson ++ ","
-    ++ "\"client_optimistic_send_cases\":"
-      ++ ClientOptimisticSend.casesJson ++ ","
-    ++ "\"identity_client_agent_journal_cases\":"
-      ++ Identity.ClientAgentJournal.casesJson ++ ","
-    ++ "\"identity_client_agent_recovery_cases\":"
-      ++ Identity.ClientAgentJournal.recoveryCasesJson ++ ","
-    ++ "\"client_publication_protected_collection\":"
-      ++ (Lean.toJson Identity.ClientAgentJournal.protectedCollection).compress ++ ","
-    ++ "\"identity_bootstrap_cases\":"
-      ++ Identity.NodeProvisioningConformance.bootstrapCasesJson ++ ","
-    ++ "\"identity_bootstrap_reservation_cases\":"
-      ++ Identity.NodeProvisioningConformance.reservationCasesJson ++ ","
-    ++ "\"identity_bootstrap_startup_cases\":"
-      ++ Identity.NodeProvisioningConformance.startupCasesJson ++ ","
-    ++ "\"identity_runtime_nac_cases\":"
-      ++ Identity.NodeProvisioningConformance.runtimeNacCasesJson ++ ","
-    ++ "\"identity_parent_publication_cases\":"
-      ++ Identity.PublicationConformance.parentCasesJson ++ ","
-    ++ "\"identity_eval_record_cases\":"
-      ++ Identity.EvalRecords.casesJson ++ ","
-    ++ "\"identity_optimization_promotion_cases\":"
-      ++ Identity.OptimizationPromotion.casesJson ++ ","
-    ++ "\"identity_owner_registration_cases\":"
-      ++ Identity.EvalRecords.registrationCasesJson ++ ","
-    ++ "\"identity_readiness_preflight_cases\":"
-      ++ Identity.OperationsConformance.preflightCasesJson ++ ","
-    ++ "\"identity_secret_publication_cases\":"
-      ++ Identity.OperationsConformance.secretPublicationCasesJson ++ ","
-    ++ "\"identity_deferred_operation_cases\":"
-      ++ Identity.OperationsConformance.deferredCasesJson ++ ","
-    ++ "\"identity_pairing_partition_cases\":"
-      ++ Identity.OperationsConformance.pairingPartitionCasesJson ++ ","
-    ++ "\"identity_desired_publisher_cases\":"
-      ++ Identity.OperationsConformance.desiredPublisherCasesJson ++ ","
-    ++ "\"identity_receiver_grant_cases\":"
-      ++ Identity.OperationsConformance.receiverGrantCasesJson ++ ","
-    ++ "\"identity_pairing_reader_cases\":"
-      ++ Identity.OperationsConformance.pairingReaderCasesJson ++ ","
-    ++ "\"identity_pairing_reader_policy_cases\":"
-      ++ Identity.OperationsConformance.pairingReaderPolicyCasesJson ++ ","
-    ++ "\"identity_relationship_replay_cases\":"
-      ++ Identity.OperationsConformance.replayCasesJson ++ ","
-    ++ "\"identity_relationship_replay_producer_cases\":"
-      ++ Identity.OperationsConformance.replayProducerCasesJson ++ ","
-    ++ "\"identity_local_registry_writer_cases\":"
-      ++ Identity.OperationsConformance.localRegistryWriterCasesJson ++ ","
-    ++ "\"identity_discovery_policy_cases\":"
-      ++ Identity.OperationsConformance.discoveryPolicyCasesJson ++ ","
-    ++ "\"identity_client_transport_cases\":"
-      ++ Identity.OperationsConformance.clientTransportCasesJson ++ ","
-    ++ "\"identity_replica_grant_cases\":"
-      ++ Identity.OperationsConformance.replicaGrantCasesJson ++ ","
-    ++ "\"identity_network_protocol_cases\":"
-      ++ Identity.OperationsConformance.networkProtocolCasesJson ++ ","
-    ++ "\"identity_enrollment_policy_cases\":"
-      ++ Identity.OperationsConformance.enrollmentPolicyCasesJson ++ ","
-    ++ "\"identity_readiness_recovery_cases\":"
-      ++ Identity.OperationsConformance.recoveryCasesJson ++ ","
-    ++ "\"identity_readiness_observation_cases\":"
-      ++ Identity.OperationsConformance.observationCasesJson ++ ","
-    ++ "\"identity_readiness_settled_cases\":"
-      ++ Identity.OperationsConformance.settledCasesJson ++ ","
-    ++ "\"identity_directory_publication_cases\":"
-      ++ Identity.DirectoryPublication.casesJson ++ ","
-    ++ "\"identity_startup_readiness_cases\":"
-      ++ Identity.StartupReadiness.casesJson ++ ","
-    ++ "\"identity_callback_parent_actor_cases\":"
-      ++ Identity.AutomationConformance.callbackParentCasesJson ++ ","
 
 def snapshotClientCasesJson : String :=
   ""
-    ++ "\"client_settings_cases\":"
-      ++ clientSettingsCases.compress ++ ","
-    ++ "\"client_data_publication_cases\":"
-      ++ Conformance.ClientDataPublication.casesJson ++ ","
-    ++ "\"client_request_patch_publication_cases\":"
-      ++ Conformance.RequestPatchPublicationCases.casesJson ++ ","
-    ++ "\"client_direct_session_read_cases\":"
-      ++ Conformance.ClientSessionDelivery.directCasesJson ++ ","
-    ++ "\"client_request_closure_cases\":"
-      ++ Conformance.ClientRequestClosure.casesJson ++ ","
-    ++ "\"client_request_cache_identity_cases\":"
-      ++ Conformance.ClientRequestCacheIdentity.casesJson ++ ","
-    ++ "\"client_session_queue_order_cases\":"
-      ++ Conformance.SessionQueueOrder.casesJson ++ ","
-    ++ "\"client_session_turn_cases\":"
-      ++ Conformance.ClientShellContracts.sessionTurnCasesJson ++ ","
-    ++ "\"request_lifecycle_operator_ui_cases\":"
-      ++ Conformance.ClientShellContracts.requestLifecycleOperatorUiCasesJson ++ ","
-    ++ "\"client_live_delta_cases\":"
-      ++ Conformance.ClientLiveDeltaContracts.casesJson ++ ","
-    ++ "\"catalog_refresh_cases\":"
-      ++ CatalogRefresh.casesJson ++ ","
-    ++ "\"claude_platform_cases\":"
-      ++ ClaudePlatform.casesJson ++ ","
-    ++ "\"plugin_reference_cases\":"
-      ++ PackInstallation.casesJson ++ ","
-    ++ "\"plugin_pin_cases\":" ++ PackInstallation.pinCasesJson ++ ","
-    ++ "\"pack_document_ownership_cases\":" ++ PackInstallation.ownershipCasesJson ++ ","
-    ++ "\"pack_wire_lock_cases\":" ++ PackInstallation.wireLockCasesJson ++ ","
-    ++ "\"pack_wire_target_cases\":" ++ PackInstallation.wireTargetCasesJson ++ ","
-    ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
-    ++ "\"pack_finality_cases\":" ++ PackInstallation.finalityCasesJson ++ ","
-    ++ "\"hosted_plugin_cases\":" ++ PackInstallation.hostedPluginCasesJson ++ ","
-    ++ "\"hosted_pack_evidence_cases\":" ++ PackInstallation.evidenceCasesJson ++ ","
-    ++ "\"hosted_pack_schema_cases\":" ++ PackInstallation.schemaCasesJson ++ ","
-    ++ "\"hosted_pack_home_cases\":" ++ PackInstallation.homeCasesJson ++ ","
-    ++ "\"pack_identity_cases\":" ++ PackInstallation.identityCasesJson ++ ","
-    ++ "\"pack_identity_reference_cases\":" ++ PackInstallation.identityReferenceCasesJson ++ ","
-    ++ "\"pack_eval_subject_cases\":" ++ PackInstallation.evalSubjectCasesJson ++ ","
-    ++ "\"snapshot_demotion_cases\":"
-      ++ snapshotDemotionCasesJson ++ ","
-    ++ "\"startup_readiness_cases\":"
-      ++ startupReadinessCasesJson ++ ","
-    ++ "\"readiness_publication_cases\":"
-      ++ readinessPublicationCasesJson ++ ","
-    ++ "\"runtime_session_selection_cases\":" ++ sessionSelectionCasesJson ++ ","
-    ++ "\"runtime_configuration_admission_cases\":" ++ configurationAdmissionCasesJson ++ ","
-    ++ "\"runtime_reconcile_cases\":"
-      ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
-    ++ "\"client_agent_readiness_cases\":"
-      ++ jsonArray (clientAgentReadinessCases.map clientAgentReadinessCaseJson) ++ ","
-    ++ "\"apply_reconcile_cases\":"
-      ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
-    ++ "\"eval_outcome_cases\":"
-      ++ Conformance.Eval.evalOutcomeCasesJson ++ ","
-    ++ "\"eval_document_capture_cases\":"
-      ++ Conformance.Eval.evalDocumentCaptureCasesJson ++ ","
-    ++ "\"optimization_cases\":"
-      ++ Conformance.Optimization.optimizationCasesJson ++ ","
-    ++ "\"publish_if_cases\":"
-      ++ ApplyReconcile.ContractCases.publishIfCasesJson ++ ","
-    ++ "\"tool_policy_cases\":"
-      ++ toolPolicyCasesJson ++ ","
-    ++ "\"application_write_cases\":" ++ applicationWriteCasesJson ++ ","
-    ++ "\"field_read_cases\":" ++ fieldReadCasesJson ++ ","
-    ++ "\"write_input_cases\":" ++ writeInputCasesJson ++ ","
-    ++ "\"invocation_correlation_cases\":" ++ invocationCorrelationCasesJson ++ ","
-    ++ "\"goal_capability_resolution_cases\":"
-      ++ goalCapabilityResolutionCasesJson ++ ","
-    ++ "\"lsp_action_cases\":"
-      ++ lspActionCasesJson ++ ","
-    ++ "\"self_config_field_tables\":"
-      ++ selfConfigFieldTablesJson ++ ","
-    ++ "\"self_config_resource_read_exposure_cases\":"
-      ++ selfConfigResourceReadExposureCasesJson ++ ","
-    ++ "\"self_config_scope_cases\":"
-      ++ selfConfigScopeCasesJson ++ ","
-    ++ "\"policy_resource_exposure_cases\":"
-      ++ policyResourceExposureCasesJson ++ ","
-    ++ "\"policy_grant_bound_cases\":"
-      ++ policyGrantBoundCasesJson ++ ","
-    ++ "\"policy_lockout_cases\":"
-      ++ policyLockoutCasesJson ++ ","
-    ++ "\"schema_publication_cases\":" ++ schemaPublicationCasesJson ++ ","
-    ++ "\"self_config_cases\":"
-      ++ selfConfigCasesJson ++ ","
-    ++ "\"agent_decision_cases\":"
-      ++ agentDecisionCasesJson ++ ","
-    ++ "\"agent_materialization_cases\":"
-      ++ agentMaterializationCasesJson ++ ","
-    ++ "\"sibling_tools_cases\":"
-      ++ siblingToolsCasesJson ++ ","
-    ++ "\"self_config_selection_cases\":"
-      ++ selfConfigSelectionCasesJson ++ ","
-    ++ "\"session_recovery_cases\":"
-      ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
-    ++ "\"inference_slot_accounting_cases\":"
-      ++ jsonArray (inferenceSlotAccountingCases.map inferenceSlotAccountingCaseJson) ++ ","
-    ++ "\"fleet_slot_accounting_cases\":"
-      ++ jsonArray (fleetSlotAccountingCases.map fleetSlotAccountingCaseJson) ++ ","
 
 def snapshotRuntimeCasesJson : String :=
   ""
-    ++ "\"persistence_failure_policy_cases\":"
-      ++ jsonArray
-        (persistenceFailurePolicyCases.map persistenceFailurePolicyCaseJson) ++ ","
-    ++ "\"storage_observation_runtime_cases\":"
-      ++ jsonArray
-        (storageObservationRuntimeCases.map storageObservationRuntimeCaseJson) ++ ","
-    ++ "\"backend_health_admission_cases\":"
-      ++ jsonArray
-        (backendHealthAdmissionCases.map backendHealthAdmissionCaseJson) ++ ","
-    ++ "\"native_filesystem_boundary_cases\":"
-      ++ jsonArray
-        (nativeFilesystemBoundaryCases.map nativeFilesystemBoundaryCaseJson) ++ ","
     ++ "\"managed_exec_tool_boundary_cases\":"
       ++ jsonArray
         (managedExecToolBoundaryCases.map managedExecToolBoundaryCaseJson) ++ ","
-    ++ "\"pairing_reconcile_shutdown_boundary_cases\":"
-      ++ jsonArray
-        (pairingReconcileShutdownBoundaryCases.map
-          pairingReconcileShutdownBoundaryCaseJson) ++ ","
-    ++ "\"pairing_reconcile_sweep_retry_boundary_cases\":"
-      ++ jsonArray
-        (pairingReconcileSweepRetryBoundaryCases.map
-          pairingReconcileSweepRetryBoundaryCaseJson) ++ ","
-    ++ "\"pairing_reconcile_sweep_scheduling_cases\":"
-      ++ jsonArray
-        (pairingReconcileSweepSchedulingCases.map
-          pairingReconcileSweepSchedulingCaseJson) ++ ","
-    ++ "\"managed_exec_liveness_cases\":"
-      ++ jsonArray
-        (managedExecLivenessCases.map managedExecLivenessCaseJson) ++ ","
     ++ "\"process_stop_cases\":"
       ++ jsonArray (processStopCases.map processStopCaseJson) ++ ","
-    ++ "\"tool_preflight_cases\":"
-      ++ jsonArray (ToolExecution.preflightCases.map toolPreflightCaseJson) ++ ","
-    ++ "\"tool_retry_cases\":"
-      ++ jsonArray (ToolExecution.retryCases.map toolRetryCaseJson) ++ ","
-    ++ "\"backend_wake_cases\":" ++ Conformance.BackendWake.casesJson ++ ","
-    ++ "\"backend_capture_scope_cases\":" ++ Conformance.BackendWake.captureScopeCasesJson ++ ","
-    ++ "\"backend_health_wake_cases\":" ++ Conformance.BackendWake.healthCasesJson ++ ","
-    ++ "\"backend_generation_mark_cases\":" ++ Conformance.BackendWake.generationCasesJson ++ ","
-    ++ "\"backend_resume_admission_cases\":" ++ Conformance.BackendWake.admissionCasesJson ++ ","
-    ++ "\"backend_repark_cases\":" ++ Conformance.BackendWake.reparkCasesJson ++ ","
-    ++ "\"backend_parked_finalize_cases\":" ++ Conformance.BackendWake.parkedFinalizeCasesJson ++ ","
-    ++ "\"backend_resumed_turn_cases\":" ++ Conformance.BackendWake.resumedTurnCasesJson ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
-    ++ "\"account_rotation_select_cases\":"
-      ++ AccountRotation.Contracts.selectCasesJson ++ ","
-    ++ "\"account_rotation_attempt_cases\":"
-      ++ AccountRotation.Contracts.attemptCasesJson ++ ","
-    ++ "\"account_rotation_observe_cases\":"
-      ++ AccountRotation.Contracts.observeCasesJson ++ ","
-    ++ "\"boundaries\":"
-      ++ boundariesJson ++ ","
-    ++ "\"deviations\":"
-      ++ deviationsJson ++ ","
-    ++ "\"artifact_mode_meet_cases\":" ++ artifactModeMeetCasesJson ++ ","
-    ++ "\"artifact_admission_cases\":" ++ artifactAdmissionCasesJson ++ ","
-    ++ "\"artifact_spawn_cases\":" ++ artifactSpawnCasesJson ++ ","
-    ++ "\"command_policy_cases\":"
-      ++ jsonArray (CommandPolicy.commandPolicyCases.map commandPolicyCaseJson) ++ ","
-    ++ "\"command_sandbox_cases\":"
-      ++ jsonArray (CommandPolicy.commandSandboxCases.map commandSandboxCaseJson) ++ ","
-    ++ "\"command_isolation_cases\":" ++ Conformance.CommandIsolation.casesJson.compress ++ ","
-    ++ "\"command_env_cases\":"
-      ++ jsonArray (CommandPolicy.commandEnvCases.map commandEnvCaseJson) ++ ","
-    ++ "\"live_overlay_cases\":"
-      ++ jsonArray (liveOverlayCases.map liveOverlayCaseJson) ++ ","
-    ++ "\"request_progress_cases\":"
-      ++ jsonArray (requestProgressCases.map requestProgressCaseJson) ++ ","
-    ++ "\"pending_user_turn_cases\":"
-      ++ jsonArray (pendingUserTurnCases.map pendingUserTurnCaseJson) ++ ","
-    ++ "\"queued_steering_trace_cases\":"
-      ++ jsonArray (QueuedSteering.traceObservations.map queuedSteeringTraceJson) ++ ","
-    ++ "\"queued_steering_guard_cases\":"
-      ++ jsonArray (QueuedSteering.guardObservations.map queuedSteeringGuardJson) ++ ","
-    ++ "\"agent_delivery_cases\":"
-      ++ jsonArray (QueuedSteering.agentDeliveryCases.map agentDeliveryCaseJson) ++ ","
-    ++ "\"remote_agent_delivery_cases\":" ++ Request.RemoteDelivery.casesJson ++ ","
-    ++ "\"remote_agent_delivery_recovery_cases\":" ++ Request.RemoteDelivery.recoveryCasesJson ++ ","
-    ++ "\"remote_agent_delivery_claim_cases\":" ++ Request.RemoteDelivery.claimCasesJson ++ ","
-    ++ "\"cross_actor_authorization_cases\":" ++ Request.CrossActorAuthorization.casesJson ++ ","
-    ++ "\"remote_agent_delivery_response_cases\":" ++ Request.RemoteDelivery.responseCasesJson ++ ","
-    ++ "\"interrupt_delivery_cases\":"
-      ++ jsonArray (QueuedSteering.interruptDeliveryCases.map interruptDeliveryCaseJson) ++ ","
 
 def snapshotRecoveryCasesJson : String :=
   ""
-    ++ "\"agent_steer_disposition_cases\":"
-      ++ jsonArray (QueuedSteering.agentSteerDispositionCases.map agentSteerDispositionCaseJson) ++ ","
-    ++ "\"agent_steer_target_cases\":"
-      ++ jsonArray (QueuedSteering.agentSteerTargetCases.map agentSteerTargetCaseJson) ++ ","
-    ++ "\"agent_steering_boundary_cases\":"
-      ++ jsonArray (QueuedSteering.boundaryCases.map boundaryCaseJson) ++ ","
-    ++ "\"agent_steer_reachability_cases\":"
-      ++ jsonArray (QueuedSteering.agentSteerReachabilityCases.map agentSteerReachabilityCaseJson) ++ ","
-    ++ "\"agent_folded_binding_cases\":"
-      ++ jsonArray (QueuedSteering.foldedBindingCases.map foldedBindingCaseJson) ++ ","
-    ++ "\"agent_message_outcome_cases\":"
-      ++ jsonArray (QueuedSteering.agentMessageOutcomeCases.map agentMessageOutcomeCaseJson) ++ ","
-    ++ "\"queue_deadline_conformance_cases\":"
-      ++ jsonArray
-        (queueDeadlineConformanceCases.map queueDeadlineConformanceCaseJson) ++ ","
     ++ "\"recovery_sweep_cases\":"
       ++ jsonArray
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
-    ++ "\"session_message_kill_cases\":"
-      ++ jsonArray (Recovery.killCases.map fun (observation, action) =>
-        "{\"observation\":" ++ jsonString observation.toContract
-          ++ ",\"action\":" ++ jsonString action.toContract ++ "}") ++ ","
-    ++ "\"session_message_kill_observation_cases\":"
-      ++ jsonArray (Recovery.killObservationCases.map fun (caused, observation) =>
-        "{\"caused\":" ++ (match caused with
-          | none => "null"
-          | some facts => "{\"terminal\":" ++ toString facts.terminal
-              ++ ",\"this_runtime\":" ++ toString facts.thisRuntime ++ "}")
-          ++ ",\"observation\":" ++ jsonString observation.toContract ++ "}") ++ ","
-    ++ "\"restart_disposition_cases\":"
-      ++ jsonArray
-        (Recovery.restartDispositionCases.map restartDispositionCaseJson) ++ ","
-    ++ "\"r4c_background_work_cases\":"
-      ++ jsonArray r4cBackgroundWorkCasesJson ++ ","
-    ++ "\"tool_output_paging_cases\":"
-      ++ jsonArray
-        (toolOutputPagingCases.map toolOutputPagingCaseJson) ++ ","
-    ++ "\"interrupt_disposition_cases\":"
-      ++ jsonArray
-        (interruptDispositionCases.map interruptDispositionCaseJson) ++ ","
+    ++ "\"recovery_sweep_ids\":"
+      ++ jsonArray (Recovery.registeredRecoverySweepIds.map jsonString) ++ ","
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
-    ++ "\"composed_invariant_witnesses\":"
-      ++ jsonArray
-        (composedInvariantWitnesses.map composedInvariantWitnessJson) ++ ","
-    ++ "\"count_carrier_cases\":" ++ Conformance.CountCarrier.casesJson ++ ","
-    ++ "\"logical_output_obligation_cases\":"
-      ++ Conformance.LogicalOutputObligationContracts.casesJson ++ ","
-    ++ "\"mailbox_notification_cases\":"
-      ++ Conformance.MailboxNotificationContracts.casesJson ++ ","
-    ++ "\"mailbox_reply_cases\":"
-      ++ Conformance.MailboxReplyContracts.casesJson ++ ","
-    ++ "\"mailbox_question_cases\":"
-      ++ Conformance.MailboxQuestionContracts.casesJson ++ ","
-    ++ "\"mailbox_handoff_cases\":"
-      ++ Conformance.MailboxHandoffContracts.casesJson ++ ","
-    ++ "\"mailbox_sweep_cases\":"
-      ++ Conformance.MailboxSweepContracts.casesJson ++ ","
-    ++ "\"schema_argument_repair_cases\":"
-      ++ Conformance.SchemaArgumentRepair.casesJson ++ ","
-    ++ "\"invalid_tool_progress_cases\":"
-      ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
-    ++ "\"repeated_tool_failure_cases\":"
-      ++ Conformance.RepeatedToolFailureContracts.casesJson ++ ","
 
 def snapshotPluginCasesJson : String :=
   ""
-    ++ "\"plugin_resource_cases\":"
-      ++ Conformance.PluginResources.casesJson ++ ","
-    ++ "\"plugin_data_cases\":" ++ Conformance.PluginResources.dataCasesJson ++ ","
-    ++ "\"plugin_calls_route_cases\":" ++ Conformance.PluginResources.routeCasesJson ++ ","
-    ++ "\"plugin_job_admission_cases\":" ++ Conformance.PluginJob.admissionCasesJson ++ ","
-    ++ "\"plugin_job_adoption_cases\":" ++ Conformance.PluginJob.adoptionCasesJson ++ ","
-    ++ "\"plugin_job_key_cases\":" ++ Conformance.PluginJob.keyCasesJson ++ ","
-    ++ "\"plugin_job_control_cases\":" ++ Conformance.PluginJob.controlCasesJson ++ ","
-    ++ "\"plugin_job_authority_cases\":" ++ Conformance.PluginJob.authorityCasesJson ++ ","
-    ++ "\"plugin_job_wire_cases\":" ++ Conformance.PluginJob.wireCasesJson ++ ","
-    ++ "\"plugin_job_lineage_cases\":" ++ Conformance.PluginJob.lineageCasesJson ++ ","
-    ++ "\"plugin_job_recovery_cases\":" ++ Conformance.PluginJob.recoveryCasesJson ++ ","
-    ++ "\"plugin_job_wake_cases\":" ++ Conformance.PluginJob.wakeCasesJson ++ ","
-    ++ "\"tool_timeout_cases\":"
-      ++ Conformance.ToolTimeouts.casesJson ++ ","
-    ++ "\"scope_collection_rules\":{"
-      ++ "\"machineRules\":"
-        ++ scopeRulesJson ScopeTemplates.machineRules
-      ++ "},"
-    ++ "\"scope_node_route_cases\":" ++ nodeRouteCasesJson ++ ","
-    ++ "\"scope_template_cases\":" ++ scopeTemplateCasesJson ++ ","
-    ++ "\"causal_hop_contract\":"
-      ++ Conformance.CausalHopContracts.contractJson ++ ","
-    ++ "\"operator_base_freeze_cases\":"
-      ++ Conformance.OperatorBaseFreezeContracts.casesJson ++ ","
-    ++ "\"workspace_path_capability_cases\":"
-      ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
-    ++ "\"file_inventory_direct_reader_cases\":"
-      ++ Conformance.FileInventoryContracts.directReaderCasesJson ++ ","
-    ++ "\"file_inventory_fork_cases\":"
-      ++ Conformance.FileInventoryContracts.forkCasesJson ++ ","
-    ++ "\"file_inventory_source_projection_cases\":"
-      ++ Conformance.FileInventoryContracts.sourceProjectionCasesJson ++ ","
-    ++ "\"file_inventory_reader_cases\":"
-      ++ Conformance.FileInventoryContracts.readerCasesJson ++ ","
-    ++ "\"file_inventory_order_window_cases\":"
-      ++ Conformance.FileInventoryContracts.orderingWindowCasesJson ++ ","
-    ++ "\"file_inventory_order_resolution_cases\":"
-      ++ Conformance.FileInventoryContracts.orderingResolutionCasesJson ++ ","
-    ++ "\"file_inventory_order_comparison_cases\":"
-      ++ Conformance.FileInventoryContracts.orderingComparisonCasesJson ++ ","
-    ++ "\"file_inventory_order_entry_cases\":"
-      ++ Conformance.FileInventoryContracts.orderingEntryCasesJson ++ ","
-    ++ "\"file_review_route_cases\":"
-      ++ Conformance.FileReviewRouteContracts.routeCasesJson ++ ","
-    ++ "\"file_review_subscription_cases\":"
-      ++ Conformance.FileReviewRouteContracts.subscriptionCasesJson ++ ","
+    ++ "\"causal_hop_default_max_request_hop\":"
+      ++ Conformance.CausalHopContracts.defaultMaxRequestHopJson ++ ","
 
 def snapshotFileCasesJson : String :=
   ""
-    ++ "\"workspace_path_alias_cases\":"
-      ++ Conformance.WorkspacePathCapabilityContracts.aliasCasesJson ++ ","
-    ++ "\"workspace_cases\":"
-      ++ workspaceCasesJson ++ ","
-    ++ "\"workspace_binding_cases\":"
-      ++ workspaceBindingCasesJson ++ ","
-    ++ "\"callback_transition_case_count\":" ++ toString callbackTransitionCaseCount ++ ","
-    ++ "\"callback_transition_cases\":" ++ callbackTransitionCasesJson ++ ","
-    ++ "\"callback_retry_cases\":" ++ callbackRetryCasesJson ++ ","
-    ++ "\"callback_recovery_cases\":" ++ callbackRecoveryCasesJson ++ ","
-    ++ "\"callback_cases\":"
-      ++ callbackCasesJson ++ ","
-    ++ "\"r6_background_theorem_witnesses\":"
-      ++ jsonArray
-        (r6BackgroundTheoremWitnesses.map backgroundTheoremWitnessJson) ++ ","
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","
-    ++ "\"request_terminal_selection_cases\":" ++ TerminalSelection.casesJson ++ ","
-    ++ "\"canonical_output_projection_cases\":"
-      ++ jsonArray
-        (StreamingResponse.outputProjectionCases.map outputProjectionCaseJson) ++ ","
-    ++ "\"reasoning_audit_cases\":" ++ jsonArray
-      (StreamingResponse.ReasoningAudit.auditCases.map reasoningAuditCaseJson) ++ ","
-    ++ "\"reasoning_signature_cases\":" ++ jsonArray
-      (StreamingResponse.ReasoningAudit.signatureCases.map reasoningSignatureCaseJson) ++ ","
-    ++ "\"reasoning_delta_cases\":" ++ jsonArray
-      (StreamingResponse.ReasoningDeltas.cases.map reasoningDeltaCaseJson) ++ ","
-    ++ "\"auxiliary_output_cases\":" ++ jsonArray
-      (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
-    ++ "\"prompt_assembly_claude_wire_start_cases\":" ++
-      promptAssemblyClaudeWireStartCasesJson ++ ","
-    ++ "\"routing_affinity_cases\":" ++ routingAffinityCasesJson ++ ","
-    ++ "\"prompt_assembly_service_tier_cases\":" ++
-      promptAssemblyServiceTierCasesJson ++ ","
-    ++ "\"prompt_assembly_responses_storage_cases\":" ++
-      promptAssemblyResponsesStorageCasesJson ++ ","
-    ++ "\"prompt_assembly_responses_effort_cases\":" ++
-      promptAssemblyResponsesEffortCasesJson ++ ","
-    ++ "\"retry_frontier_cases\":" ++ retryFrontierCasesJson ++ ","
-    ++ "\"retry_entry_cases\":" ++ retryEntryCasesJson ++ ","
-    ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
-    ++ "\"wake_input_cases\":" ++ wakeInputCasesJson ++ ","
-    ++ "\"prompt_assembly_sanitize_cases\":"
-      ++ promptAssemblySanitizeCasesJson ++ ","
-    ++ "\"provider_tool_identity_cases\":" ++ providerToolIdentityCasesJson ++ ","
 
-    ++ "\"discovery_guidance_cases\":" ++ discoveryGuidanceCasesJson ++ ","
-    ++ "\"prompt_assembly_assistant_order_cases\":"
-      ++ promptAssemblyAssistantOrderCasesJson ++ ","
-    ++ "\"prompt_assembly_mode_sanitize_cases\":"
-      ++ promptAssemblyModeSanitizeCasesJson ++ ","
-    ++ "\"prompt_assembly_layer_cases\":"
-      ++ promptAssemblyLayerCasesJson ++ ","
-    ++ "\"prompt_assembly_repair_cases\":"
-      ++ promptAssemblyRepairCasesJson ++ ","
-    ++ "\"prompt_assembly_budget_cases\":"
-      ++ promptAssemblyBudgetCasesJson ++ ","
-    ++ "\"prompt_assembly_turn_budget_cases\":"
-      ++ promptAssemblyTurnBudgetCasesJson ++ ","
 
 def snapshotJson : String :=
   "{"

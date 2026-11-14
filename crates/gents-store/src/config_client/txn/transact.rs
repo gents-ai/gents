@@ -1,0 +1,698 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Instant;
+
+use futures::future::BoxFuture;
+
+#[cfg(any(test, feature = "test-fixtures"))]
+use super::fault_injection::retry_backoff_reached_for_test;
+use super::finalize::{CommitCleanup, CommitFailure};
+use super::native::ACTIVE_EMBEDDED_TRANSACTION;
+use super::owner_staged::OwnerStagedCheckpoint;
+use super::telemetry::{AttemptReport, AttemptTelemetry, AttemptTelemetryState};
+use super::{
+    embedded_phase_timeout, retry, ConfigApplyTxn, ConfigClientError, Result, TransactionFailure,
+    EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT,
+};
+use crate::config_client::write_telemetry::{
+    ConflictSource, RetryOwner, RollbackStatus, WriteAttemptOrdinal, WriteBackend, WriteMode,
+    WriteOperation, WriteOutcome,
+};
+use crate::config_client::RerunNote;
+
+#[derive(Debug)]
+pub struct TransactionFinalityError<E> {
+    pub error: E,
+    pub unconfirmed: bool,
+}
+
+/// Replay policy for idempotent transactions (stable identities, durable-state-guarded updates).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdempotentTransactionRetry {
+    Standard,
+    FiveAttempts,
+}
+
+impl IdempotentTransactionRetry {
+    const fn max_attempts(self) -> u32 {
+        match self {
+            Self::Standard => 4,
+            Self::FiveAttempts => 5,
+        }
+    }
+}
+
+/// A competing commit delivered a new observation to reload rather than a failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TransactionOutcome<T> {
+    Committed(T),
+    ConflictObserved,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum TransactionMode {
+    ConflictRetry,
+    SignedConflictRebuild,
+    SingleAttempt,
+    Idempotent(IdempotentTransactionRetry),
+    #[cfg(test)]
+    ObserveConflict,
+}
+
+impl TransactionMode {
+    const fn max_attempts(self) -> u32 {
+        match self {
+            Self::ConflictRetry | Self::SignedConflictRebuild => {
+                retry::TRANSACT_CONFLICT_MAX_RETRIES + 1
+            }
+            Self::SingleAttempt => 1,
+            Self::Idempotent(policy) => policy.max_attempts(),
+            #[cfg(test)]
+            Self::ObserveConflict => 1,
+        }
+    }
+
+    const fn retry_owner(self) -> RetryOwner {
+        match self {
+            Self::Idempotent(_) => RetryOwner::GentsIdempotentTransaction,
+            Self::ConflictRetry | Self::SignedConflictRebuild | Self::SingleAttempt => {
+                RetryOwner::GentsTransaction
+            }
+            #[cfg(test)]
+            Self::ObserveConflict => RetryOwner::GentsTransaction,
+        }
+    }
+
+    /// Whether a callback's request to run again from the start is honoured.
+    /// A single-attempt transaction replays a recorded pack transcript, and an
+    /// observing one reports instead of repeating.
+    const fn reruns(self) -> bool {
+        match self {
+            Self::ConflictRetry | Self::SignedConflictRebuild | Self::Idempotent(_) => true,
+            Self::SingleAttempt => false,
+            #[cfg(test)]
+            Self::ObserveConflict => false,
+        }
+    }
+
+    const fn idempotent(self) -> bool {
+        matches!(self, Self::Idempotent(_))
+    }
+
+    const fn observes_conflicts(self) -> bool {
+        match self {
+            #[cfg(test)]
+            Self::ObserveConflict => true,
+            Self::ConflictRetry
+            | Self::SignedConflictRebuild
+            | Self::SingleAttempt
+            | Self::Idempotent(_) => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Deserialize), serde(rename_all = "snake_case"))]
+enum AttemptStage {
+    Begin,
+    Callback,
+    Commit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Deserialize), serde(rename_all = "snake_case"))]
+enum AttemptFailure {
+    Conflict,
+    Storage,
+    StorageFull,
+    Rejection,
+}
+
+impl AttemptFailure {
+    fn of_access(error: &ConfigClientError) -> Self {
+        if error.transaction_conflict().is_some() {
+            Self::Conflict
+        } else if crate::graphql::is_storage_full(error) {
+            Self::StorageFull
+        } else if error.is_storage_failure() {
+            Self::Storage
+        } else {
+            Self::Rejection
+        }
+    }
+
+    fn of_callback<E>(error: &E) -> Self
+    where
+        E: TransactionFailure + ?Sized,
+    {
+        error
+            .config_client_error()
+            .map_or(Self::Rejection, Self::of_access)
+    }
+}
+
+struct TransactionAttemptFailure<E> {
+    error: E,
+    stage: AttemptStage,
+    failure: AttemptFailure,
+    conflict_source: Option<ConflictSource>,
+    rollback: RollbackStatus,
+    confirmed_abort: bool,
+}
+
+pub(crate) fn client_signed_write_may_retry(
+    dispatched: bool,
+    confirmed_abort: bool,
+    replay_authorized: bool,
+) -> bool {
+    !dispatched || (confirmed_abort && replay_authorized)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize), serde(rename_all = "snake_case"))]
+enum FailureDisposition {
+    Observe,
+    Retry,
+    Fail,
+}
+
+fn repeatable(mode: TransactionMode, stage: AttemptStage, failure: AttemptFailure) -> bool {
+    match (stage, failure) {
+        (_, AttemptFailure::StorageFull) | (AttemptStage::Begin, AttemptFailure::Conflict) => false,
+        (_, AttemptFailure::Conflict) => true,
+        (AttemptStage::Commit, _) | (_, AttemptFailure::Storage) => mode.idempotent(),
+        (_, AttemptFailure::Rejection) => false,
+    }
+}
+
+fn failure_disposition(
+    mode: TransactionMode,
+    stage: AttemptStage,
+    failure: AttemptFailure,
+    dispatched: bool,
+    confirmed_abort: bool,
+    attempts_remain: bool,
+) -> FailureDisposition {
+    let conflict = failure == AttemptFailure::Conflict;
+    if stage != AttemptStage::Begin && conflict && mode.observes_conflicts() {
+        FailureDisposition::Observe
+    } else if attempts_remain
+        && repeatable(mode, stage, failure)
+        && client_signed_write_may_retry(
+            dispatched,
+            confirmed_abort && conflict,
+            matches!(mode, TransactionMode::SignedConflictRebuild),
+        )
+    {
+        FailureDisposition::Retry
+    } else {
+        FailureDisposition::Fail
+    }
+}
+
+fn rerun_honoured(
+    mode: TransactionMode,
+    discarded: bool,
+    poisoned: bool,
+    dispatched: bool,
+) -> bool {
+    mode.reruns()
+        && discarded
+        && !poisoned
+        && client_signed_write_may_retry(
+            dispatched,
+            discarded,
+            matches!(mode, TransactionMode::SignedConflictRebuild),
+        )
+}
+
+pub(super) fn transact_owned<'a, T, E, F, B>(
+    operation: &'static str,
+    backend: WriteBackend,
+    mode: TransactionMode,
+    begin: B,
+    callback: F,
+) -> BoxFuture<'a, Result<TransactionOutcome<T>, E>>
+where
+    T: Send + 'a,
+    E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+    F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
+    B: FnMut(WriteOperation, Arc<AtomicBool>) -> BoxFuture<'a, Result<ConfigApplyTxn<'a>>>
+        + Send
+        + 'a,
+{
+    transact_owned_with_finality(operation, backend, mode, begin, callback, None)
+}
+
+pub(super) fn transact_owned_with_finality<'a, T, E, F, B>(
+    operation: &'static str,
+    backend: WriteBackend,
+    mode: TransactionMode,
+    mut begin: B,
+    callback: F,
+    unconfirmed: Option<Arc<AtomicBool>>,
+) -> BoxFuture<'a, Result<TransactionOutcome<T>, E>>
+where
+    T: Send + 'a,
+    E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+    F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
+    B: FnMut(WriteOperation, Arc<AtomicBool>) -> BoxFuture<'a, Result<ConfigApplyTxn<'a>>>
+        + Send
+        + 'a,
+{
+    Box::pin(async move {
+        let operation = WriteOperation::new(operation).map_err(ConfigClientError::from)?;
+        let mut max_attempts = mode.max_attempts();
+        let mut attempt = 0;
+        let mut rerun_notes: Vec<RerunNote> = Vec::new();
+        // `Identity.OwnerStaged.applyOverHttp`: `None` while planning, then
+        // the revocations sent before the WRITE attempts.
+        let mut owner_staged_plan: Option<Vec<gents_protocol::owner_staged::OwnerStagedChange>> =
+            None;
+        while attempt < max_attempts {
+            attempt += 1;
+            let ordinal =
+                WriteAttemptOrdinal::new(attempt, max_attempts).map_err(ConfigClientError::from)?;
+            let cancellation_rollback_scheduled = Arc::new(AtomicBool::new(false));
+            let mut telemetry = AttemptTelemetry {
+                operation,
+                backend,
+                mode: WriteMode::Transaction,
+                retry_owner: mode.retry_owner(),
+                ordinal,
+                started: Instant::now(),
+                state: StdMutex::new(AttemptTelemetryState::default()),
+                cancelled_rollback: RollbackStatus::NotNeeded,
+                cancellation_rollback_scheduled: Some(Arc::clone(&cancellation_rollback_scheduled)),
+                dispatch: tracing::dispatcher::get_default(Clone::clone),
+            };
+            let mut txn = match begin(operation, cancellation_rollback_scheduled).await {
+                Ok(txn) => txn,
+                Err(error) => {
+                    let retry = failure_disposition(
+                        mode,
+                        AttemptStage::Begin,
+                        AttemptFailure::of_access(&error),
+                        false,
+                        false,
+                        attempt < max_attempts,
+                    ) == FailureDisposition::Retry;
+                    let backoff = retry.then(|| retry::transaction_backoff(attempt - 1));
+                    telemetry.record(AttemptReport {
+                        outcome: if retry {
+                            WriteOutcome::Retrying
+                        } else {
+                            WriteOutcome::Failed
+                        },
+                        conflict_source: ConflictSource::None,
+                        backoff,
+                        affected_documents: Some(0),
+                        rollback: RollbackStatus::NotNeeded,
+                    });
+                    match backoff {
+                        Some(backoff) => {
+                            tokio::time::sleep(backoff).await;
+                            continue;
+                        }
+                        None => return Err(error.into()),
+                    }
+                }
+            };
+            txn.rerun_notes = rerun_notes.clone();
+            txn.drive_owner_staged(owner_staged_plan.as_deref());
+            telemetry.cancelled_rollback = match backend {
+                WriteBackend::Embedded => RollbackStatus::NotNeeded,
+                WriteBackend::Http => RollbackStatus::Scheduled,
+            };
+            let callback_result = match backend {
+                WriteBackend::Embedded => ACTIVE_EMBEDDED_TRANSACTION
+                    .scope(
+                        operation.as_str(),
+                        tokio::time::timeout(EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT, callback(&txn)),
+                    )
+                    .await
+                    .map_err(|_| {
+                        E::from(embedded_phase_timeout(
+                            "callback",
+                            EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT,
+                        ))
+                    })
+                    .and_then(|result| result),
+                WriteBackend::Http => callback(&txn).await,
+            };
+            let callback_result = match callback_result {
+                Ok(value) => match txn.owner_staged_checkpoint() {
+                    Ok(OwnerStagedCheckpoint::Commit) => Ok(value),
+                    Ok(OwnerStagedCheckpoint::Revoke(planned)) => {
+                        // PLAN read what the revocations change; discard it
+                        // before they are sent so no open transaction has read
+                        // those documents, then WRITE in a fresh transaction.
+                        let endpoint = txn
+                            .http_endpoint()
+                            .cloned()
+                            .ok_or(ConfigClientError::LocalAccessRequired)?;
+                        // A confirmed discard proves the PLAN transaction did not
+                        // commit, not that a client-signed graph it dispatched is
+                        // invalid. So the callback reruns only after a confirmed
+                        // discard and, once it dispatched a signed graph, only
+                        // with its owner's replay authorization: the residual is
+                        // `SignedConflictRebuild`'s (`Identity.OwnerStaged.applyOverHttp`).
+                        let dispatched = txn.client_signed_write_dispatched.load(Ordering::Acquire);
+                        let replay_authorized =
+                            matches!(mode, TransactionMode::SignedConflictRebuild)
+                                || txn.planned_replay_authorized.load(Ordering::Acquire);
+                        let discarded = txn.rollback_inner().await.is_ok();
+                        telemetry.record(AttemptReport {
+                            outcome: if discarded {
+                                WriteOutcome::Retrying
+                            } else {
+                                WriteOutcome::Failed
+                            },
+                            conflict_source: ConflictSource::None,
+                            backoff: None,
+                            affected_documents: Some(0),
+                            rollback: if discarded {
+                                RollbackStatus::Succeeded
+                            } else {
+                                RollbackStatus::Scheduled
+                            },
+                        });
+                        if !discarded {
+                            return Err(E::from(ConfigClientError::OwnerStagedPlanUnconfirmed));
+                        }
+                        if !client_signed_write_may_retry(dispatched, discarded, replay_authorized)
+                        {
+                            return Err(E::from(
+                                ConfigClientError::OwnerStagedPlanReplayUnauthorized,
+                            ));
+                        }
+                        ConfigApplyTxn::send_planned_revocations(&endpoint, &planned).await?;
+                        owner_staged_plan = Some(planned);
+                        attempt -= 1;
+                        continue;
+                    }
+                    Err(error) => Err(E::from(error)),
+                },
+                Err(error) => Err(error),
+            };
+            let attempt_result: Result<(), TransactionAttemptFailure<E>> = match callback_result {
+                Ok(value) => {
+                    let affected_documents = txn.affected_documents();
+                    if let Err(error) = txn.observe_before_commit().await {
+                        let _ = txn.rollback_inner().await;
+                        return Err(E::from(error));
+                    }
+                    match txn.commit_inner().await {
+                        Ok(()) => {
+                            txn.disarm_rollback();
+                            if let Err(error) = txn.observe_committed().await {
+                                return Err(E::from(
+                                    ConfigClientError::ClientAgentPublicationUnconfirmed(Box::new(
+                                        error,
+                                    )),
+                                ));
+                            }
+                            telemetry.record(AttemptReport {
+                                outcome: WriteOutcome::Committed,
+                                conflict_source: ConflictSource::None,
+                                backoff: None,
+                                affected_documents: Some(affected_documents),
+                                rollback: RollbackStatus::NotNeeded,
+                            });
+                            txn.publish_owed_deliveries().await;
+                            txn.complete_relationship_grants().await.map_err(E::from)?;
+                            return Ok(TransactionOutcome::Committed(value));
+                        }
+                        Err(CommitFailure {
+                            error,
+                            cleanup,
+                            definitely_not_committed,
+                        }) => {
+                            let rollback = match cleanup {
+                                CommitCleanup::NotNeeded => {
+                                    txn.disarm_rollback();
+                                    RollbackStatus::NotNeeded
+                                }
+                                CommitCleanup::Required if txn.rollback_inner().await.is_ok() => {
+                                    RollbackStatus::Succeeded
+                                }
+                                CommitCleanup::Required => RollbackStatus::Scheduled,
+                            };
+                            // Embedded finish consumes the transaction before commit starts;
+                            // a successful discard proves commit did not take it. HTTP discard
+                            // cannot establish that a commit response was not lost.
+                            let discarded_before_commit = matches!(
+                                (backend, cleanup, rollback),
+                                (
+                                    WriteBackend::Embedded,
+                                    CommitCleanup::Required,
+                                    RollbackStatus::Succeeded
+                                )
+                            );
+                            if let Err(journal_error) = txn
+                                .observe_commit_failed(
+                                    definitely_not_committed || discarded_before_commit,
+                                )
+                                .await
+                            {
+                                return Err(E::from(
+                                    ConfigClientError::ClientAgentPublicationUnconfirmed(Box::new(
+                                        journal_error,
+                                    )),
+                                ));
+                            }
+                            if let (false, false, Some(unconfirmed)) = (
+                                definitely_not_committed,
+                                discarded_before_commit,
+                                &unconfirmed,
+                            ) {
+                                unconfirmed.store(true, Ordering::Release);
+                            }
+                            if !definitely_not_committed
+                                && !discarded_before_commit
+                                && txn.has_relationship_grants()
+                            {
+                                telemetry.record(AttemptReport {
+                                    outcome: WriteOutcome::Failed,
+                                    conflict_source: ConflictSource::None,
+                                    backoff: None,
+                                    affected_documents: Some(affected_documents),
+                                    rollback,
+                                });
+                                return Err(E::from(txn.unconfirmed_relationships(error)));
+                            }
+                            Err(TransactionAttemptFailure {
+                                stage: AttemptStage::Commit,
+                                failure: AttemptFailure::of_access(&error),
+                                conflict_source: retry::classified_transaction_conflict(&error),
+                                error: E::from(error),
+                                rollback,
+                                confirmed_abort: definitely_not_committed
+                                    || discarded_before_commit,
+                            })
+                        }
+                    }
+                }
+                Err(error) => {
+                    let rollback = if txn.rollback_inner().await.is_ok() {
+                        RollbackStatus::Succeeded
+                    } else {
+                        RollbackStatus::Scheduled
+                    };
+                    let rerun = error
+                        .rerun_requested()
+                        .filter(|note| !rerun_notes.contains(note))
+                        .cloned();
+                    if let Some(note) = rerun {
+                        let discarded = matches!(rollback, RollbackStatus::Succeeded);
+                        // A rerun runs the whole callback again: it needs the
+                        // attempt discarded, and a client-signed write already
+                        // sent may be signed again only where conflict
+                        // rebuilds are authorized.
+                        if rerun_honoured(
+                            mode,
+                            discarded,
+                            txn.embedded_poisoned(),
+                            txn.client_signed_write_dispatched.load(Ordering::Acquire),
+                        ) {
+                            telemetry.record(AttemptReport {
+                                outcome: WriteOutcome::Retrying,
+                                conflict_source: ConflictSource::None,
+                                backoff: None,
+                                affected_documents: Some(0),
+                                rollback,
+                            });
+                            rerun_notes.push(note);
+                            max_attempts += 1;
+                            drop(txn);
+                            continue;
+                        }
+                    }
+                    Err(TransactionAttemptFailure {
+                        stage: AttemptStage::Callback,
+                        failure: AttemptFailure::of_callback(&error),
+                        conflict_source: retry::classified_transaction_conflict(&error),
+                        error,
+                        rollback,
+                        confirmed_abort: matches!(rollback, RollbackStatus::Succeeded),
+                    })
+                }
+            };
+            let failure = match attempt_result {
+                Err(failure) => failure,
+                Ok(_) => unreachable!("successful attempt returns after commit"),
+            };
+            let TransactionAttemptFailure {
+                error,
+                stage,
+                failure,
+                conflict_source,
+                rollback,
+                confirmed_abort,
+            } = failure;
+            if txn.embedded_poisoned() {
+                telemetry.record(AttemptReport {
+                    outcome: WriteOutcome::PendingNative,
+                    conflict_source: ConflictSource::None,
+                    backoff: None,
+                    affected_documents: None,
+                    rollback: RollbackStatus::Scheduled,
+                });
+                return Err(error);
+            }
+            let source = conflict_source.unwrap_or(ConflictSource::None);
+            let sibling_contention = conflict_source.is_some()
+                && txn.contends_with_request_siblings.load(Ordering::Relaxed);
+            if sibling_contention {
+                max_attempts = max_attempts.max(retry::REQUEST_SIBLING_MAX_ATTEMPTS);
+            }
+            match failure_disposition(
+                mode,
+                stage,
+                failure,
+                txn.client_signed_write_dispatched.load(Ordering::Acquire),
+                confirmed_abort,
+                attempt < max_attempts,
+            ) {
+                FailureDisposition::Observe => {
+                    telemetry.record(AttemptReport {
+                        outcome: WriteOutcome::ConflictObserved,
+                        conflict_source: source,
+                        backoff: None,
+                        affected_documents: Some(0),
+                        rollback,
+                    });
+                    return Ok(TransactionOutcome::ConflictObserved);
+                }
+                FailureDisposition::Retry => {
+                    let backoff = if sibling_contention {
+                        retry::request_sibling_backoff(attempt - 1)
+                    } else {
+                        retry::transaction_backoff(attempt - 1)
+                    };
+                    telemetry.record(AttemptReport {
+                        outcome: WriteOutcome::Retrying,
+                        conflict_source: source,
+                        backoff: Some(backoff),
+                        affected_documents: Some(0),
+                        rollback,
+                    });
+                    drop(txn);
+                    #[cfg(any(test, feature = "test-fixtures"))]
+                    retry_backoff_reached_for_test();
+                    tokio::time::sleep(backoff).await;
+                }
+                FailureDisposition::Fail => {
+                    telemetry.record(AttemptReport {
+                        outcome: WriteOutcome::Failed,
+                        conflict_source: source,
+                        backoff: None,
+                        affected_documents: Some(0),
+                        rollback,
+                    });
+                    return Err(error);
+                }
+            }
+        }
+        unreachable!("bounded transaction loop returns on its final attempt")
+    })
+}
+
+pub(super) fn expect_committed<T>(outcome: TransactionOutcome<T>) -> T {
+    match outcome {
+        TransactionOutcome::Committed(value) => value,
+        TransactionOutcome::ConflictObserved => {
+            unreachable!("only observing transactions expose observed conflicts")
+        }
+    }
+}
+
+#[cfg(test)]
+mod conformance {
+    use gents_lean_vocab::families;
+
+    use super::{
+        client_signed_write_may_retry, failure_disposition, rerun_honoured, AttemptFailure,
+        AttemptStage, FailureDisposition, IdempotentTransactionRetry, TransactionMode,
+    };
+
+    #[derive(Debug, Clone, Copy, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Mode {
+        ConflictRetry,
+        SignedConflictRebuild,
+        SingleAttempt,
+        Idempotent,
+        IdempotentFiveAttempts,
+        ObserveConflict,
+    }
+
+    impl Mode {
+        fn production(self) -> TransactionMode {
+            match self {
+                Self::ConflictRetry => TransactionMode::ConflictRetry,
+                Self::SignedConflictRebuild => TransactionMode::SignedConflictRebuild,
+                Self::SingleAttempt => TransactionMode::SingleAttempt,
+                Self::Idempotent => {
+                    TransactionMode::Idempotent(IdempotentTransactionRetry::Standard)
+                }
+                Self::IdempotentFiveAttempts => {
+                    TransactionMode::Idempotent(IdempotentTransactionRetry::FiveAttempts)
+                }
+                Self::ObserveConflict => TransactionMode::ObserveConflict,
+            }
+        }
+    }
+
+    #[test]
+    fn client_signed_write_retries_match_the_lean_model() {
+        families::identity_configuration_client_signed_write_may_retry::replay(|i| {
+            client_signed_write_may_retry(i.dispatched, i.confirmed_abort, i.replay_authorized)
+        });
+    }
+
+    #[test]
+    fn failed_attempt_dispositions_match_the_lean_model() {
+        families::transaction_replay_disposition::replay::<
+            FailureDisposition,
+            AttemptFailure,
+            Mode,
+            AttemptStage,
+        >(|i| {
+            failure_disposition(
+                i.mode.production(),
+                i.stage,
+                i.failure,
+                i.dispatched,
+                i.confirmed_abort,
+                i.attempts_remain,
+            )
+        });
+        families::transaction_replay_rerun_honoured::replay::<Mode>(|i| {
+            rerun_honoured(i.mode.production(), i.discarded, i.poisoned, i.dispatched)
+        });
+        families::transaction_replay_mode_max_attempts::replay::<Mode>(|i| {
+            u64::from(i.mode.production().max_attempts())
+        });
+    }
+}

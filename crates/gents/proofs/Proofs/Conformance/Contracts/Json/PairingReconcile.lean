@@ -1,9 +1,10 @@
-import Proofs.PairingReconcile
+import Proofs.P2P.PairingReconcile
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
-open PairingReconcile
+open Lean PairingReconcile
 
 private inductive PairingSample where
   | dial (name : String) (before : ReconcileState) (desired : PairingDesired)
@@ -78,20 +79,73 @@ private def pairingSamples : List PairingSample :=
 example : ¬ connected.converged ∧ ¬ oneInstalled.converged ∧ allInstalled.converged := by
   decide
 
-private def pairingStateJson (s : ReconcileState) : String :=
-  "{" ++ "\"connected\":" ++ toString s.actual.connected ++ ","
-    ++ "\"desired_replicators\":" ++ jsonStringArray
-      (sampleAddresses.filter fun address =>
-        (s.desired.map (fun d => decide (sampleReplicator address ∈ d.replicators))).getD false) ++ ","
-    ++ "\"actual_replicators\":" ++ jsonStringArray
-      (sampleAddresses.filter fun address => sampleReplicator address ∈ s.actual.replicators) ++ ","
-    ++ "\"converged\":" ++ toString (decide s.converged) ++ "}"
+structure PairingStateWire where
+  connected : Bool
+  desiredReplicators : List String
+  actualReplicators : List String
+  converged : Bool
+  deriving ToJson, BEq
 
-def pairingReconcileCasesJson : String :=
-  jsonArray (pairingSamples.map fun sample =>
-    "{" ++ "\"name\":" ++ jsonString sample.name ++ ","
-      ++ "\"action\":" ++ jsonString sample.action ++ ","
-      ++ "\"before\":" ++ pairingStateJson sample.before ++ ","
-      ++ "\"after\":" ++ pairingStateJson sample.after ++ "}")
+def PairingStateWire.ofModel (s : ReconcileState) : PairingStateWire :=
+  { connected := s.actual.connected
+    desiredReplicators := sampleAddresses.filter fun address =>
+      (s.desired.map (fun d => decide (sampleReplicator address ∈ d.replicators))).getD false
+    actualReplicators :=
+      sampleAddresses.filter fun address => sampleReplicator address ∈ s.actual.replicators
+    converged := decide s.converged }
+
+/-- The replicators a state still lacks, in address order. -/
+def pairingPending (s : ReconcileState) : List String :=
+  sampleAddresses.filter fun address =>
+    (s.desired.map (fun d => decide (sampleReplicator address ∈ d.replicators))).getD false &&
+      !decide (sampleReplicator address ∈ s.actual.replicators)
+
+structure PairingSampleInput where
+  name : String
+  action : String
+  before : PairingStateWire
+  after : PairingStateWire
+  deriving ToJson
+
+structure PairingSampleProjection where
+  beforePending : List String
+  afterPending : List String
+  deriving ToJson
+
+private def PairingSampleInput.ofSample (sample : PairingSample) : PairingSampleInput :=
+  { name := sample.name, action := sample.action
+    before := PairingStateWire.ofModel sample.before, after := PairingStateWire.ofModel sample.after }
+
+/-- Each sample is a legal transition of the named sample; a sample whose
+states differ from that transition projects nothing. -/
+@[conformance_family]
+def pairingReconcileProjection : Conformance.Family PairingSampleInput (Option PairingSampleProjection) where
+  inputs := pairingSamples.map PairingSampleInput.ofSample
+  model := fun i => (pairingSamples.find? (·.name == i.name)).bind fun sample =>
+    if (PairingSampleInput.ofSample sample).before == i.before &&
+        (PairingSampleInput.ofSample sample).after == i.after then
+      some { beforePending := pairingPending sample.before
+             afterPending := pairingPending sample.after }
+    else none
+
+private def sampleWellFormed (sample : PairingSample) : Bool :=
+  let before := PairingStateWire.ofModel sample.before
+  let after := PairingStateWire.ofModel sample.after
+  before.desiredReplicators.length ≥ 2 && before.desiredReplicators == after.desiredReplicators &&
+    match sample.action with
+    | "dial" => !before.connected && after.connected &&
+        before.actualReplicators == after.actualReplicators
+    | "dialFailed" => !before.connected && !after.connected &&
+        before.actualReplicators == after.actualReplicators
+    | _ => (after.actualReplicators.filter (!before.actualReplicators.contains ·)).length == 1 &&
+        pairingPending sample.before == (pairingPending sample.before).take 1 ++ pairingPending sample.after
+
+example : pairingSamples.all sampleWellFormed = true := by native_decide
+
+example : (pairingSamples.map (·.name)).Nodup := by decide
+
+example : pairingSamples.any (fun s => s.after.actual.connected && !decide s.after.converged) ∧
+    pairingSamples.any (fun s => decide s.after.converged && (pairingPending s.after).isEmpty) := by
+  native_decide
 
 end Conformance.Contracts

@@ -1,5 +1,6 @@
-import Proofs.Session.Control
+import Proofs.Automation.Session.Control
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.SessionControlContracts
 
@@ -26,19 +27,72 @@ def terminalRunningSettledResume : State :=
     ((step? scope terminalParentWithRunningBackground .settleOwnedBackground).getD
       terminalParentWithRunningBackground) .resume).getD terminalParentWithRunningBackground
 
-def casesJson : String :=
-  "[" ++
-  "{\"name\":\"interrupt_idle\",\"initial_pending_count\":" ++ toString idleInterruptInitial.queue.pending.length ++ ",\"goal_status\":" ++ statusJson idleInterruptPost.goal.status ++
-  ",\"stopped\":" ++ boolJson idleInterruptPost.stopped ++ "}," ++
-  "{\"name\":\"stop_drains\",\"initial_pending_count\":" ++ toString queuedStopInitial.queue.pending.length ++ ",\"goal_status\":" ++ statusJson queuedStopPost.goal.status ++
-  ",\"stopped\":" ++ boolJson queuedStopPost.stopped ++
-  ",\"pending_empty\":" ++ boolJson queuedStopPost.queue.pending.isEmpty ++ "}," ++
-  "{\"name\":\"resume_after_settlement\",\"goal_status\":" ++ statusJson resumePost.goal.status ++
-  ",\"stopped\":" ++ boolJson resumePost.stopped ++
-  ",\"refused_while_active\":" ++ boolJson resumeRefusedWhileActive ++ "}," ++
-  "{\"name\":\"resume_terminal_goal\",\"goal_status\":" ++ statusJson terminalResumePost.goal.status ++
-  ",\"stopped\":" ++ boolJson terminalResumePost.stopped ++ "}," ++
-  "{\"name\":\"resume_waits_for_owned_background\",\"blocked\":" ++ boolJson terminalRunningResumeBlocked ++
-  ",\"stopped_after_settlement\":" ++ boolJson terminalRunningSettledResume.stopped ++ "}]"
+structure PendingInput where
+  name : String
+  initialPendingCount : Nat
+  deriving Lean.ToJson
+
+structure NamedInput where
+  name : String
+  deriving Lean.ToJson
+
+structure GoalOutput where
+  goalStatus : String
+  stopped : Bool
+  deriving Lean.ToJson
+
+structure DrainOutput where
+  goalStatus : String
+  stopped : Bool
+  pendingEmpty : Bool
+  deriving Lean.ToJson
+
+structure ResumeOutput where
+  goalStatus : String
+  stopped : Bool
+  refusedWhileActive : Bool
+  deriving Lean.ToJson
+
+structure OwnedBackgroundOutput where
+  blocked : Bool
+  stoppedAfterSettlement : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def interruptIdle : Conformance.Family PendingInput GoalOutput where
+  inputs := [⟨"interrupt_idle", idleInterruptInitial.queue.pending.length⟩]
+  model := fun _ => ⟨idleInterruptPost.goal.status.toDefraDB, idleInterruptPost.stopped⟩
+
+@[conformance_family]
+def stopDrains : Conformance.Family PendingInput DrainOutput where
+  inputs := [⟨"stop_drains", queuedStopInitial.queue.pending.length⟩]
+  model := fun _ =>
+    ⟨queuedStopPost.goal.status.toDefraDB, queuedStopPost.stopped,
+      queuedStopPost.queue.pending.isEmpty⟩
+
+@[conformance_family]
+def resumeTerminalGoal : Conformance.Family NamedInput GoalOutput where
+  inputs := [⟨"resume_terminal_goal"⟩]
+  model := fun _ => ⟨terminalResumePost.goal.status.toDefraDB, terminalResumePost.stopped⟩
+
+@[conformance_family]
+def resumeAfterSettlement : Conformance.Family NamedInput ResumeOutput where
+  inputs := [⟨"resume_after_settlement"⟩]
+  model := fun _ =>
+    ⟨resumePost.goal.status.toDefraDB, resumePost.stopped, resumeRefusedWhileActive⟩
+
+/-- Replayed by the registered background owner's stop scenario, whose live
+worker holds the process until the owner's reconcile stops it. -/
+@[conformance_family]
+def resumeWaitsForLiveWorker : Conformance.Family NamedInput OwnedBackgroundOutput where
+  inputs := [⟨"resume_waits_for_owned_background"⟩]
+  model := fun _ => ⟨terminalRunningResumeBlocked, terminalRunningSettledResume.stopped⟩
+
+/-- Replayed by the scenario whose tool row is already terminal while its
+process record is still live. -/
+@[conformance_family]
+def resumeWaitsForProcessRecord : Conformance.Family NamedInput OwnedBackgroundOutput where
+  inputs := [⟨"resume_waits_for_owned_background"⟩]
+  model := fun _ => ⟨terminalRunningResumeBlocked, terminalRunningSettledResume.stopped⟩
 
 end Conformance.SessionControlContracts

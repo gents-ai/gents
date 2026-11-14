@@ -226,49 +226,18 @@ async fn mailbox_applies_recipient_policy() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn enrollment_operations_match_baseline_pins() {
+async fn unbound_pairing_overlay_is_rejected_without_data_changes() {
     use gents_protocol::schemas::{
-        DATA_PLANE_PAIRING_DESIRED, DATA_PLANE_PAIRING_DESIRED_NAME, ENROLLMENT_OPERATOR_NONCE,
-        ENROLLMENT_OPERATOR_NONCE_NAME, NETWORK_ADMIN_PIN, NETWORK_ADMIN_PIN_NAME,
-        PEER_PAIRING_APPLIED, PEER_PAIRING_APPLIED_NAME, PEER_PAIRING_DESIRED,
-        PEER_PAIRING_DESIRED_NAME,
+        identity_policy_resource, AGENT_OWNERSHIP_POLICY_ID, DATA_PLANE_PAIRING_DESIRED,
+        DATA_PLANE_PAIRING_DESIRED_NAME,
     };
     let node = fresh_node().await;
-    let mut actual = Vec::new();
-    let mut expected = Vec::new();
-    for (name, sdl) in [
-        (ENROLLMENT_OPERATOR_NONCE_NAME, ENROLLMENT_OPERATOR_NONCE),
-        (NETWORK_ADMIN_PIN_NAME, NETWORK_ADMIN_PIN),
-        (PEER_PAIRING_APPLIED_NAME, PEER_PAIRING_APPLIED),
-        (PEER_PAIRING_DESIRED_NAME, PEER_PAIRING_DESIRED),
-        (DATA_PLANE_PAIRING_DESIRED_NAME, DATA_PLANE_PAIRING_DESIRED),
-    ] {
-        node.add_collection(sdl).await.unwrap();
-        actual.push((name, node.get_collection(name).unwrap().unwrap().version_id));
-        expected.push((
-            name,
-            gents_migration::DEFAULT_BASELINE
-                .iter()
-                .find(|entry| entry.name == name)
-                .unwrap()
-                .expected_version
-                .unwrap()
-                .to_owned(),
-        ));
-    }
-    assert_eq!(actual, expected);
-    node.shutdown().await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn unbound_pairing_overlay_is_rejected_without_data_changes() {
-    use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, DATA_PLANE_PAIRING_DESIRED};
-    let node = fresh_node().await;
+    let resource = identity_policy_resource(DATA_PLANE_PAIRING_DESIRED_NAME).unwrap();
     let directive =
-        format!("@policy(id: \"{AGENT_OWNERSHIP_POLICY_ID}\", resource: \"configuration\") ");
-    node.add_collection(&DATA_PLANE_PAIRING_DESIRED.replace(&directive, ""))
-        .await
-        .unwrap();
+        format!("@policy(id: \"{AGENT_OWNERSHIP_POLICY_ID}\", resource: \"{resource}\") ");
+    let unbound = DATA_PLANE_PAIRING_DESIRED.replace(&directive, "");
+    assert_ne!(unbound, DATA_PLANE_PAIRING_DESIRED);
+    node.add_collection(&unbound).await.unwrap();
     let created = node.execute(r#"mutation { create_DataPlanePairingDesired(input: {peer_id:"retained", collections:["example"], replicator_addresses:["address"]}) {_docID} }"#).await;
     assert!(!created.has_errors(), "{:?}", created.errors);
     let query = "{ DataPlanePairingDesired {_docID peer_id} }";

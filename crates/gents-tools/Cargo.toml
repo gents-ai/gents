@@ -1,0 +1,81 @@
+[package]
+name = "gents-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native, builtin and MCP tools and the tool surface for Gents"
+
+[features]
+default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
+typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript", "gents-inference/typescript", "gents-p2p/typescript", "gents-pack/typescript", "gents-session/typescript"]
+live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e", "gents-inference/live-e2e", "gents-p2p/live-e2e", "gents-pack/live-e2e", "gents-session/live-e2e"]
+test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard", "gents-inference/test-home-guard", "gents-p2p/test-home-guard", "gents-pack/test-home-guard", "gents-session/test-home-guard"]
+test-fixtures = ["test-home-guard", "axum/ws", "gents-store/test-fixtures", "gents-documents/test-fixtures", "gents-inference/test-fixtures", "gents-p2p/test-fixtures", "gents-pack/test-fixtures", "gents-session/test-fixtures"]
+
+[dependencies]
+gents-store.workspace = true
+gents-documents.workspace = true
+gents-inference.workspace = true
+gents-p2p.workspace = true
+gents-pack.workspace = true
+gents-session.workspace = true
+acp.workspace = true
+schema.workspace = true
+storage.workspace = true
+db.workspace = true
+rapidhash = { workspace = true }
+ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
+anyhow.workspace = true
+axum = "0.8"
+async-trait = "0.1"
+base64.workspace = true
+chrono.workspace = true
+defra-core.workspace = true
+defra-http.workspace = true
+defra-p2p-adapter.workspace = true
+gents-fs-runner = { path = "../gents-fs-runner" }
+gents-loop = { workspace = true, features = ["native"] }
+gents-protocol.workspace = true
+gents-migration = { path = "../gents-migration" }
+defra-node.workspace = true
+dirs.workspace = true
+events.workspace = true
+futures = "0.3"
+hostname.workspace = true
+identity.workspace = true
+libc = "0.2"
+p2p.workspace = true
+query.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error = "0.1"
+same-file = "1.0.6"
+serde_yaml.workspace = true
+regex = "1"
+jsonschema = { version = "0.46.5", default-features = false }
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
+uuid.workspace = true
+rig-core.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+rmcp = { version = "1.2.0", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
+tokio-util = "0.7"
+tempfile = "3"
+
+[dev-dependencies]
+gents-tools = { path = ".", features = ["test-fixtures"] }
+gents-store = { workspace = true, features = ["test-fixtures"] }
+gents-documents = { workspace = true, features = ["test-fixtures"] }
+gents-inference = { workspace = true, features = ["test-fixtures"] }
+gents-p2p = { workspace = true, features = ["test-fixtures"] }
+gents-pack = { workspace = true, features = ["test-fixtures"] }
+gents-session = { workspace = true, features = ["test-fixtures"] }
+axum = { version = "0.8", features = ["ws"] }
+gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true

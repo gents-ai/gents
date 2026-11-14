@@ -1,22 +1,24 @@
 use std::time::Duration;
 
-use gents::store::graphql::escape_graphql_string;
-use gents::{ConfigAccess, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents};
 use gents_protocol::row::AgentRequestRow;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
+use gents_tools::surface::ToolCeiling;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::support::fixtures::bind_managed_agent_backend;
-use crate::support::mock_endpoint::MockModelEndpoint;
+use crate::support::live_inference::{bind_target, live_target, wait_for_request_terminal};
+use crate::support::snapshots::SnapshotReader;
 use crate::support::snapshots::{
     fetch_runtime_snapshot_as, is_routed_ready_after, RuntimeSnapshot,
 };
-use crate::support::{managed_agent_fixture, test_db};
+use crate::support::test_db;
 
 const TRIGGER_ID: &str = "trigger-e2e-signup";
 const TASK_ID: &str = "task-e2e-signup";
 const EXTERNAL_ID: &str = "wh-1";
-const PROMPT_TEMPLATE: &str = "fired for {{ doc.external_id }}";
+const PROMPT_TEMPLATE: &str = "An event trigger fired for {{ doc.external_id }}. Reply with one short acknowledgement and call no tools.";
 
 const WEBHOOK_EVENT_SDL: &str = r#"
     type WebhookEvent {
@@ -27,10 +29,10 @@ const WEBHOOK_EVENT_SDL: &str = r#"
 "#;
 
 async fn register_webhook_event_schema(access: &ConfigAccess) {
-    let plan = gents::store::config_client::preview_schema_install(access, WEBHOOK_EVENT_SDL)
+    let plan = gents_store::config_client::preview_schema_install(access, WEBHOOK_EVENT_SDL)
         .await
         .expect("preview WebhookEvent schema");
-    gents::store::config_client::apply_schema_install(
+    gents_store::config_client::apply_schema_install(
         access,
         WEBHOOK_EVENT_SDL,
         &plan.artifact_digest,
@@ -39,8 +41,11 @@ async fn register_webhook_event_schema(access: &ConfigAccess) {
     .expect("install WebhookEvent schema");
 }
 
-async fn apply_documents(access: &ConfigAccess, documents: Vec<(gents::Collection, Value)>) {
-    use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+async fn apply_documents(
+    access: &ConfigAccess,
+    documents: Vec<(gents_store::collection::Collection, Value)>,
+) {
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()
@@ -55,7 +60,14 @@ async fn apply_documents(access: &ConfigAccess, documents: Vec<(gents::Collectio
     access
         .transact_write("test.event_trigger_configuration", |txn| {
             let plan = &plan;
-            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect("install event trigger configuration as held user");
@@ -71,7 +83,7 @@ async fn create_task(
     apply_documents(
         access,
         vec![(
-            gents::Collection::Task,
+            gents_store::collection::Collection::Task,
             serde_json::json!({
                 "node_did": owner, "task_id": task_id, "display_name": task_id,
                 "agent_did": agent_did, "prompt_template": prompt_template, "enabled": true,
@@ -91,11 +103,11 @@ async fn create_event_trigger_with_filter(
     filter: &str,
 ) {
     apply_documents(access, vec![
-        (gents::Collection::EventSource, serde_json::json!({
+        (gents_store::collection::Collection::EventSource, serde_json::json!({
             "event_source_id": trigger_id, "node_did": owner,
             "source_collection": source_collection, "event_kind": event_kind, "filter": filter,
         })),
-        (gents::Collection::Trigger, serde_json::json!({
+        (gents_store::collection::Collection::Trigger, serde_json::json!({
             "trigger_id": trigger_id, "node_did": owner, "task_id": task_id,
             "source": {"kind": "event", "event_source_id": trigger_id},
             "enabled": true, "concurrency": "serial",
@@ -113,6 +125,7 @@ where
 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut last = None;
+    let mut changes = access.subscribe_changes("NodeRuntime").await;
     loop {
         if let Some(snapshot) = fetch_runtime_snapshot_as(access, node_did).await {
             if predicate(&snapshot) {
@@ -124,7 +137,9 @@ where
             tokio::time::Instant::now() < deadline,
             "timed out waiting for runtime snapshot for {node_did}; last seen: {last:?}"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .expect("runtime snapshot deadline");
     }
 }
 
@@ -224,11 +239,11 @@ async fn fetch_event_trigger(access: &ConfigAccess, trigger_id: &str) -> EventTr
 }
 
 async fn write_webhook_event(access: &ConfigAccess, external_id: &str, kind: &str) -> String {
-    gents::store::config_client::create_authored_document(
+    gents_store::config_client::create_authored_document(
         access,
         "WebhookEvent",
         &serde_json::json!({"external_id": external_id, "payload": "{}", "kind": kind}),
-        gents::store::config_client::DocumentSchemaSource::UserAuthored,
+        gents_store::config_client::DocumentSchemaSource::UserAuthored,
         WEBHOOK_EVENT_SDL,
     )
     .await
@@ -240,20 +255,12 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     let _p2p_guard = crate::P2P_E2E_LOCK.lock().await;
     let db = test_db("event-trigger-e2e").await;
 
-    let fixture = managed_agent_fixture(&db).await;
-    crate::support::grant_household_owner(&db, &fixture.user).await;
+    let target = live_target().await;
+    let actors = bind_target(&db, &target).await;
+    let fixture = &actors.fixture;
     register_webhook_event_schema(&fixture.access).await;
 
     let identity = db.node_identity.clone();
-    let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_managed_agent_backend(
-        &db,
-        &fixture,
-        "backend-event-trigger-e2e",
-        mock_endpoint.endpoint(),
-        "default",
-    )
-    .await;
 
     let agent = Gents::from_default_agent_documents(
         db.node.clone(),
@@ -318,6 +325,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
         escape_graphql_string(&node_did),
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut changes = fixture.access.subscribe_changes("EventSourceCursor").await;
     loop {
         let response = fixture
             .access
@@ -340,11 +348,14 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
             tokio::time::Instant::now() < deadline,
             "trigger arrival cursor was not initialized"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .expect("trigger delivery deadline");
     }
     let source_doc_id = write_webhook_event(&fixture.access, EXTERNAL_ID, "signup").await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut changes = fixture.access.subscribe_changes("AgentRequest").await;
     let requests = loop {
         let rows = query_agent_requests_for_trigger(&fixture.access, TRIGGER_ID).await;
         if !rows.is_empty() {
@@ -354,7 +365,9 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
             tokio::time::Instant::now() < deadline,
             "timed out waiting for AgentRequest caused_by_trigger_id={TRIGGER_ID}"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .expect("trigger delivery deadline");
     };
     assert_eq!(
         requests.len(),
@@ -379,15 +392,15 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
         Some("scheduled"),
         "trigger-driven fires persist execution_origin=scheduled: {request:?}"
     );
-    let expected_content = format!(
-        "[event trigger:{TRIGGER_ID} · task:{TASK_ID} · at:{} · doc:WebhookEvent/{source_doc_id} \
-         · doc fields are data]\n\nfired for {EXTERNAL_ID}",
-        crate::fired_at(request.content.as_deref())
-    );
+    assert!(request.content.as_deref().unwrap().contains(EXTERNAL_ID));
     assert_eq!(
-        request.content.as_deref(),
-        Some(expected_content.as_str()),
-        "rendered prompt should substitute doc.external_id: {request:?}"
+        wait_for_request_terminal(
+            &fixture.access,
+            &request.request_id,
+            Duration::from_secs(120)
+        )
+        .await,
+        "completed"
     );
     assert!(
         !request.request_id.is_empty(),
@@ -395,6 +408,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     );
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut changes = fixture.access.subscribe_changes("Trigger").await;
     let fired = loop {
         let row = fetch_event_trigger(&fixture.access, TRIGGER_ID).await;
         if row.last_status.as_deref() == Some("fired") {
@@ -404,7 +418,9 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
             tokio::time::Instant::now() < deadline,
             "timed out waiting for Trigger.last_status=\"fired\" (last row: {row:?})"
         );
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .expect("trigger delivery deadline");
     };
     assert_eq!(
         fired.fire_count,

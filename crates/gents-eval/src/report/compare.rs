@@ -338,7 +338,7 @@ mod tests {
     use crate::report::fixtures::{at, definition, fail, pass, record, Outcome, Rows, RUN};
     use crate::report::report_refused;
     use crate::OutcomeKind;
-    use gents::documents::EvalDefinition;
+    use gents_documents::EvalDefinition;
 
     fn report(definition: &EvalDefinition, rows: &Rows, cells: &[&str], trials: u32) -> EvalReport {
         let run = record(RUN, definition, cells, trials);

@@ -24,6 +24,8 @@ import type { SessionGoalState } from "../generated/SessionGoalState.js";
 import type { OauthProvider } from "../transport.js";
 import type { DesktopJobControlRequest } from "../generated/DesktopJobControlRequest.js";
 import type { JobControlOutcome } from "../generated/JobControlOutcome.js";
+import type { JobState } from "../generated/JobState.js";
+import type { JobView } from "../generated/JobView.js";
 import type { OperatorProcessControlRequest } from "../generated/OperatorProcessControlRequest.js";
 import type { ProcessControlOutcome } from "../generated/ProcessControlOutcome.js";
 import type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
@@ -38,6 +40,7 @@ import type { JoinMemberView } from "../generated/JoinMemberView.js";
 import type { JoinRequestDecideRequest } from "../generated/JoinRequestDecideRequest.js";
 import type { JoinRequestDecisionView } from "../generated/JoinRequestDecisionView.js";
 import type { JoinRequestView } from "../generated/JoinRequestView.js";
+import type { ManagedServerRepairResult } from "../generated/ManagedServerRepairResult.js";
 import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
 import type { HomeResetDisposition } from "../generated/HomeResetDisposition.js";
 import type { ManagedServerToolCeiling } from "../generated/ManagedServerToolCeiling.js";
@@ -192,6 +195,7 @@ export type DesktopApiAdapter = {
     disposition?: HomeResetDisposition,
     fullReset?: boolean,
   ) => Promise<ManagedServerResetResult>;
+  repairManagedServer?: () => Promise<ManagedServerRepairResult>;
   quitDesktop?: () => Promise<void>;
   validateManagedServerRoot?: (path: string) => Promise<string>;
   selectAgentWorkspaceRoot?: (
@@ -225,10 +229,11 @@ export type DesktopApiAdapter = {
     enabled: boolean,
   ) => Promise<ManagedServerStatus>;
   setSelectedNode: (nodeDid: string | null) => Promise<void>;
+
+  reconnectNode?: (nodeDid: string | null) => Promise<string | null>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
   dismissEndedAccess: (nodeDid: string) => Promise<DesktopClientSnapshot>;
-  fetchPeerStatus: (peerId: string) => Promise<unknown>;
   requestStatusEnrollment: (
     serverAddress: string,
     candidateName?: string,
@@ -249,10 +254,7 @@ export type DesktopApiAdapter = {
       limit?: number;
     },
   ) => Promise<DesktopSessionSnapshot | null>;
-  reloadSession: (
-    sessionId: string,
-    nodeDid?: string | null,
-  ) => Promise<void>;
+  reloadSession: (sessionId: string, nodeDid?: string | null) => Promise<void>;
   /** A stretch of a session's display rows by message number, without the
    *  session's request state. */
   fetchSessionRows: (request: {
@@ -289,8 +291,15 @@ export type DesktopApiAdapter = {
   observeMailboxItem: (
     request: MailboxItemObservationRequest,
   ) => Promise<MailboxItemObservation | null>;
-  startMailboxRequest: (itemId: string) => Promise<MailboxItemView>;
-  dismissMailboxItem: (itemId: string) => Promise<void>;
+  /** `nodeDid` is the node whose store lists the item. */
+  startMailboxRequest: (
+    itemId: string,
+    nodeDid?: string | null,
+  ) => Promise<MailboxItemView>;
+  dismissMailboxItem: (
+    itemId: string,
+    nodeDid?: string | null,
+  ) => Promise<void>;
   forkSessionBeforeMessage: (
     request: SessionForkBeforeRequest,
   ) => Promise<SessionForkResult>;
@@ -463,6 +472,20 @@ export type DesktopApiAdapter = {
   ) => Promise<InterruptRequestResult>;
   backgroundTool: (request: DesktopBackgroundToolRequest) => Promise<boolean>;
   jobControl: (request: DesktopJobControlRequest) => Promise<JobControlOutcome>;
+
+  listJobs: (request: {
+    nodeDid: string;
+    states?: JobState[] | null;
+    plugin?: string | null;
+    sessionId?: string | null;
+  }) => Promise<JobView[]>;
+
+  getJobView: (
+    request: { nodeDid: string } & (
+      | { address: string; rowDocId?: never }
+      | { rowDocId: string; address?: never }
+    ),
+  ) => Promise<JobView>;
   processControl: (
     request: OperatorProcessControlRequest,
   ) => Promise<ProcessControlOutcome>;
@@ -488,7 +511,9 @@ export type DesktopApiAdapter = {
   /** the packs the Engineer starts with on the local node, and how each stands */
   listDefaultPacks: () => Promise<DefaultPacks>;
   /** installs the approved packs; the local node restarts around the install */
-  approveDefaultPacks: (packs: DefaultPackApproval[]) => Promise<DefaultPacksApproval>;
+  approveDefaultPacks: (
+    packs: DefaultPackApproval[],
+  ) => Promise<DefaultPacksApproval>;
   listDynamicWorkflows: () => Promise<DynamicWorkflows>;
   getDynamicWorkflow: (selector: string) => Promise<DynamicWorkflow>;
   promoteWorkflow: (
@@ -515,7 +540,10 @@ export type DesktopApiAdapter = {
   listUxPlugins: (
     nodeDid?: string | null,
   ) => Promise<{ plugins: UxPluginListing[]; pagesError?: string | null }>;
-  readUxPluginSource: (id: string, nodeDid?: string | null) => Promise<UxPluginSource>;
+  readUxPluginSource: (
+    id: string,
+    nodeDid?: string | null,
+  ) => Promise<UxPluginSource>;
   callPackPlugin: (
     request: PackPluginCallRequest,
   ) => Promise<{ output: unknown }>;
@@ -578,6 +606,7 @@ export type {
   JoinRequestDecideRequest,
   JoinRequestDecisionView,
   JoinRequestView,
+  ManagedServerRepairResult,
   ManagedServerResetResult,
   ManagedServerStatus,
 };

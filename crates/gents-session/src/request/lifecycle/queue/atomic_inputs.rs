@@ -1,0 +1,946 @@
+use super::*;
+
+use rapidhash::{HashMapExt, RapidHashMap};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
+
+use tokio::sync::Mutex;
+
+type BackgroundCompletionGate = Mutex<()>;
+
+pub struct ToolNotificationPublication {
+    pub tool_call_doc_id: String,
+    pub presentation: Vec<gents_protocol::output::PresentationPart>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct BackgroundCompletionGateKey {
+    node: usize,
+    session_id: String,
+    node_did: String,
+    queue_key: String,
+}
+
+pub fn background_completion_gate(
+    node: &EmbeddedNode,
+    session_id: &str,
+    node_did: &str,
+    queue_key: &str,
+) -> Arc<BackgroundCompletionGate> {
+    static GATES: OnceLock<
+        StdMutex<RapidHashMap<BackgroundCompletionGateKey, Weak<BackgroundCompletionGate>>>,
+    > = OnceLock::new();
+
+    let key = BackgroundCompletionGateKey {
+        node: node as *const EmbeddedNode as usize,
+        session_id: session_id.to_string(),
+        node_did: node_did.to_string(),
+        queue_key: queue_key.to_string(),
+    };
+    let mut gates = GATES
+        .get_or_init(|| StdMutex::new(RapidHashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(gate) = gates.get(&key).and_then(Weak::upgrade) {
+        return gate;
+    }
+
+    gates.retain(|_, gate| gate.strong_count() > 0);
+    let gate = Arc::new(Mutex::new(()));
+    gates.insert(key, Arc::downgrade(&gate));
+    gate
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "atomic notification retains the caller's signed access and exact publication inputs"
+)]
+pub async fn persist_background_completion_with_message_canonical_with_access(
+    access: &gents_store::config_client::ConfigAccess,
+    node: &std::sync::Arc<EmbeddedNode>,
+    parent: &AgentRequest,
+    notification_content: &str,
+    message_key: &str,
+    wake_content: &str,
+    queue: RequestQueue,
+    existing_notification_doc_id: Option<&str>,
+    native: &ToolNotificationPublication,
+    wake: gents_protocol::request_lifecycle::RequestHopCause,
+) -> Result<EnqueuedBackgroundCompletionInput> {
+    let signer = access
+        .managed_agent_signer()
+        .context("background completion requires a managed Agent signer")?;
+    anyhow::ensure!(
+        signer.did() == parent.agent_did
+            && access.actor_did().as_deref() == Some(parent.agent_did.as_str()),
+        "background completion signer differs from parent actor"
+    );
+    persist_background_completion_with_message_canonical_inner(
+        access,
+        Some(&signer),
+        node,
+        parent,
+        notification_content,
+        message_key,
+        wake_content,
+        queue,
+        existing_notification_doc_id,
+        native,
+        wake,
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "atomic publication shares the same inputs between managed execution and test fixtures"
+)]
+async fn persist_background_completion_with_message_canonical_inner(
+    access: &gents_store::config_client::ConfigAccess,
+    signer: Option<&gents_store::identity::ManagedAgentSigner>,
+    node: &std::sync::Arc<EmbeddedNode>,
+    parent: &AgentRequest,
+    notification_content: &str,
+    message_key: &str,
+    wake_content: &str,
+    queue: RequestQueue,
+    existing_notification_doc_id: Option<&str>,
+    native: &ToolNotificationPublication,
+    wake: gents_protocol::request_lifecycle::RequestHopCause,
+) -> Result<EnqueuedBackgroundCompletionInput> {
+    anyhow::ensure!(
+        queue.source == QueueSource::BackgroundCompletion && queue.policy == QueuePolicy::Coalesce,
+        "atomic background completion enqueue requires coalescing background queue input"
+    );
+    let queue_key = queue
+        .key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .context("atomic background completion enqueue requires a queue key")?
+        .to_string();
+
+    let gate = background_completion_gate(node, &parent.session_id, &parent.node_did, &queue_key);
+    let _guard = gate.lock().await;
+
+    let agent_did = parent_agent_did(parent)?;
+    let queue_key_ref = &queue_key;
+    let agent_did = &agent_did;
+    let queue = &queue;
+
+    let mut enqueued = access
+        .transact_idempotent(
+            gents_store::config_client::IdempotentTransactionRetry::Standard,
+            "lifecycle.enqueue_background_completion",
+            move |txn| {
+                Box::pin(async move {
+                    background_completion_transaction_attempt(
+                        txn,
+                        parent,
+                        CompletionAttempt {
+                            content: notification_content,
+                            message_key,
+                            queue_key: queue_key_ref,
+                            agent_did,
+                            wake_content,
+                            queue,
+                            existing_notification_doc_id,
+                            native,
+                            wake,
+                            signer,
+                        },
+                    )
+                    .await
+                })
+            },
+        )
+        .await?;
+
+    gents_store::config_client::session_children::publish_agent_session_child_relationships_with_access(
+        access,
+        &parent.node_did,
+        &identity::Did::new(parent.agent_did.clone())?,
+        &parent.session_id,
+    )
+    .await?;
+
+    if let Some(created) = enqueued
+        .request
+        .as_ref()
+        .filter(|_| enqueued.created_request)
+    {
+        let created_request_doc_id = created.doc_id.clone();
+        let active_request =
+            super::coalescing::reconcile_coalesced_pending_request_for_with_access(
+                (node, access),
+                &parent.agent_did,
+                &parent.session_id,
+                &parent.node_did,
+                QueueSource::BackgroundCompletion,
+                &queue_key,
+                Some(&created.doc_id),
+            )
+            .await?
+            .unwrap_or_else(|| created.clone());
+        enqueued.created_request = active_request.doc_id == created_request_doc_id;
+
+        enqueued.request = Some(active_request);
+    }
+
+    Ok(enqueued)
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+#[allow(clippy::too_many_arguments)]
+pub async fn persist_background_completion_with_message_waking_with_access(
+    access: &gents_store::config_client::ConfigAccess,
+    node: &std::sync::Arc<EmbeddedNode>,
+    parent: &AgentRequest,
+    notification_content: &str,
+    message_key: &str,
+    wake_content: &str,
+    queue: RequestQueue,
+    existing_notification_doc_id: Option<&str>,
+    wake: gents_protocol::request_lifecycle::RequestHopCause,
+) -> Result<EnqueuedBackgroundCompletionInput> {
+    use gents_protocol::output::{
+        OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
+        StreamDeclaration, StreamPayload,
+    };
+    let tool_key = format!("fixture:{message_key}");
+    let (tool_call_doc_id, close_doc_id) =
+        access.transact_write(
+            "test.canonical_background_notification_authority",
+            |txn| {
+                let tool_key = tool_key.clone();
+                Box::pin(async move {
+                    use gents_protocol::document_query::{
+                        fields::{agent_output_segment, agent_tool_call},
+                        Filter, Query, QuerySet, Selection,
+                    };
+                    let existing = txn
+                        .run(
+                            &QuerySet::new()
+                                .plain(
+                                    &Query::select(Selection::doc_id())
+                                        .filter(Filter::eq(agent_tool_call::TOOL_CALL_KEY, &tool_key))
+                                        .limit(2),
+                                )
+                                .plain(
+                                    &Query::select(Selection::owned(
+                                        gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS,
+                                    ))
+                                    .filter(Filter::eq(
+                                        agent_output_segment::REQUEST_DOC_ID,
+                                        &parent.doc_id,
+                                    )),
+                                )
+                                .render(),
+                        )
+                        .await?;
+                    let tools = existing["data"]["AgentToolCall"]
+                        .as_array()
+                        .context("fixture tool lookup")?;
+                    if tools.len() == 1 {
+                        let tool_doc = tools[0]["_docID"]
+                            .as_str()
+                            .context("fixture tool ID")?
+                            .to_owned();
+                        let source = OutputSource::ToolCall {
+                            tool_call_doc_id: tool_doc.clone(),
+                        };
+                        let rows = existing["data"]["AgentOutputSegment"]
+                            .as_array()
+                            .context("fixture segment lookup")?;
+                        let close = rows
+                            .iter()
+                            .map(gents_protocol::output::rows::decode_output_segment_row)
+                            .collect::<Result<Vec<_>, _>>()?
+                            .into_iter()
+                            .find(|row| row.segment.source == source && row.segment.close.is_some())
+                            .context("fixture tool closure")?;
+                        return Ok((tool_doc, close.doc_id));
+                    }
+                    anyhow::ensure!(tools.is_empty(), "ambiguous fixture tool authority");
+                    let (session_doc_id, agent_did) =
+                        gents_store::config_client::session_children::agent_session_child_binding_in_txn(
+                            txn,
+                            &parent.node_did,
+                            &parent.session_id,
+                            parent.requester_did.as_deref(),
+                        )
+                        .await?;
+                    use gents_protocol::document_query::{Create, Input};
+                    let created = txn
+                        .run(
+                            &Create::new(
+                                Input::new()
+                                    .set(agent_tool_call::SESSION_DOC_ID, &session_doc_id)
+                                    .set(agent_tool_call::AGENT_DID, &agent_did)
+                                    .set(agent_tool_call::CREATOR_DID, &agent_did)
+                                    .set(agent_tool_call::PARENT_LINKED, false)
+                                    .set(agent_tool_call::TOOL_CALL_KEY, &tool_key)
+                                    .set(agent_tool_call::TOOL_CALL_ID, &tool_key)
+                                    .set(agent_tool_call::REQUEST_ID, &parent.request_id)
+                                    .set(agent_tool_call::REQUEST_DOC_ID, &parent.doc_id)
+                                    .set(agent_tool_call::NODE_DID, &parent.node_did)
+                                    .set_optional(
+                                        agent_tool_call::REQUESTER_DID,
+                                        parent.requester_did.as_deref(),
+                                    )
+                                    .set(agent_tool_call::SESSION_ID, &parent.session_id)
+                                    .set(agent_tool_call::TOOL_NAME, "fixture")
+                                    .set(agent_tool_call::MESSAGE_SEQUENCE, 1)
+                                    .set(agent_tool_call::AWAIT_MODE, "background")
+                                    .set(agent_tool_call::STATUS, "completed")
+                                    .set(agent_tool_call::LIFECYCLE_STATE, "completed"),
+                            )
+                            .render(),
+                        )
+                        .await?;
+                    let tool_doc =
+                        gents_store::graphql::created_doc_id(&created, "AgentToolCall")?;
+                    let segment = OutputSegment {
+                        node_did: parent.node_did.clone(),
+                        requester_did: parent.requester_did.clone(),
+                        session_id: parent.session_id.clone(),
+                        request_doc_id: parent.doc_id.clone(),
+                        source: OutputSource::ToolCall {
+                            tool_call_doc_id: tool_doc.clone(),
+                        },
+                        writer: OutputWriter::ToolExecution {
+                            tool_call_doc_id: tool_doc.clone(),
+                        },
+                        ordinal: Some(0),
+                        runs: vec![SegmentRun {
+                            stream: 0,
+                            bytes: notification_content.len() as u32,
+                            declaration: Some(StreamDeclaration {
+                                block_index: 0,
+                                part_index: 0,
+                                payload: StreamPayload::ToolOutput,
+                            }),
+                        }],
+                        payload: notification_content.to_owned(),
+                        close: Some(SourceClose::Closed {
+                            outcome: OutputOutcome::Complete,
+                            segments: 1,
+                            stream_bytes: vec![notification_content.len() as u64],
+                        }),
+                        created_at: chrono::Utc::now().to_rfc3339(),
+                    };
+                    let created = txn
+                        .execute_with_variables(
+                            gents_protocol::output::rows::CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                            &gents_store::config_client::session_children::output_segment_bound_variables(
+                                txn, &segment,
+                            )
+                            .await?,
+                        )
+                        .await?;
+                    Ok((
+                        tool_doc,
+                        gents_store::graphql::created_doc_id(&created, "AgentOutputSegment")?,
+                    ))
+                })
+            },
+        )
+        .await?;
+    let _ = close_doc_id;
+    persist_background_completion_with_message_canonical_with_access(
+        access,
+        node,
+        parent,
+        notification_content,
+        message_key,
+        wake_content,
+        queue,
+        existing_notification_doc_id,
+        &ToolNotificationPublication {
+            tool_call_doc_id,
+            presentation: vec![gents_protocol::output::PresentationPart::OutputRange {
+                start_byte: 0,
+                end_byte: notification_content.len() as u64,
+            }],
+        },
+        wake,
+    )
+    .await
+}
+
+struct CompletionAttempt<'a> {
+    content: &'a str,
+    message_key: &'a str,
+    queue_key: &'a str,
+    agent_did: &'a str,
+    wake_content: &'a str,
+    queue: &'a RequestQueue,
+    existing_notification_doc_id: Option<&'a str>,
+    native: &'a ToolNotificationPublication,
+    wake: gents_protocol::request_lifecycle::RequestHopCause,
+    signer: Option<&'a gents_store::identity::ManagedAgentSigner>,
+}
+
+async fn background_completion_transaction_attempt(
+    txn: &ConfigApplyTxn<'_>,
+    parent: &AgentRequest,
+    attempt: CompletionAttempt<'_>,
+) -> Result<EnqueuedBackgroundCompletionInput> {
+    use sha2::{Digest, Sha256};
+
+    let CompletionAttempt {
+        content,
+        message_key,
+        queue_key,
+        agent_did,
+        wake_content,
+        queue,
+        existing_notification_doc_id,
+        native,
+        wake,
+        signer,
+    } = attempt;
+
+    let request_fields = gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
+    let escaped_session_id = escape_graphql_string(&parent.session_id);
+    let escaped_node_did = escape_graphql_string(&parent.node_did);
+    let notification_filter = match existing_notification_doc_id {
+        Some(doc_id) => format!("_docID: {{ _eq: \"{}\" }}", escape_graphql_string(doc_id)),
+        None => format!(
+            "message_key: {{ _eq: \"{}\" }}",
+            escape_graphql_string(message_key)
+        ),
+    };
+    let mut scope_hasher = Sha256::new();
+    for component in [&parent.node_did, &parent.session_id, queue_key] {
+        scope_hasher.update((component.len() as u64).to_be_bytes());
+        scope_hasher.update(component.as_bytes());
+    }
+    let queue_scope = format!("{:x}", scope_hasher.finalize());
+    let retry_key_prefix = format!("background-completion:{queue_scope}:");
+    let escaped_retry_key_pattern = escape_graphql_string(&format!("{retry_key_prefix}%"));
+    let response = txn
+        .execute(&format!(
+            r#"{{
+                notification: AgentMessage(
+                    filter: {{ {notification_filter} }},
+                    limit: 2
+                ) {{
+                    {}
+                }}
+                pending: AgentRequest(
+                    filter: {{
+                        session_id: {{ _eq: "{escaped_session_id}" }},
+                        node_did: {{ _eq: "{escaped_node_did}" }},
+                        lifecycle_state: {{ _eq: "{pending}" }}
+                    }},
+                    order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
+                ) {{
+                    {request_fields}
+                }}
+                generations: AgentRequest(
+                    filter: {{
+                        session_id: {{ _eq: "{escaped_session_id}" }},
+                        node_did: {{ _eq: "{escaped_node_did}" }},
+                        retry_key: {{ _like: "{escaped_retry_key_pattern}" }}
+                    }}
+                ) {{
+                    retry_key
+                }}
+            }}"#,
+            gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
+            pending = RequestLifecycleState::Pending.as_str()
+        ))
+        .await?;
+    let notifications = response["data"]["notification"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    anyhow::ensure!(
+        notifications.len() <= 1,
+        "background completion notification key resolved to multiple rows"
+    );
+    anyhow::ensure!(
+        existing_notification_doc_id.is_none() || notifications.len() == 1,
+        "observed background notification disappeared"
+    );
+    if let Some(raw) = notifications.first() {
+        let row = gents_protocol::output::rows::decode_transcript_message_row(raw)?;
+        let (_, reconstructed) = crate::session::load_canonical_message_in_txn(
+            txn,
+            &row.doc_id,
+            &parent.node_did,
+            parent.requester_did.as_deref(),
+        )
+        .await?;
+        anyhow::ensure!(
+            row.message.message_key == message_key
+                && row.message.session_id == parent.session_id
+                && row.message.node_did == parent.node_did
+                && row.message.requester_did == parent.requester_did
+                && row.message.role == gents_protocol::output::MessageRole::User
+                && reconstructed == gents_protocol::message::Message::user(content)
+                && matches!(&row.message.publication,
+                    gents_protocol::output::MessagePublication::ToolDelivery { tool_call_doc_id }
+                    if tool_call_doc_id == &native.tool_call_doc_id),
+            "canonical background notification replay conflicts with authority, scope, or content"
+        );
+        let doc_id = row
+            .message
+            .request_doc_id
+            .as_deref()
+            .context("canonical notification replay has no request binding")?;
+        use gents_protocol::document_query::{
+            fields::agent_request as request, Filter, Query, Selection,
+        };
+        let binding = txn
+            .run(
+                &Query::select(
+                    Selection::doc_id()
+                        .field(request::REQUEST_ID)
+                        .field(request::SESSION_ID)
+                        .field(request::NODE_DID)
+                        .field(request::INPUT),
+                )
+                .filter(Filter::eq(request::DOC_ID, doc_id))
+                .limit(2)
+                .render(),
+            )
+            .await?;
+        let rows: Vec<AgentRequestRow> =
+            serde_json::from_value(binding["data"]["AgentRequest"].clone())?;
+        anyhow::ensure!(
+            rows.len() == 1
+                && rows[0].node_did.as_deref() == Some(parent.node_did.as_str())
+                && rows[0].session_id.as_deref() == Some(parent.session_id.as_str()),
+            "canonical notification replay request binding is invalid"
+        );
+        let bound = &rows[0];
+        anyhow::ensure!(
+            row_matches_coalesced_source_and_key(
+                bound,
+                QueueSource::BackgroundCompletion,
+                queue_key,
+            ),
+            "canonical notification replay is not bound to its coalesced wake"
+        );
+        let request = Some(
+            queue_row_to_enqueued_request(bound).context("canonical wake binding is incomplete")?,
+        );
+        return Ok(EnqueuedBackgroundCompletionInput {
+            request,
+            #[cfg(any(test, feature = "test-fixtures"))]
+            message_sequence: row.message.sequence,
+            created_request: false,
+        });
+    }
+
+    let current_hop =
+        crate::session::load_session_current_hop_in_txn(txn, &parent.node_did, &parent.session_id)
+            .await?;
+    let wake_hop = gents_protocol::request_lifecycle::next_request_hop(wake, current_hop);
+    let pending_rows: Vec<AgentRequestRow> =
+        serde_json::from_value(response["data"]["pending"].clone())
+            .context("decode pending AgentRequest rows")?;
+    let asked = std::iter::once(parent.doc_id.clone())
+        .chain(
+            pending_rows
+                .iter()
+                .filter(|row| {
+                    row_matches_coalesced_source_and_key(
+                        row,
+                        QueueSource::BackgroundCompletion,
+                        queue_key,
+                    )
+                })
+                .filter_map(|row| row.doc_id.clone()),
+        )
+        .collect();
+    let assignments = crate::request::hooks::points::queue_scope(
+        txn,
+        &parent.node_did,
+        &parent.session_id,
+        asked,
+    )
+    .await?;
+    let parent_scope = assignments.scope_for_request(&parent.doc_id, &parent.request_id)?;
+    let mut matching = None;
+    for row in pending_rows {
+        if row_matches_coalesced_source_and_key(&row, QueueSource::BackgroundCompletion, queue_key)
+            && assignments.scope(
+                row.doc_id
+                    .as_deref()
+                    .context("pending wake has no physical identity")?,
+            )? == parent_scope
+        {
+            matching = Some(row);
+            break;
+        }
+    }
+    let (pending, lower) = match matching {
+        Some(row)
+            if row
+                .request_hop
+                .and_then(|hop| u32::try_from(hop).ok())
+                .unwrap_or(0)
+                >= wake_hop =>
+        {
+            (queue_row_to_enqueued_request(&row), None)
+        }
+        Some(row) => (None, Some(row)),
+        None => (None, None),
+    };
+    let message_sequence =
+        next_append_sequence_in_transaction(txn, &parent.node_did, &parent.session_id).await?;
+    let mut max_generation = None::<u64>;
+    for row in response["data"]["generations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let retry_key = row["retry_key"]
+            .as_str()
+            .context("background completion generation row has no retry key")?;
+        let generation = retry_key
+            .strip_prefix(&retry_key_prefix)
+            .context("background completion generation row has the wrong scope")?
+            .parse::<u64>()
+            .context("background completion generation row is malformed")?;
+        max_generation = Some(max_generation.map_or(generation, |current| current.max(generation)));
+    }
+    let next_generation = match max_generation {
+        Some(generation) => generation
+            .checked_add(1)
+            .context("background completion queue generation overflow")?,
+        None => 0,
+    };
+
+    let (request, created_request) = match pending {
+        Some(request) => (request, false),
+        None => {
+            let request_id = format!("background-completion-{queue_scope}-{next_generation:020}");
+            let retry_key = format!("{retry_key_prefix}{next_generation:020}");
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            let mut wake_input = parent.input.continuation(
+                background_wake_queue(queue, queue.queued_after_request_id.clone()),
+                None,
+                &parent.doc_id,
+            );
+            wake_input.goal_assignment = parent_scope.referenced().cloned();
+            let request_mutation =
+                super::mutation::session_request_create_mutation_at_hop_with_signer(
+                    parent,
+                    wake_hop,
+                    SessionRequestFields {
+                        agent_did,
+                        content: wake_content,
+                        execution_origin: ExecutionOrigin::Scheduled,
+                        input: wake_input,
+                        request_id: &request_id,
+                        created_at: &now,
+                        retry_key: Some(&retry_key),
+                    },
+                    signer,
+                )
+                .await?;
+            let response = txn.execute(&request_mutation).await?;
+            let doc_id = transaction_created_doc_id(&response, "AgentRequest")?;
+            anyhow::ensure!(
+                txn.actor_did() == Some(parent.agent_did.as_str())
+                    && signer.is_some_and(|signer| signer.did() == parent.agent_did),
+                "background wake publication differs from its managed Agent actor"
+            );
+            let session = gents_store::config_client::agent_session::load_agent_session_row_in_txn(
+                txn,
+                &parent.node_did,
+                &parent.session_id,
+                parent.requester_did.as_deref(),
+            )
+            .await?
+            .context("background wake session is unavailable")?;
+            anyhow::ensure!(
+                session.session.agent_did == parent.agent_did,
+                "background wake session selects a different Agent"
+            );
+            let (agent, _) = gents_documents::read_desired_state_record_in_txn(
+                txn,
+                gents_store::collection::Collection::Agent,
+                &parent.node_did,
+                &parent.agent_did,
+            )
+            .await?
+            .context("background wake Agent is unavailable")?;
+            super::super::client::stage_request_relationships_in_txn(
+                txn,
+                &doc_id,
+                &agent,
+                &session.doc_id,
+                &parent.agent_did,
+            )
+            .await?;
+            if let Some(lower) = &lower {
+                let lower_doc_id = lower
+                    .doc_id
+                    .as_deref()
+                    .context("pending wake is missing _docID")?;
+                let superseded = txn
+                    .execute(&super::coalescing::supersede_pending_mutation(
+                        lower_doc_id,
+                        &parent.node_did,
+                        &request_id,
+                        &doc_id,
+                        "raised to the hop of a later completion",
+                    )?)
+                    .await?;
+                if superseded
+                    .get("data")
+                    .and_then(|data| data.get("update_AgentRequest"))
+                    .is_some_and(gents_store::graphql::response_has_documents)
+                {
+                    crate::request::hooks::points::request_terminal(
+                        txn,
+                        &parent.node_did,
+                        &lower.request_id,
+                        RequestLifecycleState::Superseded,
+                        "raised to the hop of a later completion",
+                        &now,
+                    )
+                    .await?;
+                }
+            }
+            (
+                EnqueuedAgentRequest {
+                    doc_id,
+                    request_id,
+                    session_id: parent.session_id.clone(),
+                },
+                true,
+            )
+        }
+    };
+    publish_native_tool_notification(
+        txn,
+        parent,
+        &request.doc_id,
+        message_sequence,
+        message_key,
+        content,
+        native,
+    )
+    .await?;
+
+    Ok(EnqueuedBackgroundCompletionInput {
+        request: Some(request),
+        #[cfg(any(test, feature = "test-fixtures"))]
+        message_sequence,
+        created_request,
+    })
+}
+
+async fn publish_native_tool_notification(
+    txn: &ConfigApplyTxn<'_>,
+    parent: &AgentRequest,
+    binding_request_doc_id: &str,
+    sequence: u32,
+    message_key: &str,
+    expected_content: &str,
+    native: &ToolNotificationPublication,
+) -> Result<()> {
+    use gents_protocol::output::rows::CREATE_AGENT_MESSAGE_MUTATION;
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputSource, OutputWriter,
+        PayloadPresentation, PayloadRef, PresentedPayload, SourceClose, TranscriptMessage,
+    };
+    use gents_store::config_client::session_children::transcript_message_bound_variables;
+
+    use gents_protocol::document_query::{fields::agent_tool_call, Filter, Query, Selection};
+    let facts = txn
+        .run(
+            &Query::select(Selection::doc_id().field(agent_tool_call::LIFECYCLE_STATE))
+                .filter(Filter::eq(
+                    agent_tool_call::DOC_ID,
+                    &native.tool_call_doc_id,
+                ))
+                .filter(Filter::eq(agent_tool_call::REQUEST_DOC_ID, &parent.doc_id))
+                .filter(Filter::eq(agent_tool_call::AWAIT_MODE, "background"))
+                .limit(2)
+                .render(),
+        )
+        .await?;
+    let tools = facts["data"]["AgentToolCall"]
+        .as_array()
+        .context("tool authority query omitted rows")?;
+    anyhow::ensure!(
+        tools.len() == 1
+            && tools[0]["lifecycle_state"]
+                .as_str()
+                .is_some_and(|state| matches!(
+                    state,
+                    "completed" | "failed" | "timedOut" | "cancelled"
+                )),
+        "background notification requires the exact terminal background tool"
+    );
+    let source = OutputSource::ToolCall {
+        tool_call_doc_id: native.tool_call_doc_id.clone(),
+    };
+    let writer = OutputWriter::ToolExecution {
+        tool_call_doc_id: native.tool_call_doc_id.clone(),
+    };
+    let source_rows = crate::session::load_source_rows_in_txn(
+        txn,
+        &parent.doc_id,
+        &source,
+        &parent.node_did,
+        &parent.session_id,
+        parent.requester_did.as_deref(),
+    )
+    .await?
+    .into_iter()
+    .filter(|row| row.segment.writer == writer)
+    .collect::<Vec<_>>();
+    let closes = source_rows
+        .iter()
+        .filter(|row| row.segment.close.is_some())
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        closes.len() == 1,
+        "background notification requires one exact tool closure"
+    );
+    let close = closes[0];
+    let outcome = match close
+        .segment
+        .close
+        .as_ref()
+        .context("tool closure missing outcome")?
+    {
+        SourceClose::Closed { outcome, .. } => *outcome,
+        SourceClose::Retracted => anyhow::bail!("retracted tool output cannot be notified"),
+    };
+    let observed = source_rows
+        .iter()
+        .map(
+            |row| gents_protocol::output::reconstruction::ObservedSegment {
+                doc_id: &row.doc_id,
+                segment: &row.segment,
+            },
+        )
+        .collect::<Vec<_>>();
+    let payload = PayloadRef {
+        close_doc_id: close.doc_id.clone(),
+        stream: 0,
+    };
+    let stream =
+        gents_protocol::output::reconstruction::reconstruct_stream(&observed, &[], &[], &payload)?;
+    let rendered = crate::session::tool_presentation::render_presentation(
+        &stream.text,
+        &PayloadPresentation::Composed {
+            parts: native.presentation.clone(),
+        },
+    )?;
+    anyhow::ensure!(
+        rendered == expected_content,
+        "canonical tool notification presentation does not reproduce rendered content"
+    );
+    let message = TranscriptMessage {
+        native_request_id: None,
+        message_key: message_key.to_owned(),
+        session_id: parent.session_id.clone(),
+        node_did: parent.node_did.clone(),
+        requester_did: parent.requester_did.clone(),
+        request_doc_id: Some(binding_request_doc_id.to_owned()),
+        publication: MessagePublication::ToolDelivery {
+            tool_call_doc_id: native.tool_call_doc_id.clone(),
+        },
+        outcome,
+        sequence,
+        role: MessageRole::User,
+        native_id: None,
+        blocks: vec![MessageBlock::Text {
+            text: PresentedPayload {
+                output: payload,
+                presentation: PayloadPresentation::Composed {
+                    parts: native.presentation.clone(),
+                },
+            },
+        }],
+        created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+    };
+    txn.execute_with_variables(
+        CREATE_AGENT_MESSAGE_MUTATION,
+        &transcript_message_bound_variables(txn, &message).await?,
+    )
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn steering_transaction_attempt(
+    txn: &ConfigApplyTxn<'_>,
+    parent: &AgentRequest,
+    request_id: &str,
+    request_mutation: &str,
+) -> Result<EnqueuedAgentRequest> {
+    let request_response = txn.execute(request_mutation).await?;
+    let request_doc_id = transaction_created_doc_id(&request_response, "AgentRequest")?;
+
+    Ok(EnqueuedAgentRequest {
+        doc_id: request_doc_id,
+        request_id: request_id.to_string(),
+        session_id: parent.session_id.clone(),
+    })
+}
+
+pub async fn next_append_sequence_in_transaction(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<u32> {
+    let response = txn
+        .execute(&append_sequence_query(node_did, session_id))
+        .await?;
+    let message_max = response["data"]["AgentMessage"]
+        .as_array()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["sequence"].as_u64())
+        .unwrap_or(0) as u32;
+    let mut reserved_counts = std::collections::BTreeMap::<u32, u32>::new();
+    if let Some(rows) = response["data"]["AgentToolCall"].as_array() {
+        for row in rows {
+            if let Some(sequence) = row["message_sequence"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+            {
+                *reserved_counts.entry(sequence).or_default() += 1;
+            }
+        }
+    }
+    let reserved_max = reserved_counts
+        .into_iter()
+        .map(|(sequence, count)| sequence + count)
+        .max()
+        .unwrap_or(0);
+    Ok(message_max.max(reserved_max) + 1)
+}
+
+pub(super) fn append_sequence_query(node_did: &str, session_id: &str) -> String {
+    let escaped_node_did = escape_graphql_string(node_did);
+    let escaped_session_id = escape_graphql_string(session_id);
+    format!(
+        r#"{{
+                AgentMessage(
+                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}, node_did: {{ _eq: "{escaped_node_did}" }} }},
+                    order: [{{ node_did: DESC }}, {{ session_id: DESC }}, {{ sequence: DESC }}],
+                    limit: 1
+                ) {{ sequence }}
+                AgentToolCall(
+                    filter: {{
+                        session_id: {{ _eq: "{escaped_session_id}" }},
+                        node_did: {{ _eq: "{escaped_node_did}" }},
+                        await_mode: {{ _eq: "background" }}
+                    }}
+                ) {{ message_sequence }}
+            }}"#
+    )
+}
+
+pub(super) fn transaction_created_doc_id(response: &Value, collection: &str) -> Result<String> {
+    Ok(gents_store::graphql::created_doc_id(response, collection)?)
+}

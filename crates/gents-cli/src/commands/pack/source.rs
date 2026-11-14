@@ -1,215 +1,11 @@
-use super::{local, registry};
 use anyhow::{Context, Result};
-use gents::pack::archive::PackArchive;
-use gents::pack::resolve::{resolve_named, ResolveOptions, ResolvedFrom};
-use gents::pack::PackManifest;
-
-pub(crate) struct PackSource {
-    pub(super) archive: std::sync::Arc<PackArchive>,
-    pub(super) from: Source,
-    pub(super) file_name: Option<String>,
-}
-
-pub(super) enum Source {
-    Local,
-    Installed,
-    Store,
-    Registry {
-        namespace: String,
-        name: String,
-        version: String,
-        artifact_digest: String,
-    },
-}
-
-impl PackSource {
-    /// A verified archive the runtime received from its operator.
-    pub(crate) fn received(archive: PackArchive, source: gents::pack::PackSource) -> Result<Self> {
-        source.validate()?;
-        let (from, file_name) = match source {
-            gents::pack::PackSource::Local { file_name } => (Source::Local, file_name),
-            gents::pack::PackSource::Installed => (Source::Installed, None),
-            gents::pack::PackSource::Store => (Source::Store, None),
-            gents::pack::PackSource::Registry {
-                namespace,
-                name,
-                version,
-                artifact_digest,
-            } => {
-                anyhow::ensure!(
-                    namespace == archive.manifest().metadata.namespace
-                        && name == archive.manifest().name
-                        && version == archive.manifest().version,
-                    "registry source does not match the archive"
-                );
-                (
-                    Source::Registry {
-                        namespace,
-                        name,
-                        version,
-                        artifact_digest,
-                    },
-                    None,
-                )
-            }
-        };
-        Ok(Self {
-            archive: archive.into(),
-            from,
-            file_name,
-        })
-    }
-
-    pub(crate) fn shared_archive(&self) -> std::sync::Arc<PackArchive> {
-        self.archive.clone()
-    }
-
-    pub(crate) fn manifest(&self) -> &PackManifest {
-        self.archive.manifest()
-    }
-
-    pub(crate) fn digest(&self) -> &str {
-        self.archive.digest()
-    }
-
-    pub(crate) fn asset(&self, path: &str) -> Result<&[u8]> {
-        self.archive.asset(path)
-    }
-
-    pub(crate) fn archive(&self) -> &PackArchive {
-        &self.archive
-    }
-
-    pub(crate) fn label(&self) -> &'static str {
-        match &self.from {
-            Source::Local => "local",
-            Source::Installed => "installed",
-            Source::Store => "store",
-            Source::Registry { .. } => "registry",
-        }
-    }
-
-    /// Records the provenance of `root` and `dependencies` under their pack coordinates.
-    pub(crate) fn record_graph_sources(
-        prepared: &mut gents::pack::PreparedDocumentPackInstall,
-        root: &Self,
-        dependencies: &[Self],
-    ) {
-        for source in std::iter::once(root).chain(dependencies) {
-            let manifest = source.manifest();
-            prepared.sources.insert(
-                format!("{}/{}", manifest.metadata.namespace, manifest.name),
-                source.provenance(),
-            );
-        }
-    }
-
-    pub(crate) fn provenance(&self) -> gents::pack::PackSource {
-        match &self.from {
-            Source::Local => gents::pack::PackSource::Local {
-                file_name: self.file_name.clone(),
-            },
-            Source::Installed => gents::pack::PackSource::Installed,
-            Source::Store => gents::pack::PackSource::Store,
-            Source::Registry {
-                namespace,
-                name,
-                version,
-                artifact_digest,
-            } => gents::pack::PackSource::Registry {
-                namespace: namespace.clone(),
-                name: name.clone(),
-                version: version.clone(),
-                artifact_digest: artifact_digest.clone(),
-            },
-        }
-    }
-
-    pub(crate) fn describe(&self) -> String {
-        match &self.from {
-            Source::Registry {
-                namespace,
-                name,
-                version,
-                artifact_digest,
-            } => format!(
-                "{} ({namespace}/{name}@{version}, artifact sha256:{artifact_digest})",
-                self.label()
-            ),
-            _ => format!("{} ({})", self.label(), self.digest()),
-        }
-    }
-}
-
-pub(crate) async fn resolve_pack_source(
-    spec: &str,
-    registry_override: Option<&str>,
-    home: &std::path::Path,
-) -> Result<PackSource> {
-    if let Some(local) = local::classify(spec) {
-        let archive = local::open(&local, home)?;
-        let (from, file_name) = match &local {
-            gents::pack::local::LocalName::Path(path) => (
-                Source::Local,
-                path.file_name()
-                    .map(|name| name.to_string_lossy().into_owned()),
-            ),
-            gents::pack::local::LocalName::Digest(_) => (Source::Store, None),
-        };
-        return Ok(PackSource {
-            archive: archive.into(),
-            from,
-            file_name,
-        });
-    }
-    let installed: Vec<gents::pack::InstalledPack> = gents::pack::list_home_installs(home)?
-        .into_iter()
-        .map(|record| gents::pack::InstalledPack {
-            coordinate: record.coordinate,
-            version: record.version,
-            digest: record.digest,
-        })
-        .collect();
-    let options = ResolveOptions {
-        home: Some(home),
-        registry_url: registry::resolve_registry_url(registry_override),
-        installed: &installed,
-    };
-    let resolved = resolve_named(spec, &options).await?;
-    let from = match resolved.from {
-        ResolvedFrom::Installed => Source::Installed,
-        ResolvedFrom::Store => Source::Store,
-        ResolvedFrom::Registry {
-            artifact_digest,
-            version,
-        } => {
-            let parsed = gents::pack::resolve::parse_pack_spec(spec)?;
-            Source::Registry {
-                namespace: parsed.namespace.to_owned(),
-                name: parsed.name.to_owned(),
-                version,
-                artifact_digest,
-            }
-        }
-    };
-    Ok(PackSource {
-        archive: resolved.archive.into(),
-        from,
-        file_name: None,
-    })
-}
-
-pub(super) fn materialize_cached_pack(
-    home: &std::path::Path,
-    pack: &PackSource,
-) -> Result<(std::path::PathBuf, gents::store::local::file_lock::FileLock)> {
-    gents::pack::materialize::cached(home, &pack.archive)
-}
+use gents_pack::pack::resolved_pack::{materialize_cached_pack, resolve_pack_source, ResolvedPack};
+use gents_pack::pack::PackManifest;
 
 pub(crate) struct SubjectPack {
     pub(crate) source: gents_eval::runner::CellSource,
     pub(crate) manifest: PackManifest,
-    _lease: Option<gents::store::local::file_lock::FileLock>,
+    _lease: Option<gents_store::local::file_lock::FileLock>,
 }
 
 impl SubjectPack {
@@ -268,7 +64,7 @@ pub(crate) async fn resolve_subject_pack(
     })
 }
 
-pub(crate) fn single_slot(manifest: &PackManifest) -> Result<&gents::pack::PackInferenceSlot> {
+pub(crate) fn single_slot(manifest: &PackManifest) -> Result<&gents_pack::pack::PackInferenceSlot> {
     match manifest.metadata.inference_slots.as_slice() {
         [only] => Ok(only),
         slots => anyhow::bail!(
@@ -299,9 +95,9 @@ pub(super) fn names_a_directory(spec: &str) -> bool {
 
 pub(super) fn asset_cache_root(
     home: &std::path::Path,
-    pack: &PackSource,
+    pack: &ResolvedPack,
 ) -> Result<std::path::PathBuf> {
-    gents::pack::materialize::cache_root(
+    gents_pack::pack::materialize::cache_root(
         home,
         &pack.manifest().metadata.namespace,
         &pack.manifest().name,

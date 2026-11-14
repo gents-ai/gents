@@ -16,18 +16,27 @@ struct TypeDef {
 
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
-    let schema_dir = manifest.join("schemas/agent");
-    println!("cargo:rerun-if-changed={}", schema_dir.display());
-
     let mut types = BTreeMap::new();
-    let mut paths: Vec<_> = fs::read_dir(&schema_dir)
-        .expect("schema directory")
-        .map(|entry| entry.expect("schema entry").path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "graphql"))
+    let schema_dirs = [
+        manifest.join("schemas/agent"),
+        manifest.join("../gents-protocol/schemas/inference"),
+        manifest.join("../gents-protocol/schemas/services"),
+    ];
+    for schema_dir in &schema_dirs {
+        track_schema(schema_dir);
+    }
+    let mut paths: Vec<_> = schema_dirs
+        .iter()
+        .flat_map(|schema_dir| {
+            fs::read_dir(schema_dir)
+                .expect("schema directory")
+                .map(|entry| entry.expect("schema entry").path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "graphql"))
+        })
         .collect();
     paths.sort();
     for path in paths {
-        println!("cargo:rerun-if-changed={}", path.display());
+        track_schema(&path);
         for parsed in parse_types(&path) {
             let name = parsed.name.clone();
             assert!(
@@ -43,6 +52,16 @@ fn main() {
     }
     let dest = PathBuf::from(env::var("OUT_DIR").expect("out dir")).join("fields.rs");
     fs::write(dest, out).expect("write generated fields");
+}
+
+fn track_schema(path: &Path) {
+    use std::io::Write;
+    writeln!(
+        std::io::stdout(),
+        "cargo:rerun-if-changed={}",
+        path.display()
+    )
+    .expect("write Cargo schema dependency");
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -147,6 +166,7 @@ fn parse_field(type_name: &str, line: &str) -> FieldDef {
         "JSON" => "Json",
         "Blob" => "Blob",
         "[String]" | "[String!]" => "StrList",
+        "[Int]" | "[Int!]" => "IntList",
         other => panic!("{type_name}.{name}: unsupported schema type {other:?}"),
     };
     FieldDef { name, kind }
@@ -210,6 +230,17 @@ fn render_type(out: &mut String, def: &TypeDef) {
         names.join(", ")
     )
     .unwrap();
+    writeln!(out, "    impl crate::SelectFields for Doc {{").unwrap();
+    writeln!(
+        out,
+        "        fn select_fields<S>(selection: S) -> S where S: crate::FieldSelection<Self> {{"
+    )
+    .unwrap();
+    write!(out, "            selection").unwrap();
+    for field in &def.fields {
+        write!(out, ".field({})", field.name.to_ascii_uppercase()).unwrap();
+    }
+    writeln!(out, "\n        }}\n    }}").unwrap();
     let is_str = |name: &str| {
         def.fields
             .iter()

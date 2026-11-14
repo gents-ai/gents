@@ -12,8 +12,8 @@ use crate::checks::CheckRegistry;
 use crate::optimization::driver::{baseline_dir, spend_so_far, JobRequest};
 use crate::optimization::job::{JobState, JournalEntry};
 use crate::runner::ScriptedExecutor;
-use gents::documents::EvalSplit;
-use gents::Collection;
+use gents_documents::EvalSplit;
+use gents_store::collection::Collection;
 
 #[tokio::test]
 async fn a_resume_with_another_capture_list_is_refused() {
@@ -225,15 +225,15 @@ async fn a_definition_that_no_longer_validates_fails_the_job_as_definition_chang
         .access()
         .transact_write("matrix.invalidate_definition", |txn| {
             Box::pin(async move {
-                let (doc_id, _) = gents::store::config_client::read_desired_state_record_in_txn(
+                let (doc_id, _) = gents_documents::read_desired_state_record_in_txn(
                     txn, Collection::EvalDefinition, owner, DEFINITION,
                 ).await?.expect("installed definition");
                 txn.execute_client_signed_update(
                     &format!(
                         r#"mutation($input: EvalDefinitionMutationInputArg!) {{ update_EvalDefinition(filter: {{ _docID: {{ _eq: "{}" }}, definition_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}, input: $input) {{ _docID }} }}"#,
-                        gents::store::graphql::escape_graphql_string(&doc_id),
-                        gents::store::graphql::escape_graphql_string(DEFINITION),
-                        gents::store::graphql::escape_graphql_string(owner),
+                        gents_store::graphql::escape_graphql_string(&doc_id),
+                        gents_store::graphql::escape_graphql_string(DEFINITION),
+                        gents_store::graphql::escape_graphql_string(owner),
                     ),
                     &serde_json::json!({"input": {"comparability_version": 0}}),
                     gents_protocol::schemas::EVAL_DEFINITION,

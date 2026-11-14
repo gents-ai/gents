@@ -9,8 +9,8 @@ pub(crate) use load::load_document_runtime_view;
 pub(crate) use load::load_document_runtime_view_as;
 pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 
-use crate::documents::*;
-use crate::inference::auth::credential::OAuthCredential;
+use gents_documents::*;
+use gents_inference::auth::credential::OAuthCredential;
 use rapidhash::RapidHashMap;
 
 #[derive(Debug, Clone)]
@@ -22,6 +22,8 @@ pub(crate) struct DocumentRecord<T> {
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentRuntimeView {
     pub(crate) node: DocumentRecord<Node>,
+    /// Absent selects no default.
+    pub(crate) default_selection: Option<DocumentRecord<DefaultAgentSelection>>,
     pub(crate) agents: RapidHashMap<String, DocumentRecord<Agent>>,
     pub(crate) contexts: RapidHashMap<String, DocumentRecord<AgentContext>>,
     pub(crate) compactions: RapidHashMap<String, DocumentRecord<CompactionConfig>>,
@@ -52,12 +54,18 @@ pub(crate) enum ControlUpdateOutcome {
 }
 
 impl DocumentRuntimeView {
+    pub(crate) fn default_agent_did(&self) -> Option<&str> {
+        self.default_selection
+            .as_ref()
+            .and_then(|record| record.value.selected())
+    }
+
     pub(super) fn resolves_oauth_credential(
         &self,
         provider: &str,
-        pick: crate::inference::auth::credential::AccountPick<'_>,
+        pick: gents_inference::auth::credential::AccountPick<'_>,
     ) -> bool {
-        crate::inference::auth::credential::pick_oauth_credential(
+        gents_inference::auth::credential::pick_oauth_credential(
             self.oauth_rows(),
             &self.node.value.node_did,
             provider,
@@ -77,10 +85,10 @@ impl DocumentRuntimeView {
         if !matches!(backend.auth, BackendAuth::NodeOAuthPool { .. }) {
             return Vec::new();
         }
-        crate::inference::auth::credential::pick_oauth_pool(
+        gents_inference::auth::credential::pick_oauth_pool(
             self.oauth_rows(),
             &self.node.value.node_did,
-            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         )
         .into_iter()
         .map(|row| row.credential_id.clone())
@@ -93,7 +101,7 @@ impl DocumentRuntimeView {
 
     pub(crate) fn pending_visibility_details(&self) -> Vec<String> {
         let mut details = Vec::new();
-        if let Some(id) = self.node.value.default_agent_did.as_deref() {
+        if let Some(id) = self.default_agent_did() {
             if !self.agents.contains_key(id) {
                 details.push(format!(
                     "principal {} references missing default agent {id}",
@@ -110,13 +118,15 @@ impl DocumentRuntimeView {
 }
 
 #[cfg(test)]
+mod account_event_tests;
+#[cfg(test)]
 mod tests;
 
 pub(crate) fn merge_surface_tools(
     tools: &Tools,
     view: &DocumentRuntimeView,
-) -> anyhow::Result<crate::documents::MergedSurfaceTools> {
-    crate::documents::merge_datastore_tool_surfaces(
+) -> anyhow::Result<gents_documents::MergedSurfaceTools> {
+    gents_documents::merge_datastore_tool_surfaces(
         tools,
         view.datastore_tool_surfaces
             .values()

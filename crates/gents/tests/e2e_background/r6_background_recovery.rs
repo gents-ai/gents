@@ -1,39 +1,17 @@
 use serde::{Deserialize, Serialize};
 
-use crate::support::accepted_turn::{boot_prepared_accepted_turn, AcceptedTurnSpec};
-use crate::support::fixtures::configure_agent_tools;
-use crate::support::streaming_backend::StreamChunk;
+use crate::support::agent_requests::submit_user_request;
+use crate::support::fixtures::configure_agent_tools_as;
+use crate::support::interrupt::spawn_runtime;
+use crate::support::live_inference::{bind_target, live_target, wait_for_rows};
 use crate::support::test_db_in;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Debug, Deserialize)]
 struct ToolCallRow {
     lifecycle_state: Option<String>,
     cancel_cause: Option<String>,
-}
-
-/// Reads as the working Agent, which owns its tool calls under document ACP.
-async fn wait_for_running_tool(access: &gents::ConfigAccess, session_id: &str) -> String {
-    let session_id = gents::store::graphql::escape_graphql_string(session_id);
-    for _ in 0..100 {
-        let response = access
-            .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ tool_call_id }} }}"#
-            ))
-            .await
-            .expect("read running background tool as its Agent");
-        if let Some(id) = response
-            .get("data")
-            .and_then(|data| data.get("AgentToolCall"))
-            .and_then(serde_json::Value::as_array)
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("tool_call_id"))
-            .and_then(serde_json::Value::as_str)
-        {
-            return id.to_string();
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-    panic!("background bash never reached running");
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,113 +26,110 @@ struct CrashWorkerReady {
     agent_binding: gents_protocol::agent_identity::AgentIdentityBinding,
     session_id: String,
     tool_call_id: String,
+    process: gents_session::exec::ownership::ProcessIdentity,
 }
 
 const CRASH_WORKER_READY: &str = "GENTS_R6_CRASH_WORKER_READY";
 
+#[cfg(unix)]
 async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
-    let data_dir = tempfile::Builder::new()
-        .prefix("worker-data-")
-        .tempdir_in(ready_path.parent().expect("handshake parent"))
-        .unwrap();
+    let data_parent = ready_path.parent().unwrap().to_owned();
+    let data_dir = tokio::task::spawn_blocking(move || {
+        tempfile::Builder::new()
+            .prefix("worker-data-")
+            .tempdir_in(data_parent)
+    })
+    .await
+    .unwrap()
+    .unwrap();
     let db = test_db_in(data_dir).await;
-    let node_did = db.node_identity.did().to_string();
-    let fixture = crate::support::managed_agent_fixture(&db).await;
-    let agent_binding = fixture.binding.clone();
-    let agent_did = agent_binding.agent_did.as_str();
-    let agent_access = gents::ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent_did.parse().expect("valid Agent DID"),
-        fixture.agent.as_ref(),
-    )
-    .expect("managed worker Agent access");
+    let target = live_target().await;
+    let actors = bind_target(&db, &target).await;
+    let node_did = actors.node_did().to_owned();
     let session_id = "r6-recovery-session";
-    let spec = AcceptedTurnSpec {
-        backend_id: "r6-recovery-backend",
-        model: "test-model",
-        parent_agent_did: agent_did,
-        configured_agent_dids: &[agent_did],
-        request_id: "r6-recovery-parent",
-        session_id,
-        prompt: "start recovery background process",
-        accepted_chunks: vec![StreamChunk::tool_call(
-            "r6-recovery-spawn",
-            "spawn_process",
-            r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
-        )],
-        child_plans: Vec::new(),
-        valid_until: None,
-        request_hop: None,
-        request_setup: None,
-    };
-    let prepared =
-        crate::support::accepted_turn::prepare_managed_accepted_turn(&db, &fixture, spec).await;
-    prepared
-        .backend
-        .enable_dynamic_followups("start recovery background process");
-    configure_agent_tools(
-        &db,
-        &node_did,
-        agent_did,
-        None,
-        gents::documents::Tools {
-            tools_id: format!("{agent_did}:tools"),
-            node_did: node_did.clone(),
-            host: Some(gents::documents::HostTools {
-                bash: Some(gents::documents::BashTools {
-                    mode: gents::BashMode::ReadOnly,
-                    read_only_commands: Some(vec!["sleep".to_string()]),
+    let root = ready_path.parent().unwrap();
+    configure_agent_tools_as(
+        &actors.fixture.access, &node_did, actors.agent_did(),
+        Some("Follow the requested two tool steps. Start the background process, then wait on its returned handle. Do not start other work.".into()),
+        gents_documents::Tools {
+            tools_id: "live-crash-recovery-tools".into(), node_did: node_did.clone(),
+            host: Some(gents_documents::HostTools {
+                root: Some(root.display().to_string()),
+                bash: Some(gents_documents::BashTools {
+                    mode: gents_documents::BashMode::ReadOnly,
+                    read_only_commands: Some(vec!["sh".into()]),
                     background_enabled: true,
                     ..Default::default()
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-        Vec::new(),
-    )
-    .await;
-    let identity: std::sync::Arc<dyn gents::NodeIdentity> = db.node_identity.clone();
+                }), ..Default::default()
+            }), ..Default::default()
+        }, Vec::new(),
+    ).await;
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
-        identity,
+        db.node_identity.clone(),
         gents::DocumentRuntimeOptions {
             backend_admission: Some(db.home.backend_admission()),
-            tool_ceiling: gents::ToolCeiling::readonly(),
+            tool_ceiling: gents_tools::surface::ToolCeiling::readonly_at(root),
             ..Default::default()
         },
     )
     .await
-    .expect("build recovery crash worker runtime")
+    .unwrap()
     .with_background_process_records(db.data_path().join("background-processes"));
-    let _runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
-    let tool_call_id = wait_for_running_tool(&agent_access, session_id).await;
-    let parent = agent_access
-        .execute(
-            r#"{ AgentRequest(filter: { request_id: { _eq: "r6-recovery-parent" } }, limit: 1) { lifecycle_state } }"#,
-        )
-        .await
-        .expect("load live recovery parent");
-    assert_eq!(
-        parent["data"]["AgentRequest"][0]["lifecycle_state"].as_str(),
-        Some("processing"),
-        "crash recovery fixture must stop with a live parent: {parent}"
-    );
+    let executions = agent.background_execution_registry();
+    let _runtime = spawn_runtime(&db, agent).await;
+    let arguments = serde_json::json!({"tool_name":"bash", "args":{"command":"sh", "args":["-c", "exec 3< \"$1\"; printf READY; IFS= read -r release <&3", "gents-live-crash", root.join("release").display().to_string()]}});
+    submit_user_request(&node_did, &actors.fixture, session_id, "r6-recovery-parent",
+        &format!("Call spawn_process with exactly these arguments: {arguments}. Then call wait_process using the returned tool_call_id and timeout_secs 120. Wait for that result before answering."), Default::default()).await;
+    let running = wait_for_rows(&actors.fixture.access, "AgentToolCall",
+        r#"{ AgentToolCall(filter: {request_id: {_eq: "r6-recovery-parent"}, lifecycle_state: {_eq: "running"}}) {tool_call_id tool_name} }"#,
+        Duration::from_secs(180), |rows| {
+            let calls = rows["AgentToolCall"].as_array().unwrap();
+            calls.iter().any(|row| row["tool_name"] == "bash") && calls.iter().any(|row| row["tool_name"] == "wait_process")
+        }).await;
+    let tool_call_id = running["AgentToolCall"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["tool_name"] == "bash")
+        .unwrap()["tool_call_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let record_id = tool_call_id.clone();
+    let process = tokio::task::spawn_blocking(move || {
+        executions
+            .try_process_record_list()
+            .unwrap()
+            .into_iter()
+            .find(|record| record.tool_call_id == record_id)
+            .expect("running background process record")
+            .identity
+    })
+    .await
+    .unwrap();
     let ready = CrashWorkerReady {
         data_path: db.data_path().to_path_buf(),
         node_did,
-        agent_binding,
-        session_id: session_id.to_string(),
+        agent_binding: actors.fixture.binding.clone(),
+        session_id: session_id.into(),
         tool_call_id,
+        process,
     };
-    let pending = ready_path.with_extension("pending");
-    std::fs::write(&pending, serde_json::to_vec(&ready).unwrap()).unwrap();
-    std::fs::rename(pending, ready_path).unwrap();
+    let mut socket = tokio::net::UnixStream::connect(ready_path).await.unwrap();
+    socket
+        .write_all(&serde_json::to_vec(&ready).unwrap())
+        .await
+        .unwrap();
+    socket.shutdown().await.unwrap();
     std::future::pending::<()>().await;
 }
 
-async fn load_tool_call(access: &gents::ConfigAccess, tool_call_id: &str) -> ToolCallRow {
-    let tool_call_id = gents::store::graphql::escape_graphql_string(tool_call_id);
+async fn load_tool_call(
+    access: &gents_store::config_client::ConfigAccess,
+    tool_call_id: &str,
+) -> ToolCallRow {
+    let tool_call_id = gents_store::graphql::escape_graphql_string(tool_call_id);
     let query = format!(
         r#"{{
             AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}, limit: 1) {{
@@ -171,8 +146,11 @@ async fn load_tool_call(access: &gents::ConfigAccess, tool_call_id: &str) -> Too
         .expect("one recovered tool call")
 }
 
-async fn load_messages(access: &gents::ConfigAccess, session_id: &str) -> Vec<MessageRow> {
-    let session_id = gents::store::graphql::escape_graphql_string(session_id);
+async fn load_messages(
+    access: &gents_store::config_client::ConfigAccess,
+    session_id: &str,
+) -> Vec<MessageRow> {
+    let session_id = gents_store::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentMessage(
@@ -191,7 +169,7 @@ async fn load_messages(access: &gents::ConfigAccess, session_id: &str) -> Vec<Me
         .unwrap_or_default();
     let mut messages = Vec::new();
     for header in headers {
-        let (_, message) = gents::session::load_canonical_message(
+        let (_, message) = gents_session::session::load_canonical_message(
             access,
             header["_docID"].as_str().expect("message header _docID"),
             header["node_did"].as_str().expect("message header agent"),
@@ -200,19 +178,19 @@ async fn load_messages(access: &gents::ConfigAccess, session_id: &str) -> Vec<Me
         .await
         .expect("reconstruct recovery notification");
         let content = match message {
-            gents::inference::llm::message::Message::System { content } => content,
-            gents::inference::llm::message::Message::User { content } => content
+            gents_inference::llm::message::Message::System { content } => content,
+            gents_inference::llm::message::Message::User { content } => content
                 .into_iter()
                 .filter_map(|item| match item {
-                    gents::inference::llm::message::UserContent::Text(text) => Some(text.text),
+                    gents_inference::llm::message::UserContent::Text(text) => Some(text.text),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
                 .join("\n"),
-            gents::inference::llm::message::Message::Assistant { content, .. } => content
+            gents_inference::llm::message::Message::Assistant { content, .. } => content
                 .into_iter()
                 .filter_map(|item| match item {
-                    gents::inference::llm::message::AssistantContent::Text(text) => Some(text.text),
+                    gents_inference::llm::message::AssistantContent::Text(text) => Some(text.text),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -223,8 +201,11 @@ async fn load_messages(access: &gents::ConfigAccess, session_id: &str) -> Vec<Me
     messages
 }
 
-async fn load_wakes(access: &gents::ConfigAccess, session_id: &str) -> Vec<serde_json::Value> {
-    let session_id = gents::store::graphql::escape_graphql_string(session_id);
+async fn load_wakes(
+    access: &gents_store::config_client::ConfigAccess,
+    session_id: &str,
+) -> Vec<serde_json::Value> {
+    let session_id = gents_store::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentRequest(
@@ -240,64 +221,77 @@ async fn load_wakes(access: &gents::ConfigAccess, session_id: &str) -> Vec<serde
 }
 
 #[cfg(unix)]
-fn process_alive(pid: i32) -> bool {
-    // SAFETY: signal 0 only checks existence of this test's own child.
-    unsafe { libc::kill(pid, 0) == 0 }
-}
-
-#[cfg(unix)]
 #[tokio::test]
 async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
     if let Some(ready_path) = std::env::var_os(CRASH_WORKER_READY) {
         run_recovery_crash_worker(std::path::Path::new(&ready_path)).await;
         unreachable!();
     }
-    let handshake = tempfile::tempdir().unwrap();
-    let ready_path = handshake.path().join("ready.json");
-    struct ChildGuard(Option<std::process::Child>);
-    impl Drop for ChildGuard {
-        fn drop(&mut self) {
-            if let Some(child) = self.0.as_mut() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-        }
-    }
-    let child = std::process::Command::new(std::env::current_exe().unwrap())
+    let handshake = tokio::task::spawn_blocking(|| {
+        tempfile::Builder::new()
+            .prefix("gents-r6-")
+            .tempdir_in("/tmp")
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let ready_path = handshake.path().join("ready.sock");
+    let listener = tokio::net::UnixListener::bind(&ready_path).unwrap();
+    let fifo = handshake.path().join("release");
+    assert!(tokio::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .await
+        .unwrap()
+        .success());
+    let _gate = tokio::task::spawn_blocking(move || {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(fifo)
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
         .arg("r6_background_recovery::recover_all_interrupts_backgrounded_running_tool_with_live_parent")
         .arg("--nocapture")
         .env(CRASH_WORKER_READY, &ready_path)
-        .spawn()
-        .expect("spawn recovery crash worker");
-    let mut child = ChildGuard(Some(child));
-    let ready = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            if let Some(status) = child.0.as_mut().unwrap().try_wait().unwrap() {
-                panic!("recovery crash worker exited before readiness: {status}");
+        .kill_on_drop(true)
+        .spawn().expect("spawn live recovery crash worker");
+    let ready = tokio::time::timeout(Duration::from_secs(240), async {
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (mut socket, _) = accepted.unwrap();
+                let mut bytes = Vec::new();
+                socket.read_to_end(&mut bytes).await.unwrap();
+                serde_json::from_slice::<CrashWorkerReady>(&bytes).unwrap()
             }
-            if let Ok(bytes) = std::fs::read(&ready_path) {
-                break serde_json::from_slice::<CrashWorkerReady>(&bytes).unwrap();
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            status = child.wait() => panic!("live recovery crash worker exited before readiness: {status:?}"),
         }
+    }).await.expect("live crash worker readiness deadline");
+    child
+        .kill()
+        .await
+        .expect("kill and reap live recovery crash worker");
+
+    let key_path = ready.data_path.join("node.key");
+    let reopened_identity = tokio::task::spawn_blocking(move || {
+        gents_store::identity::KeyIdentity::load_or_create(key_path, None)
     })
     .await
-    .expect("crash worker readiness");
-    let mut killed = child.0.take().unwrap();
-    killed.kill().expect("kill recovery crash worker");
-    killed.wait().expect("reap recovery crash worker");
-
-    let reopened_identity =
-        gents::KeyIdentity::load_or_create(ready.data_path.join("node.key"), None)
-            .expect("reload crashed worker signing identity");
+    .unwrap()
+    .expect("reload crashed worker signing identity");
     assert_eq!(
-        gents::NodeIdentity::did(&reopened_identity),
+        gents_store::identity::NodeIdentity::did(&reopened_identity),
         ready.node_did,
         "persisted crash-worker key must retain the exact node principal"
     );
     let agent_identity =
-        gents::store::identity::resolve_agent_identity(&reopened_identity, &ready.agent_binding)
+        gents_store::identity::resolve_agent_identity(&reopened_identity, &ready.agent_binding)
             .expect("reload crashed worker's managed Agent identity");
     // Reopen through the home owner: the store is protected by its home key
     // and lives under the home's data directory.
@@ -307,24 +301,17 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
     assert_eq!(home.did(), ready.node_did);
     let node = home.node.clone();
     let records = ready.data_path.join("background-processes");
-    let record: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(
-            std::fs::read_dir(&records)
-                .expect("crashed worker left a process record")
-                .map(|entry| entry.unwrap().path())
-                .find(|path| path.extension().is_some_and(|ext| ext == "json"))
-                .expect("process record file"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    let orphan_pid = record["identity"]["pid"].as_i64().unwrap() as i32;
-    assert!(
-        process_alive(orphan_pid),
+    let process = ready.process.clone();
+    assert_eq!(
+        tokio::task::spawn_blocking(move || process.observe())
+            .await
+            .unwrap(),
+        gents_session::exec::ownership::ProcessObservation::Running,
         "the spawned process must survive its runtime's crash"
     );
-    let executions = gents::BackgroundExecutionRegistry::default().with_process_records(records);
-    let report = gents::tools::call::lifecycle::ToolCallLifecycle::recover_all_with_executions(
+    let executions = gents_toolcalls::call::hook::BackgroundExecutionRegistry::default()
+        .with_process_records(records);
+    gents_toolcalls::call::lifecycle::ToolCallLifecycle::recover_all_with_executions(
         &node,
         &ready.node_did,
         std::slice::from_ref(&agent_identity),
@@ -332,20 +319,17 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
     )
     .await
     .unwrap();
-    assert_eq!(report.tool_calls_recovered, 1);
-    let stopped = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while process_alive(orphan_pid) {
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        }
-    })
-    .await;
-    assert!(
-        stopped.is_ok(),
+    let process = ready.process.clone();
+    assert_eq!(
+        tokio::task::spawn_blocking(move || process.observe())
+            .await
+            .unwrap(),
+        gents_session::exec::ownership::ProcessObservation::Exited,
         "restart recovery must stop the owned orphan"
     );
 
     // The recovered rows belong to the working Agent; read them as it.
-    let agent_access = gents::ConfigAccess::local_managed_agent(
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         agent_identity.did().parse().expect("valid Agent DID"),
         agent_identity.as_ref(),

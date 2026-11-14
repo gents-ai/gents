@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use gents::pack::AGENT_SLOT_REFERENCE_PREFIX;
+use gents_pack::pack::AGENT_SLOT_REFERENCE_PREFIX;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubjectAgent {
@@ -53,25 +53,20 @@ mod tests {
 
     #[test]
     fn selected_subject_resolution_matches_lean() {
-        for case in crate::lean_vocab_test::lean_pack_eval_subject_cases() {
+        gents_lean_vocab::families::contracts_pack_installation_eval_subject::replay(|case| {
             let selected = case.selected.as_ref().map(|binding| SubjectAgent {
                 slot: binding.slot.clone(),
                 agent_did: binding.agent_did.clone(),
             });
-            assert_eq!(
-                resolve_subject(selected.as_ref(), &case.slot),
-                case.expected.as_deref(),
-                "{}",
-                case.name
-            );
+            let resolved = resolve_subject(selected.as_ref(), &case.slot).map(str::to_owned);
             let mut value =
                 json!({"agent_did": {"_eq": format!("gents:agent-slot:{}", case.slot)}});
-            let result = bind_subject_references(&mut value, selected.as_ref());
-            assert_eq!(result.is_ok(), case.expected.is_some(), "{}", case.name);
-            if let Some(expected) = &case.expected {
-                assert_eq!(value["agent_did"]["_eq"], *expected, "{}", case.name);
-            }
-        }
+            let bound = bind_subject_references(&mut value, selected.as_ref())
+                .ok()
+                .map(|()| value["agent_did"]["_eq"].as_str().unwrap().to_owned());
+            assert_eq!(bound, resolved, "{}", case.name);
+            resolved
+        });
     }
     #[test]
     fn grading_uses_the_installed_did_and_refuses_missing_and_foreign_slots() {

@@ -6,6 +6,7 @@ import { useDraft } from "./draft";
 import { Fact, focusField, Group, PathFact, Row, Unfold } from "./rows";
 import { LocalServer } from "./LocalServer";
 import { AgentCard } from "./AgentCard";
+import { CONNECTION_GROUP, ConnectionGroup } from "./ConnectionGroup";
 import { saveDefault } from "./BehaviorsPanel";
 import { packOrigin } from "./ListDetail";
 import { useApp } from "@/app/AppContext";
@@ -13,7 +14,21 @@ import { settleAvatar } from "@/lib/avatarRoll";
 import { useBootstrap, useNodeConfigReadOnly, useNodeReach } from "@/hooks/useClient";
 import { href } from "@/lib/router";
 
-export function AgentPanel({ deployment }: { deployment: NodeView }) {
+export function AgentPanel({
+  deployment,
+  item,
+}: {
+  deployment: NodeView;
+
+  item?: string;
+}) {
+  useEffect(() => {
+    if (item !== CONNECTION_GROUP) return;
+    const frame = requestAnimationFrame(() =>
+      document.getElementById(CONNECTION_GROUP)?.scrollIntoView({ block: "start" }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [item, deployment.nodeDid]);
   const bootstrap = useBootstrap();
   const reach = useNodeReach(deployment);
   const { changeConfig } = useApp().actions;
@@ -47,7 +62,6 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
           node_did: agent.nodeDid,
           display_name: next.displayName.trim(),
           avatar: next.avatar || null,
-          default_agent_did: next.defaultAgentDid,
           enabled: next.enabled,
           max_request_hop:
             next.maxRequestHop.trim() === "" ? null : Number(next.maxRequestHop),
@@ -160,6 +174,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
           />
         </>
       )}
+      <ConnectionGroup deployment={deployment} />
       <Group title="Identity">
         <Row
           label="Node DID"
@@ -182,9 +197,6 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
         )}
         <Row label="Tool root" description="The directory tools are confined to.">
           <PathFact path={reach.root} local={reach.local} />
-        </Row>
-        <Row label="Peer" description="Where the node's runtime runs.">
-          <Fact mono>{deployment.peerId}</Fact>
         </Row>
         <Row label="Created">
           <Fact>

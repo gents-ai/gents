@@ -99,7 +99,7 @@ background continuation owner rather than a gate operation.
 
 ## Payload presentation before provider-input sizing
 
-`canonical_payload_presentation_cases` measures only reconstructed payload fields.
+The family `payload_presentation_contracts_lengths` measures only reconstructed payload fields.
 Headers select presentations of stored streams, and neither payload length
 bounds the other:
 
@@ -132,14 +132,15 @@ count. After reduction it rebuilds from the checkpoint and retained suffix and
 projects and estimates again before authorizing dispatch. Provider-view repair
 also requires fresh admission; shrinking the history is not evidence of fit.
 
-`compaction_projection_join_cases` exercises this composition with explicit
+`contract_cases_compaction_projection_join_projection_join` exercises this composition with explicit
 projection/estimation observations. Those observations are controlled inputs at
 the native-owner boundary, not a Lean implementation of provider serialization.
-`compaction_canonical_projection_cases` supplies the actual immutable records
-and selected identities and compares the complete native messages passed to
-initial projection and checkpoint rebuilding. Missing selected identities and
+The leftover family `compaction_canonical_projection_unreached` supplies the
+actual immutable records and selected identities and pins the complete native
+messages passed to initial projection and checkpoint rebuilding. Missing selected identities and
 loading dependencies stop the composition instead of shortening the request.
-`repaired_projection_admission_cases` exercises fresh admission after a provider
+The family
+`contract_cases_compaction_canonical_projection_repaired_admission_unreached` exercises fresh admission after a provider
 view has been repaired; it does not model the repair transformation itself.
 The latter two groups separate `input` from `expected`, so native adapters cannot
 receive expected messages or decisions as construction inputs.

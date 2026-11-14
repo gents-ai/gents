@@ -1,0 +1,80 @@
+{
+ "gents": {
+  "files": 144,
+  "lines": 70157,
+  "production_lines": 20074,
+  "test_files": 69
+ },
+ "gents-automation": {
+  "files": 103,
+  "lines": 56325,
+  "production_lines": 23659,
+  "test_files": 44
+ },
+ "gents-documents": {
+  "files": 92,
+  "lines": 29312,
+  "production_lines": 16987,
+  "test_files": 14
+ },
+ "gents-inference": {
+  "files": 124,
+  "lines": 52419,
+  "production_lines": 20318,
+  "test_files": 47
+ },
+ "gents-loop": {
+  "files": 0,
+  "lines": 0,
+  "production_lines": 0,
+  "test_files": 0
+ },
+ "gents-observe": {
+  "files": 44,
+  "lines": 18331,
+  "production_lines": 11021,
+  "test_files": 10
+ },
+ "gents-p2p": {
+  "files": 59,
+  "lines": 20841,
+  "production_lines": 12910,
+  "test_files": 21
+ },
+ "gents-pack": {
+  "files": 83,
+  "lines": 38172,
+  "production_lines": 22900,
+  "test_files": 18
+ },
+ "gents-protocol": {
+  "files": 1,
+  "lines": 179,
+  "production_lines": 176,
+  "test_files": 0
+ },
+ "gents-session": {
+  "files": 198,
+  "lines": 101015,
+  "production_lines": 48497,
+  "test_files": 64
+ },
+ "gents-store": {
+  "files": 109,
+  "lines": 34573,
+  "production_lines": 19651,
+  "test_files": 27
+ },
+ "gents-toolcalls": {
+  "files": 140,
+  "lines": 78100,
+  "production_lines": 32408,
+  "test_files": 53
+ },
+ "gents-tools": {
+  "files": 222,
+  "lines": 99468,
+  "production_lines": 49580,
+  "test_files": 52
+ }
+}

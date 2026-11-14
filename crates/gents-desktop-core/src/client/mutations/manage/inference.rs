@@ -1,19 +1,74 @@
 use anyhow::Result;
-use gents::store::collection::Collection;
-use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::InferenceBackend;
+use gents_documents::InferenceBackend;
+use gents_inference::operations::{self, OperationFailure};
+use gents_protocol::operations::inference::{
+    DocumentWrite, InferenceDocument, InferenceOperationError, WriteMode,
+};
+use gents_store::config_client::ConfigAccess;
+
+pub(super) fn refusal(
+    error: InferenceOperationError,
+    document: InferenceDocument,
+    verb: &'static str,
+) -> anyhow::Error {
+    let next = error.recovery(document, verb);
+    crate::error::inference_operation_failure(error, next)
+}
+
+pub(super) fn operation_failure(
+    failure: OperationFailure,
+    document: InferenceDocument,
+    verb: &'static str,
+) -> anyhow::Error {
+    match failure {
+        OperationFailure::Operation(error) => refusal(error, document, verb),
+        OperationFailure::Other(error) => error,
+    }
+}
+
+pub(super) fn put_write(
+    document: InferenceDocument,
+    value: &serde_json::Value,
+    mode: WriteMode,
+) -> Result<(String, DocumentWrite)> {
+    operations::whole_document_write(document, value, mode)
+        .map_err(|error| refusal(error, document, "update"))
+}
+
+pub(super) async fn put_document(
+    access: &ConfigAccess,
+    document: InferenceDocument,
+    value: &serde_json::Value,
+) -> Result<()> {
+    let (node_did, write) = put_write(document, value, WriteMode::Put)?;
+    operations::write(access, &node_did, &write)
+        .await
+        .map_err(|error| refusal(error, document, "update"))?;
+    Ok(())
+}
+
+pub(super) async fn remove_document(
+    access: &ConfigAccess,
+    document: InferenceDocument,
+    node_did: &str,
+    id: &str,
+) -> Result<usize> {
+    let receipt = operations::remove(access, node_did, document, id)
+        .await
+        .map_err(|error| refusal(error, document, "remove"))?;
+    Ok(usize::from(receipt.removed))
+}
 
 pub async fn upsert_inference_backend_on(
     access: &ConfigAccess,
     document: &InferenceBackend,
 ) -> Result<()> {
-    let value = serde_json::to_value(document)?;
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::InferenceBackend,
-        add: value.clone(),
-        update: value,
-    }])?;
-    super::apply_plan(access, "desktop.inference_backend.save", plan).await
+    put_document(
+        access,
+        InferenceDocument::Backend,
+        &serde_json::to_value(document)?,
+    )
+    .await
 }
 
 pub async fn delete_inference_backend_on(
@@ -21,32 +76,25 @@ pub async fn delete_inference_backend_on(
     node_did: &str,
     id: &str,
 ) -> Result<usize> {
-    super::delete_scoped_document(
-        access,
-        "desktop.inference_backend.delete",
-        Collection::InferenceBackend,
-        node_did,
-        id,
-    )
-    .await
+    remove_document(access, InferenceDocument::Backend, node_did, id).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_fixtures::ServedRuntimeHome;
-    use gents::documents::{BackendAuth, BackendModelCatalog, InferenceProfile};
+    use gents_documents::{BackendModelCatalog, InferenceProfile};
     use serde_json::json;
 
     async fn observation(
         access: &ConfigAccess,
         node_did: &str,
         backend_id: &str,
-    ) -> Result<Option<gents::documents::InferenceBackendObservation>> {
+    ) -> Result<Option<gents_documents::InferenceBackendObservation>> {
         access
             .transact_readonly("test.backend.observation", |txn| {
                 Box::pin(async move {
-                    gents::inference::backends::registry::lookup_backend_observation_in_txn(
+                    gents_inference::backends::registry::lookup_backend_observation_in_txn(
                         txn, node_did, backend_id,
                     )
                     .await
@@ -82,7 +130,7 @@ mod tests {
                 let backend = &backend;
                 let catalog = catalog.clone();
                 Box::pin(async move {
-                    gents::inference::backends::registry::record_model_catalog_in_txn(
+                    gents_inference::backends::registry::record_model_catalog_in_txn(
                         txn, backend, catalog,
                     )
                     .await
@@ -93,15 +141,15 @@ mod tests {
         upsert_inference_backend_on(&access, &backend).await?;
         let retained = observation(&access, &backend.node_did, &backend.backend_id).await?;
         assert_eq!(retained.unwrap().catalogs, vec![catalog]);
-        let mut invalid = backend.clone();
-        invalid.auth = BackendAuth::ApiKey { key: " ".into() };
-        assert!(upsert_inference_backend_on(&access, &invalid)
-            .await
-            .is_err());
         let profile: InferenceProfile = serde_json::from_value(json!({
             "node_did":backend.node_did, "profile_id":"profile", "backend_id":"shared", "model_name":"model"
         }))?;
-        gents::documents::write_inference_profile_document(&access, &profile).await?;
+        gents_documents::write_inference_profile_document(
+            &access,
+            &profile,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         assert!(
             delete_inference_backend_on(&access, &backend.node_did, "shared")
                 .await

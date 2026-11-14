@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use clap::{Subcommand, ValueEnum};
-use gents::{BackendProviderKind, OpenAiWireApi};
+use gents_inference::backends::provider::BackendProviderKind;
+use gents_loop::openai_wire::OpenAiWireApi;
 
 use super::{ConfigListArgs, ConfigShowArgs, ACCOUNT_HELP, ACCOUNT_PROVIDERS};
 
@@ -90,18 +91,16 @@ impl BackendPresetArg {
             Self::OpenAi => Some("https://api.openai.com/v1"),
             Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
             Self::ChatGptCodex => {
-                Some(gents::inference::clients::chatgpt_codex::default_backend_endpoint())
+                Some(gents_inference::clients::chatgpt_codex::default_backend_endpoint())
             }
             Self::XaiGrokOAuth => {
-                Some(gents::inference::clients::xai_grok::default_backend_endpoint())
+                Some(gents_inference::clients::xai_grok::default_backend_endpoint())
             }
-            Self::XaiApiKey => Some(gents::inference::backends::setup::XAI_API_ENDPOINT),
+            Self::XaiApiKey => Some(gents_inference::backends::setup::XAI_API_ENDPOINT),
             Self::ClaudeCliSubscription => {
-                Some(gents::inference::clients::claude_subscription::default_backend_endpoint())
+                Some(gents_inference::clients::claude_subscription::default_backend_endpoint())
             }
-            Self::Anthropic => {
-                Some(gents::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT)
-            }
+            Self::Anthropic => Some(gents_documents::inference_defaults::ANTHROPIC_API_ENDPOINT),
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_ENDPOINT),
             Self::Vllm => Some("http://127.0.0.1:8000/v1"),
             Self::LlamaCpp => Some("http://127.0.0.1:8080/v1"),
@@ -115,7 +114,7 @@ impl BackendPresetArg {
             Self::ChatGptCodex => Some(crate::DEFAULT_CHATGPT_CODEX_MODEL_NAME),
             Self::XaiGrokOAuth => Some(crate::DEFAULT_XAI_GROK_OAUTH_MODEL_NAME),
             Self::ClaudeCliSubscription => {
-                Some(gents::inference::clients::claude_subscription::default_model_name())
+                Some(gents_inference::clients::claude_subscription::default_model_name())
             }
             Self::GenericOpenAiCompatible
             | Self::OpenAi

@@ -18,6 +18,8 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 
+pub(crate) use setup::connect_first_sign_in;
+
 use anyhow::Context;
 use gents_shell::source::Intent;
 use tokio::runtime::Handle;
@@ -38,12 +40,9 @@ pub(crate) async fn open(
         .spawn_blocking(move || prefs::read_keys(&saved))
         .await
         .context("reading the saved key set")?;
-    let work = runtime
-        .spawn_blocking(move || work::work_for(&reading))
-        .await
-        .context("reading this home's GraphQL endpoint")?;
+    let work = work::work_for(&reading).await;
     let config = runtime
-        .spawn_blocking(move || crate::home_state::read_finished_init_config(&setup))
+        .spawn_blocking(move || gents_service::home_state::read_finished_init_config(&setup))
         .await
         .context("reading this home's setup")??
         .context("this home is not set up: run `gents` to set it up")?;

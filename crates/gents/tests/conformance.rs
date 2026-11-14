@@ -1,106 +1,57 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
+use rapidhash::RapidHashSet;
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents::inference::llm::message::{
+use gents_inference::admission::InferenceCall;
+use gents_inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use gents::request::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
-use gents::store::graphql::escape_graphql_string;
-use gents::triggers::event_delivery::{
-    runtime_event_delivery_source_contracts, EventDeliverySourceContract,
+use gents_session::request::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
+use gents_session::{
+    request::lifecycle::write_manual_agent_request, request::lifecycle::RequestLifecycle,
 };
-use gents::{write_manual_agent_request, InferenceCall, RequestLifecycle};
+use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-#[path = "../src/inference/admission/slot_accounting.rs"]
+#[path = "../../gents-inference/src/admission/slot_accounting.rs"]
 mod admission_slot_accounting;
-#[path = "../src/lean_vocab_test/support.rs"]
-mod lean_vocab_test;
 mod support;
 
 use admission_slot_accounting::{
     reconstructed_running_slot_count, slot_contribution, InferenceCallSlotRow,
 };
-use lean_vocab_test::{
-    assert_lean_transition_is_illegal, assert_lean_transition_is_legal,
-    assert_lifecycle_transition_cases_partition, assert_state_machine_contract_is_complete,
-    lean_backend_health_cases, lean_client_agent_readiness_cases, lean_command_env_case,
-    lean_command_policy_case, lean_command_sandbox_case, lean_compaction_cursor_cases,
-    lean_compaction_reducer_cases, lean_contract_snapshot, lean_event_delivery_convergence_traces,
-    lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
-    lean_inference_slot_accounting_cases, lean_interrupt_disposition_cases, lean_mcp_health_cases,
-    lean_queue_deadline_cases, lean_r4c_background_work_cases,
-    lean_r6_background_theorem_witnesses, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
-    lean_recovery_sweep_cases, lean_request_transition_cases, lean_restart_disposition_cases,
-    lean_session_control_cases, lean_startup_readiness_cases, lean_tool_output_paging_cases,
-    lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
-    LeanLifecycleTransitionCase,
+use gents_lean_vocab::{
+    lean_contract_snapshot, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
+    lean_recovery_sweep_cases,
 };
-use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
     fetch_request_lineage_snapshot, fetch_request_snapshot, fetch_request_snapshot_raw,
     fetch_session_snapshot, RequestLineageSnapshot, RequestSnapshot,
 };
-use support::{
-    build_request, first_optional_row, first_row, test_db, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
-    NODE_DID,
-};
+use support::{build_request, first_optional_row, first_row, test_db, BACKEND_ID, DEADLINE_SECS};
 
-#[path = "conformance/backend_health.rs"]
-mod backend_health;
 #[path = "conformance/background.rs"]
 mod background;
-#[path = "conformance/callback_lifecycle.rs"]
-mod callback_lifecycle;
-#[path = "conformance/client_runtime.rs"]
-mod client_runtime;
-#[path = "conformance/command_policy.rs"]
-mod command_policy;
 #[path = "conformance/compaction_gate.rs"]
 mod compaction_gate;
-#[path = "conformance/completion_retry.rs"]
-mod completion_retry;
 #[path = "conformance/coverage.rs"]
 mod coverage;
-#[path = "conformance/directory_projection.rs"]
-mod directory_projection;
 #[path = "conformance/enrollment.rs"]
 mod enrollment;
 #[path = "conformance/eval.rs"]
 mod eval;
-#[path = "conformance/event_delivery.rs"]
-mod event_delivery;
-#[path = "conformance/fleet.rs"]
-mod fleet;
-#[path = "conformance/goals.rs"]
-mod goals;
-#[path = "conformance/inference_call.rs"]
-mod inference_call;
 #[path = "conformance/interrupts_manual.rs"]
 mod interrupts_manual;
-#[path = "conformance/lsp.rs"]
-mod lsp;
-#[path = "conformance/mailbox.rs"]
-mod mailbox;
-#[path = "conformance/mcp_health.rs"]
-mod mcp_health;
-#[path = "conformance/p2p_observability.rs"]
-mod p2p_observability;
 #[path = "conformance/p2p_replication.rs"]
 mod p2p_replication;
-#[path = "conformance/plugin_job.rs"]
-mod plugin_job;
 #[path = "conformance/prompt_template.rs"]
 mod prompt_template;
 #[path = "conformance/recovery_sweeps.rs"]
 mod recovery_sweeps;
-#[path = "conformance/request_input.rs"]
-mod request_input;
 #[path = "conformance/request_lifecycle.rs"]
 mod request_lifecycle;
 #[path = "conformance/request_owner_scope.rs"]
@@ -111,13 +62,6 @@ mod session_control;
 mod startup_readiness;
 #[path = "conformance/streaming_compaction.rs"]
 mod streaming_compaction;
-#[path = "conformance/tool_call.rs"]
-mod tool_call;
-
-#[test]
-fn lean_executable_contracts_cover_initial_domains() {
-    coverage::lean_executable_contracts_cover_initial_domains();
-}
 
 #[tokio::test]
 async fn generated_recovery_sweep_cases_drive_startup_recovery_contract() {
@@ -166,8 +110,8 @@ fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
 }
 
 #[test]
-fn generated_compaction_reducer_cases_pin_contract() {
-    streaming_compaction::generated_compaction_reducer_cases_pin_contract();
+fn compaction_reducers_follow_the_lean_model() {
+    streaming_compaction::compaction_reducers_follow_the_lean_model();
 }
 
 #[test]
@@ -181,145 +125,15 @@ fn compaction_runtime_reduces_valid_canonical_history() {
         .block_on(compaction_gate::compaction_runtime_reduces_valid_canonical_history());
 }
 
-#[test]
-fn generated_tool_policy_cases_match_lean_composition() {
-    tool_policy::generated_tool_policy_cases_match_lean_composition();
-}
-
-#[test]
-fn generated_goal_capability_resolution_matches_rust_decoder() {
-    tool_policy::generated_goal_capability_resolution_matches_rust_decoder();
-}
-
-#[test]
-fn generated_lsp_action_cases_match_rust_authorization() {
-    lsp::generated_lsp_action_cases_match_rust_authorization();
-}
-
-#[test]
-fn self_config_field_tables_match_lean_contract() {
-    self_config::self_config_field_tables_match_lean_contract();
-}
-
-#[test]
-fn generated_self_config_cases_fence_patch_merge() {
-    self_config::generated_self_config_cases_fence_patch_merge();
-}
-
-#[test]
-fn completion_retry_lean_witness_cases_hold() {
-    completion_retry::completion_retry_lean_witness_cases_hold();
-}
-
-#[test]
-fn pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep() {
-    pairing_reconcile::pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep();
-}
-
-#[test]
-fn pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried() {
-    pairing_reconcile::pairing_reconcile_top_level_sweep_failure_is_nonterminal_and_retried();
-}
-
-#[test]
-fn pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer() {
-    pairing_reconcile::pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer();
-}
-
-#[test]
-fn generated_mcp_health_cases_pin_threshold_projection_shape() {
-    mcp_health::generated_mcp_health_cases_pin_threshold_projection_shape();
-}
-
-#[test]
-fn generated_backend_health_cases_pin_threshold_and_veto_shape() {
-    backend_health::generated_backend_health_cases_pin_threshold_and_veto_shape();
-}
-
-#[test]
-fn edit_match_exact_priority_is_never_shadowed() {
-    edit_match::exact_priority_is_never_shadowed();
-}
-
-#[test]
-fn edit_match_ladder_fires_at_the_strictest_matching_rung() {
-    edit_match::ladder_fires_at_the_strictest_matching_rung();
-}
-
-#[test]
-fn edit_match_ambiguity_gate_requires_unique_or_replace_all() {
-    edit_match::ambiguity_gate_requires_unique_or_replace_all();
-}
-
-#[test]
-fn edit_match_decision_is_pure_and_deterministic() {
-    edit_match::decision_is_pure_and_deterministic();
-}
-
-#[test]
-fn edit_match_noop_is_reported_not_applied() {
-    edit_match::noop_is_reported_not_applied();
-}
-
-#[test]
-fn edit_match_operations_desugar_onto_the_single_matcher() {
-    edit_match::operations_desugar_onto_the_single_matcher();
-}
-
-#[test]
-fn edit_match_near_miss_is_diagnosed_never_applied() {
-    edit_match::near_miss_is_diagnosed_never_applied();
-}
-
-#[test]
-fn edit_match_overlapping_windows_apply_disjoint_selection() {
-    edit_match::overlapping_windows_apply_disjoint_selection();
-}
-
-#[test]
-fn edit_match_relaxed_rung_hits_respect_the_ambiguity_gate() {
-    edit_match::relaxed_rung_hits_respect_the_ambiguity_gate();
-}
-
-#[test]
-fn edit_match_insert_before_desugar_applies_to_every_replace_all_site() {
-    edit_match::insert_before_desugar_applies_to_every_replace_all_site();
-}
-
-#[tokio::test]
-async fn generated_inference_slot_accounting_cases_drive_db_backed_reconstruction() {
-    inference_call::generated_inference_slot_accounting_cases_drive_db_backed_reconstruction()
-        .await;
-}
-
-#[test]
-fn generated_slot_accounting_cases_pin_inference_and_fleet_contracts() {
-    fleet::generated_slot_accounting_cases_pin_inference_and_fleet_contracts();
-}
-
 #[tokio::test]
 async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
     request_lifecycle::generated_queue_deadline_cases_pin_r4a_contract_rows().await;
 }
 
 #[tokio::test]
-async fn generated_request_transition_cases_cover_lifecycle_policy() {
-    request_lifecycle::generated_request_transition_cases_cover_lifecycle_policy().await;
-}
-
-#[tokio::test]
-async fn event_delivery_transition_cases_match_contract() {
-    event_delivery::event_delivery_transition_cases_match_contract().await;
-}
-
-#[test]
-fn event_delivery_source_instances_match_runtime() {
-    event_delivery::event_delivery_source_instances_match_runtime();
-}
-
-#[tokio::test]
-async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
-    event_delivery::event_delivery_convergence_traces_match_runtime_or_deviation().await;
+async fn legal_request_transitions_reach_their_target_through_production_writers() {
+    request_lifecycle::legal_request_transitions_reach_their_target_through_production_writers()
+        .await;
 }
 
 #[test]
@@ -329,29 +143,17 @@ fn rust_eval_outcome_vocabulary_and_projection_match_lean() {
 
 #[path = "conformance/docs.rs"]
 mod docs;
-#[path = "conformance/edit_match.rs"]
-mod edit_match;
 #[path = "conformance/identity.rs"]
 mod identity;
-#[path = "conformance/live_overlay.rs"]
-mod live_overlay;
 #[path = "conformance/manual_run.rs"]
 mod manual_run;
-#[path = "conformance/pairing_invariant_tests.rs"]
-mod pairing_invariant_tests;
 #[path = "conformance/pairing_reconcile.rs"]
 mod pairing_reconcile;
 #[path = "conformance/prompt_assembly.rs"]
 mod prompt_assembly;
-#[path = "conformance/rendered_capture.rs"]
-mod rendered_capture;
 #[path = "conformance/root_admission.rs"]
 mod root_admission;
 #[path = "conformance/scope_templates.rs"]
 mod scope_templates;
-#[path = "conformance/self_config.rs"]
-mod self_config;
-#[path = "conformance/structure.rs"]
-mod structure;
 #[path = "conformance/tool_policy.rs"]
 mod tool_policy;

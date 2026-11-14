@@ -1,3 +1,4 @@
+use super::inference_failure::InferenceFailure;
 use crate::cli::output_format::OutputFormat;
 use crate::cli::{
     ConfigListArgs, ConfigShowArgs, InferenceProfileSetAccountArgs, InferenceProfileSetArgs,
@@ -5,18 +6,12 @@ use crate::cli::{
 use crate::commands::accounts::{snapshot, Snapshot};
 use crate::config_writes::ConfigAccess;
 use anyhow::{Context, Result};
-use gents::documents::InferenceProfile;
-use gents::inference::auth::credential::{
+use gents_documents::InferenceProfile;
+use gents_inference::auth::credential::{
     backend_account, serving_account, AccountState, AccountSummary, ServingAccount,
 };
+use gents_protocol::operations::inference::{DocumentWrite, InferenceDocument, WriteMode};
 use serde_json::{json, Value};
-
-fn decode_profile(contents: &[u8]) -> Result<InferenceProfile> {
-    let profile: InferenceProfile =
-        serde_json::from_slice(contents).context("decoding canonical InferenceProfile document")?;
-    profile.validate()?;
-    Ok(profile)
-}
 
 pub(super) async fn inference_profile_set(args: InferenceProfileSetArgs) -> Result<()> {
     let contents =
@@ -43,7 +38,16 @@ pub(super) async fn profile_set_account(args: InferenceProfileSetAccountArgs) ->
         &args.profile,
     )?;
     let output = match args.account.as_deref() {
-        None => list_candidates(&access, &node_did, &args.profile, &slots).await?,
+        None => {
+            list_candidates(
+                &access,
+                &gents_service::home_state::resolve_home_dir(args.home.as_deref()),
+                &node_did,
+                &args.profile,
+                &slots,
+            )
+            .await?
+        }
         Some(account) => {
             set_account(
                 &access,
@@ -69,8 +73,8 @@ pub(crate) fn bound_slots(
     if graphql.is_some() {
         return Ok(Vec::new());
     }
-    gents::plugin::store::bound_to_profile(
-        &crate::home_state::resolve_home_dir(home),
+    gents_pack::plugin::store::bound_to_profile(
+        &gents_service::home_state::resolve_home_dir(home),
         node_did,
         profile_id,
     )
@@ -78,16 +82,17 @@ pub(crate) fn bound_slots(
 
 async fn list_candidates(
     access: &ConfigAccess,
+    home: &std::path::Path,
     node_did: &str,
     profile_id: &str,
     plugin_slots: &[String],
 ) -> Result<Value> {
     let observations = if let ConfigAccess::Graphql(graphql) = access {
-        let identity = crate::load_client_identity().await?;
+        let identity = gents_service::home_state::client_identity_for(home).await?;
         crate::commands::accounts::request_usage_reads(
             &identity,
             graphql,
-            gents::inference::usage_observation::UsageTrigger::Cached,
+            gents_inference::usage_observation::UsageTrigger::Cached,
             None,
         )
         .await
@@ -98,7 +103,7 @@ async fn list_candidates(
     } else {
         Vec::new()
     };
-    let plan = gents::inference::profile_switch::switch_candidates(
+    let plan = gents_inference::profile_switch::switch_candidates(
         access,
         node_did,
         profile_id,
@@ -116,43 +121,100 @@ async fn set_profile(
     account: Option<&str>,
     provider: Option<&str>,
 ) -> Result<Value> {
-    if account.is_none() && provider.is_none() {
-        let profile = decode_profile(contents)?;
-        let snapshot = snapshot(access, &profile.node_did).await?;
-        return write_checked(access, &snapshot, &profile, false).await;
-    }
+    let fail = |error| InferenceFailure::new(error, InferenceDocument::Profile, "update");
     let mut value: Value =
         serde_json::from_slice(contents).context("decoding canonical InferenceProfile document")?;
-    let node_did = value["node_did"]
-        .as_str()
-        .context("the profile document names no node_did")?
-        .to_owned();
-    let snapshot = snapshot(access, &node_did).await?;
-    let summary = match (account, provider) {
-        (Some(account), provider) => snapshot.pick(account, provider)?,
-        (None, Some(provider)) => snapshot
-            .accounts
-            .iter()
-            .find(|account| account.provider == provider && account.default)
-            .with_context(|| {
-                gents::inference::auth::credential::enabled_accounts_note(
-                    provider,
-                    &snapshot.accounts,
-                )
-            })?,
-        (None, None) => unreachable!("handled above"),
-    };
-    let backend_id = account_backend(&snapshot, summary)?;
-    match value["backend_id"].as_str() {
-        Some(named) if named != backend_id => anyhow::bail!(
-            "the file names backend {named:?}, but account {:?} runs on {backend_id:?}; \
-             drop backend_id from the file or the account flags",
-            summary.label
-        ),
-        _ => value["backend_id"] = json!(backend_id),
+    let (node_did, _) =
+        DocumentWrite::from_document(InferenceDocument::Profile, &value, WriteMode::Put)
+            .map_err(fail)?;
+    let before = snapshot(access, &node_did).await?;
+    if account.is_some() || provider.is_some() {
+        let summary = match (account, provider) {
+            (Some(account), provider) => before.pick(account, provider)?,
+            (None, Some(provider)) => before
+                .accounts
+                .iter()
+                .find(|account| account.provider == provider && account.default)
+                .with_context(|| {
+                    gents_inference::auth::credential::enabled_accounts_note(
+                        provider,
+                        &before.accounts,
+                    )
+                })?,
+            (None, None) => unreachable!("guarded above"),
+        };
+        let backend_id = account_backend(&before, summary)?;
+        match value["backend_id"].as_str() {
+            Some(named) if named != backend_id => anyhow::bail!(
+                "the file names backend {named:?}, but account {:?} runs on {backend_id:?}; \
+                 drop backend_id from the file or the account flags",
+                summary.label
+            ),
+            _ => value["backend_id"] = json!(backend_id),
+        }
     }
-    let profile = decode_profile(&serde_json::to_vec(&value)?)?;
-    write_checked(access, &snapshot, &profile, account.is_none()).await
+    let (_, write) =
+        DocumentWrite::from_document(InferenceDocument::Profile, &value, WriteMode::Put)
+            .map_err(fail)?;
+    let effective_backend = value
+        .get("backend_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            before
+                .profiles
+                .iter()
+                .find(|stored| stored.profile_id == write.id)
+                .map(|stored| stored.backend_id.clone())
+        });
+    if let Some(backend_id) = effective_backend.as_deref() {
+        let moved = !before
+            .profiles
+            .iter()
+            .any(|stored| stored.profile_id == write.id && stored.backend_id == backend_id);
+        if let Some(ServingAccount {
+            label,
+            state,
+            provider: Some(provider),
+        }) = before
+            .backends
+            .iter()
+            .find(|backend| backend.backend_id == backend_id)
+            .map(|backend| serving_account(backend, &before.accounts))
+        {
+            anyhow::ensure!(
+                !moved || state == AccountState::Enabled,
+                "account {label:?} is {}; {}",
+                state.as_str(),
+                gents_inference::auth::credential::enabled_accounts_note(
+                    provider,
+                    &before.accounts
+                )
+            );
+        }
+    }
+    let receipt = gents_inference::operations::write(access, &node_did, &write)
+        .await
+        .map_err(fail)?;
+    let after = snapshot(access, &node_did).await?;
+    let profile = after
+        .profiles
+        .iter()
+        .find(|stored| stored.profile_id == write.id)
+        .context("written profile missing")?;
+    let serving = after
+        .backends
+        .iter()
+        .find(|backend| backend.backend_id == profile.backend_id)
+        .map(|backend| serving_account(backend, &after.accounts));
+    let mut output = json!({"doc_id":receipt.doc_id,"node_did":profile.node_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name,"created":receipt.created,"changed":receipt.changed});
+    if let Some(serving) = serving {
+        output["account"] = serde_json::to_value(serving)?;
+    }
+    if account.is_none() && provider.is_some() {
+        output["picked"] = json!("default");
+    }
+    Ok(output)
 }
 
 async fn set_account(
@@ -165,7 +227,7 @@ async fn set_account(
     plugin_slots: &[String],
 ) -> Result<Value> {
     let backend_id = backend_for_account(access, node_did, account, provider).await?;
-    let receipt = gents::inference::profile_switch::switch_profile_account(
+    let receipt = gents_inference::profile_switch::switch_profile_account(
         access,
         node_did,
         profile_id,
@@ -229,48 +291,10 @@ fn account_backend(snapshot: &Snapshot, account: &AccountSummary) -> Result<Stri
     }
 }
 
-async fn write_checked(
-    access: &ConfigAccess,
-    snapshot: &Snapshot,
-    profile: &InferenceProfile,
-    picked_default: bool,
-) -> Result<Value> {
-    let account = snapshot
-        .backends
-        .iter()
-        .find(|backend| backend.backend_id == profile.backend_id)
-        .map(|backend| serving_account(backend, &snapshot.accounts));
-    let moved = !snapshot.profiles.iter().any(|stored| {
-        stored.profile_id == profile.profile_id && stored.backend_id == profile.backend_id
-    });
-    if let Some(ServingAccount {
-        label,
-        state,
-        provider: Some(provider),
-    }) = &account
-    {
-        anyhow::ensure!(
-            !moved || *state == AccountState::Enabled,
-            "account {label:?} is {}; {}",
-            state.as_str(),
-            gents::inference::auth::credential::enabled_accounts_note(provider, &snapshot.accounts)
-        );
-    }
-    let doc_id = gents::documents::write_inference_profile_document(access, profile).await?;
-    let mut output = json!({"doc_id":doc_id,"node_did":profile.node_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name});
-    if let Some(account) = account {
-        output["account"] = serde_json::to_value(account)?;
-    }
-    if picked_default {
-        output["picked"] = json!("default");
-    }
-    Ok(output)
-}
-
 pub(super) async fn target(
     home: Option<&std::path::Path>,
     graphql: Option<&str>,
-) -> Result<(gents::store::config_client::ConfigAccess, String)> {
+) -> Result<(gents_store::config_client::ConfigAccess, String)> {
     let (access, _) = crate::resolve_config_access(home, graphql).await?;
     let node_did =
         super::binding::resolve_target_node_did(None, None, home, graphql, Some(&access)).await?;
@@ -285,7 +309,7 @@ pub(super) async fn profile_list(args: ConfigListArgs) -> Result<()> {
         &[OutputFormat::Table, OutputFormat::Json],
     )? {
         OutputFormat::Json => crate::print_json(&json!({
-            "collection": gents::Collection::InferenceProfile.graphql_type(),
+            "collection": gents_store::collection::Collection::InferenceProfile.graphql_type(),
             "count": rows.len(),
             "items": rows,
         })),
@@ -404,12 +428,13 @@ pub(super) async fn profile_effort_warning(
     )
     .await
     .ok()?;
-    let backend = gents::documents::InferenceBackend::from_value(&backend).ok()?;
+    let backend = gents_documents::InferenceBackend::from_value(&backend).ok()?;
     let observation =
         crate::shared::load_backend_observation(access, node_did, &profile.backend_id)
             .await
             .ok();
-    gents::inference::resolved::unsent_reasoning_effort(&backend, &profile, observation.as_ref())
+    gents_inference::resolved::unsent_reasoning_effort(&backend, &profile, observation.as_ref())
+        .map(|unsent| unsent.to_string())
 }
 
 #[cfg(test)]
@@ -417,7 +442,7 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn profile_show_warns_when_an_xai_effort_will_not_be_sent() {
-        let (access, owner) = crate::shared::test_support::seed_unsent_xai_effort().await;
+        let (access, owner) = gents_host::test_support::seed_unsent_xai_effort().await;
         let owner = owner.as_str();
         let mut row =
             super::super::crud::load_one(&access, super::super::crud::PROFILE_SPEC, owner, "grok")
@@ -429,11 +454,11 @@ mod tests {
             .expect("warning");
         assert!(warning.contains("profile grok"), "{warning}");
     }
-    const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+    const DID: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
     const CLAUDE: &str = "claude-subscription";
 
     fn agent(name: &str) -> gents_protocol::agent_identity::AgentIdentityBinding {
-        crate::shared::test_support::fixture_agent_named(name)
+        gents_host::test_support::fixture_agent_named(name)
     }
 
     /// The named fixture Agents' DIDs in DID order.
@@ -443,11 +468,11 @@ mod tests {
         dids
     }
 
-    fn claude_sign_in(who: &str) -> gents::inference::auth::credential::OAuthCredential {
-        gents::inference::auth::claude::credential_from_login_tokens(
+    fn claude_sign_in(who: &str) -> gents_inference::auth::credential::OAuthCredential {
+        gents_inference::auth::claude::credential_from_login_tokens(
             DID,
             CLAUDE,
-            &gents::inference::auth::claude::ClaudeLoginTokens {
+            &gents_inference::auth::claude::ClaudeLoginTokens {
                 access_token: "access-SECRET".into(),
                 refresh_token: format!("refresh-SECRET-{who}"),
                 expires_in: Some(3600),
@@ -476,25 +501,23 @@ mod tests {
             "model_name": "model-x",
         }))
         .unwrap();
-        gents::documents::write_inference_profile_document(access, &profile)
-            .await
-            .unwrap();
+        gents_documents::write_inference_profile_document(
+            access,
+            &profile,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
     }
 
     async fn seeded() -> (ConfigAccess, String, String) {
-        use gents::inference::auth::credential::{set_account_enabled, store_sign_in};
-        let node = std::sync::Arc::new(
-            crate::shared::test_support::fixture_node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
-        crate::shared::test_support::publish_test_node(&node).await;
-        let access = ConfigAccess::local_as(
-            node,
-            ::identity::Did::new(crate::caused_sessions::fixtures::FIXTURE_DID).unwrap(),
-        );
+        use gents_inference::auth::credential::{set_account_enabled, store_sign_in};
+        let served = gents_host::test_support::served_config(json!({})).await;
+        let user = served.user.held_client_signing_capability().unwrap().did();
+        let access =
+            ConfigAccess::local_as(served.node.clone(), ::identity::Did::new(user).unwrap())
+                .with_client_signed_writes_through(served.user.clone())
+                .unwrap();
         for value in [
             backend(
                 "claude",
@@ -515,14 +538,15 @@ mod tests {
                 json!({"kind": "api_key", "key": "key-SECRET"}),
             ),
         ] {
-            gents::documents::write_inference_backend_document(
+            gents_documents::write_inference_backend_document(
                 &access,
                 &serde_json::from_value(value).unwrap(),
+                &gents_inference::resolved::ProviderProfilePolicy,
             )
             .await
             .unwrap();
         }
-        gents::inference::auth::credential::upsert_oauth_credential_on(
+        gents_inference::auth::credential::upsert_oauth_credential_on(
             &access,
             &claude_sign_in("a"),
         )
@@ -537,7 +561,7 @@ mod tests {
         set_account_enabled(&access, DID, &c.credential.credential_id, false)
             .await
             .unwrap();
-        let backend_of = |sign_in: &gents::inference::auth::credential::SignIn| {
+        let backend_of = |sign_in: &gents_inference::auth::credential::SignIn| {
             format!(
                 "{CLAUDE}-{}",
                 sign_in.credential.account_ref.as_deref().unwrap()
@@ -645,13 +669,13 @@ mod tests {
     }
 
     async fn disable(access: &ConfigAccess, credential_id: &str) {
-        gents::inference::auth::credential::set_account_enabled(access, DID, credential_id, false)
+        gents_inference::auth::credential::set_account_enabled(access, DID, credential_id, false)
             .await
             .unwrap();
     }
 
     fn original_id() -> String {
-        gents::inference::auth::credential::oauth_credential_id(DID, CLAUDE)
+        gents_inference::auth::credential::oauth_credential_id(DID, CLAUDE)
     }
 
     #[tokio::test]
@@ -662,7 +686,7 @@ mod tests {
         grok.credential_id = format!("xai-oauth:{DID}:acct-g");
         grok.account_ref = Some("acct-g".into());
         grok.label = Some("label-b".into());
-        gents::inference::auth::credential::upsert_oauth_credential_on(&access, &grok)
+        gents_inference::auth::credential::upsert_oauth_credential_on(&access, &grok)
             .await
             .unwrap();
 
@@ -782,7 +806,7 @@ mod tests {
     #[tokio::test]
     async fn an_account_with_several_backends_is_ambiguous() {
         let (access, _, _) = seeded().await;
-        gents::documents::write_inference_backend_document(
+        gents_documents::write_inference_backend_document(
             &access,
             &serde_json::from_value(backend(
                 "claude-2",
@@ -791,6 +815,7 @@ mod tests {
                 json!({"kind": "node_oauth"}),
             ))
             .unwrap(),
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();
@@ -864,37 +889,41 @@ mod tests {
         write_profile(access, "summ", "claude").await;
         let documents = [
             (
-                gents::Collection::Compaction,
+                gents_store::collection::Collection::Compaction,
                 json!({"node_did": DID, "compaction_id": "compaction-x", "inference_profile_id": "summ"}),
             ),
             (
-                gents::Collection::AgentContext,
+                gents_store::collection::Collection::AgentContext,
                 json!({"node_did": DID, "context_id": "context-x", "compaction_id": "compaction-x"}),
             ),
             (
-                gents::Collection::Agent,
+                gents_store::collection::Collection::Agent,
                 json!({"node_did": DID, "agent_did": agent("x").agent_did, "creation_nonce": agent("x").creation_nonce, "context_id": "context-x", "inference_profile_id": "p-original"}),
             ),
             (
-                gents::Collection::Agent,
+                gents_store::collection::Collection::Agent,
                 json!({"node_did": DID, "agent_did": agent("y").agent_did, "creation_nonce": agent("y").creation_nonce, "inference_profile_id": "p-original"}),
             ),
         ]
         .into_iter()
-        .map(|(collection, value)| gents::store::config_client::DesiredStateApplyDocument {
+        .map(|(collection, value)| gents_documents::DesiredStateApplyDocument {
             collection,
             add: value.clone(),
             update: value,
         })
         .collect();
-        let plan = gents::store::config_client::DesiredStateApplyPlan::new(documents).unwrap();
+        let plan = gents_documents::DesiredStateApplyPlan::new(documents).unwrap();
         access
             .transact_write("test.profile.agents", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    gents::documents::apply_desired_state_plan(txn, plan)
-                        .await
-                        .map(|_| ())
+                    gents_documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
                 })
             })
             .await
@@ -905,9 +934,15 @@ mod tests {
     async fn set_account_without_an_account_lists_the_candidates() {
         let (access, b_backend, _) = seeded().await;
         with_agents(&access).await;
-        let output = list_candidates(&access, DID, "p-original", &[])
-            .await
-            .unwrap();
+        let output = list_candidates(
+            &access,
+            std::path::Path::new("/unused"),
+            DID,
+            "p-original",
+            &[],
+        )
+        .await
+        .unwrap();
         assert_eq!(output["profile"], json!("p-original"));
         assert_eq!(
             output["account"],
@@ -917,7 +952,7 @@ mod tests {
         assert_eq!(output["companions"], json!(["summ"]));
         assert_eq!(
             output["cost"],
-            json!(gents::inference::profile_switch::SWITCH_COST)
+            json!(gents_inference::profile_switch::SWITCH_COST)
         );
         let candidates: Vec<_> = output["candidates"]
             .as_array()
@@ -959,7 +994,7 @@ mod tests {
         assert_eq!(output["agents"], json!(agent_dids(["x", "y"])));
         assert_eq!(
             output["cost"],
-            json!(gents::inference::profile_switch::SWITCH_COST)
+            json!(gents_inference::profile_switch::SWITCH_COST)
         );
         assert_eq!(output["companions_offered"], json!(["summ"]));
         assert_eq!(output["companions_moved"], json!([]));
@@ -984,10 +1019,10 @@ mod tests {
         grok.credential_id = format!("xai-oauth:{DID}:acct-g");
         grok.account_ref = Some("acct-g".into());
         grok.label = Some("label-g".into());
-        gents::inference::auth::credential::upsert_oauth_credential_on(&access, &grok)
+        gents_inference::auth::credential::upsert_oauth_credential_on(&access, &grok)
             .await
             .unwrap();
-        gents::documents::write_inference_backend_document(
+        gents_documents::write_inference_backend_document(
             &access,
             &serde_json::from_value(backend(
                 "xai-oauth-acct-g",
@@ -996,6 +1031,7 @@ mod tests {
                 json!({"kind": "node_oauth", "account_ref": "acct-g"}),
             ))
             .unwrap(),
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();
@@ -1011,7 +1047,7 @@ mod tests {
     #[tokio::test]
     async fn set_account_moves_an_api_key_profile_and_counts_its_plugin_slots() {
         let (access, _, _) = seeded().await;
-        gents::documents::write_inference_backend_document(
+        gents_documents::write_inference_backend_document(
             &access,
             &serde_json::from_value(backend(
                 "openai-2",
@@ -1020,11 +1056,12 @@ mod tests {
                 json!({"kind": "api_key", "key": "key-SECRET"}),
             ))
             .unwrap(),
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();
         let home = tempfile::tempdir().unwrap();
-        let record: gents::plugin::store::InstalledPlugin = serde_json::from_value(json!({
+        let record: gents_pack::plugin::store::InstalledPlugin = serde_json::from_value(json!({
             "namespace": "team", "name": "ocr", "version": "1.0.0",
             "digest": format!("sha256:{}", "0".repeat(64)), "language": "rust",
             "declaration": {
@@ -1035,7 +1072,7 @@ mod tests {
             "model_binding": {"node_did": DID, "profile_id": "p-api"},
         }))
         .unwrap();
-        gents::plugin::store::write_record(home.path(), &record).unwrap();
+        gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
 
         let slots = bound_slots(Some(home.path()), None, DID, "p-api").unwrap();
         assert_eq!(slots, ["team/ocr"]);

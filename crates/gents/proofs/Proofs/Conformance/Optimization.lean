@@ -1,46 +1,16 @@
-import Proofs.Optimization
-import Proofs.Conformance.ContractTypes
+import Proofs.Runtime.Optimization
+import Proofs.Conformance.Family
 
 namespace Conformance.Optimization
 
-open Conformance.Contracts
 open _root_.Optimization
 
-private def boolJson (b : Bool) : String := if b then "true" else "false"
+deriving instance Lean.ToJson for SeedSplit, SeedCase, SeedTrigger, SeedSource, Params, CasePairs,
+  Mode
 
-private def modeJson : Mode → String
-  | .improve => "\"improve\"" | .confirm => "\"confirm\""
+def bools : List Bool := [true, false]
 
-private def decisionJson : Decision → String
-  | .accept => "\"accept\""
-  | .inconclusive => "\"inconclusive\""
-  | .reject .caseRegression => "\"reject_case_regression\""
-  | .reject .costRegression => "\"reject_cost_regression\""
-  | .reject .noImprovement => "\"reject_no_improvement\""
-
-private def bools : List Bool := [true, false]
-
-private def splitJson : SeedSplit → String
-  | .train => "\"train\"" | .validation => "\"validation\"" | .heldOut => "\"held_out\""
-
-private def optionalStringJson : Option String → String
-  | none => "null" | some value => jsonString value
-
-private def seedTriggerJson (trigger : SeedTrigger) : String :=
-  "{\"task_id\":" ++ jsonString trigger.taskId
-    ++ ",\"event_source_id\":" ++ optionalStringJson trigger.eventSourceId
-    ++ ",\"enabled\":" ++ boolJson trigger.enabled ++ "}"
-
-private def seedSourceJson (source : SeedSource) : String :=
-  "{\"event_source_id\":" ++ jsonString source.eventSourceId
-    ++ ",\"source_collection\":" ++ jsonString source.collection
-    ++ ",\"event_kind\":" ++ optionalStringJson source.eventKind ++ "}"
-
-private def seedCaseJson (c : SeedCase) : String :=
-  "{\"split\":" ++ splitJson c.split
-    ++ ",\"seed_collections\":" ++ jsonArray (c.seedCollections.map jsonString) ++ "}"
-
-private structure SeedCoverageScenario where
+structure SeedCoverageScenario where
   name : String
   target : Option String := some "target"
   taskEnabled : Bool := true
@@ -48,7 +18,7 @@ private structure SeedCoverageScenario where
   sources : List SeedSource := [⟨"events", "Work", none⟩]
   cases : List SeedCase := [⟨.train, ["Work"]⟩, ⟨.validation, ["Work"]⟩]
 
-private def seedCoverageScenarios : List SeedCoverageScenario :=
+def seedCoverageScenarios : List SeedCoverageScenario :=
   [{ name := "both_splits_seed_target" },
    { name := "context_prompt_only", target := none, taskEnabled := false,
      triggers := [], sources := [], cases := [⟨.train, []⟩, ⟨.validation, []⟩] },
@@ -73,36 +43,18 @@ private def seedCoverageScenarios : List SeedCoverageScenario :=
        [⟨"other", some "events", true⟩, ⟨"target", some "events", false⟩,
         ⟨"target", some "events", true⟩] }]
 
-private def seedCoverageRow (s : SeedCoverageScenario) : String :=
-  "{\"name\":" ++ jsonString s.name
-    ++ ",\"target_task\":" ++ optionalStringJson s.target
-    ++ ",\"task_enabled\":" ++ boolJson s.taskEnabled
-    ++ ",\"triggers\":" ++ jsonArray (s.triggers.map seedTriggerJson)
-    ++ ",\"sources\":" ++ jsonArray (s.sources.map seedSourceJson)
-    ++ ",\"cases\":" ++ jsonArray (s.cases.map seedCaseJson)
-    ++ ",\"missing_splits\":" ++ jsonArray
-      ((missingTaskSeedSplits s.target s.taskEnabled s.triggers s.sources s.cases).map splitJson)
-    ++ "}"
-
-private def decisionRows : List String :=
-  [Mode.improve, Mode.confirm].flatMap fun m =>
-    bools.flatMap fun s => bools.flatMap fun r => bools.flatMap fun c => bools.map fun i =>
-      "{\"mode\":" ++ modeJson m ++ ",\"sufficient\":" ++ boolJson s
-        ++ ",\"no_case_regression\":" ++ boolJson r ++ ",\"cost_ok\":" ++ boolJson c
-        ++ ",\"improves\":" ++ boolJson i
-        ++ ",\"decision\":" ++ decisionJson (decideGates m s r c i) ++ "}"
-
-private structure ExactSeed where
+structure ExactSeed where
   caseId : String := "case"
   stageId : String := "seed"
   collection : String := "PlanItem"
   document : String := "{\"goal\":\"ship\",\"owner\":\"alex\"}"
   rendered : Bool := true
+  deriving Lean.ToJson
 
-private def ExactSeed.rendering (seed : ExactSeed) : SeedRendering :=
+def ExactSeed.rendering (seed : ExactSeed) : SeedRendering :=
   ⟨seed.caseId, seed.stageId, seed.collection, seed.rendered⟩
 
-private structure SeedRenderingScenario where
+structure SeedRenderingScenario where
   name : String
   target : Option String := some "plan"
   taskEnabled : Bool := true
@@ -111,7 +63,7 @@ private structure SeedRenderingScenario where
   text : String := "Plan {{ doc.goal }} for {{ doc.owner }}."
   seeds : List ExactSeed := [{}]
 
-private def seedRenderingScenarios : List SeedRenderingScenario :=
+def seedRenderingScenarios : List SeedRenderingScenario :=
   [{ name := "all_exact_seeds_render" },
    { name := "missing_baseline_field", seeds :=
        [{ document := "{\"goal\":\"ship\"}", rendered := false }] },
@@ -150,36 +102,16 @@ private def seedRenderingScenarios : List SeedRenderingScenario :=
    { name := "updated_source_is_not_a_created_seed_route", sources :=
        [⟨"plan-source", "PlanItem", some "updated"⟩], seeds := [{ document := "{}", rendered := false }] }]
 
-private def exactSeedJson (seed : ExactSeed) : String :=
-  "{\"case_id\":" ++ jsonString seed.caseId
-    ++ ",\"stage_id\":" ++ jsonString seed.stageId
-    ++ ",\"collection\":" ++ jsonString seed.collection
-    ++ ",\"document\":" ++ seed.document
-    ++ ",\"rendered\":" ++ boolJson seed.rendered ++ "}"
-
-private def seedRenderingRow (s : SeedRenderingScenario) : String :=
-  let failures := failedTaskSeedRenders s.target s.taskEnabled s.triggers s.sources
-    (s.seeds.map ExactSeed.rendering)
-  "{\"name\":" ++ jsonString s.name
-    ++ ",\"target_task\":" ++ optionalStringJson s.target
-    ++ ",\"task_enabled\":" ++ boolJson s.taskEnabled
-    ++ ",\"triggers\":" ++ jsonArray (s.triggers.map seedTriggerJson)
-    ++ ",\"sources\":" ++ jsonArray (s.sources.map seedSourceJson)
-    ++ ",\"text\":" ++ jsonString s.text
-    ++ ",\"seeds\":" ++ jsonArray (s.seeds.map exactSeedJson)
-    ++ ",\"failed_stages\":" ++ jsonArray (failures.map fun seed =>
-      "[" ++ jsonString seed.caseId ++ "," ++ jsonString seed.stageId ++ "]") ++ "}"
-
-private def params : Params :=
+def params : Params :=
   { minPairs := 2, maxNotEvidenceBp := 2000, maxAsymmetryBp := 1000, caseToleranceBp := 3000,
     alphaPpm := 50000, maxRounds := 3, maxTokenIncreaseBp := 2500 }
 
-private def c (n b k : Nat) : CasePairs := ⟨n, b, k⟩
+def c (n b k : Nat) : CasePairs := ⟨n, b, k⟩
 
-private def six : List CasePairs :=
+def six : List CasePairs :=
   [c 2 10000 16000, c 2 8000 14000, c 2 12000 18000, c 2 6000 12000, c 2 10000 15000, c 2 9000 16000]
 
-private def gateScenarios : List (String × Evidence) :=
+def gateScenarios : List (String × Evidence) :=
   [("six_clean_cases", ⟨true, six, 12, 0, 0⟩),
    ("cases_do_not_match", ⟨false, six, 12, 0, 0⟩),
    ("no_cases", ⟨true, [], 0, 0, 0⟩),
@@ -191,21 +123,7 @@ private def gateScenarios : List (String × Evidence) :=
    ("regression_at_the_tolerance", ⟨true, c 2 16000 10000 :: six.drop 1, 12, 0, 0⟩),
    ("regression_just_past_tolerance", ⟨true, c 2 16001 10000 :: six.drop 1, 12, 0, 0⟩)]
 
-private def caseJson (x : CasePairs) : String :=
-  "{\"pairs\":" ++ toString x.pairs ++ ",\"sum_baseline\":" ++ toString x.sumBaseline
-    ++ ",\"sum_candidate\":" ++ toString x.sumCandidate ++ "}"
-
-private def gateRow (name : String) (e : Evidence) : String :=
-  "{\"name\":" ++ jsonString name
-    ++ ",\"cases_match\":" ++ boolJson e.casesMatch
-    ++ ",\"cases\":" ++ jsonArray (e.cases.map caseJson)
-    ++ ",\"keys\":" ++ toString e.keys
-    ++ ",\"dropped_baseline\":" ++ toString e.droppedBaseline
-    ++ ",\"dropped_candidate\":" ++ toString e.droppedCandidate
-    ++ ",\"sufficient\":" ++ boolJson (sufficient params e)
-    ++ ",\"no_case_regression\":" ++ boolJson (noCaseRegression params e) ++ "}"
-
-private def costScenarios : List (String × Nat × Nat × Nat × Nat) :=
+def costScenarios : List (String × Nat × Nat × Nat × Nat) :=
   [("same_cost", 1000, 10, 1000, 10),
    ("at_the_limit", 1000, 10, 1250, 10),
    ("just_over_the_limit", 1000, 10, 1251, 10),
@@ -213,26 +131,160 @@ private def costScenarios : List (String × Nat × Nat × Nat × Nat) :=
    ("unequal_trial_counts_within_limit", 1000, 10, 600, 5),
    ("unequal_trial_counts_over_limit", 1000, 10, 700, 5)]
 
-private def costRow : String × Nat × Nat × Nat × Nat → String
-  | (name, bt, bn, ct, cn) =>
-    "{\"name\":" ++ jsonString name
-      ++ ",\"baseline_tokens\":" ++ toString bt ++ ",\"baseline_trials\":" ++ toString bn
-      ++ ",\"candidate_tokens\":" ++ toString ct ++ ",\"candidate_trials\":" ++ toString cn
-      ++ ",\"cost_ok\":" ++ boolJson (costOk params bt bn ct cn) ++ "}"
+inductive DecisionWire where
+  | accept | inconclusive | rejectCaseRegression | rejectCostRegression | rejectNoImprovement
+  deriving Lean.ToJson
 
-def optimizationCasesJson : String :=
-  "{\"params\":{\"min_pairs\":" ++ toString params.minPairs
-    ++ ",\"max_not_evidence_bp\":" ++ toString params.maxNotEvidenceBp
-    ++ ",\"max_asymmetry_bp\":" ++ toString params.maxAsymmetryBp
-    ++ ",\"case_tolerance_bp\":" ++ toString params.caseToleranceBp
-    ++ ",\"alpha_ppm\":" ++ toString params.alphaPpm
-    ++ ",\"max_rounds\":" ++ toString params.maxRounds
-    ++ ",\"max_token_increase_bp\":" ++ toString params.maxTokenIncreaseBp
-    ++ ",\"alpha_effective_ppm\":" ++ toString (alphaEffectivePpm params) ++ "}"
-    ++ ",\"decisions\":" ++ jsonArray decisionRows
-    ++ ",\"gates\":" ++ jsonArray (gateScenarios.map fun (n, e) => gateRow n e)
-    ++ ",\"costs\":" ++ jsonArray (costScenarios.map costRow)
-    ++ ",\"seed_coverage\":" ++ jsonArray (seedCoverageScenarios.map seedCoverageRow)
-    ++ ",\"seed_rendering\":" ++ jsonArray (seedRenderingScenarios.map seedRenderingRow) ++ "}"
+def DecisionWire.ofDecision : Decision → DecisionWire
+  | .accept => .accept
+  | .inconclusive => .inconclusive
+  | .reject .caseRegression => .rejectCaseRegression
+  | .reject .costRegression => .rejectCostRegression
+  | .reject .noImprovement => .rejectNoImprovement
+
+@[conformance_family]
+def alphaEffective : Conformance.Family Params Nat where
+  inputs := [params]
+  model := alphaEffectivePpm
+
+structure GateInput where
+  name : String
+  params : Params
+  casesMatch : Bool
+  cases : List CasePairs
+  keys : Nat
+  droppedBaseline : Nat
+  droppedCandidate : Nat
+  deriving Lean.ToJson
+
+def GateInput.evidence (i : GateInput) : Evidence :=
+  ⟨i.casesMatch, i.cases, i.keys, i.droppedBaseline, i.droppedCandidate⟩
+
+structure GateOutput where
+  sufficient : Bool
+  noCaseRegression : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def gate : Conformance.Family GateInput GateOutput where
+  inputs := gateScenarios.map fun (name, e) =>
+    { name, params, casesMatch := e.casesMatch, cases := e.cases, keys := e.keys
+      droppedBaseline := e.droppedBaseline, droppedCandidate := e.droppedCandidate }
+  model := fun i =>
+    { sufficient := sufficient i.params i.evidence
+      noCaseRegression := noCaseRegression i.params i.evidence }
+
+structure CostInput where
+  name : String
+  params : Params
+  baselineTokens : Nat
+  baselineTrials : Nat
+  candidateTokens : Nat
+  candidateTrials : Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def cost : Conformance.Family CostInput Bool where
+  inputs := costScenarios.map fun (name, bt, bn, ct, cn) =>
+    { name, params, baselineTokens := bt, baselineTrials := bn, candidateTokens := ct
+      candidateTrials := cn }
+  model := fun i =>
+    costOk i.params i.baselineTokens i.baselineTrials i.candidateTokens i.candidateTrials
+
+structure DecisionInput where
+  mode : Mode
+  sufficient : Bool
+  noCaseRegression : Bool
+  costOk : Bool
+  improves : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def decision : Conformance.Family DecisionInput DecisionWire where
+  inputs := [Mode.improve, Mode.confirm].flatMap fun mode =>
+    bools.flatMap fun sufficient => bools.flatMap fun noCaseRegression =>
+      bools.flatMap fun costOk => bools.map fun improves =>
+        { mode, sufficient, noCaseRegression, costOk, improves }
+  model := fun i =>
+    DecisionWire.ofDecision (decideGates i.mode i.sufficient i.noCaseRegression i.costOk i.improves)
+
+structure SeedCoverageInput where
+  name : String
+  targetTask : Option String
+  taskEnabled : Bool
+  triggers : List SeedTrigger
+  sources : List SeedSource
+  cases : List SeedCase
+  deriving Lean.ToJson
+
+def SeedCoverageInput.ofScenario (s : SeedCoverageScenario) : SeedCoverageInput :=
+  { name := s.name, targetTask := s.target, taskEnabled := s.taskEnabled, triggers := s.triggers
+    sources := s.sources, cases := s.cases }
+
+def seedCoverageMissing (i : SeedCoverageInput) : List SeedSplit :=
+  missingTaskSeedSplits i.targetTask i.taskEnabled i.triggers i.sources i.cases
+
+@[conformance_family]
+def seedCoverage : Conformance.Family SeedCoverageInput (List SeedSplit) where
+  inputs := seedCoverageScenarios.map SeedCoverageInput.ofScenario
+  model := seedCoverageMissing
+
+/-- The optimization driver refuses a task target before any job exists only when a
+split lacks seeds; these are the scenarios whose task definition the driver harness
+installs (one seeded stage per seeded split of the shared validation cases). -/
+def refusedCoverageNames : List String :=
+  ["task_prompt_only", "only_train_seeds", "only_validation_seeds", "only_held_out_seeds"]
+
+@[conformance_family]
+def seedCoverageRefused : Conformance.Family SeedCoverageInput (List SeedSplit) where
+  inputs := (seedCoverageScenarios.filter fun s => s.name ∈ refusedCoverageNames).map
+    SeedCoverageInput.ofScenario
+  model := seedCoverageMissing
+
+structure SeedRenderingInput where
+  name : String
+  targetTask : Option String
+  taskEnabled : Bool
+  triggers : List SeedTrigger
+  sources : List SeedSource
+  text : String
+  seeds : List ExactSeed
+  deriving Lean.ToJson
+
+structure StageRef where
+  caseId : String
+  stageId : String
+  deriving Lean.ToJson
+
+def SeedRenderingInput.ofScenario (s : SeedRenderingScenario) : SeedRenderingInput :=
+  { name := s.name, targetTask := s.target, taskEnabled := s.taskEnabled, triggers := s.triggers
+    sources := s.sources, text := s.text, seeds := s.seeds }
+
+def seedRenderingFailures (i : SeedRenderingInput) : List StageRef :=
+  (failedTaskSeedRenders i.targetTask i.taskEnabled i.triggers i.sources
+    (i.seeds.map ExactSeed.rendering)).map fun seed => { caseId := seed.caseId, stageId := seed.stageId }
+
+@[conformance_family]
+def seedRendering : Conformance.Family SeedRenderingInput (List StageRef) where
+  inputs := seedRenderingScenarios.map SeedRenderingInput.ofScenario
+  model := seedRenderingFailures
+
+/-- The candidate scenario installs a task target whose `plan` route reads `PlanItem` and
+proposes the scenario's text; only scenarios with that route and the task enabled can
+reach the candidate seed gate. -/
+def candidateRenderingNames : List String :=
+  ["missing_added_field", "nested_missing_field", "one_of_multiple_seeds_fails",
+   "added_field_present_in_every_seed", "guarded_absent_field_renders",
+   "runtime_document_id_is_available", "trial_owner_binding_reaches_the_guarded_missing_field"]
+
+structure CandidateOutput where
+  failed : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def seedRenderingCandidate : Conformance.Family SeedRenderingInput CandidateOutput where
+  inputs := (seedRenderingScenarios.filter fun s => s.name ∈ candidateRenderingNames).map
+    SeedRenderingInput.ofScenario
+  model := fun i => { failed := !(seedRenderingFailures i).isEmpty }
 
 end Conformance.Optimization

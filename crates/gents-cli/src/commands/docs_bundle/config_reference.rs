@@ -2,8 +2,8 @@
 //! `manifest.json`, and each canonical configuration document they hold, as
 //! the pack loader accepts them.
 
-use gents::pack::{authored_document_schema, authored_pack_config_schema, PackManifest};
-use gents::Collection;
+use gents_pack::pack::{authored_document_schema, authored_pack_config_schema, PackManifest};
+use gents_store::collection::Collection;
 use schemars::{schema_for, Schema};
 use serde::Serialize;
 use serde_json::Value;

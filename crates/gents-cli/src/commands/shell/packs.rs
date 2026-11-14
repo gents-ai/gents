@@ -2,15 +2,15 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
-use gents::pack::{PackChangeError, SlotBindingError};
-use gents::plugin::authority::GrantError;
-use gents::store::config_client::ConfigAccess;
-use gents::store::local::storage_backend::drive_unsendable;
 use gents_desktop_core::inference::load_inference_setup_state;
+use gents_pack::pack::{PackChangeError, SlotBindingError};
+use gents_pack::plugin::authority::GrantError;
 use gents_shell::sample::Tone;
 use gents_shell::source::{
     EditedChoice, FieldKind, Form, FormError, FormRef, MenuAct, MenuRow, PackAct, Update,
 };
+use gents_store::config_client::ConfigAccess;
+use gents_store::local::storage_backend::drive_unsendable;
 use serde_json::Value;
 use tokio::runtime::Handle;
 
@@ -23,7 +23,7 @@ use crate::commands::config::crud::{
     query_collection_sorted, EVENT_SOURCE_SPEC, SCHEDULE_SPEC, SKILL_SPEC, TOOLS_SPEC,
 };
 use crate::commands::task::load_task_inventory;
-use crate::packs::EditedDocuments;
+use gents_protocol::operations::pack::EditedDocuments;
 
 #[cfg(test)]
 mod tests;
@@ -89,7 +89,7 @@ pub(super) async fn read(
 
 async fn runtime_answers(home: &Path) -> bool {
     let home = home.to_path_buf();
-    match blocking(move || crate::home_state::read_runtime_state(&home)).await {
+    match blocking(move || gents_service::home_state::read_runtime_state(&home)).await {
         Ok(Some(state)) => crate::graphql_access::graphql_endpoint_available(&state.graphql).await,
         Ok(None) | Err(_) => false,
     }
@@ -124,7 +124,7 @@ where
 /// The tags of the node's documents of each of `KINDS`, in its order.
 async fn tags(access: &ConfigAccess, node_did: &str) -> anyhow::Result<Vec<Vec<Vec<String>>>> {
     let setup = load_inference_setup_state(access, node_did).await?;
-    let tasks = load_task_inventory(access, None).await?.tasks;
+    let tasks = load_task_inventory(access, node_did, None).await?.tasks;
     let tasks = tasks
         .into_iter()
         .filter(|task| task["node_did"] == node_did);
@@ -164,7 +164,7 @@ pub(super) fn adds(tags: &[Vec<Vec<String>>]) -> BTreeMap<String, String> {
     for (documents, (one, many)) in tags.iter().zip(KINDS) {
         let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
         for tags in documents {
-            if let Ok(Some(pack)) = gents::pack::pack_origin_from_tags(tags) {
+            if let Ok(Some(pack)) = gents_pack::pack::pack_origin_from_tags(tags) {
                 *counts.entry(pack).or_default() += 1;
             }
         }

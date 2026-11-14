@@ -1,26 +1,18 @@
-//! A request its Agent authored against a sealed read-only workspace before
-//! the runtime started waits in `workspaceBindingPending`; the runtime's
-//! startup recovery binds it as that held Agent and runs it.
-
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use gents::documents::{FileTools, HostTools, Tools};
-use gents::tools::workspace::{provision_read_only_workspace, WorkspaceProvisioningSelection};
-use gents::FileToolMode;
+use gents_documents::FileToolMode;
+use gents_documents::{FileTools, HostTools, Tools};
+use gents_session::workspace::{provision_read_only_workspace, WorkspaceProvisioningSelection};
 
 use crate::support::agent_requests::{canonical_now, RequestSeed};
-use crate::support::builder_runtime::{
-    builder_actors, fixture_agent, runtime_builder, spawn_runtime,
+use crate::support::live_inference::{
+    bind_target, boot_live_agent_with_ceiling, live_target, wait_for_request_terminal,
 };
-use crate::support::live_inference::wait_for_request_terminal;
-use crate::support::streaming_backend::{MockStreamingBackend, StreamScript};
 use crate::support::test_db;
 
-const BACKEND: &str = "workspace-recovery-backend";
-const MODEL: &str = "workspace-recovery-model";
-const PROMPT: &str = "Summarize the sealed workspace.";
+const PROMPT: &str = "Acknowledge this sealed workspace request in one short sentence. Do not inspect files or call tools.";
 
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -43,24 +35,25 @@ fn git(repo: &Path, args: &[&str]) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn startup_binds_an_agent_authored_workspace_request() {
     let db = test_db("workspace-binding-recovery").await;
-    let backend = MockStreamingBackend::start(
-        MODEL,
-        vec![StreamScript::completes(PROMPT, ["the workspace is sealed"])],
-    )
-    .unwrap();
-    let actors = builder_actors(&db, BACKEND, backend.endpoint(), MODEL, 1).await;
+    let target = live_target().await;
+    let actors = bind_target(&db, &target).await;
     let did = actors.node_did().to_owned();
     let agent_did = actors.agent_did().to_owned();
 
     let fixture = tempfile::tempdir().unwrap();
-    let repo = std::fs::canonicalize(fixture.path()).unwrap().join("repo");
-    std::fs::create_dir(&repo).unwrap();
-    git(&repo, &["init", "-b", "main"]);
-    git(&repo, &["config", "user.email", "recovery@example.com"]);
-    git(&repo, &["config", "user.name", "Workspace Recovery"]);
-    std::fs::write(repo.join("README.md"), "sealed\n").unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-m", "sealed recovery fixture"]);
+    let path = fixture.path().to_owned();
+    let (repo, revision) = tokio::task::spawn_blocking(move || {
+        let repo = std::fs::canonicalize(path).unwrap().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        gents_session::workspace::init_test_repo(&repo, &["-b", "main"]);
+        std::fs::write(repo.join("README.md"), "sealed\n").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "sealed recovery fixture"]);
+        let revision = git(&repo, &["rev-parse", "HEAD"]);
+        (repo, revision)
+    })
+    .await
+    .unwrap();
 
     crate::support::fixtures::configure_agent_tools_as(
         &actors.fixture.access,
@@ -87,7 +80,7 @@ async fn startup_binds_an_agent_authored_workspace_request() {
         &actors.fixture.access,
         &actors.agent_access,
         &repo,
-        &git(&repo, &["rev-parse", "HEAD"]),
+        &revision,
         &WorkspaceProvisioningSelection {
             workspace_id: uuid::Uuid::new_v4().to_string(),
             node_did: did.clone(),
@@ -112,20 +105,13 @@ async fn startup_binds_an_agent_authored_workspace_request() {
     request.workspace_seal_hash = sealed.workspace.seal_hash.clone();
     let doc = actors.create_signed(request).await;
 
-    let runtime = spawn_runtime(
+    let runtime = boot_live_agent_with_ceiling(
         &db,
-        fixture_agent(runtime_builder(&db, &actors), &actors, &agent_did)
-            .backend_id(BACKEND)
-            .model_name(MODEL)
-            .stream_batch_ms(0)
-            .deadline_duration_secs(60)
-            .done()
-            .tool_ceiling(gents::ToolCeiling::readonly_at(&repo))
-            .build()
-            .await
-            .unwrap(),
+        db.node_identity.clone(),
+        gents_tools::surface::ToolCeiling::readonly_at(&repo),
     )
-    .await;
+    .await
+    .unwrap();
     let terminal = wait_for_request_terminal(
         &actors,
         "workspace-recovery-request",

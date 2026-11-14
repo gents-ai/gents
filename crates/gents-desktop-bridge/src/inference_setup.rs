@@ -1,4 +1,4 @@
-use gents::inference::backends::setup::{
+use gents_inference::backends::setup::{
     InferenceAuthMethod, InferenceModelOption, InferenceModelRecommendation, InferenceProviderId,
 };
 use serde::{Deserialize, Serialize};
@@ -40,8 +40,8 @@ pub struct InferenceDiscoveryResult {
     pub requested_endpoint: String,
     pub effective_endpoint: String,
     pub backend_name: String,
-    pub provider_kind: gents::BackendProviderKind,
-    pub openai_wire_api: Option<gents::OpenAiWireApi>,
+    pub provider_kind: gents_inference::backends::provider::BackendProviderKind,
+    pub openai_wire_api: Option<gents_loop::openai_wire::OpenAiWireApi>,
     pub reachable: bool,
     pub models: Vec<InferenceModelOption>,
     pub failure: Option<InferenceDiscoveryFailure>,
@@ -59,21 +59,21 @@ pub struct InferenceRecommendationRequest {
     pub context_window: Option<i64>,
     pub max_context_window: Option<i64>,
     pub max_output_tokens: Option<i64>,
-    pub reasoning_efforts: Option<Vec<gents::inference::resolved::ReasoningEffort>>,
+    pub reasoning_efforts: Option<Vec<gents_documents::inference_defaults::ReasoningEffort>>,
 }
 
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct InferenceBackendRecommendationRequest {
-    pub provider_kind: gents::BackendProviderKind,
+    pub provider_kind: gents_inference::backends::provider::BackendProviderKind,
     pub endpoint: String,
     pub model_name: String,
     pub display_name: Option<String>,
     pub context_window: Option<i64>,
     pub max_context_window: Option<i64>,
     pub max_output_tokens: Option<i64>,
-    pub reasoning_efforts: Option<Vec<gents::inference::resolved::ReasoningEffort>>,
+    pub reasoning_efforts: Option<Vec<gents_documents::inference_defaults::ReasoningEffort>>,
 }
 
 pub fn inference_model_recommendation(
@@ -83,10 +83,10 @@ pub fn inference_model_recommendation(
     if model_name.is_empty() {
         return Err(BridgeError::untyped("model name is required"));
     }
-    gents::inference::backends::setup::recommendation_for_model(
+    gents_inference::backends::setup::recommendation_for_model(
         request.provider,
         request.auth_method,
-        &gents::documents::AdvertisedModel {
+        &gents_documents::AdvertisedModel {
             model_name: model_name.to_string(),
             display_name: request.display_name,
             context_window: request.context_window,
@@ -101,7 +101,7 @@ pub fn inference_model_recommendation(
 pub fn inference_backend_recommendation(
     request: InferenceBackendRecommendationRequest,
 ) -> Result<InferenceModelRecommendation, BridgeError> {
-    let (provider, auth_method) = gents::inference::backends::setup::provider_selection_for_backend(
+    let (provider, auth_method) = gents_inference::backends::setup::provider_selection_for_backend(
         request.provider_kind,
         &request.endpoint,
     );
@@ -170,8 +170,8 @@ pub async fn discover_inference_models_for_core(
     })?;
     Ok(InferenceDiscoveryResult {
         request_key: request.request_key,
-        contract_version: gents::inference::backends::setup::INFERENCE_SETUP_CONTRACT_VERSION,
-        defaults_version: gents::inference::backends::setup::INFERENCE_DEFAULTS_VERSION.into(),
+        contract_version: gents_inference::backends::setup::INFERENCE_SETUP_CONTRACT_VERSION,
+        defaults_version: gents_inference::backends::setup::INFERENCE_DEFAULTS_VERSION.into(),
         requested_endpoint: request.endpoint.trim().to_string(),
         effective_endpoint: found.spec.endpoint,
         backend_name: found.spec.backend_name.into(),

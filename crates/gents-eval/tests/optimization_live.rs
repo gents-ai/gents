@@ -2,10 +2,10 @@ use gents::support;
 
 use std::path::{Path, PathBuf};
 
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{EvalDefinition, EvalSplit, InferenceBackend, InferenceProfile};
-use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::{Collection, ConfigAccess, DocumentRuntimeOptions};
+use gents::DocumentRuntimeOptions;
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_documents::{EvalDefinition, EvalSplit, InferenceBackend, InferenceProfile};
 use gents_eval::checks::CheckRegistry;
 use gents_eval::optimization::target::JobTarget;
 use gents_eval::optimization::{
@@ -14,6 +14,7 @@ use gents_eval::optimization::{
 };
 use gents_eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
 use gents_eval::runner::{Capture, RunOptions};
+use gents_store::{collection::Collection, config_client::ConfigAccess};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -34,8 +35,8 @@ enum Baseline {
 }
 
 #[tokio::test]
-#[ignore = "M5: needs GENTS_EVAL_TARGET, GENTS_OPTIMIZATION_LIVE_PACK, GENTS_OPTIMIZATION_LIVE_DEFINITION_ID and a real backend"]
-async fn live_accept_the_golden_prompt_beats_a_thin_one_and_reaches_ready_to_promote() {
+#[ignore = "quality experiment: select GENTS_LIVE_TARGET and an optimization pack/definition; promotion depends on measured model performance"]
+async fn experiment_golden_prompt_beats_a_thin_one_and_reaches_ready_to_promote() {
     let fixture = Fixture::new("live-accept", Baseline::Thin).await;
     let proposer = fixture.proposer(
         &fixture.golden_prompt,
@@ -64,8 +65,8 @@ async fn live_accept_the_golden_prompt_beats_a_thin_one_and_reaches_ready_to_pro
 }
 
 #[tokio::test]
-#[ignore = "M5: needs GENTS_EVAL_TARGET, GENTS_OPTIMIZATION_LIVE_PACK, GENTS_OPTIMIZATION_LIVE_DEFINITION_ID and a real backend"]
-async fn live_reject_a_prompt_that_ignores_the_task_never_reaches_ready_to_promote() {
+#[ignore = "quality experiment: select GENTS_LIVE_TARGET and an optimization pack/definition; promotion depends on measured model performance"]
+async fn experiment_prompt_that_ignores_the_task_never_reaches_ready_to_promote() {
     let fixture = Fixture::new("live-reject", Baseline::Golden).await;
     let proposer = fixture.proposer(DEGRADED_PROMPT, "shorter is better");
     let outcome = fixture.drive(&proposer).await;
@@ -136,12 +137,12 @@ impl Fixture {
             .await
             .unwrap();
         let dirs = tempfile::tempdir().unwrap();
-        let evaluator = gents::store::identity::KeyIdentity::load_or_create(
+        let evaluator = gents_store::identity::KeyIdentity::load_or_create(
             dirs.path().join("evaluator.key"),
             None,
         )
         .unwrap();
-        let evaluator_did = gents::store::identity::NodeIdentity::did(&evaluator).to_owned();
+        let evaluator_did = gents_store::identity::NodeIdentity::did(&evaluator).to_owned();
         let access = ConfigAccess::local_as(
             home.node.clone(),
             ::identity::Did::new(evaluator_did.clone()).unwrap(),
@@ -177,7 +178,7 @@ impl Fixture {
             std::fs::write(baseline_pack.join(&sidecar), THIN_PROMPT).unwrap();
         }
 
-        let target = support::live_inference::live_target();
+        let target = support::live_inference::live_target().await;
         install(
             &access,
             vec![
@@ -312,7 +313,15 @@ async fn install(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
     access
         .transact_write("optimization_live.install", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await
         .unwrap();
@@ -327,29 +336,30 @@ async fn live_subject(access: &ConfigAccess, pack: &Path, owner: &str, behavior:
         .iter()
         .map(|slot| (slot.name.clone(), "live".to_owned()))
         .collect();
-    let bound = gents::pack::load_pack_install_config(
+    let bound = gents_pack::pack::load_pack_install_config(
         access,
         &subject.manifest,
-        &gents::pack::PackInstallOptions {
+        &gents_pack::pack::PackInstallOptions {
             node_did: owner.to_owned(),
         },
         &|path| Ok(std::fs::read(pack.join(path))?),
         &|name| std::env::var(name).ok(),
-        gents::pack::InstalledVia::Operator,
+        gents_pack::pack::InstalledVia::Operator,
     )
     .await
     .unwrap();
     let config = bound.bind_inference(&subject.manifest, &requested).unwrap();
     let mut identity =
-        gents::pack::PackIdentity::new(&subject.manifest, subject.digest, Vec::new());
+        gents_pack::pack::PackIdentity::new(&subject.manifest, subject.digest, Vec::new());
     identity.installation_doc_id = bound.installation_doc_id;
     identity.agent_bindings = bound.agent_bindings;
-    gents::pack::install_pack_documents(
+    gents_pack::pack::install_pack_documents(
         access,
         owner,
         &identity,
         &config,
-        gents::pack::DriftPolicy::Overwrite,
+        gents_pack::pack::DriftPolicy::Overwrite,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();

@@ -1,5 +1,6 @@
-import Proofs.InferenceCall.Registry
+import Proofs.Inference.InferenceCall.Registry
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.InferenceRegistry
 open InferenceCall.Registry
@@ -25,6 +26,8 @@ structure Observation where
   tally : Tally
   attributed : List Nat
   deriving DecidableEq, Repr
+
+deriving instance Lean.ToJson for Config, Tally, Desired, Observation
 
 def observe (s : State) : Observation :=
   ⟨s.admitting.map (·.generation), InferenceCall.Registry.capacity s, s.held, s.queue.length,
@@ -90,34 +93,39 @@ theorem cases_cover_queueing_snapshots_and_closure :
         (fun t => t.any (fun t => 0 < t.gone)) = true := by
   native_decide
 
-def natOptionJson : Option Nat → String
-  | none => "null"
-  | some n => toString n
+inductive StepKind where
+  | reconcile | acquire | release
+  deriving Lean.ToJson
 
-def configJson (d : Desired) : String :=
-  "{\"connection\":" ++ toString d.config.connection
-  ++ ",\"generation\":" ++ toString d.config.generation
-  ++ ",\"capacity\":" ++ toString d.config.capacity
-  ++ ",\"queue_depth\":" ++ toString d.config.queueDepth
-  ++ ",\"available\":" ++ toString d.config.available
-  ++ ",\"name\":" ++ jsonString d.name ++ ",\"catalog\":" ++ jsonString d.catalog ++ "}"
+structure Step where
+  kind : StepKind
+  desired : Option Desired
+  slot : Option Nat
+  deriving Lean.ToJson
 
-def actionJson : Action → String
-  | .reconcile d => "{\"kind\":\"reconcile\",\"desired\":" ++ (d.map configJson).getD "null" ++ "}"
-  | .acquire slot => "{\"kind\":\"acquire\",\"slot\":" ++ toString slot ++ "}"
-  | .release => "{\"kind\":\"release\"}"
+structure Trace where
+  name : String
+  steps : List Step
+  deriving Lean.ToJson
 
-def observationJson (o : Observation) : String :=
-  "{\"admitting_generation\":" ++ natOptionJson o.admittingGeneration
-  ++ ",\"capacity\":" ++ toString o.capacity ++ ",\"held\":" ++ toString o.held
-  ++ ",\"queued\":" ++ toString o.queued
-  ++ ",\"admitted\":" ++ toString o.tally.admitted
-  ++ ",\"queue_full\":" ++ toString o.tally.queueFull
-  ++ ",\"gone\":" ++ toString o.tally.gone
-  ++ ",\"attributed\":" ++ jsonArray (o.attributed.map toString) ++ "}"
+structure Outcome where
+  observations : List Observation
+  deriving Lean.ToJson
 
-def casesJson : String := jsonArray (cases.map fun c =>
-  "{\"name\":" ++ jsonString c.name ++ ",\"actions\":" ++ jsonArray (c.actions.map actionJson)
-  ++ ",\"expected\":" ++ jsonArray ((replay initial c.actions).map observationJson) ++ "}")
+def Action.toStep : Action → Step
+  | .reconcile d => ⟨.reconcile, d, none⟩
+  | .acquire slot => ⟨.acquire, none, some slot⟩
+  | .release => ⟨.release, none, none⟩
+
+def Step.toAction (step : Step) : Action :=
+  match step.kind with
+  | .reconcile => .reconcile step.desired
+  | .acquire => .acquire (step.slot.getD 0)
+  | .release => .release
+
+@[conformance_family]
+def admission : Conformance.Family Trace Outcome where
+  inputs := cases.map fun c => ⟨c.name, c.actions.map Action.toStep⟩
+  model := fun t => ⟨replay initial (t.steps.map Step.toAction)⟩
 
 end Conformance.InferenceRegistry

@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use anyhow::{bail, ensure, Context, Result};
-use gents::store::config_client::{
-    AgentPublicationObserver, ClientAgentJournal, ConfigAccess, ConfigClientError,
-    ConfigRelationshipGrant, IdempotentTransactionRetry, PublicationStage, PublicationStatus,
+use gents_store::config_client::{
+    recovery_disposition, AgentPublicationObserver, ClientAgentJournal, ConfigAccess,
+    ConfigClientError, ConfigRelationshipGrant, IdempotentTransactionRetry, PublicationStage,
+    PublicationStatus, RecoveryDisposition,
 };
-use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents_store::graphql::escape_graphql_string;
 
 use super::{Entry, Envelope};
 
@@ -66,7 +67,7 @@ fn encode(record: &Record) -> Result<String> {
 }
 
 async fn write(
-    txn: &gents::store::config_client::ConfigApplyTxn<'_>,
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     doc_id: &str,
     record: &Record,
 ) -> Result<()> {
@@ -77,25 +78,16 @@ async fn write(
 }
 
 async fn lookup(
-    node: &defra_node::Node,
+    node: &Arc<defra_node::Node>,
     client: &str,
     node_did: &str,
     agent_did: &str,
 ) -> Result<Option<Record>> {
     let id = key(client, node_did, agent_did);
-    let response = graphql_with_transaction_retry(
-        node,
-        &super::query(&id),
-        "desktop.agent.publication.lookup",
-    )
-    .await?;
-    match super::row(
-        response
-            .data
-            .as_ref()
-            .context("publication query omitted data")?,
-        &id,
-    )? {
+    let rows = ConfigAccess::local_as(node.clone(), identity::Did::new(client)?)
+        .read_view(&gents_store::views::journals::PendingSubmission { request_id: &id })
+        .await?;
+    match super::row(rows, &id)? {
         None => Ok(None),
         Some((_, Entry::Publication(record))) => Ok(Some(*record)),
         Some(_) => bail!("configuration publication identity belongs to another journal"),
@@ -103,7 +95,17 @@ async fn lookup(
 }
 
 async fn reserve(node: &Arc<defra_node::Node>, records: &[Record]) -> Result<()> {
-    ConfigAccess::transact_local_idempotent(node, None, IdempotentTransactionRetry::Standard,
+    let Some(first) = records.first() else {
+        return Ok(());
+    };
+    super::require_client_signer(node, &first.journal.client)?;
+    ensure!(
+        records
+            .iter()
+            .all(|record| record.journal.client == first.journal.client),
+        "publication records have different clients"
+    );
+    ConfigAccess::transact_local_idempotent(node, Some(identity::Did::new(&first.journal.client)?), IdempotentTransactionRetry::Standard,
         "desktop.agent.publication.reserve", |txn| {
             Box::pin(async move {
                 for record in records {
@@ -133,9 +135,20 @@ async fn replace(node: &Arc<defra_node::Node>, before: &[Record], after: &[Recor
         before.len() == after.len(),
         "publication update changed its extent"
     );
+    let Some(first) = before.first() else {
+        return Ok(());
+    };
+    super::require_client_signer(node, &first.journal.client)?;
+    ensure!(
+        before
+            .iter()
+            .chain(after)
+            .all(|record| record.journal.client == first.journal.client),
+        "publication records have different clients"
+    );
     ConfigAccess::transact_local_idempotent(
         node,
-        None,
+        Some(identity::Did::new(&first.journal.client)?),
         IdempotentTransactionRetry::Standard,
         "desktop.agent.publication.update",
         |txn| {
@@ -380,25 +393,28 @@ pub(crate) async fn ensure_recovered(
     agent_did: &str,
 ) -> Result<()> {
     super::require_client_signer(node, client)?;
-    ensure!(
-        access.actor_did().as_deref() == Some(client),
-        "Agent publication actor changed"
-    );
-    let Some(record) = lookup(node, client, node_did, agent_did).await? else {
-        return Ok(());
-    };
-    ensure!(
+    let actor_matches = access.actor_did().as_deref() == Some(client);
+    ensure!(actor_matches, "Agent publication actor changed");
+    let record = lookup(node, client, node_did, agent_did).await?;
+    let binding_matches = record.as_ref().is_some_and(|record| {
         record.journal.client == client
             && record.journal.node_did == node_did
-            && record.journal.agent_did == agent_did,
-        "retained Agent publication identity changed"
+            && record.journal.agent_did == agent_did
+    });
+    let disposition = recovery_disposition(
+        actor_matches,
+        record.as_ref().map(|record| &record.journal),
+        binding_matches,
     );
-    if record.journal.commit == PublicationStatus::Failed || record.terminal() {
+    let Some(record) = record else {
         return Ok(());
+    };
+    match disposition {
+        RecoveryDisposition::Proceed => Ok(()),
+        RecoveryDisposition::BindingMismatch => bail!("retained Agent publication identity changed"),
+        RecoveryDisposition::CommitUnknown => bail!("Agent {agent_did} creation for document {} has an unknown outcome; inspect its retained publication before repair", record.journal.agent_doc),
+        RecoveryDisposition::ExplicitRepair => bail!("Agent {agent_did} document {} has unfinished relationships (parent: {:?}, executor: {:?}); current parent and ownership bindings cannot be verified atomically, so inspect and repair them explicitly", record.journal.agent_doc, record.journal.parent, record.journal.executor),
     }
-    ensure!(record.journal.commit == PublicationStatus::Succeeded,
-        "Agent {agent_did} creation for document {} has an unknown outcome; inspect its retained publication before repair", record.journal.agent_doc);
-    bail!("Agent {agent_did} document {} has unfinished relationships (parent: {:?}, executor: {:?}); current parent and ownership bindings cannot be verified atomically, so inspect and repair them explicitly", record.journal.agent_doc, record.journal.parent, record.journal.executor)
 }
 
 #[cfg(test)]
@@ -408,7 +424,7 @@ mod tests {
     #[tokio::test]
     async fn matching_attempt_id_cannot_replace_physical_grant_bindings() -> Result<()> {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
-        gents::ensure_runtime_schemas(&node).await?;
+        gents_store::schema::ensure_runtime_schemas(&node).await?;
         let client = node.node_identity_did().context("client identity")?;
         let mut journal = ClientAgentJournal::new(
             client.into(),

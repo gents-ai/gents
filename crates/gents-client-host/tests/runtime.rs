@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use gents::store::identity::NodeIdentity;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_store::identity::NodeIdentity;
 use serde_json::{json, Value};
 #[cfg(unix)]
 use tokio::process::Child;
@@ -63,6 +63,8 @@ mod fake_llm;
 mod goal_delivery;
 #[path = "support/initialization.rs"]
 mod initialization;
+#[path = "support/live_runtime.rs"]
+mod live_runtime;
 #[path = "support/passive_settings.rs"]
 mod passive_settings;
 #[allow(dead_code)]
@@ -170,20 +172,18 @@ async fn editor_recovers_goal_commands_after_lost_replies_and_reload() -> Result
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalDelivery)
         .await
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
+    copy_editor_evidence(temp.path(), "editor-goal-delivery-canonical.json")
+}
+
+#[cfg(all(feature = "editor-e2e", unix))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_recovers_text_goal_commands_after_lost_replies_and_reload() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    live_runtime::exercise_editor(temp.path(), "live-goal-delivery")
+        .await
         .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
+            std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
         })?;
     copy_editor_evidence(temp.path(), "editor-goal-delivery-canonical.json")
 }
@@ -198,82 +198,52 @@ async fn editor_recovers_the_original_message_after_a_lost_helper_reply() -> Res
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorDelivery)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-delivery-canonical.json")?;
     copy_editor_evidence(temp.path(), "editor-fork-canonical.json")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "drives a local model; run through `make live-client`"]
 async fn native_client_submits_signed_input_and_observes_live_and_durable_output() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let result = exercise(temp.path(), Journey::Conversation).await;
-    result.with_context(|| {
-        [
-            "runtime.log",
-            "runtime.err",
-            "client-host.log",
-            "client-host-restart.log",
-        ]
-        .map(|name| {
-            format!(
-                "{name}:\n{}",
-                std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-            )
-        })
-        .join("\n")
-    })
+    result.with_context(|| support::fixture_logs(temp.path(), &[]))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "drives a local model; run through `make live-client`"]
 async fn managed_runtime_replacement_preserves_running_input_enrollment_and_transcript(
 ) -> Result<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::RuntimeReplacement)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "runtime-replacement.err",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })
+        .with_context(|| support::fixture_logs(temp.path(), &["runtime-replacement.err"]))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn enrolled_client_starts_pauses_and_resumes_the_current_goal_turn() -> Result<()> {
+#[ignore = "drives a local model; run through `make live-client`"]
+async fn enrolled_client_resumes_a_durable_goal_and_observes_completion() -> Result<()> {
     let temp = tempfile::tempdir()?;
-    exercise(temp.path(), Journey::Goal).await.with_context(|| {
-        ["runtime.log", "runtime.err", "client-host.log"]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-    })
+    exercise(temp.path(), Journey::Goal)
+        .await
+        .with_context(|| support::fixture_logs(temp.path(), &[]))
+}
+
+#[cfg(all(feature = "editor-e2e", unix))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_steers_text_input_into_a_live_request() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    live_runtime::exercise_editor(temp.path(), "live-steering").await?;
+    copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
+}
+
+#[cfg(all(feature = "editor-e2e", unix))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_steers_text_input_and_preserves_a_live_goal() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    live_runtime::exercise_editor(temp.path(), "live-goal-steering").await?;
+    copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
 }
 
 #[cfg(feature = "editor-e2e")]
@@ -282,9 +252,7 @@ async fn editor_preserves_live_session_and_draft_across_window_reload() -> Resul
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::Editor)
         .await
-        .with_context(|| {
-            std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
-        })
+        .with_context(|| support::fixture_logs(temp.path(), &[]))
 }
 
 #[cfg(feature = "editor-e2e")]
@@ -293,9 +261,7 @@ async fn editor_steers_pending_input_into_the_active_request() -> Result<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorSteering)
         .await
-        .with_context(|| {
-            std::fs::read_to_string(temp.path().join("editor.log")).unwrap_or_default()
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
 }
 
@@ -305,11 +271,7 @@ async fn editor_steers_pending_input_and_continues_the_same_goal() -> Result<()>
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalSteering)
         .await
-        .with_context(|| {
-            ["editor.log", "runtime.log", "runtime.err"]
-                .map(|name| std::fs::read_to_string(temp.path().join(name)).unwrap_or_default())
-                .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-steering-canonical.json")
 }
 
@@ -325,21 +287,13 @@ async fn editor_pages_native_history_without_losing_the_reader_or_draft() -> Res
         evidence.finish(temp.path(), &result)?;
     }
     result.with_context(|| {
-        [
-            "runtime.log",
-            "runtime.err",
-            "client-host.log",
-            "editor.log",
-            "editor-history-seed-progress.json",
-            "editor-history-seed-failure.json",
-        ]
-        .map(|name| {
-            format!(
-                "{name}:\n{}",
-                std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-            )
-        })
-        .join("\n")
+        support::fixture_logs(
+            temp.path(),
+            &[
+                "editor-history-seed-progress.json",
+                "editor-history-seed-failure.json",
+            ],
+        )
     })
 }
 
@@ -349,21 +303,7 @@ async fn editor_preserves_captured_context_in_a_multi_root_workspace() -> Result
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorWorkspace)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-workspace-canonical.json")
 }
 
@@ -372,21 +312,7 @@ async fn editor_preserves_captured_context_in_a_multi_root_workspace() -> Result
 async fn editor_preserves_image_bytes_through_submission_and_reload() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let result = exercise(temp.path(), Journey::EditorImages).await;
-    result.with_context(|| {
-        [
-            "runtime.log",
-            "runtime.err",
-            "client-host.log",
-            "editor.log",
-        ]
-        .map(|name| {
-            format!(
-                "{name}:\n{}",
-                std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-            )
-        })
-        .join("\n")
-    })?;
+    result.with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-images-canonical.json")
 }
 
@@ -396,21 +322,7 @@ async fn editor_retries_failed_input_without_submitting_the_unsent_draft() -> Re
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorRetry)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-retry-canonical.json")
 }
 
@@ -420,21 +332,7 @@ async fn editor_reviews_retained_file_images_without_reading_the_working_copy() 
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorReview)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-review-canonical.json")
 }
 
@@ -445,21 +343,7 @@ async fn editor_restores_and_saves_recorded_edits_without_overwriting_later_chan
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorUndo)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-undo-canonical.json")
 }
 
@@ -468,19 +352,7 @@ async fn editor_restores_and_saves_recorded_edits_without_overwriting_later_chan
 async fn editor_pages_real_file_captures_across_reload_and_new_activity() -> Result<()> {
     let temp = tempfile::tempdir()?;
     if let Err(error) = exercise(temp.path(), Journey::EditorInventory).await {
-        let mut logs = Vec::new();
-        for name in [
-            "runtime.log",
-            "runtime.err",
-            "client-host.log",
-            "editor.log",
-        ] {
-            let contents = tokio::fs::read_to_string(temp.path().join(name))
-                .await
-                .unwrap_or_default();
-            logs.push(format!("{name}:\n{contents}"));
-        }
-        return Err(error.context(logs.join("\n")));
+        return Err(error.context(support::fixture_logs(temp.path(), &[])));
     }
     let root = temp.path().to_path_buf();
     tokio::task::spawn_blocking(move || {
@@ -495,21 +367,7 @@ async fn editor_recovers_blocked_and_limited_goals_without_submitting_the_draft(
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalRecovery)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-goal-recovery-canonical.json")
 }
 
@@ -534,21 +392,7 @@ async fn editor_removes_goals_without_cancelling_current_work_or_queued_input() 
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalRemoval)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-goal-removal-canonical.json")
 }
 
@@ -558,21 +402,7 @@ async fn editor_replaces_goals_in_the_same_chat_without_losing_work_or_drafts() 
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorGoalReplacement)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-goal-replacement-canonical.json")
 }
 
@@ -582,21 +412,7 @@ async fn editor_answers_a_native_question_and_uses_the_edited_worker_prompt() ->
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorQuestions)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-questions-canonical.json")
 }
 
@@ -606,21 +422,7 @@ async fn editor_observes_concurrent_related_work_without_losing_the_parent_draft
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorRelatedWork)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-related-work-canonical.json")
 }
 
@@ -631,21 +433,7 @@ async fn editor_observes_related_worker_failure_without_losing_completed_work_or
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorRelatedWorkFailure)
         .await
-        .with_context(|| {
-            [
-                "runtime.log",
-                "runtime.err",
-                "client-host.log",
-                "editor.log",
-            ]
-            .map(|name| {
-                format!(
-                    "{name}:\n{}",
-                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
-                )
-            })
-            .join("\n")
-        })?;
+        .with_context(|| support::fixture_logs(temp.path(), &[]))?;
     copy_editor_evidence(temp.path(), "editor-related-work-canonical.json")
 }
 
@@ -682,6 +470,66 @@ async fn installed_editor_refreshes_models_and_reconnects_without_the_runtime_ke
 }
 
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
+    if matches!(journey, Journey::Conversation) {
+        return live_runtime::exercise(root, false).await;
+    }
+    if matches!(journey, Journey::Goal) {
+        return live_runtime::exercise(root, true).await;
+    }
+    if matches!(journey, Journey::RuntimeReplacement) {
+        return live_runtime::exercise_replacement(root).await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::Editor) {
+        return live_runtime::exercise_editor(root, "live").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorWorkspace) {
+        return live_runtime::exercise_editor(root, "live-workspace").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorDelivery) {
+        return live_runtime::exercise_editor(root, "live-delivery").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorReview) {
+        return live_runtime::exercise_editor(root, "live-review").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorGoalRemoval) {
+        return live_runtime::exercise_editor(root, "live-goal-removal").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorGoalReplacement) {
+        return live_runtime::exercise_editor(root, "live-goal-replacement").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorQuestions) {
+        return live_runtime::exercise_editor(root, "live-questions").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorRelatedWork) {
+        return live_runtime::exercise_editor(root, "live-related-work").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorInventory) {
+        return live_runtime::exercise_editor(root, "live-review-inventory").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorUndo) {
+        return live_runtime::exercise_editor(root, "live-undo").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorRetry) {
+        return live_runtime::exercise_editor(root, "retry").await;
+    }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::EditorHistory)
+        && !editor_history::Options::from_env()?.profile
+        && std::env::var_os("GENTS_PREVIOUS_CLIENT_HOST").is_none()
+    {
+        return live_runtime::exercise_editor(root, "live-history").await;
+    }
     let history = matches!(journey, Journey::EditorHistory)
         .then(editor_history::Options::from_env)
         .transpose()?;
@@ -895,6 +743,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     init.current_dir(root)
         .envs(homes.env())
         .env_remove("GENTS_SYSTEM_LOG")
+        .env("RUST_LOG", "warn,gents_server::commands::init=info")
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&node_home)
         .args([
@@ -921,9 +770,14 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let output = initialization::Initialization::spawn(&mut init, root)?
         .wait(Duration::from_secs(30))
         .await?;
+    let init_stages = std::fs::read_to_string(root.join("init.stderr"))?;
+    ensure!(
+        init_stages.contains(r#""embedded_node_drained""#),
+        "initialization must record its stage boundaries so a timed-out run can be attributed: {init_stages}"
+    );
     let init: Value = serde_json::from_slice(&output)?;
     let node_did = init["node_did"].as_str().context("initialized node DID")?;
-    let identity = gents::KeyIdentity::load_or_create(
+    let identity = gents_store::identity::KeyIdentity::load_or_create(
         init["key_path"]
             .as_str()
             .context("initialized identity path")?,
@@ -1020,8 +874,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     // requests; the Node key holds no relation on them.
     let operator =
         gents_desktop_core::client::PrincipalIdentity::load_existing(&homes.cli_identity())?;
-    let access = gents::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, operator.did())
+    let access = gents_store::config_client::ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(graphql, operator.did())
             .with_client_signing_capability(operator.client_signing_capability()?)?,
     );
     if matches!(journey, Journey::Conversation | Journey::RuntimeReplacement) {
@@ -1030,9 +884,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .await;
         if matches!(journey, Journey::Conversation) && predecessor.is_none() {
             let pending =
-                gents_server::server_host::pending_managed_enrollments(&node_home, graphql).await?;
+                gents_service::server_host::pending_managed_enrollments(&node_home, graphql)
+                    .await?;
             let members =
-                gents_server::server_host::managed_enrollment_members(&node_home, graphql).await?;
+                gents_service::server_host::managed_enrollment_members(&node_home, graphql).await?;
             ensure!(
                 pending
                     .iter()
@@ -1064,7 +919,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .context("pending enrollment")?;
         let pending_query = format!(
             "{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
-            gents::store::graphql::escape_graphql_string(pending_id)
+            gents_store::graphql::escape_graphql_string(pending_id)
         );
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
@@ -1238,7 +1093,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let request = receipt["requestId"].as_str().context("submitted request")?;
     let signed_query = format!(
         "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
-        gents::store::graphql::escape_graphql_string(request),
+        gents_store::graphql::escape_graphql_string(request),
         gents::SIGNED_REQUEST_FIELDS,
     );
     let row: gents_protocol::row::AgentRequestRow =
@@ -1256,7 +1111,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         })
         .await
         .context("submitted request did not reach the runtime")??;
-    gents::verify_request_receipt_signature(&row)?;
+    gents_store::identity::request_receipt::verify_request_receipt_signature(&row)?;
     let original_doc_id = row.doc_id.clone().context("submitted physical request")?;
     ensure!(row.admission_signer_did.as_deref() == Some(client_did.as_str()));
     ensure!(client_did != node_did);
@@ -1326,21 +1181,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .await
         .context("live output was not observed before provider completion")??;
     }
-    if matches!(journey, Journey::RuntimeReplacement) {
-        runtime_replacement::refuse_busy(&host_binary, &node_home).await?;
-        let unchanged = access.execute(&signed_query).await?;
-        let unchanged = &unchanged["data"]["AgentRequest"][0];
-        ensure!(
-            unchanged["_docID"] == original_doc_id,
-            "busy refusal replaced the input: {unchanged}"
-        );
-        ensure!(
-            !gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
-                unchanged["lifecycle_state"].as_str()
-            ),
-            "busy refusal terminated the input: {unchanged}"
-        );
-    }
     if journey.is_steering() {
         let completion_path = root.join("finish-provider");
         let completion_gate = Arc::clone(&gate);
@@ -1374,8 +1214,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             let snapshot = read_session(&mut client, &mut id, node_did, session).await?;
             let requests = access.execute(&format!(
                 r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} superseded_by_request_doc_id }} }}"#,
-                gents::store::graphql::escape_graphql_string(node_did),
-                gents::store::graphql::escape_graphql_string(session),
+                gents_store::graphql::escape_graphql_string(node_did),
+                gents_store::graphql::escape_graphql_string(session),
                 gents::SIGNED_REQUEST_FIELDS,
             )).await?;
             let name = "editor-steering-failure.json";
@@ -1424,7 +1264,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         let current = access
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state interrupt_requested_at }} }}"#,
-                gents::store::graphql::escape_graphql_string(&original_doc_id)
+                gents_store::graphql::escape_graphql_string(&original_doc_id)
             ))
             .await?;
         let rows = current["data"]["AgentRequest"]
@@ -1458,7 +1298,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             view = wait_goal(&mut client, &mut id, node_did, session, status).await?;
             let requests = access.execute(&format!(r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}},
                 session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ _docID request_id lifecycle_state interrupt_requested_at }} }}"#,
-                gents::store::graphql::escape_graphql_string(node_did), gents::store::graphql::escape_graphql_string(session))).await?;
+                gents_store::graphql::escape_graphql_string(node_did), gents_store::graphql::escape_graphql_string(session))).await?;
             let rows = requests["data"]["AgentRequest"]
                 .as_array()
                 .context("goal request rows")?;
@@ -1498,8 +1338,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ message_key request_doc_id }}
                 AgentOutputSegment(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ payload }}
             }}"#,
-            gents::store::graphql::escape_graphql_string(session),
-            gents::store::graphql::escape_graphql_string(session),
+            gents_store::graphql::escape_graphql_string(session),
+            gents_store::graphql::escape_graphql_string(session),
         )).await?;
         ensure!(
             context["data"]["AgentMessage"]
@@ -1546,7 +1386,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         std::fs::write(&approval_path, "fixture access")?;
         let approval_session = session.to_owned();
         let approval_wait = tokio::spawn(async move {
-            let mark = gents::plugin::approval::queue_dir(&approval_home).join(".listening");
+            let mark = gents_tools::plugin::approval::queue_dir(&approval_home).join(".listening");
             tokio::time::timeout(Duration::from_secs(90), async {
                 loop {
                     if std::fs::metadata(&mark)
@@ -1560,18 +1400,22 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             })
             .await
             .context("the editor did not open an approval listener")?;
-            let resolved = gents::plugin::allowed::Resolved {
+            let resolved = gents_pack::plugin::allowed::Resolved {
                 target: approval_path,
                 is_dir: false,
             };
-            let question = gents::plugin::approval::Request::new(
+            let question = gents_tools::plugin::approval::Request::new(
                 "fixture/files",
                 &resolved,
-                gents::pack::BindAccess::Read,
+                gents_pack::pack::BindAccess::Read,
                 Some(approval_session),
             );
-            gents::plugin::approval::ask(&approval_home, &question, gents::plugin::approval::WAIT)
-                .await
+            gents_tools::plugin::approval::ask(
+                &approval_home,
+                &question,
+                gents_tools::plugin::approval::WAIT,
+            )
+            .await
         });
         let result = run_editor_journey(
             root,
@@ -1589,7 +1433,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         let stopped = access
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content session_id lifecycle_state }} }}"#,
-                gents::store::graphql::escape_graphql_string(node_did),
+                gents_store::graphql::escape_graphql_string(node_did),
             ))
             .await?;
         let stopped = stopped["data"]["AgentRequest"]
@@ -1615,7 +1459,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         configured_actions::verify_editor_settings(&access, node_did, agent_did).await?;
         let submitted = access.execute(&format!(
             r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content input }} }}"#,
-            gents::store::graphql::escape_graphql_string(node_did),
+            gents_store::graphql::escape_graphql_string(node_did),
         )).await?;
         let rows = submitted["data"]["AgentRequest"]
             .as_array()
@@ -1687,7 +1531,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .await
             .context("the editor's approval did not reach the waiting call")???);
         ensure!(
-            gents::plugin::allowed::list(&node_home)?.is_empty(),
+            gents_pack::plugin::allowed::list(&node_home)?.is_empty(),
             "allow-once must not persist a file or folder grant"
         );
         id += 1;
@@ -1746,27 +1590,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     })
     .await
     .context("the exact request's terminal answer was not observed")??;
-    if matches!(journey, Journey::RuntimeReplacement) {
-        runtime_replacement::Fixture {
-            root,
-            home: &node_home,
-            binary: &host_binary,
-            node_did,
-            agent_did,
-            session,
-            client_did: &client_did,
-            original_doc_id: &original_doc_id,
-            access: &access,
-        }
-        .replace_and_verify(&mut runtime, &mut client, &mut id)
-        .await.with_context(|| {
-            let requests: Vec<_> = provider.captured_chat_requests().iter().map(|request| json!({
-                "model":request["model"], "stream":request["stream"],
-                "userMessages":request["messages"].as_array().into_iter().flatten().filter(|message| message["role"] == "user").map(|message| message["content"].clone()).collect::<Vec<_>>(),
-            })).collect();
-            format!("provider observations: {}; completion gate permits: {}", json!(requests), gate.available_permits())
-        })?;
-    }
     let wrong_scope = client
         .try_call(
             id,
@@ -1790,8 +1613,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}},
             session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ request_id }} }}"#,
-                gents::store::graphql::escape_graphql_string(node_did),
-                gents::store::graphql::escape_graphql_string(session)
+                gents_store::graphql::escape_graphql_string(node_did),
+                gents_store::graphql::escape_graphql_string(session)
             ))
             .await?;
         ensure!(
@@ -1827,36 +1650,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "the recovered Goal must deliver its frozen image to the provider exactly once: {images:?}"
         );
     }
-    let user_rounds = requests
-        .iter()
-        .filter(|request| {
-            request["messages"].as_array().is_some_and(|messages| {
-                messages.iter().any(|message| {
-                    message["role"] == "user"
-                        && match &message["content"] {
-                            Value::String(text) => text == "Return the fixture response.",
-                            Value::Array(parts) => parts
-                                .iter()
-                                .any(|part| part["text"] == "Return the fixture response."),
-                            _ => false,
-                        }
-                })
-            })
-        })
-        .count();
-    ensure!(
-        user_rounds
-            == if matches!(journey, Journey::EditorGoalRecovery) {
-                7
-            } else if matches!(journey, Journey::EditorGoalSteering) {
-                3
-            } else if journey.is_steering() || matches!(journey, Journey::RuntimeReplacement) {
-                2
-            } else {
-                1
-            },
-        "unexpected provider round count: {user_rounds}"
-    );
     if journey.is_steering() {
         let evidence = editor_steering::verify(
             &access,
@@ -2072,7 +1865,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             captured.iter().any(|body| body["tools"]
                 .as_array()
                 .is_some_and(|tools| tools.iter().any(|tool| tool["function"]["name"]
-                    == gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME))),
+                    == gents_documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME))),
             "the default Engineer must advertise its question tool"
         );
         editor_result?;
@@ -2118,8 +1911,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )
         .await?;
         let evidence =
-            editor_workspace::verify(&access, &provider, root, node_did, session, &client_did)
-                .await?;
+            editor_workspace::verify(&access, root, node_did, session, &client_did).await?;
         std::fs::write(
             root.join("editor-workspace-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
@@ -2568,7 +2360,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &mut client,
             &mut id,
             &access,
-            &provider,
             root,
             node_did,
             session,
@@ -2623,7 +2414,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             )
             .await?,
         );
-        let local = gents::store::config_client::ConfigAccess::local(reopened.node_arc())
+        let local = gents_store::config_client::ConfigAccess::local(reopened.node_arc())
             .execute("{ Goal { _docID } PendingChatSubmission { _docID } }")
             .await;
         reopened.shutdown().await?;
@@ -2643,7 +2434,7 @@ async fn wait_chat_deployment(
     client: &mut Attachment,
     id: &mut u32,
     node_did: &str,
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
 ) -> Result<Value> {
     let mut last_snapshot = Value::Null;
     let observed = tokio::time::timeout(Duration::from_secs(30), async {
@@ -2673,7 +2464,7 @@ async fn wait_chat_deployment(
         Err(error) => {
             let query = format!(
                 "{{ NodeReadiness(filter: {{node_did: {{_eq: \"{}\"}}}}, limit: 2) {{_docID node_did snapshot_json updated_at}} }}",
-                gents::store::graphql::escape_graphql_string(node_did),
+                gents_store::graphql::escape_graphql_string(node_did),
             );
             let source = tokio::time::timeout(Duration::from_secs(2), access.execute(&query)).await;
             Err(error).with_context(|| {
@@ -2690,7 +2481,7 @@ struct EditRecoveryHost<'a> {
     binary: &'a Path,
     root: &'a Path,
     paths: &'a DesktopPaths,
-    access: &'a gents::ConfigAccess,
+    access: &'a gents_store::config_client::ConfigAccess,
     editor_store: bool,
 }
 
@@ -2810,8 +2601,8 @@ async fn exercise_message_edit(
     .await?;
     *id += 1;
     let query = format!("{{ AgentSession(filter: {{ node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}} }}) {{ _docID session_id provenance }} AgentMessage(filter: {{ node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}} }}, order: {{sequence: ASC}}) {{_docID message_key sequence}} }}",
-        gents::store::graphql::escape_graphql_string(node_did), gents::store::graphql::escape_graphql_string(&child_session_id),
-        gents::store::graphql::escape_graphql_string(node_did), gents::store::graphql::escape_graphql_string(&child_session_id));
+        gents_store::graphql::escape_graphql_string(node_did), gents_store::graphql::escape_graphql_string(&child_session_id),
+        gents_store::graphql::escape_graphql_string(node_did), gents_store::graphql::escape_graphql_string(&child_session_id));
     let committed = access.execute(&query).await?;
     client.close().await;
     recovery.restart().await?;
@@ -2868,7 +2659,7 @@ async fn exercise_message_edit(
     .await?;
     *id += 1;
     let request_query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{_docID request_id session_id requester_did agent_did content input admission_signer_did admission_signature created_at valid_until}} }}",
-        gents::store::graphql::escape_graphql_string(node_did), gents::store::graphql::escape_graphql_string(&request_id));
+        gents_store::graphql::escape_graphql_string(node_did), gents_store::graphql::escape_graphql_string(&request_id));
     let admitted = access.execute(&request_query).await?;
     ensure!(
         admitted["data"]["AgentRequest"]
@@ -3247,16 +3038,18 @@ async fn stop(child: &mut Child) -> Result<()> {
     }
     #[cfg(windows)]
     child.interrupt()?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    // The runtime's own orderly teardown is longer than any one stage of it,
+    // so a deadline picked here cannot tell a slow stop from a stalled one.
+    let deadline = tokio::time::Instant::now() + gents::runtime::shutdown::shutdown_budget();
     #[cfg(unix)]
     let status = tokio::time::timeout_at(deadline, child.wait())
         .await
-        .context("fixture process did not exit after interrupt")??;
+        .context("fixture process did not exit within the runtime's shutdown budget")??;
     #[cfg(windows)]
     let status = {
         let status = tokio::time::timeout_at(deadline, child.wait_for_exit())
             .await
-            .context("fixture process did not exit after console interrupt")??;
+            .context("fixture process did not exit within the runtime's shutdown budget")??;
         tokio::time::timeout_at(deadline, child.finish_output())
             .await
             .context("fixture process exited but console output cleanup did not finish")??;

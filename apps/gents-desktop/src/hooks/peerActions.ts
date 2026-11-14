@@ -59,12 +59,9 @@ export function createPeerActions({
     }
   }
 
-  async function fetchPeerStatus(peerId: string) {
-    try {
-      return await api.fetchPeerStatus(peerId);
-    } catch (err) {
-      throw new Error(formatPeerConnectionError(err, "peer-status"));
-    }
+  async function reconnectNode(nodeDid: string | null): Promise<string | null> {
+    if (!api.reconnectNode || !clientRuns()) return null;
+    return api.reconnectNode(nodeDid);
   }
 
   async function requestStatusEnrollment(
@@ -110,8 +107,8 @@ export function createPeerActions({
   }
 
   return {
+    reconnectNode,
     dismissEndedAccess,
-    fetchPeerStatus,
     requestStatusEnrollment,
     initLocalRuntime,
     removePeer,

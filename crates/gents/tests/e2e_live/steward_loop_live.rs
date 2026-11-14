@@ -1,55 +1,42 @@
-use crate::support::builder_runtime::submit_request;
-use crate::support::live_inference::*;
-use crate::support::test_db;
 use std::time::Duration;
 
+use crate::support::agent_requests::submit_user_request;
+use crate::support::live_inference::{
+    bind_target, boot_live_agent, live_target, terminal_assistant_answer, wait_for_request_terminal,
+};
+use crate::support::test_db;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "live: set GENTS_EVAL_TARGET and pass --ignored"]
 async fn target_backend_probes_healthy_and_completes() {
-    let target = live_target();
-    target.assert_reachable().await;
-
-    let db = test_db("steward-loop-live-smoke").await;
+    let target = live_target().await;
+    let db = test_db("live-client-request").await;
     let actors = bind_target(&db, &target).await;
-    let reader = &actors.fixture.access;
-
-    let agent = boot_live_agent(&db, db.node_identity.clone())
+    let runtime = boot_live_agent(&db, db.node_identity.clone())
         .await
-        .expect("boot live agent");
-
-    let request_id = "req-live-smoke";
-    let session_id = "session-live-smoke";
-    let started = std::time::Instant::now();
-    submit_request(
-        &actors,
-        request_id,
-        session_id,
-        "interactive",
-        "Reply with the single word: ok",
+        .unwrap();
+    submit_user_request(
+        actors.node_did(),
+        &actors.fixture,
+        "session-live-client",
+        "req-live-client",
+        "Briefly confirm that you received this message.",
+        Default::default(),
     )
     .await;
-
-    let terminal = wait_for_request_terminal(reader, request_id, Duration::from_secs(120)).await;
-    let elapsed = started.elapsed();
-    eprintln!("[live-smoke] request terminal state = {terminal} (latency {elapsed:?})");
     assert_eq!(
-        terminal, "completed",
-        "target {} request must complete; got {terminal}",
-        target.name
+        wait_for_request_terminal(
+            &actors.fixture.access,
+            "req-live-client",
+            Duration::from_secs(120)
+        )
+        .await,
+        "completed"
     );
-
-    let answer = wait_for_assistant_answer(reader, request_id, Duration::from_secs(30)).await;
-    eprintln!("[live-smoke] assistant answer = {answer:?}");
     assert!(
-        !answer.trim().is_empty(),
-        "target {} must produce a non-empty assistant response; got empty",
-        target.name
+        !terminal_assistant_answer(&actors.fixture.access, "req-live-client")
+            .await
+            .trim()
+            .is_empty()
     );
-    if answer.to_lowercase().contains("ok") {
-        eprintln!("[live-smoke] OK: answer contains 'ok'");
-    } else {
-        eprintln!("[live-smoke] SOFT-WARN: answer did not contain 'ok': {answer:?}");
-    }
-
-    agent.shutdown().await;
+    runtime.shutdown().await;
 }

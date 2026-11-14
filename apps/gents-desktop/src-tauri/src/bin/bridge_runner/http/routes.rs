@@ -45,11 +45,10 @@ use gents_desktop_bridge::types::{
     DefaultAgentSetRequest, DesktopInterruptRequest, DesktopOperationsSnapshotRequest,
     DesktopProbeMcpServiceRequest, DesktopSessionProvenanceRequest, EnrollmentRequestView,
     EnrollmentStatusRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
-    InferenceProfileSaveRequest, NodeConfigSaveRequest, PeerStatusFetchRequest,
-    ScheduleDeleteRequest, ScheduleRunRequest, ScheduleSaveRequest, SessionRenameRequest,
-    SessionRowsWindow, TaskRunRequest, TaskSaveRequest, ToolServiceSaveRequest,
-    ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest,
-    TriggerSaveRequest,
+    InferenceProfileSaveRequest, NodeConfigSaveRequest, ScheduleDeleteRequest, ScheduleRunRequest,
+    ScheduleSaveRequest, SessionRenameRequest, SessionRowsWindow, TaskRunRequest, TaskSaveRequest,
+    ToolServiceSaveRequest, ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest,
+    TriggerDeleteRequest, TriggerSaveRequest,
 };
 use gents_server::packs;
 
@@ -145,7 +144,7 @@ pub(super) async fn handle_request(
         ("GET", "/desktop/packs/installed") => {
             let home = fixture.node_home().to_path_buf();
             let node_did = fixture.node_did().to_owned();
-            let access = gents::ConfigAccess::Graphql(
+            let access = gents_store::config_client::ConfigAccess::Graphql(
                 fixture
                     .desktop_core()
                     .local_home_operator_endpoint(&node_did, &home)?,
@@ -187,7 +186,7 @@ pub(super) async fn handle_request(
                         request.root_agents,
                     )
                     .await
-                    .map_err(gents::pack::PackChangeError::into_anyhow)
+                    .map_err(gents_pack::pack::PackChangeError::into_anyhow)
                 })
                 .await?,
             )
@@ -209,7 +208,7 @@ pub(super) async fn handle_request(
                 packs::ux_data_call(
                     fixture.node_home().to_path_buf(),
                     access,
-                    gents::observe::ux_data::UxDataCall {
+                    gents_tools::ux_data::UxDataCall {
                         ux: request.ux,
                         node_did: request.node_did,
                         surface: request.surface,
@@ -238,7 +237,7 @@ pub(super) async fn handle_request(
             let home = fixture.node_home().to_path_buf();
             let operator = if packs::plugin_call_uses_data(&home, &request.ux, &request.name)? {
                 let node_did = packs::ux_installing_node(&home)?;
-                let access = gents::ConfigAccess::Graphql(
+                let access = gents_store::config_client::ConfigAccess::Graphql(
                     fixture
                         .desktop_core()
                         .local_home_operator_endpoint(&node_did, &home)?,
@@ -267,13 +266,14 @@ pub(super) async fn handle_request(
                 .ok_or_else(|| anyhow!("live bridge runner has no deployment"))?;
             let node = fixture.runtime_node()?;
             let identity = Arc::clone(fixture.runtime_identity()?);
-            let network = gents_desktop_bridge::enrollment::ensure_enrollment_network(
+            let network = gents_p2p::p2p_reconcile::ensure_enrollment_network(
                 node,
                 identity.as_ref(),
                 fixture.deployment_label(),
             )
             .await?;
-            let issuer = gents_desktop_bridge::enrollment::EnrollmentOfferIssuer::new(
+            let issuer = gents_p2p::p2p_reconcile::EnrollmentOfferIssuer::new(
+                Arc::clone(node),
                 identity,
                 fixture.runtime_p2p()?,
                 network.network_id,
@@ -281,10 +281,8 @@ pub(super) async fn handle_request(
                 "client".to_string(),
             );
             let enrollment = issuer.mint().await?;
-            let schema = gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(
-                Arc::clone(node),
-            )
-            .await?;
+            let schema =
+                gents_p2p::p2p_reconcile::read_client_replicated_schema(Arc::clone(node)).await?;
             Ok(HttpResponse::json_ok(
                 serde_json::json!({
                     "enrollment": enrollment,
@@ -312,7 +310,7 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
         ("GET", "/desktop/inference/setup/catalog") => Ok(HttpResponse::json_ok(
-            serde_json::to_string(&gents::inference::backends::setup::inference_setup_catalog())?,
+            serde_json::to_string(&gents_inference::backends::setup::inference_setup_catalog())?,
         )),
         ("POST", "/desktop/inference/models/discover") => {
             let request = decode::<InferenceDiscoveryRequest>(
@@ -365,7 +363,7 @@ pub(super) async fn handle_request(
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty());
             let core = fixture.desktop_core();
-            core.set_selected_node_did(did.clone());
+            fixture.select_node(did.clone());
             if let Some(did) = did {
                 if let Err(error) = core.refresh_node(&did).await {
                     tracing::warn!(
@@ -421,28 +419,16 @@ pub(super) async fn handle_request(
             let replicators = fixture.runtime_p2p()?.get_replicators().await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
-        ("POST", "/desktop/peer/status") => {
-            let request = decode::<PeerStatusFetchRequest>(
-                &request.body,
-                "decoding saved peer status request",
-            )?;
-            let address = fixture
-                .desktop_core()
-                .peer_records()
-                .await
-                .into_iter()
-                .find(|record| record.peer_id == request.peer_id)
-                .map(|record| record.addr)
-                .with_context(|| format!("saved peer {} was not found", request.peer_id))?;
-            let payload = fetch_runtime_connection_payload(&address).await?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(&payload)?))
-        }
         ("POST", "/desktop/peer/enroll-status") => {
             let request = decode::<EnrollmentStatusRequest>(
                 &request.body,
                 "decoding enrollment status request",
             )?;
-            let payload = fetch_runtime_connection_payload(&request.server_address).await?;
+            let payload = fetch_runtime_connection_payload(
+                &request.server_address,
+                Some(fixture.desktop_core().node_identity()),
+            )
+            .await?;
             let enrollment = fixture
                 .desktop_core()
                 .request_status_enrollment(&payload)
@@ -497,16 +483,7 @@ pub(super) async fn handle_request(
         ("POST", "/desktop/session/reload") => {
             let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)
                 .context("decoding session hydration retry request")?;
-            let node_did = request.node_did.or_else(|| {
-                fixture
-                    .desktop_core()
-                    .store()
-                    .snapshot()
-                    .sessions
-                    .iter()
-                    .find(|session| session.session_id == request.session_id)
-                    .map(|session| session.node_did.clone())
-            });
+            let node_did = request.node_did.or_else(|| fixture.selected_node_did());
             let node_did = node_did
                 .as_deref()
                 .ok_or_else(|| anyhow!("session reload requires a node"))?;
@@ -564,28 +541,28 @@ pub(super) async fn handle_request(
                 &request.body,
                 "decoding session provenance request",
             )?;
-            // The runner serves one frontend, whose selection is the core's.
-            request.node_did = request
-                .node_did
-                .or_else(|| fixture.desktop_core().selected_node_did());
+            // The runner serves one frontend, as one window with its selection.
+            request.node_did = request.node_did.or_else(|| fixture.selected_node_did());
             let view = session_provenance_request(fixture.desktop_core(), request)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&view)?))
         }
         ("GET", "/desktop/backend-health") => {
-            // The runner serves one frontend, whose selection is the core's.
+            // The runner serves one frontend, as one window with its selection.
             let core = fixture.desktop_core();
             let rows =
-                list_backends_with_health_for_core(Arc::clone(core), core.selected_node_did())
+                list_backends_with_health_for_core(Arc::clone(core), fixture.selected_node_did())
                     .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&rows)?))
         }
         ("GET", "/desktop/mcp-health") => {
             let core = fixture.desktop_core();
-            let rows =
-                load_mcp_services_with_health(core.as_ref(), core.selected_node_did().as_deref())
-                    .await?;
+            let rows = load_mcp_services_with_health(
+                core.as_ref(),
+                fixture.selected_node_did().as_deref(),
+            )
+            .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&rows)?))
         }
         ("POST", "/desktop/mcp/probe") => {
@@ -651,6 +628,34 @@ pub(super) async fn handle_request(
             set_default_agent(fixture.desktop_core().as_ref(), request).await?;
             snapshot_response(fixture).await
         }
+        ("POST", "/desktop/agent/identity") => {
+            let request = decode::<gents_protocol::agent_identity::ProvisionAgentIdentityRequest>(
+                &request.body,
+                "decoding agent identity provision request",
+            )?;
+            json(serde_json::to_value(
+                fixture
+                    .desktop_core()
+                    .provision_agent_identity(&request.node_did)
+                    .await?,
+            )?)
+        }
+        ("POST", "/desktop/agent/workspace-root") => {
+            let request = decode::<gents_desktop_bridge::types::AgentWorkspaceRootSelectRequest>(
+                &request.body,
+                "decoding agent workspace root selection",
+            )?;
+            let access = fixture.desktop_core().operator_access(&request.node_did)?;
+            json(serde_json::to_value(
+                gents_desktop_core::workspace_root::select_agent_workspace_root(
+                    &access,
+                    &request.node_did,
+                    &request.agent_did,
+                    &request.path,
+                )
+                .await?,
+            )?)
+        }
         ("POST", "/desktop/agent/save") => {
             let request = decode::<AgentSaveRequest>(&request.body, "decoding agent save request")?;
             save_agent_config(fixture.desktop_core().as_ref(), request).await?;
@@ -679,10 +684,11 @@ pub(super) async fn handle_request(
                     "clear-client-store is only available in live test mode (GENTS_TAURI_LIVE=1)",
                 ));
             }
-            fixture
-                .desktop_core()
-                .store()
-                .replace_snapshot(Default::default());
+            for node_did in fixture.desktop_core().stores().node_dids() {
+                if let Some(store) = fixture.desktop_core().stores().store(&node_did) {
+                    store.replace_snapshot(Default::default());
+                }
+            }
             Ok(HttpResponse::json_ok(
                 serde_json::json!({ "ok": true }).to_string(),
             ))
@@ -856,8 +862,10 @@ pub(super) async fn handle_request(
             snapshot_response(fixture).await
         }
         ("POST", "/desktop/schedule/run") => {
-            let request =
+            let mut request =
                 decode::<ScheduleRunRequest>(&request.body, "decoding schedule run request")?;
+            // The runner serves one frontend, as one window with its selection.
+            request.node_did = request.node_did.or_else(|| fixture.selected_node_did());
             let result = run_schedule_config(fixture.desktop_core().as_ref(), request).await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
@@ -890,7 +898,9 @@ pub(super) async fn handle_request(
             snapshot_response(fixture).await
         }
         ("POST", "/desktop/task/run") => {
-            let request = decode::<TaskRunRequest>(&request.body, "decoding task run request")?;
+            let mut request = decode::<TaskRunRequest>(&request.body, "decoding task run request")?;
+            // The runner serves one frontend, as one window with its selection.
+            request.node_did = request.node_did.or_else(|| fixture.selected_node_did());
             let result = run_task_config(fixture.desktop_core().as_ref(), request).await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
@@ -906,10 +916,8 @@ pub(super) async fn handle_request(
         ("POST", "/desktop/interrupt/request") => {
             let mut request =
                 decode::<DesktopInterruptRequest>(&request.body, "decoding interrupt request")?;
-            // The runner serves one frontend, whose selection is the core's.
-            request.node_did = request
-                .node_did
-                .or_else(|| fixture.desktop_core().selected_node_did());
+            // The runner serves one frontend, as one window with its selection.
+            request.node_did = request.node_did.or_else(|| fixture.selected_node_did());
             let result = interrupt_request(fixture.desktop_core(), &request)
                 .await
                 .map_err(|e| anyhow!("{e}"))?;
@@ -962,5 +970,5 @@ where
     Fut: std::future::Future<Output = Result<T>>,
     T: Send + 'static,
 {
-    gents::store::local::storage_backend::drive_unsendable(runtime, operation).await?
+    gents_store::local::storage_backend::drive_unsendable(runtime, operation).await?
 }

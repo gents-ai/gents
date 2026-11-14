@@ -67,13 +67,14 @@ export function GeneralPanel() {
   const [usageTelemetry, setUsageTelemetry] = useState<ProductTelemetryStatus | null>(
     null,
   );
-  const [telemetryError, setTelemetryError] = useState(false);
+  const [telemetryUnread, setTelemetryUnread] = useState(false);
+  const [telemetryUnsaved, setTelemetryUnsaved] = useState(false);
   const [telemetrySaving, setTelemetrySaving] = useState(false);
   const telemetryPending = useRef(false);
   useEffect(() => {
     void productTelemetryStatus()
       .then(setUsageTelemetry)
-      .catch(() => setTelemetryError(true));
+      .catch(() => setTelemetryUnread(true));
   }, []);
   return (
     <div>
@@ -114,6 +115,11 @@ export function GeneralPanel() {
             }
             value={usageTelemetry.enabled ? "on" : "off"}
             disabled={telemetrySaving}
+            error={
+              telemetryUnsaved
+                ? "Couldn't save the change. It may not last after a restart."
+                : undefined
+            }
             onChange={(value) => {
               if (
                 telemetryPending.current ||
@@ -122,11 +128,11 @@ export function GeneralPanel() {
                 return;
               telemetryPending.current = true;
               setTelemetrySaving(true);
-              setTelemetryError(false);
+              setTelemetryUnsaved(false);
               void setProductTelemetry(value === "on")
                 .then(setUsageTelemetry)
                 .catch(async () => {
-                  setTelemetryError(true);
+                  setTelemetryUnsaved(true);
                   try {
                     setUsageTelemetry(await productTelemetryStatus());
                   } catch {}
@@ -142,19 +148,16 @@ export function GeneralPanel() {
             ]}
           />
         ) : (
-          <p>
-            {usageTelemetry
-              ? "Usage telemetry is not configured."
-              : telemetryError
-                ? "Usage telemetry status is unavailable."
-                : "Checking usage telemetry…"}
-          </p>
-        )}
-        {telemetryError && (
-          <p>
-            Could not save or read the telemetry preference. Unsaved changes may be lost
-            after restart.
-          </p>
+          <Row
+            label="Usage telemetry"
+            description={
+              usageTelemetry
+                ? "Not set up in this build, so nothing is sent."
+                : telemetryUnread
+                  ? "Couldn't read this setting."
+                  : "Checking…"
+            }
+          />
         )}
       </Group>
       <Group title="Sessions">

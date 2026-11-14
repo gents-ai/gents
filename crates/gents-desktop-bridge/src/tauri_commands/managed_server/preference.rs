@@ -1,21 +1,9 @@
-use super::authority::{parse_tool_ceiling, EffectiveManagedAuthority, HomeIdentity};
+use super::authority::EffectiveManagedAuthority;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::ManagedServerToolCeiling;
-use gents_desktop_core::preference::{ReviewedHome, StoredManagedServer, MANAGED_SERVER_CONFIG};
-
-pub(super) async fn read_initialized_did(node_home: &std::path::Path) -> Option<String> {
-    tokio::fs::read(node_home.join("init.json"))
-        .await
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|value| {
-            value
-                .get("node_did")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        })
-}
+use gents_desktop_core::preference::{read_home_identity, HomeIdentity};
+use gents_desktop_core::preference::{StoredManagedServer, MANAGED_SERVER_CONFIG};
 
 pub(super) async fn read_initialized_name(node_home: &std::path::Path) -> Option<String> {
     tokio::fs::read(node_home.join("init.json"))
@@ -30,11 +18,15 @@ pub(super) async fn read_initialized_name(node_home: &std::path::Path) -> Option
         })
 }
 
+/// `unfinished` is the home_reset owner's judgement that this home never
+/// served or paired; the name it holds is then this computer's own abandoned
+/// attempt, not another Node.
 pub(super) async fn refuse_renaming_home(
     node_home: &std::path::Path,
     requested: &str,
+    unfinished: bool,
 ) -> Result<(), BridgeError> {
-    if !gents_server::server_host::initialized_home(node_home) {
+    if !gents_service::server_host::initialized_home(node_home) {
         return Ok(());
     }
     let initialized = read_initialized_name(node_home).await;
@@ -42,18 +34,27 @@ pub(super) async fn refuse_renaming_home(
         return Ok(());
     }
     let requested = requested.trim();
-    Err(BridgeError::new(
-        BridgeErrorCode::InvalidArgument,
-        match initialized {
-            Some(name) => format!(
+    Err(match (initialized, unfinished) {
+        (Some(name), true) => BridgeError::new(
+            BridgeErrorCode::UnfinishedLocalSetup,
+            format!(
+                "The setup that created {name} here never finished, so {requested} was not created. Continue with {name}, or start over and back {name}'s home up."
+            ),
+        ),
+        (Some(name), false) => BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            format!(
                 "This computer already has a local Node named {name}, so {requested} was not created. Go back to continue with {name}."
             ),
-            None => format!(
+        ),
+        (None, _) => BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            format!(
                 "The local node home at {} has no readable node name; it was left unchanged.",
                 node_home.display()
             ),
-        },
-    ))
+        ),
+    })
 }
 
 fn name_confirmed_by_home(requested: &str, initialized: Option<&str>) -> bool {
@@ -82,27 +83,6 @@ pub(super) async fn save_confirmed_preference(
         .await?;
     }
     Ok(())
-}
-
-pub(super) async fn read_home_identity(node_home: &std::path::Path) -> Option<HomeIdentity> {
-    let home = tokio::fs::canonicalize(node_home).await.ok()?;
-    let bytes = tokio::fs::read(node_home.join("init.json")).await.ok()?;
-    let init: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    let text = |key: &str| {
-        init.get(key)
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-    };
-    Some(HomeIdentity {
-        reviewed: ReviewedHome {
-            node_home: home.to_string_lossy().into_owned(),
-            node_did: text("node_did")?,
-        },
-        tool_ceiling: text("tool_ceiling").as_deref().and_then(parse_tool_ceiling),
-        tool_root: text("tool_root"),
-    })
 }
 
 fn bind_preference(
@@ -156,6 +136,10 @@ pub(super) async fn load_bound_preference(
     Ok(Some(bind_preference(stored, home.as_ref())))
 }
 
+/// A preference in another version's shape (valid JSON whose fields differ)
+/// is set aside so setup starts fresh. A truncated file fails as end of input
+/// and is left in place, because `save_preference` writes it in place and a
+/// concurrent read can see a partial write.
 pub(super) async fn load_preference(
     state: &DesktopAppState,
 ) -> Result<Option<StoredManagedServer>, BridgeError> {
@@ -165,9 +149,22 @@ pub(super) async fn load_preference(
         .root()
         .join(MANAGED_SERVER_CONFIG);
     match tokio::fs::read(&path).await {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|error| BridgeError::untyped(error.to_string())),
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(stored) => Ok(Some(stored)),
+            Err(error) if error.classify() == serde_json::error::Category::Data => {
+                let aside = gents_desktop_core::client::set_aside_unreadable(&path)
+                    .await
+                    .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
+                tracing::warn!(
+                    target: "gents_desktop::managed_server",
+                    %error,
+                    aside = %aside.display(),
+                    "managed-server.json is from another version; set it aside"
+                );
+                Ok(None)
+            }
+            Err(error) => Err(BridgeError::untyped(error.to_string())),
+        },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(BridgeError::untyped(error.to_string())),
     }

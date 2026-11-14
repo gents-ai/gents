@@ -708,7 +708,8 @@ impl Serialize for CacheControl {
 }
 
 /// A cache lifetime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CacheTtl {
     /// The default lifetime: no `ttl` key on the wire.
     FiveMinutes,

@@ -2,31 +2,31 @@ use super::*;
 
 #[test]
 fn exit_stops_active_service_without_a_desktop_preference_but_respects_login_enablement() {
-    let active = gents_server::native_service::NativeServiceStatus {
+    let active = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: true,
         job_loaded: true,
         enabled: false,
         requires_approval: false,
-        background_item: gents_server::native_service::BackgroundItemStatus::Unavailable,
+        background_item: gents_service::native_service::BackgroundItemStatus::Unavailable,
         failed: false,
         detail: None,
     };
     assert!(should_stop_managed_service_on_exit(&active));
 
-    let keep_running = gents_server::native_service::NativeServiceStatus {
+    let keep_running = gents_service::native_service::NativeServiceStatus {
         enabled: true,
         ..active.clone()
     };
     assert!(!should_stop_managed_service_on_exit(&keep_running));
 
-    let absent = gents_server::native_service::NativeServiceStatus {
+    let absent = gents_service::native_service::NativeServiceStatus {
         installed: false,
         running: false,
         job_loaded: false,
         enabled: false,
         requires_approval: false,
-        background_item: gents_server::native_service::BackgroundItemStatus::Unavailable,
+        background_item: gents_service::native_service::BackgroundItemStatus::Unavailable,
         failed: false,
         detail: None,
     };
@@ -74,6 +74,11 @@ fn invoke_on_forge_home(cmd: &str) -> (tempfile::TempDir, Vec<u8>, String) {
     let node_home = state.policy.node_home.clone().expect("node home");
     let desktop_root = state.policy.desktop_paths.root().to_path_buf();
     write_home(&node_home, "did:key:forge", "MetaOnly", None);
+    // A home that has served is another Node, not an unfinished attempt.
+    write(
+        &node_home.join(gents_store::local::home::RUNTIME_STATE_FILE_NAME),
+        "{}",
+    );
     let before = std::fs::read(node_home.join("init.json")).unwrap();
     let root = temp.path().join("work");
     std::fs::create_dir_all(&root).unwrap();
@@ -210,7 +215,7 @@ async fn reprovisioning_with_another_name_leaves_the_home_and_preference_alone()
             node_name: "Scout".to_string(),
             tool_ceiling: runtime_tool_ceiling(ManagedServerToolCeiling::Readwrite),
             tool_root: None,
-            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             default_packs: false,
         },
     )

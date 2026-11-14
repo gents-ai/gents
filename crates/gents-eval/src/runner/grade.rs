@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use crate::checks::{failure_feedback, CheckRegistry};
 use crate::runner::executor::{StageEvidence, TrialEvidence};
 use crate::{classify, EvidenceClass, OutcomeKind, ProviderReason};
-use gents::documents::{EvalCase, EvalCheckRef, EvalStage, EvalTier};
+use gents_documents::{EvalCase, EvalCheckRef, EvalStage, EvalTier};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VerdictRow {
@@ -177,7 +177,7 @@ mod tests {
         case_trial_score, classify, CaseTrialScore, EvidenceClass, OutcomeKind, ProviderReason,
         VerdictView,
     };
-    use gents::documents::{EvalReducer, EvalSplit};
+    use gents_documents::{EvalReducer, EvalSplit};
 
     fn case(stages: &[(&str, &[(&str, Value)])]) -> EvalCase {
         EvalCase {

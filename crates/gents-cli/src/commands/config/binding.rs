@@ -1,11 +1,10 @@
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::{KeyIdentity, NodeIdentity};
 use gents_protocol::row::{
     decode_node_readiness_snapshot, NodeReadinessProcessState, NodeReadinessRow,
 };
+use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::Value;
 
 use crate::cli::ManifestNodeDidBindingArg;
@@ -33,11 +32,8 @@ pub(crate) struct BoundDesiredManifest {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct ManifestBindingContext {
-    pub(crate) bind_mode: ManifestBindMode,
     pub(crate) target_node_did: String,
-    pub(crate) source_manifest_dids: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,17 +86,13 @@ pub(crate) async fn load_bound_manifest(
         });
     };
 
-    let source_manifest_dids = manifest_node_dids(&manifest)?;
+    manifest_node_dids(&manifest)?;
 
     if bind_mode == ManifestBindMode::Manifest {
         let target_node_did = manifest.node.node_did.clone();
         return Ok(BoundManifestLoad {
             bound: Some(BoundDesiredManifest {
-                context: ManifestBindingContext {
-                    bind_mode,
-                    target_node_did,
-                    source_manifest_dids,
-                },
+                context: ManifestBindingContext { target_node_did },
                 manifest,
             }),
             report: initial_report,
@@ -119,9 +111,7 @@ pub(crate) async fn load_bound_manifest(
     Ok(BoundManifestLoad {
         bound: Some(BoundDesiredManifest {
             context: ManifestBindingContext {
-                bind_mode,
                 target_node_did: target_did,
-                source_manifest_dids,
             },
             manifest,
         }),
@@ -153,7 +143,7 @@ pub(crate) async fn resolve_target_node_did(
     }
 
     let Some(bind_node_did) = bind_node_did else {
-        return crate::resolve_node_did(home, None);
+        return gents_service::home_state::resolve_node_did(home, None);
     };
 
     resolve_bound_node_did(
@@ -214,8 +204,8 @@ async fn resolve_bound_node_did(
 }
 
 fn resolve_home_binding_node_did(home: Option<&Path>) -> Result<String> {
-    let home_dir = crate::resolve_home_dir(home);
-    let init_config = crate::read_init_config(&home_dir)?.ok_or_else(|| {
+    let home_dir = gents_service::home_state::resolve_home_dir(home);
+    let init_config = gents_service::home_state::read_init_config(&home_dir)?.ok_or_else(|| {
         anyhow::anyhow!(
             "initialized home metadata is required for --bind-node-did home; run `gents init --identity-only --home {}` first",
             home_dir.display()

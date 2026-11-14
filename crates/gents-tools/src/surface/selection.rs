@@ -1,0 +1,476 @@
+use std::sync::Arc;
+
+use anyhow::Result;
+use gents_loop::tool::ToolDyn;
+
+use gents_documents::{BashMode, FileToolMode};
+
+use std::path::PathBuf;
+
+use crate::native::{
+    default_read_only_command_policy, CommandExecutionMode, CommandExecutionPolicy,
+    CommandNetworkMode,
+};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BackgroundToolConfig {
+    pub allowlist: Vec<String>,
+    pub timeouts: super::BackgroundTimeouts,
+}
+
+impl BackgroundToolConfig {
+    pub(crate) fn tools_enabled(&self) -> bool {
+        !self.allowlist.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommandOutputLimits {
+    pub bash: Option<usize>,
+    pub cli: std::collections::BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedToolSelection {
+    pub file_tools: FileToolMode,
+    pub file_tool_root: Option<PathBuf>,
+    pub bash: BashMode,
+    pub command_policy: Option<CommandExecutionPolicy>,
+    pub cli_tool_names: Vec<String>,
+    pub command_output_limits: CommandOutputLimits,
+    pub timeouts: super::ToolTimeouts,
+    /// `host.files` per-call limits; unset fields keep the toolset defaults.
+    pub file_limits: crate::native::FileToolLimits,
+    pub enable_meta_tools: bool,
+    pub enable_goal_tools: bool,
+    pub enable_goal_creation: bool,
+    pub allowed_mcp_service_ids: Vec<String>,
+    pub remote_tools: Option<gents_documents::RemoteTools>,
+    pub required_mcp_service_ids: Vec<String>,
+    pub backgroundable_tool_names: Vec<String>,
+    pub enable_session_history_tool: bool,
+    pub enable_schema_tool: bool,
+    pub enable_p2p_tool: bool,
+    pub enable_p2p_mutations: bool,
+    pub enable_context_budget: bool,
+    pub enable_defra_query: bool,
+    pub defra_query_collections: Vec<String>,
+    pub application_write_collections: Vec<String>,
+    pub write_tools: Vec<gents_documents::WriteToolDecl>,
+    pub query_tools: Vec<gents_documents::QueryToolDecl>,
+    /// See [`crate::documents::MergedSurfaceTools::surface_of_tool`].
+    pub surface_of_tool: std::collections::BTreeMap<String, String>,
+    pub enable_self_config: bool,
+    pub self_config_categories: Option<Vec<String>>,
+    pub self_config_no_lockout: bool,
+    pub self_config_preview: bool,
+    pub enable_pack_install: bool,
+    pub enable_pack_authority: bool,
+    pub enable_lsp: bool,
+    pub lsp_config: Option<String>,
+    pub plugin_tools: Vec<gents_documents::PluginToolRef>,
+}
+
+impl Default for ResolvedToolSelection {
+    fn default() -> Self {
+        Self {
+            file_tools: FileToolMode::Off,
+            file_tool_root: None,
+            bash: BashMode::Off,
+            command_policy: None,
+            cli_tool_names: Vec::new(),
+            command_output_limits: CommandOutputLimits::default(),
+            timeouts: super::ToolTimeouts::default(),
+            file_limits: crate::native::FileToolLimits::default(),
+            enable_meta_tools: true,
+            enable_goal_tools: true,
+            enable_goal_creation: false,
+            allowed_mcp_service_ids: Vec::new(),
+            remote_tools: None,
+            required_mcp_service_ids: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
+            enable_session_history_tool: true,
+            enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            enable_context_budget: true,
+            enable_defra_query: false,
+            defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
+            write_tools: Vec::new(),
+            query_tools: Vec::new(),
+            surface_of_tool: Default::default(),
+            enable_self_config: false,
+            self_config_categories: None,
+            self_config_no_lockout: false,
+            self_config_preview: false,
+            enable_pack_install: false,
+            enable_pack_authority: false,
+            enable_lsp: false,
+            lsp_config: None,
+            plugin_tools: Vec::new(),
+        }
+    }
+}
+
+impl ResolvedToolSelection {
+    pub(crate) fn requires_filesystem_root(&self) -> bool {
+        self.file_tools != FileToolMode::Off
+            || self.bash != BashMode::Off
+            || !self.cli_tool_names.is_empty()
+            || self.enable_lsp
+    }
+
+    pub fn from_document(tools: &gents_documents::Tools) -> anyhow::Result<Self> {
+        tools.validate()?;
+        let host = tools.host.as_ref();
+        let files = host.and_then(|host| host.files.as_ref());
+        let bash_group = host.and_then(|host| host.bash.as_ref());
+        let built_ins = tools.built_ins.as_ref();
+        let datastore = tools.datastore.as_ref();
+        let integrations = tools.integrations.as_ref();
+        let self_config_group = tools.self_config.as_ref();
+
+        let file_tools = files.map(|files| files.mode).unwrap_or_default();
+        let bash = bash_group.map(|bash| bash.mode).unwrap_or_default();
+        let command_policy = command_policy_from_document(bash_group, bash)?;
+        let cli_tool_names = host
+            .map(|host| host.cli.iter().map(|tool| tool.name.clone()).collect())
+            .unwrap_or_default();
+        let output_chars = |value: Option<i64>| value.and_then(|value| usize::try_from(value).ok());
+        let command_output_limits = CommandOutputLimits {
+            bash: bash_group.and_then(|bash| output_chars(bash.max_output_chars)),
+            cli: host
+                .into_iter()
+                .flat_map(|host| host.cli.iter())
+                .filter_map(|tool| {
+                    output_chars(tool.max_output_chars).map(|chars| (tool.name.clone(), chars))
+                })
+                .collect(),
+        };
+
+        let remote_services = tools
+            .remote
+            .as_ref()
+            .map(|remote| remote.services.as_slice())
+            .unwrap_or(&[]);
+        let enable_meta_tools = !remote_services.is_empty();
+        let mut allowed_mcp_service_ids = Vec::with_capacity(remote_services.len());
+        let mut required_mcp_service_ids = Vec::new();
+        let mut backgroundable_tool_names = Vec::new();
+        if let Some(plugins) = integrations.and_then(|integrations| integrations.plugins.as_ref()) {
+            backgroundable_tool_names.extend(
+                plugins
+                    .iter()
+                    .filter(|plugin| plugin.job.is_none())
+                    .map(|plugin| plugin.tool_name().to_owned()),
+            );
+        }
+        if let Some(bash) = bash_group {
+            if bash.background_enabled && !matches!(bash.mode, BashMode::Off) {
+                backgroundable_tool_names.push(match bash.mode {
+                    BashMode::Unrestricted => "bash_unrestricted".to_string(),
+                    BashMode::Off | BashMode::ReadOnly => "bash".to_string(),
+                });
+            }
+        }
+        for service in remote_services {
+            let service_id = &service.mcp_service_id;
+            if !allowed_mcp_service_ids.contains(&service_id.to_string()) {
+                allowed_mcp_service_ids.push(service_id.to_string());
+            }
+            if service.required {
+                required_mcp_service_ids.push(service_id.to_string());
+            }
+            if !service.background_tool_names.is_empty() {
+                match service.style {
+                    gents_documents::RemoteToolStyle::Discovery => {
+                        backgroundable_tool_names.push("call_tool".to_string())
+                    }
+                    gents_documents::RemoteToolStyle::Flat => backgroundable_tool_names.extend(
+                        service
+                            .background_tool_names
+                            .iter()
+                            .map(|name| crate::mcp::meta::flat_tool_name(service_id, name)),
+                    ),
+                }
+            }
+        }
+        allowed_mcp_service_ids.sort();
+        allowed_mcp_service_ids.dedup();
+        required_mcp_service_ids.sort();
+        required_mcp_service_ids.dedup();
+
+        let (enable_goal_tools, enable_goal_creation) = resolve_goal_capabilities(
+            built_ins.and_then(|built| built.enable_goal_tools),
+            built_ins.and_then(|built| built.enable_goal_creation),
+        );
+
+        Ok(Self {
+            file_tools,
+            file_tool_root: host
+                .and_then(|host| host.root.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from),
+            bash,
+            command_policy,
+            cli_tool_names,
+            command_output_limits,
+            timeouts: super::ToolTimeouts::from_document(tools),
+            file_limits: file_limits_from_document(files),
+            enable_meta_tools,
+            enable_goal_tools,
+            enable_goal_creation,
+            allowed_mcp_service_ids,
+            remote_tools: tools.remote.clone(),
+            required_mcp_service_ids,
+            backgroundable_tool_names,
+            enable_schema_tool: built_ins
+                .and_then(|built| built.enable_schema_tool)
+                .unwrap_or(false),
+            enable_p2p_tool: built_ins
+                .and_then(|built| built.enable_p2p_tool)
+                .unwrap_or(false),
+            enable_p2p_mutations: built_ins
+                .and_then(|built| built.enable_p2p_mutations)
+                .unwrap_or(false),
+            enable_session_history_tool: built_ins
+                .and_then(|built| built.enable_session_history_tool)
+                .unwrap_or(true),
+            enable_context_budget: built_ins
+                .and_then(|built| built.enable_context_budget)
+                .unwrap_or(false),
+            enable_defra_query: datastore
+                .and_then(|datastore| datastore.enable_defra_query)
+                .unwrap_or(false),
+            defra_query_collections: datastore
+                .and_then(|datastore| datastore.defra_query_collections.as_deref())
+                .unwrap_or(&[])
+                .to_vec(),
+            application_write_collections: datastore
+                .and_then(|v| v.write_collections.clone())
+                .unwrap_or_default(),
+            write_tools: Vec::new(),
+            query_tools: Vec::new(),
+            surface_of_tool: Default::default(),
+            enable_self_config: self_config_group
+                .and_then(|group| group.enable_self_config)
+                .unwrap_or(false),
+            self_config_categories: self_config_group
+                .and_then(|group| group.self_config_categories.clone()),
+            self_config_no_lockout: self_config_group
+                .and_then(|group| group.self_config_no_lockout)
+                .unwrap_or(false),
+            self_config_preview: self_config_group
+                .and_then(|group| group.self_config_preview)
+                .unwrap_or(false),
+            enable_pack_install: self_config_group
+                .and_then(|group| group.enable_pack_install)
+                .unwrap_or(false),
+            enable_pack_authority: self_config_group
+                .and_then(|group| group.enable_pack_authority)
+                .unwrap_or(false),
+            enable_lsp: integrations
+                .map(|group| group.lsp.is_some())
+                .unwrap_or(false),
+            lsp_config: integrations
+                .and_then(|group| group.lsp.as_ref())
+                .and_then(|lsp| lsp.config.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+            plugin_tools: integrations
+                .and_then(|group| group.plugins.clone())
+                .unwrap_or_default(),
+        })
+    }
+}
+
+fn file_limits_from_document(
+    files: Option<&gents_documents::FileTools>,
+) -> crate::native::FileToolLimits {
+    let defaults = crate::native::FileToolLimits::default();
+    let limit = |value: Option<i64>, fallback: usize| {
+        value
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(fallback)
+    };
+    crate::native::FileToolLimits {
+        max_read_chars: limit(
+            files.and_then(|files| files.max_read_chars),
+            defaults.max_read_chars,
+        ),
+        max_list_entries: limit(
+            files.and_then(|files| files.max_list_entries),
+            defaults.max_list_entries,
+        ),
+        max_matches: limit(
+            files.and_then(|files| files.max_matches),
+            defaults.max_matches,
+        ),
+    }
+}
+
+pub fn resolve_goal_capabilities(
+    explicit_goal_tools: Option<bool>,
+    explicit_goal_creation: Option<bool>,
+) -> (bool, bool) {
+    (
+        explicit_goal_tools.unwrap_or(false),
+        explicit_goal_creation.unwrap_or(false),
+    )
+}
+
+fn command_policy_from_document(
+    bash_group: Option<&gents_documents::BashTools>,
+    bash: BashMode,
+) -> anyhow::Result<Option<CommandExecutionPolicy>> {
+    let execution_mode = bash_group.and_then(|bash| bash.execution_mode);
+    let network_mode = bash_group.and_then(|bash| bash.network_mode);
+    let allowed = bash_group
+        .and_then(|bash| bash.allowed_argv_prefixes.as_ref())
+        .filter(|prefixes| !prefixes.is_empty())
+        .map(|prefixes| prefixes.as_slice());
+    let forbidden = bash_group
+        .and_then(|bash| bash.forbidden_argv_prefixes.as_ref())
+        .filter(|prefixes| !prefixes.is_empty())
+        .map(|prefixes| prefixes.as_slice());
+    let read_only_allowlist = bash_group
+        .and_then(|bash| bash.read_only_commands.as_ref())
+        .filter(|list| !list.is_empty())
+        .map(|list| list.as_slice());
+    let has_policy = execution_mode.is_some()
+        || network_mode.is_some()
+        || allowed.is_some()
+        || forbidden.is_some()
+        || read_only_allowlist.is_some();
+
+    if !has_policy {
+        return if matches!(bash, BashMode::Unrestricted) {
+            Ok(Some(
+                CommandExecutionPolicy::write_capable()
+                    .with_mode(CommandExecutionMode::Unrestricted),
+            ))
+        } else {
+            Ok(None)
+        };
+    }
+
+    let mode = match bash {
+        BashMode::Off | BashMode::ReadOnly => CommandExecutionMode::ReadOnly,
+        BashMode::Unrestricted => execution_mode.unwrap_or(CommandExecutionMode::Unrestricted),
+    };
+
+    let base = if matches!(mode, CommandExecutionMode::ReadOnly) {
+        default_read_only_command_policy()
+    } else {
+        CommandExecutionPolicy::write_capable()
+    };
+    let base = match (mode, read_only_allowlist) {
+        (CommandExecutionMode::ReadOnly, Some(list)) if !list.is_empty() => {
+            base.with_read_only_allowlist(list.to_vec())
+        }
+        _ => base,
+    };
+    let allowed = allowed.map(<[Vec<String>]>::to_vec).unwrap_or_default();
+    let forbidden = forbidden.map(<[Vec<String>]>::to_vec).unwrap_or_default();
+    Ok(Some(
+        base.with_mode(mode)
+            .with_allowed_argv_prefixes(allowed)
+            .with_forbidden_argv_prefixes(forbidden)
+            .with_network_mode(network_mode.unwrap_or(CommandNetworkMode::Inherit)),
+    ))
+}
+
+type CustomToolFactoryFn = Arc<dyn Fn() -> Result<Box<dyn ToolDyn>> + Send + Sync>;
+
+#[derive(Clone)]
+pub struct CustomToolFactory {
+    name: String,
+    factory: CustomToolFactoryFn,
+}
+
+impl CustomToolFactory {
+    pub fn new(
+        name: impl Into<String>,
+        factory: impl Fn() -> Result<Box<dyn ToolDyn>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            factory: Arc::new(factory),
+        }
+    }
+
+    pub fn from_tool<T>(tool: T) -> Self
+    where
+        T: ToolDyn + Clone + Send + Sync + 'static,
+    {
+        let name = tool.name();
+        Self::new(name, move || Ok(Box::new(tool.clone()) as Box<dyn ToolDyn>))
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn build(&self) -> Result<Box<dyn ToolDyn>> {
+        (self.factory)()
+    }
+}
+
+impl std::fmt::Debug for CustomToolFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomToolFactory")
+            .field("name", &self.name)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod pushdown_tests;
+
+#[cfg(test)]
+mod candidate_conformance {
+    use super::*;
+
+    #[test]
+    fn generated_bash_documents_select_the_complete_command_policy() {
+        use gents_lean_vocab::families::tools_bash_selection_document_selection as family;
+        family::replay(|input| {
+            let mode = match input.mode.as_str() {
+                "off" => "Off",
+                "read_only" => "ReadOnly",
+                "unrestricted" => "Unrestricted",
+                other => panic!("unknown modeled bash mode {other}"),
+            };
+            let tools: gents_documents::Tools = serde_json::from_value(serde_json::json!({
+                "tools_id": "tools", "node_did": "did:key:zAgent",
+                "host": {"bash": {
+                    "mode": mode, "execution_mode": input.execution,
+                    "read_only_commands": input.allowlist, "background_enabled": input.background,
+                }}
+            }))
+            .unwrap();
+            let selection = ResolvedToolSelection::from_document(&tools).unwrap();
+            family::Observation {
+                policy: selection.command_policy.map(|policy| {
+                    let wire = serde_json::to_value(&policy).unwrap();
+                    family::Policy {
+                        mode: policy.mode.as_str().to_owned(),
+                        allowed_argv_prefixes: policy.allowed_argv_prefixes,
+                        forbidden_argv_prefixes: policy.forbidden_argv_prefixes,
+                        network_mode: policy.network_mode.as_str().to_owned(),
+                        read_only_allowlist: serde_json::from_value(
+                            wire["readOnlyAllowlist"].clone(),
+                        )
+                        .unwrap(),
+                        deny_all_argv: wire["denyAllArgv"].as_bool().unwrap(),
+                        deny_git_metadata_writes: wire["denyGitMetadataWrites"].as_bool().unwrap(),
+                    }
+                }),
+                background: selection.backgroundable_tool_names,
+            }
+        });
+    }
+}

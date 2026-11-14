@@ -1681,7 +1681,7 @@ describe("configuration panels", () => {
     expect(api.saveAgentConfig).not.toHaveBeenCalled();
   });
 
-  it("opens a new behavior as an unsaved, disabled draft until the operator saves it", async () => {
+  it("opens a new behavior as an unsaved draft and saves it with the Agent document's enabled default", async () => {
     const { api, app } = harness();
     renderRouted(app, agentsRoute, (route) => (
       <AgentsPanel deployment={deployment} agentDid={itemOf(route)} />
@@ -1701,10 +1701,10 @@ describe("configuration panels", () => {
     expect(request.document.agents).toEqual([
       expect.objectContaining({
         display_name: "Reviewer",
-        enabled: false,
         context_id: request.document.contexts[0].context_id,
       }),
     ]);
+    expect(request.document.agents[0]).not.toHaveProperty("enabled");
     expect(api.saveAgentConfig).not.toHaveBeenCalled();
   });
 
@@ -2036,30 +2036,75 @@ describe("configuration panels", () => {
     ).toHaveAttribute("aria-disabled", "true");
   });
 
-  it("coalesces repeated create activation while the operator write is pending", async () => {
-    const { api, app } = harness();
-    let finish: (() => void) | undefined;
-    api.saveSkillConfig.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
+  it.each([
+    {
+      section: "skills",
+      label: "New skill",
+      save: "Create skill",
+      write: "saveSkillConfig",
+      fill: "Name",
+      panel: (item?: string) => <SkillsPanel deployment={deployment} item={item} />,
+    },
+    {
+      section: "tools",
+      label: "New tools",
+      save: "Create",
+      write: "saveToolsConfig",
+      panel: (item?: string) => <ToolsPanel deployment={deployment} item={item} />,
+    },
+    {
+      section: "schedules",
+      label: "New schedule",
+      save: "Create schedule",
+      write: "saveScheduleConfig",
+      panel: (item?: string) => <SchedulesPanel deployment={deployment} item={item} />,
+    },
+    {
+      section: "event-sources",
+      label: "New event source",
+      save: "Create event source",
+      write: "saveEventSourceConfig",
+      panel: (item?: string) => (
+        <EventSourcesPanel deployment={deployment} item={item} />
+      ),
+    },
+    {
+      section: "tool-services",
+      label: "New remote tools",
+      save: "Add remote tools",
+      write: "saveToolServiceConfig",
+      panel: (item?: string) => (
+        <ToolServicesPanel deployment={deployment} item={item} />
+      ),
+    },
+  ] as const)(
+    "$label opens a draft that writes nothing until it is saved",
+    async ({ section, label, save, write, fill, panel }) => {
+      const { api, app } = harness();
+      const list = { ...nodeRoute, section };
+      const view = renderRouted(app, list, (route) => panel(itemOf(route)));
+      const user = userEvent.setup();
+
+      await user.click(screen.getByRole("button", { name: label }));
+      expect(screen.getByTestId("new-item-page")).toBeTruthy();
+      expect(api[write]).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(view.nav().route).toEqual(list);
+      expect(api[write]).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole("button", { name: label }));
+      if (fill) await user.type(screen.getByLabelText(fill), "Made here");
+      await user.click(screen.getByRole("button", { name: save }));
+      await waitFor(() => expect(api[write]).toHaveBeenCalledTimes(1));
+      await waitFor(() =>
+        expect(view.nav().route).toEqual({
+          ...list,
+          item: expect.not.stringMatching(/^~/),
         }),
-    );
-    renderIn(app, <SkillsPanel deployment={deployment} />);
-    const button = screen.getByRole("button", { name: "New skill" });
-
-    act(() => {
-      button.click();
-      button.click();
-    });
-
-    expect(api.saveSkillConfig).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: "Creating…" })).toBeDisabled();
-    finish?.();
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "New skill" })).toBeEnabled(),
-    );
-  });
+      );
+    },
+  );
 
   it("uses the real context delete command and never a replacement-list apply", async () => {
     const { api, app } = harness();

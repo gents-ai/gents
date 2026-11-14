@@ -1,13 +1,13 @@
-use gents::documents::{EvalSplit, EvalTier};
 use gents::eval::documents::*;
 use gents::eval::{OutcomeKind, ProviderReason, TAXONOMY_VERSION};
+use gents_documents::{EvalSplit, EvalTier};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use std::sync::Arc;
 
 use serde_json::json;
 
-use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
-use gents::store::identity::NodeIdentity;
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents_store::identity::NodeIdentity;
 
 pub(crate) struct HeldEvalFixture {
     pub(crate) access: ConfigAccess,
@@ -15,18 +15,25 @@ pub(crate) struct HeldEvalFixture {
     pub(crate) user_did: String,
     pub(crate) other_did: String,
     _node: Arc<gents::defra_node::Node>,
-    _user: gents::KeyIdentity,
-    _other: gents::KeyIdentity,
-    _runtime: gents::KeyIdentity,
+    _user: gents_store::identity::KeyIdentity,
+    _other: gents_store::identity::KeyIdentity,
+    _runtime: gents_store::identity::KeyIdentity,
     _keys: tempfile::TempDir,
 }
 
 impl HeldEvalFixture {
     pub(crate) async fn new() -> anyhow::Result<Self> {
         let keys = tempfile::tempdir()?;
-        let user = gents::KeyIdentity::load_or_create(keys.path().join("user.key"), None)?;
-        let runtime = gents::KeyIdentity::load_or_create(keys.path().join("runtime.key"), None)?;
-        let other = gents::KeyIdentity::load_or_create(keys.path().join("other.key"), None)?;
+        let user =
+            gents_store::identity::KeyIdentity::load_or_create(keys.path().join("user.key"), None)?;
+        let runtime = gents_store::identity::KeyIdentity::load_or_create(
+            keys.path().join("runtime.key"),
+            None,
+        )?;
+        let other = gents_store::identity::KeyIdentity::load_or_create(
+            keys.path().join("other.key"),
+            None,
+        )?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let address = listener.local_addr()?;
         let node = Arc::new(
@@ -37,7 +44,7 @@ impl HeldEvalFixture {
                 .build()
                 .await?,
         );
-        gents::ensure_runtime_schemas(&node).await?;
+        gents_store::schema::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), user.did())
                 .with_client_signing_capability(user.client_signing_capability()?)?

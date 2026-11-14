@@ -1,0 +1,33 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "k",
+        "type": "int64"
+      },
+      {
+        "name": "v",
+        "type": "text"
+      }
+    ],
+    "markdown": "| k | v |\n| --- | --- |\n| 1 | one |\n| 2 | two |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 2,
+    "rows": [
+      [
+        1,
+        "one"
+      ],
+      [
+        2,
+        "two"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT * FROM bom"
+  }
+}

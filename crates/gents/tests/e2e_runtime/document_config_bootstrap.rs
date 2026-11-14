@@ -1,8 +1,9 @@
-use gents::documents::apply_desired_state_plan;
-use gents::store::config_client::{
+use gents_documents::apply_desired_state_plan;
+use gents_documents::ensure_node;
+use gents_documents::{
     read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::{ensure_node, Collection};
+use gents_store::collection::Collection;
 use serde_json::{json, Value};
 
 use crate::support::agent_requests::RequestActors;
@@ -43,8 +44,13 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
             owner,
             json!({
                 "node_did": owner, "display_name": "Explicit configuration",
-                "default_agent_did": agent_did, "tags": ["authored"]
+                "tags": ["authored"]
             }),
+        ),
+        (
+            Collection::DefaultAgentSelection,
+            owner,
+            json!({"node_did": owner, "default_agent_did": agent_did}),
         ),
         (
             Collection::Compaction,
@@ -116,7 +122,14 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
     access
         .transact_write("test.canonical_config.apply", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -138,7 +151,7 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
         // Logical IDs are scoped by their Node: the same ID under another
         // Node names nothing here.
         let other = "did:key:zOtherNode";
-        let other_id = if *collection == Collection::Node {
+        let other_id = if collection.keyed_by_owner() {
             other
         } else {
             id
@@ -194,7 +207,7 @@ async fn session_create_returns_its_physical_receipt() {
                 &json!({"input": input}),
             ).await?;
             let response = gents::defra_node::QueryResponse::success(response["data"].clone());
-            let created = gents::store::graphql::single_mutation_document(&response, "create_AgentSession")?.expect("create must return a physical document");
+            let created = gents_store::graphql::single_mutation_document(&response, "create_AgentSession")?.expect("create must return a physical document");
             let id = created["_docID"].as_str().expect("physical ID");
             let stored = txn.execute("{ AgentSession { _docID session_id provenance } }").await?;
             assert_eq!(stored["data"]["AgentSession"].as_array().unwrap().len(), 1);

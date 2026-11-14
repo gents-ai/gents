@@ -15,6 +15,7 @@ name = "runtime"
 required-features = ["runtime-e2e"]
 
 [dependencies]
+gents-service.workspace = true
 anyhow.workspace = true
 async-trait = "0.1"
 bytes.workspace = true
@@ -22,7 +23,17 @@ blake3 = "1"
 clap.workspace = true
 futures = "0.3"
 gents = { path = "../gents" }
+gents-store = { workspace = true }
+gents-documents = { workspace = true }
+gents-inference = { workspace = true }
+gents-pack = { workspace = true }
+gents-session = { workspace = true }
+gents-tools = { workspace = true }
+gents-automation = { workspace = true }
+gents-observe = { workspace = true }
+gents-loop = { workspace = true }
 gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false }
+gents-host.workspace = true
 gents-desktop-core.workspace = true
 gents-protocol.workspace = true
 gents-desktop-bridge = { path = "../gents-desktop-bridge", default-features = false }
@@ -45,7 +56,8 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
-gents = { path = "../gents", features = ["test-home-guard"] }
+gents-service = { workspace = true, features = ["test-home-guard"] }
+gents = { path = "../gents", features = ["test-fixtures"] }
 defra-node.workspace = true
 chrono.workspace = true
 reqwest.workspace = true
@@ -59,3 +71,6 @@ base64.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
 portable-pty = "0.9"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+security-framework = { version = "3.7.0", features = ["OSX_10_15"] }

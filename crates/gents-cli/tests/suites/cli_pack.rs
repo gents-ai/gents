@@ -97,7 +97,7 @@ fn a_document_pack_with_a_plugin_installs_and_its_removal_retires_the_plugin() -
         &["config", "pack", "remove", "demo_tools", "--home", home_arg],
     )?;
     anyhow::ensure!(
-        gents::plugin::store::read_record(&home, "gents", "echo_tool").is_err(),
+        gents_pack::plugin::store::read_record(&home, "gents", "echo_tool").is_err(),
         "the retired plugin still has a store record"
     );
     let uncallable = run_cli_failure_stderr(
@@ -220,9 +220,9 @@ fn offline_pack_install_with_a_documents_dependency_holds_one_store_claim() -> R
         "the documents dependency was not installed: {denial}"
     );
 
-    let _held = gents::store::local::home::lock_store(
+    let _held = gents_store::local::home::lock_store(
         &setup.home,
-        &gents::store::local::home::default_data_dir(&setup.home),
+        &gents_store::local::home::default_data_dir(&setup.home),
     )?;
     let denial = run_cli_failure_stderr(setup.tempdir.path(), &install_args)?;
     anyhow::ensure!(
@@ -423,7 +423,7 @@ fn a_documents_dependency_plugin_is_retired_with_its_dependent() -> Result<()> {
 
     let setup = DependentHome::with_dependee("dep-plugin", &dependee)?;
     run_cli_json(setup.tempdir.path(), &setup.install_args())?;
-    let record = gents::plugin::store::read_record(&setup.home, "fixture", "echo_tool")?;
+    let record = gents_pack::plugin::store::read_record(&setup.home, "fixture", "echo_tool")?;
     anyhow::ensure!(
         record.owner_pack_coordinate.as_deref() == Some("fixture/dependee_fixture"),
         "the dependency's plugin is not owned by the dependency: {record:?}"
@@ -441,7 +441,7 @@ fn a_documents_dependency_plugin_is_retired_with_its_dependent() -> Result<()> {
         ],
     )?;
     anyhow::ensure!(
-        gents::plugin::store::read_record(&setup.home, "fixture", "echo_tool").is_err(),
+        gents_pack::plugin::store::read_record(&setup.home, "fixture", "echo_tool").is_err(),
         "the dependency's plugin outlived the removal that released it"
     );
     Ok(())
@@ -616,7 +616,7 @@ fn target_ids(tools: &serde_json::Value) -> std::collections::BTreeSet<String> {
 fn pack_wire_writes_tools_and_context_in_one_transaction() -> Result<()> {
     let fixture = wire_fixture(true)?;
     fixture.wire(&[])?;
-    let plugin = gents::plugin::store::read_record(&fixture.home, "fixture", "job_fixture")?;
+    let plugin = gents_pack::plugin::store::read_record(&fixture.home, "fixture", "job_fixture")?;
     let tools = fixture.agent_tools()?;
     let entry = wired_plugin(&tools).context("the agent's Tools does not list the plugin")?;
     anyhow::ensure!(
@@ -900,7 +900,7 @@ fn pack_install_expect_digest_match_installs() -> Result<()> {
     let digest = fixture.job_pack_digest()?;
     fixture.install_job_pack(&["--expect-digest", &digest])?;
     anyhow::ensure!(
-        gents::pack::read_home_install(&fixture.home, JOB_PACK)?.is_some(),
+        gents_pack::pack::read_home_install(&fixture.home, JOB_PACK)?.is_some(),
         "a matching --expect-digest did not install the pack"
     );
     Ok(())
@@ -912,12 +912,12 @@ fn pack_install_expect_digest_mismatch_writes_nothing() -> Result<()> {
     let digest = fixture.job_pack_digest()?;
     let wrong = format!("sha256:{}", "0".repeat(64));
     let stderr = fixture.install_job_pack_failure(&["--expect-digest", &wrong])?;
-    for needle in [wrong.as_str(), digest.as_str(), "gents config pack show"] {
+    for needle in [wrong.as_str(), digest.as_str(), "--preview"] {
         anyhow::ensure!(stderr.contains(needle), "{needle} missing from: {stderr}");
     }
     anyhow::ensure!(
-        gents::pack::read_home_install(&fixture.home, JOB_PACK)?.is_none()
-            && gents::plugin::store::list_records(&fixture.home)?.is_empty(),
+        gents_pack::pack::read_home_install(&fixture.home, JOB_PACK)?.is_none()
+            && gents_pack::plugin::store::list_records(&fixture.home)?.is_empty(),
         "a refused digest left an install behind"
     );
     Ok(())
@@ -973,7 +973,7 @@ fn pack_install_preview_reports_the_review_and_writes_nothing() -> Result<()> {
         "the preview does not list the pack's agent and what it holds: {preview}"
     );
     anyhow::ensure!(
-        gents::pack::read_home_install(&home, "fixture/documents_fixture")?.is_none(),
+        gents_pack::pack::read_home_install(&home, "fixture/documents_fixture")?.is_none(),
         "a preview installed the pack"
     );
     let shown = run_cli_json(temp.path(), &["config", "pack", "show", dir_arg(&pack)])?;
@@ -1050,7 +1050,9 @@ fn default_profile_from_init(initialized: &serde_json::Value) -> Result<String> 
         .as_str()
         .or_else(|| initialized["init"]["default_agent_did"].as_str())
         .with_context(|| format!("init reports no default agent: {initialized}"))?;
-    Ok(gents::default_inference_profile_id_for_agent(agent))
+    Ok(gents_documents::default_inference_profile_id_for_agent(
+        agent,
+    ))
 }
 
 fn slot<'a>(needs: &'a serde_json::Value, name: &str) -> Result<&'a serde_json::Value> {
@@ -1135,7 +1137,7 @@ fn pack_install_preview_reports_the_slots_still_to_bind() -> Result<()> {
         "the install did not refuse the unbound slots: {refusal}"
     );
     anyhow::ensure!(
-        gents::pack::read_home_install(&home, "fixture/dependee_fixture")?.is_none(),
+        gents_pack::pack::read_home_install(&home, "fixture/dependee_fixture")?.is_none(),
         "the refused install installed the pack"
     );
 
@@ -1316,7 +1318,7 @@ fn pack_install_wire_refuses_before_any_write_without_grant() -> Result<()> {
         "child_process": false,
     });
     write_json_file(&manifest_path, &manifest)?;
-    let records = serde_json::to_value(gents::plugin::store::list_records(&fixture.home)?)?;
+    let records = serde_json::to_value(gents_pack::plugin::store::list_records(&fixture.home)?)?;
     let tools = fixture.agent_tools()?;
 
     let stderr = fixture.install_job_pack_failure(&["--wire", &fixture.agent])?;
@@ -1325,7 +1327,7 @@ fn pack_install_wire_refuses_before_any_write_without_grant() -> Result<()> {
         "the refusal does not name --grant-authority: {stderr}"
     );
     anyhow::ensure!(
-        serde_json::to_value(gents::plugin::store::list_records(&fixture.home)?)? == records
+        serde_json::to_value(gents_pack::plugin::store::list_records(&fixture.home)?)? == records
             && fixture.agent_tools()? == tools,
         "a refused install changed the plugin store or the agent's Tools"
     );
@@ -1394,13 +1396,21 @@ async fn wire_sources_in_fixture_home() -> Result<()> {
 
 const STARTER_HOME_ENV: &str = "GENTS_TEST_STARTER_HOME";
 const STARTER_STEP_ENV: &str = "GENTS_TEST_STARTER_STEP";
+const STARTER_ARCHIVES_ENV: &str = "GENTS_TEST_STARTER_ARCHIVES";
 
-/// A copy of the job fixture pack renamed to the starter pack `gents/<name>`,
+/// The directory the fixture core pack archives are written to, one
+/// `<name>.pack` per core pack `gents/<name>`.
+fn starter_archives(scratch: &std::path::Path) -> std::path::PathBuf {
+    scratch.join("core-packs")
+}
+
+/// A copy of the job fixture pack renamed to the core pack `gents/<name>`,
 /// shipping the plugin `gents/<plugin>` (which requests an environment
-/// variable) and one skill, admitted to `home`'s pack store.
-fn admit_starter_fixture(
+/// variable) and one skill, written as a release archive. A job plugin's
+/// pack also ships a worker agent whose rootless host Tools take the
+/// Engineer's root, as `gents/dynamic_workflows` does.
+fn release_starter_fixture(
     scratch: &std::path::Path,
-    home: &std::path::Path,
     name: &str,
     plugin: &str,
     job: bool,
@@ -1429,6 +1439,10 @@ fn admit_starter_fixture(
         format!("plugins/{plugin}.afb"),
     ]);
     manifest.as_object_mut().unwrap().remove("schemas");
+    if job {
+        manifest["inference_slots"] = serde_json::json!([{"name": "worker",
+            "description": "The worker.", "agents": ["wf-worker"]}]);
+    }
     let entry = &mut manifest["plugins"][0];
     entry["name"] = plugin.into();
     entry["artifact"] = format!("plugins/{plugin}.afb").into();
@@ -1457,19 +1471,35 @@ fn admit_starter_fixture(
             "tools_id": format!("{name}-caller"),
             "display_name": "Starter fixture caller",
             "integrations": {"plugins": [selection]},
+        }, {
+            "tools_id": "${GENTS_PACK_NODE_DID}-wf-worker",
+            "display_name": "Read-only files",
+            "host": {"files": {"mode": "ReadOnly"}},
         }]);
+        config["agents"] = serde_json::json!([{"agent_slot": "wf-worker",
+            "context_id": "wf-worker-context", "display_name": "Starter workflow worker",
+            "description": "Does one read-only task.",
+            "inference_profile_id": "gents:inference-slot:worker"}]);
+        config["contexts"] = serde_json::json!([{"context_id": "wf-worker-context",
+            "system_prompt": "Work.", "tools_id": "${GENTS_PACK_NODE_DID}-wf-worker"}]);
     }
     edit_pack_config(&dir, |existing| *existing = config)?;
     run_cli_text(scratch, &["config", "pack", "build", dir_arg(&dir)])?;
-    gents::pack::local::open(&gents::pack::local::LocalName::Path(&dir), home)
-        .with_context(|| format!("admitting {name} to the home's pack store"))?;
+    let mut archive = Vec::new();
+    gents_pack::pack::archive::write_pack(&dir, &mut archive)
+        .with_context(|| format!("packing {name}"))?;
+    std::fs::create_dir_all(starter_archives(scratch))?;
+    std::fs::write(
+        starter_archives(scratch).join(format!("{name}.pack")),
+        archive,
+    )?;
     Ok(())
 }
 
 fn starter_step(fixture: &std::path::Path, home: &std::path::Path, step: &str) -> Result<()> {
     let output = std::process::Command::new(std::env::current_exe()?)
         .args([
-            "cli_pack::starter_packs_in_fixture_home",
+            "cli_pack::core_packs_in_fixture_home",
             "--exact",
             "--include-ignored",
             "--nocapture",
@@ -1478,6 +1508,7 @@ fn starter_step(fixture: &std::path::Path, home: &std::path::Path, step: &str) -
         .env_remove(gents_desktop_core::client::DESKTOP_HOME_ENV)
         .env(STARTER_HOME_ENV, home)
         .env(STARTER_STEP_ENV, step)
+        .env(STARTER_ARCHIVES_ENV, starter_archives(fixture))
         .output()?;
     anyhow::ensure!(
         output.status.success(),
@@ -1488,15 +1519,50 @@ fn starter_step(fixture: &std::path::Path, home: &std::path::Path, step: &str) -
     Ok(())
 }
 
-/// What the desktop's starter packs card does, against a real runtime. The
-/// list is read while the runtime serves the home. An approval installs
-/// through the home's own store, so it is refused, writing nothing, while
-/// the runtime runs, and the desktop restarts the node around it: here the
-/// runtime is stopped, the packs approved (twice: approving again changes
-/// nothing) and the runtime started again, where the Engineer's surface has
-/// the packs' plugin tools and its Context their skills.
+/// The runtime's readiness of `home` as `gents status` reports it, and the
+/// reason the node readiness snapshot gives `agent`, if any. The fixture's
+/// backend is unreachable, so a backend reason is the fixture's and not what
+/// a core pack leaves: it reads as none.
+fn readiness_of(
+    scratch: &std::path::Path,
+    home_arg: &str,
+    agent: &str,
+) -> Result<(serde_json::Value, Option<serde_json::Value>)> {
+    let status = run_cli_json(scratch, &["status", "--home", home_arg, "--output", "json"])?;
+    let reason = status["node_readiness"]["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["agent_did"] == agent)
+        .map(|entry| entry["reason"].clone())
+        .filter(|reason| {
+            !reason.is_null()
+                && reason
+                    .as_str()
+                    .is_some_and(|reason| !reason.starts_with("backend_"))
+        });
+    anyhow::ensure!(
+        !status.to_string().contains("tool_surface_unavailable"),
+        "no agent of the node lacks its tool surface: {status}"
+    );
+    Ok((status, reason))
+}
+
+/// What the desktop's starter packs card and `gents config pack starter`
+/// do, against a real runtime, replaying Lean `Pack.CorePacks.enableRoute`
+/// and the readiness `Runtime.StartupDegraded` gives a core pack's agents.
+/// While the runtime serves the home, enabling a pack the home lacks is
+/// refused, writing nothing, and names how to stop the node. Stopped, the
+/// packs are installed as init leaves them; served again, the not-enabled
+/// pack's worker is the one agent off and no agent lacks its tool surface.
+/// Enabling that pack on the running node (twice: enabling again changes
+/// nothing) grants and enables its worker, which the running node then
+/// reports with no reason the pack leaves, and gives the Engineer's surface
+/// the pack's plugin tool.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn starter_packs_are_approved_around_a_running_runtime() -> Result<()> {
+async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
+    use gents_pack::pack::core_packs::CorePack;
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
     let tempdir = tempfile::tempdir()?;
     let scratch = tempdir.path();
     let home = scratch.join("agent-home");
@@ -1519,8 +1585,8 @@ async fn starter_packs_are_approved_around_a_running_runtime() -> Result<()> {
         .as_str()
         .context("init output missing default_agent_did")?
         .to_owned();
-    admit_starter_fixture(scratch, &home, "dynamic_workflows", "job_fixture", true)?;
-    admit_starter_fixture(scratch, &home, "script", "script", false)?;
+    release_starter_fixture(scratch, "dynamic_workflows", "job_fixture", true)?;
+    release_starter_fixture(scratch, "script", "script", false)?;
 
     let serve = |port: u16| spawn_server_with_ready_json(scratch, port, &["--home", home_arg], &[]);
     let port = allocate_port()?;
@@ -1540,7 +1606,42 @@ async fn starter_packs_are_approved_around_a_running_runtime() -> Result<()> {
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(&graphql, &node_did, std::time::Duration::from_secs(60)).await?;
     wait_for_runtime_state_graphql(&home, &graphql, std::time::Duration::from_secs(30)).await?;
-    starter_step(scratch, &home, "restarted")?;
+    let status = run_cli_json(scratch, &["status", "--home", home_arg, "--output", "json"])?;
+    let worker = match status["off_agents"].as_array().map(Vec::as_slice) {
+        Some([worker]) => worker.as_str().context("an off agent is a DID")?.to_owned(),
+        _ => anyhow::bail!("the not-enabled pack's worker is the one agent off: {status}"),
+    };
+    let (_, reason) = readiness_of(scratch, home_arg, &worker)?;
+    for case in gents_lean_vocab::families::runtime_startup_degraded_init_agent_reason::cases::<
+        CorePack,
+        Reason,
+    >() {
+        if case.input.core_pack == CorePack::DynamicWorkflows && case.input.host_tools {
+            case.check(serde_json::from_value::<Option<Reason>>(
+                reason.clone().unwrap_or_default(),
+            )?);
+        }
+    }
+
+    starter_step(scratch, &home, "enable-running")?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let reason = loop {
+        let (_, reason) = readiness_of(scratch, home_arg, &worker)?;
+        if reason.is_none() || std::time::Instant::now() >= deadline {
+            break reason;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    };
+    for case in gents_lean_vocab::families::runtime_startup_degraded_enabled_agent_reason::cases::<
+        CorePack,
+        Reason,
+    >() {
+        if case.input.core_pack == CorePack::DynamicWorkflows && case.input.host_tools {
+            case.check(serde_json::from_value::<Option<Reason>>(
+                reason.clone().unwrap_or_default(),
+            )?);
+        }
+    }
     let explained = run_cli_json(
         scratch,
         &[
@@ -1591,25 +1692,45 @@ async fn starter_packs_are_approved_around_a_running_runtime() -> Result<()> {
     let workflow = selected("gents/job_fixture");
     anyhow::ensure!(
         workflow.len() == 1 && workflow[0]["job"]["policy"]["dynamic"] == "run",
-        "approving gents/dynamic_workflows did not set its job block to run, once: {tools}"
+        "enabling gents/dynamic_workflows did not set its job block to run, once: {tools}"
     );
     let script = selected("gents/script");
     anyhow::ensure!(
         script.len() == 1 && script[0]["tool_calls"] == true,
-        "approving gents/script did not wire it with tool_calls, once: {tools}"
+        "init did not wire gents/script with tool_calls, once: {tools}"
+    );
+    let (_, stderr) = server.captured_output()?;
+    anyhow::ensure!(
+        !stderr.contains("tool surface unavailable"),
+        "the served node logged a tool surface error: {stderr}"
     );
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "run by starter_packs_are_approved_around_a_running_runtime in the fixture's HOME"]
-async fn starter_packs_in_fixture_home() -> Result<()> {
+#[ignore = "run by core_packs_are_enabled_around_a_running_runtime in the fixture's HOME"]
+async fn core_packs_in_fixture_home() -> Result<()> {
     let home = std::path::PathBuf::from(
         std::env::var_os(STARTER_HOME_ENV).context("fixture home is not set")?,
     );
     let step = std::env::var(STARTER_STEP_ENV).context("fixture step is not set")?;
-    let registry = Some(UNROUTABLE_REGISTRY.to_owned());
-    let listed = gents_server::packs::default_packs(home.clone(), registry.clone()).await?;
+    let archive_dir = std::path::PathBuf::from(
+        std::env::var_os(STARTER_ARCHIVES_ENV).context("fixture archives are not set")?,
+    );
+    let mut archives = Vec::new();
+    for entry in std::fs::read_dir(&archive_dir)? {
+        let path = entry?.path();
+        let name = path
+            .file_stem()
+            .and_then(std::ffi::OsStr::to_str)
+            .context("an archive file is not named for its pack")?;
+        archives.push((format!("gents/{name}"), std::fs::read(&path)?));
+    }
+    let archives: Vec<(&str, &[u8])> = archives
+        .iter()
+        .map(|(coordinate, bytes)| (coordinate.as_str(), bytes.as_slice()))
+        .collect();
+    let listed = gents_server::packs::core_packs_from(home.clone(), &archives).await?;
     let state = |pack: &str| {
         listed["packs"]
             .as_array()
@@ -1618,79 +1739,102 @@ async fn starter_packs_in_fixture_home() -> Result<()> {
             .find(|listed| listed["pack"] == pack)
             .map(|listed| listed["state"].clone())
     };
-    let fixtures = ["gents/dynamic_workflows", "gents/script"];
-    let approved = || {
-        fixtures
-            .iter()
-            .map(|pack| {
-                let digest = listed["packs"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .find(|listed| listed["pack"] == *pack)
-                    .and_then(|listed| listed["digest"].as_str())
-                    .with_context(|| format!("{pack} lists no digest: {listed}"))?;
-                Ok(((*pack).to_owned(), digest.to_owned()))
-            })
-            .collect::<Result<Vec<_>>>()
+    let fixtures = || {
+        ["gents/dynamic_workflows", "gents/script"]
+            .map(str::to_owned)
+            .to_vec()
     };
     anyhow::ensure!(
         listed["packs"].as_array().map(Vec::len) == Some(6)
             && state("gents/web") == Some("unavailable".into()),
-        "{step}: every starter pack is listed, and one nothing publishes is unavailable: {listed}"
+        "{step}: every core pack is listed, and one this build does not carry is unavailable: {listed}"
     );
     match step.as_str() {
         "running" => {
             anyhow::ensure!(
-                fixtures
+                fixtures()
                     .iter()
-                    .all(|pack| state(pack) == Some("needs_approval".into())),
-                "the running node's packs wait on an approval: {listed}"
+                    .all(|pack| state(pack) == Some("missing".into())),
+                "the running node's packs are missing and installable: {listed}"
             );
             let refused =
-                gents_server::packs::approve_default_packs(home.clone(), approved()?, registry)
+                gents_server::packs::enable_core_packs_from(home.clone(), fixtures(), &archives)
                     .await
-                    .expect_err("an approval while the runtime serves the home");
+                    .expect_err("enabling a pack the home lacks while the runtime serves it");
+            let refused = format!("{refused:#}");
             anyhow::ensure!(
-                format!("{refused:#}").contains("a runtime is serving this home"),
-                "{refused:#}"
+                refused.contains("is not installed on this home")
+                    && refused.contains("gents runtime service stop --home")
+                    && refused.contains("gents runtime server --home"),
+                "{refused}"
             );
             anyhow::ensure!(
-                gents::pack::read_home_install(&home, "gents/script")?.is_none()
-                    && gents::plugin::store::list_records(&home)?.is_empty(),
-                "a refused approval installed something"
+                gents_pack::pack::read_home_install(&home, "gents/script")?.is_none()
+                    && gents_pack::plugin::store::list_records(&home)?.is_empty(),
+                "a refused enable installed something"
             );
         }
         "stopped" => {
+            let report =
+                gents_server::packs::install_core_packs_from(home.clone(), &archives).await?;
+            anyhow::ensure!(
+                report["installed"].as_array().map(Vec::len) == Some(2),
+                "init's install did not install both packs: {report}"
+            );
+            let listed = gents_server::packs::core_packs_from(home.clone(), &archives).await?;
+            let state = |pack: &str| {
+                listed["packs"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|listed| listed["pack"] == pack)
+                    .map(|listed| listed["state"].clone())
+            };
+            anyhow::ensure!(
+                state("gents/dynamic_workflows") == Some("not_enabled".into())
+                    && state("gents/script") == Some("installed".into()),
+                "init leaves dynamic workflows not enabled and script installed: {listed}"
+            );
+        }
+        "enable-running" => {
             for _ in 0..2 {
-                let report = gents_server::packs::approve_default_packs(
+                let report = gents_server::packs::enable_core_packs_from(
                     home.clone(),
-                    approved()?,
-                    registry.clone(),
+                    vec!["gents/dynamic_workflows".to_owned()],
+                    &archives,
                 )
                 .await?;
                 anyhow::ensure!(
                     report["failed"] == serde_json::json!([])
-                        && report["installed"].as_array().map(Vec::len) == Some(2),
-                    "the approval did not install both packs: {report}"
+                        && report["enabled"].as_array().map(Vec::len) == Some(1),
+                    "enabling on the running node failed: {report}"
                 );
+                let enabled = &report["enabled"][0];
                 anyhow::ensure!(
-                    report["installed"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .all(|pack| pack["skills"].as_array().map(Vec::len) == Some(1)
-                            && pack["granted_permissions"].as_array().map(Vec::len) == Some(1)),
-                    "each pack's skill is attached and its permission granted: {report}"
+                    enabled["skills"].as_array().map(Vec::len) == Some(1)
+                        && enabled["granted_permissions"].as_array().map(Vec::len) == Some(1)
+                        && enabled["host_tool_roots"]
+                            .as_array()
+                            .is_some_and(|rows| rows.len() == 1 && rows[0]["reader_on"].is_string())
+                        && enabled["agents"]
+                            .as_array()
+                            .is_some_and(|rows| rows.len() == 1 && rows[0]["enabled"] == true),
+                    "enabling attaches the skill, grants the permission and the worker's reader and enables the worker: {report}"
                 );
             }
+            let listed = gents_server::packs::core_packs_from(home.clone(), &archives).await?;
+            anyhow::ensure!(
+                listed["packs"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|listed| fixtures()
+                        .iter()
+                        .any(|pack| listed["pack"] == pack.as_str()))
+                    .all(|listed| listed["state"] == "installed"),
+                "the running node lists the enabled packs as installed: {listed}"
+            );
         }
-        "restarted" => anyhow::ensure!(
-            fixtures
-                .iter()
-                .all(|pack| state(pack) == Some("installed".into())),
-            "the restarted node lists the approved packs as installed: {listed}"
-        ),
         other => anyhow::bail!("unknown step {other}"),
     }
     Ok(())

@@ -3,7 +3,8 @@ use super::{
     DesiredStateManifest,
 };
 use anyhow::{Context, Result};
-use gents::{store::config_client::DesiredStateApplyPlan, Collection};
+use gents_documents::DesiredStateApplyPlan;
+use gents_store::collection::Collection;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -81,6 +82,9 @@ fn compare_manifests(
     let mut live_docs = canonical_records(live)?;
     if live_principal.is_none() {
         live_docs.retain(|(collection, _), _| *collection != Collection::Node);
+    }
+    if desired.default_agent_selection.is_none() {
+        live_docs.retain(|(collection, _), _| *collection != Collection::DefaultAgentSelection);
     }
     let mut collections = DesiredStateDiffCollections::default();
     for collection in Collection::ALL {

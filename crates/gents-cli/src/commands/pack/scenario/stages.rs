@@ -1,4 +1,4 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -12,8 +12,8 @@ use super::manifest::{
 use super::results::graphql_rows;
 use super::tool_calls::verify_stage_tool_sequences;
 use crate::graphql_access::post_graphql;
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
+use gents_store::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone)]
 pub(super) struct StageResult {
@@ -74,16 +74,16 @@ async fn sourced_trigger_request_count(
                 source.collection, source.expected_count_field
             )
         })?;
-        let count = gents::store::graphql::canonical_positive_count(
+        let count = gents_store::graphql::canonical_positive_count(
             value,
-            gents::MAX_EVENT_TRIGGER_GROUP_DOCS,
+            gents_documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS,
         )
         .with_context(|| {
             format!(
                 "{}.{} must be a canonical positive integer <= {}",
                 source.collection,
                 source.expected_count_field,
-                gents::MAX_EVENT_TRIGGER_GROUP_DOCS
+                gents_documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS
             )
         })?;
         if expected.is_some_and(|prior| prior != count) {
@@ -331,11 +331,23 @@ pub(super) fn stage_requests_query(trigger_id: &str, correlation: &str) -> Strin
 }
 
 async fn trigger_error(graphql: &GraphqlEndpoint, trigger_id: &str) -> Option<String> {
-    let query = format!(
-        r#"{{ Trigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ last_status last_error }} }}"#,
-        escape_graphql_string(trigger_id)
-    );
-    let resp = post_graphql(graphql, &query).await.ok()?;
+    let rendered = {
+        use gents_protocol::document_query::{fields::trigger, Filter, Query, Selection};
+        Query::select(
+            Selection::new()
+                .field(trigger::LAST_STATUS)
+                .field(trigger::LAST_ERROR),
+        )
+        .filter(Filter::eq(trigger::TRIGGER_ID, trigger_id))
+        .render()
+    };
+    let resp = gents_store::config_client::post_graphql_with_variables(
+        graphql,
+        &rendered.document,
+        &rendered.variables,
+    )
+    .await
+    .ok()?;
     let row = resp.pointer("/data/Trigger/0")?;
     if row.get("last_status").and_then(Value::as_str) != Some("error") {
         return None;

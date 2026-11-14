@@ -2,7 +2,7 @@ use crate::support::*;
 
 use anyhow::{Context, Result};
 use gents::defra_node::Node as EmbeddedNode;
-use gents::NodeIdentity;
+use gents_store::identity::NodeIdentity;
 use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -318,7 +318,10 @@ fn mcp_register_rejects_unsupported_legacy_version() -> Result<()> {
 async fn mcp_register_rejects_an_unavailable_explicit_node() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let node_home = tempdir.path().join("node-home");
-    let foreign = gents::KeyIdentity::load_or_create(tempdir.path().join("foreign.key"), None)?;
+    let foreign = gents_store::identity::KeyIdentity::load_or_create(
+        tempdir.path().join("foreign.key"),
+        None,
+    )?;
     let fixture = McpFixture::new(tempdir.path(), &node_home, "mcp-scope").await?;
     let output = fixture
         .run_for_node(
@@ -404,13 +407,13 @@ fn assert_last_error_contains(row: &Value, needle: &str) -> Result<()> {
 
 struct McpFixture {
     node: Arc<EmbeddedNode>,
-    access: gents::ConfigAccess,
+    access: gents_store::config_client::ConfigAccess,
     node_did: String,
     graphql: String,
     cwd: std::path::PathBuf,
     desktop_home: std::path::PathBuf,
-    _store_claim: gents::store::local::home::StoreLock,
-    _runtime: gents::KeyIdentity,
+    _store_claim: gents_store::local::home::StoreLock,
+    _runtime: gents_store::identity::KeyIdentity,
     _client: gents_desktop_core::client::PrincipalIdentity,
 }
 
@@ -446,24 +449,24 @@ impl McpFixture {
         let client = gents_desktop_core::client::PrincipalIdentity::load_existing(
             &gents_desktop_core::client::DesktopPaths::from_root(desktop_home.join("cli")),
         )?;
-        let data = gents::store::local::home::default_data_dir(&home);
-        let claim = gents::store::local::home::lock_store(&home, &data)?;
-        let store_key = gents::store::local::store_key::open_home_store_key(&home, &data).await?;
+        let data = gents_store::local::home::default_data_dir(&home);
+        let claim = gents_store::local::home::lock_store(&home, &data)?;
+        let store_key = gents_store::local::store_key::open_home_store_key(&home, &data).await?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let graphql = format!("http://{}/api/v0/graphql", listener.local_addr()?);
         let node = Arc::new(
-            gents::store::local::store_key::persistent_builder(&data, &store_key)?
+            gents_store::local::store_key::persistent_builder(&data, &store_key)?
                 .with_node_identity_did(node_did.clone())
                 .with_node_acp_enabled()
                 .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
                 .build()
                 .await?,
         );
-        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             client.private_key_bytes(),
         )?;
-        let access = gents::ConfigAccess::Graphql(
-            gents::store::config_client::GraphqlEndpoint::as_principal(&graphql, client.did())
+        let access = gents_store::config_client::ConfigAccess::Graphql(
+            gents_store::config_client::GraphqlEndpoint::as_principal(&graphql, client.did())
                 .with_client_signing_capability(capability)?
                 .with_client_signed_agent_creates(),
         );
@@ -512,8 +515,8 @@ impl McpFixture {
         mcp_port: u16,
         enabled: bool,
     ) -> Result<()> {
-        use gents::documents::apply_desired_state_plan;
-        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents_documents::apply_desired_state_plan;
+        use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let value = serde_json::json!({"node_did":self.node_did,"service_id":service_id,"display_name":"Fixture MCP","description":"MCP probe fixture","hostname":hostname,"tailscale_ip":tailscale_ip,"lan_ip":lan_ip,"mcp_port":mcp_port,"mcp_path":"/mcp","enabled":enabled});
         if mcp_port == 0
             || [hostname, tailscale_ip, lan_ip]
@@ -523,14 +526,21 @@ impl McpFixture {
             return self.seed_unvalidated(&value).await;
         }
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: gents::Collection::ToolServiceRegistry,
+            collection: gents_store::collection::Collection::ToolServiceRegistry,
             add: value.clone(),
             update: value,
         }])?;
         self.access
             .transact_write("test.mcp.service", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await?;
         Ok(())
@@ -540,11 +550,11 @@ impl McpFixture {
     /// address, but the probe must still report one that reached the store
     /// another way, so these rows are created directly as the User.
     async fn seed_unvalidated(&self, value: &Value) -> Result<()> {
-        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             self._client.private_key_bytes(),
         )?;
-        let access = gents::ConfigAccess::Graphql(
-            gents::store::config_client::GraphqlEndpoint::as_principal(
+        let access = gents_store::config_client::ConfigAccess::Graphql(
+            gents_store::config_client::GraphqlEndpoint::as_principal(
                 &self.graphql,
                 self._client.did(),
             )
@@ -556,7 +566,7 @@ impl McpFixture {
             &serde_json::json!({"input": value}),
         )
         .await?;
-        gents::store::graphql::created_doc_id(&response, "ToolServiceRegistry")?;
+        gents_store::graphql::created_doc_id(&response, "ToolServiceRegistry")?;
         Ok(())
     }
 }

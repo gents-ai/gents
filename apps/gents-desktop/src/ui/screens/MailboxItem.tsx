@@ -149,7 +149,7 @@ function RowDismiss({ item }: { item: MailboxItemView }) {
         aria-label={`Dismiss ${item.title}`}
         className="absolute top-1/2 right-0 -translate-y-1/2 text-muted-foreground hover:text-foreground opacity-0 group-hover/row:opacity-100 group-has-focus-visible/row:opacity-100 [@media(hover:none)]:opacity-100"
         onClick={() =>
-          dismissMailboxItem(item.itemId).catch((e: unknown) =>
+          dismissMailboxItem(item.itemId, item.nodeDid).catch((e: unknown) =>
             toastFailure("dismiss the item", e),
           )
         }
@@ -591,7 +591,7 @@ function Footer({
           size="sm"
           variant="raised"
           onClick={() =>
-            dismissMailboxItem(m.itemId).then(onDone, (e: unknown) =>
+            dismissMailboxItem(m.itemId, m.nodeDid).then(onDone, (e: unknown) =>
               toastFailure("dismiss the item", e),
             )
           }
@@ -660,7 +660,7 @@ export async function openItem(
     return;
   }
   try {
-    const item = await openMailboxItem(m.itemId);
+    const item = await openMailboxItem(m.itemId, m.nodeDid);
     if (!item) return;
     navigate(
       item.sessionId

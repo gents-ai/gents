@@ -6,6 +6,7 @@ import {
   type DesktopApiAdapter,
   type ManagedServerResetResult,
 } from "@source-inc/gents-desktop-client";
+import type { ManagedServerRepairResult } from "@source-inc/gents-desktop-client/generated/ManagedServerRepairResult";
 
 import { ManagedServerStartupError } from "../lib/managedServerStartup";
 import type { ClientState, ClientStore } from "./clientStore";
@@ -16,6 +17,8 @@ type IncompatibleHomeOptions = {
   client: ClientStore;
   setError: (error: string | null) => void;
   startFresh: () => Promise<void>;
+  /** Setup follows a home the repair set aside instead of asking. */
+  setAside: (repair: ManagedServerRepairResult) => void;
 };
 
 export type IncompatibleHome = {
@@ -24,6 +27,7 @@ export type IncompatibleHome = {
   fullReset: boolean;
   canReset: boolean;
   previewReset: () => Promise<void>;
+  startOver: () => Promise<void>;
   cancel: () => void;
   generation: number;
   adopt: (error: unknown) => Promise<boolean>;
@@ -47,6 +51,7 @@ export function createIncompatibleHomeOps({
   client,
   setError,
   startFresh,
+  setAside,
 }: IncompatibleHomeOptions) {
   let previewing: Promise<boolean> | null = null;
   const home = () => client.getState().home;
@@ -64,6 +69,11 @@ export function createIncompatibleHomeOps({
     const resetManagedServer = api.resetManagedServer;
     const pending = (async () => {
       try {
+        const repaired = await api.repairManagedServer?.();
+        if (repaired?.outcome === "needsSetup") {
+          setAside(repaired);
+          return true;
+        }
         setHome({ report: await resetManagedServer(), fullReset: false });
         return true;
       } catch (previewError) {
@@ -86,6 +96,19 @@ export function createIncompatibleHomeOps({
     try {
       const report = await api.resetManagedServer(undefined, undefined, true);
       setHome({ report, fullReset: true });
+    } catch (error) {
+      setError(errorText(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startOver() {
+    if (!api.resetManagedServer || home().busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setHome({ report: await api.resetManagedServer(), fullReset: false });
     } catch (error) {
       setError(errorText(error));
     } finally {
@@ -158,6 +181,7 @@ export function createIncompatibleHomeOps({
     adopt,
     canReset: Boolean(api.resetManagedServer),
     previewReset,
+    startOver,
     cancel,
     backUp: () => retire("archive"),
     remove: () => retire("delete"),

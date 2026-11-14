@@ -13,6 +13,8 @@ import {
 } from "./editors";
 import { DeleteButton, ListDetail, packOrigin } from "./ListDetail";
 import { newId, problemOf, useDraft } from "./draft";
+import { NEW_ITEM } from "./draftItems";
+import { NewItemPage, type ItemDraft } from "./NewItemPage";
 import { Group, Unfold } from "./rows";
 import { RowMenu } from "./RowMenu";
 import { usersOf } from "./behaviorDraft";
@@ -29,9 +31,12 @@ export function SkillEditor({
   deployment,
   skill,
   preview,
+  draft,
 }: {
   deployment: NodeView;
   skill: SkillView;
+
+  draft?: ItemDraft;
   /** a skill a pack would add: the pack it comes from, and where the
       agents that would use it open */
   preview?: { pack: string; agentHref: (agentDid: string) => string };
@@ -73,6 +78,7 @@ export function SkillEditor({
         },
       }),
     {
+      isNew: draft !== undefined,
       problems: (next) => ({
         name: next.name.trim() ? undefined : "Name is required",
         interfaceJson:
@@ -83,7 +89,7 @@ export function SkillEditor({
     },
   );
   const id = (f: string) => `${skill.skillId}-${f}`;
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(draft !== undefined);
   const users = skillUsers(deployment, skill.skillId);
   const pack = preview?.pack ?? packOrigin(skill.tags);
   const title = d.draft.displayName.trim() || d.draft.name.trim() || skill.skillId;
@@ -236,18 +242,27 @@ export function SkillEditor({
       <DraftActions
         draft={d}
         fields={{ name: id("name"), interfaceJson: id("interface") }}
+        {...(draft && {
+          saveLabel: "Create skill",
+          onSave: async () => {
+            if (await d.save()) draft.onSaved(skill.skillId);
+          },
+          onCancel: draft.onCancel,
+        })}
       />
-      <DeleteButton
-        label={skill.name ?? skill.skillId}
-        warning={dependentsWarning(deployment, "skill", skill.skillId)}
-        base={base}
-        onDelete={() =>
-          changeConfig("deleteSkillConfig", {
-            skillId: skill.skillId,
-            nodeDid: deployment.nodeDid,
-          })
-        }
-      />
+      {!draft && (
+        <DeleteButton
+          label={skill.name ?? skill.skillId}
+          warning={dependentsWarning(deployment, "skill", skill.skillId)}
+          base={base}
+          onDelete={() =>
+            changeConfig("deleteSkillConfig", {
+              skillId: skill.skillId,
+              nodeDid: deployment.nodeDid,
+            })
+          }
+        />
+      )}
     </>
   );
 }
@@ -289,6 +304,10 @@ export function SkillsPanel({
     nodeDid: deployment.nodeDid,
     section: "skills",
   };
+  if (item === NEW_ITEM && !deployment.skills.some((s) => s.skillId === NEW_ITEM))
+    return (
+      <NewSkillPage key={deployment.nodeDid} deployment={deployment} base={base} />
+    );
   return (
     <ListDetail
       base={base}
@@ -339,27 +358,7 @@ export function SkillsPanel({
       }))}
       createLabel="New skill"
       empty="No skills yet. A skill is instructions and tool references an agent can load by name."
-      onCreate={async () => {
-        const skillId = newId("skill");
-        await changeConfig("saveSkillConfig", {
-          document: {
-            skill_id: skillId,
-            node_did: deployment.nodeDid,
-            name: "New skill",
-            description: null,
-            instructions: "",
-            tool_refs: null,
-            display_name: null,
-            enabled: false,
-          },
-        });
-        navigate({
-          name: "agent",
-          nodeDid: deployment.nodeDid,
-          section: "skills",
-          item: skillId,
-        });
-      }}
+      onCreate={() => navigate({ ...base, item: NEW_ITEM })}
       detail={(id) => {
         const skill = deployment.skills.find((s) => s.skillId === id)!;
         return (
@@ -367,5 +366,33 @@ export function SkillsPanel({
         );
       }}
     />
+  );
+}
+
+function NewSkillPage({
+  deployment,
+  base,
+}: {
+  deployment: NodeView;
+  base: { name: "agent"; nodeDid: string; section: string };
+}) {
+  const [skill] = useState<SkillView>(() => ({
+    skillId: newId("skill"),
+    nodeDid: deployment.nodeDid,
+    name: null,
+    description: null,
+    instructions: "",
+    sourceDirectory: null,
+    toolRefs: [],
+    displayName: null,
+    interfaceJson: null,
+    enabled: false,
+    createdAt: null,
+    tags: [],
+  }));
+  return (
+    <NewItemPage base={base} back="Skills">
+      {(draft) => <SkillEditor deployment={deployment} skill={skill} draft={draft} />}
+    </NewItemPage>
   );
 }

@@ -3,12 +3,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 use crate::client::peer_directory::{PeerDirectory, PeerRecord};
 use crate::client::store::ClientStore;
-use gents::store::config_client::{GraphqlEndpoint, TransactionFailure};
-use gents::store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::config_client::{GraphqlEndpoint, TransactionFailure};
+use gents_store::identity::{KeyIdentity, NodeIdentity};
 
 #[test]
 fn observer_stops_only_for_an_explicit_authorization_refusal() {
-    let denial = gents::store::config_client::ConfigClientError::Database(
+    let denial = gents_store::config_client::ConfigClientError::Database(
         gents_protocol::database_error::GraphqlFailure::new(
             "subscription",
             serde_json::json!([
@@ -20,16 +20,18 @@ fn observer_stops_only_for_an_explicit_authorization_refusal() {
     assert!(!anyhow::anyhow!("not found or unavailable").permission_denied());
 }
 
-async fn wait_for_name(store: &ObservedStore, expected: Option<&str>) {
-    let mut notices = store.subscribe_changes();
+async fn wait_for_name(store: &ObservedStores, expected: Option<&str>) {
+    let mut notices = store.subscribe();
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
-            let snapshot = store.snapshot();
-            let name = snapshot
-                .nodes
-                .first()
-                .and_then(|node| node.display_name.as_deref());
-            if name == expected {
+            let name = store.node_dids().into_iter().find_map(|node| {
+                store
+                    .snapshot(&node)
+                    .nodes
+                    .first()
+                    .and_then(|row| row.display_name.clone())
+            });
+            if name.as_deref() == expected {
                 break;
             }
             notices.changed().await.expect("observer alive");
@@ -39,8 +41,12 @@ async fn wait_for_name(store: &ObservedStore, expected: Option<&str>) {
     .expect("authenticated runtime observation");
 }
 
-async fn wait_for_connection(store: &ObservedStore, node: &str, expected: RuntimeConnectionStatus) {
-    let mut notices = store.subscribe_changes();
+async fn wait_for_connection(
+    store: &ObservedStores,
+    node: &str,
+    expected: RuntimeConnectionStatus,
+) {
+    let mut notices = store.subscribe();
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             if store.runtime_connection(node) == Some(expected) {
@@ -62,6 +68,9 @@ enum ProxyMode {
     /// Keeps every armed subscription streaming and drops every other
     /// request: the runtime's reads fail for a transport reason.
     FailingReads,
+    /// Keeps every armed subscription streaming and answers every other
+    /// request with the runtime's HTTP refusal.
+    RefusingReads,
 }
 
 type ProxyCommands =
@@ -167,7 +176,10 @@ async fn interruptible_proxy(
                         reads.abort_all();
                         while reads.join_next().await.is_some() {}
                     }
-                    if !matches!(next, ProxyMode::Online | ProxyMode::FailingReads) {
+                    if !matches!(
+                        next,
+                        ProxyMode::Online | ProxyMode::FailingReads | ProxyMode::RefusingReads
+                    ) {
                         subscriptions.abort_all();
                         while subscriptions.join_next().await.is_some() {}
                     }
@@ -192,10 +204,10 @@ async fn interruptible_proxy(
                         ProxyMode::Online => {
                             reads.spawn(forward(client, single_request(head), upstream));
                         }
-                        ProxyMode::FailingReads if subscription => {
+                        ProxyMode::FailingReads | ProxyMode::RefusingReads if subscription => {
                             subscriptions.spawn(forward(client, head, upstream));
                         }
-                        ProxyMode::Refusing => {
+                        ProxyMode::Refusing | ProxyMode::RefusingReads => {
                             reads.spawn(async move {
                                 use tokio::io::AsyncWriteExt;
                                 if read_request_body(&mut client, &head).await.is_ok() {
@@ -289,7 +301,7 @@ impl ObservedRuntime {
         );
         let owner =
             ConfigAccess::local_as(runtime.clone(), runtime_identity.did().parse().unwrap());
-        let did = gents::store::graphql::escape_graphql_string(runtime_identity.did());
+        let did = gents_store::graphql::escape_graphql_string(runtime_identity.did());
         let created = access
             .write(
                 "test.observer.seed",
@@ -297,7 +309,7 @@ impl ObservedRuntime {
             )
             .await
             .unwrap();
-        let physical = gents::store::graphql::created_doc_id(&created, "Node").unwrap();
+        let physical = gents_store::graphql::created_doc_id(&created, "Node").unwrap();
         owner
             .add_actor_relationship(
                 "Node",
@@ -417,7 +429,7 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
     );
     let owner = ConfigAccess::local_as(runtime.clone(), runtime_identity.did().parse().unwrap());
     let reader = client.did().parse().unwrap();
-    let did = gents::store::graphql::escape_graphql_string(runtime_identity.did());
+    let did = gents_store::graphql::escape_graphql_string(runtime_identity.did());
     let mutation = |name: &str| {
         format!("mutation {{ create_Node(input: {{node_did: \"{did}\", display_name: \"{name}\", enabled: true, created_at: \"2026-11-04T00:00:00Z\", created_by: \"user\"}}) {{ _docID }} }}")
     };
@@ -425,7 +437,7 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
         .write("test.observer.seed", &mutation("remote"))
         .await
         .unwrap();
-    let physical = gents::store::graphql::created_doc_id(&created, "Node").unwrap();
+    let physical = gents_store::graphql::created_doc_id(&created, "Node").unwrap();
     owner
         .add_actor_relationship("Node", &physical, "runtime_reader", &reader)
         .await
@@ -439,7 +451,7 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
         )
         .await
         .unwrap();
-    let session_doc = gents::store::graphql::created_doc_id(&session, "AgentSession").unwrap();
+    let session_doc = gents_store::graphql::created_doc_id(&session, "AgentSession").unwrap();
     owner
         .add_actor_relationship("AgentSession", &session_doc, "reader", &reader)
         .await
@@ -455,18 +467,18 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
         .unwrap();
     peers.upsert(peer).await.unwrap();
     let configured = ClientSyncStateOwner::new(Default::default(), peers, Vec::new());
-    let (store, _) = ObservedStore::new(ClientStore::default());
+    let store = ObservedStores::new();
     let handle = spawn_observer(
         store.clone(),
         configured,
         client.client_signing_capability().unwrap(),
     );
     wait_for_name(&store, Some("remote")).await;
-    let mut notices = store.subscribe_changes();
+    let mut notices = store.subscribe();
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             if store
-                .snapshot()
+                .snapshot(runtime_identity.did())
                 .sessions
                 .iter()
                 .any(|row| row.session_id == "unrelated-visible")
@@ -478,11 +490,13 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
     })
     .await
     .expect("authorized session in authenticated snapshot");
-    store.clear_node_after_refused_read(runtime_identity.did());
+    store
+        .ensure(runtime_identity.did())
+        .clear_after_refused_read();
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             if store
-                .snapshot()
+                .snapshot(runtime_identity.did())
                 .sessions
                 .iter()
                 .any(|row| row.session_id == "unrelated-visible")
@@ -499,7 +513,7 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
         Some(RuntimeConnectionStatus::Connected)
     );
     let physical_id = physical;
-    let physical = gents::store::graphql::escape_graphql_string(&physical_id);
+    let physical = gents_store::graphql::escape_graphql_string(&physical_id);
     set_proxy_online(&proxy_commands, false).await;
     wait_for_connection(
         &store,
@@ -509,7 +523,9 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
     .await;
     access.write("test.observer.offline", &format!("mutation {{ update_Node(docID: \"{physical}\", input: {{display_name: \"offline update\"}}) {{ _docID }} }}")).await.unwrap();
     assert_eq!(
-        store.snapshot().nodes[0].display_name.as_deref(),
+        store.snapshot(runtime_identity.did()).nodes[0]
+            .display_name
+            .as_deref(),
         Some("remote")
     );
     set_proxy_online(&proxy_commands, true).await;
@@ -582,15 +598,13 @@ async fn missing_endpoint_never_reads_runtime_data_from_desktop_store() {
     ConfigAccess::local(desktop.clone()).write("test.observer.local", "mutation { create_Node(input: {node_did: \"did:test:runtime\", display_name: \"stale\", enabled: true, created_at: \"now\", created_by: \"old\"}) {_docID} }").await.unwrap();
     let directory = tempfile::tempdir().unwrap();
     let key_path = directory.path().join("client.key");
-    let client =
-        tokio::task::spawn_blocking(move || gents::KeyIdentity::load_or_create(key_path, None))
-            .await
-            .unwrap()
-            .unwrap();
+    let client = tokio::task::spawn_blocking(move || {
+        gents_store::identity::KeyIdentity::load_or_create(key_path, None)
+    })
+    .await
+    .unwrap()
+    .unwrap();
     let capability = client.client_signing_capability().unwrap();
-    let snapshots =
-        crate::client::query::load_full_snapshot_with_peer_records(&[], &capability).await;
-    assert!(snapshots.store.nodes.is_empty());
     assert!(
         crate::client::query::load_node_scoped_snapshot_with_peer_records(
             "did:test:runtime",
@@ -614,7 +628,7 @@ fn generated_runtime_connection_observations_drive_the_owner() {
     let contract: serde_json::Value = serde_json::from_str(&output).unwrap();
     let cases = contract["cases"].as_array().unwrap();
     assert!(!cases.is_empty());
-    let (store, _) = ObservedStore::new(ClientStore::default());
+    let store = ObservedStores::new();
     for case in cases {
         let status = lean_status(case["status"].as_str().unwrap());
         store.set_runtime_connection("node", Some(status));
@@ -630,10 +644,10 @@ fn generated_runtime_connection_observations_drive_the_owner() {
     for case in ends {
         let end = match case["end"].as_str().unwrap() {
             "renewalDue" => {
-                remote::StreamEnd::Ended(gents::store::config_client::SubscriptionEnd::RenewalDue)
+                remote::StreamEnd::Ended(gents_store::config_client::SubscriptionEnd::RenewalDue)
             }
             "completed" => {
-                remote::StreamEnd::Ended(gents::store::config_client::SubscriptionEnd::Completed)
+                remote::StreamEnd::Ended(gents_store::config_client::SubscriptionEnd::Completed)
             }
             "refusedFailure" => remote::StreamEnd::Failed { refused: true },
             "transportFailure" => remote::StreamEnd::Failed { refused: false },
@@ -690,7 +704,7 @@ fn generated_runtime_connection_observations_drive_the_owner() {
         let next = remote::renewal_start(
             started,
             Duration::from_millis(case["armMs"].as_u64().unwrap()),
-            gents::store::config_client::SUBSCRIPTION_RENEWAL_PERIOD,
+            gents_store::config_client::SUBSCRIPTION_RENEWAL_PERIOD,
         );
         assert_eq!(
             u64::try_from(next.duration_since(base).as_millis()).unwrap(),
@@ -698,26 +712,88 @@ fn generated_runtime_connection_observations_drive_the_owner() {
             "{case}"
         );
     }
-    for (rust, lean) in [
-        (
-            gents::store::config_client::SUBSCRIPTION_RENEWAL_PERIOD,
-            "renewalPeriodMs",
-        ),
-        (SNAPSHOT_RETRY_DELAY, "snapshotRetryDelayMs"),
-    ] {
-        assert_eq!(
-            u64::try_from(rust.as_millis()).unwrap(),
-            contract[lean].as_u64().unwrap(),
-            "{lean}"
-        );
+    assert_eq!(
+        u64::try_from(gents_store::config_client::SUBSCRIPTION_RENEWAL_PERIOD.as_millis()).unwrap(),
+        contract["renewalPeriodMs"].as_u64().unwrap()
+    );
+    let retries = contract["snapshotRetries"].as_array().unwrap();
+    assert!(retries.len() > 30);
+    for case in retries {
+        let failures = u32::try_from(case["failures"].as_u64().unwrap()).unwrap();
+        let settlements: &[Settlement] = match case["outcome"].as_str().unwrap() {
+            "succeeded" => &[Settlement::Published, Settlement::Superseded],
+            "refused" => &[Settlement::Refused],
+            "unreachable" => &[Settlement::TransportFailed],
+            other => panic!("unexpected snapshot outcome {other}"),
+        };
+        for settlement in settlements {
+            let mut queue = Queue::default();
+            queue.failures.insert("node".into(), failures);
+            queue.settle("node", *settlement, base);
+            assert_eq!(
+                u64::from(queue.failures.get("node").copied().unwrap_or_default()),
+                case["failuresAfter"].as_u64().unwrap(),
+                "{case} {settlement:?}"
+            );
+            assert_eq!(
+                queue
+                    .retry_at
+                    .get("node")
+                    .map(|due| u64::try_from(due.duration_since(base).as_millis()).unwrap()),
+                case["retryDelayMs"].as_u64(),
+                "{case} {settlement:?}"
+            );
+        }
     }
+}
+
+#[tokio::test]
+async fn retry_now_answers_a_connected_runtime_without_reconnecting() {
+    let fixture = ObservedRuntime::start().await;
+    let configured =
+        ClientSyncStateOwner::new(Default::default(), fixture.peers.clone(), Vec::new());
+    let store = ObservedStores::new();
+    let handle = spawn_observer(
+        store.clone(),
+        configured,
+        fixture.client.client_signing_capability().unwrap(),
+    );
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Connected,
+    )
+    .await;
+    let mut changes = store.subscribe();
+
+    handle.retry_all_now();
+    let answer = tokio::time::timeout(
+        Duration::from_secs(1),
+        handle.retry_now(&fixture.runtime_did),
+    )
+    .await
+    .expect("a connected runtime is answered at once");
+    assert_eq!(answer, Some(RuntimeConnectionStatus::Connected));
+    let _ = tokio::time::timeout(Duration::from_millis(500), async {
+        loop {
+            assert_eq!(
+                store.runtime_connection(&fixture.runtime_did),
+                Some(RuntimeConnectionStatus::Connected),
+                "no source restarted"
+            );
+            changes.changed().await.unwrap();
+        }
+    })
+    .await;
+    handle.shutdown().await;
+    fixture.stop().await;
 }
 
 /// The snapshot owner's failures map to `RuntimeConnectionObservation.SnapshotOutcome`:
 /// only the access owner's classification is a refusal.
 #[test]
 fn snapshot_failures_classify_as_their_lean_outcome() {
-    let refused = anyhow::Error::new(gents::store::config_client::ConfigClientError::Database(
+    let refused = anyhow::Error::new(gents_store::config_client::ConfigClientError::Database(
         gents_protocol::database_error::GraphqlFailure::new(
             "snapshot",
             serde_json::json!([{"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}]),
@@ -768,7 +844,7 @@ async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() 
     let fixture = ObservedRuntime::start().await;
     let configured =
         ClientSyncStateOwner::new(Default::default(), fixture.peers.clone(), Vec::new());
-    let (store, _) = ObservedStore::new(ClientStore::default());
+    let store = ObservedStores::new();
     let handle = spawn_observer(
         store.clone(),
         configured,
@@ -790,8 +866,8 @@ async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() 
         RuntimeConnectionStatus::Refused,
     )
     .await;
-    assert!(store.snapshot().nodes.is_empty());
-    let mut changes = store.subscribe_changes();
+    assert!(store.snapshot(&fixture.runtime_did).nodes.is_empty());
+    let mut changes = store.subscribe();
     tokio::time::timeout(Duration::from_secs(15), async {
         while handle.metrics_snapshot().reconnects < 3 {
             assert_eq!(
@@ -804,7 +880,7 @@ async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() 
     })
     .await
     .expect("a refusal reconnects on the backoff");
-    let physical = gents::store::graphql::escape_graphql_string(&fixture.physical);
+    let physical = gents_store::graphql::escape_graphql_string(&fixture.physical);
     fixture
         .access
         .write(
@@ -826,6 +902,66 @@ async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() 
     fixture.stop().await;
 }
 
+/// Lean `failed_snapshot_reconnects_iff_refused`: a snapshot read the runtime
+/// refuses while every subscription stays armed names the refusal and ends
+/// the source, which reconnects on the backoff instead of retrying the read.
+#[tokio::test]
+async fn refused_snapshot_read_reconnects_the_source() {
+    let fixture = ObservedRuntime::start().await;
+    let configured =
+        ClientSyncStateOwner::new(Default::default(), fixture.peers.clone(), Vec::new());
+    let store = ObservedStores::new();
+    let handle = spawn_observer(
+        store.clone(),
+        configured,
+        fixture.client.client_signing_capability().unwrap(),
+    );
+    wait_for_name(&store, Some("remote")).await;
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Connected,
+    )
+    .await;
+    let before = handle.metrics_snapshot();
+
+    set_proxy_mode(&fixture.proxy_commands, ProxyMode::RefusingReads).await;
+    let physical = gents_store::graphql::escape_graphql_string(&fixture.physical);
+    fixture
+        .access
+        .write(
+            "test.observer.read_refused",
+            &format!("mutation {{ update_Node(docID: \"{physical}\", input: {{display_name: \"after read refusal\"}}) {{ _docID }} }}"),
+        )
+        .await
+        .unwrap();
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Refused,
+    )
+    .await;
+    let mut changes = store.subscribe();
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while handle.metrics_snapshot().reconnects < before.reconnects + 2 {
+            changes.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("a refused read reconnects the source");
+
+    set_proxy_mode(&fixture.proxy_commands, ProxyMode::Online).await;
+    wait_for_name(&store, Some("after read refusal")).await;
+    wait_for_connection(
+        &store,
+        &fixture.runtime_did,
+        RuntimeConnectionStatus::Connected,
+    )
+    .await;
+    handle.shutdown().await;
+    fixture.stop().await;
+}
+
 /// Lean `reconnects .snapshot .transportFailed = false`: a snapshot read that
 /// fails for a transport reason while every subscription stays armed shows
 /// the outage and retries the read; it never ends the source, so the healthy
@@ -835,7 +971,7 @@ async fn failed_snapshot_read_keeps_the_streams_armed() {
     let fixture = ObservedRuntime::start().await;
     let configured =
         ClientSyncStateOwner::new(Default::default(), fixture.peers.clone(), Vec::new());
-    let (store, _) = ObservedStore::new(ClientStore::default());
+    let store = ObservedStores::new();
     let handle = spawn_observer(
         store.clone(),
         configured,
@@ -851,7 +987,7 @@ async fn failed_snapshot_read_keeps_the_streams_armed() {
     let before = handle.metrics_snapshot();
 
     set_proxy_mode(&fixture.proxy_commands, ProxyMode::FailingReads).await;
-    let physical = gents::store::graphql::escape_graphql_string(&fixture.physical);
+    let physical = gents_store::graphql::escape_graphql_string(&fixture.physical);
     fixture
         .access
         .write(
@@ -902,7 +1038,7 @@ async fn stalled_runtime_snapshot_delays_neither_another_runtime_nor_shutdown() 
     stalled.graphql = Some(stalled_url);
     peers.upsert(stalled).await.unwrap();
     let configured = ClientSyncStateOwner::new(Default::default(), peers, Vec::new());
-    let (store, _) = ObservedStore::new(ClientStore::default());
+    let store = ObservedStores::new();
     let handle = spawn_observer(
         store.clone(),
         configured,
@@ -921,8 +1057,8 @@ async fn stalled_runtime_snapshot_delays_neither_another_runtime_nor_shutdown() 
         RuntimeConnectionStatus::Connected,
     )
     .await;
-    let mut notices = store.subscribe_changes();
-    let physical = gents::store::graphql::escape_graphql_string(&fixture.physical);
+    let mut notices = store.subscribe();
+    let physical = gents_store::graphql::escape_graphql_string(&fixture.physical);
     fixture
         .access
         .write(
@@ -934,7 +1070,7 @@ async fn stalled_runtime_snapshot_delays_neither_another_runtime_nor_shutdown() 
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             if store
-                .snapshot()
+                .snapshot(&fixture.runtime_did)
                 .nodes
                 .iter()
                 .any(|node| node.display_name.as_deref() == Some("beside stall"))
@@ -1008,6 +1144,10 @@ fn generated_reconnect_backoff_drives_the_sources() {
         u64::try_from(remote::RECONNECT_STABLE.as_millis()).unwrap(),
         contract["stableMs"].as_u64().unwrap()
     );
+    assert_eq!(
+        u64::from(remote::RETRY_NOW_COUNT),
+        contract["retryNowCount"].as_u64().unwrap()
+    );
 }
 
 /// Every reconnect, after a transport failure or a refusal of the source or
@@ -1017,7 +1157,7 @@ fn generated_reconnect_backoff_drives_the_sources() {
 /// that connects and then drops at once keeps backing off.
 #[tokio::test]
 async fn every_reconnect_path_uses_the_backoff_and_only_a_stable_connection_resets_it() {
-    let (store, _) = ObservedStore::new(ClientStore::default());
+    let store = ObservedStores::new();
     let metrics = ObserverMetrics::default();
     let mut sources = remote::Sources::default();
     let node = "did:test:backoff";
@@ -1108,7 +1248,7 @@ async fn every_reconnect_path_uses_the_backoff_and_only_a_stable_connection_rese
 /// the source at once.
 #[tokio::test]
 async fn reconcile_keeps_an_ended_source_until_its_notice_schedules_the_reconnect() {
-    let (store, _) = ObservedStore::new(ClientStore::default());
+    let store = ObservedStores::new();
     let store = Arc::new(store);
     let metrics = Arc::new(ObserverMetrics::default());
     let mut sources = remote::Sources::default();
@@ -1162,7 +1302,7 @@ async fn reconcile_keeps_an_ended_source_until_its_notice_schedules_the_reconnec
 /// published by the User.
 async fn served_observer(
     home: &crate::test_fixtures::ServedRuntimeHome,
-) -> (tempfile::TempDir, Arc<ObservedStore>, ObserverHandle) {
+) -> (tempfile::TempDir, Arc<ObservedStores>, ObserverHandle) {
     let directory = tempfile::tempdir().unwrap();
     let mut peer = PeerRecord::new("runtime", "", home.node_did());
     peer.graphql = Some(home.graphql().to_owned());
@@ -1171,7 +1311,7 @@ async fn served_observer(
         .unwrap();
     peers.upsert(peer).await.unwrap();
     let configured = ClientSyncStateOwner::new(Default::default(), peers, Vec::new());
-    let (store, _) = ObservedStore::new(ClientStore::default());
+    let store = ObservedStores::new();
     let handle = spawn_observer(
         store.clone(),
         configured,
@@ -1185,7 +1325,7 @@ async fn node_doc_id(home: &crate::test_fixtures::ServedRuntimeHome) -> String {
         .user_graphql_access()
         .execute(&format!(
             "{{ Node(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
-            gents::store::graphql::escape_graphql_string(home.node_did())
+            gents_store::graphql::escape_graphql_string(home.node_did())
         ))
         .await
         .unwrap();
@@ -1204,7 +1344,7 @@ async fn planned_renewal_keeps_the_runtime_connected() {
     wait_for_connection(&store, home.node_did(), RuntimeConnectionStatus::Connected).await;
     let before = handle.metrics_snapshot();
     let mut shown = vec![RuntimeConnectionStatus::Connected];
-    let mut changes = store.subscribe_changes();
+    let mut changes = store.subscribe();
     tokio::time::timeout(Duration::from_secs(45), async {
         loop {
             let metrics = handle.metrics_snapshot();
@@ -1238,7 +1378,7 @@ async fn planned_renewal_keeps_the_runtime_connected() {
             "test.observer.after_renewal",
             &format!(
                 "mutation {{ update_Node(docID: \"{}\", input: {{display_name: \"after renewal\"}}) {{ _docID }} }}",
-                gents::store::graphql::escape_graphql_string(&physical)
+                gents_store::graphql::escape_graphql_string(&physical)
             ),
         )
         .await
@@ -1269,7 +1409,7 @@ async fn peer_without_an_endpoint_shows_no_endpoint_until_it_has_one() {
         .unwrap();
     let configured = ClientSyncStateOwner::new(Default::default(), peers, Vec::new());
     configured.upsert_for_test(enrolled.clone()).await.unwrap();
-    let (store, _) = ObservedStore::new(ClientStore::default());
+    let store = ObservedStores::new();
     let handle = spawn_observer(
         store.clone(),
         configured.clone(),
@@ -1307,7 +1447,7 @@ async fn peer_without_an_endpoint_shows_no_endpoint_until_it_has_one() {
         .find(|record| record.node_did == "did:test:enrolled")
         .unwrap();
     configured.remove_for_test(&current).await.unwrap();
-    let mut notices = store.subscribe_changes();
+    let mut notices = store.subscribe();
     tokio::time::timeout(Duration::from_secs(15), async {
         while store.runtime_connection("did:test:enrolled").is_some() {
             notices.changed().await.unwrap();
@@ -1330,22 +1470,6 @@ async fn peer_without_an_endpoint_shows_no_endpoint_until_it_has_one() {
 async fn revoked_user_is_answered_with_omitted_roots() {
     let home = crate::test_fixtures::ServedRuntimeHome::start().await;
     let access = home.user_graphql_access();
-    let query = crate::client::query::snapshot_query(Some(home.node_did())).unwrap();
-    let authorized = access.execute(&query).await.unwrap();
-    assert!(authorized.get("errors").is_none(), "{authorized}");
-    let mut answered: Vec<_> = authorized["data"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .cloned()
-        .collect();
-    answered.sort();
-    let mut roots: Vec<_> = crate::client::query::SNAPSHOT_ROOTS
-        .iter()
-        .map(|root| (*root).to_owned())
-        .collect();
-    roots.sort();
-    assert_eq!(answered, roots, "SNAPSHOT_ROOTS names every snapshot root");
     let before = crate::client::load_node_snapshot_on(&access, home.node_did())
         .await
         .unwrap();
@@ -1353,7 +1477,7 @@ async fn revoked_user_is_answered_with_omitted_roots() {
 
     let subscription = "subscription { Node(showDeleted: true) { _docID _deleted } }";
     let mut open = access.subscribe(subscription).await.unwrap();
-    gents::store::identity::GrantSet::HouseholdOwner
+    gents_store::identity::GrantSet::HouseholdOwner
         .revoke(
             &home.runtime_access(),
             &::identity::Did::new(home.user().did()).unwrap(),
@@ -1393,16 +1517,16 @@ async fn revoked_user_sees_connected_with_nothing_and_never_reconnects() {
     let home = crate::test_fixtures::ServedRuntimeHome::start().await;
     let (_directory, store, handle) = served_observer(&home).await;
     wait_for_connection(&store, home.node_did(), RuntimeConnectionStatus::Connected).await;
-    assert!(!store.snapshot().nodes.is_empty());
+    assert!(!store.snapshot(home.node_did()).nodes.is_empty());
     let before = handle.metrics_snapshot();
     let user = ::identity::Did::new(home.user().did()).unwrap();
-    gents::store::identity::GrantSet::HouseholdOwner
+    gents_store::identity::GrantSet::HouseholdOwner
         .revoke(&home.runtime_access(), &user)
         .await
         .unwrap();
     let mut shown = vec![RuntimeConnectionStatus::Connected];
-    let mut changes = store.subscribe_changes();
-    let renewal = gents::store::config_client::SUBSCRIPTION_RENEWAL_PERIOD;
+    let mut changes = store.subscribe();
+    let renewal = gents_store::config_client::SUBSCRIPTION_RENEWAL_PERIOD;
     tokio::time::timeout(renewal + Duration::from_secs(15), async {
         loop {
             if let Some(status) = store.runtime_connection(home.node_did()) {
@@ -1410,7 +1534,7 @@ async fn revoked_user_sees_connected_with_nothing_and_never_reconnects() {
                     shown.push(status);
                 }
             }
-            if store.snapshot().nodes.is_empty() {
+            if store.snapshot(home.node_did()).nodes.is_empty() {
                 break;
             }
             changes.changed().await.unwrap();
@@ -1430,12 +1554,12 @@ async fn revoked_user_sees_connected_with_nothing_and_never_reconnects() {
     );
     assert_eq!(after.transport_failures, before.transport_failures);
 
-    gents::store::identity::GrantSet::HouseholdOwner
+    gents_store::identity::GrantSet::HouseholdOwner
         .grant(&home.runtime_access(), &user)
         .await
         .unwrap();
     tokio::time::timeout(renewal + Duration::from_secs(15), async {
-        while store.snapshot().nodes.is_empty() {
+        while store.snapshot(home.node_did()).nodes.is_empty() {
             changes.changed().await.unwrap();
         }
     })
@@ -1458,7 +1582,6 @@ async fn revoked_user_sees_connected_with_nothing_and_never_reconnects() {
 #[tokio::test]
 async fn generated_observer_resync_traces_match_the_lean_owner() {
     use crate::client::store::ClientStoreRows;
-    use gents_protocol::row::AgentRequestRow;
     use gents_protocol::schemas::{AGENT_MESSAGE_NAME, AGENT_TOOL_CALL_NAME};
 
     const NODES: usize = 2;
@@ -1470,25 +1593,12 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         }))
         .unwrap()
     };
-    let shared = |owner: Option<usize>| AgentRequestRow {
-        doc_id: Some("shared".into()),
-        request_id: "shared".into(),
-        node_did: owner.map(did),
-        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-        ..Default::default()
-    };
     // `Conformance.ObserverResync.snapshot`.
-    let snapshot = |node: usize, kind: &str| {
-        let mut rows = ClientStoreRows {
+    let snapshot = |node: usize| {
+        ClientStore::from_rows(ClientStoreRows {
             sessions: vec![session(node)],
             ..Default::default()
-        };
-        match kind {
-            "foreign" => rows.sessions.push(session(1 - node)),
-            "shared" => rows.requests.push(shared(Some(node))),
-            _ => {}
-        }
-        ClientStore::from_rows(rows)
+        })
     };
     let op = |op: &str, node: usize, result: &str| serde_json::json!({"op": op, "node": node, "result": result});
     let alphabet = [
@@ -1502,12 +1612,11 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         op("stream_failed", 0, ""),
         op("stream_refused", 0, ""),
         op("source_started", 0, ""),
-        op("publish", 0, "foreign"),
-        op("publish", 0, "shared"),
-        op("seed_unowned", 0, ""),
+        op("publish", 0, ""),
+        op("publish", 1, ""),
         op("timer", 0, ""),
+        op("retry_now", 0, ""),
         op("finish", 0, "rows"),
-        op("finish", 0, "shared"),
         op("finish", 0, "transport_failed"),
         op("finish", 0, "refused"),
         op("finish", 1, "rows"),
@@ -1515,14 +1624,6 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
     let prefix = [
         op("armed", 0, ""),
         op("armed", 1, ""),
-        op("start", 0, ""),
-        op("start", 1, ""),
-    ];
-    // An unowned row in the store before every load starts.
-    let seeded = [
-        op("armed", 0, ""),
-        op("armed", 1, ""),
-        op("seed_unowned", 0, ""),
         op("start", 0, ""),
         op("start", 1, ""),
     ];
@@ -1538,13 +1639,6 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
     for a in &alphabet {
         for b in &alphabet {
             let ops: Vec<_> = [a, b].into_iter().chain(suffix.iter()).cloned().collect();
-            traces.push(serde_json::json!({"nodes": NODES, "ops": ops}));
-            let ops: Vec<_> = seeded
-                .iter()
-                .chain([a, b])
-                .chain(suffix.iter())
-                .cloned()
-                .collect();
             traces.push(serde_json::json!({"nodes": NODES, "ops": ops}));
             for c in &alphabet {
                 let ops: Vec<_> = prefix
@@ -1574,8 +1668,9 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
 
     let metrics = ObserverMetrics::default();
     let mut settlements = BTreeSet::new();
+    let mut retries = BTreeSet::new();
     for (trace, expected) in traces.iter().zip(&modeled) {
-        let (store, _) = ObservedStore::new(ClientStore::default());
+        let stores = ObservedStores::new();
         let mut queue = Queue::default();
         let mut sources = remote::Sources::default();
         let mut generation = [0_u64; NODES];
@@ -1583,7 +1678,8 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         let now = Instant::now();
         for (node, generation) in generation.iter_mut().enumerate() {
             *generation = sources.start_inert(&did(node));
-            store.observe_runtime_connection(&did(node), RuntimeConnectionEvent::SourceStarted);
+            stores.ensure(&did(node));
+            stores.observe_runtime_connection(&did(node), RuntimeConnectionEvent::SourceStarted);
         }
         let ops = trace["ops"].as_array().unwrap();
         let steps = expected["steps"].as_array().unwrap();
@@ -1591,6 +1687,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         for (step, modeled_step) in ops.iter().zip(steps) {
             let node = usize::try_from(step["node"].as_u64().unwrap()).unwrap();
             let node_did = did(node);
+            let store = stores.store(&node_did).unwrap();
             let result = step["result"].as_str().unwrap();
             // What `observe/remote.rs` and the loop's notice arm do. A source
             // that ended for a reconnect sends nothing more: its next notice
@@ -1605,12 +1702,12 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                     *generation = sources.start_inert(&node_did);
                 }
                 if SourceNotice::of(event) != Some(SourceNotice::Armed) {
-                    store.observe_request_event(None);
+                    store.observe_request_event();
                 }
                 let kind = apply_source_notice(
                     queue,
                     sources,
-                    &store,
+                    &stores,
                     &node_did,
                     *generation,
                     event,
@@ -1626,7 +1723,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                 "source_started" => {
                     generation[node] = sources.start_inert(&node_did);
                     in_flight.remove(&node_did);
-                    store.observe_runtime_connection(
+                    stores.observe_runtime_connection(
                         &node_did,
                         RuntimeConnectionEvent::SourceStarted,
                     );
@@ -1671,47 +1768,40 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                     delivery::deliver(
                         &store,
                         &metrics,
-                        &node_did,
                         collection,
                         &serde_json::json!({"data": {collection: [{"_docID": "changed"}]}}),
                     )
                     .unwrap();
-                    let (full, scopes) = store.take_resync_requests();
-                    assert!(!full);
-                    queue.pending.extend(scopes);
+                    queue.pending.extend(stores.take_resync_requests());
                 }
                 "publish" => {
-                    assert!(store.replace_reloaded_snapshot_at_read(
-                        &store.capture_read(),
-                        Some(&node_did),
-                        snapshot(node, result),
-                    ));
-                }
-                "seed_unowned" => {
-                    store.merge_chat_patch(ClientStore::from_rows(ClientStoreRows {
-                        requests: vec![shared(None)],
-                        ..Default::default()
-                    }));
+                    assert!(store
+                        .replace_reloaded_snapshot_at_read(&store.capture_read(), snapshot(node)));
                 }
                 "timer" => {
                     queue.retry_at.remove(&node_did);
                 }
+                "retry_now" => {
+                    let restarted =
+                        apply_retry_now(&mut queue, &mut sources, &stores, &node_did, now);
+                    if restarted {
+                        in_flight.remove(&node_did);
+                    }
+                    retries.insert(restarted);
+                }
                 "finish" => {
                     if let Some(captured) = in_flight.remove(&node_did) {
-                        let patch_accepted =
-                            store.accepts_chat_patch_read(&captured, &snapshot(node, "rows"));
+                        let patch_accepted = store.accepts_chat_patch_read(&captured);
                         let settlement = match result {
                             "transport_failed" => Settlement::TransportFailed,
                             "refused" => {
-                                clear_node(&store, &node_did);
+                                clear_node(&stores, &node_did);
                                 Settlement::Refused
                             }
-                            rows => {
-                                if store.replace_reloaded_snapshot_at_read(
-                                    &captured,
-                                    Some(&node_did),
-                                    snapshot(node, rows),
-                                ) {
+                            _ => {
+                                if store
+                                    .replace_reloaded_snapshot_at_read(&captured, snapshot(node))
+                                {
                                     Settlement::Published
                                 } else {
                                     Settlement::Superseded
@@ -1721,7 +1811,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                         apply_settlement(
                             &mut queue,
                             &mut sources,
-                            &store,
+                            &stores,
                             &node_did,
                             settlement,
                             now,
@@ -1749,34 +1839,28 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                 "loading": in_flight.contains_key(&node_did),
                 "armed": queue.armed.get(&node_did) == Some(&generation[node])
                     && !sources.entries[&node_did].ended(),
-                "status": store.runtime_connection(&node_did).unwrap().as_str(),
+                "status": stores.runtime_connection(&node_did).unwrap().as_str(),
                 "presentation": slot["presentation"],
             });
             assert_eq!(&observed, slot, "{step} in {trace}");
             assert_ne!(slot["presentation"], "stalled", "{step} in {trace}");
         }
-        let mut rows: Vec<_> = expected["rows"].as_array().unwrap().clone();
-        rows.sort_by_key(|row| row["key"].as_str().unwrap().to_owned());
-        let owner = |node_did: Option<&str>| {
-            node_did.map(|node_did| (0..NODES).find(|node| did(*node) == node_did).unwrap())
-        };
-        let snapshot = store.snapshot();
-        let mut stored: Vec<_> = snapshot
-            .sessions
-            .iter()
-            .map(|row| serde_json::json!({"key": row.session_id, "owner": owner(Some(&row.node_did))}))
-            .chain(snapshot.requests.iter().map(|row| {
-                serde_json::json!({"key": row.doc_id, "owner": owner(row.node_did.as_deref())})
-            }))
-            .collect();
-        stored.sort_by_key(|row| row["key"].as_str().unwrap().to_owned());
-        assert_eq!(stored, rows, "{trace}");
+        for (node, modeled) in expected["rows"].as_array().unwrap().iter().enumerate() {
+            let stored: Vec<_> = stores
+                .snapshot(&did(node))
+                .sessions
+                .iter()
+                .map(|row| serde_json::json!(row.session_id))
+                .collect();
+            assert_eq!(&serde_json::Value::Array(stored), modeled, "{trace}");
+        }
     }
     assert_eq!(settlements.len(), 4, "every settlement is exercised");
-}
-
-fn desktop_snapshot(body: &str) -> bool {
-    body.contains("query DesktopSnapshot")
+    assert_eq!(
+        retries.len(),
+        2,
+        "a retry of a connected and of an unconnected node is exercised"
+    );
 }
 
 /// Every snapshot load sees runtime changes while it is in flight: one to its
@@ -1792,7 +1876,8 @@ async fn request_events_during_every_snapshot_load_still_publish() {
     runtime
         .publish_node(serde_json::json!({"display_name": "before"}))
         .await;
-    let mut proxy = GatedRuntimeProxy::start(runtime.graphql(), desktop_snapshot).await;
+    let mut proxy =
+        GatedRuntimeProxy::start(runtime.graphql(), GatedRuntimeProxy::node_snapshot).await;
     let directory = tempfile::tempdir().unwrap();
     let mut peers = PeerDirectory::open_writer(directory.path().join("peers.json"))
         .await
@@ -1801,7 +1886,7 @@ async fn request_events_during_every_snapshot_load_still_publish() {
     peer.graphql = Some(proxy.url().to_owned());
     peers.upsert(peer).await.unwrap();
     let configured = ClientSyncStateOwner::new(Default::default(), peers, Vec::new());
-    let (store, _) = ObservedStore::new(ClientStore::default());
+    let store = ObservedStores::new();
     let mut resyncs = store.subscribe_resync_requests();
     let handle = spawn_observer(
         store.clone(),
@@ -1822,7 +1907,7 @@ async fn request_events_during_every_snapshot_load_still_publish() {
         runtime.publish_foreign_node().await;
         resyncs.changed().await.unwrap();
         held.release();
-        let mut notices = store.subscribe_changes();
+        let mut notices = store.subscribe();
         tokio::time::timeout(Duration::from_secs(15), async {
             while handle.metrics_snapshot().scope_reloads < load {
                 notices.changed().await.unwrap();

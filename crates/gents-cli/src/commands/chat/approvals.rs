@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use gents::plugin::approval::{self, Answer, Request};
+use gents_tools::plugin::approval::{self, Answer, Request};
 
 pub(super) fn mine(request: &Request, session_id: &str) -> bool {
     request
@@ -30,8 +30,8 @@ pub(super) fn answer_pending(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::pack::BindAccess;
-    use gents::plugin::allowed::{self, Resolved};
+    use gents_pack::pack::BindAccess;
+    use gents_pack::plugin::allowed::{self, Resolved};
 
     #[test]
     fn only_this_sessions_questions_are_answered_and_always_stores_the_folder() {

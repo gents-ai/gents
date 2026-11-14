@@ -1,101 +1,145 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases.RenderedCapture
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
-def renderedCaptureCaseJson (witness : RenderedCaptureCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"node_did\":" ++ toString witness.nodeDid ++ ","
-    ++ "\"session_id\":" ++ toString witness.sessionId ++ ","
-    ++ "\"request_id\":" ++ toString witness.requestId ++ ","
-    ++ "\"turn_index\":" ++ toString witness.turnIndex ++ ","
-    ++ "\"attempt\":" ++ toString witness.attempt ++ ","
-    ++ "\"request\":" ++ toString witness.request ++ ","
-    ++ "\"prior_binding\":" ++ jsonOptionalNat witness.priorBinding ++ ","
-    ++ "\"capture_outcome\":" ++ jsonString witness.captureOutcome ++ ","
-    ++ "\"capture_durable\":" ++ boolString witness.captureDurable ++ ","
-    ++ "\"post_stage\":" ++ jsonString witness.postStage ++ ","
-    ++ "\"send_permitted\":" ++ boolString witness.sendPermitted ++ ","
-    ++ "\"provider_requests_observed\":"
-      ++ toString witness.providerRequestsObserved ++ ","
-    ++ "\"durable_after\":" ++ jsonOptionalNat witness.durableAfter ++ ","
-    ++ "\"final_stage\":" ++ jsonString witness.finalStage
-    ++ "}"
+structure CaptureScenarioInput where
+  nodeDid : Nat
+  sessionId : Nat
+  requestId : Nat
+  turnIndex : Nat
+  attempt : Nat
+  /-- Opaque canonical-request identity. Equal values mean equal canonical JSON. -/
+  request : Nat
+  priorBinding : Option Nat
+  deriving Lean.ToJson
 
-def renderedCaptureCasesJson : String :=
-  jsonArray (renderedCaptureCases.map renderedCaptureCaseJson)
+structure CaptureScenarioOutput where
+  captureOutcome : String
+  captureDurable : Bool
+  postStage : String
+  sendPermitted : Bool
+  providerRequestsObserved : Nat
+  durableAfter : Option Nat
+  finalStage : String
+  deriving Lean.ToJson
 
-private def manifestBlockJson (block : RenderedCaptureManifestBlock) : String :=
-  "{\"ref\":" ++ toString block.ref
-    ++ ",\"pinned_witness\":" ++ toString block.pinnedWitness
-    ++ ",\"stored_witness\":" ++ jsonOptionalNat block.storedWitness ++ "}"
+example : renderedCaptureCases.any (·.captureOutcome == "rejected") := by native_decide
 
-def renderedCaptureStorageCaseJson (witness : RenderedCaptureStorageCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"encoding\":" ++ jsonString witness.encoding ++ ","
-    ++ "\"request\":" ++ toString witness.request ++ ","
-    ++ "\"base_witness\":" ++ jsonOptionalNat witness.baseWitness ++ ","
-    ++ "\"base_depth\":" ++ toString witness.baseDepth ++ ","
-    ++ "\"max_depth\":" ++ toString witness.maxDepth ++ ","
-    ++ "\"base_verified\":" ++ boolString witness.baseVerified ++ ","
-    ++ "\"manifest_blocks\":" ++ jsonArray (witness.manifestBlocks.map manifestBlockJson) ++ ","
-    ++ "\"manifest_root\":" ++ (match witness.manifestRoot with
-      | none => "null"
-      | some block => manifestBlockJson block) ++ ","
-    ++ "\"decoded_request\":" ++ jsonOptionalNat witness.decodedRequest ++ ","
-    ++ "\"send_permitted\":" ++ boolString witness.sendPermitted
-    ++ "}"
+example : renderedCaptureCases.any (·.captureOutcome == "idempotent") := by native_decide
 
-def renderedCaptureStorageCasesJson : String :=
-  jsonArray (renderedCaptureStorageCases.map renderedCaptureStorageCaseJson)
+example : renderedCaptureCases.all (fun c =>
+    c.captureDurable == (c.captureOutcome != "rejected") &&
+      (if c.sendPermitted then
+        c.durableAfter == some c.request && c.postStage == "durablyCaptured" &&
+          c.finalStage == "sent" && c.providerRequestsObserved == 1
+      else
+        c.durableAfter != some c.request && c.postStage == "assembled" &&
+          c.finalStage == "assembled" && c.providerRequestsObserved == 0)) := by
+  native_decide
 
-def renderedCaptureKeyCaseJson (witness : RenderedCaptureKeyCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"left_node_did\":" ++ toString witness.leftNodeDid ++ ","
-    ++ "\"left_session_id\":" ++ toString witness.leftSessionId ++ ","
-    ++ "\"left_request_id\":" ++ toString witness.leftRequestId ++ ","
-    ++ "\"left_turn_index\":" ++ toString witness.leftTurnIndex ++ ","
-    ++ "\"left_attempt\":" ++ toString witness.leftAttempt ++ ","
-    ++ "\"right_node_did\":" ++ toString witness.rightNodeDid ++ ","
-    ++ "\"right_session_id\":" ++ toString witness.rightSessionId ++ ","
-    ++ "\"right_request_id\":" ++ toString witness.rightRequestId ++ ","
-    ++ "\"right_turn_index\":" ++ toString witness.rightTurnIndex ++ ","
-    ++ "\"right_attempt\":" ++ toString witness.rightAttempt ++ ","
-    ++ "\"same_fact\":" ++ boolString witness.sameFact
-    ++ "}"
+/-- One provider attempt through the owned loop whose capture sink is the real
+durable sink, seeded with the scenario's prior binding for the same key. -/
+@[conformance_family]
+def renderedCapture : Family CaptureScenarioInput CaptureScenarioOutput where
+  inputs := renderedCaptureCases.map fun c =>
+    { nodeDid := c.nodeDid, sessionId := c.sessionId, requestId := c.requestId
+      turnIndex := c.turnIndex, attempt := c.attempt, request := c.request
+      priorBinding := c.priorBinding }
+  model := fun i =>
+    let sc : RenderedCapture.Scenario :=
+      { key := { nodeDid := i.nodeDid, sessionId := i.sessionId, requestId := i.requestId
+                 turnIndex := i.turnIndex, attempt := i.attempt }
+        request := { value := i.request }
+        priorBinding := i.priorBinding.map fun value => { value } }
+    { captureOutcome := sc.outcome.toContract
+      captureDurable := sc.outcome.durable
+      postStage := sc.postStage.toContract
+      sendPermitted := sc.sendPermitted
+      providerRequestsObserved := sc.providerRequests
+      durableAfter := sc.durableAfter.map (·.value)
+      finalStage := sc.finalStage.toContract }
 
-def renderedCaptureKeyCasesJson : String :=
-  jsonArray (renderedCaptureKeyCases.map renderedCaptureKeyCaseJson)
+structure CaptureKeyPair where
+  leftNodeDid : Nat
+  leftSessionId : Nat
+  leftRequestId : Nat
+  leftTurnIndex : Nat
+  leftAttempt : Nat
+  rightNodeDid : Nat
+  rightSessionId : Nat
+  rightRequestId : Nat
+  rightTurnIndex : Nat
+  rightAttempt : Nat
+  deriving Lean.ToJson
 
-def captureScopeCaseJson (witness : CaptureScopeCase) : String :=
-  "{"
-    ++ "\"label\":" ++ jsonString witness.label ++ ","
-    ++ "\"kind\":" ++ jsonString witness.kind ++ ","
-    ++ "\"seq\":" ++ toString witness.seq ++ ","
-    ++ "\"valid\":" ++ boolString witness.valid
-    ++ "}"
+example :
+    renderedCaptureKeyCases.all fun c =>
+      let varied :=
+        [ c.leftNodeDid != c.rightNodeDid, c.leftSessionId != c.rightSessionId
+        , c.leftRequestId != c.rightRequestId, c.leftTurnIndex != c.rightTurnIndex
+        , c.leftAttempt != c.rightAttempt ].count true
+      varied ≤ 1 && (varied == 0) == c.sameFact := by
+  native_decide
 
-def captureScopeCasesJson : String :=
-  jsonArray (captureScopeCases.map captureScopeCaseJson)
+/-- Whether the production capture key names both provider attempts as one fact. -/
+@[conformance_family]
+def renderedCaptureKey : Family CaptureKeyPair Bool where
+  inputs := renderedCaptureKeyCases.map fun c =>
+    { leftNodeDid := c.leftNodeDid, leftSessionId := c.leftSessionId
+      leftRequestId := c.leftRequestId, leftTurnIndex := c.leftTurnIndex
+      leftAttempt := c.leftAttempt, rightNodeDid := c.rightNodeDid
+      rightSessionId := c.rightSessionId, rightRequestId := c.rightRequestId
+      rightTurnIndex := c.rightTurnIndex, rightAttempt := c.rightAttempt }
+  model := fun i =>
+    decide (({ nodeDid := i.leftNodeDid, sessionId := i.leftSessionId
+               requestId := i.leftRequestId, turnIndex := i.leftTurnIndex
+               attempt := i.leftAttempt } : RenderedCapture.CaptureKey) =
+      { nodeDid := i.rightNodeDid, sessionId := i.rightSessionId
+        requestId := i.rightRequestId, turnIndex := i.rightTurnIndex
+        attempt := i.rightAttempt })
 
-def captureOrderCaseJson (witness : CaptureOrderCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"left_label\":" ++ jsonString witness.leftLabel ++ ","
-    ++ "\"left_turn\":" ++ toString witness.leftTurn ++ ","
-    ++ "\"left_attempt\":" ++ toString witness.leftAttempt ++ ","
-    ++ "\"right_label\":" ++ jsonString witness.rightLabel ++ ","
-    ++ "\"right_turn\":" ++ toString witness.rightTurn ++ ","
-    ++ "\"right_attempt\":" ++ toString witness.rightAttempt ++ ","
-    ++ "\"left_before_right\":" ++ boolString witness.leftBeforeRight
-    ++ "}"
+structure CaptureOrderPair where
+  leftLabel : String
+  leftTurn : Nat
+  leftAttempt : Nat
+  rightLabel : String
+  rightTurn : Nat
+  rightAttempt : Nat
+  deriving Lean.ToJson
 
-def captureOrderCasesJson : String :=
-  jsonArray (captureOrderCases.map captureOrderCaseJson)
+/-- The scope kind and sequence a well-formed `"{kind}.{seq}"` label names. -/
+def captureScopeOf (label : String) : Option (CaptureScopeKind × Nat) :=
+  allCaptureScopeKinds.findSome? fun kind =>
+    if label.startsWith (kind.label ++ ".") then
+      (label.drop (kind.label.length + 1)).toNat?.map (kind, ·)
+    else none
+
+/-- Whether the left capture orders strictly before the right one by
+`(kind rank, seq, turn, attempt)`. -/
+def captureOrderBefore (pair : CaptureOrderPair) : Bool :=
+  match captureScopeOf pair.leftLabel, captureScopeOf pair.rightLabel with
+  | some (leftKind, leftSeq), some (rightKind, rightSeq) =>
+      tupleLt (orderTuple leftKind leftSeq pair.leftTurn pair.leftAttempt)
+        (orderTuple rightKind rightSeq pair.rightTurn pair.rightAttempt)
+  | _, _ => false
+
+def captureOrderPairs : List CaptureOrderPair :=
+  captureOrderCases.map fun c =>
+    { leftLabel := c.leftLabel, leftTurn := c.leftTurn, leftAttempt := c.leftAttempt
+      rightLabel := c.rightLabel, rightTurn := c.rightTurn, rightAttempt := c.rightAttempt }
+
+example :
+    (captureOrderCases.zip captureOrderPairs).all fun (c, pair) =>
+      captureOrderBefore pair == c.leftBeforeRight := by
+  native_decide
+
+@[conformance_family]
+def captureOrder : Family CaptureOrderPair Bool where
+  inputs := captureOrderPairs
+  model := captureOrderBefore
 
 end Conformance.Contracts

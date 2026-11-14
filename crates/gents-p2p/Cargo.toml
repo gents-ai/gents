@@ -1,0 +1,51 @@
+[package]
+name = "gents-p2p"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "P2P observability and enrollment reconcilers for Gents"
+
+[features]
+default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
+typescript = ["gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript"]
+live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e"]
+test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard"]
+test-fixtures = ["test-home-guard", "gents-store/test-fixtures", "gents-documents/test-fixtures"]
+
+[dependencies]
+gents-store.workspace = true
+gents-documents.workspace = true
+acp.workspace = true
+schema.workspace = true
+storage.workspace = true
+anyhow.workspace = true
+async-trait = "0.1"
+bs58 = "0.5"
+chrono.workspace = true
+defra-core.workspace = true
+defra-p2p-adapter.workspace = true
+gents-protocol.workspace = true
+defra-node.workspace = true
+events.workspace = true
+futures = "0.3"
+identity.workspace = true
+p2p.workspace = true
+query.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+tokio-util = "0.7"
+tempfile = "3"
+
+[dev-dependencies]
+gents-p2p = { path = ".", features = ["test-fixtures"] }
+gents-store = { workspace = true, features = ["test-fixtures"] }
+gents-documents = { workspace = true, features = ["test-fixtures"] }
+gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true

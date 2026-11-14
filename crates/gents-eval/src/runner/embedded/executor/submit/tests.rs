@@ -3,7 +3,7 @@ use crate::runner::embedded::executor::install::install_schema;
 use crate::runner::embedded::executor::tests::seed_trigger;
 use crate::runner::embedded::executor::{close, EventSourcesReady};
 use crate::runner::executor::FixtureDocument;
-use gents::RuntimeSnapshotObserver;
+use gents_automation::triggers::snapshot_observer::RuntimeSnapshotObserver;
 use serde_json::json;
 
 #[tokio::test]
@@ -100,11 +100,11 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
         since,
     )
     .await;
-    gents::test_support::update_trigger_runtime_fields(
+    gents_automation::test_support::update_trigger_runtime_fields(
         &home.node,
         home.did(),
         "seed-trigger",
-        gents::test_support::TriggerRuntimeUpdate {
+        gents_automation::test_support::TriggerRuntimeUpdate {
             last_fired_source_doc_id: Some(doc_id.clone()),
             ..Default::default()
         },

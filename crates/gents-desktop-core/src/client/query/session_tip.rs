@@ -1,54 +1,31 @@
 use super::*;
-use gents_protocol::output::rows::{
-    decode_scoped_canonical_rows, decode_scoped_request_output_segments,
-    decode_transcript_message_row, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
-};
+use gents_session::views::requests::RequestRows;
+use gents_session::views::transcript::{MessageIdentities, MessageRows, Scope, SegmentRows};
+use gents_store::config_client::ConfigAccess;
 
 /// Bound the rows read for an active request; oversized results fail instead
 /// of silently presenting a truncated tip.
 const MAX_TIP_REQUEST_ROWS: usize = 2_048;
 
-pub async fn load_session_tip_store(
-    node: &EmbeddedNode,
-    request: &AgentRequestRow,
-) -> Result<ClientStore> {
-    let query = tip_query(request, false)?;
-    let data = execute_local_graphql_query(node, &query, "session tip").await?;
-    tip_store(&data, request)
-}
-
 pub async fn load_session_tip_store_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &ConfigAccess,
     request: &AgentRequestRow,
 ) -> Result<ClientStore> {
-    let query = tip_query(request, false)?;
-    let data = execute_access_graphql_query(access, &query, "session tip").await?;
-    tip_store(&data, request)
-}
-
-pub async fn load_session_live_store(
-    node: &EmbeddedNode,
-    request: &AgentRequestRow,
-) -> Result<ClientStore> {
-    let query = tip_query(request, true)?;
-    let data = execute_local_graphql_query(node, &query, "session live output").await?;
-    live_store(&data, request)
+    tip_store(read_tip(access, request, false).await?, request)
 }
 
 pub async fn load_session_live_store_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &ConfigAccess,
     request: &AgentRequestRow,
 ) -> Result<ClientStore> {
-    let query = tip_query(request, true)?;
-    let data = execute_access_graphql_query(access, &query, "session live output").await?;
-    live_store(&data, request)
+    live_store(read_tip(access, request, true).await?, request)
 }
 
 /// The live rows of `request_id` when `observed` holds exactly one such
 /// request of `session_id` on `node_did` and the session's requester made it;
 /// an empty store otherwise.
 pub async fn load_session_request_live_store_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     observed: &ClientStore,
     session_id: &str,
     node_did: &str,
@@ -81,7 +58,7 @@ pub async fn load_session_request_live_store_on(
 /// `node_did` in `observed`, read over `access`; `None` once that request is
 /// terminal or while it has no live output.
 pub async fn load_session_live_text_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     observed: &ClientStore,
     session_id: &str,
     node_did: &str,
@@ -108,9 +85,8 @@ pub async fn load_session_live_text_on(
     ))
 }
 
-fn live_store(data: &Value, expected: &AgentRequestRow) -> Result<ClientStore> {
-    let requests: Vec<AgentRequestRow> = parse_query_rows(data, AGENT_REQUEST_NAME)?;
-    let [request] = requests.as_slice() else {
+fn live_store(data: TipRead, expected: &AgentRequestRow) -> Result<ClientStore> {
+    let [request] = data.requests.as_slice() else {
         return Ok(ClientStore::default());
     };
     anyhow::ensure!(
@@ -121,9 +97,7 @@ fn live_store(data: &Value, expected: &AgentRequestRow) -> Result<ClientStore> {
             && request.requester_did == expected.requester_did,
         "live request scope changed"
     );
-    let mut rows = tip_rows(data, expected)?;
-    rows.requests = requests;
-    Ok(ClientStore::from_rows(rows))
+    tip_store(data, expected)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -141,170 +115,65 @@ pub struct RequestPromptFact {
 }
 
 fn input_owner(request: &AgentRequestRow) -> Result<(String, String, bool)> {
-    let (owner, key) = gents::request::lifecycle::input_message_owner(request)
+    let (owner, key) = gents_session::request::lifecycle::input_message_owner(request)
         .context("prompt lookup lacks physical request")?;
     let own = request.doc_id.as_deref() == Some(owner.as_str());
     Ok((owner, key, own))
 }
 
-pub async fn load_request_prompt_ownership(
-    node: &EmbeddedNode,
-    requests: &[AgentRequestRow],
-) -> Result<RequestPromptOwnership> {
-    let mut facts = RequestPromptOwnership::default();
-    for chunk in requests.chunks(32) {
-        if let Some(query) = prompt_ownership_batch_query(chunk) {
-            let data =
-                execute_local_graphql_query(node, &query, "request prompt ownership").await?;
-            if decode_prompt_ownership_batch(&data, chunk, &mut facts)? {
-                continue;
-            }
-        }
-        let query = prompt_ownership_query(chunk)?;
-        let data = execute_local_graphql_query(node, &query, "request prompt ownership").await?;
-        decode_prompt_ownership(&data, chunk, &mut facts)?;
-    }
-    Ok(facts)
-}
-
 pub async fn load_request_prompt_ownership_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &ConfigAccess,
     requests: &[AgentRequestRow],
 ) -> Result<RequestPromptOwnership> {
     let mut facts = RequestPromptOwnership::default();
     for chunk in requests.chunks(32) {
-        if let Some(query) = prompt_ownership_batch_query(chunk) {
-            let data =
-                execute_access_graphql_query(access, &query, "request prompt ownership").await?;
-            if decode_prompt_ownership_batch(&data, chunk, &mut facts)? {
-                continue;
-            }
-        }
-        let query = prompt_ownership_query(chunk)?;
-        let data = execute_access_graphql_query(access, &query, "request prompt ownership").await?;
-        decode_prompt_ownership(&data, chunk, &mut facts)?;
+        let observations = prompt_observations(access, chunk).await?;
+        decode_prompt_ownership(&observations, chunk, &mut facts)?;
     }
     Ok(facts)
 }
 
-fn prompt_ownership_batch_query(requests: &[AgentRequestRow]) -> Option<String> {
-    let first = requests.first()?;
-    let node = escape_graphql_string(first.node_did.as_deref()?);
-    let session = escape_graphql_string(first.session_id.as_deref()?);
-    let requester = first
-        .requester_did
-        .as_deref()
-        .map(|did| format!("\"{}\"", escape_graphql_string(did)))
-        .unwrap_or_else(|| "null".into());
-    let mut seen_owners = rapidhash::RapidHashSet::default();
-    let ids = requests
-        .iter()
-        .map(|request| {
-            if request.node_did != first.node_did
-                || request.session_id != first.session_id
-                || request.requester_did != first.requester_did
-            {
-                return None;
-            }
-            let (owner, _, _) = input_owner(request).ok()?;
-            Some(owner)
-        })
-        .collect::<Option<Vec<_>>>()?
-        .into_iter()
-        .filter(|owner| seen_owners.insert(owner.clone()))
-        .map(|owner| format!("\"{}\"", escape_graphql_string(&owner)))
-        .collect::<Vec<_>>()
-        .join(",");
-    let limit = MAX_TIP_REQUEST_ROWS + 1;
-    Some(format!(
-        r#"query DesktopRequestPromptOwnership {{
-        AgentMessage(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}},
-            requester_did: {{_eq: {requester}}}, request_doc_id: {{_in: [{ids}]}}}},
-            order: {{sequence: ASC}}, limit: {limit}) {{
-            _docID request_doc_id node_did session_id requester_did message_key role sequence
-        }}
-    }}"#
-    ))
-}
-
-fn decode_prompt_ownership_batch(
-    data: &Value,
-    requests: &[AgentRequestRow],
-    facts: &mut RequestPromptOwnership,
-) -> Result<bool> {
-    let rows = data
-        .get(AGENT_MESSAGE_NAME)
-        .and_then(Value::as_array)
-        .context("prompt batch omitted rows")?;
-    if rows.len() > MAX_TIP_REQUEST_ROWS {
-        return Ok(false);
-    }
-    let mut observations = serde_json::Map::new();
-    for (index, request) in requests.iter().enumerate() {
+async fn prompt_observations(access: &ConfigAccess, requests: &[AgentRequestRow]) -> Result<Value> {
+    let mut views = Vec::new();
+    for request in requests {
         let (owner, key, own) = input_owner(request)?;
-        let matching = rows
-            .iter()
-            .filter(|row| row["request_doc_id"].as_str() == Some(owner.as_str()))
-            .collect::<Vec<_>>();
-        if matching.len() > 1 && matching[0]["sequence"] == matching[1]["sequence"] {
-            return Ok(false);
+        let scope = Scope::Session(gents_protocol::session::SessionScope {
+            node_did: request
+                .node_did
+                .clone()
+                .context("prompt lookup lacks node")?,
+            session_id: request
+                .session_id
+                .clone()
+                .context("prompt lookup lacks session")?,
+            requester_did: request.requester_did.clone(),
+        });
+        let mut prompt = MessageRows::new(scope.clone());
+        prompt.request_doc_ids = Some(vec![owner.clone()]);
+        prompt.message_key = Some(key.clone());
+        prompt.role = Some(gents_protocol::output::MessageRole::User);
+        prompt.limit = Some(2);
+        let mut anchor = MessageRows::new(scope);
+        anchor.request_doc_ids = Some(vec![owner]);
+        anchor.limit = Some(1);
+        if !own {
+            anchor.message_key = Some(key);
+            anchor.role = Some(gents_protocol::output::MessageRole::User);
         }
-        let prompt = matching
-            .iter()
-            .filter(|row| {
-                row["message_key"].as_str() == Some(key.as_str()) && row["role"] == "user"
-            })
-            .take(2)
-            .map(|row| (*row).clone())
-            .collect::<Vec<_>>();
-        let anchor = if own {
-            matching.first().map(|row| (*row).clone())
+        views.push(MessageIdentities(prompt));
+        views.push(MessageIdentities(anchor));
+    }
+    let rows = access.read_views(&views).await?;
+    let mut observations = serde_json::Map::new();
+    for (index, rows) in rows.into_iter().enumerate() {
+        let key = if index % 2 == 0 {
+            format!("p{}", index / 2)
         } else {
-            prompt.first().cloned()
+            format!("a{}", index / 2)
         };
-        observations.insert(format!("p{index}"), Value::Array(prompt));
-        observations.insert(
-            format!("a{index}"),
-            Value::Array(anchor.into_iter().collect()),
-        );
+        observations.insert(key, serde_json::to_value(rows)?);
     }
-    decode_prompt_ownership(&Value::Object(observations), requests, facts)?;
-    Ok(true)
-}
-
-fn prompt_ownership_query(requests: &[AgentRequestRow]) -> Result<String> {
-    let mut fields = Vec::new();
-    for (index, request) in requests.iter().enumerate() {
-        let (doc, key, own) = input_owner(request)?;
-        let node = request
-            .node_did
-            .as_deref()
-            .context("prompt lookup lacks node")?;
-        let session = request
-            .session_id
-            .as_deref()
-            .context("prompt lookup lacks session")?;
-        let requester = request
-            .requester_did
-            .as_deref()
-            .map(|did| format!("\"{}\"", escape_graphql_string(did)))
-            .unwrap_or_else(|| "null".into());
-        let scope = format!(
-            r#"request_doc_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }}"#,
-            escape_graphql_string(&doc),
-            escape_graphql_string(node),
-            escape_graphql_string(session)
-        );
-        let key = escape_graphql_string(&key);
-        let exact = format!(r#"{scope}, message_key: {{ _eq: "{key}" }}, role: {{ _eq: "user" }}"#);
-        let anchor_scope = if own { scope.clone() } else { exact.clone() };
-        fields.push(format!(r#"p{index}: AgentMessage(filter: {{ {exact} }}, limit: 2) {{ _docID request_doc_id node_did session_id requester_did message_key role sequence }}
-        a{index}: AgentMessage(filter: {{ {anchor_scope} }}, order: {{ sequence: ASC }}, limit: 1) {{ _docID request_doc_id node_did session_id requester_did message_key sequence }}"#));
-    }
-    Ok(format!(
-        "query DesktopRequestPromptOwnership {{ {} }}",
-        fields.join("\n")
-    ))
+    Ok(Value::Object(observations))
 }
 
 fn decode_prompt_ownership(
@@ -363,7 +232,7 @@ fn decode_prompt_ownership(
                     .first()
                     .filter(|row| {
                         let input = request.input.clone().unwrap_or_default();
-                        !gents::request::lifecycle::is_runtime_control_message(
+                        !gents_session::request::lifecycle::is_runtime_control_message(
                             &input,
                             row["message_key"].as_str().unwrap_or_default(),
                         )
@@ -380,92 +249,69 @@ fn decode_prompt_ownership(
     Ok(())
 }
 
-fn tip_query(request: &AgentRequestRow, include_request: bool) -> Result<String> {
-    let doc = escape_graphql_string(
-        request
-            .doc_id
-            .as_deref()
-            .context("tip request lacks physical identity")?,
-    );
-    let node = escape_graphql_string(
-        request
-            .node_did
-            .as_deref()
-            .context("tip request lacks node")?,
-    );
-    let session = escape_graphql_string(
-        request
+struct TipRead {
+    requests: Vec<AgentRequestRow>,
+    messages: Vec<gents_session::views::transcript::MessageRow>,
+    segments: Vec<gents_session::views::transcript::SegmentRow>,
+}
+
+async fn read_tip(
+    access: &ConfigAccess,
+    request: &AgentRequestRow,
+    include_request: bool,
+) -> Result<TipRead> {
+    let doc = request
+        .doc_id
+        .clone()
+        .context("tip request lacks physical identity")?;
+    let scope = Scope::Session(gents_protocol::session::SessionScope {
+        node_did: request.node_did.clone().context("tip request lacks node")?,
+        session_id: request
             .session_id
-            .as_deref()
+            .clone()
             .context("tip request lacks session")?,
-    );
-    let requester = request
-        .requester_did
-        .as_deref()
-        .map(|value| format!("\"{}\"", escape_graphql_string(value)))
-        .unwrap_or_else(|| "null".into());
-    let scope = format!(
-        r#"request_doc_id: {{ _eq: "{doc}" }}, _or: [{{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }} }}]"#
-    );
+        requester_did: request.requester_did.clone(),
+    });
     let live = include_request
         || request
             .lifecycle_state
             .is_some_and(|state| !state.is_terminal());
-    let limit = MAX_TIP_REQUEST_ROWS + 1;
-    let header_filter = if live {
-        scope.clone()
+    let mut headers = MessageRows::new(scope.clone());
+    headers.request_doc_ids = Some(vec![doc.clone()]);
+    headers.limit = Some((MAX_TIP_REQUEST_ROWS + 1) as u64);
+    if !live {
+        headers.message_key = Some(format!("authored:{doc}:prompt"));
+    }
+    let mut segments = SegmentRows::new(scope.clone());
+    segments.request_doc_ids = Some(vec![doc.clone()]);
+    segments.limit = Some((MAX_TIP_REQUEST_ROWS + 1) as u64);
+    segments.provider_live_only = include_request;
+    if include_request {
+        let requests = RequestRows::new(scope).doc_ids(vec![doc]).limit(2);
+        let (requests, messages, segments) =
+            access.read_views(&(requests, headers, segments)).await?;
+        Ok(TipRead {
+            requests,
+            messages,
+            segments,
+        })
+    } else if live {
+        let (messages, segments) = access.read_views(&(headers, segments)).await?;
+        Ok(TipRead {
+            requests: Vec::new(),
+            messages,
+            segments,
+        })
     } else {
-        let key = escape_graphql_string(&format!(
-            "authored:{}:prompt",
-            request.doc_id.as_deref().unwrap()
-        ));
-        format!(r#"{scope}, message_key: {{ _eq: "{key}" }}"#)
-    };
-    let segments = if live {
-        let source = if include_request {
-            r#", source: { kind: { _eq: "provider_turn" }, scope: { _like: "inference.%" } }"#
-        } else {
-            ""
-        };
-        format!(
-            r#"AgentOutputSegment(filter: {{ {scope}{source} }}, limit: {limit}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}"#
-        )
-    } else {
-        String::new()
-    };
-    let request_fields = if include_request {
-        format!(
-            r#"AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }}, node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }} }}, limit: 2) {{ {AGENT_REQUEST_FIELDS} }}"#
-        )
-    } else {
-        String::new()
-    };
-    Ok(format!(
-        r#"query DesktopSessionTip {{
-        {request_fields}
-        AgentMessage(filter: {{ {header_filter} }}, limit: {limit}) {{ {AGENT_MESSAGE_FIELDS} }}
-        {segments}
-    }}"#
-    ))
+        Ok(TipRead {
+            requests: Vec::new(),
+            messages: access.read_view(&headers).await?,
+            segments: Vec::new(),
+        })
+    }
 }
 
-fn tip_store(data: &Value, request: &AgentRequestRow) -> Result<ClientStore> {
-    Ok(ClientStore::from_rows(tip_rows(data, request)?))
-}
-
-fn bounded_tip_rows<'a>(data: &'a Value, root: &str) -> Result<&'a [Value]> {
-    let rows = data
-        .get(root)
-        .and_then(Value::as_array)
-        .with_context(|| format!("session tip omitted {root} rows"))?;
-    anyhow::ensure!(
-        rows.len() <= MAX_TIP_REQUEST_ROWS,
-        "active request exceeds bounded session-tip read of {MAX_TIP_REQUEST_ROWS} rows"
-    );
-    Ok(rows)
-}
-
-fn tip_rows(data: &Value, request: &AgentRequestRow) -> Result<ClientStoreRows> {
+fn tip_store(data: TipRead, request: &AgentRequestRow) -> Result<ClientStore> {
     let node = request
         .node_did
         .as_deref()
@@ -474,35 +320,43 @@ fn tip_rows(data: &Value, request: &AgentRequestRow) -> Result<ClientStoreRows> 
         .session_id
         .as_deref()
         .context("tip request lacks session")?;
-    let messages = decode_scoped_canonical_rows(
-        bounded_tip_rows(data, AGENT_MESSAGE_NAME)?,
-        node,
-        Some(session),
-        request.requester_did.as_deref(),
-        decode_transcript_message_row,
-    )?;
-    let segments = if data.get(AGENT_OUTPUT_SEGMENT_NAME).is_some() {
-        decode_scoped_request_output_segments(
-            bounded_tip_rows(data, AGENT_OUTPUT_SEGMENT_NAME)?,
-            node,
-            Some(session),
-            request.requester_did.as_deref(),
-        )?
-    } else {
-        Vec::new()
-    };
-    Ok(ClientStoreRows {
+    anyhow::ensure!(
+        data.messages.len() <= MAX_TIP_REQUEST_ROWS && data.segments.len() <= MAX_TIP_REQUEST_ROWS,
+        "active request exceeds bounded session-tip read of {MAX_TIP_REQUEST_ROWS} rows"
+    );
+    let messages = data
+        .messages
+        .into_iter()
+        .filter(|row| {
+            row.message.node_did == node
+                && row.message.session_id == session
+                && row.message.requester_did == request.requester_did
+        })
+        .map(|row| row.into_canonical())
+        .collect();
+    let segments = data
+        .segments
+        .into_iter()
+        .filter(|row| {
+            row.segment.node_did == node
+                && row.segment.session_id == session
+                && row.segment.requester_did == request.requester_did
+        })
+        .map(|row| row.into_canonical())
+        .collect();
+    Ok(ClientStore::from_rows(ClientStoreRows {
+        requests: data.requests,
         transcript_messages: messages,
         output_segments: segments,
         ..Default::default()
-    })
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::store::config_client::ConfigAccess;
     use gents_protocol::request_lifecycle::RequestLifecycleState;
+    use gents_store::config_client::ConfigAccess;
 
     #[tokio::test]
     async fn reopening_completed_request_reads_only_its_prompt_and_active_reads_stay_request_scoped(
@@ -563,7 +417,9 @@ mod tests {
                 lifecycle_state: Some(state),
                 ..Default::default()
             };
-            let tip = load_session_tip_store(&node, &request).await.unwrap();
+            let tip = load_session_tip_store_on(&fixture_view_access(&node), &request)
+                .await
+                .unwrap();
             assert_eq!(tip.transcript_messages.len(), 1);
             assert_eq!(
                 tip.transcript_messages[0].message.message_key,
@@ -579,16 +435,12 @@ mod tests {
             ..Default::default()
         };
         let mut requests = vec![scoped("completed"), scoped("interrupted")];
-        let ownership = load_request_prompt_ownership(&node, &requests)
+        let ownership = load_request_prompt_ownership_on(&fixture_view_access(&node), &requests)
             .await
             .unwrap();
-        let exact = execute_local_graphql_query(
-            &node,
-            &prompt_ownership_query(&requests).unwrap(),
-            "exact prompt ownership comparison",
-        )
-        .await
-        .unwrap();
+        let exact = prompt_observations(&fixture_view_access(&node), &requests)
+            .await
+            .unwrap();
         let mut exact_facts = RequestPromptOwnership::default();
         decode_prompt_ownership(&exact, &requests, &mut exact_facts).unwrap();
         for (doc, fact) in &ownership.by_request_doc_id {
@@ -607,10 +459,10 @@ mod tests {
             None
         );
         requests[0].requester_did = Some("different-requester".into());
-        assert!(prompt_ownership_batch_query(&requests).is_none());
-        let other_scope = load_request_prompt_ownership(&node, &requests[..1])
-            .await
-            .unwrap();
+        let other_scope =
+            load_request_prompt_ownership_on(&fixture_view_access(&node), &requests[..1])
+                .await
+                .unwrap();
         assert!(!other_scope.by_request_doc_id["completed"].materialized);
         assert_eq!(
             other_scope.by_request_doc_id["completed"].first_sequence,
@@ -634,199 +486,6 @@ mod tests {
             &mut RequestPromptOwnership::default()
         )
         .is_err());
-        node.shutdown().await.unwrap();
-    }
-
-    #[test]
-    fn a_folded_message_is_owned_by_its_folded_entry_under_the_claiming_request() {
-        let request = |doc: &str| AgentRequestRow {
-            doc_id: Some(doc.into()),
-            request_id: format!("req-{doc}"),
-            node_did: Some("agent".into()),
-            session_id: Some("session".into()),
-            ..Default::default()
-        };
-        let folded = AgentRequestRow {
-            lifecycle_state: Some(
-                gents_protocol::request_lifecycle::RequestLifecycleState::Superseded,
-            ),
-            superseded_by_request: Some("req-head".into()),
-            superseded_by_request_doc_id: Some("head".into()),
-            failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
-            ..request("folded")
-        };
-        let requests = [request("head"), folded];
-        let query = prompt_ownership_batch_query(&requests).expect("one scope");
-        assert!(query.contains(r#"request_doc_id: {_in: ["head"]}"#));
-        let mut other_scope = requests.clone();
-        other_scope[1].requester_did = Some("other-requester".into());
-        assert!(prompt_ownership_batch_query(&other_scope).is_none());
-        let row = |key: &str, sequence: i64| {
-            serde_json::json!({
-                "request_doc_id": "head", "node_did": "agent", "session_id": "session",
-                "requester_did": null, "message_key": key, "role": "user", "sequence": sequence
-            })
-        };
-        let rows = serde_json::json!({"AgentMessage": [
-            row("authored:head:context", 3),
-            row("authored:head:prompt", 4),
-            row("authored:head:folded:folded", 5),
-        ]});
-        let mut facts = RequestPromptOwnership::default();
-        assert!(decode_prompt_ownership_batch(&rows, &requests, &mut facts).unwrap());
-        assert!(facts.by_request_doc_id["head"].materialized);
-        assert_eq!(facts.by_request_doc_id["head"].first_sequence, Some(3));
-        assert!(facts.by_request_doc_id["folded"].materialized);
-        assert_eq!(facts.by_request_doc_id["folded"].first_sequence, Some(5));
-
-        let exact = prompt_ownership_query(&requests[1..]).unwrap();
-        assert!(exact.contains("authored:head:folded:folded"));
-        assert!(!exact.contains("authored:folded:prompt"));
-
-        let unpublished = serde_json::json!({"AgentMessage": [row("authored:head:prompt", 4)]});
-        let mut facts = RequestPromptOwnership::default();
-        assert!(decode_prompt_ownership_batch(&unpublished, &requests, &mut facts).unwrap());
-        assert!(!facts.by_request_doc_id["folded"].materialized);
-        assert_eq!(facts.by_request_doc_id["folded"].first_sequence, None);
-    }
-
-    #[tokio::test]
-    #[ignore = "measures repeated-owner index planning against a large disposable session"]
-    async fn folded_prompt_ownership_index_benchmark() {
-        let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
-        let access = ConfigAccess::local(node.clone());
-        access
-            .add_collection(gents_protocol::schemas::AGENT_MESSAGE)
-            .await
-            .unwrap();
-        for start in (0..2_112).step_by(128) {
-            let mutations = (start..(start + 128).min(2_112))
-                .map(|sequence| {
-                    let (owner, key, role) = if sequence < 2_048 {
-                        (format!("noise-{sequence}"), format!("noise-{sequence}"), "assistant")
-                    } else {
-                        let key = match sequence - 2_048 {
-                            0 => "authored:head:context".into(),
-                            1 => "authored:head:prompt".into(),
-                            offset @ 2..=32 => format!("authored:head:folded:folded-{}", offset - 2),
-                            offset => format!("head-{offset}"),
-                        };
-                        ("head".into(), key, "user")
-                    };
-                    let owner = escape_graphql_string(&owner);
-                    let key = escape_graphql_string(&key);
-                    let role = escape_graphql_string(role);
-                    format!(r#"m{sequence}: create_AgentMessage(input: {{
-                        message_key: "{key}", session_id: "session", node_did: "agent",
-                        request_doc_id: "{owner}", requester_did: null,
-                        publication: {{kind: "request_execution", execution_generation: "generation"}},
-                        outcome: "complete", sequence: {sequence}, role: "{role}", blocks: null,
-                        created_at: "2026-09-30T00:00:00Z"
-                    }}) {{ _docID }}"#)
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            ConfigAccess::write_local(
-                &node,
-                "test.prompt_benchmark.seed",
-                &format!("mutation {{ {mutations} }}"),
-            )
-            .await
-            .unwrap();
-        }
-        let head = AgentRequestRow {
-            doc_id: Some("head".into()),
-            request_id: "req-head".into(),
-            node_did: Some("agent".into()),
-            session_id: Some("session".into()),
-            ..Default::default()
-        };
-        let mut requests = vec![head.clone()];
-        requests.extend((0..31).map(|index| AgentRequestRow {
-            doc_id: Some(format!("folded-{index}")),
-            request_id: format!("req-folded-{index}"),
-            lifecycle_state: Some(RequestLifecycleState::Superseded),
-            superseded_by_request: Some(head.request_id.clone()),
-            superseded_by_request_doc_id: head.doc_id.clone(),
-            failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
-            ..head.clone()
-        }));
-        let unique = prompt_ownership_batch_query(&requests).unwrap();
-        let owners = std::iter::repeat_n(r#""head""#, 32)
-            .collect::<Vec<_>>()
-            .join(",");
-        let repeated = unique.replace(r#"_in: ["head"]"#, &format!("_in: [{owners}]"));
-        assert_ne!(repeated, unique);
-        let exact = prompt_ownership_query(&requests).unwrap();
-        let report = ConfigAccess::transact_local_readonly(
-            &node,
-            None,
-            "test.prompt_benchmark.read",
-            |txn| {
-                let unique = unique.clone();
-                let repeated = repeated.clone();
-                let exact = exact.clone();
-                let requests = requests.clone();
-                Box::pin(async move {
-                    let unique_rows = txn.execute(&unique).await?;
-                    let repeated_rows = txn.execute(&repeated).await?;
-                    assert_eq!(unique_rows, repeated_rows);
-                    assert_eq!(unique_rows["data"][AGENT_MESSAGE_NAME].as_array().unwrap().len(), 64);
-                    let mut batch_facts = RequestPromptOwnership::default();
-                    assert!(decode_prompt_ownership_batch(&unique_rows["data"], &requests, &mut batch_facts)?);
-                    let exact_rows = txn.execute(&exact).await?;
-                    let mut exact_facts = RequestPromptOwnership::default();
-                    decode_prompt_ownership(&exact_rows["data"], &requests, &mut exact_facts)?;
-                    assert_eq!(batch_facts.by_request_doc_id.len(), requests.len());
-                    assert_eq!(exact_facts.by_request_doc_id.len(), requests.len());
-                    for (doc, fact) in &batch_facts.by_request_doc_id {
-                        let expected = &exact_facts.by_request_doc_id[doc];
-                        assert_eq!(fact.materialized, expected.materialized);
-                        assert_eq!(fact.first_sequence, expected.first_sequence);
-                        assert_eq!(fact.node_did, expected.node_did);
-                        assert_eq!(fact.session_id, expected.session_id);
-                        assert_eq!(fact.requester_did, expected.requester_did);
-                    }
-                    let mut decoder_timings = Vec::new();
-                    for _ in 0..5 {
-                        let started = std::time::Instant::now();
-                        for _ in 0..1_000 {
-                            let mut facts = RequestPromptOwnership::default();
-                            assert!(decode_prompt_ownership_batch(&unique_rows["data"], &requests, &mut facts)?);
-                            assert_eq!(facts.by_request_doc_id.len(), requests.len());
-                            std::hint::black_box(facts);
-                        }
-                        decoder_timings.push(started.elapsed().as_secs_f64() * 1_000.0);
-                    }
-                    let mut timings = Vec::new();
-                    for round in 0..5 {
-                        for (label, query) in if round % 2 == 0 {
-                            [("repeated", &repeated), ("unique", &unique)]
-                        } else {
-                            [("unique", &unique), ("repeated", &repeated)]
-                        } {
-                            let started = std::time::Instant::now();
-                            let response = txn.execute(query).await?;
-                            assert_eq!(response, unique_rows);
-                            timings.push(serde_json::json!({"query": label, "wall_ms": started.elapsed().as_secs_f64() * 1000.0}));
-                        }
-                    }
-                    let explain = |query: &str| query.replacen("query DesktopRequestPromptOwnership", "query DesktopRequestPromptOwnership @explain(type: execute)", 1);
-                    Ok::<_, anyhow::Error>(serde_json::json!({
-                        "session_headers": 2_112, "owner_headers": 64, "requests": 32,
-                        "timings": timings, "decoder_ms_per_1000": decoder_timings,
-                        "unique_plan": txn.execute(&explain(&unique)).await?,
-                        "repeated_plan": txn.execute(&explain(&repeated)).await?,
-                    }))
-                })
-            },
-        )
-        .await
-        .unwrap();
-        if let Ok(path) = std::env::var("GENTS_PROMPT_BENCHMARK_OUTPUT") {
-            std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
-        }
-        tracing::info!(report = %report, "folded prompt ownership benchmark");
         node.shutdown().await.unwrap();
     }
 
@@ -886,7 +545,7 @@ mod tests {
             input: queue("head"),
             superseded_by_request: Some("head".into()),
             superseded_by_request_doc_id: Some("doc-head".into()),
-            failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
+            failure_reason: Some(gents_session::request::lifecycle::FOLDED_REASON.into()),
             ..row("folded", RequestLifecycleState::Superseded, "reader")
         };
         let foreign = AgentRequestRow {
@@ -903,14 +562,18 @@ mod tests {
             ..Default::default()
         });
 
-        let untargeted = load_session_tip_store(&node, &queued).await.unwrap();
+        let untargeted = load_session_tip_store_on(&fixture_view_access(&node), &queued)
+            .await
+            .unwrap();
         assert!(untargeted.output_segments.is_empty());
         for submitted in ["queued", "folded"] {
             let tip = store
                 .session_tip_request("session", Some("agent"), Some("reader"), submitted)
                 .expect("submitted row in scope");
             assert_eq!(tip.request_id, "head", "{submitted}");
-            let loaded = load_session_tip_store(&node, &tip).await.unwrap();
+            let loaded = load_session_tip_store_on(&fixture_view_access(&node), &tip)
+                .await
+                .unwrap();
             assert_eq!(loaded.output_segments.len(), 1, "{submitted}");
             assert_eq!(loaded.output_segments[0].segment.payload, "hello");
         }
@@ -920,6 +583,14 @@ mod tests {
         assert_eq!(foreign_tip.request_id, "foreign");
         node.shutdown().await.unwrap();
     }
+}
+
+#[cfg(test)]
+fn fixture_view_access(node: &std::sync::Arc<EmbeddedNode>) -> ConfigAccess {
+    ConfigAccess::local_as(
+        node.clone(),
+        node.node_identity_did().unwrap().parse().unwrap(),
+    )
 }
 
 #[cfg(test)]

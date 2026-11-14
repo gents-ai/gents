@@ -1,23 +1,14 @@
-use super::snapshot_loaders::complete_request_rows;
-use super::{
-    execute_access_graphql_query, execute_local_graphql_query, AGENT_REQUEST_FIELDS,
-    AGENT_REQUEST_NAME,
-};
 use anyhow::{Context, Result};
-use defra_node::Node as EmbeddedNode;
-use gents_protocol::graphql::escape_graphql_string;
+use futures::future::BoxFuture;
 use gents_protocol::row::AgentRequestRow;
+use gents_session::views::requests::{RequestOrder, RequestRows};
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use rapidhash::{HashSetExt, RapidHashSet};
-use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
-use std::pin::Pin;
 
 const PHYSICAL_BATCH_SIZE: usize = 128;
 const EDGE_BATCH_SIZE: usize = 64;
 const ROOT_BATCH_SIZE: usize = 32;
-
-type QueryFuture<'a> = Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>>;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct Scope {
@@ -43,17 +34,16 @@ impl Scope {
         })
     }
 
-    fn filter(&self) -> String {
-        let node = escape_graphql_string(&self.node_did);
-        let session = escape_graphql_string(&self.session_id);
-        let requester = self
-            .requester_did
-            .as_deref()
-            .map(|did| format!("\"{}\"", escape_graphql_string(did)))
-            .unwrap_or_else(|| "null".to_string());
-        format!(
-            "purpose: {{ _eq: \"normal\" }}, node_did: {{ _eq: \"{node}\" }}, session_id: {{ _eq: \"{session}\" }}, requester_did: {{ _eq: {requester} }}"
-        )
+    fn view(&self) -> RequestRows {
+        RequestRows::new(gents_session::views::transcript::Scope::Session(
+            gents_protocol::session::SessionScope {
+                node_did: self.node_did.clone(),
+                session_id: self.session_id.clone(),
+                requester_did: self.requester_did.clone(),
+            },
+        ))
+        .public()
+        .order(RequestOrder::Physical)
     }
 
     fn owns(&self, row: &AgentRequestRow) -> bool {
@@ -64,26 +54,22 @@ impl Scope {
     }
 }
 
-pub(crate) async fn close_request_rows(
-    node: &EmbeddedNode,
+pub(crate) async fn close_request_rows_on(
+    access: &ConfigAccess,
     seeds: Vec<AgentRequestRow>,
 ) -> Result<Vec<AgentRequestRow>> {
-    close_request_rows_with(seeds, |query| {
-        Box::pin(async move {
-            execute_local_graphql_query(node, &query, "request dependency closure").await
-        })
+    close_request_rows_with(seeds, |views| {
+        Box::pin(async move { Ok(access.read_views(&views).await?) })
     })
     .await
 }
 
-pub(crate) async fn close_request_rows_on(
-    access: &gents::store::config_client::ConfigAccess,
+pub(crate) async fn close_request_rows_in_txn(
+    txn: &ConfigApplyTxn<'_>,
     seeds: Vec<AgentRequestRow>,
 ) -> Result<Vec<AgentRequestRow>> {
-    close_request_rows_with(seeds, |query| {
-        Box::pin(async move {
-            execute_access_graphql_query(access, &query, "request dependency closure").await
-        })
+    close_request_rows_with(seeds, |views| {
+        Box::pin(async move { Ok(txn.read_views(&views).await?) })
     })
     .await
 }
@@ -102,23 +88,19 @@ struct ReadBatch {
 }
 
 impl ReadBatch {
-    fn selection(&self, index: usize) -> String {
-        let scope = self.scope.filter();
-        let ids = string_list(&self.ids);
-        let args = match self.edge {
-            Edge::Physical => format!("docIDs: [{ids}], filter: {{ {scope} }}"),
-            Edge::Predecessor => format!("filter: {{ {scope}, request_id: {{ _in: [{ids}] }} }}"),
-            Edge::Retry => {
-                format!("filter: {{ {scope}, retry_parent_request: {{ _in: [{ids}] }} }}")
-            }
-        };
-        format!("r{index}: {AGENT_REQUEST_NAME}({args}) {{ {AGENT_REQUEST_FIELDS} }}")
+    fn view(&self) -> RequestRows {
+        let view = self.scope.view();
+        match self.edge {
+            Edge::Physical => view.doc_ids(self.ids.clone()),
+            Edge::Predecessor => view.request_ids(self.ids.clone()),
+            Edge::Retry => view.retry_parent_ids(self.ids.clone()),
+        }
     }
 }
 
 pub(super) async fn close_request_rows_with<'a>(
     seeds: Vec<AgentRequestRow>,
-    mut execute: impl FnMut(String) -> QueryFuture<'a> + 'a,
+    mut execute: impl FnMut(Vec<RequestRows>) -> BoxFuture<'a, Result<Vec<Vec<AgentRequestRow>>>> + 'a,
 ) -> Result<Vec<AgentRequestRow>> {
     let mut rows = Vec::with_capacity(seeds.len());
     let mut frontier = Vec::new();
@@ -144,7 +126,7 @@ pub(super) async fn close_request_rows_with<'a>(
             let Some(scope) = Scope::from_row(row) else {
                 continue;
             };
-            let folded = gents::request::lifecycle::folded_into(row).is_some();
+            let folded = gents_session::request::lifecycle::folded_into(row).is_some();
             let predecessor = matches!(row.lifecycle_state, Some(
                 gents_protocol::request_lifecycle::RequestLifecycleState::Pending
                 | gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending
@@ -163,7 +145,7 @@ pub(super) async fn close_request_rows_with<'a>(
             let edges = [
                 (
                     Edge::Physical,
-                    if folded || gents::request::lifecycle::replaced_by(row).is_some() {
+                    if folded || gents_session::request::lifecycle::replaced_by(row).is_some() {
                         row.superseded_by_request_doc_id.as_deref()
                     } else {
                         None
@@ -205,15 +187,13 @@ pub(super) async fn close_request_rows_with<'a>(
             })
             .collect::<Vec<_>>();
         for batch in batches.chunks(ROOT_BATCH_SIZE) {
-            let selections = batch
-                .iter()
-                .enumerate()
-                .map(|(index, read)| read.selection(index))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let data = execute(format!("query RequestDependencies {{ {selections} }}")).await?;
-            for (index, read) in batch.iter().enumerate() {
-                let candidates = complete_request_rows(&data, &format!("r{index}"))?;
+            let views = batch.iter().map(ReadBatch::view).collect::<Vec<_>>();
+            let results = execute(views).await?;
+            anyhow::ensure!(
+                results.len() == batch.len(),
+                "request dependency batch omitted results"
+            );
+            for (read, candidates) in batch.iter().zip(results) {
                 for row in candidates {
                     anyhow::ensure!(
                         read.scope.owns(&row),
@@ -233,14 +213,6 @@ pub(super) async fn close_request_rows_with<'a>(
     }
     crate::client::store::sort_request_rows(&mut rows);
     Ok(rows)
-}
-
-fn string_list(values: &[String]) -> String {
-    values
-        .iter()
-        .map(|value| format!("\"{}\"", escape_graphql_string(value)))
-        .collect::<Vec<_>>()
-        .join(",")
 }
 
 #[cfg(test)]

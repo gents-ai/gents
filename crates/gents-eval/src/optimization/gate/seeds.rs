@@ -4,8 +4,8 @@ use super::{reject, StructuralRejection};
 use crate::optimization::subject::{task_seed_routes, MaterializedPack};
 use crate::optimization::target::TargetField;
 use crate::runner::embedded::executor::install::bind_fixture_owner;
-use gents::documents::template::{render_template, task_node_ctx, TemplateScope};
-use gents::documents::{EvalCase, EvalDefinition, EventSource};
+use gents_documents::template::{render_template, task_node_ctx, TemplateScope};
+use gents_documents::{EvalCase, EvalDefinition, EventSource};
 
 pub(crate) fn seed_gate(
     baseline: &MaterializedPack,
@@ -55,7 +55,7 @@ fn failed_seeds(
                         "state_doc_id": identity,
                         "correlation_value": correlation,
                         "count": docs.len(),
-                        "complete": gents::triggers::expected_group_count(
+                        "complete": gents_automation::triggers::expected_group_count(
                             group.expected_count.as_ref(), &docs
                         ).ok().flatten() == Some(docs.len()),
                         "docs": docs,
@@ -131,16 +131,19 @@ fn group_documents(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::documents::TriggerSource;
+    use gents_documents::TriggerSource;
 
     #[test]
     fn exact_seed_rendering_matches_lean() {
-        for row in &crate::lean_vocab_test::lean_optimization_cases().seed_rendering {
+        gents_lean_vocab::families::optimization_seed_rendering::replay(|row| {
             let dir = tempfile::tempdir().unwrap();
             crate::optimization::subject::tests::write_task_fixture_pack(dir.path(), false);
-            use gents::NodeIdentity;
-            let runtime =
-                gents::KeyIdentity::load_or_create(dir.path().join("runtime.key"), None).unwrap();
+            use gents_store::identity::NodeIdentity;
+            let runtime = gents_store::identity::KeyIdentity::load_or_create(
+                dir.path().join("runtime.key"),
+                None,
+            )
+            .unwrap();
             let fixture = crate::optimization::subject::materialize_pack(
                 dir.path(),
                 runtime.did(),
@@ -175,7 +178,7 @@ mod tests {
             for source in &row.sources {
                 let mut value = fixture.config.event_sources[0].clone();
                 value.event_source_id = source.event_source_id.clone();
-                value.source_collection = source.source_collection.clone();
+                value.source_collection = source.collection.clone();
                 value.event_kind = source.event_kind.clone();
                 baseline.config.event_sources.push(value);
             }
@@ -188,7 +191,10 @@ mod tests {
                 let case: EvalCase = serde_json::from_value(json!({
                     "case_id": seed.case_id, "split": "validation", "stages": [{
                         "stage_id": seed.stage_id, "prompt":"", "deadline_secs": 600,
-                        "seed":{"collection":seed.collection,"document":seed.document},
+                        "seed":{
+                            "collection":seed.collection,
+                            "document":serde_json::from_str::<serde_json::Value>(&seed.document).unwrap(),
+                        },
                         "checks":[],
                     }],
                 }))
@@ -210,21 +216,32 @@ mod tests {
                 }
                 definition.cases.push(case);
             }
-            let expected = &row.failed_stages;
             let failures = failed_seeds(&baseline, &definition, &row.text);
-            assert_eq!(failures.len(), expected.len(), "{}: {failures:?}", row.name);
-            for ((case, stage), failure) in expected.iter().zip(&failures) {
-                assert!(
-                    failure.contains(&format!("case {case:?}, stage {stage:?}")),
-                    "{failure}"
-                );
-            }
             assert_eq!(
                 seed_gate(&baseline, &definition, &row.text).is_ok(),
-                expected.is_empty(),
+                failures.is_empty(),
                 "{}",
                 row.name
             );
-        }
+            failures
+                .iter()
+                .map(|failure| {
+                    let seed = row
+                        .seeds
+                        .iter()
+                        .find(|seed| {
+                            failure.contains(&format!(
+                                "case {:?}, stage {:?}",
+                                seed.case_id, seed.stage_id
+                            ))
+                        })
+                        .unwrap_or_else(|| panic!("{}: unattributed failure {failure}", row.name));
+                    gents_lean_vocab::families::optimization_seed_rendering::StageRef {
+                        case_id: seed.case_id.clone(),
+                        stage_id: seed.stage_id.clone(),
+                    }
+                })
+                .collect()
+        });
     }
 }

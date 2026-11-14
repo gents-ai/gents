@@ -2,9 +2,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::store::config_client::ConfigAccess;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::row::AgentRequestRow;
+use gents_store::config_client::ConfigAccess;
 
 use super::super::mutations::SubmittedRequest;
 use super::super::observe::ObservedStore;
@@ -40,17 +40,29 @@ async fn observe_submitted_request(
     refresh: impl std::future::Future<Output = Result<super::StoreRefresh>>,
 ) -> SubmittedRequest {
     store.set_focused_request_id(Some(receipt.request_id.clone()));
+    observe_committed_write(&receipt.node_did, "submit request", refresh).await;
+    receipt
+}
+
+fn acknowledge_submitted_request(store: &ObservedStore, receipt: &SubmittedRequest) {
+    store.set_focused_request_id(Some(receipt.request_id.clone()));
+    store.request_resync();
+}
+
+async fn observe_committed_write(
+    node_did: &str,
+    action: &str,
+    refresh: impl std::future::Future<Output = Result<super::StoreRefresh>>,
+) {
     if let Err(error) = refresh.await {
-        store.request_resync(Some(&receipt.node_did));
         tracing::warn!(
-            node_did = %receipt.node_did,
-            session_id = %receipt.session_id,
-            request_id = %receipt.request_id,
-            error = %error,
-            "submitted request awaits local projection refresh"
+            target: "gents_desktop_core::writes",
+            node_did = %node_did,
+            action = %action,
+            error = %gents_protocol::error_chain::ErrorChain(error.as_ref()),
+            "desktop write saved; its refresh failed and the observer owns the node's next read"
         );
     }
-    receipt
 }
 
 pub(super) fn find_request_in_scope(
@@ -70,13 +82,6 @@ pub(super) fn find_request_in_scope(
         "request {request_id} is ambiguous across node scopes"
     );
     Ok(Some(row.clone()))
-}
-
-fn agent_did_for_write(requested_agent_did: Option<&str>) -> Option<String> {
-    requested_agent_did
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
 }
 
 /// A chat write refused before any request was saved. The cause is the Lean
@@ -153,7 +158,7 @@ pub enum LocalHomeAccessError {
     #[error("the local node that installed this app has no operator connection")]
     NoOperatorConnection,
     #[error("the desktop's client key cannot sign requests to its runtime")]
-    Signing(#[source] gents::store::config_client::ConfigClientError),
+    Signing(#[source] gents_store::config_client::ConfigClientError),
 }
 
 fn ux_local_runtime_record<'a>(
@@ -208,7 +213,7 @@ impl ClientCore {
         node_did: &str,
         record: Option<&PeerRecord>,
     ) -> Result<(
-        Arc<dyn gents::store::identity::NodeIdentity>,
+        Arc<dyn gents_store::identity::NodeIdentity>,
         AgentRequestAdmissionRecord,
         String,
     )> {
@@ -217,7 +222,7 @@ impl ClientCore {
             record.node_did == node_did,
             "request route belongs to another node"
         );
-        let signer: Arc<dyn gents::store::identity::NodeIdentity> =
+        let signer: Arc<dyn gents_store::identity::NodeIdentity> =
             Arc::new(self.node_identity.clone());
         Ok((
             signer,
@@ -230,14 +235,8 @@ impl ClientCore {
         self.node_identity.did().to_owned()
     }
 
-    /// A superseded node read is not read again here: the observer owns that
-    /// node's next load (`ObserverResync` `RefreshFallback`).
-    async fn refresh_config_source(&self, source_node_did: &str) -> Result<u64> {
-        let refresh = match self.refresh_node(source_node_did).await? {
-            Some(refresh) => refresh,
-            None => self.refresh_store().await?,
-        };
-        Ok(refresh.version())
+    async fn observe_committed_config(&self, node_did: &str, action: &str) {
+        observe_committed_write(node_did, action, self.refresh_node(node_did)).await;
     }
 
     #[cfg(test)]

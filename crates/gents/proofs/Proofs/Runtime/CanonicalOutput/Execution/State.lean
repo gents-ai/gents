@@ -1,0 +1,205 @@
+import Proofs.Session.CanonicalOutput.Message
+import Proofs.Session.Request.State
+import Proofs.Session.RequestExecutionLease.State
+import Proofs.Session.Transcript.State
+import Proofs.Session.ToolExecution.Executable
+import Proofs.Session.SessionQueue.State
+import Proofs.Store.StorageWriteGate
+import Proofs.ToolCalls.Background.CompletionContinuation
+import Proofs.Shared.CompletionRetry.State
+
+namespace CanonicalOutput.Execution
+
+abbrev Generation := Nat
+
+namespace Handover
+
+structure PhysicalRequestAdmission where
+  document : DocId
+  entry : SessionQueue.QueueEntry
+  node : Nat
+  session : SessionId
+  requester : Option Nat
+  authenticated : Bool
+  deriving DecidableEq, Repr
+
+structure GoalChildReceipt where
+  goalDocument : DocId
+  request : PhysicalRequestAdmission
+  parentPhysical : DocId
+  parentLogical : RequestId
+  authenticated : Bool
+  deriving DecidableEq, Repr
+
+structure AuxiliaryBinding where
+  purpose : RequestPurpose := .titleAudit
+  physicalRequest : DocId
+  logicalRequest : RequestId
+  parentPhysical : DocId
+  parentLogical : RequestId
+  node : Nat
+  session : SessionId
+  authenticated : Bool
+  deriving DecidableEq, Repr
+
+structure AuxiliaryActivation where
+  binding : AuxiliaryBinding
+  generation : Generation
+  duration : Time
+  deadline : Time
+  deriving DecidableEq, Repr
+
+inductive ClaimEvidence where
+  | backgroundWake (snapshot : BackgroundCompletion.WakeAttemptSnapshot)
+  | ordinary
+  | goalChild (receipt : GoalChildReceipt)
+  | auxiliary (binding : AuxiliaryBinding)
+  deriving DecidableEq, Repr
+
+structure Activation where
+  request : PhysicalRequestAdmission
+  evidence : ClaimEvidence
+  generation : Generation
+  duration : Time
+  deadline : Time
+  admitted : List RequestId := []
+  deriving DecidableEq, Repr
+
+structure ClaimedBinding where
+  physicalRequest : DocId
+  logicalRequest : RequestId
+  session : SessionId
+  evidence : ClaimEvidence
+  deriving DecidableEq, Repr
+
+end Handover
+
+structure ToolAdmission where
+  document : DocId
+  context : ToolExecution.ToolCallContext
+  deriving DecidableEq, Repr
+
+inductive ToolProvenance where
+  | acceptedIntent
+  | spawnedBackground (parentToolDoc : DocId)
+  | pluginEffect (parentToolDoc : DocId) (ordinal : Nat)
+  deriving DecidableEq, Repr
+
+structure ToolGenesis where
+  logicalCallId : ToolExecution.ToolCallId
+  logicalRequestId : RequestId
+  operation : ToolExecution.ToolOperation
+  deriving DecidableEq, Repr
+
+def ToolGenesis.fromContext (context : ToolExecution.ToolCallContext) : ToolGenesis :=
+  { logicalCallId := context.callId
+  , logicalRequestId := context.requestId
+  , operation := context.operation }
+
+structure OwnedTool where
+  document : DocId
+  requestDoc : DocId
+  session : SessionId
+  acceptedSequence : Transcript.Sequence
+  provenance : ToolProvenance := .acceptedIntent
+  effectArguments : Option DocId := none
+  terminalOutput : Option PayloadSpec := none
+  context : ToolExecution.ToolCallContext
+  stuckSince : Option Time := none
+  deriving DecidableEq, Repr
+
+structure PluginEffectAdmission where
+  document : DocId
+  parentToolDoc : DocId
+  ordinal : Nat
+  name : String
+  context : ToolExecution.ToolCallContext
+  arguments : Segment
+  deriving DecidableEq, Repr
+
+structure SpawnedToolAdmission where
+  document : DocId
+  parentToolDoc : DocId
+  context : ToolExecution.ToolCallContext
+  deriving DecidableEq, Repr
+
+structure WakeDocumentBinding where
+  entry : SessionQueue.QueueEntry
+  node : Nat
+  session : SessionId
+  notificationMessageId : Transcript.MessageId
+  notificationSequence : Transcript.Sequence
+  wakeDocument : DocId
+  authenticated : Bool
+  deriving DecidableEq, Repr
+
+structure World where
+  requestId : DocId
+  sessionId : SessionId
+  purpose : RequestPurpose
+  nodeDid : Nat
+  lease : RequestExecutionLease.World Generation
+  segments : List Segment
+  messages : List MessageEnvelope
+  transcript : Transcript.TranscriptState
+  compactionCursor : Option Transcript.Sequence := none
+  toolContexts : List OwnedTool := []
+  terminalSelection : Option TerminalSelection
+  gateOwner : Option Nat := none
+  gateSchedule : StorageWriteGate.State := ⟨.released, true, false⟩
+  queue : SessionQueue.SessionQueueState :=
+    { scope := { node := 0, session := 0, requester := none }
+    , active := none, pending := [], terminal := ∅ }
+  claimed : Option Handover.ClaimedBinding := none
+  retry : CompletionRetry.State :=
+    { request := 0, scope := 0, turn := 0, phase := .issuing
+    , budget := { transportRetries := 0, resampleRetries := 0, allowRepair := false }
+    , transportUsed := 0, resampleUsed := 0, repairUsed := false
+    , lastParseError := none, now := 0, deadline := none, attempt := 0
+    , usageCharged := 0 }
+  deriving DecidableEq
+
+def World.currentGeneration? (world : World) : Option Generation :=
+  match world.lease.lease with
+  | .active generation _ _ => some generation
+  | _ => none
+
+structure DispatchPermit where
+  call : ToolExecution.ToolCallId
+  cancellationAllows : Bool
+  toolPolicyAllows : Bool
+  deriving DecidableEq, Repr
+
+inductive IntegrityError where
+  | identityConflict
+  | malformedSource (coordinate : Coordinate)
+  | invalidWriter (coordinate : Coordinate)
+  deriving DecidableEq, Repr
+
+structure RecoveryItem where
+  closing : Segment
+  message : Option MessageEnvelope
+  deriving DecidableEq, Repr
+
+structure RecoveryPrepared where
+  segments : List Segment
+  messages : List MessageEnvelope
+  transcript : Transcript.TranscriptState
+  deriving DecidableEq
+
+inductive Error where
+  | integrity (error : IntegrityError)
+  | sourceAlreadyClosed
+  | invalidSegment
+  | invalidHeader
+  | invalidRecoveryHeader
+  | identityCollision
+  | leaseRejected
+  | transcriptRejected
+  | terminalRejected
+  | publicationIncomplete
+  deriving DecidableEq, Repr
+
+def noDeniedDocuments : List DocId := []
+
+end CanonicalOutput.Execution

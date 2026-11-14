@@ -1,0 +1,550 @@
+{
+ "about": "Target crate and module for every module of crates/gents/src. A rule names a module by its source path (without .rs; a directory and its .rs or mod.rs are one module) and applies to that module and everything declared under it, until a deeper rule says otherwise. Crates are listed bottom to top; a crate may depend only on crates before it.",
+ "source_crate": "crates/gents",
+ "root_crate": "gents",
+ "crates": [
+  {
+   "name": "gents-protocol",
+   "existing": true
+  },
+  {
+   "name": "gents-loop",
+   "existing": true
+  },
+  {
+   "name": "gents-store",
+   "description": "DefraDB access, identity and schema owners for Gents"
+  },
+  {
+   "name": "gents-documents",
+   "description": "Configuration documents and desired-state apply for Gents"
+  },
+  {
+   "name": "gents-inference",
+   "description": "Inference backends, auth, admission and provider clients for Gents"
+  },
+  {
+   "name": "gents-p2p",
+   "description": "P2P observability and enrollment reconcilers for Gents"
+  },
+  {
+   "name": "gents-pack",
+   "description": "Packs and the plugin runner for Gents"
+  },
+  {
+   "name": "gents-session",
+   "description": "Sessions and the request lifecycle for Gents"
+  },
+  {
+   "name": "gents-tools",
+   "description": "Native, builtin and MCP tools and the tool surface for Gents"
+  },
+  {
+   "name": "gents-toolcalls",
+   "description": "Tool-call lifecycle, background tools and plugin host calls for Gents"
+  },
+  {
+   "name": "gents-automation",
+   "description": "Triggers, callbacks and goals for Gents"
+  },
+  {
+   "name": "gents-observe",
+   "description": "Run timelines, trace export and file inventory for Gents"
+  },
+  {
+   "name": "gents"
+  }
+ ],
+ "independent": [
+  [
+   "gents-inference",
+   "gents-p2p",
+   "gents-pack"
+  ]
+ ],
+ "lib_names": {
+  "rig-core": "rig",
+  "reqwest-provider": "reqwest_provider",
+  "afterburner-afb": "afterburner_afb",
+  "afterburner-core": "afterburner_core"
+ },
+ "rules": [
+  {
+   "path": "eval",
+   "crate": "gents",
+   "module": "eval"
+  },
+  {
+   "path": "turn",
+   "crate": "gents",
+   "module": "turn"
+  },
+  {
+   "path": "runtime",
+   "crate": "gents",
+   "module": "runtime"
+  },
+  {
+   "path": "operations",
+   "crate": "gents",
+   "module": "operations"
+  },
+  {
+   "path": "claude_request_context",
+   "crate": "gents",
+   "module": "claude_request_context",
+   "note": "conflict 1: stays in the root"
+  },
+  {
+   "path": "error",
+   "action": "delete",
+   "note": "re-export shim; references are rewritten to the crate it re-exports"
+  },
+  {
+   "path": "truncation",
+   "action": "delete",
+   "note": "re-export shim; references are rewritten to the crate it re-exports"
+  },
+  {
+   "path": "openai_wire",
+   "action": "delete",
+   "note": "re-export shim; references are rewritten to the crate it re-exports"
+  },
+  {
+   "path": "provider_usage",
+   "action": "delete",
+   "note": "re-export shim; references are rewritten to the crate it re-exports"
+  },
+  {
+   "path": "inference/llm/tool",
+   "action": "delete",
+   "note": "re-export shim; references are rewritten to the crate it re-exports"
+  },
+  {
+   "path": "inference/llm/responses_normalize",
+   "action": "delete",
+   "note": "re-export shim; references are rewritten to the crate it re-exports"
+  },
+  {
+   "path": "runtime/agent/completion_retry",
+   "action": "delete",
+   "note": "re-export shim; references are rewritten to the crate it re-exports"
+  },
+  {
+   "path": "tools/background/job/keys",
+   "action": "delete",
+   "note": "re-export shim; references are rewritten to the crate it re-exports"
+  },
+  {
+   "path": "request/failure_text",
+   "crate": "gents-protocol",
+   "module": "failure_text",
+   "note": "needs regex in gents-protocol (design blocker 2)"
+  },
+  {
+   "path": "store",
+   "crate": "gents-store",
+   "module": ""
+  },
+  {
+   "path": "documents",
+   "crate": "gents-documents",
+   "module": ""
+  },
+  {
+   "path": "inference",
+   "crate": "gents-inference",
+   "module": ""
+  },
+  {
+   "path": "claude_gateway_login",
+   "crate": "gents-inference",
+   "module": "claude_gateway_login"
+  },
+  {
+   "path": "request/failure_text_tests",
+   "crate": "gents-inference",
+   "module": "failure_text_tests"
+  },
+  {
+   "path": "runtime/p2p",
+   "crate": "gents-p2p",
+   "module": "p2p"
+  },
+  {
+   "path": "runtime/agent/p2p_reconcile",
+   "crate": "gents-p2p",
+   "module": "p2p_reconcile"
+  },
+  {
+   "path": "runtime/agent/directory_projection",
+   "crate": "gents-p2p",
+   "module": "directory_projection"
+  },
+  {
+   "path": "pack",
+   "crate": "gents-pack",
+   "module": "pack"
+  },
+  {
+   "path": "plugin",
+   "crate": "gents-pack",
+   "module": "plugin"
+  },
+  {
+   "path": "plugin/application_write",
+   "crate": "gents-toolcalls",
+   "module": "plugin::application_write"
+  },
+  {
+   "path": "plugin/data",
+   "crate": "gents-toolcalls",
+   "module": "plugin::data"
+  },
+  {
+   "path": "plugin/job_calls",
+   "crate": "gents-toolcalls",
+   "module": "plugin::job_calls"
+  },
+  {
+   "path": "plugin/model_calls",
+   "crate": "gents-toolcalls",
+   "module": "plugin::model_calls"
+  },
+  {
+   "path": "plugin/service",
+   "crate": "gents-toolcalls",
+   "module": "plugin::service"
+  },
+  {
+   "path": "plugin/tool",
+   "crate": "gents-toolcalls",
+   "module": "plugin::tool"
+  },
+  {
+   "path": "plugin/tool_calls",
+   "crate": "gents-toolcalls",
+   "module": "plugin::tool_calls"
+  },
+  {
+   "path": "plugin/executor",
+   "crate": "gents-toolcalls",
+   "module": "plugin::executor",
+   "note": "conflict 2: executor and rounds name host-half modules"
+  },
+  {
+   "path": "plugin/rounds",
+   "crate": "gents-toolcalls",
+   "module": "plugin::rounds",
+   "note": "conflict 2: executor and rounds name host-half modules"
+  },
+  {
+   "path": "plugin/tests",
+   "crate": "gents-toolcalls",
+   "module": "plugin::tests"
+  },
+  {
+   "path": "plugin/tests/call_bound",
+   "crate": "gents-pack",
+   "module": "plugin::tests::call_bound"
+  },
+  {
+   "path": "plugin/tests/trap_handler",
+   "crate": "gents-pack",
+   "module": "plugin::tests::trap_handler"
+  },
+  {
+   "path": "plugin/approval",
+   "crate": "gents-tools",
+   "module": "plugin::approval",
+   "note": "conflict 3: tools/native uses it; approval's own deps are at or below gents-tools"
+  },
+  {
+   "path": "session",
+   "crate": "gents-session",
+   "module": "session"
+  },
+  {
+   "path": "request",
+   "crate": "gents-session",
+   "module": "request"
+  },
+  {
+   "path": "tools/call/lifecycle/query/result",
+   "crate": "gents-session",
+   "module": "tool_call::query::result"
+  },
+  {
+   "path": "observe/log_rate",
+   "crate": "gents-session",
+   "module": "log_rate",
+   "note": "conflict 10: session/output/replay_capture.rs uses it; no crate:: references"
+  },
+  {
+   "path": "tools",
+   "crate": "gents-tools",
+   "module": ""
+  },
+  {
+   "path": "tools/background",
+   "crate": "gents-toolcalls",
+   "module": "background"
+  },
+  {
+   "path": "tools/call",
+   "crate": "gents-toolcalls",
+   "module": "call"
+  },
+  {
+   "path": "triggers",
+   "crate": "gents-automation",
+   "module": "triggers"
+  },
+  {
+   "path": "goal",
+   "crate": "gents-automation",
+   "module": "goal"
+  },
+  {
+   "path": "session/control",
+   "crate": "gents-automation",
+   "module": "session_control"
+  },
+  {
+   "path": "tools/call/hook/persistence/goal_tools",
+   "crate": "gents-automation",
+   "module": "goal::goal_tools"
+  },
+  {
+   "path": "observe",
+   "crate": "gents-observe",
+   "module": "observe"
+  },
+  {
+   "path": "file_inventory",
+   "crate": "gents-observe",
+   "module": "file_inventory"
+  },
+  {
+   "path": "collection_use",
+   "crate": "gents-tools",
+   "module": "collection_use",
+   "note": "new in rc2: reads documents, pack and store; its only users are tools/builtin/self_config and schema_help, so it sits in the lowest crate above gents-pack that uses it"
+  },
+  {
+   "path": "plugin/host_calls",
+   "crate": "gents-toolcalls",
+   "module": "plugin::host_calls",
+   "note": "new: names plugin::executor, plugin::tool and tools::call (host half)"
+  },
+  {
+   "path": "plugin/authoring_test",
+   "crate": "gents-toolcalls",
+   "module": "plugin::authoring_test"
+  },
+  {
+   "path": "observe/ux_preview",
+   "crate": "gents-tools",
+   "module": "ux_preview",
+   "note": "T3: driven from tools/builtin/self_config"
+  },
+  {
+   "path": "observe/ux_data",
+   "crate": "gents-tools",
+   "module": "ux_data",
+   "note": "T3"
+  },
+  {
+   "path": "test_support",
+   "crate": "gents",
+   "module": "test_support",
+   "note": "the per-level fixture modules below leave; test_support::root stays"
+  },
+  {
+   "path": "test_support/documents",
+   "crate": "gents-documents",
+   "module": "test_support"
+  },
+  {
+   "path": "test_support/inference",
+   "crate": "gents-inference",
+   "module": "test_support"
+  },
+  {
+   "path": "test_support/pack",
+   "crate": "gents-pack",
+   "module": "test_support"
+  },
+  {
+   "path": "test_support/session",
+   "crate": "gents-session",
+   "module": "test_support"
+  },
+  {
+   "path": "test_support/tools",
+   "crate": "gents-tools",
+   "module": "test_support"
+  },
+  {
+   "path": "test_support/toolcalls",
+   "crate": "gents-toolcalls",
+   "module": "test_support"
+  },
+  {
+   "path": "test_support/automation",
+   "crate": "gents-automation",
+   "module": "test_support"
+  },
+  {
+   "path": "workspace",
+   "crate": "gents-session",
+   "module": "workspace",
+   "note": "wave four: a session-crate concept"
+  },
+  {
+   "path": "exec",
+   "crate": "gents-session",
+   "module": "exec",
+   "note": "wave four: a session-crate concept"
+  },
+  {
+   "path": "file_contents",
+   "crate": "gents-session",
+   "module": "file_contents",
+   "note": "wave four: a session-crate concept"
+  }
+ ],
+ "outstanding_splits": [
+  {
+   "path": "crates/gents/src/lib.rs",
+   "assigned_whole_to": "gents",
+   "parts": [
+    {
+     "crate": "gents",
+     "items": "mod eval, runtime, turn, operations, claude_request_context, lean_vocab_test declarations; provider_budget (turn::provider_input::budget); __test_internals (AgentBuildError); CAPTURED_EVENT_TARGETS and enable_scoped_event_capture (names runtime::status, store write_telemetry and session REFUSAL_PROJECTION_EVENT_TARGET, so it can only live at the root); first_content, CORRUPT_TOOL_ARGS_589; also the #[path] include of lean_vocab_test/canonical_execution/native_adapter.rs (3,573 lines, uses request::lifecycle, streaming, tools::call and runtime::agent)"
+    },
+    {
+     "crate": "gents-store",
+     "items": "test_support: runtime_handle, node_builder, held_runtime_identity, EnvVarGuard, delete_configuration_document, mod acp_policies and read_observation; `support` path include of tests/support/mod.rs (TestDb)"
+    },
+    {
+     "crate": "gents-documents",
+     "items": "test_support: bootstrap_signed_test_node, ensure_test_node, set_test_default_agent_as, set_test_node_field_as, test_agent_documents, signed_test_node_without_agent(_from_db); apply_desired_state_plan users"
+    },
+    {
+     "crate": "gents-inference",
+     "items": "test_support: install_test_agent_binding_with_access, install_test_agent(_binding), signed_test_node(_from_db), ensure_test_default_agent (they call inference::backends::registry::set_backend_probe_status_as), capture_scripted_provider_request (inference::rendered_request::transport)"
+    },
+    {
+     "crate": "gents-pack",
+     "items": "test_support: fixture_pack_copy, home_with_fixture_pack, home_with_pack_dir (use plugin::tests::build_plugin_afb, pack::archive, plugin::executor)"
+    },
+    {
+     "crate": "gents-session",
+     "items": "test_support: publish_provider_message, admitted_client_lifecycle (request::admission verifier plus p2p enrollment_authority_channel), create_agent_owned_session"
+    },
+    {
+     "crate": "gents-tools",
+     "items": "test_support::tool_policy (tools::surface::ToolCeiling::policy)"
+    },
+    {
+     "crate": "gents-automation",
+     "items": "test_support re-exports of crate_owners (checkpoint_prefix, PreparedFire, update_trigger_runtime_fields and others)"
+    }
+   ]
+  },
+  {
+   "path": "crates/gents/src/plugin.rs",
+   "assigned_whole_to": "gents-pack",
+   "parts": [
+    {
+     "crate": "gents-pack",
+     "items": "PluginRunner, PluginBudget, PluginVerdict, narrow_manifold, attempts_allowed, retry_backoff; mod allowed, authority, bound, executor, host_imports, http_calls, install, rounds, script_engine, store, ux, wasi_runtime, tests (lines 1-630 and the matching mod lines)"
+    },
+    {
+     "crate": "gents-toolcalls",
+     "items": "mod application_write, data, job_calls, model_calls, service, tool, tool_calls declarations (host-callback half, plan step 10)"
+    },
+    {
+     "crate": "gents-tools",
+     "items": "mod approval (plan step 13 files plugin::approval::workspace in tools; step 10 says host half; they disagree)"
+    }
+   ]
+  },
+  {
+   "path": "crates/gents/src/tools/background/status.rs",
+   "assigned_whole_to": "gents-toolcalls",
+   "source": "recon conflict 7",
+   "parts": [
+    {
+     "crate": "gents-documents or lower",
+     "items": "DEFAULT_WAIT_PROCESS_TIMEOUT_SECS, MAX_WAIT_PROCESS_TIMEOUT_SECS (documents/tools.rs:736,737,843,844; tools/surface/timeouts.rs:4)"
+    },
+    {
+     "crate": "gents-tools or lower",
+     "items": "r4c_args::{ListBackgroundToolsArgs, ReadToolOutputArgs}, BackgroundToolArgs, WaitToolArgs, CancelToolArgs (tools/native/session_message.rs:9)"
+    },
+    {
+     "crate": "gents-session",
+     "items": "canonical_tool_output_from_rows, observe_canonical_tool_output_with_access, CanonicalToolOutputObservation (status.rs:370-470; query/result.rs)"
+    },
+    {
+     "crate": "gents-toolcalls",
+     "items": "the rest"
+    }
+   ]
+  }
+ ],
+ "layout_corrections": [
+  "lean_vocab_test/{task_hook_executor,task_hooks_policy,request_execution_lease_policy}.rs stay in the root crate with the rest of the Lean decoder (maintainer decision: Rust first, Lean later); layout.json sent them to gents-toolcalls and gents-session.",
+  "claude_request_context.rs stays in the root crate (recon conflict 1).",
+  "plugin/executor.rs and plugin/rounds.rs go to gents-toolcalls (recon conflict 2).",
+  "plugin/approval/ goes to gents-tools (recon conflict 3).",
+  "tools/background/job/promote.rs stays in gents-toolcalls (recon conflict 5).",
+  "tools/background/job/settings.rs goes whole to gents-pack (recon conflict 6); gents-protocol cannot take the whole file because the pack-admission pair names documents and pack.",
+  "tools/background/completion/rendering.rs goes to gents-tools (recon conflict 8).",
+  "observe/log_rate.rs goes to gents-session (recon conflict 10).",
+  "eval/ (5 files) had no manifest entry; assigned to the root crate (recon conflict 16).",
+  "The eight re-export shims are deleted and their users repointed, rather than moved to gents-loop or gents-protocol where the items already live.",
+  "gents-tools and gents-store, gents-documents, gents-inference take their old module file as lib.rs (gents_tools::native, not gents_tools::tools::native); layout.json mixed both forms.",
+  "Base bdffe76467: 15 rules dropped because the mechanical moves put those files where their parent module's rule already sends them (store/{drop_cleanup,service,agent_identity_watch,subscription_source}, inference/{inference_observation,trace_context}, session/provider_context_reduction, tools/{runtime_context,rendering}, tools/call/task_hooks, tools/background/caused, goal/{continuation,session_goal_control}, runtime/agent/{session_commands,session_input_edit}, runtime/background_completion_observer).",
+  "Base bdffe76467: collection_use.rs (new top-level module) goes to gents-tools; plugin/host_calls.rs goes to gents-toolcalls.",
+  "Base bdffe76467: request/task_run.rs, pack/wiring.rs, pack/plugin_wiring.rs, pack/authoring/export/, observe/ux_preview/, plugin/test_fixtures.rs and plugin/script_engine.rs follow their parent module's rule.",
+  "Base 602044890d: the tools/background/job/settings rule is dropped (the file is now documents/plugin_job_settings.rs); plugin/authoring_test goes to gents-toolcalls; observe/ux_preview and observe/ux_data go to gents-tools.",
+  "Base 56d4e7dc25: the Lean decoder is the existing crate gents-lean-vocab (rules dropped); store/test_support follows store; test_support/<level> goes to that level's crate as test_support and test_support/root stays in the root; each new crate dev-depends on the new crates below it with test-fixtures enabled.",
+  "Base f8ed08b6ea: top-level workspace, exec and file_contents go to gents-session; the build script follows the C sources under exec."
+ ],
+ "splits_resolved_on_this_base": [
+  "crates/gents/src/documents/tools.rs",
+  "crates/gents/src/goal.rs",
+  "crates/gents/src/goal/state.rs",
+  "crates/gents/src/goal/task_fire.rs",
+  "crates/gents/src/goal/usage.rs",
+  "crates/gents/src/observe/adapter_projection.rs",
+  "crates/gents/src/observe/inference_observation.rs",
+  "crates/gents/src/observe/runtime_trace.rs",
+  "crates/gents/src/plugin/data.rs",
+  "crates/gents/src/plugin/model_calls.rs",
+  "crates/gents/src/plugin/store.rs",
+  "crates/gents/src/plugin/tests.rs",
+  "crates/gents/src/plugin/tool_calls.rs",
+  "crates/gents/src/request.rs",
+  "crates/gents/src/request/lifecycle/materialize.rs",
+  "crates/gents/src/runtime.rs",
+  "crates/gents/src/runtime/agent/p2p_reconcile/mod.rs",
+  "crates/gents/src/runtime/agent/stream_processor.rs",
+  "crates/gents/src/session/mailbox.rs",
+  "crates/gents/src/session/mailbox/notification.rs",
+  "crates/gents/src/tools.rs",
+  "crates/gents/src/tools/background/completion.rs",
+  "crates/gents/src/tools/background/job/settings.rs",
+  "crates/gents/src/tools/call/lifecycle.rs",
+  "crates/gents/src/tools/call/lifecycle/delivery/presentation.rs",
+  "crates/gents/src/tools/call/lifecycle/plugin_effect.rs",
+  "crates/gents/src/triggers/callback/documents.rs",
+  "crates/gents/src/triggers/callback/plugin.rs",
+  "crates/gents/src/triggers/engine/durable.rs",
+  "crates/gents/src/triggers/engine/mod.rs",
+  "crates/gents/src/turn/completion_factory.rs"
+ ]
+}

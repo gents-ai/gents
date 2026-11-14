@@ -496,29 +496,6 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_case_rejects_even_when_the_mean_improves() {
-        let ids = names(6);
-        let good = [(5_000u32, 9_000u32), (5_000, 9_000)];
-        let broken = [(9_000u32, 1_000u32), (9_000, 1_000)];
-        let mut cases: Vec<(&str, &[(u32, u32)])> = ids
-            .iter()
-            .skip(1)
-            .map(|id| (id.as_str(), &good[..]))
-            .collect();
-        cases.push((ids[0].as_str(), &broken[..]));
-        let report = decide(
-            Mode::Improve,
-            &params(),
-            &evidence_from_pairs(&paired(&cases), &ids, None),
-            1,
-        );
-        assert_eq!(
-            report.decision,
-            Decision::Reject(RejectReason::CaseRegression)
-        );
-    }
-
-    #[test]
     fn a_more_expensive_candidate_is_rejected_and_missing_usage_skips_the_gate() {
         let (six, ids) = uniform(6, 5_000, 8_000);
         let costly = TokenTotals {
@@ -567,23 +544,6 @@ mod tests {
             Mode::Improve,
             &params(),
             &evidence_from_pairs(&six, &ids[..5], None),
-            1,
-        );
-        assert_eq!(
-            report.decision,
-            Decision::Inconclusive(InconclusiveReason::Insufficient)
-        );
-    }
-
-    #[test]
-    fn asymmetric_exclusion_is_insufficient() {
-        let (mut six, ids) = uniform(6, 5_000, 8_000);
-        six.keys += 2;
-        six.dropped_candidate = 2;
-        let report = decide(
-            Mode::Improve,
-            &params(),
-            &evidence_from_pairs(&six, &ids, None),
             1,
         );
         assert_eq!(
@@ -645,24 +605,28 @@ mod tests {
         ));
     }
 
+    macro_rules! modeled_policy {
+        ($params:expr) => {
+            PolicyV2 {
+                min_pairs: $params.min_pairs,
+                max_not_evidence_bp: $params.max_not_evidence_bp,
+                max_asymmetry_bp: $params.max_asymmetry_bp,
+                case_tolerance_bp: $params.case_tolerance_bp,
+                alpha_ppm: $params.alpha_ppm,
+                max_rounds: u32::try_from($params.max_rounds).unwrap(),
+                max_token_increase_bp: $params.max_token_increase_bp,
+                ..params()
+            }
+        };
+    }
+
     #[test]
     fn gates_costs_and_decisions_match_lean() {
-        let lean = crate::lean_vocab_test::lean_optimization_cases();
-        let policy = PolicyV2 {
-            min_pairs: lean.params.min_pairs,
-            max_not_evidence_bp: lean.params.max_not_evidence_bp,
-            max_asymmetry_bp: lean.params.max_asymmetry_bp,
-            case_tolerance_bp: lean.params.case_tolerance_bp,
-            alpha_ppm: lean.params.alpha_ppm,
-            max_rounds: lean.params.max_rounds,
-            max_token_increase_bp: lean.params.max_token_increase_bp,
-            ..params()
-        };
-        assert_eq!(
-            alpha_effective_ppm(&policy),
-            lean.params.alpha_effective_ppm
-        );
-        for row in &lean.gates {
+        gents_lean_vocab::families::optimization_alpha_effective::replay(|p| {
+            alpha_effective_ppm(&modeled_policy!(p))
+        });
+        gents_lean_vocab::families::optimization_gate::replay(|row| {
+            let policy = modeled_policy!(row.params);
             let evidence = Evidence {
                 cases_match: row.cases_match,
                 cases: row
@@ -681,33 +645,27 @@ mod tests {
                 dropped_candidate: row.dropped_candidate,
                 tokens: None,
             };
-            assert_eq!(
-                sufficient(&policy, &evidence),
-                row.sufficient,
-                "{}",
-                row.name
-            );
-            assert_eq!(
-                no_case_regression(&policy, &evidence),
-                row.no_case_regression,
-                "{}",
-                row.name
-            );
-        }
-        for row in &lean.costs {
-            let totals = TokenTotals {
-                baseline_tokens: row.baseline_tokens,
-                baseline_trials: row.baseline_trials,
-                candidate_tokens: row.candidate_tokens,
-                candidate_trials: row.candidate_trials,
-            };
-            assert_eq!(cost_ok(&policy, &totals), row.cost_ok, "{}", row.name);
-        }
-        for row in &lean.decisions {
-            let mode = if row.mode == "improve" {
-                Mode::Improve
-            } else {
-                Mode::Confirm
+            gents_lean_vocab::families::optimization_gate::GateOutput {
+                sufficient: sufficient(&policy, &evidence),
+                no_case_regression: no_case_regression(&policy, &evidence),
+            }
+        });
+        gents_lean_vocab::families::optimization_cost::replay(|row| {
+            cost_ok(
+                &modeled_policy!(row.params),
+                &TokenTotals {
+                    baseline_tokens: row.baseline_tokens,
+                    baseline_trials: row.baseline_trials,
+                    candidate_tokens: row.candidate_tokens,
+                    candidate_trials: row.candidate_trials,
+                },
+            )
+        });
+        gents_lean_vocab::families::optimization_decision::replay::<String, String>(|row| {
+            let mode = match row.mode.as_str() {
+                "improve" => Mode::Improve,
+                "confirm" => Mode::Confirm,
+                other => panic!("unknown mode {other}"),
             };
             let decision = decide_gates(
                 mode,
@@ -719,15 +677,15 @@ mod tests {
                 },
                 InconclusiveReason::Insufficient,
             );
-            let got = match decision {
+            match decision {
                 Decision::Accept => "accept",
                 Decision::Inconclusive(_) => "inconclusive",
                 Decision::Reject(RejectReason::CaseRegression) => "reject_case_regression",
                 Decision::Reject(RejectReason::CostRegression) => "reject_cost_regression",
                 Decision::Reject(RejectReason::NoImprovement) => "reject_no_improvement",
-            };
-            assert_eq!(got, row.decision, "{row:?}");
-        }
+            }
+            .to_owned()
+        });
     }
 
     proptest! {

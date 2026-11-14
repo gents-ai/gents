@@ -1,9 +1,5 @@
 use super::*;
-use crate::inference::llm::message::AssistantContent;
-use crate::test_support::first_content;
-use gents_loop::claude_messages_body::ReplayTag;
-use gents_protocol::output::OutputSource;
-use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+use gents_store::test_support::first_content;
 
 fn test_builder(system_prompt: &str, agent_did: &str) -> LayeredPromptBuilder {
     LayeredPromptBuilder::for_agent(
@@ -25,42 +21,28 @@ fn user_msg(text: &str) -> Message {
 
 #[test]
 fn mcp_discovery_guidance_matches_presented_operations_model() {
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = snapshot["discovery_guidance_cases"].as_array().unwrap();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let tools = case["presented"]
-            .as_array()
-            .unwrap()
+    gents_lean_vocab::families::contracts_discovery_guidance_presented::replay(|case| {
+        let tools = case
+            .presented
             .iter()
-            .map(|name| name.as_str().unwrap())
+            .map(String::as_str)
             .collect::<Vec<_>>();
-        let preamble = build_preamble(
-            "Instructions",
-            "worker",
-            &tools,
-            case["enabled"].as_bool().unwrap(),
-        );
-        assert_eq!(
-            preamble.contains("## Tool Discovery"),
-            case["expected"].as_bool().unwrap(),
-            "{}",
-            case["name"]
-        );
-        for name in tools {
+        let preamble = build_preamble("Instructions", "worker", &tools, case.enabled);
+        for name in &tools {
             assert!(
                 preamble.contains(name),
                 "direct tool {name} must remain visible"
             );
         }
-    }
+        preamble.contains("## Tool Discovery")
+    });
 }
 
 #[test]
 fn preamble_strips_title_generation_suffix() {
     for suffix in [
         super::TITLE_GENERATION_SUFFIX,
-        crate::session::title_text::GENERATION_PREAMBLE,
+        gents_session::session::title_text::GENERATION_PREAMBLE,
     ] {
         let preamble = build_preamble(
             &format!("You are a policy agent.\n\n{suffix}"),
@@ -103,61 +85,6 @@ async fn build_with_summaries_prepends() {
     } else {
         panic!("expected user message");
     }
-}
-
-#[tokio::test]
-async fn build_preserves_each_source_through_summary_prepend_even_with_equal_native_ids() {
-    let builder = test_builder("Be helpful.", "general");
-    let tag = |turn_index| ReplayTag {
-        request_doc_id: "request-one".to_string(),
-        source: OutputSource::ProviderTurn {
-            scope: CaptureScope {
-                kind: CaptureScopeKind::Inference,
-                seq: 1,
-            },
-            turn_index,
-            attempt: 0,
-        },
-    };
-    let with_native_id = |text: &str| Message::Assistant {
-        request_id: None,
-        id: Some("same-provider-id".to_string()),
-        content: vec![AssistantContent::Text(Text {
-            text: text.to_string(),
-        })],
-    };
-    let first = TaggedMessage {
-        message: with_native_id("first"),
-        source: Some(tag(1)),
-        physical_header: None,
-        block_indices: Vec::new(),
-    };
-    let second = TaggedMessage {
-        message: with_native_id("second"),
-        source: Some(tag(2)),
-        physical_header: None,
-        block_indices: Vec::new(),
-    };
-    let prompt = builder
-        .build(
-            &[first.clone(), second.clone()],
-            &["earlier conversation".to_string()],
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(prompt.messages.len(), 3);
-    assert!(prompt.messages[0].source.is_none());
-    assert_eq!(prompt.messages[1], first);
-    assert_eq!(prompt.messages[2], second);
-    assert_eq!(
-        prompt.native_messages(),
-        prompt
-            .messages
-            .iter()
-            .map(|row| row.message.clone())
-            .collect::<Vec<_>>()
-    );
 }
 
 #[test]

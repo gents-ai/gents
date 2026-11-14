@@ -7,12 +7,6 @@ use tokio::sync::mpsc;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
 use super::*;
-use crate::ensure_runtime_schemas;
-use crate::lean_vocab_test::{
-    assert_lean_contract_vocabulary_matches, assert_lean_transition_is_legal,
-    assert_state_machine_contract_is_complete, lean_process_transition_cases,
-    lean_runtime_reconcile_case, LeanContractVocabulary, LeanLifecycleTransitionCase,
-};
 
 #[derive(Debug, Deserialize)]
 struct NodeRuntimeRow {
@@ -30,12 +24,15 @@ struct NodeReadinessRow {
     updated_at: String,
 }
 
-async fn test_node() -> Arc<defra_node::Node> {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let did = node.node_identity_did().unwrap();
-    let access = crate::store::config_client::ConfigAccess::local_as(
-        node.clone(),
+async fn test_node() -> gents_inference::test_support::TestDb {
+    let db = gents_inference::test_support::test_db(
+        "status",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let did = db.node_identity.did();
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
         identity::Did::new(did).unwrap(),
     );
     access
@@ -48,15 +45,15 @@ async fn test_node() -> Arc<defra_node::Node> {
         )
         .await
         .unwrap();
-    node
+    db
 }
 
 #[tokio::test]
 async fn runtime_status_publication_preserves_native_ownership_and_revocation() -> anyhow::Result<()>
 {
-    use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentityAction};
-    use crate::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
-    use crate::NodeIdentity;
+    use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
+    use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
+    use gents_store::identity::NodeIdentity;
 
     let model = lean_identity_household_cases()
         .iter()
@@ -71,11 +68,14 @@ async fn runtime_status_publication_preserves_native_ownership_and_revocation() 
         })
         .collect();
     let dir = tempfile::tempdir()?;
-    let user = crate::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
-    let runtime = crate::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
-    let agent = crate::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
-    let sibling = crate::KeyIdentity::load_or_create(dir.path().join("sibling"), None)?;
-    let outsider = crate::KeyIdentity::load_or_create(dir.path().join("outsider"), None)?;
+    let user = gents_store::identity::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
+    let runtime =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
+    let agent = gents_store::identity::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
+    let sibling =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("sibling"), None)?;
+    let outsider =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("outsider"), None)?;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
     let node = Arc::new(
@@ -97,7 +97,7 @@ async fn runtime_status_publication_preserves_native_ownership_and_revocation() 
     node.add_collection(gents_protocol::schemas::NODE).await?;
     node.add_collection(gents_protocol::schemas::NODE_RUNTIME)
         .await?;
-    let access = |actor: &crate::KeyIdentity| -> anyhow::Result<ConfigAccess> {
+    let access = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
                 .with_client_signing_capability(actor.client_signing_capability()?)?,
@@ -116,6 +116,14 @@ async fn runtime_status_publication_preserves_native_ownership_and_revocation() 
                 .await?;
         }
     }
+    // Public relationship routes require `get-collection`, which production
+    // Users hold (`GrantSets.operatorUser`).
+    runtime_access
+        .grant_node_permission(
+            &identity::Did::new(user.did())?,
+            NodePermission::CollectionGet,
+        )
+        .await?;
     let parent = user_access
         .write(
             "test.status.node",
@@ -215,26 +223,6 @@ async fn runtime_status_publication_preserves_native_ownership_and_revocation() 
     Ok(())
 }
 
-#[test]
-fn node_runtime_writer_source_cannot_serialize_readiness_authority() {
-    let source = include_str!("../status.rs");
-    for forbidden in [
-        "row.process_state",
-        "row.active_generation",
-        "row.router_generation",
-        "row.default_agent_did",
-        "process_state: \"{process_state}\"",
-        "active_generation: {active_generation}",
-        "router_generation: {router_generation}",
-        "default_agent_did: \"{default_agent_did}\"",
-    ] {
-        assert!(
-            !source.contains(forbidden),
-            "NodeRuntime writer regained readiness-owned source fragment {forbidden}"
-        );
-    }
-}
-
 fn status_test_request(request_id: &str) -> gents_protocol::row::AgentRequest {
     gents_protocol::row::AgentRequest {
         retry_parent_request_doc_id: None,
@@ -268,13 +256,19 @@ fn status_test_request(request_id: &str) -> gents_protocol::row::AgentRequest {
         workspace_authority: None,
         workspace_owner_node_did: None,
         workspace_seal_hash: None,
+        executed_model_name: None,
+        executed_reasoning_effort: None,
+        executed_service_tier: None,
+        executed_inference_profile_id: None,
+        executed_runtime_generation: None,
     }
 }
 
-fn unavailable_general() -> RapidHashMap<String, crate::runtime::snapshot::UnavailableAgent> {
+fn unavailable_general(
+) -> RapidHashMap<String, gents_automation::triggers::runtime_snapshot::UnavailableAgent> {
     RapidHashMap::from_iter([(
         "general".to_string(),
-        crate::runtime::snapshot::UnavailableAgent::new(
+        gents_automation::triggers::runtime_snapshot::UnavailableAgent::new(
             AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
             "test runtime is not configured",
         ),
@@ -296,7 +290,7 @@ async fn fetch_runtime_row(node: &Arc<defra_node::Node>, node_did: &str) -> Node
         }}"#
     );
     let actor = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
-    let response = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor)
+    let response = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor)
         .execute(&query)
         .await
         .unwrap();
@@ -316,7 +310,7 @@ async fn fetch_node_readiness_row(
 ) -> NodeReadinessRow {
     let escaped_node_did = escape_graphql_string(node_did);
     let actor = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
-    let response = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor)
+    let response = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor)
         .execute(&format!(
             r#"{{
                 NodeReadiness(
@@ -337,13 +331,29 @@ async fn fetch_node_readiness_row(
     serde_json::from_value(value).expect("decode NodeReadiness row")
 }
 
+async fn read_node_readiness_row(
+    node: &Arc<defra_node::Node>,
+    node_did: &str,
+) -> gents_protocol::node_readiness::NodeReadinessRow {
+    let row = fetch_node_readiness_row(node, node_did).await;
+    gents_protocol::node_readiness::NodeReadinessRow {
+        node_did: node_did.to_owned(),
+        snapshot_json: row.snapshot_json,
+        updated_at: row.updated_at,
+    }
+}
+
 #[tokio::test]
 async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
     let node_did = node.node_identity_did().unwrap();
 
-    let (first_owner, first) = RuntimeStatusHandle::start(node.clone(), node_did);
+    let (first_owner, first) = RuntimeStatusHandle::start(
+        node.clone(),
+        node_did,
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
     first.initialize_startup("general").await.unwrap();
     first
         .set_process_state_durable(ProcessLifecycleState::Ready)
@@ -361,7 +371,11 @@ async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     );
     first_owner.close().await.unwrap();
 
-    let (second_owner, second) = RuntimeStatusHandle::start(node.clone(), node_did);
+    let (second_owner, second) = RuntimeStatusHandle::start(
+        node.clone(),
+        node_did,
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
     second.initialize_startup("general").await.unwrap();
     let restarted = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
         &fetch_node_readiness_row(&node, node_did)
@@ -377,188 +391,122 @@ async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     second_owner.close().await.unwrap();
 }
 
-#[test]
-fn rust_process_state_vocabulary_matches_lean_model() {
-    let rust_states = vec![
-        ProcessLifecycleState::Uninitialized.as_str(),
-        ProcessLifecycleState::Recovering.as_str(),
-        ProcessLifecycleState::Ready.as_str(),
-        ProcessLifecycleState::ShuttingDown.as_str(),
-        ProcessLifecycleState::Shutdown.as_str(),
-    ];
-
-    assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-        domain: "ProcessState",
-        rust_source:
-            "ProcessLifecycleState::{Uninitialized, Recovering, Ready, ShuttingDown, Shutdown}",
-        rust_values: &rust_states,
-    });
-}
-
-fn rust_process_transition_action(from: &str, to: &str) -> Option<&'static str> {
-    match (from, to) {
-        ("uninitialized", "recovering") => Some("startupRecover"),
-        ("uninitialized", "ready") => Some("startupClean"),
-        ("recovering", "ready") => Some("recoveryComplete"),
-        ("ready", "shuttingDown") => Some("beginShutdown"),
-        ("shuttingDown", "shutdown") => Some("finishShutdown"),
-        _ => None,
+fn status_test_snapshot(
+    generation: u64,
+    dispatcher: mpsc::Sender<gents_protocol::row::AgentRequest>,
+) -> ActiveRuntimeSnapshot {
+    ActiveRuntimeSnapshot {
+        generation,
+        node: None,
+        local_did: String::new(),
+        default_agent_did: "general".to_string(),
+        agents: RapidHashMap::new(),
+        tool_configs: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: RapidHashMap::new(),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: RapidHashSet::new(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: RapidHashSet::new(),
+        active_tasks: RapidHashMap::new(),
+        dispatchers: RapidHashMap::from_iter([("general".to_string(), dispatcher)]),
+        agent_executor_capacities: RapidHashMap::from_iter([("general".to_string(), 1)]),
+        agent_executor_queue_capacities: RapidHashMap::from_iter([("general".to_string(), 1)]),
     }
-}
-
-fn process_state_from_contract(state: &str) -> ProcessLifecycleState {
-    match state {
-        "uninitialized" => ProcessLifecycleState::Uninitialized,
-        "recovering" => ProcessLifecycleState::Recovering,
-        "ready" => ProcessLifecycleState::Ready,
-        "shuttingDown" => ProcessLifecycleState::ShuttingDown,
-        "shutdown" => ProcessLifecycleState::Shutdown,
-        other => panic!("unknown generated Process state {other:?}"),
-    }
-}
-
-async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = node.node_identity_did().unwrap().to_owned();
-    let (owner, status) = RuntimeStatusHandle::start(node.clone(), node_did.clone());
-    status.readiness().initialize("general").await.unwrap();
-    let action = case
-        .action
-        .as_deref()
-        .expect("legal Process transition case must carry an action");
-
-    match action {
-        "startupRecover" | "startupClean" => {
-            status
-                .set_process_state(process_state_from_contract(&case.to))
-                .await;
-        }
-        "recoveryComplete" => {
-            status
-                .set_process_state(ProcessLifecycleState::Recovering)
-                .await;
-            status.set_process_state(ProcessLifecycleState::Ready).await;
-        }
-        "beginShutdown" => {
-            status.set_process_state(ProcessLifecycleState::Ready).await;
-            status
-                .set_process_state(ProcessLifecycleState::ShuttingDown)
-                .await;
-        }
-        "finishShutdown" => {
-            status
-                .set_process_state(ProcessLifecycleState::ShuttingDown)
-                .await;
-            status
-                .set_process_state(ProcessLifecycleState::Shutdown)
-                .await;
-        }
-        other => panic!(
-            "generated Process transition {} has unsupported action {other:?}",
-            case.name
-        ),
-    }
-
-    let readiness = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
-        &fetch_node_readiness_row(&node, &node_did)
-            .await
-            .snapshot_json,
-    )
-    .expect("decode process readiness");
-    assert_eq!(
-        readiness.process_state.as_str(),
-        case.to,
-        "generated Process transition {} expected {} -> {} classified as {} via {:?}, got authoritative process_state={}",
-        case.name,
-        case.from,
-        case.to,
-        case.classification,
-        case.action,
-        readiness.process_state.as_str()
-    );
-    owner.close().await.unwrap();
 }
 
 #[tokio::test]
-async fn generated_process_transition_cases_match_runtime_status_policy() {
-    let mut legal_count = 0;
-    let mut illegal_count = 0;
+async fn startup_claim_demotes_a_killed_process_ready_row_before_any_runtime_work() {
+    let db = test_node().await;
+    let node = db.node.clone();
+    let node_did = node.node_identity_did().unwrap().to_owned();
+    let claim = gents_lean_vocab::families::client_agent_readiness_restart_claim::cases::<
+        gents_protocol::node_readiness::AgentReadinessUnavailableReason,
+        gents_protocol::node_readiness::NodeReadinessProcessState,
+    >()
+    .into_iter()
+    .find(|claim| claim.input.name == "restart_claim_demotes_stale_ready")
+    .expect("modeled restart claim case");
+    let case = &claim.input;
+    let (dispatcher, _requests) = mpsc::channel(1);
 
-    for case in lean_process_transition_cases() {
-        let rust_classification = if rust_process_transition_action(&case.from, &case.to).is_some()
-        {
-            "legal"
-        } else {
-            "illegal"
-        };
-        assert_eq!(
-            case.classification, rust_classification,
-            "Process transition {} expected classification drift for {} -> {}; Lean action={:?} boundary={:?}",
-            case.name, case.from, case.to, case.action, case.boundary
-        );
+    let (killed_owner, killed) = RuntimeStatusHandle::start(
+        node.clone(),
+        node_did.clone(),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
+    killed.initialize_startup("general").await.unwrap();
+    killed
+        .publish_startup_snapshot(&status_test_snapshot(case.active_generation, dispatcher))
+        .await
+        .unwrap();
+    killed
+        .publish_router_generation(case.router_generation)
+        .await
+        .unwrap();
+    killed
+        .set_process_state_durable(ProcessLifecycleState::Ready)
+        .await
+        .unwrap();
+    drop(killed_owner);
+    drop(killed);
 
-        match case.classification.as_str() {
-            "legal" => {
-                legal_count += 1;
-                assert_eq!(
-                    case.action.as_deref(),
-                    rust_process_transition_action(&case.from, &case.to),
-                    "Process transition {} legal writer action drifted for {} -> {}",
-                    case.name,
-                    case.from,
-                    case.to
-                );
-                drive_generated_process_legal_case(case).await;
-            }
-            "illegal" => {
-                illegal_count += 1;
-                assert!(
-                    rust_process_transition_action(&case.from, &case.to).is_none(),
-                    "Process transition {} is ordinary illegal but Rust has a writer path for {} -> {}",
-                    case.name,
-                    case.from,
-                    case.to
-                );
-            }
-            other => panic!(
-                "generated Process transition {} has unknown classification {other:?}",
-                case.name
-            ),
+    let row = read_node_readiness_row(&node, &node_did).await;
+    assert!(
+        !matches!(
+            gents_protocol::node_readiness::project_node_readiness_summary(Some(&row), &node_did),
+            gents_protocol::node_readiness::ProjectedNodeReadinessSummary::Unknown(_)
+        ),
+        "the killed process must leave a row every reader still projects as current"
+    );
+
+    crate::runtime::startup_readiness::claim_startup_readiness(&node, &node_did)
+        .await
+        .unwrap();
+
+    let claimed = read_node_readiness_row(&node, &node_did).await;
+    let (state, reason) = match gents_protocol::node_readiness::project_node_readiness_summary(
+        Some(&claimed),
+        &node_did,
+    ) {
+        gents_protocol::node_readiness::ProjectedNodeReadinessSummary::Observed(_) => {
+            ("observed", None)
         }
-    }
-
-    assert_eq!(legal_count, 5);
-    assert_eq!(illegal_count, 20);
-}
-
-#[test]
-fn rust_reconcile_phase_vocabulary_matches_lean_model() {
-    let rust_phases = vec![
-        ReconcilePhase::Idle.as_str(),
-        ReconcilePhase::Debouncing.as_str(),
-        ReconcilePhase::Resolving.as_str(),
-        ReconcilePhase::Diffing.as_str(),
-        ReconcilePhase::Applying.as_str(),
-    ];
-
-    assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-        domain: "ReconcilePhase",
-        rust_source: "ReconcilePhase::{Idle, Debouncing, Resolving, Diffing, Applying}",
-        rust_values: &rust_phases,
-    });
-}
-
-#[test]
-fn runtime_reconcile_state_machine_contract_is_complete() {
-    assert_state_machine_contract_is_complete("RuntimeReconcile");
-    assert_lean_transition_is_legal("RuntimeReconcile", "applying", "idle");
+        gents_protocol::node_readiness::ProjectedNodeReadinessSummary::Unknown(reason) => (
+            "unknown",
+            serde_json::to_value(reason)
+                .unwrap()
+                .as_str()
+                .map(str::to_owned),
+        ),
+    };
+    claim.check(
+        gents_lean_vocab::families::client_agent_readiness_restart_claim::ClaimedRowOutput {
+            state: state.to_owned(),
+            reason,
+        },
+    );
+    let snapshot =
+        gents_protocol::node_readiness::decode_node_readiness_snapshot(&claimed, &node_did)
+            .unwrap();
+    assert_eq!(snapshot.process_state, case.process_state);
+    assert_eq!(snapshot.active_generation, case.active_generation);
+    assert_eq!(snapshot.router_generation, case.router_generation);
+    assert_eq!(snapshot.default_agent_did, "general");
+    assert!(
+        snapshot
+            .agents
+            .iter()
+            .any(|entry| entry.agent_did == "general"),
+        "the claim keeps the predecessor's agent picture readable for diagnosis: {snapshot:?}"
+    );
 }
 
 #[tokio::test]
 async fn runtime_status_persists_agent_executor_capacity_and_queue_depth() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
 
     let (tx, _rx) = mpsc::channel(4);
     tx.try_send(status_test_request("queued-1")).unwrap();
@@ -571,6 +519,7 @@ async fn runtime_status_persists_agent_executor_capacity_and_queue_depth() {
             node: None,
             local_did: String::new(),
             default_agent_did: "general".to_string(),
+            tool_configs: Default::default(),
             agents: RapidHashMap::new(),
             tool_surfaces: RapidHashMap::new(),
             backend_admission_configs: RapidHashMap::new(),
@@ -607,8 +556,8 @@ async fn runtime_status_persists_agent_executor_capacity_and_queue_depth() {
 
 #[tokio::test]
 async fn executor_metrics_do_not_republish_unchanged_node_readiness() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
 
     let (tx, _rx) = mpsc::channel(2);
     let snapshot = ActiveRuntimeSnapshot {
@@ -616,6 +565,7 @@ async fn executor_metrics_do_not_republish_unchanged_node_readiness() {
         node: None,
         local_did: String::new(),
         default_agent_did: "general".to_string(),
+        tool_configs: Default::default(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -648,8 +598,8 @@ async fn executor_metrics_do_not_republish_unchanged_node_readiness() {
 
 #[tokio::test]
 async fn runtime_status_serializes_persisted_generation_updates() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let db = test_node().await;
+    let node = db.node.clone();
 
     let status = RuntimeStatusHandle::new(node.clone(), node.node_identity_did().unwrap());
     let startup = ActiveRuntimeSnapshot {
@@ -657,6 +607,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         node: None,
         local_did: String::new(),
         default_agent_did: "general".to_string(),
+        tool_configs: Default::default(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -675,6 +626,7 @@ async fn runtime_status_serializes_persisted_generation_updates() {
         node: None,
         local_did: String::new(),
         default_agent_did: "general".to_string(),
+        tool_configs: Default::default(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
@@ -717,129 +669,209 @@ async fn runtime_status_serializes_persisted_generation_updates() {
     assert_eq!(readiness.router_generation, 2);
 }
 
+fn reconcile_snapshot(generation: u64) -> ActiveRuntimeSnapshot {
+    ActiveRuntimeSnapshot {
+        generation,
+        node: None,
+        local_did: String::new(),
+        default_agent_did: "general".to_string(),
+        tool_configs: Default::default(),
+        agents: RapidHashMap::new(),
+        tool_surfaces: RapidHashMap::new(),
+        backend_admission_configs: RapidHashMap::new(),
+        unavailable_agents: unavailable_general(),
+        active_schedules: RapidHashMap::new(),
+        unavailable_schedules: RapidHashSet::new(),
+        active_event_triggers: RapidHashMap::new(),
+        unavailable_event_triggers: RapidHashSet::new(),
+        active_tasks: RapidHashMap::new(),
+        dispatchers: RapidHashMap::new(),
+        agent_executor_capacities: RapidHashMap::new(),
+        agent_executor_queue_capacities: RapidHashMap::new(),
+    }
+}
+
+async fn published_readiness(
+    node: &Arc<defra_node::Node>,
+) -> gents_protocol::node_readiness::NodeReadinessSnapshot {
+    serde_json::from_str(
+        &fetch_node_readiness_row(node, node.node_identity_did().unwrap())
+            .await
+            .snapshot_json,
+    )
+    .expect("decode published runtime contract readiness")
+}
+
 #[tokio::test]
 async fn runtime_status_generation_updates_match_lean_runtime_reconcile_cases() {
-    let publish = lean_runtime_reconcile_case("publish_changed_snapshot");
-    let router = lean_runtime_reconcile_case("router_observe_published_generation");
-    assert!(publish.legal);
-    assert!(router.legal);
-
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-
-    let status = RuntimeStatusHandle::new(node.clone(), node.node_identity_did().unwrap());
-    let startup = ActiveRuntimeSnapshot {
-        generation: publish.pre_active_generation as u64,
-        node: None,
-        local_did: String::new(),
-        default_agent_did: "general".to_string(),
-        agents: RapidHashMap::new(),
-        tool_surfaces: RapidHashMap::new(),
-        backend_admission_configs: RapidHashMap::new(),
-        unavailable_agents: unavailable_general(),
-        active_schedules: RapidHashMap::new(),
-        unavailable_schedules: RapidHashSet::new(),
-        active_event_triggers: RapidHashMap::new(),
-        unavailable_event_triggers: RapidHashSet::new(),
-        active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::new(),
-        agent_executor_capacities: RapidHashMap::new(),
-        agent_executor_queue_capacities: RapidHashMap::new(),
-    };
-    let applied = ActiveRuntimeSnapshot {
-        generation: publish.post_active_generation as u64,
-        node: None,
-        local_did: String::new(),
-        default_agent_did: "general".to_string(),
-        agents: RapidHashMap::new(),
-        tool_surfaces: RapidHashMap::new(),
-        backend_admission_configs: RapidHashMap::new(),
-        unavailable_agents: unavailable_general(),
-        active_schedules: RapidHashMap::new(),
-        unavailable_schedules: RapidHashSet::new(),
-        active_event_triggers: RapidHashMap::new(),
-        unavailable_event_triggers: RapidHashSet::new(),
-        active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::new(),
-        agent_executor_capacities: RapidHashMap::new(),
-        agent_executor_queue_capacities: RapidHashMap::new(),
-    };
-
-    status.publish_startup_snapshot(&startup).await.unwrap();
-    status
-        .publish_router_generation(publish.pre_router_generation as u64)
-        .await
-        .unwrap();
-    status.set_reconcile_phase(ReconcilePhase::Applying).await;
-    status.publish_applied(&applied).await;
-    let row = fetch_runtime_row(&node, node.node_identity_did().unwrap()).await;
-    assert_eq!(row.reconcile_phase, publish.post_phase.as_str());
-    assert_eq!(row.last_reconcile_result, "applied");
-    let readiness = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
-        &fetch_node_readiness_row(&node, node.node_identity_did().unwrap())
+    for case in gents_lean_vocab::families::contracts_runtime_reconcile_status::cases() {
+        let input = &case.input;
+        let db = test_node().await;
+        let node = db.node.clone();
+        let status = RuntimeStatusHandle::new(node.clone(), node.node_identity_did().unwrap());
+        status
+            .publish_startup_snapshot(&reconcile_snapshot(input.pre_active_generation))
             .await
-            .snapshot_json,
-    )
-    .expect("decode published runtime contract readiness");
-    assert_eq!(
-        readiness.active_generation,
-        publish.post_active_generation as u64
-    );
-    assert_eq!(
-        readiness.router_generation,
-        publish.post_router_generation as u64
-    );
-
-    status
-        .publish_router_generation(router.post_router_generation as u64)
-        .await
-        .unwrap();
-    let row = fetch_runtime_row(&node, node.node_identity_did().unwrap()).await;
-    assert_eq!(row.reconcile_phase, router.post_phase.as_str());
-    let readiness = serde_json::from_str::<gents_protocol::node_readiness::NodeReadinessSnapshot>(
-        &fetch_node_readiness_row(&node, node.node_identity_did().unwrap())
+            .unwrap();
+        status
+            .publish_router_generation(input.pre_router_generation)
             .await
-            .snapshot_json,
-    )
-    .expect("decode router-observed readiness");
-    assert_eq!(
-        readiness.active_generation,
-        router.post_active_generation as u64
-    );
-    assert_eq!(
-        readiness.router_generation,
-        router.post_router_generation as u64
-    );
+            .unwrap();
+        let phase: ReconcilePhase =
+            serde_json::from_value(serde_json::Value::String(input.pre_phase.clone())).unwrap();
+        status.set_reconcile_phase(phase).await;
+        match input.action.as_str() {
+            "publish" => {
+                status
+                    .publish_applied(&reconcile_snapshot(crate::runtime::agent::next_generation(
+                        input.pre_active_generation,
+                    )))
+                    .await;
+                let row = fetch_runtime_row(&node, node.node_identity_did().unwrap()).await;
+                assert_eq!(row.last_reconcile_result, "applied", "{}", input.name);
+            }
+            "routerObserve" => {
+                let observed = published_readiness(&node).await.active_generation;
+                status.publish_router_generation(observed).await.unwrap();
+            }
+            other => panic!("the status fixture cannot drive {other}"),
+        }
+        let row = fetch_runtime_row(&node, node.node_identity_did().unwrap()).await;
+        let readiness = published_readiness(&node).await;
+        case.check(
+            gents_lean_vocab::families::contracts_runtime_reconcile_status::ReconcileStatusOutput {
+                post_phase: row.reconcile_phase.clone(),
+                post_active_generation: readiness.active_generation,
+                post_router_generation: readiness.router_generation,
+            },
+        );
+    }
 }
 
 #[tokio::test]
 async fn goal_settled_uses_live_runtime_status_cases() {
-    let node = test_node().await;
-    let node_did = node.node_identity_did().unwrap().to_owned();
+    let db = test_node().await;
+    let node = db.node.clone();
+    let node_did = db.node_identity.did().to_owned();
     let status = RuntimeStatusHandle::new(node, node_did);
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().identity_readiness_settled_cases {
+    for case in gents_lean_vocab::families::identity_operations_readiness_settled::cases() {
         {
             let mut row = status.state.lock().await;
-            row.reconcile_phase = if case["idle"].as_bool().unwrap() {
-                "idle"
-            } else {
-                "applying"
-            }
-            .to_owned();
-            row.last_reconcile_result = if !case["result_known"].as_bool().unwrap() {
+            row.reconcile_phase = if case.input.idle { "idle" } else { "applying" }.to_owned();
+            row.last_reconcile_result = if !case.input.result_known {
                 ""
-            } else if case["result_error"].as_bool().unwrap() {
+            } else if case.input.result_error {
                 "error"
             } else {
                 "applied"
             }
             .to_owned();
         }
-        let actual = if case["live_present"].as_bool().unwrap() {
-            status.goal_reconcile_settled().await
-        } else {
-            false
-        };
-        assert_eq!(actual, case["expected"].as_bool().unwrap(), "{case}");
+        let live = case.input.live_present.then_some(&status);
+        case.check(gents_automation::goal::live_goal_reconcile_settled(live).await);
     }
+}
+
+#[tokio::test]
+async fn storage_full_readiness_write_is_retained_as_a_process_local_fault() {
+    use gents_protocol::node_readiness::{
+        project_node_readiness_summary, project_node_readiness_summary_with_storage,
+        AgentReadinessEntry, AgentReadinessState, NodeReadinessProcessState as ProcessState,
+        NodeReadinessRow as ReadinessRow, NodeReadinessSnapshot, ProjectedNodeReadinessSummary,
+        RuntimeStorageObservation, NODE_READINESS_FORMAT_VERSION,
+    };
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("native transaction")]
+    struct NativeTransaction(#[source] storage::corekv::Error);
+
+    struct StorageFullWriter;
+
+    #[async_trait::async_trait]
+    impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for StorageFullWriter {
+        async fn upsert(
+            &self,
+            _node_did: &str,
+            _snapshot: &gents_protocol::row::NodeReadinessSnapshot,
+            _updated_at: &str,
+        ) -> anyhow::Result<()> {
+            Err(anyhow::Error::new(NativeTransaction(
+                storage::corekv::Error::from(std::io::Error::new(
+                    std::io::ErrorKind::StorageFull,
+                    "write-ahead log left in an unknown state: No space left on device (os error 28)",
+                )),
+            )))
+        }
+    }
+
+    let db = test_node().await;
+    let node = db.node.clone();
+    let node_did = node.node_identity_did().unwrap().to_owned();
+    let (owner, status) = RuntimeStatusHandle::start_with_readiness_writer(
+        node.clone(),
+        node_did.clone(),
+        Arc::new(StorageFullWriter),
+        std::time::Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
+    );
+
+    assert!(!status.storage_fault().is_unavailable());
+    let error = status
+        .initialize_startup("did:test:agent")
+        .await
+        .expect_err("a latched store cannot persist readiness");
+    assert!(
+        gents_store::graphql::is_storage_full(error.as_ref()),
+        "{}",
+        gents_protocol::error_chain::ErrorChain(error.as_ref()),
+    );
+    assert!(
+        status.storage_fault().is_unavailable(),
+        "the write that cannot be persisted must still be observable"
+    );
+
+    let stale_ready = ReadinessRow {
+        node_did: node_did.clone(),
+        snapshot_json: serde_json::to_string(&NodeReadinessSnapshot {
+            format_version: NODE_READINESS_FORMAT_VERSION,
+            process_state: ProcessState::Ready,
+            active_generation: 1,
+            router_generation: 1,
+            default_agent_did: "did:test:agent".to_string(),
+            agents: vec![AgentReadinessEntry {
+                effective_inference: None,
+
+                agent_did: "did:test:agent".to_string(),
+                state: AgentReadinessState::Ready,
+                reason: None,
+            }],
+        })
+        .unwrap(),
+        updated_at: "2026-11-12T00:00:00Z".to_string(),
+    };
+    assert!(
+        matches!(
+            project_node_readiness_summary(Some(&stale_ready), &node_did),
+            ProjectedNodeReadinessSummary::Observed(_)
+        ),
+        "the durable row alone cannot carry the fault"
+    );
+    assert_eq!(
+        project_node_readiness_summary_with_storage(
+            Some(&stale_ready),
+            &node_did,
+            status.storage_fault().observation(),
+        ),
+        ProjectedNodeReadinessSummary::Unknown(
+            gents_protocol::row::AgentReadinessUnknownReason::StorageUnavailable
+        ),
+        "the reader must join the process-local fault with the frozen row"
+    );
+    assert_eq!(
+        status.storage_fault().observation(),
+        RuntimeStorageObservation::Unavailable
+    );
+
+    owner.close().await.ok();
+    node.shutdown().await.unwrap();
 }

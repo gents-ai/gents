@@ -1,4 +1,4 @@
-import Proofs.RuntimeReconcile.MetricsScrapeAccess
+import Proofs.Runtime.RuntimeReconcile.MetricsScrapeAccess
 import Lean
 
 open Lean RuntimeReconcile.MetricsScrapeAccess

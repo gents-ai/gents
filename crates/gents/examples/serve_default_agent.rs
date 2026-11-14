@@ -1,52 +1,28 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use anyhow::{Context, Result};
-use gents::defra_node::{HttpConfig, Node as EmbeddedNode};
-use gents::{
-    ensure_runtime_schemas, DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, NodeIdentity,
-    ToolCeiling,
-};
+use anyhow::Result;
+use gents::runtime::embedded::EmbeddedHome;
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_tools::{mcp::pool::McpPool, surface::ToolCeiling};
 use tokio::sync::watch;
 
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
 
-fn env_or_u16(name: &str, default: u16) -> u16 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(default)
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_target(false).init();
-    let data_dir = PathBuf::from(env_or("GENTS_DATA_DIR", "./var/defradb"));
-    let http_port = env_or_u16("GENTS_HTTP_PORT", 9191);
+    let home_dir = PathBuf::from(env_or("GENTS_HOME", "./var/gents-home"));
     let node_name = env_or("GENTS_NAME", "demo");
-    let key_path = std::env::var("GENTS_KEY_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| data_dir.join("keys").join(format!("{node_name}.key")));
-
-    let http_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), http_port);
-    let identity = Arc::new(
-        KeyIdentity::load_or_create(key_path, None)
-            .context("creating or loading node identity key")?,
-    );
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(&data_dir)
-            .with_regolith_options(gents::store::local::storage_backend::regolith_options())
-            .with_http(HttpConfig::with_addr(http_addr))
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .context("building embedded DefraDB node")?,
-    );
-    ensure_runtime_schemas(node.as_ref()).await?;
+    let home = if home_dir.join("node.key").exists() {
+        EmbeddedHome::open_retained(&home_dir).await?
+    } else {
+        EmbeddedHome::create_retained(&home_dir).await?
+    };
+    let node = home.node.clone();
+    let identity = home.identity.clone();
+    let graphql = home.graphql_endpoint().unwrap_or_default().to_owned();
     let agent = Gents::from_default_agent_documents(
         node,
         identity.clone(),
@@ -69,7 +45,7 @@ async fn main() -> Result<()> {
     tracing::info!(
         node_name,
         node_did = agent.node_did(),
-        graphql = %format!("http://127.0.0.1:{http_port}/api/v0/graphql"),
+        graphql = %graphql,
         "serving default behavior"
     );
 

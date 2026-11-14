@@ -1,5 +1,5 @@
-import Proofs.GoalAutomation.ReadinessGate
-import Lean
+import Proofs.Automation.GoalAutomation.ReadinessGate
+import Proofs.Conformance.Family
 
 namespace Conformance.GoalClaimedReadiness
 open GoalAutomation.ReadinessGate Lean
@@ -34,46 +34,78 @@ def cases : List Case :=
   , ⟨"claimed_paused_goal_stays_inactive", .ready true, true, false,
       { active with goal := { active.goal with status := .paused } }⟩ ]
 
-private def observationName : Observation → String
-  | .ready _ => "ready"
-  | .backendRecovering => "backend_recovering"
-  | .unavailable => "unavailable"
-  | .unassigned => "unassigned"
-  | .unknown => "unknown"
+inductive ObservationKind where
+  | ready
+  | backendRecovering
+  | unavailable
+  | unassigned
+  | unknown
+  deriving ToJson
 
-private def decisionName : ClaimedDecision → String
-  | .materialize => "materialize"
-  | .awaitReadiness => "await_readiness"
-  | .stop => "stop"
-  | .inactive => "inactive"
+def ObservationKind.ofModel : Observation → ObservationKind
+  | .ready _ => .ready
+  | .backendRecovering => .backendRecovering
+  | .unavailable => .unavailable
+  | .unassigned => .unassigned
+  | .unknown => .unknown
 
-private def optionalString : Option String → Json
-  | none => .null
-  | some value => .str value
+def ObservationKind.toModel (newerThanTerminal : Bool) : ObservationKind → Observation
+  | .ready => .ready newerThanTerminal
+  | .backendRecovering => .backendRecovering
+  | .unavailable => .unavailable
+  | .unassigned => .unassigned
+  | .unknown => .unknown
 
-private def recoveryJson (state : ClaimedRecovery) : Json := Json.mkObj
-  [ ("status", .str state.goal.status.toDefraDB)
-  , ("blocked_audits", toJson state.goal.blockedAudits)
-  , ("wrapup_requested", toJson state.goal.wrapupRequested)
-  , ("wrapup_completed", toJson state.goal.wrapupCompleted)
-  , ("infrastructure_retries", toJson state.retries)
-  , ("last_failure", optionalString state.lastFailure)
-  , ("continuation_sequence", toJson state.sequence)
-  , ("parent", optionalString state.parent) ]
+deriving instance ToJson for ClaimedDecision
 
-private def caseJson (c : Case) : Json := Json.mkObj
-  [ ("name", .str c.name)
-  , ("observation", .str (observationName c.observation))
-  , ("newer_than_terminal", toJson c.observation.newerThanTerminal)
-  , ("settled", toJson c.settled)
-  , ("child_exists", toJson c.childExists)
-  , ("before", recoveryJson c.before)
-  , ("decision", .str (decisionName (claimedGate c.observation c.settled c.childExists c.before.goal)))
-  , ("expected", match claimedStep c.observation c.settled c.childExists c.before with
-      | none => .null
-      | some after => recoveryJson after) ]
+structure RecoveryWire where
+  status : String
+  blockedAudits : Nat
+  wrapupRequested : Bool
+  wrapupCompleted : Bool
+  infrastructureRetries : Nat
+  lastFailure : Option String
+  continuationSequence : Nat
+  parent : Option String
+  deriving ToJson
 
-def casesJson : String := (toJson (cases.map caseJson)).compress
+def RecoveryWire.ofModel (state : ClaimedRecovery) : RecoveryWire :=
+  { status := state.goal.status.toDefraDB, blockedAudits := state.goal.blockedAudits
+    wrapupRequested := state.goal.wrapupRequested, wrapupCompleted := state.goal.wrapupCompleted
+    infrastructureRetries := state.retries, lastFailure := state.lastFailure
+    continuationSequence := state.sequence, parent := state.parent }
+
+def RecoveryWire.toModel (state : RecoveryWire) : ClaimedRecovery :=
+  { goal := ⟨(Goals.Status.fromDefraDB? state.status).getD .active, state.blockedAudits,
+      state.wrapupRequested, state.wrapupCompleted⟩
+    retries := state.infrastructureRetries, lastFailure := state.lastFailure
+    sequence := state.continuationSequence, parent := state.parent }
+
+structure ClaimedInput where
+  name : String
+  observation : ObservationKind
+  newerThanTerminal : Bool
+  settled : Bool
+  childExists : Bool
+  before : RecoveryWire
+  deriving ToJson
+
+structure ClaimedOutput where
+  decision : ClaimedDecision
+  expected : Option RecoveryWire
+  deriving ToJson
+
+@[conformance_family]
+def claimed : Family ClaimedInput ClaimedOutput where
+  inputs := cases.map fun c =>
+    { name := c.name, observation := .ofModel c.observation
+      newerThanTerminal := c.observation.newerThanTerminal, settled := c.settled
+      childExists := c.childExists, before := .ofModel c.before }
+  model := fun i =>
+    let observation := i.observation.toModel i.newerThanTerminal
+    let before := i.before.toModel
+    { decision := claimedGate observation i.settled i.childExists before.goal
+      expected := (claimedStep observation i.settled i.childExists before).map RecoveryWire.ofModel }
 
 theorem all_cases_have_legal_owned_outcomes :
     cases.all (fun c => (claimedStep c.observation c.settled c.childExists c.before).isSome) = true := by

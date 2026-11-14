@@ -68,7 +68,7 @@ fn folded_into(id: &str, after: &str, head: &str, second: u32) -> AgentRequestRo
     AgentRequestRow {
         superseded_by_request: Some(head.into()),
         superseded_by_request_doc_id: Some(format!("doc-{head}")),
-        failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
+        failure_reason: Some(gents_session::request::lifecycle::FOLDED_REASON.into()),
         ..queued(id, after, RequestLifecycleState::Superseded, second)
     }
 }
@@ -272,27 +272,6 @@ fn a_folded_row_whose_entry_has_not_replicated_stays_a_pending_input_of_its_turn
 }
 
 #[test]
-fn the_session_list_reports_the_turn_a_folded_or_queued_head_belongs_to() {
-    let requests = vec![
-        request("done", RequestLifecycleState::Completed, 0),
-        queued("head", "done", RequestLifecycleState::Processing, 1),
-        folded_into("later", "head", "head", 2),
-    ];
-    let summaries = session_summaries(
-        &[session_observing(
-            "later",
-            RequestLifecycleState::Superseded,
-        )],
-        &requests,
-        "did:test:amy",
-        &[],
-        &[],
-    );
-    assert_eq!(summaries[0].latest_request_id.as_deref(), Some("head"));
-    assert_eq!(summaries[0].turn_state.as_deref(), Some("running"));
-}
-
-#[test]
 fn a_selected_message_the_head_never_published_is_queued_again_not_delivered() {
     let mut rows = ClientStoreRows {
         sessions: vec![session_observing(
@@ -361,7 +340,7 @@ fn an_edited_queued_message_the_local_store_has_not_seen_stays_queued() {
     let sent = queued("sent", "running", RequestLifecycleState::Pending, 1);
     let edited = AgentRequestRow {
         lifecycle_state: Some(RequestLifecycleState::Superseded),
-        failure_reason: Some(gents::request::lifecycle::REPLACED_REASON.into()),
+        failure_reason: Some(gents_session::request::lifecycle::REPLACED_REASON.into()),
         superseded_by_request: Some("edit".into()),
         superseded_by_request_doc_id: Some("doc-edit".into()),
         ..sent.clone()

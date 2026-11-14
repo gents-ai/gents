@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gents::BackendProviderKind;
+use gents_inference::backends::provider::BackendProviderKind;
 
 const LIVE_BACKEND_PREFIX: &str = "GENTS_DESKTOP_LIVE_BACKEND";
 

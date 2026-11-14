@@ -64,10 +64,10 @@ fn load_root(root: &Path, owner: Option<&str>) -> Result<DesiredStateManifest> {
         root.display()
     );
     let value = read_json(&compact)?;
-    let config = gents::pack::decode_pack_config(
+    let config = gents_pack::pack::decode_pack_config(
         value,
         owner
-            .map(|node_did| gents::pack::PackInstallOptions {
+            .map(|node_did| gents_pack::pack::PackInstallOptions {
                 node_did: node_did.to_owned(),
             })
             .as_ref(),
@@ -80,10 +80,14 @@ fn load_root(root: &Path, owner: Option<&str>) -> Result<DesiredStateManifest> {
     )?;
     let mut config = config;
     if let Some(manifest) = pack_manifest(root)? {
-        gents::pack::pin_pack_plugins(&manifest, &|path| read_pack_asset(root, path), &mut config)?;
+        gents_pack::pack::pin_pack_plugins(
+            &manifest,
+            &|path| read_pack_asset(root, path),
+            &mut config,
+        )?;
     }
-    let plan = gents::store::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
-    gents::documents::ConfigReferences::from_documents(
+    let plan = gents_documents::DesiredStateApplyPlan::from_pack_config(&config)?;
+    gents_documents::ConfigReferences::from_documents(
         &config.node.node_did,
         plan.documents()
             .iter()
@@ -92,7 +96,7 @@ fn load_root(root: &Path, owner: Option<&str>) -> Result<DesiredStateManifest> {
     Ok(config)
 }
 
-fn pack_manifest(root: &Path) -> Result<Option<gents::pack::PackManifest>> {
+fn pack_manifest(root: &Path) -> Result<Option<gents_pack::pack::PackManifest>> {
     let path = root.join("manifest.json");
     if !path.is_file() {
         return Ok(None);
@@ -154,7 +158,7 @@ mod filesystem_tests {
     use serde_json::json;
 
     fn config() -> DesiredStateManifest {
-        gents::pack::decode_pack_config(json!({
+        gents_pack::pack::decode_pack_config(json!({
             "node":{"node_did":"owner"},
             "contexts":[{"context_id":"context","system_prompt":"  literal ${NOT_EXPANDED} {{node.did}}\n"}],
             "inference_backends":[{"backend_id":"backend","name":"backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],

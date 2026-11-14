@@ -10,81 +10,30 @@ use crate::client::peer_directory::RemovalCause;
 use crate::client::DesktopPaths;
 use defra_p2p_adapter::P2pDocumentRequest;
 use defra_p2p_adapter::TransportPeerId;
-use gents::runtime::agent::p2p_reconcile::enrollment_candidate::{
+use gents_p2p::p2p_reconcile::enrollment_candidate::{
     enrollment_request_input, sign_enrollment_request,
 };
-use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::EnrollmentAuthorityOutcome;
-use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::{
+use gents_p2p::p2p_reconcile::enrollment_member_authority::EnrollmentAuthorityOutcome;
+use gents_p2p::p2p_reconcile::enrollment_member_authority::{
     apply_current_generational_conflicts, raw_authority_targets, scoped_authority_outcomes,
 };
-use gents::runtime::agent::p2p_reconcile::enrollment_projection::{
+use gents_p2p::p2p_reconcile::enrollment_projection::{
     project_desktop_approval, ApprovedStatusEnrollment, DesktopApprovalProjection,
 };
-use gents::runtime::agent::p2p_reconcile::enrollment_rows::{
-    EnrollmentRevisionRow, EnrollmentRouteReceiptRow, STATUS_ENROLLMENT_QUERY,
+use gents_p2p::p2p_reconcile::enrollment_rows::{
+    EnrollmentDecisionRow, EnrollmentRevisionRow, EnrollmentRouteReceiptRow,
+    STATUS_ENROLLMENT_QUERY,
 };
 use gents_protocol::enrollment::derive_enrollment_id;
 use gents_protocol::enrollment::{
     AuthorizationRevisionKind, AuthorizationRevisionRecord, EnrollmentDecisionRecord,
     EnrollmentRouteReceiptDirection, EnrollmentRouteReceiptRecord, ENROLLMENT_PROTOCOL_VERSION,
 };
+use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use p2p::iroh::parse_public_peer_addr;
-use serde::Deserialize;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::time::Duration;
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PendingRequestCase {
-    name: String,
-    requested: gents::runtime::agent::p2p_reconcile::enrollment::EnrollmentRequestAuthority,
-    current: gents::runtime::agent::p2p_reconcile::enrollment::EnrollmentRequestAuthority,
-    has_decision: bool,
-    current_approval: bool,
-    route_applied: bool,
-    expected_satisfied: bool,
-    request_fresh: bool,
-    expected_visible: bool,
-}
-
-fn pending_request_cases() -> Vec<PendingRequestCase> {
-    let snapshot: Value = gents_lean_contract::load_contract_snapshot()
-        .expect("Lean pending enrollment request cases");
-    serde_json::from_value(snapshot["enrollment_pending_request_cases"].clone())
-        .expect("decode pending enrollment request cases")
-}
-
-#[test]
-fn generated_pending_request_satisfaction_matches_lean() {
-    let cases = pending_request_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        assert_eq!(
-            gents::runtime::agent::p2p_reconcile::enrollment::pending_request_satisfied(
-                &case.requested,
-                &case.current,
-                case.has_decision,
-                case.current_approval,
-                case.route_applied,
-            ),
-            case.expected_satisfied,
-            "{}",
-            case.name,
-        );
-        assert_eq!(
-            active_request_visible(
-                case.request_fresh,
-                case.has_decision,
-                case.current_approval,
-                case.route_applied
-            ),
-            case.expected_visible,
-            "{}",
-            case.name,
-        );
-    }
-}
 
 fn approval(server_peer: &str, owner_node_did: &str) -> ApprovedStatusEnrollment {
     ApprovedStatusEnrollment {
@@ -146,7 +95,7 @@ async fn managed_enrollment_discovers_restarted_endpoint_without_changing_author
         )
         .unwrap();
         std::fs::write(
-            home.join(gents::store::local::home::RUNTIME_STATE_FILE_NAME),
+            home.join(gents_store::local::home::RUNTIME_STATE_FILE_NAME),
             json!({
                 "node_name": "managed", "node_did": live_owner,
                 "graphql": graphql, "p2p_transport": "iroh", "p2p_peer_id": live_peer,
@@ -479,6 +428,7 @@ async fn signed_current_receipt_opens_generation_and_revocation_closes_it() {
         owner_node_did: "did:key:owner".into(),
         profile: "client".into(),
         schema_fingerprint: enrollment_schema_fingerprint(),
+        live_schema_digest: format!("sha256:{}", "a".repeat(64)),
         issued_at: issued_at.clone(),
         expires_at: request_expires_at.clone(),
         admin_sig: Vec::new(),
@@ -1037,6 +987,7 @@ fn signed_enrollment_authority_with_owner_at(
         owner_node_did: owner_node.into(),
         profile: "client".into(),
         schema_fingerprint: enrollment_schema_fingerprint(),
+        live_schema_digest: format!("sha256:{}", "a".repeat(64)),
         issued_at: issued_at.clone(),
         expires_at: request_expires_at.clone(),
         admin_sig: Vec::new(),
@@ -1169,13 +1120,13 @@ fn signed_enrollment_authority_with_owner_at(
 }
 
 async fn commit_document(core: &ClientCore, stage: &'static str, mutation: &str) {
-    gents::store::config_client::ConfigAccess::write_local(&core.node_arc(), stage, mutation)
+    gents_store::config_client::ConfigAccess::write_local(&core.node_arc(), stage, mutation)
         .await
         .expect("commit enrollment authority document");
 }
 
 async fn commit_admin_pin(core: &ClientCore, authority: &SignedEnrollmentAuthority) {
-    gents::runtime::agent::p2p_reconcile::enrollment_candidate::confirm_network_admin_pin(
+    gents_p2p::p2p_reconcile::enrollment_candidate::confirm_network_admin_pin(
         &core.node_arc(),
         &authority.offer,
     )
@@ -1392,13 +1343,6 @@ async fn activation_authentication_error_is_observed_before_peer_exists_and_clea
         Utc::now() - chrono::Duration::minutes(10),
         "expired-request",
     );
-    assert!(
-        pending_request_cases()
-            .into_iter()
-            .find(|case| case.name == "visibility_false_true_true_false")
-            .unwrap()
-            .expected_visible
-    );
     commit_test_authority(&core, &authority).await;
     let mut updates = core.sync_state.subscribe();
     reconcile_with_test_transport(&core, test_transport(&authority, false)).await;
@@ -1495,18 +1439,6 @@ async fn expired_pending_and_expired_authorization_requests_are_not_visible() {
     );
     commit_test_authority(&core, &expired).await;
     commit_enrollment_request(&core, &pending.request).await;
-    for name in [
-        "visibility_false_false_false_false",
-        "visibility_false_true_false_false",
-    ] {
-        assert!(
-            !pending_request_cases()
-                .into_iter()
-                .find(|case| case.name == name)
-                .unwrap()
-                .expected_visible
-        );
-    }
     assert!(core
         .active_status_enrollment_requests()
         .await
@@ -1546,13 +1478,6 @@ async fn expired_malformed_decision_does_not_hide_pending_request_but_fresh_fail
 
         let listed = core.active_status_enrollment_requests().await;
         if expired {
-            assert!(
-                !pending_request_cases()
-                    .into_iter()
-                    .find(|case| case.name == "visibility_false_true_false_false")
-                    .unwrap()
-                    .expected_visible
-            );
             let listed = listed.unwrap();
             assert_eq!(listed.len(), 1);
             assert_eq!(listed[0].request_id, pending.request.request_id);
@@ -1764,23 +1689,19 @@ async fn revoked_enrollment_ends_the_active_request_listing() {
     Arc::new(core).shutdown().await.unwrap();
 }
 
-async fn assert_pending_visibility_matches_model(
+async fn observe_pending_listing(
     core: &ClientCore,
     request: &EnrollmentRequestRecord,
-    case_name: &str,
+    case_name: &'static str,
+    observations: &mut Vec<(&'static str, bool)>,
 ) {
-    let case = pending_request_cases()
-        .into_iter()
-        .find(|case| case.name == case_name)
-        .expect("modeled enrollment case");
     let listed = core.active_status_enrollment_requests().await.unwrap();
-    assert_eq!(
+    observations.push((
+        case_name,
         listed
             .iter()
             .any(|row| row.request_id == request.request_id),
-        !case.expected_satisfied,
-        "{case_name}: {listed:?}",
-    );
+    ));
 }
 
 async fn configure_test_enrollment_route(
@@ -1806,7 +1727,33 @@ async fn configure_test_enrollment_route(
 }
 
 #[tokio::test]
-async fn reconnected_authority_satisfies_pending_request_until_a_newer_revision() {
+async fn pending_request_listing_matches_lean() {
+    let mut observations = Vec::new();
+    reconnected_authority_satisfies_pending_request_until_a_newer_revision(&mut observations).await;
+    pending_request_requires_the_exact_current_applied_route(&mut observations).await;
+    for case in gents_lean_vocab::families::enrollment_pending_requests_listing::cases() {
+        let listed = observations
+            .iter()
+            .filter(|(name, _)| *name == case.input.name)
+            .map(|(_, listed)| *listed)
+            .collect::<Vec<_>>();
+        assert!(!listed.is_empty(), "{:?}", case.input);
+        assert!(
+            listed.iter().all(|seen| *seen == listed[0]),
+            "{:?}: {listed:?}",
+            case.input
+        );
+        case.check(
+            gents_lean_vocab::families::enrollment_pending_requests_listing::ListingOutput {
+                listed: listed[0],
+            },
+        );
+    }
+}
+
+async fn reconnected_authority_satisfies_pending_request_until_a_newer_revision(
+    observations: &mut Vec<(&'static str, bool)>,
+) {
     use crate::client::paths::DesktopPaths;
 
     let temp = tempfile::tempdir().unwrap();
@@ -1860,18 +1807,24 @@ async fn reconnected_authority_satisfies_pending_request_until_a_newer_revision(
     .unwrap();
     let configured =
         configure_test_enrollment_route(&core, &authority, &authority.request.server_peer).await;
-    assert_pending_visibility_matches_model(&core, &pending.request, "route_still_reconnecting")
-        .await;
+    observe_pending_listing(
+        &core,
+        &pending.request,
+        "route_still_reconnecting",
+        observations,
+    )
+    .await;
     let ready = core
         .sync_state
         .set_pairing_ready(&configured, true)
         .await
         .unwrap()
         .unwrap();
-    assert_pending_visibility_matches_model(
+    observe_pending_listing(
         &core,
         &pending.request,
         "reconnected_route_satisfies_pending_request",
+        observations,
     )
     .await;
     assert!(core
@@ -1908,10 +1861,11 @@ async fn reconnected_authority_satisfies_pending_request_until_a_newer_revision(
     newer.admin_sig = admin.sign(&newer.signing_payload()).unwrap();
     commit_revision(&core, &newer).await;
     assert_eq!(core.sync_state.records(), vec![ready.clone()]);
-    assert_pending_visibility_matches_model(
+    observe_pending_listing(
         &core,
         &pending.request,
         "revoked_or_expired_authorization",
+        observations,
     )
     .await;
 
@@ -1927,17 +1881,19 @@ async fn reconnected_authority_satisfies_pending_request_until_a_newer_revision(
     revoked.admin_sig = admin.sign(&revoked.signing_payload()).unwrap();
     commit_revision(&core, &revoked).await;
     assert_eq!(core.sync_state.records(), vec![ready]);
-    assert_pending_visibility_matches_model(
+    observe_pending_listing(
         &core,
         &pending.request,
         "revoked_or_expired_authorization",
+        observations,
     )
     .await;
     Arc::new(core).shutdown().await.unwrap();
 }
 
-#[tokio::test]
-async fn pending_request_requires_the_exact_current_applied_route() {
+async fn pending_request_requires_the_exact_current_applied_route(
+    observations: &mut Vec<(&'static str, bool)>,
+) {
     use crate::client::paths::DesktopPaths;
 
     let temp = tempfile::tempdir().unwrap();
@@ -1966,8 +1922,13 @@ async fn pending_request_requires_the_exact_current_applied_route() {
         .await
         .unwrap()
         .unwrap();
-    assert_pending_visibility_matches_model(&core, &pending.request, "route_still_reconnecting")
-        .await;
+    observe_pending_listing(
+        &core,
+        &pending.request,
+        "route_still_reconnecting",
+        observations,
+    )
+    .await;
     let configured =
         configure_test_enrollment_route(&core, &authority, &authority.request.server_peer).await;
     let mut ready = core
@@ -2006,10 +1967,11 @@ async fn pending_request_requires_the_exact_current_applied_route() {
             .await
             .unwrap()
             .unwrap();
-        assert_pending_visibility_matches_model(
+        observe_pending_listing(
             &core,
             &pending.request,
             "route_still_reconnecting",
+            observations,
         )
         .await;
         ready = core
@@ -2019,10 +1981,11 @@ async fn pending_request_requires_the_exact_current_applied_route() {
             .unwrap()
             .unwrap();
     }
-    assert_pending_visibility_matches_model(
+    observe_pending_listing(
         &core,
         &pending.request,
         "reconnected_route_satisfies_pending_request",
+        observations,
     )
     .await;
     Arc::new(core).shutdown().await.unwrap();
@@ -2135,23 +2098,9 @@ async fn malformed_authority_rows_are_skipped_by_the_active_listing() {
     Arc::new(core).shutdown().await.unwrap();
 }
 
-#[derive(Deserialize)]
-struct AbsentEnrollmentPeerCase {
-    managed: bool,
-    initial_ready: bool,
-    expected_present: bool,
-    expected_ready: bool,
-}
-
 #[tokio::test]
 async fn absent_enrollment_preserves_managed_deployment_and_demotes_readiness() {
-    let snapshot: Value =
-        gents_lean_contract::load_contract_snapshot().expect("Lean absent enrollment peer cases");
-    let cases: Vec<AbsentEnrollmentPeerCase> =
-        serde_json::from_value(snapshot["enrollment_absent_peer_cases"].clone())
-            .expect("decode absent enrollment peer cases");
-    assert!(!cases.is_empty());
-    for case in cases {
+    for case in gents_lean_vocab::families::enrollment_pending_requests_absent_peer::cases() {
         let temp = tempfile::tempdir().unwrap();
         let core = start_unsupervised_core(temp.path().join("desktop")).await;
         let admin =
@@ -2176,7 +2125,7 @@ async fn absent_enrollment_preserves_managed_deployment_and_demotes_readiness() 
             )
             .await
             .unwrap();
-        if case.managed {
+        if case.input.managed {
             record = core
                 .sync_state
                 .upsert_local_standard_peer(
@@ -2189,21 +2138,28 @@ async fn absent_enrollment_preserves_managed_deployment_and_demotes_readiness() 
                 .await
                 .unwrap();
         }
-        assert_eq!(record.is_managed_runtime(), case.managed);
+        assert_eq!(record.is_managed_runtime(), case.input.managed);
         core.sync_state
-            .set_pairing_ready(&record, case.initial_ready)
+            .set_pairing_ready(&record, case.input.initial_ready)
             .await
             .unwrap()
             .expect("the enrollment record is still current");
 
         reconcile_with_test_transport(&core, test_transport(&authority, true)).await;
         let records = core.peer_records().await;
-        assert_eq!(records.len(), usize::from(case.expected_present));
+        assert!(records.len() <= 1, "{records:?}");
         if let Some(retained) = records.first() {
             assert_eq!(retained.peer_id, authority.request.server_peer);
             assert_eq!(retained.local_node_home.as_deref(), Some("/managed/home"));
-            assert_eq!(retained.pairing_ready, case.expected_ready);
         }
+        case.check(
+            gents_lean_vocab::families::enrollment_pending_requests_absent_peer::AbsentPeerOutput {
+                present: !records.is_empty(),
+                ready: records
+                    .first()
+                    .is_some_and(|retained| retained.pairing_ready),
+            },
+        );
         Arc::new(core).shutdown().await.unwrap();
     }
 }
@@ -2400,7 +2356,7 @@ async fn a_retirement_survives_an_absent_route_receipt_while_authority_is_curren
 
 #[tokio::test]
 async fn desired_materialization_rechecks_signed_authority_before_writing() {
-    use gents::store::config_client::ConfigAccess;
+    use gents_store::config_client::ConfigAccess;
     let temp = tempfile::tempdir().unwrap();
     let core = start_unsupervised_core(temp.path().join("desktop")).await;
     let admin = PrincipalIdentity::load_or_create(&crate::client::paths::DesktopPaths::from_root(
@@ -2466,9 +2422,9 @@ async fn desired_materialization_rechecks_signed_authority_before_writing() {
 
 #[tokio::test]
 async fn signed_http_advertisement_activates_an_iroh_only_runtime_endpoint() {
-    use gents::runtime::agent::p2p_reconcile::peer_registry_endpoint_upsert_mutation;
-    use gents::store::config_client::ConfigAccess;
+    use gents_p2p::p2p_reconcile::peer_registry_endpoint_upsert_mutation;
     use gents_protocol::network_token::EndpointRecord;
+    use gents_store::config_client::ConfigAccess;
 
     let temp = tempfile::tempdir().unwrap();
     let core = start_unsupervised_core(temp.path().join("desktop")).await;
@@ -2538,7 +2494,7 @@ async fn signed_http_advertisement_activates_an_iroh_only_runtime_endpoint() {
 #[tokio::test]
 async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Result<()> {
     use gents::defra_node::{AcpIdentity, DocumentPermission};
-    use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
+    use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 
     let directory = tempfile::tempdir()?;
     let address = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
@@ -2622,17 +2578,6 @@ async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Re
     let nodes = local.execute("{ Node { _docID } }").await?;
     assert!(gents_protocol::graphql::graphql_rows_from_response(&nodes, "Node").is_empty());
     let doc = write_enrollment_request(&core.node, &request).await?;
-    let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
-    let cases = snapshot["identity_enrollment_policy_cases"]
-        .as_array()
-        .context("missing enrollment policy cases")?;
-    let expected = |name: &str| -> Result<bool> {
-        cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .and_then(|case| case["allowed"].as_bool())
-            .with_context(|| format!("missing enrollment policy case {name}"))
-    };
     let acp = core.node.document_acp();
     let policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
     assert_eq!(
@@ -2650,19 +2595,21 @@ async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Re
         r#"{{ NetworkEnrollmentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID offer_token}} }}"#,
         escape_graphql_string(&doc)
     );
-    for (name, actor, permission) in [
-        (
-            "thin-client-write",
-            core.node_identity(),
-            DocumentPermission::Update,
-        ),
-        ("thin-admin-read", &admin, DocumentPermission::Read),
-        ("thin-admin-write", &admin, DocumentPermission::Update),
-        ("thin-user-read", &user, DocumentPermission::Read),
-        ("thin-agent-read", &agent, DocumentPermission::Read),
-        ("thin-outsider-read", &outsider, DocumentPermission::Read),
-    ] {
-        let actual = acp
+    for case in gents_lean_vocab::families::identity_operations_enrollment_policy_thin::cases() {
+        let actor = match case.input.actor.as_str() {
+            "client" => core.node_identity(),
+            "admin" => &admin,
+            "user" => &user,
+            "agent" => &agent,
+            "outsider" => &outsider,
+            other => panic!("the thin-client scenario has no actor {other}"),
+        };
+        let permission = match case.input.permission.as_str() {
+            "read" => DocumentPermission::Read,
+            "update" => DocumentPermission::Update,
+            other => panic!("the thin-client scenario has no permission {other}"),
+        };
+        let allowed = acp
             .check_doc_access(
                 &AcpIdentity::Authenticated(identity::Did::new(actor.did())?),
                 permission,
@@ -2671,23 +2618,23 @@ async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Re
                 &doc,
             )
             .await?;
-        assert_eq!(actual, expected(name)?, "{name}");
-    }
-    for (name, actor) in [
-        ("thin-admin-read", &admin),
-        ("thin-user-read", &user),
-        ("thin-agent-read", &agent),
-        ("thin-outsider-read", &outsider),
-    ] {
-        let response = access(actor)?.execute(&query).await?;
-        assert_eq!(
-            !gents_protocol::graphql::graphql_rows_from_response(
-                &response,
-                "NetworkEnrollmentRequest"
-            )
-            .is_empty(),
-            expected(name)?,
-            "{name}"
+        if case.input.permission == "read" {
+            let response = access(actor)?.execute(&query).await?;
+            assert_eq!(
+                !gents_protocol::graphql::graphql_rows_from_response(
+                    &response,
+                    "NetworkEnrollmentRequest"
+                )
+                .is_empty(),
+                allowed,
+                "{}",
+                case.input.name
+            );
+        }
+        case.check(
+            gents_lean_vocab::families::identity_operations_enrollment_policy_thin::Allowed {
+                allowed,
+            },
         );
     }
     let mutation = format!(
@@ -2709,9 +2656,9 @@ async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Re
 #[tokio::test]
 async fn thin_client_automatically_publishes_received_decision_reader() -> Result<()> {
     use gents::defra_node::{AcpIdentity, DocumentPermission, NodePermission};
-    use gents::runtime::agent::p2p_reconcile::EnrollmentOfferIssuer;
-    use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
+    use gents_p2p::p2p_reconcile::EnrollmentOfferIssuer;
     use gents_protocol::enrollment::derive_decision_id;
+    use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 
     let directory = tempfile::tempdir()?;
     let sender = Arc::new(start_unsupervised_core(directory.path().join("server")).await);
@@ -2755,6 +2702,7 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
     .is_empty());
 
     let issuer = EnrollmentOfferIssuer::new(
+        sender.node_arc(),
         Arc::new(sender.node_identity().clone()),
         sender.p2p.clone(),
         "client-receiver".into(),
@@ -2829,8 +2777,10 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
             })
         })
         .await?;
-    let mut arrivals =
-        gents::subscribe_collections(receiver.node.as_ref(), ["NetworkEnrollmentDecision"])?;
+    let mut arrivals = gents_store::subscription_source::subscribe_collections(
+        receiver.node.as_ref(),
+        ["NetworkEnrollmentDecision"],
+    )?;
     sender
         .p2p
         .connect_peer(&receiver_ticket)
@@ -2863,17 +2813,6 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
         .context("received-decision notification closed")?;
     drop(arrivals);
 
-    let model: Value = gents_lean_contract::load_contract_snapshot()?;
-    let cases = model["identity_client_transport_cases"]
-        .as_array()
-        .context("missing client transport cases")?;
-    let expected = |name: &str| -> Result<bool> {
-        cases
-            .iter()
-            .find(|case| case["name"] == name)
-            .and_then(|case| case["allowed"].as_bool())
-            .with_context(|| format!("missing client transport case {name}"))
-    };
     let policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
     let acp = receiver.node.document_acp();
     assert_eq!(
@@ -2881,47 +2820,66 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
             .await?,
         Some(server_did.clone())
     );
-    for (name, did, permission) in [
-        (
-            "foreign-owner-update",
-            &server_did,
-            DocumentPermission::Update,
-        ),
-        ("client-read", &client_did, DocumentPermission::Read),
-        ("client-update", &client_did, DocumentPermission::Update),
-        (
-            "user-read",
-            &identity::Did::new(user.did())?,
-            DocumentPermission::Read,
-        ),
-        (
-            "agent-read",
-            &identity::Did::new(agent.did())?,
-            DocumentPermission::Read,
-        ),
-        (
-            "outsider-read",
-            &identity::Did::new(outsider.did())?,
-            DocumentPermission::Read,
-        ),
-    ] {
-        assert_eq!(
-            acp.check_doc_access(
-                &AcpIdentity::Authenticated(did.clone()),
-                permission,
-                policy,
-                "enrollment_records",
-                &doc
-            )
-            .await?,
-            expected(name)?,
-            "{name}"
-        );
-    }
     let query = format!(
         r#"{{ NetworkEnrollmentDecision(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID request_id}} }}"#,
         escape_graphql_string(&doc)
     );
+    for case in gents_lean_vocab::families::client_transport_decision_access::cases() {
+        let did = match case.input.actor.as_str() {
+            "server" => server_did.clone(),
+            "client" => client_did.clone(),
+            "user" => identity::Did::new(user.did())?,
+            "agent" => identity::Did::new(agent.did())?,
+            "outsider" => identity::Did::new(outsider.did())?,
+            other => anyhow::bail!("unknown client transport actor {other}"),
+        };
+        let permission = match case.input.permission.as_str() {
+            "read" => DocumentPermission::Read,
+            "update" => DocumentPermission::Update,
+            other => anyhow::bail!("unknown client transport permission {other}"),
+        };
+        let allowed = acp
+            .check_doc_access(
+                &AcpIdentity::Authenticated(did),
+                permission,
+                policy,
+                "enrollment_records",
+                &doc,
+            )
+            .await?;
+        let graphql_actor = match (case.input.actor.as_str(), case.input.permission.as_str()) {
+            ("user", "read") => Some(&user),
+            ("agent", "read") => Some(&agent),
+            ("outsider", "read") => Some(&outsider),
+            _ => None,
+        };
+        let graphql_visible = match graphql_actor {
+            Some(actor) => {
+                let access = ConfigAccess::Graphql(
+                    GraphqlEndpoint::as_principal(
+                        format!("http://{address}/api/v0/graphql"),
+                        actor.did(),
+                    )
+                    .with_client_signing_capability(actor.client_signing_capability()?)?,
+                );
+                let response = access.execute(&query).await?;
+                Some(
+                    !gents_protocol::graphql::graphql_rows_from_response(
+                        &response,
+                        "NetworkEnrollmentDecision",
+                    )
+                    .is_empty(),
+                )
+            }
+            None => None,
+        };
+        case.check(
+            gents_lean_vocab::families::client_transport_decision_access::DecisionAccessOutput {
+                allowed,
+                graphql_visible,
+            },
+        );
+    }
     assert_eq!(
         gents_protocol::graphql::graphql_rows_from_response(
             &client.execute(&query).await?,
@@ -2930,26 +2888,6 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
         .len(),
         1
     );
-    for (name, actor) in [
-        ("user-read", &user),
-        ("agent-read", &agent),
-        ("outsider-read", &outsider),
-    ] {
-        let access = ConfigAccess::Graphql(
-            GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
-                .with_client_signing_capability(actor.client_signing_capability()?)?,
-        );
-        let response = access.execute(&query).await?;
-        assert_eq!(
-            !gents_protocol::graphql::graphql_rows_from_response(
-                &response,
-                "NetworkEnrollmentDecision"
-            )
-            .is_empty(),
-            expected(name)?,
-            "{name}"
-        );
-    }
     client
         .transact_write("test.client_receiver.revoke", |txn| {
             let client_did = &client_did;

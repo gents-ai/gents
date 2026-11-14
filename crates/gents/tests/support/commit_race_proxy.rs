@@ -56,9 +56,12 @@ impl CommitRaceProxy {
     }
 
     /// The User's client-signed access through this proxy.
-    pub fn client_access(&self, identity: &dyn gents::NodeIdentity) -> gents::ConfigAccess {
-        gents::ConfigAccess::Graphql(
-            gents::store::config_client::GraphqlEndpoint::as_principal(
+    pub fn client_access(
+        &self,
+        identity: &dyn gents_store::identity::NodeIdentity,
+    ) -> gents_store::config_client::ConfigAccess {
+        gents_store::config_client::ConfigAccess::Graphql(
+            gents_store::config_client::GraphqlEndpoint::as_principal(
                 &self.graphql,
                 identity.did(),
             )

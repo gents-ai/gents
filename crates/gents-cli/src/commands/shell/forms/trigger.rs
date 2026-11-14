@@ -1,4 +1,4 @@
-use gents::documents::{PackConfig, Trigger};
+use gents_documents::{PackConfig, Trigger};
 use gents_shell::source::{Doc, FieldKind, Form, FormError, FormRef};
 use serde_json::{json, Value};
 
@@ -437,8 +437,8 @@ fn choices(sources: &Sources) -> [Vec<(String, String)>; 3] {
 
 #[cfg(test)]
 mod tests {
-    use gents::documents::{ConcurrencyMode, Trigger, TriggerSource};
     use gents_desktop_core::inference::AgentView;
+    use gents_documents::{ConcurrencyMode, Trigger, TriggerSource};
     use gents_shell::source::{Doc, FormError, FormRef};
     use serde_json::json;
 

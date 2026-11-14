@@ -1,0 +1,476 @@
+use std::time::Duration;
+
+use futures::StreamExt;
+use rig::client::CompletionClient;
+use rig::completion::CompletionModel;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+use super::*;
+use crate::llm::rig_compat::classify_completion_error;
+use gents_loop::error::InferenceError;
+
+pub(crate) async fn one_shot_server(
+    status: &'static str,
+    headers: &'static [(&'static str, &'static str)],
+    body: &'static str,
+) -> String {
+    server_for(1, status, headers, body).await
+}
+
+pub(crate) async fn server_for(
+    requests: usize,
+    status: &'static str,
+    headers: &'static [(&'static str, &'static str)],
+    body: &'static str,
+) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let url = format!("http://{}", listener.local_addr().expect("addr"));
+    tokio::spawn(async move {
+        for _ in 0..requests {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = socket.read(&mut chunk).await.expect("read");
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf).to_ascii_lowercase();
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let length = text[..end]
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    if buf.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+                if n == 0 {
+                    break;
+                }
+            }
+            let extra: String = headers
+                .iter()
+                .map(|(name, value)| format!("{name}: {value}\r\n"))
+                .collect();
+            let response = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n{extra}content-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+            socket.write_all(response.as_bytes()).await.expect("write");
+            socket.shutdown().await.ok();
+        }
+    });
+    url
+}
+
+fn classify_http(error: http_client::Error) -> InferenceError {
+    classify_completion_error(&rig::agent::StreamingError::Completion(
+        rig::completion::CompletionError::HttpError(error),
+    ))
+    .error
+}
+
+fn post(url: &str) -> Request<Bytes> {
+    Request::builder()
+        .method("POST")
+        .uri(format!("{url}/v1/responses"))
+        .body(Bytes::from_static(b"{}"))
+        .expect("request")
+}
+
+#[tokio::test]
+async fn credential_client_does_not_follow_redirects() {
+    let url = one_shot_server("302 Found", &[("location", "/other")], "").await;
+    let request = Request::builder()
+        .method("GET")
+        .uri(&url)
+        .header("authorization", "Bearer test-credential")
+        .body(Bytes::new())
+        .unwrap();
+    let client = ProviderHttpClient::new(ProviderHttpClient::credential_client().unwrap());
+    let error = client
+        .send::<Bytes, Bytes>(request)
+        .await
+        .err()
+        .expect("redirect rejected");
+    assert!(
+        matches!(error, http_client::Error::InvalidStatusCodeWithMessage(status, _) if status == StatusCode::FOUND)
+    );
+}
+
+#[tokio::test]
+async fn streaming_429_keeps_anthropic_unified_reset() {
+    let url = one_shot_server(
+        "429 Too Many Requests",
+        &[
+            ("retry-after", "6000"),
+            ("anthropic-ratelimit-unified-status", "rejected"),
+            ("anthropic-ratelimit-unified-reset", "1790354400"),
+        ],
+        r#"{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."}}"#,
+    )
+    .await;
+    let error = ProviderHttpClient::default()
+        .send_streaming(post(&url))
+        .await
+        .err()
+        .expect("429");
+    let text = error.to_string();
+    assert!(text.contains("Invalid status code 429"), "{text}");
+    assert!(
+        text.ends_with("reset-at=2026-09-25T16:40:00Z usage-exhausted]"),
+        "{text}"
+    );
+    match classify_http(error) {
+        InferenceError::UsageLimited(limit) => {
+            assert_eq!(
+                limit.resets_at.map(|at| at.timestamp()),
+                Some(1_790_354_400)
+            );
+        }
+        other => panic!("expected usage limit, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn buffered_429_honors_short_retry_after() {
+    let url = one_shot_server(
+        "429 Too Many Requests",
+        &[("retry-after", "3")],
+        r#"{"code":"Too many requests","error":"slow down"}"#,
+    )
+    .await;
+    let error = ProviderHttpClient::default()
+        .send::<Bytes, Bytes>(post(&url))
+        .await
+        .err()
+        .expect("429");
+    match classify_http(error) {
+        InferenceError::RateLimited {
+            retry_after: Some(wait),
+        } => assert!(
+            wait <= Duration::from_secs(3) && wait >= Duration::from_secs(2),
+            "{wait:?}"
+        ),
+        other => panic!("expected throttle, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn success_passes_the_body_through() {
+    let url = one_shot_server("200 OK", &[], r#"{"ok":true}"#).await;
+    let response = ProviderHttpClient::default()
+        .send::<Bytes, Bytes>(post(&url))
+        .await
+        .expect("200");
+    assert_eq!(
+        response.into_body().await.expect("body"),
+        Bytes::from_static(br#"{"ok":true}"#)
+    );
+}
+
+#[tokio::test]
+async fn codex_usage_limit_survives_rig_responses_stream() {
+    let url = one_shot_server(
+        "429 Too Many Requests",
+        &[
+            ("x-codex-primary-used-percent", "100"),
+            ("x-codex-primary-reset-at", "1790350000"),
+        ],
+        r#"{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"plus","resets_at":1790354400}}"#,
+    )
+    .await;
+    let client = crate::clients::inference_http::build_openai_responses_client(
+        "test-key",
+        &format!("{url}/v1"),
+        ProviderHttpClient::default(),
+        Default::default(),
+    )
+    .expect("client");
+    let model = client.completion_model("gpt-5");
+    let request = model.completion_request("hi").build();
+    let error = match model.stream(request).await {
+        Err(error) => error,
+        Ok(mut stream) => stream
+            .next()
+            .await
+            .expect("stream item")
+            .expect_err("usage-limit error"),
+    };
+    match classify_completion_error(&rig::agent::StreamingError::Completion(error)).error {
+        InferenceError::UsageLimited(limit) => {
+            assert_eq!(
+                limit.resets_at.map(|at| at.timestamp()),
+                Some(1_790_354_400)
+            );
+            assert_eq!(limit.detail, "The usage limit has been reached");
+        }
+        other => panic!("expected usage limit, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn overloaded_529_with_overage_rejected_stays_transient() {
+    let url = one_shot_server(
+        "529 Overloaded",
+        &[
+            ("anthropic-ratelimit-unified-status", "allowed"),
+            ("anthropic-ratelimit-unified-overage-status", "rejected"),
+            ("anthropic-ratelimit-unified-overage-reset", "1790354400"),
+        ],
+        r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+    )
+    .await;
+    let error = ProviderHttpClient::default()
+        .send_streaming(post(&url))
+        .await
+        .err()
+        .expect("529");
+    match classify_http(error) {
+        InferenceError::TransientFailure { reason } => {
+            assert!(!reason.contains("provider-limit"), "{reason}");
+        }
+        other => panic!("expected transient failure, got {other:?}"),
+    }
+}
+
+async fn openrouter_stream_error(url: &str) -> rig::completion::CompletionError {
+    let client: rig::providers::openrouter::Client<
+        crate::rendered_request::RenderedRequestCapturingHttpClient<ProviderHttpClient>,
+    > = rig::providers::openrouter::Client::builder()
+        .api_key("test-key")
+        .base_url(url)
+        .http_client(
+            crate::rendered_request::RenderedRequestCapturingHttpClient::<
+                ProviderHttpClient,
+            >::default(),
+        )
+        .build()
+        .expect("client");
+    let model = client.completion_model("test/model");
+    let request = model.completion_request("hi").build();
+    match model.stream(request).await {
+        Err(error) => error,
+        Ok(mut stream) => stream
+            .next()
+            .await
+            .expect("stream item")
+            .expect_err("402 error"),
+    }
+}
+
+#[tokio::test]
+async fn openrouter_credits_402_is_a_usage_limit() {
+    let url = one_shot_server(
+        "402 Payment Required",
+        &[],
+        r#"{"error":{"code":402,"message":"Insufficient credits. Add more using https://openrouter.ai/credits"}}"#,
+    )
+    .await;
+    let error = openrouter_stream_error(&url).await;
+    match classify_completion_error(&rig::agent::StreamingError::Completion(error)).error {
+        InferenceError::UsageLimited(limit) => assert!(
+            limit.to_string().starts_with(
+                "provider usage limit reached (reset time not reported): Insufficient credits"
+            ),
+            "{limit}"
+        ),
+        other => panic!("expected usage limit, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn openrouter_in_flight_402_waits_for_retry_after() {
+    let url = one_shot_server(
+        "402 Payment Required",
+        &[("retry-after", "30")],
+        r#"{"error":{"code":402,"message":"This request would exceed your available credits given your current in-flight requests. Retry after in-flight requests settle, or add credits.","metadata":{"reason":"in_flight_budget_exhausted","limit_source":"openrouter_in_flight_budget","remedy_hint":"Retry after your in-flight requests settle (see the Retry-After header). Adding credits at https://openrouter.ai/settings/credits raises your in-flight budget, up to a capped ceiling."}}}"#,
+    )
+    .await;
+    let error = openrouter_stream_error(&url).await;
+    match classify_completion_error(&rig::agent::StreamingError::Completion(error)).error {
+        InferenceError::RateLimited {
+            retry_after: Some(wait),
+        } => assert!(
+            wait <= Duration::from_secs(30) && wait >= Duration::from_secs(28),
+            "{wait:?}"
+        ),
+        other => panic!("expected throttle, got {other:?}"),
+    }
+}
+
+fn usage_account(node_did: &str, backend_id: &str) -> crate::usage_observation::UsageAccount {
+    crate::usage_observation::UsageAccount::Backend {
+        node_did: node_did.to_string(),
+        provider: "ChatGptCodex".to_string(),
+        backend_id: backend_id.to_string(),
+        connection: backend_id.to_string(),
+    }
+}
+
+async fn usage_client(
+    cache: &std::sync::Arc<crate::usage_observation::UsageCache>,
+    backend_id: &str,
+) -> (
+    crate::test_support::TestDb,
+    crate::usage_observation::UsageAccount,
+    ProviderHttpClient,
+) {
+    let db = crate::test_support::test_db(
+        "provider-http-usage",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
+    let account = usage_account(db.node_identity.did(), backend_id);
+    let reporter = crate::usage_observation::UsageReporter::new(
+        cache.clone(),
+        db.node.clone(),
+        account.clone(),
+    );
+    (
+        db,
+        account,
+        ProviderHttpClient::with_usage(ReqwestClient::new(), reporter),
+    )
+}
+
+pub(crate) async fn stored_usage_eventually(
+    cache: &crate::usage_observation::UsageCache,
+    node: &std::sync::Arc<defra_node::Node>,
+    account: &crate::usage_observation::UsageAccount,
+) -> Option<crate::usage_observation::UsageObservation> {
+    let access = gents_store::config_client::ConfigAccess::local(node.clone());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let stored = crate::usage_observation::load_usage(cache, &access, account)
+            .await
+            .expect("load usage");
+        if stored.is_some() || tokio::time::Instant::now() >= deadline {
+            return stored;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+const CODEX_USAGE_HEADERS: &[(&str, &str)] = &[
+    ("x-codex-primary-used-percent", "12"),
+    ("x-codex-primary-window-minutes", "300"),
+];
+
+#[tokio::test]
+async fn usage_capture_success_send_records_header_windows() {
+    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
+    let (db, account, client) = usage_client(&cache, "backend-usage-send").await;
+    let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, r#"{"ok":true}"#).await;
+    client.send::<Bytes, Bytes>(post(&url)).await.expect("200");
+
+    let stored = stored_usage_eventually(&cache, &db.node, &account)
+        .await
+        .expect("usage recorded");
+    let window = &stored.report.windows[0];
+    assert_eq!((window.label.as_str(), window.used_pct), ("primary", 12.0));
+    assert_eq!(
+        window.source,
+        gents_loop::account_usage::UsageSource::Header
+    );
+}
+
+#[tokio::test]
+async fn usage_capture_streaming_success_records_header_windows() {
+    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
+    let (db, account, client) = usage_client(&cache, "backend-usage-stream").await;
+    let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, "data: {}\n\n").await;
+    let response = client.send_streaming(post(&url)).await.expect("200");
+    let mut body = response.into_body();
+    while body.next().await.is_some() {}
+
+    let stored = stored_usage_eventually(&cache, &db.node, &account)
+        .await
+        .expect("usage recorded");
+    assert_eq!(stored.report.windows[0].used_pct, 12.0);
+}
+
+#[tokio::test]
+async fn usage_capture_rejected_records_error_source_and_keeps_the_marker() {
+    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
+    let (db, account, client) = usage_client(&cache, "backend-usage-rejected").await;
+    let url = one_shot_server(
+        "429 Too Many Requests",
+        &[
+            ("x-codex-primary-used-percent", "100"),
+            ("x-codex-primary-reset-at", "1790354400"),
+        ],
+        r#"{"error":{"type":"usage_limit_reached"}}"#,
+    )
+    .await;
+    let error = client.send_streaming(post(&url)).await.err().expect("429");
+    assert!(
+        error
+            .to_string()
+            .ends_with("reset-at=2026-09-25T16:40:00Z usage-exhausted]"),
+        "{error}"
+    );
+
+    let stored = stored_usage_eventually(&cache, &db.node, &account)
+        .await
+        .expect("usage recorded");
+    let window = &stored.report.windows[0];
+    assert_eq!(window.used_pct, 100.0);
+    assert_eq!(window.source, gents_loop::account_usage::UsageSource::Error);
+}
+
+#[tokio::test]
+async fn usage_capture_requires_no_persistent_schema() {
+    use gents_store::identity::NodeIdentity;
+    let identity = tokio::task::spawn_blocking(|| {
+        gents_store::test_support::test_identity("provider-no-schema")
+    })
+    .await
+    .unwrap();
+    let node = std::sync::Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .expect("node without schemas"),
+    );
+    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
+    let account = usage_account(identity.did(), "backend-usage-failure");
+    let reporter =
+        crate::usage_observation::UsageReporter::new(cache.clone(), node.clone(), account.clone());
+    let client = ProviderHttpClient::with_usage(ReqwestClient::new(), reporter);
+    let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, r#"{"ok":true}"#).await;
+    let response = client
+        .send::<Bytes, Bytes>(post(&url))
+        .await
+        .expect("the call succeeds");
+    assert_eq!(
+        response.into_body().await.expect("body"),
+        Bytes::from_static(br#"{"ok":true}"#)
+    );
+    let stored = stored_usage_eventually(&cache, &node, &account)
+        .await
+        .expect("usage recorded without schemas");
+    assert_eq!(stored.report.windows[0].used_pct, 12.0);
+}
+
+#[test]
+fn provider_rejection_errors_carry_no_request_headers() {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        "Bearer sk-ant-api03-HEADERSECRET".parse().unwrap(),
+    );
+    headers.insert("x-api-key", "sk-proj-HEADERSECRET".parse().unwrap());
+    headers.insert("retry-after", "30".parse().unwrap());
+    let error = rejected_response_error(
+        reqwest::StatusCode::TOO_MANY_REQUESTS,
+        &headers,
+        r#"{"error":{"type":"rate_limit_error"}}"#,
+    );
+    let rendered = error.to_string();
+    assert!(!rendered.contains("HEADERSECRET"), "{rendered}");
+    assert!(rendered.contains("rate_limit_error"));
+}

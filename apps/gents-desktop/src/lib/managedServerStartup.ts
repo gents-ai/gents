@@ -150,7 +150,7 @@ export function unsettledManagedServerError(
   if (kind === "updating") return null;
   if (kind === "booting") {
     return new ManagedServerStartupError(
-      `The background node did not report ready within ${MANAGED_SERVER_BOOT_TIMEOUT_MS / 60_000} minutes. Restart the node, or try again.`,
+      `The background node did not report ready within ${MANAGED_SERVER_BOOT_TIMEOUT_MS / 60_000} minutes. Try again.`,
       status,
     );
   }

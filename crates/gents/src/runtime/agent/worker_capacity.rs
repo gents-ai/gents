@@ -23,7 +23,7 @@ impl WorkerTicket {
 pub(crate) enum CapacityError {
     #[error("request worker capacity acquisition cancelled")]
     Cancelled,
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     #[error("request worker capacity is full")]
     ActiveFull,
     #[error("request generation already has an active worker")]
@@ -115,7 +115,7 @@ impl WorkerCapacity {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "macos"))]
     pub(crate) fn try_acquire_unbound(
         self: &Arc<Self>,
     ) -> Result<UnboundActiveGuard, CapacityError> {
@@ -209,68 +209,92 @@ struct CapacitySnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lean_vocab_test::{
-        lean_canonical_worker_capacity_cases, LeanWorkerCapacityOperation, LeanWorkerCapacityState,
-    };
+    use futures::FutureExt;
+    use gents_lean_vocab::families::worker_capacity_contracts_transition::{StateWire, TicketWire};
 
-    fn ticket(raw: [u64; 2]) -> WorkerTicket {
-        WorkerTicket::new(raw[0].to_string(), raw[1].to_string())
+    fn ticket(raw: &TicketWire) -> WorkerTicket {
+        WorkerTicket::new(raw.doc.to_string(), raw.generation.to_string())
     }
 
-    fn assert_state(capacity: &WorkerCapacity, modeled: &LeanWorkerCapacityState) {
-        assert_eq!(capacity.active_limit(), modeled.active_limit);
-        let mut active: Vec<_> = modeled.active.iter().copied().map(ticket).collect();
-        active.sort_by(|a, b| {
-            (&a.request_doc_id, &a.execution_generation)
-                .cmp(&(&b.request_doc_id, &b.execution_generation))
-        });
-        assert_eq!(capacity.snapshot().active, active);
+    fn observe(capacity: &WorkerCapacity) -> StateWire {
+        StateWire {
+            active_limit: capacity.active_limit() as u64,
+            active: capacity
+                .snapshot()
+                .active
+                .iter()
+                .map(|ticket| TicketWire {
+                    doc: ticket.request_doc_id.parse().unwrap(),
+                    generation: ticket.execution_generation.parse().unwrap(),
+                })
+                .collect(),
+        }
+    }
+
+    fn admit(
+        capacity: &Arc<WorkerCapacity>,
+        key: WorkerTicket,
+    ) -> Option<Result<ActiveGuard, CapacityError>> {
+        capacity
+            .acquire_unbound(&CancellationToken::new())
+            .now_or_never()
+            .map(|unbound| unbound?.bind(key).map_err(|(_, error)| error))
+    }
+
+    fn wire(state: &StateWire) -> serde_json::Value {
+        serde_json::to_value(state).unwrap()
     }
 
     #[tokio::test]
-    async fn emitted_worker_capacity_resource_transitions_match_model() {
-        let mut exercised = 0;
-        for case in lean_canonical_worker_capacity_cases() {
-            let capacity = WorkerCapacity::new(case.pre.active_limit);
+    async fn worker_capacity_transitions_follow_the_lean_model() {
+        for case in
+            gents_lean_vocab::families::worker_capacity_contracts_transition::cases::<String>()
+        {
+            let capacity = WorkerCapacity::new(case.input.pre.active_limit as usize);
             let mut active = RapidHashMap::<WorkerTicket, ActiveGuard>::new();
-            for raw in &case.pre.active {
-                let key = ticket(*raw);
-                let guard = capacity
-                    .try_acquire_unbound()
-                    .unwrap()
-                    .bind(key.clone())
-                    .unwrap_or_else(|_| panic!("bind modeled active ticket"));
+            for raw in &case.input.pre.active {
+                let key = ticket(raw);
+                let guard = admit(&capacity, key.clone())
+                    .expect("modeled active ticket has a free worker")
+                    .unwrap_or_else(|error| {
+                        panic!("{}: modeled active ticket: {error}", case.input.name)
+                    });
                 active.insert(key, guard);
             }
-            assert_state(&capacity, &case.pre);
-
-            match &case.operation {
-                LeanWorkerCapacityOperation::Acquire { ticket: raw } => {
-                    let key = ticket(*raw);
-                    let outcome = capacity
-                        .try_acquire_unbound()
-                        .and_then(|unbound| unbound.bind(key.clone()).map_err(|(_, error)| error));
-                    if case.expected.is_some() {
-                        active.insert(key, outcome.expect("Lean admitted fresh ticket"));
-                    } else {
-                        assert!(outcome.is_err(), "Lean refused ticket in {}", case.name);
+            let before = observe(&capacity);
+            assert_eq!(
+                wire(&before),
+                wire(&case.input.pre),
+                "{}: fixture",
+                case.input.name
+            );
+            let key = ticket(&case.input.operation.ticket);
+            let observed = match case.input.operation.kind.as_str() {
+                "acquire" => match admit(&capacity, key.clone()) {
+                    Some(Ok(guard)) => {
+                        active.insert(key, guard);
+                        Some(observe(&capacity))
                     }
+                    None | Some(Err(CapacityError::AlreadyOwned)) => {
+                        assert_eq!(
+                            wire(&observe(&capacity)),
+                            wire(&before),
+                            "{}: a refusal changes nothing",
+                            case.input.name
+                        );
+                        None
+                    }
+                    Some(Err(error)) => {
+                        panic!("{}: unexpected refusal {error}", case.input.name)
+                    }
+                },
+                "release" => {
+                    drop(active.remove(&key).expect("modeled active release"));
+                    Some(observe(&capacity))
                 }
-                LeanWorkerCapacityOperation::Release { ticket: raw } => {
-                    drop(
-                        active
-                            .remove(&ticket(*raw))
-                            .expect("modeled active release"),
-                    );
-                }
-            }
-            assert_state(&capacity, case.expected.as_ref().unwrap_or(&case.pre));
-            exercised += 1;
+                other => panic!("no production operation {other}"),
+            };
+            case.check(observed);
         }
-        assert_eq!(
-            exercised,
-            lean_canonical_worker_capacity_cases().len(),
-            "every emitted resource transition is exercised"
-        );
     }
 }

@@ -11,7 +11,8 @@ use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use gents_desktop_core::client::{
-    load_peer_records, project_sync_health, ClientCore, DesktopPaths, P2PHealth, SyncHealth,
+    load_peer_records, project_sync_health, ClientCore, DesktopPaths, P2PHealth, PeerRecord,
+    SyncHealth,
 };
 
 use super::config::ResolvedBridgePolicy;
@@ -38,7 +39,8 @@ pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
         cause: health.cause.map(|cause| cause.as_str().to_string()),
         next_action: health.next_action.map(|action| action.as_str().to_string()),
         last_error: health.last_error.clone(),
-        connected_peer_count: health.connected_peer_count,
+        runtime_count: health.runtime_count,
+        connected_runtime_count: health.connected_runtime_count,
         activation_error_count: health.activation_error_count,
     }
 }
@@ -47,12 +49,12 @@ pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
 /// connection, read from the runtime connection observer.
 pub(crate) fn project_client_sync_health(core: &ClientCore) -> SyncHealthView {
     let sync = core.sync_state();
-    let store = core.store();
+    let stores = core.stores();
     let health = project_sync_health(
         &sync,
         sync.directory
             .iter()
-            .map(|record| store.runtime_connection(&record.node_did)),
+            .map(|record| stores.runtime_connection(&record.node_did)),
     );
     to_sync_health_view(&health)
 }
@@ -92,30 +94,42 @@ async fn build_bootstrap_summary_raw(
             .as_ref()
             .and_then(|config| normalize_optional(config.tool_root.as_deref())),
         desktop_home: desktop_paths.root().display().to_string(),
-        diagnostics_hint: crate::logging::diagnostics_hint(desktop_paths.root()),
+        diagnostics_hint: crate::logging::diagnostics_hint(&dirs::home_dir().unwrap_or_default()),
         node_home_exists,
         client_state_exists: desktop_paths.client_state_exists(),
-        saved_peers: peer_records
-            .iter()
-            .map(|peer| SavedPeerView {
-                peer_id: peer.peer_id.clone(),
-                label: peer.label.clone(),
-                node_did: peer.node_did.clone(),
-                addr: peer.addr.clone(),
-                source: peer.source.clone(),
-                graphql: peer.graphql.clone(),
-            })
-            .collect(),
+        local_setup_unfinished: node_home.is_some_and(|home| {
+            gents_desktop_core::home_reset::local_setup_unfinished(
+                home,
+                init.as_ref().map(|config| config.node_did.as_str()),
+                peer_records.iter().map(|peer| peer.node_did.as_str()),
+            )
+        }),
+        saved_peers: saved_peer_views(&peer_records),
     })
+}
+
+pub(crate) fn saved_peer_views(peers: &[PeerRecord]) -> Vec<SavedPeerView> {
+    peers
+        .iter()
+        .map(|peer| SavedPeerView {
+            peer_id: peer.peer_id.clone(),
+            label: peer.label.clone(),
+            node_did: peer.node_did.clone(),
+            addr: peer.addr.clone(),
+            source: peer.source.clone(),
+            graphql: peer.graphql.clone(),
+            local: peer.is_managed_runtime(),
+        })
+        .collect()
 }
 
 fn read_stored_init_config(
     node_home: &std::path::Path,
 ) -> (
-    Option<gents::store::local::home::StoredInitConfig<String, String>>,
+    Option<gents_store::local::home::StoredInitConfig<String, String>>,
     InitConfigStatus,
 ) {
-    let path = gents::store::local::home::init_config_path(node_home);
+    let path = gents_store::local::home::init_config_path(node_home);
     let file = match std::fs::File::open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -125,7 +139,7 @@ fn read_stored_init_config(
     };
     let config = match serde_json::from_reader::<
         _,
-        gents::store::local::home::StoredInitConfig<String, String>,
+        gents_store::local::home::StoredInitConfig<String, String>,
     >(file)
     {
         Ok(config) if !config.node_did.trim().is_empty() => config,
@@ -136,9 +150,12 @@ fn read_stored_init_config(
 
 pub(crate) fn resolve_node_home_tool_ceiling(
     node_home: &std::path::Path,
-) -> Result<(gents::ToolCeiling, &'static str), String> {
+) -> Result<(gents_tools::surface::ToolCeiling, &'static str), String> {
     let Some(config) = read_init_ceiling(node_home) else {
-        return Ok((gents::ToolCeiling::meta_only(), "default_no_init_json"));
+        return Ok((
+            gents_tools::surface::ToolCeiling::meta_only(),
+            "default_no_init_json",
+        ));
     };
 
     let tool_root = config
@@ -155,12 +172,14 @@ pub(crate) fn resolve_node_home_tool_ceiling(
         .as_deref()
     {
         None | Some("metaonly") | Some("meta_only") => {
-            Ok((gents::ToolCeiling::meta_only(), "init_json"))
+            Ok((gents_tools::surface::ToolCeiling::meta_only(), "init_json"))
         }
         Some("readonly") => Ok((
             match tool_root.as_deref() {
-                Some(root) => gents::ToolCeiling::readonly_at(std::path::PathBuf::from(root)),
-                None => gents::ToolCeiling::readonly(),
+                Some(root) => {
+                    gents_tools::surface::ToolCeiling::readonly_at(std::path::PathBuf::from(root))
+                }
+                None => gents_tools::surface::ToolCeiling::readonly(),
             },
             "init_json",
         )),
@@ -169,7 +188,7 @@ pub(crate) fn resolve_node_home_tool_ceiling(
                 "init.json has readwrite tool_ceiling but no tool_root".to_string()
             })?;
             Ok((
-                gents::ToolCeiling::readwrite(std::path::PathBuf::from(root)),
+                gents_tools::surface::ToolCeiling::readwrite(std::path::PathBuf::from(root)),
                 "init_json",
             ))
         }
@@ -194,12 +213,10 @@ fn read_init_ceiling(node_home: &std::path::Path) -> Option<InitCeilingView> {
 mod runtime_tasks;
 #[path = "snapshot/task_lineage.rs"]
 mod task_lineage;
+use runtime_tasks::request_matches_node;
 #[cfg(test)]
 use runtime_tasks::{recent_runs_for_task_views, task_run_histories};
-use runtime_tasks::{request_matches_node, source_matches_node};
-pub(crate) use runtime_tasks::{
-    session_summaries, session_summary_order_key, SessionSummaryOrderKey,
-};
+pub(crate) use runtime_tasks::{session_summaries, session_summary_order_key};
 
 #[path = "snapshot/runtime.rs"]
 mod runtime;
@@ -240,7 +257,11 @@ pub async fn build_client_snapshot_with_grants(
         None => None,
     };
     Ok(project_client_snapshot(
-        DesktopClientSnapshot { bootstrap, client },
+        DesktopClientSnapshot {
+            bootstrap,
+            client,
+            repair_note: None,
+        },
         grants,
     ))
 }

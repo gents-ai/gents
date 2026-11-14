@@ -10,8 +10,8 @@ use crate::{
     case_trial_score, latest_verdicts, load_run, load_trials, load_verdicts, pair_trials,
     PairedEvidence, TrialRecord, TrialScore, TrialUsage, VerdictRecord, VerdictView,
 };
-use gents::documents::{EvalCase, EvalDefinition};
-use gents::store::config_client::ConfigAccess;
+use gents_documents::{EvalCase, EvalDefinition};
+use gents_store::config_client::ConfigAccess;
 
 /// Everything one run wrote, read once.
 #[derive(Clone, Debug, PartialEq)]
@@ -209,7 +209,7 @@ pub(crate) mod tests {
     use crate::{
         Anchor, CaseTrialScore, OutcomeKind, StageCompletion, TrialCompletion, TrialIdentity,
     };
-    use gents::documents::EvalTier;
+    use gents_documents::EvalTier;
     use serde_json::json;
 
     pub(crate) fn one_case_definition() -> EvalDefinition {

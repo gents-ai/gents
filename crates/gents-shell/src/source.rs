@@ -385,7 +385,7 @@ pub enum PackAct {
 }
 
 /// What a pack change does with documents edited since their pack installed them, as
-/// `gents_server::packs::EditedDocuments` says.
+/// `gents_protocol::operations::pack::EditedDocuments` says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditedChoice {
     Refuse,

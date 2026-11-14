@@ -1,7 +1,5 @@
 use base64::Engine as _;
 use chrono::{DateTime, Local, NaiveDate};
-use gents::tools::call::lifecycle::ToolCallState;
-use gents::tools::native::{AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME};
 use gents_desktop_core::client::canonical_output::{
     project_canonical_message, terminal_tool_output, CanonicalMessageProjection,
 };
@@ -15,14 +13,16 @@ use gents_protocol::message::{AssistantContent, Message, ToolResultContent, User
 use gents_protocol::output::rows::authored_message_key;
 use gents_protocol::output::{MessageBlock, MessageRole};
 use gents_protocol::row::{AgentToolCallRow, CompactionEntryRow};
+use gents_protocol::tool_names::{AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME};
 use gents_protocol::transcript::present_message;
+use gents_session::session::tool_call_state::ToolCallState;
 use gents_shell::app::ChatLine;
 use gents_shell::sample::{Opens, RunState, Running, Tone};
 use gents_shell::source::{Agent, Change, ChangeKind, Day, Session, SessionState};
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::Value;
 
-use crate::caused_sessions::CausedSession;
+use gents_session::session::caused::CausedSession;
 
 /// The node's root sessions, newest activity first. A session an agent started is listed
 /// beside its parent instead, and an archived one not at all.
@@ -699,7 +699,8 @@ mod tests {
 
     #[test]
     fn a_caused_session_becomes_a_subagent_row() {
-        use crate::caused_sessions::{CausedSession, SessionScope};
+        use gents_protocol::session::SessionScope;
+        use gents_session::session::caused::CausedSession;
         let scope = |session: &str| SessionScope {
             node_did: "n".to_string(),
             session_id: session.to_string(),

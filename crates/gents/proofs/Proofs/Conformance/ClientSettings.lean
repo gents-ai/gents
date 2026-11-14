@@ -1,23 +1,43 @@
-import Proofs.ClientShell.Settings
-import Lean
+import Proofs.Clients.ClientShell.Settings
+import Proofs.Conformance.Family
+
+namespace Conformance.ClientSettings
 
 open Lean ClientShell.Settings
 
-private def revisionJson : Option Revision → Json
-  | none => Json.null
-  | some revision => Json.mkObj [
-      ("document", toJson revision.document), ("composite", toJson revision.composite)]
+deriving instance ToJson for Revision
 
-def clientSettingsCases : Json :=
-  let revisions : List (Option Revision) :=
-    [none, some ⟨1, 1⟩, some ⟨1, 2⟩, some ⟨2, 1⟩, some ⟨2, 2⟩]
-  Json.mkObj [
-    ("revisions", toJson (revisions.flatMap fun expected => revisions.map fun current =>
-      Json.mkObj [("expected", revisionJson expected), ("current", revisionJson current),
-        ("matches", toJson (revisionMatches expected current))])),
-    ("fields", toJson (SelfConfig.allTargets.map fun target => Json.mkObj [
-      ("collection", toJson target.collectionName), ("editable", toJson (editableFields target))])),
-    ("savedProjections", toJson ([false, true].flatMap fun read =>
-      [false, true].flatMap fun physical => [false, true].map fun content =>
-        Json.mkObj [("read", toJson read), ("physical", toJson physical), ("content", toJson content),
-          ("adopt", toJson (adoptSavedProjection read physical content))]))]
+structure RevisionInput where
+  expected : Option Revision
+  current : Option Revision
+  deriving ToJson
+
+structure RevisionOutput where
+  «matches» : Bool
+  deriving ToJson
+
+@[conformance_family]
+def revisions : Family RevisionInput RevisionOutput where
+  inputs :=
+    let revisions : List (Option Revision) :=
+      [none, some ⟨1, 1⟩, some ⟨1, 2⟩, some ⟨2, 1⟩, some ⟨2, 2⟩]
+    revisions.flatMap fun expected => revisions.map fun current => { expected, current }
+  model := fun i => { «matches» := revisionMatches i.expected i.current }
+
+structure FieldsInput where
+  collection : String
+  deriving ToJson
+
+structure FieldsOutput where
+  editable : List String
+  deriving ToJson
+
+@[conformance_family]
+def fields : Family FieldsInput FieldsOutput where
+  inputs := SelfConfig.allTargets.map fun target => { collection := target.collectionName }
+  model := fun i =>
+    { editable := match SelfConfig.allTargets.find? (·.collectionName == i.collection) with
+        | some target => editableFields target
+        | none => [] }
+
+end Conformance.ClientSettings

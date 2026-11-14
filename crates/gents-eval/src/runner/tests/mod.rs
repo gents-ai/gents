@@ -11,10 +11,10 @@ use crate::{
     invalidate_run, load_run, load_trials, load_verdicts, OutcomeKind, TrialCompletion,
     TrialIdentity, TrialRecord, VerdictDraft, VerdictRecord,
 };
-use gents::documents::EvalFixtureDocument;
-use gents::documents::EvalFixtureFile;
-use gents::documents::{EvalCase, EvalFixtures, EvalSplit};
-use gents::Collection;
+use gents_documents::EvalFixtureDocument;
+use gents_documents::EvalFixtureFile;
+use gents_documents::{EvalCase, EvalFixtures, EvalSplit};
+use gents_store::collection::Collection;
 
 mod budget;
 mod cancel;

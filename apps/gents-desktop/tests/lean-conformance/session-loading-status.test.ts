@@ -46,15 +46,7 @@ type StatusRow = {
   expected: SessionLoadingStatus | null;
 };
 
-type Reply =
-  | "found"
-  | "missing"
-  | "pending"
-  | "delivering"
-  | "notConnected"
-  | "accepted"
-  | "failed"
-  | "mismatch";
+type Reply = "found" | "missing" | "pending" | "failed" | "refused" | "mismatch";
 
 type Act =
   | { kind: "select"; drop: boolean }
@@ -144,11 +136,9 @@ const RUNNING = {
 } as unknown as DesktopClientSnapshot;
 const STOPPED = { ...RUNNING, client: null } as unknown as DesktopClientSnapshot;
 
-const WAITING_CODES: Partial<Record<Reply, string>> = {
+const REPLY_CODES: Partial<Record<Reply, string>> = {
+  refused: "permissionDenied",
   pending: "projectionPending",
-  delivering: "sessionDelivering",
-  notConnected: "sessionNotConnected",
-  accepted: "sessionAccepted",
 };
 
 type Fetch = {
@@ -260,7 +250,7 @@ async function replay(acts: Act[]): Promise<Observation[]> {
           break;
         case "complete": {
           const fetch = fetches.at(-1)!;
-          const code = WAITING_CODES[act.reply];
+          const code = REPLY_CODES[act.reply];
           if (code)
             fetch.reject(
               new BridgeInvokeError({
@@ -342,7 +332,7 @@ describe("generated selected-session load status", () => {
   }, 300_000);
 
   it("drives the production projection, match and re-read budget with every Lean row", () => {
-    expect(cases.statuses).toHaveLength(1536);
+    expect(cases.statuses).toHaveLength(1152);
     expect(cases.operational).toHaveLength(80);
     for (const row of [...cases.statuses, ...cases.operational]) {
       expect(project(row), JSON.stringify(row)).toEqual(row.expected);
@@ -365,7 +355,7 @@ describe("generated selected-session load status", () => {
   });
 
   it("replays every Lean follow-up trace through the observer, drain loop and session reads", async () => {
-    expect(cases.traces.length).toBeGreaterThan(1_000);
+    expect(cases.traces.length).toBeGreaterThan(900);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     try {
       for (const trace of cases.traces) {

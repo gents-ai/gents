@@ -1,14 +1,6 @@
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::types::{ManagedServerStatus, ManagedServerToolCeiling};
-use gents_desktop_core::preference::ReviewedHome;
 use std::path::{Path, PathBuf};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct HomeIdentity {
-    pub(super) reviewed: ReviewedHome,
-    pub(super) tool_ceiling: Option<ManagedServerToolCeiling>,
-    pub(super) tool_root: Option<String>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct EffectiveManagedAuthority {
@@ -79,7 +71,7 @@ pub(super) fn validate_tool_root(path: &Path) -> Result<PathBuf, BridgeError> {
         ));
     }
     let user_home = dirs::home_dir().and_then(|home| std::fs::canonicalize(home).ok());
-    gents::tools::surface::refuse_too_broad_root(&canonical, user_home.as_deref())
+    gents_tools::surface::refuse_too_broad_root(&canonical, user_home.as_deref())
         .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, error.to_string()))?;
     std::fs::read_dir(&canonical).map_err(|error| {
         BridgeError::new(
@@ -92,12 +84,12 @@ pub(super) fn validate_tool_root(path: &Path) -> Result<PathBuf, BridgeError> {
 
 pub(super) fn runtime_tool_ceiling(
     value: ManagedServerToolCeiling,
-) -> gents_server::server_host::ManagedToolCeiling {
-    use gents_server::server_host::ManagedToolCeiling;
+) -> gents_service::args::ToolCeilingArg {
+    use gents_service::args::ToolCeilingArg;
     match value {
-        ManagedServerToolCeiling::MetaOnly => ManagedToolCeiling::MetaOnly,
-        ManagedServerToolCeiling::Readonly => ManagedToolCeiling::Readonly,
-        ManagedServerToolCeiling::Readwrite => ManagedToolCeiling::Readwrite,
+        ManagedServerToolCeiling::MetaOnly => ToolCeilingArg::MetaOnly,
+        ManagedServerToolCeiling::Readonly => ToolCeilingArg::Readonly,
+        ManagedServerToolCeiling::Readwrite => ToolCeilingArg::Readwrite,
     }
 }
 
@@ -142,13 +134,4 @@ pub(super) fn suggested_tool_root() -> Option<String> {
     dirs::home_dir()
         .and_then(|path| std::fs::canonicalize(path).ok())
         .map(|path| path.to_string_lossy().into_owned())
-}
-
-pub(super) fn parse_tool_ceiling(value: &str) -> Option<ManagedServerToolCeiling> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "meta-only" | "metaonly" | "meta_only" => Some(ManagedServerToolCeiling::MetaOnly),
-        "readonly" => Some(ManagedServerToolCeiling::Readonly),
-        "readwrite" => Some(ManagedServerToolCeiling::Readwrite),
-        _ => None,
-    }
 }

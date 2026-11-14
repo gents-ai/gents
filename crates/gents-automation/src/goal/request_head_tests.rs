@@ -1,0 +1,811 @@
+use super::*;
+use crate::goal::continuation::prepare_goal_continuation;
+use gents_lean_vocab::families::goal_request_head_contracts_membership as members;
+use gents_lean_vocab::families::goal_request_head_contracts_selection as head;
+use gents_lean_vocab::families::goal_wake_ancestry_contracts_ancestry as ancestry;
+use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+use gents_store::identity::{KeyIdentity, NodeIdentity};
+use rapidhash::{HashMapExt, RapidHashMap};
+use serde::Deserialize;
+
+#[tokio::test]
+async fn generated_goal_wake_ancestry_keeps_assignment_without_widening_invocations() {
+    let temp = tempfile::tempdir().unwrap();
+    let identities = [
+        KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
+        KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap(),
+    ];
+    for modeled in gents_lean_vocab::families::goal_wake_ancestry_contracts_ancestry::cases::<
+        InputDisposition,
+    >() {
+        let value = &modeled.input;
+        let rows = &value.rows;
+        let case = Case {
+            name: value.name.clone(),
+            scope: Scope {
+                owner: 1,
+                session: 1,
+                goal: 1,
+            },
+            rows: rows
+                .iter()
+                .map(|row| model_row(&gents_lean_vocab::family::recode(&row.request)))
+                .collect(),
+            assignment_root: None,
+            receipt_checks: None,
+        };
+        let mut fixture = Fixture {
+            case: &case,
+            identities: &identities,
+            built: RapidHashMap::new(),
+        };
+        let mut built = Vec::new();
+        for (model, facts) in case.rows.iter().zip(rows) {
+            let row = if facts.background_wake {
+                let identity = fixture.identity(model.owner);
+                let parent = fixture.built.get(&model.parent_request.unwrap()).cloned();
+                let parent_id = parent
+                    .as_ref()
+                    .map(|parent| parent.request_id.clone())
+                    .unwrap_or_else(|| fixture.base_id(model.parent_request.unwrap()));
+                let mut create = AgentRequestCreate::base(
+                    model.purpose,
+                    fixture.base_id(model.request),
+                    identity.did(),
+                    identity.did(),
+                    identity.did(),
+                    format!("session-{}", model.session),
+                    "review notifications",
+                    "scheduled",
+                    "2026-10-21T00:00:00Z",
+                    if facts.runtime_wake_receipt {
+                        AgentRequestAdmissionRecord::runtime_local_control(
+                            identity.did(),
+                            &parent_id,
+                        )
+                    } else {
+                        AgentRequestAdmissionRecord::local_self(identity.did())
+                    },
+                );
+                create.caused_by_parent_request_id = Some(if model.parent_request == Some(999) {
+                    fixture.base_id(999)
+                } else {
+                    parent_id
+                });
+                create.caused_by_parent_request_doc_id =
+                    model.parent_doc.map(|doc| format!("physical-{doc}"));
+                create.input.queue = Some(gents_protocol::request_input::RequestQueue {
+                    source: gents_protocol::request_input::QueueSource::BackgroundCompletion,
+                    policy: gents_protocol::request_input::QueuePolicy::Coalesce,
+                    key: Some("background_completion:session-1".into()),
+                    delivery: Default::default(),
+                    position: None,
+                    queued_after_request_id: create.caused_by_parent_request_id.clone(),
+                    interrupted_request_id: None,
+                    background_completion_wake_version: Some(1),
+                });
+                if facts.tagged {
+                    create.input.goal_assignment =
+                        Some(gents_protocol::request_input::GoalAssignmentInput {
+                            goal_id: "goal-1".into(),
+                            root_request_doc_id: Some("physical-10".into()),
+                        });
+                }
+                gents_session::request::admission::sign_agent_request_create(identity, &mut create)
+                    .await
+                    .unwrap();
+                let mut row = signed_row(&create, model.doc);
+                if !model.receipt_valid {
+                    row.content = Some("changed after signing".into());
+                }
+                fixture.built.insert(model.request, row.clone());
+                row
+            } else {
+                let mut row = fixture.build(model.clone()).await;
+                if facts.tagged {
+                    let mut create = AgentRequestCreate::base(
+                        model.purpose,
+                        row.request_id.clone(),
+                        fixture.identity(model.owner).did(),
+                        fixture.identity(model.owner).did(),
+                        fixture.identity(model.owner).did(),
+                        "session-1",
+                        "entry",
+                        "interactive",
+                        "2026-10-21T00:00:00Z",
+                        AgentRequestAdmissionRecord::local_self(
+                            fixture.identity(model.owner).did(),
+                        ),
+                    );
+                    create.input.goal_assignment =
+                        Some(gents_protocol::request_input::GoalAssignmentInput {
+                            goal_id: "goal-1".into(),
+                            root_request_doc_id: None,
+                        });
+                    gents_session::request::admission::sign_agent_request_create(
+                        fixture.identity(model.owner),
+                        &mut create,
+                    )
+                    .await
+                    .unwrap();
+                    row = signed_row(&create, model.doc);
+                    fixture.built.insert(model.request, row.clone());
+                }
+                row
+            };
+            built.push(row);
+        }
+        let owner = identities[0].did();
+        let by_doc = request_rows_by_doc(owner, "session-1", &built).unwrap();
+        let current = format!("physical-{}", value.current);
+        let expected_goal = value.expected_goal.map(|goal| format!("goal-{goal}"));
+        let opening_facts = rows
+            .iter()
+            .filter(|row| !row.opening_goals.is_empty())
+            .map(|row| {
+                (
+                    format!("physical-{}", row.request.doc),
+                    row.opening_goals
+                        .iter()
+                        .map(|goal| format!("goal-{goal}"))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let openings = opening_facts
+            .iter()
+            .map(|(doc, goals)| (doc.as_str(), goals.iter().map(String::as_str).collect()))
+            .collect();
+        let actual = authenticated_assignment_entry(
+            owner,
+            "session-1",
+            by_doc[current.as_str()],
+            &by_doc,
+            expected_goal.as_deref(),
+            &openings,
+        )
+        .ok()
+        .and_then(|row| row.doc_id.clone());
+        let invocation = authenticated_entry(
+            owner,
+            "session-1",
+            by_doc[current.as_str()],
+            &by_doc,
+            expected_goal.as_deref(),
+        )
+        .ok()
+        .and_then(|row| row.doc_id.clone());
+        let number = |doc: Option<String>| {
+            doc.map(|doc| {
+                doc.strip_prefix("physical-")
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+            })
+        };
+        modeled.check(ancestry::AncestryOutput {
+            entry: number(actual),
+            invocation_entry: number(invocation),
+        });
+    }
+}
+
+#[tokio::test]
+async fn generated_goal_ancestry_cases_keep_one_signed_goal() {
+    let temp = tempfile::tempdir().unwrap();
+    let identities = [
+        KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
+        KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap(),
+    ];
+    for family_case in gents_lean_vocab::families::goal_request_ancestry_contracts_ancestry::cases::<
+        InputDisposition,
+    >() {
+        let value = &family_case.input;
+        let rows: Vec<head::RowWire<InputDisposition>> = value
+            .rows
+            .iter()
+            .map(gents_lean_vocab::family::recode)
+            .collect();
+        let case = model_case(
+            &value.name,
+            &gents_lean_vocab::family::recode(&value.scope),
+            &rows,
+            None,
+            None,
+        );
+        let mut fixture = Fixture {
+            case: &case,
+            identities: &identities,
+            built: RapidHashMap::new(),
+        };
+        let mut rows = Vec::new();
+        for row in &case.rows {
+            rows.push(fixture.build(row.clone()).await);
+        }
+        let owner = identities[(case.scope.owner - 1) as usize].did();
+        let session = format!("session-{}", case.scope.session);
+        let by_doc = request_rows_by_doc(owner, &session, &rows).unwrap();
+        let current = format!("physical-{}", value.current);
+        let goal = value.expected_goal.map(|id| format!("goal-{id}"));
+        let actual = authenticated_entry(
+            owner,
+            &session,
+            by_doc[&current.as_str()],
+            &by_doc,
+            goal.as_deref(),
+        )
+        .ok()
+        .and_then(|row| row.doc_id.clone());
+        family_case.check(
+            gents_lean_vocab::families::goal_request_ancestry_contracts_ancestry::AncestryOutput {
+                entry: actual.map(|doc| {
+                    doc.strip_prefix("physical-")
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap()
+                }),
+            },
+        );
+    }
+}
+struct Scope {
+    owner: u64,
+    session: u64,
+    goal: u64,
+}
+#[derive(Clone, Copy, Debug, Default, Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum InputDisposition {
+    #[default]
+    Execution,
+    Folded,
+    Replaced,
+    Removed,
+}
+
+#[derive(Clone, Debug)]
+struct ModelRow {
+    purpose: gents_protocol::request_admission::RequestPurpose,
+    doc: u64,
+    request: u64,
+    owner: u64,
+    session: u64,
+    goal: Option<u64>,
+    parent_doc: Option<u64>,
+    parent_request: Option<u64>,
+    sequence: u64,
+    receipt_valid: bool,
+    deterministic_identity: bool,
+    input_disposition: InputDisposition,
+}
+struct Case {
+    name: String,
+    scope: Scope,
+    rows: Vec<ModelRow>,
+    assignment_root: Option<u64>,
+    receipt_checks: Option<usize>,
+}
+
+fn model_case(
+    name: &str,
+    scope: &head::Scope,
+    rows: &[head::RowWire<InputDisposition>],
+    assignment_root: Option<u64>,
+    receipt_checks: Option<u64>,
+) -> Case {
+    Case {
+        name: name.to_owned(),
+        scope: Scope {
+            owner: scope.owner,
+            session: scope.session,
+            goal: scope.goal,
+        },
+        rows: rows.iter().map(model_row).collect(),
+        assignment_root,
+        receipt_checks: receipt_checks.map(|checks| usize::try_from(checks).unwrap()),
+    }
+}
+
+fn selection_case(input: &head::SelectionInput<InputDisposition>) -> Case {
+    model_case(
+        &input.name,
+        &input.scope,
+        &input.rows,
+        input.assignment_root,
+        input.receipt_checks,
+    )
+}
+
+fn membership_case(input: &members::MembershipInput<InputDisposition>) -> Case {
+    let rows: Vec<head::RowWire<InputDisposition>> = input
+        .rows
+        .iter()
+        .map(gents_lean_vocab::family::recode)
+        .collect();
+    model_case(
+        &input.name,
+        &gents_lean_vocab::family::recode(&input.scope),
+        &rows,
+        input.assignment_root,
+        input.membership_receipt_checks,
+    )
+}
+
+fn model_row(row: &head::RowWire<InputDisposition>) -> ModelRow {
+    ModelRow {
+        purpose: serde_json::from_value(serde_json::Value::String(row.purpose.clone())).unwrap(),
+        doc: row.doc,
+        request: row.request,
+        owner: row.owner,
+        session: row.session,
+        goal: row.goal,
+        parent_doc: row.parent_doc,
+        parent_request: row.parent_request,
+        sequence: row.sequence,
+        receipt_valid: row.receipt_valid,
+        deterministic_identity: row.deterministic_identity,
+        input_disposition: row.input_disposition,
+    }
+}
+
+pub(crate) fn signed_row(create: &AgentRequestCreate, doc: u64) -> AgentRequestRow {
+    AgentRequestRow {
+        purpose: Some(create.purpose),
+        doc_id: Some(format!("physical-{doc}")),
+        request_id: create.request_id.clone(),
+        node_did: Some(create.node_did.clone()),
+        requester_did: Some(create.requester_did.clone()),
+        agent_did: Some(create.agent_did.clone()),
+        session_id: Some(create.session_id.clone()),
+        retry_parent_request: create.retry_parent_request.clone(),
+        retry_parent_request_doc_id: create.retry_parent_request_doc_id.clone(),
+        retry_root_request: create.retry_root_request.clone(),
+        retry_key: create.retry_key.clone(),
+        content: Some(create.content.clone()),
+        input: Some(create.input.clone()),
+        execution_origin: Some(create.execution_origin.clone()),
+        caused_by_trigger_id: create.caused_by_trigger_id.clone(),
+        caused_by_trigger_doc_id: create.caused_by_trigger_doc_id.clone(),
+        caused_by_trigger_kind: create.caused_by_trigger_kind.clone(),
+        caused_by_correlation: create.caused_by_correlation.clone(),
+        caused_by_trigger_context: create.caused_by_trigger_context.clone(),
+        caused_by_source_doc_id: create.caused_by_source_doc_id.clone(),
+        created_at: Some(create.created_at.clone()),
+        retry_count: Some(create.retry_count),
+        max_retries: Some(create.max_retries),
+        valid_until: create.valid_until.clone(),
+        request_hop: Some(i64::from(create.request_hop)),
+        caused_by_parent_request_id: create.caused_by_parent_request_id.clone(),
+        caused_by_parent_request_doc_id: create.caused_by_parent_request_doc_id.clone(),
+        caused_by_parent_tool_call_id: create.caused_by_parent_tool_call_id.clone(),
+        caused_by_parent_tool_call_doc_id: create.caused_by_parent_tool_call_doc_id.clone(),
+        workspace_id: create.workspace_id.clone(),
+        workspace_authority: create.workspace_authority.clone(),
+        workspace_owner_node_did: create.workspace_owner_node_did.clone(),
+        workspace_seal_hash: create.workspace_seal_hash.clone(),
+        lifecycle_state: Some(RequestLifecycleState::Completed),
+        admission_kind: Some(create.admission.kind.as_str().into()),
+        admission_signer_did: Some(create.admission.signer_did.clone()),
+        admission_signature: Some(bs58::encode(&create.admission.signature).into_string()),
+        runtime_issuer_did: create.admission.runtime_issuer_did.clone(),
+        runtime_source_request_id: create.admission.runtime_source_request_id.clone(),
+        runtime_source_kind: create
+            .admission
+            .runtime_source_kind
+            .map(|kind| kind.as_str().into()),
+        ..Default::default()
+    }
+}
+
+struct Fixture<'a> {
+    case: &'a Case,
+    identities: &'a [KeyIdentity],
+    built: RapidHashMap<u64, AgentRequestRow>,
+}
+impl Fixture<'_> {
+    fn identity(&self, owner: u64) -> &KeyIdentity {
+        &self.identities[(owner - 1) as usize]
+    }
+    fn base_id(&self, request: u64) -> String {
+        match request {
+            100 if self.case.name == "same_second_task_parent_chain" => {
+                "task-goal-request:original".into()
+            }
+            100 => "graph-parent".into(),
+            400 => "unrelated-latest".into(),
+            _ => format!("ordinary-{request}"),
+        }
+    }
+    fn timestamp(&self, request: u64) -> String {
+        if self.case.name.starts_with("same_second_") {
+            return "2026-07-15T00:00:00Z".into();
+        }
+        let index = self
+            .case
+            .rows
+            .iter()
+            .position(|row| row.request == request)
+            .unwrap_or(0);
+        (chrono::DateTime::parse_from_rfc3339("2026-07-15T00:00:00Z").unwrap()
+            + chrono::Duration::seconds(
+                i64::try_from(self.case.rows.len().max(60) - 1 - index).unwrap(),
+            ))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    }
+    async fn build(&mut self, model: ModelRow) -> AgentRequestRow {
+        let requested = model.request;
+        let mut pending = Vec::new();
+        let mut next = Some(model);
+        while let Some(model) = next {
+            if self.built.contains_key(&model.request) {
+                break;
+            }
+            assert!(
+                !pending
+                    .iter()
+                    .any(|row: &ModelRow| row.request == model.request),
+                "{}: cyclic fixture request ancestry",
+                self.case.name
+            );
+            next = model.goal.and(model.parent_request).and_then(|parent| {
+                self.case
+                    .rows
+                    .iter()
+                    .find(|row| row.request == parent)
+                    .cloned()
+            });
+            pending.push(model);
+        }
+        while let Some(model) = pending.pop() {
+            self.build_one(model).await;
+        }
+        self.built
+            .get(&requested)
+            .expect("fixture request built")
+            .clone()
+    }
+
+    async fn build_one(&mut self, model: ModelRow) {
+        let now = self.timestamp(model.request);
+        let mut create = if let Some(goal) = model.goal {
+            let parent_request = model.parent_request.unwrap();
+            let mut parent = if let Some(parent) = self.built.get(&parent_request) {
+                parent.clone()
+            } else {
+                let identity = self.identity(model.owner);
+                let base = AgentRequestCreate::base(
+                    gents_protocol::request_admission::RequestPurpose::Normal,
+                    self.base_id(parent_request),
+                    identity.did(),
+                    identity.did(),
+                    identity.did(),
+                    format!("session-{}", model.session),
+                    "parent",
+                    "interactive",
+                    &now,
+                    AgentRequestAdmissionRecord::local_self(identity.did()),
+                );
+                signed_row(&base, model.parent_doc.unwrap())
+            };
+            parent.doc_id = model.parent_doc.map(|doc| format!("physical-{doc}"));
+            parent.node_did = Some(self.identity(model.owner).did().into());
+            parent.session_id = Some(format!("session-{}", model.session));
+            let parent = gents_protocol::row::AgentRequest::try_from(parent).unwrap();
+            prepare_goal_continuation(
+                &parent,
+                self.identity(model.owner).did().into(),
+                &format!("goal-{goal}"),
+                "signed child",
+                i64::try_from(model.sequence).unwrap(),
+                false,
+                &now,
+                parent.request_hop,
+            )
+            .unwrap()
+        } else {
+            let identity = self.identity(model.owner);
+            let mut base = AgentRequestCreate::base(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                self.base_id(model.request),
+                identity.did(),
+                identity.did(),
+                identity.did(),
+                format!("session-{}", model.session),
+                "signed root",
+                "interactive",
+                &now,
+                AgentRequestAdmissionRecord::local_self(identity.did()),
+            );
+            base.caused_by_parent_request_id =
+                model.parent_request.map(|request| self.base_id(request));
+            base.caused_by_parent_request_doc_id =
+                model.parent_doc.map(|doc| format!("physical-{doc}"));
+            base
+        };
+        if self.case.name == "legacy_source_omission_keeps_physical_edge" {
+            create.caused_by_source_doc_id = if model.goal.is_none() {
+                Some("original-event-source".into())
+            } else {
+                None
+            };
+        }
+        create.purpose = model.purpose;
+        if !model.deterministic_identity {
+            create.request_id.push_str("-wrong-identity");
+        }
+        gents_session::request::admission::sign_agent_request_create(
+            self.identity(model.owner),
+            &mut create,
+        )
+        .await
+        .unwrap();
+        let mut row = signed_row(&create, model.doc);
+        match model.input_disposition {
+            InputDisposition::Execution => {}
+            InputDisposition::Folded | InputDisposition::Replaced => {
+                row.lifecycle_state = Some(RequestLifecycleState::Superseded);
+                row.failure_reason = Some(
+                    match model.input_disposition {
+                        InputDisposition::Folded => {
+                            gents_session::request::lifecycle::FOLDED_REASON
+                        }
+                        _ => gents_session::request::lifecycle::REPLACED_REASON,
+                    }
+                    .into(),
+                );
+                row.superseded_by_request = Some(self.base_id(100));
+                row.superseded_by_request_doc_id = Some("physical-10".into());
+            }
+            InputDisposition::Removed => {
+                row.lifecycle_state = Some(RequestLifecycleState::Interrupted);
+                row.failure_reason = Some(gents_session::request::lifecycle::REMOVED_REASON.into());
+            }
+        }
+        if !model.receipt_valid {
+            row.content = Some("altered after signing".into());
+        }
+        assert_eq!(
+            verify_request_receipt_signature(&row).is_ok(),
+            model.receipt_valid,
+            "{}: actual signature",
+            self.case.name
+        );
+        self.built.insert(model.request, row);
+    }
+}
+
+#[tokio::test]
+async fn generated_goal_request_head_cases_drive_signed_row_selector() {
+    let cases = gents_lean_vocab::families::goal_request_head_contracts_selection::cases::<
+        InputDisposition,
+    >();
+    let temp = tempfile::tempdir().unwrap();
+    let identities = [
+        KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap(),
+        KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap(),
+    ];
+    for typed in &cases {
+        let case = selection_case(&typed.input);
+        let goal: GoalDocument = serde_json::from_value(serde_json::json!({
+            "_docID": "goal-doc", "goal_id": format!("goal-{}", case.scope.goal),
+            "node_did": identities[(case.scope.owner - 1) as usize].did(),
+            "session_id": format!("session-{}", case.scope.session), "status": "active",
+            "assignment_root_request_doc_id": case.assignment_root.map(|doc| format!("physical-{doc}")),
+        }))
+        .unwrap();
+        let mut fixture = Fixture {
+            case: &case,
+            identities: &identities,
+            built: RapidHashMap::new(),
+        };
+        let mut rows = Vec::new();
+        for model in &case.rows {
+            rows.push(fixture.build(model.clone()).await);
+        }
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.doc_id.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+            case.rows
+                .iter()
+                .map(|row| format!("physical-{}", row.doc))
+                .collect::<Vec<_>>(),
+            "{}: preserve Lean input mapping",
+            case.name
+        );
+        assert!(
+            rows.windows(2)
+                .all(|pair| (pair[0].created_at.as_ref(), &pair[0].request_id)
+                    >= (pair[1].created_at.as_ref(), &pair[1].request_id)),
+            "{}: real canonical input order",
+            case.name
+        );
+        if case.name == "legacy_source_omission_keeps_physical_edge" {
+            assert_eq!(
+                rows[0].caused_by_source_doc_id.as_deref(),
+                Some("original-event-source")
+            );
+            assert_eq!(rows[1].caused_by_source_doc_id, None);
+            verify_request_receipt_signature(&rows[0]).unwrap();
+            verify_request_receipt_signature(&rows[1]).unwrap();
+        }
+        let (selected, verifications) =
+            gents_store::identity::request_receipt::count_request_receipt_verifications(|| {
+                latest_goal_request(&goal, &rows).and_then(|row| row.doc_id.as_deref())
+            });
+        if let Some(expected_checks) = case.receipt_checks {
+            assert!(
+                verifications <= expected_checks,
+                "{}: {verifications} receipt checks exceed the Lean plan bound {expected_checks}",
+                case.name,
+            );
+        }
+        let selected_row = selected.map(|doc| {
+            typed
+                .input
+                .rows
+                .iter()
+                .find(|row| format!("physical-{}", row.doc) == doc)
+                .unwrap_or_else(|| panic!("{}: selected {doc} is not a case row", case.name))
+                .clone()
+        });
+        typed.check(selected_row);
+    }
+}
+
+#[tokio::test]
+async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() {
+    use gents_store::config_client::ConfigAccess;
+    let (db, _user, _access, binding) =
+        crate::test_support::signed_test_node("task-assignment-root-fence").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
+    let agent = gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
+    let access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    access
+        .transact_write("test.assignment_session", |txn| {
+            Box::pin(gents_session::session::ensure_session_in_txn(
+                txn,
+                "bound-session",
+                identity.did(),
+                agent.did(),
+                Some(agent.did()),
+                None,
+                None,
+                "2026-01-01T00:00:00Z",
+            ))
+        })
+        .await
+        .unwrap();
+    let mut goal = seed_goal_from_access(
+        &access,
+        identity.did(),
+        "bound-session",
+        Some("next assignment"),
+        Some(GoalStatus::Active),
+        Some(None),
+        None,
+    )
+    .await
+    .unwrap();
+    for (id, created) in [
+        ("old-root", "2026-01-01T00:00:00Z"),
+        ("new-root", "2026-01-01T00:00:01Z"),
+    ] {
+        let mut create = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            id,
+            identity.did(),
+            agent.did(),
+            agent.did(),
+            "bound-session",
+            "root",
+            "interactive",
+            created,
+            AgentRequestAdmissionRecord::local_self(agent.did()),
+        );
+        gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut create)
+            .await
+            .unwrap();
+        access
+            .write("test.assignment_root", &create.graphql_mutation().unwrap())
+            .await
+            .unwrap();
+    }
+    let query = format!(
+        "{{AgentRequest(order: {{created_at: DESC}}) {{{}}}}}",
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+    );
+    let response = access.execute(&query).await.unwrap();
+    let rows: Vec<AgentRequestRow> =
+        serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();
+    let old = rows
+        .iter()
+        .find(|row| row.request_id == "old-root")
+        .unwrap();
+    let new = rows
+        .iter()
+        .find(|row| row.request_id == "new-root")
+        .unwrap();
+    let new_doc = new.doc_id.as_deref().unwrap();
+    goal.assignment_root_request_doc_id = Some(new_doc.into());
+    access.write("test.assignment_binding", &format!("mutation {{update_Goal(filter: {{_docID: {{_eq: \"{}\"}}}}, input: {{assignment_root_request_doc_id: \"{}\"}}) {{_docID}}}}",
+        escape_graphql_string(&goal.doc_id), escape_graphql_string(new_doc))).await.unwrap();
+    let mut parent = gents_protocol::row::AgentRequest::try_from(old.clone()).unwrap();
+    for sequence in [1, 2] {
+        let mut child = prepare_goal_continuation(
+            &parent,
+            agent.did().into(),
+            &goal.goal_id,
+            "old continuation",
+            sequence,
+            false,
+            "2026-01-01T00:00:02Z",
+            parent.request_hop,
+        )
+        .unwrap();
+        gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut child)
+            .await
+            .unwrap();
+        access
+            .write("test.old_continuation", &child.graphql_mutation().unwrap())
+            .await
+            .unwrap();
+        let response = access.execute(&query).await.unwrap();
+        let rows: Vec<AgentRequestRow> =
+            serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();
+        assert_eq!(
+            latest_goal_request(&goal, &rows).unwrap().request_id,
+            "new-root"
+        );
+        let old_child = rows
+            .iter()
+            .find(|row| row.request_id == child.request_id)
+            .unwrap();
+        let request = gents_protocol::row::AgentRequest::try_from(old_child.clone()).unwrap();
+        let allowed = access
+            .transact_write("test.late_goal_claim", |txn| {
+                let request = &request;
+                Box::pin(async move {
+                    gents_session::request::lifecycle::claim_gate_in_txn(
+                        txn,
+                        request,
+                        "2026-01-01T00:00:03Z",
+                        false,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            allowed,
+            gents_session::request::lifecycle::ClaimGate::Retired
+        );
+        let response = access.execute(&query).await.unwrap();
+        let rows: Vec<AgentRequestRow> =
+            serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();
+        assert_eq!(
+            rows.iter()
+                .find(|row| row.request_id == child.request_id)
+                .unwrap()
+                .lifecycle_state,
+            Some(RequestLifecycleState::Superseded)
+        );
+        parent = gents_protocol::row::AgentRequest::try_from(
+            rows.iter()
+                .find(|row| row.request_id == child.request_id)
+                .unwrap()
+                .clone(),
+        )
+        .unwrap();
+    }
+}
+
+#[path = "request_membership_tests.rs"]
+mod membership;

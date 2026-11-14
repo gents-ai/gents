@@ -1,5 +1,8 @@
+use gents::support::snapshots::SnapshotReader;
+use gents_store::config_client::ConfigAccess;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use anyhow::{anyhow, bail, Result};
 use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
@@ -7,7 +10,42 @@ use serde_json::Value;
 
 use super::fs::read_runtime_state_json;
 use super::graphql::{escape_graphql_string, first_graphql_row, graphql_query};
-use super::process::run_cli_json;
+
+/// File changes directly inside the directories that can hold a home's
+/// runtime state. Serve replaces that state once it is serving, which is
+/// after its startup gate opened client access; until then the gate answers
+/// 503 to reads and subscriptions alike, so this is the only notification a
+/// client outside the process can wait on before it may subscribe. The watch
+/// is not recursive: a recursive one opens every entry below the directory,
+/// which fails on a dangling link and races the store's own files.
+struct RuntimeStateChanges {
+    _watcher: notify::RecommendedWatcher,
+    changes: tokio::sync::mpsc::UnboundedReceiver<notify::Result<notify::Event>>,
+}
+
+impl RuntimeStateChanges {
+    fn watch<'a>(directories: impl IntoIterator<Item = &'a Path>) -> Result<Self> {
+        use notify::Watcher;
+        let (tx, changes) = tokio::sync::mpsc::unbounded_channel();
+        let mut watcher = notify::recommended_watcher(move |event| {
+            let _ = tx.send(event);
+        })?;
+        for directory in directories {
+            watcher.watch(directory, notify::RecursiveMode::NonRecursive)?;
+        }
+        Ok(Self {
+            _watcher: watcher,
+            changes,
+        })
+    }
+
+    async fn recv_until(&mut self, deadline: Instant) -> Result<()> {
+        if let Ok(Some(event)) = tokio::time::timeout_at(deadline, self.changes.recv()).await {
+            event?;
+        }
+        Ok(())
+    }
+}
 
 pub async fn wait_for_runtime_ready(
     graphql: &str,
@@ -15,6 +53,11 @@ pub async fn wait_for_runtime_ready(
     timeout: Duration,
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
+    let mut serving = super::graphql::served_home(graphql)
+        .map(|home| RuntimeStateChanges::watch([home.as_path()]))
+        .transpose()?;
+    let access = ConfigAccess::Graphql(super::graphql::served_endpoint(graphql));
+    let mut changes = None::<gents::support::snapshots::SnapshotChanges>;
     loop {
         let response = graphql_query(
             graphql,
@@ -31,7 +74,7 @@ pub async fn wait_for_runtime_ready(
         )
         .await;
         let last_observation = format!("{response:?}");
-        match response {
+        let client_access_open = match response {
             Ok(response) => {
                 if let Ok(row) = first_graphql_row(&response, "NodeReadiness") {
                     if let Ok(row) = serde_json::from_value::<NodeReadinessRow>(row.clone()) {
@@ -46,18 +89,30 @@ pub async fn wait_for_runtime_ready(
                         }
                     }
                 }
+                true
             }
-            Err(error)
-                if runtime_schema_is_starting(&error) || runtime_http_is_starting(&error) => {}
-
+            Err(error) if runtime_schema_is_starting(&error) => true,
+            Err(error) if runtime_http_is_starting(&error) => false,
             Err(error) => return Err(error),
-        }
+        };
 
         if Instant::now() >= deadline {
             bail!("timed out waiting for authoritative runtime readiness for {node_did}; last observation: {last_observation}");
         }
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        if client_access_open {
+            match changes.as_mut() {
+                Some(changes) => {
+                    let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
+                }
+                None => changes = Some(access.subscribe_changes("NodeReadiness").await),
+            }
+        } else {
+            let Some(serving) = serving.as_mut() else {
+                bail!("{graphql} is still starting and no fixture registered its home, so its serving announcement cannot be observed; last observation: {last_observation}");
+            };
+            serving.recv_until(deadline).await?;
+        }
     }
 }
 
@@ -66,6 +121,12 @@ pub async fn wait_for_runtime_state_graphql(
     expected_graphql: &str,
     timeout: Duration,
 ) -> Result<Value> {
+    let nested_home = home_dir.join(".gents");
+    let mut changes = RuntimeStateChanges::watch(
+        [home_dir, nested_home.as_path()]
+            .into_iter()
+            .filter(|directory| directory.is_dir()),
+    )?;
     let deadline = Instant::now() + timeout;
     let mut last_state = None::<Value>;
     let mut last_error: Option<anyhow::Error>;
@@ -96,7 +157,7 @@ pub async fn wait_for_runtime_state_graphql(
             );
         }
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        changes.recv_until(deadline).await?;
     }
 }
 
@@ -107,6 +168,9 @@ pub async fn wait_for_runtime_quiescence(
     quiet_period: Duration,
 ) -> Result<i64> {
     let deadline = Instant::now() + Duration::from_secs(45);
+    let access = ConfigAccess::Graphql(super::graphql::served_endpoint(graphql));
+    let mut readiness_changes = access.subscribe_changes("NodeReadiness").await;
+    let mut runtime_changes = access.subscribe_changes("NodeRuntime").await;
     let mut last_generation = None;
     let mut last_change_at = None;
     let mut last_runtime_row = None::<Value>;
@@ -185,7 +249,17 @@ pub async fn wait_for_runtime_quiescence(
                     .unwrap_or_else(|| "null".to_string())
             );
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let wake = last_change_at
+            .map(|at| at + quiet_period)
+            .unwrap_or(deadline)
+            .min(deadline);
+        let _ = tokio::time::timeout_at(wake, async {
+            tokio::select! {
+                _ = readiness_changes.recv() => {},
+                _ = runtime_changes.recv() => {},
+            }
+        })
+        .await;
     }
 }
 
@@ -211,6 +285,8 @@ pub async fn wait_for_request(
     content: &str,
 ) -> Result<(String, String, String)> {
     let deadline = Instant::now() + Duration::from_secs(15);
+    let access = ConfigAccess::Graphql(super::graphql::served_endpoint(graphql));
+    let mut changes = access.subscribe_changes("AgentRequest").await;
     loop {
         let query = format!(
             r#"{{
@@ -224,7 +300,7 @@ pub async fn wait_for_request(
                     agent_did
                 }}
             }}"#,
-            gents::session::public_request_filter(&format!(
+            gents_session::session::public_request_filter(&format!(
                 r#"node_did: {{ _eq: "{}" }}, content: {{ _eq: "{}" }}"#,
                 escape_graphql_string(node_did),
                 escape_graphql_string(content),
@@ -254,7 +330,7 @@ pub async fn wait_for_request(
         if Instant::now() >= deadline {
             bail!("timed out waiting for AgentRequest for {node_did}");
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -266,6 +342,8 @@ pub async fn wait_for_request_lifecycle_state(
 ) -> Result<Value> {
     let deadline = Instant::now() + timeout;
     let mut last_row = None::<Value>;
+    let access = ConfigAccess::Graphql(super::graphql::served_endpoint(graphql));
+    let mut changes = access.subscribe_changes("AgentRequest").await;
     loop {
         let query = format!(
             r#"{{
@@ -302,53 +380,14 @@ pub async fn wait_for_request_lifecycle_state(
                     .unwrap_or_else(|| "null".to_string())
             );
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-}
-
-pub async fn wait_for_connected_peer(
-    home_dir: &std::path::Path,
-    peer_id: &str,
-    timeout: Duration,
-) -> Result<Value> {
-    let deadline = Instant::now() + timeout;
-    let mut last_error = "none".to_string();
-    loop {
-        match run_cli_json(home_dir, &["runtime", "p2p", "peers"]) {
-            Ok(status) => {
-                last_error.clear();
-                if status
-                    .get("peers")
-                    .and_then(Value::as_array)
-                    .is_some_and(|rows| {
-                        rows.iter()
-                            .filter_map(Value::as_str)
-                            .any(|row| row.contains(peer_id))
-                    })
-                {
-                    return Ok(status);
-                }
-            }
-            Err(error) => {
-                last_error = error.to_string();
-            }
-        }
-        if Instant::now() >= deadline {
-            bail!(
-                "timed out waiting for connected peer {peer_id}; last_error={}",
-                if last_error.is_empty() {
-                    "none"
-                } else {
-                    &last_error
-                }
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
 pub async fn wait_for_tool_call(graphql: &str, session_id: &str, tool_name: &str) -> Result<Value> {
     let deadline = Instant::now() + Duration::from_secs(20);
+    let access = ConfigAccess::Graphql(super::graphql::served_endpoint(graphql));
+    let mut changes = access.subscribe_changes("AgentToolCall").await;
     loop {
         let response = graphql_query(
             graphql,
@@ -368,7 +407,7 @@ pub async fn wait_for_tool_call(graphql: &str, session_id: &str, tool_name: &str
                         request_doc_id
                         session_id
                         tool_name
-                        status
+                        lifecycle_state
                     }}
                 }}"#,
                 escape_graphql_string(session_id),
@@ -377,11 +416,11 @@ pub async fn wait_for_tool_call(graphql: &str, session_id: &str, tool_name: &str
         )
         .await?;
         if let Ok(row) = first_graphql_row(&response, "AgentToolCall") {
-            let status = row
-                .get("status")
+            let lifecycle_state = row
+                .get("lifecycle_state")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            if status == "completed" {
+            if lifecycle_state == "completed" {
                 return Ok(row.clone());
             }
         }
@@ -389,7 +428,7 @@ pub async fn wait_for_tool_call(graphql: &str, session_id: &str, tool_name: &str
         if Instant::now() >= deadline {
             bail!("timed out waiting for AgentToolCall {tool_name} in session {session_id}");
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -400,6 +439,8 @@ pub async fn wait_for_completed_tool_calls(
     minimum_count: usize,
 ) -> Result<Vec<Value>> {
     let deadline = Instant::now() + Duration::from_secs(30);
+    let access = ConfigAccess::Graphql(super::graphql::served_endpoint(graphql));
+    let mut changes = access.subscribe_changes("AgentToolCall").await;
     loop {
         let response = graphql_query(
             graphql,
@@ -418,7 +459,7 @@ pub async fn wait_for_completed_tool_calls(
                         request_doc_id
                         session_id
                         tool_name
-                        status
+                        lifecycle_state
                     }}
                 }}"#,
                 escape_graphql_string(session_id),
@@ -433,7 +474,7 @@ pub async fn wait_for_completed_tool_calls(
             .unwrap_or_default();
         let completed = rows
             .iter()
-            .filter(|row| row.get("status").and_then(Value::as_str) == Some("completed"))
+            .filter(|row| row.get("lifecycle_state").and_then(Value::as_str) == Some("completed"))
             .cloned()
             .collect::<Vec<_>>();
         if completed.len() >= minimum_count {
@@ -446,7 +487,7 @@ pub async fn wait_for_completed_tool_calls(
                 Value::Array(rows)
             );
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -454,8 +495,8 @@ pub async fn wait_for_completed_tool_calls(
 /// physical-tool-document owner; a completed tool can precede replicated
 /// delivery briefly, so wait for the addressed reply to become visible.
 pub async fn canonical_tool_result_text(graphql: &str, call: &Value) -> Result<String> {
-    use gents::store::config_client::ConfigAccess;
-    use gents::tools::call::lifecycle::{load_tool_call_result, render_tool_result};
+    use gents_session::tool_call::query::result::{load_tool_call_result, render_tool_result};
+    use gents_store::config_client::ConfigAccess;
 
     let required = |field: &str| -> Result<&str> {
         call.get(field)
@@ -469,13 +510,18 @@ pub async fn canonical_tool_result_text(graphql: &str, call: &Value) -> Result<S
     let requester_did = call.get("requester_did").and_then(Value::as_str);
     let access = ConfigAccess::Graphql(super::graphql::served_endpoint(graphql));
     let deadline = Instant::now() + Duration::from_secs(20);
+    let mut changes = access.subscribe_changes("AgentMessage").await;
+    let mut segments = access.subscribe_changes("AgentOutputSegment").await;
     loop {
         match load_tool_call_result(&access, tool_doc_id, node_did, session_id, requester_did).await
         {
             Ok(message) => return render_tool_result(&message),
             Err(error) if Instant::now() < deadline => {
                 let _ = error;
-                tokio::time::sleep(Duration::from_millis(200)).await;
+                let _ = tokio::time::timeout_at(deadline, async {
+                    tokio::select! { _ = changes.recv() => {}, _ = segments.recv() => {} }
+                })
+                .await;
             }
             Err(error) => return Err(error),
         }
@@ -488,6 +534,8 @@ pub async fn wait_for_completed_inference_agents(
     expected_agent_dids: &[&str],
 ) -> Result<Vec<Value>> {
     let deadline = Instant::now() + Duration::from_secs(30);
+    let access = ConfigAccess::Graphql(super::graphql::served_endpoint(graphql));
+    let mut changes = access.subscribe_changes("InferenceCall").await;
     loop {
         let response = graphql_query(
             graphql,
@@ -531,6 +579,6 @@ pub async fn wait_for_completed_inference_agents(
                 Value::Array(rows)
             );
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }

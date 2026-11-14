@@ -1,6 +1,6 @@
 use super::*;
 use crate::client::mutations::submission_journal as journal;
-use gents::store::graphql::graphql_with_transaction_retry;
+use gents_store::graphql::graphql_with_transaction_retry;
 use std::sync::Arc;
 
 async fn stored(node: &defra_node::Node) -> Result<Vec<Record>> {
@@ -26,223 +26,168 @@ async fn stored(node: &defra_node::Node) -> Result<Vec<Record>> {
 
 #[tokio::test]
 async fn generated_goal_delivery_histories_survive_the_existing_journal() -> Result<()> {
-    let cases = tokio::task::spawn_blocking(model_cases).await??;
-    let checked = async {
-        let mut count = 0;
-        for case in cases {
-            let steps = case["trace"].as_array().context("trace")?;
-            if !case["initial"].as_array().context("initial")?.is_empty()
-                || steps.iter().any(|step| {
-                    step["input"]["durable"] == false || step["input"]["verified"] == false
-                })
-            {
-                continue;
-            }
-            // Each history runs against the journal of the desktop whose client
-            // issues its first command.
-            let mut facts = Facts::new()?;
-            let client = facts.client(number(&steps[0]["input"]["intent"], "client")?)?;
-            let node = crate::test_support::client_journal_node(&client).await?;
-            for step in steps {
-                let input = &step["input"];
-                match input["kind"].as_str().context("action")? {
-                    "reserve" => {
-                        let proposal = facts
-                            .record(&json!({"intent":input["intent"],
-                            "prepared":input["prepared"],"receipt":null,
-                            "retainedBytes":true,"acknowledged":false}))
-                            .await?;
-                        let decision = match journal::goal::reserve(&node, &proposal).await {
-                            Ok(record) => record.decision(),
-                            Err(_) if step["output"]["result"]["kind"] == "refused" => {
-                                Decision::Refused
-                            }
-                            Err(error) => return Err(error),
-                        };
-                        assert_eq!(
-                            facts.output(decision, None)?,
-                            step["output"],
-                            "{}",
-                            case["name"]
-                        );
-                    }
-                    "query" | "resume" => {
-                        let intent = facts.intent(&input["intent"])?;
-                        let records = match journal::goal::recover(&node, &intent).await {
-                            Ok(record) => record.into_iter().collect::<Vec<_>>(),
-                            Err(_) if step["output"]["result"]["kind"] == "refused" => {
-                                assert_eq!(facts.output(Decision::Refused, None)?, step["output"]);
-                                assert_eq!(
-                                    facts.records_json(&stored(&node).await?)?,
-                                    step["after"]
-                                );
-                                continue;
-                            }
-                            Err(error) => return Err(error),
-                        };
-                        let (decision, effect) = if input["kind"] == "resume" {
-                            resume(&records, &intent)
-                        } else {
-                            (query(&records, &intent), None)
-                        };
-                        assert_eq!(
-                            facts.output(decision, effect)?,
-                            step["output"],
-                            "{}",
-                            case["name"]
-                        );
-                    }
-                    "observe" => {
-                        let intent = facts.intent(&input["intent"])?;
-                        let receipt = facts.receipt(&input["receipt"], &input["intent"]).await?;
-                        let record = journal::goal::recover(&node, &intent)
-                            .await?
-                            .context("reservation")?;
-                        journal::goal::update(&node, &intent, &record.reference, Some(&receipt))
-                            .await?;
-                    }
-                    "acknowledge" => {
-                        let intent = facts.intent(&input["intent"])?;
-                        let command = facts.command(&input["prepared"], &input["intent"]).await?;
-                        let reference = Reference {
-                            command_id: command.command_id.clone(),
-                            command_digest: command.computed_digest()?,
-                            initial_request_id: command
-                                .initial_request
-                                .as_ref()
-                                .map(|r| r.request_id.clone()),
-                            requester_did: command.requester_did,
-                            agent_did: command.agent_did,
-                        };
-                        journal::goal::update(&node, &intent, &reference, None).await?;
-                    }
-                    "reconnect" => {}
-                    other => anyhow::bail!("unknown action {other}"),
+    for case in gents_lean_vocab::families::goal_client_delivery_contracts_durable_trace::cases() {
+        let input = serde_json::to_value(&case.input)?;
+        let actions = input["actions"].as_array().context("actions")?;
+        // Each history runs against the journal of the desktop whose client
+        // issues its first command.
+        let mut facts = Facts::new()?;
+        let client = facts.client(number(&actions[0]["intent"], "client")?)?;
+        let node = crate::test_support::client_journal_node(&client).await?;
+        let mut steps = Vec::new();
+        for action in actions {
+            let before = facts.records_json(&stored(&node).await?)?;
+            let output = match action["kind"].as_str().context("action")? {
+                "reserve" => {
+                    let proposal = facts.record(&proposal(action)).await?;
+                    let decision = match journal::goal::reserve(&node, &proposal).await {
+                        Ok(record) => record.decision(),
+                        Err(_) => Decision::Refused,
+                    };
+                    facts.output(decision, None)?
                 }
-                let records = stored(&node).await?;
-                assert_eq!(
-                    facts.records_json(&records)?,
-                    step["after"],
-                    "{} {}",
-                    case["name"],
-                    input["kind"]
-                );
-                for record in records {
-                    let retained = journal::goal::recover(&node, &record.intent)
+                "query" | "resume" => {
+                    let intent = facts.intent(&action["intent"])?;
+                    match journal::goal::recover(&node, &intent).await {
+                        Ok(record) => {
+                            let records = record.into_iter().collect::<Vec<_>>();
+                            let (decision, effect) = if action["kind"] == "resume" {
+                                resume(&records, &intent)
+                            } else {
+                                (query(&records, &intent), None)
+                            };
+                            facts.output(decision, effect)?
+                        }
+                        Err(_) => facts.output(Decision::Refused, None)?,
+                    }
+                }
+                "observe" => {
+                    let intent = facts.intent(&action["intent"])?;
+                    let receipt = facts.receipt(&action["receipt"], &action["intent"]).await?;
+                    let record = journal::goal::recover(&node, &intent)
                         .await?
-                        .context("retained")?;
-                    assert_eq!(
-                        facts.records_json(&[retained])?,
-                        facts.records_json(std::slice::from_ref(&record))?
-                    );
+                        .context("reservation")?;
+                    journal::goal::update(&node, &intent, &record.reference, Some(&receipt))
+                        .await?;
+                    Value::Null
                 }
+                "acknowledge" => {
+                    let intent = facts.intent(&action["intent"])?;
+                    let command = facts
+                        .command(&action["prepared"], &action["intent"])
+                        .await?;
+                    journal::goal::update(&node, &intent, &reference_of(command)?, None).await?;
+                    Value::Null
+                }
+                "reconnect" => Value::Null,
+                other => anyhow::bail!("unknown action {other}"),
+            };
+            let records = stored(&node).await?;
+            steps.push(
+                json!({"before":before,"after":facts.records_json(&records)?,"output":output}),
+            );
+            for record in records {
+                let retained = journal::goal::recover(&node, &record.intent)
+                    .await?
+                    .context("retained")?;
+                assert_eq!(
+                    facts.records_json(&[retained])?,
+                    facts.records_json(std::slice::from_ref(&record))?
+                );
             }
-            node.shutdown().await.unwrap();
-            count += 1;
         }
-        anyhow::ensure!(count == 16, "executed {count} durable Goal histories");
-        Ok::<(), anyhow::Error>(())
+        node.shutdown().await.unwrap();
+        case.check(serde_json::from_value(Value::Array(steps))?);
     }
-    .await;
-    checked
+    Ok(())
 }
 
 #[tokio::test]
 async fn competing_goal_reservations_and_acknowledgement_survive_reopen() -> Result<()> {
-    let cases = tokio::task::spawn_blocking(model_cases).await??;
-    let trace = cases
-        .iter()
-        .find(|case| case["name"] == "acknowledgement_loss")
-        .context("modeled acknowledgement loss")?["trace"]
-        .as_array()
-        .context("trace")?;
-    let mut facts = Facts::new()?;
-    let proposal = facts
-        .record(&json!({"intent":trace[0]["input"]["intent"],
-        "prepared":trace[0]["input"]["prepared"],"receipt":null,
-        "retainedBytes":true,"acknowledged":false}))
-        .await?;
-    let signed = serde_json::to_vec(proposal.prepared.as_ref().unwrap())?;
-    let home = tempfile::tempdir()?;
-    let open = || async {
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(&proposal.intent.client_did)
-                .data_path(home.path())
-                .build()
-                .await?,
+    for case in
+        gents_lean_vocab::families::goal_client_delivery_contracts_reopened_acknowledgement::cases()
+    {
+        let input = serde_json::to_value(&case.input)?;
+        let actions = input["actions"].as_array().context("actions")?;
+        let mut facts = Facts::new()?;
+        let proposal = facts.record(&proposal(&actions[0])).await?;
+        let signed = serde_json::to_vec(proposal.prepared.as_ref().unwrap())?;
+        let home = tempfile::tempdir()?;
+        let open = || async {
+            let node = Arc::new(
+                defra_node::Node::builder()
+                    .with_node_identity_did(&proposal.intent.client_did)
+                    .data_path(home.path())
+                    .build()
+                    .await?,
+            );
+            Ok::<_, anyhow::Error>(node)
+        };
+        let node = open().await?;
+        node.add_collection(&crate::test_support::unbound_journal_schema())
+            .await?;
+        let (left, right) = tokio::join!(
+            journal::goal::reserve(&node, &proposal),
+            journal::goal::reserve(&node, &proposal)
         );
-        Ok::<_, anyhow::Error>(node)
-    };
-    let node = open().await?;
-    node.add_collection(&crate::test_support::unbound_journal_schema())
-        .await?;
-    let (left, right) = tokio::join!(
-        journal::goal::reserve(&node, &proposal),
-        journal::goal::reserve(&node, &proposal)
-    );
-    assert_eq!(left?.reference, right?.reference);
-    node.shutdown().await.unwrap();
-    drop(node);
-    let node = open().await?;
-    let record = journal::goal::recover(&node, &proposal.intent)
-        .await?
-        .context("reopened reservation")?;
-    assert_eq!(
-        serde_json::to_vec(record.prepared.as_ref().unwrap())?,
-        signed
-    );
-    assert_eq!(facts.records_json(&[record])?, trace[0]["after"]);
-    let receipt = facts
-        .receipt(&trace[1]["input"]["receipt"], &trace[1]["input"]["intent"])
-        .await?;
-    let settled =
-        journal::goal::update(&node, &proposal.intent, &proposal.reference, Some(&receipt)).await?;
-    assert_eq!(facts.records_json(&[settled])?, trace[1]["after"]);
-    let acknowledged =
-        journal::goal::update(&node, &proposal.intent, &proposal.reference, None).await?;
-    assert_eq!(facts.records_json(&[acknowledged])?, trace[2]["after"]);
-    node.shutdown().await.unwrap();
-    drop(node);
-    let node = open().await?;
-    let record = journal::goal::recover(&node, &proposal.intent)
-        .await?
-        .context("reopened acknowledgement")?;
-    assert_eq!(
-        facts.records_json(std::slice::from_ref(&record))?,
-        trace[2]["after"]
-    );
-    let replay = journal::goal::reserve(&node, &proposal).await?;
-    assert_eq!(replay.reference, record.reference);
-    assert!(replay.prepared.is_none());
-    node.shutdown().await.unwrap();
+        assert_eq!(left?.reference, right?.reference);
+        node.shutdown().await.unwrap();
+        drop(node);
+        let node = open().await?;
+        let record = journal::goal::recover(&node, &proposal.intent)
+            .await?
+            .context("reopened reservation")?;
+        assert_eq!(
+            serde_json::to_vec(record.prepared.as_ref().unwrap())?,
+            signed
+        );
+        let reserved = facts.records_json(&[record])?;
+        let receipt = facts
+            .receipt(&actions[1]["receipt"], &actions[1]["intent"])
+            .await?;
+        let settled =
+            journal::goal::update(&node, &proposal.intent, &proposal.reference, Some(&receipt))
+                .await?;
+        let settled = facts.records_json(&[settled])?;
+        let acknowledged =
+            journal::goal::update(&node, &proposal.intent, &proposal.reference, None).await?;
+        let acknowledged = facts.records_json(&[acknowledged])?;
+        node.shutdown().await.unwrap();
+        drop(node);
+        let node = open().await?;
+        let record = journal::goal::recover(&node, &proposal.intent)
+            .await?
+            .context("reopened acknowledgement")?;
+        assert_eq!(
+            facts.records_json(std::slice::from_ref(&record))?,
+            acknowledged
+        );
+        let replay = journal::goal::reserve(&node, &proposal).await?;
+        assert_eq!(replay.reference, record.reference);
+        assert!(replay.prepared.is_none());
+        node.shutdown().await.unwrap();
+        case.check(serde_json::from_value(json!([
+            reserved,
+            settled,
+            acknowledged
+        ]))?);
+    }
     Ok(())
 }
 
 #[tokio::test]
 async fn competing_distinct_signed_proposals_share_one_committed_goal_preparation() -> Result<()> {
-    let cases = tokio::task::spawn_blocking(model_cases).await??;
-    let trace = cases
-        .iter()
-        .find(|case| case["name"] == "racing_first_request_proposal")
-        .context("modeled competing proposals")?["trace"]
-        .as_array()
-        .context("trace")?;
-    let mut facts = Facts::new()?;
-    let mut proposals = Vec::new();
-    for step in &trace[..2] {
-        let input = &step["input"];
-        proposals.push(
-            facts
-                .record(&json!({
-                    "intent":input["intent"], "prepared":input["prepared"],
-                    "receipt":null, "retainedBytes":true, "acknowledged":false,
-                }))
-                .await?,
-        );
-    }
-    let node = crate::test_support::client_journal_node(&proposals[0].intent.client_did).await?;
-    let checked = async {
+    for case in gents_lean_vocab::families::goal_client_delivery_contracts_racing_proposals::cases()
+    {
+        let input = serde_json::to_value(&case.input)?;
+        let mut facts = Facts::new()?;
+        let mut proposals = Vec::new();
+        for action in input["actions"].as_array().context("actions")? {
+            proposals.push(facts.record(&proposal(action)).await?);
+        }
+        let node =
+            crate::test_support::client_journal_node(&proposals[0].intent.client_did).await?;
+        let checked = async {
         assert_ne!(proposals[0].reference, proposals[1].reference);
         let (left, right) = tokio::join!(
             journal::goal::reserve(&node, &proposals[0]),
@@ -250,10 +195,8 @@ async fn competing_distinct_signed_proposals_share_one_committed_goal_preparatio
         );
         let left = left?;
         let right = right?;
-        assert_eq!(left.reference, right.reference);
         let rows = stored(&node).await?;
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].reference, left.reference);
+        assert!(rows.iter().all(|row| row.reference == left.reference));
         let winner = proposals
             .iter()
             .find(|proposal| proposal.reference == left.reference)
@@ -266,9 +209,16 @@ async fn competing_distinct_signed_proposals_share_one_committed_goal_preparatio
             serde_json::to_vec(&right.prepared)?,
             serde_json::to_vec(&winner.prepared)?
         );
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, anyhow::Error>(
+            gents_lean_vocab::families::goal_client_delivery_contracts_racing_proposals::RacingOutput {
+                shared_preparation: left.reference == right.reference,
+                records: rows.len() as u64,
+            },
+        )
     }
     .await;
-    node.shutdown().await.unwrap();
-    checked
+        node.shutdown().await.unwrap();
+        case.check(checked?);
+    }
+    Ok(())
 }

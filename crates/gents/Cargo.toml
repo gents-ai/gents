@@ -14,24 +14,36 @@ default = [
     "defra-node/p2p",
     "defra-node/wasmtime-runtime",
 ]
-typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript"]
+typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript", "gents-inference/typescript", "gents-p2p/typescript", "gents-pack/typescript", "gents-session/typescript", "gents-tools/typescript", "gents-toolcalls/typescript", "gents-automation/typescript", "gents-observe/typescript"]
 # Gates the optional live-inference collection out of default builds.
-live-e2e = []
+live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e", "gents-inference/live-e2e", "gents-p2p/live-e2e", "gents-pack/live-e2e", "gents-session/live-e2e", "gents-tools/live-e2e", "gents-toolcalls/live-e2e", "gents-automation/live-e2e", "gents-observe/live-e2e"]
 # Test builds refuse to resolve the operator's real Gents homes; enabled only
 # through dev-dependencies, never by production builds.
-test-home-guard = []
+test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard", "gents-inference/test-home-guard", "gents-p2p/test-home-guard", "gents-pack/test-home-guard", "gents-session/test-home-guard", "gents-tools/test-home-guard", "gents-toolcalls/test-home-guard", "gents-automation/test-home-guard", "gents-observe/test-home-guard"]
 # Native fixtures for downstream conformance tests; never enabled in production.
-test-fixtures = ["test-home-guard", "axum/ws"]
+test-fixtures = ["dep:gents-lean-vocab", "test-home-guard", "axum/ws", "gents-store/test-fixtures", "gents-documents/test-fixtures", "gents-inference/test-fixtures", "gents-p2p/test-fixtures", "gents-pack/test-fixtures", "gents-session/test-fixtures", "gents-tools/test-fixtures", "gents-toolcalls/test-fixtures", "gents-automation/test-fixtures", "gents-observe/test-fixtures"]
 
 # All other test binaries are auto-discovered; this explicit target overrides
 # autodiscovery for e2e_live so the link only happens on live runs
-# (`cargo test -p gents --features live-e2e --test e2e_live -- --ignored`).
+# (`cargo test -p gents --features live-e2e --test e2e_live`).
 [[test]]
 name = "e2e_live"
 path = "tests/e2e_live.rs"
 required-features = ["live-e2e"]
 
 [dependencies]
+# Decoder of Lean-generated cases; compiled in only for test-fixtures.
+gents-lean-vocab = { workspace = true, optional = true }
+gents-store.workspace = true
+gents-documents.workspace = true
+gents-inference.workspace = true
+gents-p2p.workspace = true
+gents-pack.workspace = true
+gents-session.workspace = true
+gents-tools.workspace = true
+gents-toolcalls.workspace = true
+gents-automation.workspace = true
+gents-observe.workspace = true
 acp.workspace = true
 schema.workspace = true
 storage.workspace = true
@@ -158,6 +170,18 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+# Integration tests link the library with its fixtures.
+gents = { path = ".", features = ["test-fixtures"] }
+gents-store = { workspace = true, features = ["test-fixtures"] }
+gents-documents = { workspace = true, features = ["test-fixtures"] }
+gents-inference = { workspace = true, features = ["test-fixtures"] }
+gents-p2p = { workspace = true, features = ["test-fixtures"] }
+gents-pack = { workspace = true, features = ["test-fixtures"] }
+gents-session = { workspace = true, features = ["test-fixtures"] }
+gents-tools = { workspace = true, features = ["test-fixtures"] }
+gents-toolcalls = { workspace = true, features = ["test-fixtures"] }
+gents-automation = { workspace = true, features = ["test-fixtures"] }
+gents-observe = { workspace = true, features = ["test-fixtures"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 oxc_allocator = "=0.127.0"
 oxc_ast = "=0.127.0"
@@ -171,6 +195,7 @@ shlex = "1.3"
 tree-sitter = "0.25"
 tree-sitter-bash = "0.25.1"
 gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true
 gents-callback-fixture-create-workspace = { path = "../gents-callbacks/fixture_create_workspace" }
 syn = { version = "2", features = ["full", "visit"] }
 wat = "1.254"

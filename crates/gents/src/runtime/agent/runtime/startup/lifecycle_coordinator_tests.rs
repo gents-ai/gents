@@ -1,135 +1,112 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
-
-use tokio::sync::{Barrier, Notify, Semaphore};
-
 use super::*;
 use crate::runtime::agent::ProcessLifecycleObserver;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
+use tokio::sync::{Notify, Semaphore};
 
 #[derive(Default)]
 struct RecordingObserver {
     states: StdMutex<Vec<ProcessLifecycleState>>,
 }
-
 impl ProcessLifecycleObserver for RecordingObserver {
     fn on_process_state_change(&self, state: ProcessLifecycleState) {
-        self.states.lock().expect("observer mutex").push(state);
+        self.states.lock().unwrap().push(state);
     }
 }
-
-struct FailFirstReadyWriter {
-    calls: AtomicUsize,
-    ready_attempted: Barrier,
+struct PendingReadyWriter {
+    retry_first: AtomicBool,
+    entered: Notify,
     release: Semaphore,
 }
-
 #[async_trait::async_trait]
-impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for FailFirstReadyWriter {
+impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for PendingReadyWriter {
     async fn upsert(
         &self,
-        _node_did: &str,
-        _snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
-        _updated_at: &str,
+        _: &str,
+        snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
+        _: &str,
     ) -> Result<()> {
-        if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
-            self.ready_attempted.wait().await;
+        if snapshot.process_state
+            == gents_protocol::node_readiness::NodeReadinessProcessState::Ready
+        {
+            if self.retry_first.swap(false, Ordering::SeqCst) {
+                anyhow::bail!("injected readiness retry");
+            }
+            self.entered.notify_one();
             self.release.acquire().await.unwrap().forget();
-            anyhow::bail!("injected first Ready persistence failure");
         }
         Ok(())
     }
 }
 
 #[tokio::test]
-async fn admission_gate_waits_for_durable_ready_retry_ack() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let writer = Arc::new(FailFirstReadyWriter {
-        calls: AtomicUsize::new(0),
-        ready_attempted: Barrier::new(2),
-        release: Semaphore::new(0),
-    });
-    let (status_owner, status) = RuntimeStatusHandle::start_with_readiness_writer(
-        node.clone(),
-        "did:test:ready-gate-persistence",
-        writer.clone(),
-        std::time::Duration::from_millis(5),
-    );
-    status.initialize_startup("general").await.unwrap();
-    let gate = super::super::router::RuntimeAdmissionGate::closed();
-    let coordinator = Arc::new(RuntimeLifecycleCoordinator::new(gate.clone(), status, None));
-    let becoming_ready = {
-        let coordinator = coordinator.clone();
-        tokio::spawn(async move { coordinator.become_ready().await })
-    };
-
-    writer.ready_attempted.wait().await;
-    assert!(
-        !gate.is_open().await,
-        "Ready write failure opened admission"
-    );
-    assert!(
-        !becoming_ready.is_finished(),
-        "Ready lifecycle acknowledged before persistence retry"
-    );
-    writer.release.add_permits(1);
-    assert!(becoming_ready.await.unwrap().unwrap());
-    assert!(gate.is_open().await, "durable Ready did not open admission");
-
-    coordinator.begin_shutdown().await.unwrap();
-    coordinator.finish_shutdown().await.unwrap();
-    status_owner.close().await.unwrap();
-    node.shutdown().await.expect("node shutdown");
-}
-
-#[tokio::test]
-async fn shutdown_wins_over_a_late_startup_barrier_release() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let node_did = node
-        .node_identity_did()
-        .expect("fixture node has an identity")
-        .to_owned();
-    crate::test_support::ensure_test_node(&node, &node_did).await;
-    let status = RuntimeStatusHandle::new(node.clone(), node_did);
-    status.initialize_startup("general").await.unwrap();
-    let gate = super::super::router::RuntimeAdmissionGate::closed();
-    let observer = Arc::new(RecordingObserver::default());
-    let coordinator = Arc::new(RuntimeLifecycleCoordinator::new(
-        gate.clone(),
-        status,
-        Some(observer.clone()),
-    ));
-    let waiting = Arc::new(Barrier::new(2));
-    let release = Arc::new(Notify::new());
-
-    let ready_task = {
-        let coordinator = coordinator.clone();
-        let waiting = waiting.clone();
-        let release = release.clone();
-        tokio::spawn(async move {
-            waiting.wait().await;
-            release.notified().await;
-            coordinator.become_ready().await
-        })
-    };
-
-    waiting.wait().await;
-    coordinator.begin_shutdown().await.unwrap();
-    release.notify_one();
-
-    assert!(
-        !ready_task.await.unwrap().unwrap(),
-        "closing lifecycle reopened Ready"
-    );
-    assert!(
-        !gate.is_open().await,
-        "closing lifecycle reopened admission"
-    );
-    assert_eq!(
-        *observer.states.lock().expect("observer mutex"),
-        vec![ProcessLifecycleState::ShuttingDown],
-        "Ready must never become observable after shutdown begins"
-    );
-    node.shutdown().await.expect("node shutdown");
+async fn generated_startup_admission_opens_only_after_a_durable_ready() {
+    use gents_lean_vocab::families::runtime_startup_admission_become_ready as family;
+    for case in family::cases() {
+        let db = gents_inference::test_support::test_db(
+            "startup-ready-family",
+            gents_automation::lifecycle_hooks::composition(),
+        )
+        .await;
+        let writer = Arc::new(PendingReadyWriter {
+            retry_first: AtomicBool::new(case.input.retry_first),
+            entered: Notify::new(),
+            release: Semaphore::new(0),
+        });
+        let (status_owner, status) = RuntimeStatusHandle::start_with_readiness_writer(
+            db.node.clone(),
+            "did:test:startup-ready",
+            writer.clone(),
+            std::time::Duration::from_millis(1),
+            crate::runtime::storage_fault::StorageFaultObservation::new(),
+        );
+        status.initialize_startup("general").await.unwrap();
+        let gate = super::super::router::RuntimeAdmissionGate::closed();
+        let observer = Arc::new(RecordingObserver::default());
+        let coordinator = Arc::new(RuntimeLifecycleCoordinator::new(
+            gate.clone(),
+            status.clone(),
+            Some(observer.clone()),
+        ));
+        if case.input.closing {
+            coordinator.begin_shutdown().await.unwrap();
+        }
+        let task = {
+            let coordinator = coordinator.clone();
+            tokio::spawn(async move { coordinator.become_ready().await })
+        };
+        let (pending_before_write, gate_before_write) = if case.input.closing {
+            (false, gate.is_open().await)
+        } else {
+            writer.entered.notified().await;
+            let pending = !task.is_finished();
+            let gate = gate.is_open().await;
+            writer.release.add_permits(1);
+            (pending, gate)
+        };
+        let applied = task.await.unwrap().unwrap();
+        case.check(family::ReadyObservation {
+            pending_before_write,
+            gate_before_write,
+            applied,
+            gate_after_write: gate.is_open().await,
+            process: status
+                .readiness()
+                .observation()
+                .process_state()
+                .as_str()
+                .into(),
+            notifications: observer
+                .states
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|state| state.as_str().to_owned())
+                .collect(),
+        });
+        coordinator.begin_shutdown().await.unwrap();
+        coordinator.finish_shutdown().await.unwrap();
+        status_owner.close().await.unwrap();
+        db.node.shutdown().await.unwrap();
+    }
 }

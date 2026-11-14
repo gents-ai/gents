@@ -1,25 +1,21 @@
 //! External premises: DefraDB's merge path keeps the unique-index entry for
 //! the lexicographically smallest docID and persists the loser unindexed.
-//! Node shutdown does not join the P2P pending-DAG sweep loops spawned in
-//! defra-node's `setup_p2p`, so
-//! the in-process storage lock can lag shutdown by up to one sweep interval; the
-//! OS drops the lock on real process exit.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents::runtime::agent::p2p_reconcile::{
-    EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
-};
-use gents::store::graphql::escape_graphql_string;
+use gents_p2p::p2p_reconcile::{EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin};
+use gents_store::graphql::escape_graphql_string;
 
-use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
+use crate::support::snapshots::SnapshotReader;
 use crate::support::test_p2p_db;
+use gents_p2p::test_support::transport::{wait_for_connected_peer, wait_for_listen_addr};
 
 const CONFLICT_DID: &str = "did:test:984-stale-endpoint";
 
-async fn create_endpoint(node: &EmbeddedNode, address: &str) -> String {
+async fn create_endpoint(node: &std::sync::Arc<EmbeddedNode>, address: &str) -> String {
     let did = escape_graphql_string(CONFLICT_DID);
     let address = escape_graphql_string(address);
     let mutation = format!(
@@ -34,7 +30,13 @@ async fn create_endpoint(node: &EmbeddedNode, address: &str) -> String {
             }}) {{ _docID }}
         }}"#
     );
-    let resp = node.execute(&mutation).await;
+    let resp = gents_store::config_client::ConfigAccess::write_local_response(
+        node,
+        "test.p2p_fixture",
+        &mutation,
+    )
+    .await
+    .expect("P2P document access");
     assert!(
         !resp.has_errors(),
         "create_PeerRegistry failed: {:?}",
@@ -45,13 +47,15 @@ async fn create_endpoint(node: &EmbeddedNode, address: &str) -> String {
     indexed.into_iter().next().unwrap()
 }
 
-async fn indexed_endpoint_doc_ids(node: &EmbeddedNode) -> Vec<String> {
+async fn indexed_endpoint_doc_ids(node: &std::sync::Arc<EmbeddedNode>) -> Vec<String> {
     let did = escape_graphql_string(CONFLICT_DID);
-    let resp = node
-        .execute(&format!(
-            r#"{{ PeerRegistry(filter: {{ peer_id: {{ _eq: "{did}" }} }}) {{ _docID }} }}"#
-        ))
-        .await;
+    let resp = gents_store::graphql::graphql_with_transaction_retry(
+        node,
+        &format!(r#"{{ PeerRegistry(filter: {{ peer_id: {{ _eq: "{did}" }} }}) {{ _docID }} }}"#),
+        "test.p2p_observation",
+    )
+    .await
+    .expect("P2P document access");
     scan_endpoint_doc_ids(&resp)
 }
 
@@ -70,10 +74,14 @@ fn scan_endpoint_doc_ids(resp: &gents::defra_node::QueryResponse) -> Vec<String>
         .unwrap_or_default()
 }
 
-async fn scan_endpoints(node: &EmbeddedNode) -> Vec<String> {
-    let resp = node
-        .execute(r#"{ PeerRegistry { _docID peer_id endpoint_address } }"#)
-        .await;
+async fn scan_endpoints(node: &std::sync::Arc<EmbeddedNode>) -> Vec<String> {
+    let resp = gents_store::graphql::graphql_with_transaction_retry(
+        node,
+        r#"{ PeerRegistry { _docID peer_id endpoint_address } }"#,
+        "test.p2p_observation",
+    )
+    .await
+    .expect("P2P document access");
     scan_endpoint_doc_ids(&resp)
 }
 
@@ -83,8 +91,8 @@ async fn install_replicator(sender: &Arc<EmbeddedNode>, receiver: &Arc<EmbeddedN
     let collections = vec!["PeerRegistry".to_string()];
 
     // Transport administration runs as each Node's own identity.
-    let sender_p2p = gents::store::identity::node_p2p(sender).expect("sender p2p");
-    let receiver_p2p = gents::store::identity::node_p2p(receiver).expect("receiver p2p");
+    let sender_p2p = gents_store::identity::node_p2p(sender).expect("sender p2p");
+    let receiver_p2p = gents_store::identity::node_p2p(receiver).expect("receiver p2p");
     sender_p2p
         .connect_peer(&receiver_addr)
         .await
@@ -130,6 +138,7 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
     install_replicator(&client.node, &home.node).await;
 
     let deadline = Instant::now() + Duration::from_secs(30);
+    let mut changes = home.node.subscribe_changes("PeerRegistry").await;
     loop {
         let docs = scan_endpoints(&home.node).await;
         if docs.len() == 2 {
@@ -139,7 +148,9 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
             Instant::now() < deadline,
             "home never persisted the conflicting endpoint; scan={docs:?}"
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .expect("conflicting endpoint notification deadline");
     }
 
     let winner = std::cmp::min(home_doc.clone(), client_doc.clone());
@@ -151,21 +162,17 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
 
     client.node.shutdown().await.expect("node shutdown");
 
-    let reopen_deadline = Instant::now() + Duration::from_secs(90);
-    loop {
-        match home.simulate_process_crash().await {
-            Ok(()) => break,
-            Err(e)
-                if e.to_string().contains("is locked by another process")
-                    && Instant::now() < reopen_deadline =>
-            {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-            Err(e) => panic!("boot after a merge-parked unique-index conflict must succeed: {e}"),
-        }
-    }
+    drop(changes);
+    tokio::time::timeout(Duration::from_secs(90), home.node.shutdown())
+        .await
+        .expect("node shutdown deadline")
+        .expect("node shutdown");
+    tokio::time::timeout(Duration::from_secs(90), home.simulate_process_crash())
+        .await
+        .expect("reopen deadline")
+        .expect("boot after a merge-parked unique-index conflict");
 
-    gents::store::schema::migration::ensure_migrations(&home.node)
+    gents_store::schema::migration::ensure_migrations(&home.node)
         .await
         .expect("ensure_migrations after boot");
 

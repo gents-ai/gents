@@ -11,7 +11,7 @@ checksum = "fe438c63458706e03479442743baae6c88256498e6431708f6dfc520a26515d3"
 [[package]]
 name = "acp"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "async-trait",
  "datastore",
@@ -1257,7 +1257,7 @@ dependencies = [
 [[package]]
 name = "blockstore"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2282,7 +2282,7 @@ dependencies = [
 [[package]]
 name = "crdt"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "ciborium",
  "defra-core",
@@ -2369,7 +2369,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "crypto"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "aes-gcm",
  "blst",
@@ -2524,7 +2524,7 @@ dependencies = [
 [[package]]
 name = "cursor"
 version = "0.1.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "base64 0.23.1",
  "serde",
@@ -2721,7 +2721,7 @@ dependencies = [
 [[package]]
 name = "datastore"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2734,7 +2734,7 @@ dependencies = [
 [[package]]
 name = "db"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "acp",
  "async-trait",
@@ -2810,7 +2810,7 @@ dependencies = [
 [[package]]
 name = "defra-core"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2838,7 +2838,7 @@ dependencies = [
 [[package]]
 name = "defra-http"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "acp",
  "async-stream",
@@ -2870,6 +2870,7 @@ dependencies = [
  "schema",
  "serde",
  "serde_json",
+ "storage",
  "telemetry",
  "thiserror 2.0.18",
  "tower",
@@ -2881,7 +2882,7 @@ dependencies = [
 [[package]]
 name = "defra-node"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "acp",
  "async-trait",
@@ -2923,7 +2924,7 @@ dependencies = [
 [[package]]
 name = "defra-p2p-adapter"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "acp",
  "async-trait",
@@ -2968,7 +2969,7 @@ dependencies = [
 [[package]]
 name = "defra-version"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "serde",
 ]
@@ -3248,7 +3249,7 @@ dependencies = [
 [[package]]
 name = "document"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -3422,7 +3423,7 @@ dependencies = [
 [[package]]
 name = "edge"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "async-compat",
  "defra-core",
@@ -3644,7 +3645,7 @@ dependencies = [
 [[package]]
 name = "events"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -4273,13 +4274,25 @@ dependencies = [
  "eventsource-stream",
  "flate2",
  "futures",
+ "gents",
+ "gents-automation",
  "gents-callback-fixture-create-workspace",
  "gents-claude",
+ "gents-documents",
  "gents-fs-runner",
+ "gents-inference",
  "gents-lean-contract",
+ "gents-lean-vocab",
  "gents-loop",
  "gents-migration",
+ "gents-observe",
+ "gents-p2p",
+ "gents-pack",
  "gents-protocol",
+ "gents-session",
+ "gents-store",
+ "gents-toolcalls",
+ "gents-tools",
  "hkdf",
  "hmac 0.12.1",
  "hostname",
@@ -4347,6 +4360,57 @@ dependencies = [
 ]
 
 [[package]]
+name = "gents-automation"
+version = "1.0.0-rc2"
+dependencies = [
+ "acp",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "bs58",
+ "chrono",
+ "crypto",
+ "db",
+ "defra-core",
+ "defra-node",
+ "document",
+ "events",
+ "futures",
+ "gents-automation",
+ "gents-callback-fixture-create-workspace",
+ "gents-documents",
+ "gents-inference",
+ "gents-lean-contract",
+ "gents-lean-vocab",
+ "gents-loop",
+ "gents-p2p",
+ "gents-pack",
+ "gents-protocol",
+ "gents-session",
+ "gents-store",
+ "gents-toolcalls",
+ "gents-tools",
+ "identity",
+ "query",
+ "rapidhash",
+ "reqwest 0.12.28",
+ "rig-core",
+ "schema",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
 name = "gents-callback-fixture-create-workspace"
 version = "0.1.0"
 dependencies = [
@@ -4384,6 +4448,7 @@ dependencies = [
  "crc32fast",
  "flate2",
  "gents-lean-contract",
+ "gents-lean-vocab",
  "hmac 0.12.1",
  "httparse",
  "kovan-map",
@@ -4440,27 +4505,41 @@ dependencies = [
  "ciborium",
  "clap",
  "crypto",
+ "ctor",
  "db",
  "defra-core",
- "defra-http",
  "defra-node",
  "defra-p2p-adapter",
  "flate2",
  "futures",
  "futures-util",
  "gents",
+ "gents-automation",
  "gents-chatgpt-login",
  "gents-claude-login",
+ "gents-core-packs",
  "gents-desktop-core",
+ "gents-documents",
  "gents-eval",
  "gents-fs-runner",
+ "gents-host",
+ "gents-inference",
  "gents-lean-contract",
+ "gents-lean-vocab",
+ "gents-loop",
+ "gents-observe",
+ "gents-p2p",
+ "gents-pack",
  "gents-protocol",
+ "gents-service",
+ "gents-session",
  "gents-shell",
+ "gents-store",
+ "gents-toolcalls",
+ "gents-tools",
  "hostname",
  "iana-time-zone",
  "identity",
- "include_dir",
  "iroh",
  "jsonschema",
  "libc",
@@ -4488,7 +4567,6 @@ dependencies = [
  "serde_yaml",
  "sha2 0.10.9",
  "shlex",
- "subtle",
  "tar",
  "tempfile",
  "thiserror 2.0.18",
@@ -4525,14 +4603,26 @@ dependencies = [
  "futures",
  "futures-util",
  "gents",
+ "gents-automation",
  "gents-cli",
  "gents-desktop-bridge",
  "gents-desktop-core",
+ "gents-documents",
+ "gents-host",
+ "gents-inference",
+ "gents-loop",
+ "gents-observe",
+ "gents-pack",
  "gents-protocol",
+ "gents-service",
+ "gents-session",
+ "gents-store",
+ "gents-tools",
  "libc",
  "portable-pty",
  "rapidhash",
  "reqwest 0.12.28",
+ "security-framework",
  "serde",
  "serde_json",
  "tempfile",
@@ -4544,6 +4634,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "gents-core-packs"
+version = "1.0.0-rc2"
+
+[[package]]
 name = "gents-desktop"
 version = "1.0.0-rc2"
 dependencies = [
@@ -4551,6 +4645,7 @@ dependencies = [
  "clap",
  "gents",
  "gents-desktop-core",
+ "gents-session",
  "serde_json",
  "tokio",
  "tracing",
@@ -4568,16 +4663,29 @@ dependencies = [
  "blake3",
  "bytes",
  "chrono",
+ "clap",
  "crypto",
  "dirs 5.0.1",
  "futures",
  "gents",
+ "gents-automation",
  "gents-chatgpt-login",
  "gents-claude-login",
  "gents-cli",
  "gents-desktop-core",
+ "gents-documents",
+ "gents-host",
+ "gents-inference",
  "gents-lean-contract",
+ "gents-lean-vocab",
+ "gents-loop",
+ "gents-pack",
  "gents-protocol",
+ "gents-service",
+ "gents-session",
+ "gents-store",
+ "gents-toolcalls",
+ "gents-tools",
  "heck 0.5.0",
  "hostname",
  "identity",
@@ -4621,10 +4729,21 @@ dependencies = [
  "events",
  "futures",
  "gents",
+ "gents-automation",
  "gents-desktop-core",
+ "gents-documents",
+ "gents-inference",
  "gents-lean-contract",
+ "gents-lean-vocab",
+ "gents-loop",
  "gents-migration",
+ "gents-observe",
+ "gents-p2p",
  "gents-protocol",
+ "gents-session",
+ "gents-store",
+ "gents-toolcalls",
+ "gents-tools",
  "identity",
  "p2p",
  "rapidhash",
@@ -4656,9 +4775,18 @@ dependencies = [
  "gents-cli",
  "gents-desktop-bridge",
  "gents-desktop-core",
+ "gents-documents",
  "gents-fs-runner",
- "gents-lean-contract",
+ "gents-inference",
+ "gents-lean-vocab",
+ "gents-observe",
+ "gents-p2p",
+ "gents-pack",
  "gents-protocol",
+ "gents-service",
+ "gents-session",
+ "gents-store",
+ "gents-tools",
  "mac-notification-sys",
  "mimalloc",
  "objc2",
@@ -4685,6 +4813,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "gents-documents"
+version = "1.0.0-rc2"
+dependencies = [
+ "acp",
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "chrono-tz",
+ "db",
+ "defra-core",
+ "defra-node",
+ "gents-lean-vocab",
+ "gents-loop",
+ "gents-protocol",
+ "gents-store",
+ "identity",
+ "minijinja",
+ "query",
+ "rapidhash",
+ "reqwest 0.12.28",
+ "schema",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
 name = "gents-eval"
 version = "1.0.0-rc2"
 dependencies = [
@@ -4696,8 +4861,19 @@ dependencies = [
  "defra-core",
  "futures",
  "gents",
+ "gents-automation",
+ "gents-documents",
+ "gents-inference",
  "gents-lean-contract",
+ "gents-lean-vocab",
+ "gents-loop",
+ "gents-observe",
+ "gents-pack",
  "gents-protocol",
+ "gents-session",
+ "gents-store",
+ "gents-toolcalls",
+ "gents-tools",
  "glob",
  "identity",
  "jsonschema",
@@ -4725,6 +4901,7 @@ dependencies = [
  "dirs 5.0.1",
  "fixture-domain-plugin",
  "gents-desktop-bridge",
+ "gents-service",
  "serde_json",
  "tauri",
  "tauri-build",
@@ -4745,6 +4922,119 @@ dependencies = [
 ]
 
 [[package]]
+name = "gents-host"
+version = "1.0.0-rc2"
+dependencies = [
+ "acp",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "crypto",
+ "ctor",
+ "db",
+ "defra-core",
+ "defra-http",
+ "defra-node",
+ "defra-p2p-adapter",
+ "futures",
+ "futures-util",
+ "gents",
+ "gents-automation",
+ "gents-desktop-core",
+ "gents-documents",
+ "gents-inference",
+ "gents-lean-contract",
+ "gents-lean-vocab",
+ "gents-loop",
+ "gents-p2p",
+ "gents-pack",
+ "gents-protocol",
+ "gents-service",
+ "gents-session",
+ "gents-store",
+ "gents-toolcalls",
+ "gents-tools",
+ "hostname",
+ "identity",
+ "include_dir",
+ "iroh",
+ "libc",
+ "p2p",
+ "query",
+ "rapidhash",
+ "reqwest 0.12.28",
+ "rmcp",
+ "schema",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "gents-inference"
+version = "1.0.0-rc2"
+dependencies = [
+ "acp",
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "aws-lc-rs",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "db",
+ "defra-core",
+ "defra-http",
+ "defra-node",
+ "document",
+ "flate2",
+ "futures",
+ "gents-claude",
+ "gents-documents",
+ "gents-inference",
+ "gents-lean-contract",
+ "gents-lean-vocab",
+ "gents-loop",
+ "gents-protocol",
+ "gents-store",
+ "hmac 0.12.1",
+ "identity",
+ "kovan-map",
+ "opentelemetry",
+ "query",
+ "rand 0.9.2",
+ "rapidhash",
+ "reqwest 0.12.28",
+ "reqwest 0.13.2",
+ "rig-core",
+ "schema",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-opentelemetry",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
 name = "gents-lean-contract"
 version = "1.0.0-rc2"
 dependencies = [
@@ -4754,6 +5044,7 @@ dependencies = [
  "crypto",
  "defra-core",
  "defra-node",
+ "gents-lean-vocab",
  "gents-protocol",
  "gents-schemas",
  "hex",
@@ -4761,6 +5052,25 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "gents-lean-vocab"
+version = "1.0.0-rc2"
+dependencies = [
+ "acp",
+ "anyhow",
+ "chrono",
+ "gents-lean-contract",
+ "gents-protocol",
+ "identity",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_json",
+ "syn 2.0.117",
  "tokio",
 ]
 
@@ -4792,6 +5102,7 @@ dependencies = [
  "futures",
  "gents-claude",
  "gents-lean-contract",
+ "gents-lean-vocab",
  "gents-protocol",
  "rand 0.9.2",
  "rapidhash",
@@ -4848,6 +5159,134 @@ dependencies = [
 ]
 
 [[package]]
+name = "gents-observe"
+version = "1.0.0-rc2"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "bs58",
+ "chrono",
+ "defra-node",
+ "gents-automation",
+ "gents-documents",
+ "gents-inference",
+ "gents-lean-contract",
+ "gents-lean-vocab",
+ "gents-loop",
+ "gents-observe",
+ "gents-p2p",
+ "gents-pack",
+ "gents-protocol",
+ "gents-session",
+ "gents-store",
+ "gents-toolcalls",
+ "gents-tools",
+ "identity",
+ "jsonschema",
+ "query",
+ "rapidhash",
+ "schema",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "gents-p2p"
+version = "1.0.0-rc2"
+dependencies = [
+ "acp",
+ "anyhow",
+ "async-trait",
+ "bs58",
+ "chrono",
+ "defra-core",
+ "defra-node",
+ "defra-p2p-adapter",
+ "events",
+ "futures",
+ "gents-documents",
+ "gents-lean-contract",
+ "gents-lean-vocab",
+ "gents-p2p",
+ "gents-protocol",
+ "gents-store",
+ "identity",
+ "p2p",
+ "query",
+ "reqwest 0.12.28",
+ "schema",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "storage",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "gents-pack"
+version = "1.0.0-rc2"
+dependencies = [
+ "acp",
+ "afterburner",
+ "afterburner-afb",
+ "afterburner-core",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "defra-core",
+ "defra-node",
+ "dirs 5.0.1",
+ "flate2",
+ "futures",
+ "gents-documents",
+ "gents-inference",
+ "gents-lean-contract",
+ "gents-lean-vocab",
+ "gents-loop",
+ "gents-protocol",
+ "gents-store",
+ "identity",
+ "libc",
+ "memmap2",
+ "nuclei",
+ "query",
+ "rapidhash",
+ "regex",
+ "reqwest 0.12.28",
+ "same-file",
+ "schema",
+ "schemars 1.2.1",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "ts-rs",
+ "uuid",
+ "wasmtime",
+ "wat",
+]
+
+[[package]]
 name = "gents-protocol"
 version = "1.0.0-rc2"
 dependencies = [
@@ -4857,12 +5296,16 @@ dependencies = [
  "chrono",
  "ciborium",
  "gents-lean-contract",
+ "gents-lean-vocab",
  "gents-schemas",
  "graphql-parser",
+ "query",
  "rapidhash",
+ "regex",
  "reqwest 0.12.28",
  "rig-core",
  "schemars 1.2.1",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4877,12 +5320,279 @@ name = "gents-schemas"
 version = "1.0.0-rc2"
 
 [[package]]
+name = "gents-service"
+version = "1.0.0-rc2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "clap",
+ "gents",
+ "gents-desktop-core",
+ "gents-lean-vocab",
+ "gents-protocol",
+ "gents-service",
+ "gents-session",
+ "gents-store",
+ "hostname",
+ "identity",
+ "libc",
+ "notify",
+ "objc2",
+ "objc2-foundation",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "plist",
+ "reqwest 0.12.28",
+ "security-framework",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wait-timeout",
+]
+
+[[package]]
+name = "gents-session"
+version = "1.0.0-rc2"
+dependencies = [
+ "acp",
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "base64 0.22.1",
+ "bs58",
+ "caseless",
+ "cc",
+ "chrono",
+ "crypto",
+ "cursor",
+ "db",
+ "defra-core",
+ "defra-node",
+ "document",
+ "events",
+ "futures",
+ "gents-documents",
+ "gents-inference",
+ "gents-lean-contract",
+ "gents-lean-vocab",
+ "gents-loop",
+ "gents-migration",
+ "gents-p2p",
+ "gents-protocol",
+ "gents-session",
+ "gents-store",
+ "identity",
+ "libc",
+ "query",
+ "rapidhash",
+ "reqwest 0.12.28",
+ "rig-core",
+ "schema",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "storage",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-normalization",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "gents-shell"
 version = "1.0.0-rc2"
 dependencies = [
  "rapidhash",
  "ratatui",
  "tui-test-rs",
+]
+
+[[package]]
+name = "gents-store"
+version = "1.0.0-rc2"
+dependencies = [
+ "acp",
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "crypto",
+ "cursor",
+ "db",
+ "defra-core",
+ "defra-http",
+ "defra-node",
+ "defra-p2p-adapter",
+ "dirs 5.0.1",
+ "document",
+ "events",
+ "eventsource-stream",
+ "futures",
+ "gents-lean-contract",
+ "gents-lean-vocab",
+ "gents-loop",
+ "gents-migration",
+ "gents-protocol",
+ "gents-schemas",
+ "hkdf",
+ "hmac 0.12.1",
+ "identity",
+ "k256 0.13.4",
+ "lens",
+ "libc",
+ "query",
+ "rand 0.9.2",
+ "rapidhash",
+ "regex",
+ "regolith",
+ "reqwest 0.12.28",
+ "schema",
+ "security-framework",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "storage",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "gents-toolcalls"
+version = "1.0.0-rc2"
+dependencies = [
+ "acp",
+ "afterburner",
+ "afterburner-afb",
+ "afterburner-core",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "db",
+ "defra-core",
+ "defra-node",
+ "document",
+ "events",
+ "futures",
+ "gents-documents",
+ "gents-inference",
+ "gents-lean-contract",
+ "gents-lean-vocab",
+ "gents-loop",
+ "gents-p2p",
+ "gents-pack",
+ "gents-protocol",
+ "gents-session",
+ "gents-store",
+ "gents-toolcalls",
+ "gents-tools",
+ "identity",
+ "kovan-map",
+ "libc",
+ "p2p",
+ "query",
+ "rapidhash",
+ "reqwest 0.12.28",
+ "rig-core",
+ "schema",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "gents-tools"
+version = "1.0.0-rc2"
+dependencies = [
+ "acp",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "db",
+ "defra-core",
+ "defra-http",
+ "defra-node",
+ "defra-p2p-adapter",
+ "dirs 5.0.1",
+ "events",
+ "futures",
+ "gents-documents",
+ "gents-fs-runner",
+ "gents-inference",
+ "gents-lean-contract",
+ "gents-lean-vocab",
+ "gents-loop",
+ "gents-migration",
+ "gents-p2p",
+ "gents-pack",
+ "gents-protocol",
+ "gents-session",
+ "gents-store",
+ "gents-tools",
+ "hostname",
+ "identity",
+ "jsonschema",
+ "libc",
+ "p2p",
+ "query",
+ "rapidhash",
+ "regex",
+ "reqwest 0.12.28",
+ "rig-core",
+ "rmcp",
+ "same-file",
+ "schema",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "storage",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+ "tokio-util",
+ "toml 0.8.2",
+ "tracing",
+ "tracing-subscriber",
+ "ts-rs",
+ "uuid",
 ]
 
 [[package]]
@@ -5694,7 +6404,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "identity"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "base64 0.23.1",
  "crypto",
@@ -5886,7 +6596,7 @@ dependencies = [
 [[package]]
 name = "inputs"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "defra-core",
  "edge",
@@ -6491,7 +7201,7 @@ dependencies = [
 [[package]]
 name = "keyring"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm",
@@ -6510,7 +7220,7 @@ dependencies = [
 [[package]]
 name = "kms"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "acp",
  "async-channel",
@@ -6541,9 +7251,9 @@ dependencies = [
 
 [[package]]
 name = "kovan"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daa9f1b7bd4e214a839ec477347103f4265810e25cab696762ac65bd8701963b"
+checksum = "0bcb8da121c845d9ba15fba591bfa74a1edc4338224de908e9418f83ea0a157f"
 dependencies = [
  "once_cell",
  "portable-atomic",
@@ -6551,9 +7261,9 @@ dependencies = [
 
 [[package]]
 name = "kovan-channel"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9132bf6a8ccf1d07adaf2e53383167b26938c6bee94aefef9f386a804b5b9e9d"
+checksum = "c60b65a276e6b8dfdec214556dd8f146cf4eba929a2ed64f1f39cf4065a49337"
 dependencies = [
  "crossbeam-utils",
  "kovan",
@@ -6561,9 +7271,9 @@ dependencies = [
 
 [[package]]
 name = "kovan-map"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e37b89c7827b824d80ef7a8dba6aebd394d790dd571f6e0f00d0f8f6f6094de0"
+checksum = "b9df379acf9faa6c17eca47b85049f5fb19c916a62fd936b089299024f004140"
 dependencies = [
  "foldhash 0.2.0",
  "kovan",
@@ -6571,9 +7281,9 @@ dependencies = [
 
 [[package]]
 name = "kovan-queue"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfb6480396d536cecf454bad4c133fd9a0130bac03306d2b8ece1f5d3000803a"
+checksum = "afd9b3c5e33bce20b80b6037313c2f217c72923d2643d2ead20362d7c13390ed"
 dependencies = [
  "crossbeam-utils",
  "kovan",
@@ -6635,7 +7345,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 [[package]]
 name = "lens"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -7336,7 +8046,7 @@ dependencies = [
 [[package]]
 name = "net"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "bytes",
  "edge",
@@ -8718,7 +9428,7 @@ dependencies = [
 [[package]]
 name = "p2p"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "acp",
  "async-trait",
@@ -9713,7 +10423,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 [[package]]
 name = "query"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "acp",
  "async-graphql",
@@ -10251,7 +10961,7 @@ dependencies = [
 [[package]]
 name = "replication-filter"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "kovan-map",
  "p2p",
@@ -10839,7 +11549,7 @@ dependencies = [
 [[package]]
 name = "schema"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "cid",
  "defra-core",
@@ -11727,7 +12437,7 @@ dependencies = [
 [[package]]
 name = "storage"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "async-trait",
  "bm25",
@@ -12425,7 +13135,7 @@ dependencies = [
 [[package]]
 name = "telemetry"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "rapidhash",
  "regolith",
@@ -15194,7 +15904,7 @@ dependencies = [
 [[package]]
 name = "workers"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "libc",
  "rapidhash",
@@ -15361,7 +16071,7 @@ dependencies = [
 [[package]]
 name = "zanzibar"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=ce4b566a5860f4ca6e858101d53ce8f413f8d957#ce4b566a5860f4ca6e858101d53ce8f413f8d957"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=199470622d01f4ee742ccdf62c0c72f20bc2b4a6#199470622d01f4ee742ccdf62c0c72f20bc2b4a6"
 dependencies = [
  "async-trait",
  "identity",

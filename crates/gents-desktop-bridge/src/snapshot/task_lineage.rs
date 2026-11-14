@@ -110,97 +110,65 @@ impl LineageIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
 
-    fn scope(value: &Value) -> Scope {
+    fn scope(value: &gents_lean_vocab::families::task_lineage_originating::Scope) -> Scope {
         Scope {
-            node: value["node"].as_u64().unwrap().to_string(),
-            session: value["session"].as_u64().unwrap().to_string(),
-            requester: value["requester"].as_u64().map(|value| value.to_string()),
+            node: value.node.to_string(),
+            session: value.session.to_string(),
+            requester: value.requester.map(|value| value.to_string()),
+        }
+    }
+
+    fn scoped_scope(value: &gents_lean_vocab::families::task_lineage_scoped_task::Scope) -> Scope {
+        Scope {
+            node: value.node.to_string(),
+            session: value.session.to_string(),
+            requester: value.requester.map(|value| value.to_string()),
         }
     }
 
     #[test]
     fn generated_task_lineage_cases_match_projection() {
-        let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases: Vec<_> = contract["session_document_cases"]["projection"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|case| case["operation"] == "task_lineage")
-            .collect();
-        assert!(!cases.is_empty());
-        for case in cases {
-            let rows = case["rows"]
-                .as_array()
-                .unwrap()
+        gents_lean_vocab::families::task_lineage_originating::replay(|i| {
+            let rows = i
+                .rows
                 .iter()
                 .map(|row| Row {
-                    scope: scope(&row["scope"]),
-                    task: row["task"].as_u64().map(|value| value.to_string()),
-                    starter: (!row["starter"].is_null()).then(|| scope(&row["starter"])),
+                    scope: scope(&row.scope),
+                    task: row.task.map(|value| value.to_string()),
+                    starter: row.starter.as_ref().map(scope),
                 })
                 .collect();
-            let owner = case["owner"].as_u64().unwrap().to_string();
-            let expected = case["task"].as_u64().map(|value| value.to_string());
+            let owner = i.owner.to_string();
             let mut index = LineageIndex::new(rows);
-            assert_eq!(
-                index.originating_task(&owner, &scope(&case["scope"])),
-                expected,
-                "{}",
-                case["name"]
-            );
-            assert_eq!(
-                index.originating_task(&owner, &scope(&case["scope"])),
-                expected
-            );
-            assert_eq!(
-                index.originating_task("other-node", &scope(&case["scope"])),
-                None
-            );
-        }
+            let task = index.originating_task(&owner, &scope(&i.scope));
+            assert_eq!(index.originating_task(&owner, &scope(&i.scope)), task);
+            assert_eq!(index.originating_task("other-node", &scope(&i.scope)), None);
+            gents_lean_vocab::families::task_lineage_originating::LineageOutput {
+                task: task.map(|task| task.parse().unwrap()),
+            }
+        });
     }
 
     #[test]
     fn generated_scoped_lineage_cases_preserve_the_task_owner() {
-        let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases: Vec<_> = contract["session_document_cases"]["projection"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|case| case["operation"] == "task_lineage_scoped")
-            .collect();
-        assert!(!cases.is_empty());
-        for case in cases {
-            let rows = case["rows"]
-                .as_array()
-                .unwrap()
+        gents_lean_vocab::families::task_lineage_scoped_task::replay(|i| {
+            let rows = i
+                .rows
                 .iter()
                 .map(|row| Row {
-                    scope: scope(&row["scope"]),
-                    task: row["task"].as_u64().map(|value| value.to_string()),
-                    starter: (!row["starter"].is_null()).then(|| scope(&row["starter"])),
+                    scope: scoped_scope(&row.scope),
+                    task: row.task.map(|value| value.to_string()),
+                    starter: row.starter.as_ref().map(scoped_scope),
                 })
                 .collect();
-            let expected =
-                case["task"]
-                    .as_u64()
-                    .zip(case["task_node"].as_u64())
-                    .map(|(task, node)| ScopedTask {
-                        task: task.to_string(),
-                        node: node.to_string(),
-                    });
             let mut index = LineageIndex::new(rows);
-            assert_eq!(
-                index.originating_scoped_task(&scope(&case["scope"])),
-                expected,
-                "{}",
-                case["name"]
-            );
-            assert_eq!(
-                index.originating_scoped_task(&scope(&case["scope"])),
-                expected
-            );
-        }
+            let task = index.originating_scoped_task(&scoped_scope(&i.scope));
+            assert_eq!(index.originating_scoped_task(&scoped_scope(&i.scope)), task);
+            gents_lean_vocab::families::task_lineage_scoped_task::ScopedOutput {
+                task_node: task.as_ref().map(|task| task.node.parse().unwrap()),
+                task: task.as_ref().map(|task| task.task.parse().unwrap()),
+            }
+        });
     }
 }

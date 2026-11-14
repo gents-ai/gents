@@ -5,7 +5,6 @@ import {
   BridgeInvokeError,
   type DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
-import type { BridgeErrorCode } from "@source-inc/gents-desktop-client/generated/BridgeErrorCode";
 
 import { startClientObservation } from "../src/hooks/clientObservation";
 import { LoadingStatus } from "../src/ui/screens/LoadingStatus";
@@ -38,15 +37,24 @@ function bridgeApi(): Record<string, ReturnType<typeof vi.fn>> {
 
 type Listener = (event: { reason?: string }) => Promise<void>;
 
-/* a session with a request that has not finished and no live text, whose
-   read takes `readMs` and, while `changing` says so, differs each time */
-function observe({ readMs, changing }: { readMs: number; changing: () => boolean }) {
+/* a session with a request that has not finished and no live text, unless
+   `idle`, whose read takes `readMs` and, while `changing` says so, differs
+   each time */
+function observe({
+  readMs,
+  changing,
+  idle = false,
+}: {
+  readMs: number;
+  changing: () => boolean;
+  idle?: boolean;
+}) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   const api = bridgeApi();
   const session = sessionSnapshot({
     sessionId: "s-1",
     nodeDid: NODE_DID,
-    turnState: "running",
+    turnState: idle ? "completed" : "running",
     latestRequestId: "r-1",
     liveCursor: null,
     timelineItems: [],
@@ -74,16 +82,29 @@ function observe({ readMs, changing }: { readMs: number; changing: () => boolean
   return { app, api, stop, started, sendUpdate };
 }
 
-function deliveryError(code: BridgeErrorCode) {
+function pendingError() {
   return new BridgeInvokeError({
-    code,
-    message: `${code} on Studio`,
+    code: "projectionPending",
+    message: "projectionPending on Studio",
     retryable: true,
     endpoint: NODE_DID,
   });
 }
 
-afterEach(() => vi.useRealTimers());
+let visibility: DocumentVisibilityState = "visible";
+Object.defineProperty(document, "visibilityState", {
+  configurable: true,
+  get: () => visibility,
+});
+const showWindow = (shown: boolean) => {
+  visibility = shown ? "visible" : "hidden";
+  document.dispatchEvent(new Event("visibilitychange"));
+};
+
+afterEach(() => {
+  visibility = "visible";
+  vi.useRealTimers();
+});
 
 describe("reading a session with an open request", () => {
   it("reads nothing while no update arrives", async () => {
@@ -151,15 +172,79 @@ describe("reading a session with an open request", () => {
   });
 });
 
+describe("reading an idle open session while its node is busy elsewhere", () => {
+  it("refreshes the list on every store change but reads the session at its own pace", async () => {
+    const run = observe({ readMs: 200, changing: () => false, idle: true });
+    try {
+      await vi.advanceTimersByTimeAsync(200);
+      expect(run.app.trackedRequestId()).toBeNull();
+      expect(run.started).toHaveLength(1);
+      const lists = () => run.api.fetchDesktopSnapshot.mock.calls.length;
+      let listed = lists();
+      for (let i = 0; i < 40; i++) {
+        await run.sendUpdate();
+        await vi.advanceTimersByTimeAsync(50);
+        /* a change made while a session read runs is listed after it */
+        if (i % 4 === 3) {
+          expect(lists()).toBeGreaterThan(listed);
+          listed = lists();
+        }
+      }
+      /* each read waits at least as long as the last one took */
+      for (let i = 1; i < run.started.length; i++)
+        expect(run.started[i]! - run.started[i - 1]!).toBeGreaterThanOrEqual(400);
+      expect(run.started.length).toBeLessThanOrEqual(6);
+      /* the last change is still read, once */
+      const reads = run.started.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(run.started.length).toBeLessThanOrEqual(reads + 1);
+      expect(run.started.at(-1)!).toBeGreaterThanOrEqual(2_000);
+    } finally {
+      run.stop();
+    }
+  });
+
+  it("reads nothing for the session while the window is hidden, then reads it once shown", async () => {
+    const run = observe({ readMs: 0, changing: () => true, idle: true });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run.started).toHaveLength(1);
+      showWindow(false);
+      const lists = run.api.fetchDesktopSnapshot.mock.calls.length;
+      for (let i = 0; i < 20; i++) {
+        await run.sendUpdate();
+        await vi.advanceTimersByTimeAsync(3_000);
+      }
+      expect(run.started).toHaveLength(1);
+      expect(run.api.fetchDesktopSnapshot.mock.calls.length - lists).toBe(20);
+      showWindow(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run.started).toHaveLength(2);
+    } finally {
+      run.stop();
+    }
+  });
+
+  it("keeps a running request's reads while the window is hidden", async () => {
+    const run = observe({ readMs: 0, changing: () => true });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run.app.trackedRequestId()).toBe("r-1");
+      showWindow(false);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await run.sendUpdate();
+      expect(run.started).toHaveLength(2);
+    } finally {
+      run.stop();
+    }
+  });
+});
+
 describe("a session waiting on its node", () => {
   it("re-reads when the pairing changes and when the store changes, ahead of its backoff", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const api = bridgeApi();
-    const reads = [
-      deliveryError("sessionNotConnected"),
-      deliveryError("sessionDelivering"),
-      deliveryError("sessionAccepted"),
-    ];
+    const reads = [pendingError(), pendingError(), pendingError()];
     const visible = sessionSnapshot({
       sessionId: "s-1",
       nodeDid: NODE_DID,
@@ -201,10 +286,10 @@ describe("a session waiting on its node", () => {
     const phase = () => app.stores.session.getState().load.phase;
     try {
       await vi.advanceTimersByTimeAsync(0);
-      expect(phase()).toBe("notConnected");
+      expect(phase()).toBe("pending");
       expect(app.view.getState().loadingStatus).toMatchObject({
-        phase: "blocked",
-        title: "Not connected to the node",
+        phase: "loading",
+        title: "Waiting for session update",
       });
       /* nothing reads before the first re-read of the backoff is due */
       await vi.advanceTimersByTimeAsync(999);
@@ -212,12 +297,12 @@ describe("a session waiting on its node", () => {
 
       await send("health");
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
-      expect(phase()).toBe("delivering");
+      expect(phase()).toBe("pending");
 
       await send("store");
       await vi.advanceTimersByTimeAsync(0);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(3);
-      expect(phase()).toBe("accepted");
+      expect(phase()).toBe("pending");
 
       await send("store");
       await vi.advanceTimersByTimeAsync(0);
@@ -242,10 +327,10 @@ describe("a session waiting on its node", () => {
       .mockImplementationOnce(
         () =>
           new Promise((_resolve, reject) => {
-            land = () => reject(deliveryError("sessionNotConnected"));
+            land = () => reject(pendingError());
           }),
       )
-      .mockRejectedValueOnce(deliveryError("sessionDelivering"));
+      .mockRejectedValueOnce(pendingError());
     const app = testApp({
       api,
       snapshot: running,
@@ -276,18 +361,13 @@ describe("a session waiting on its node", () => {
       land();
       await vi.advanceTimersByTimeAsync(0);
       expect(api.fetchSessionSnapshot).toHaveBeenCalledTimes(2);
-      expect(app.stores.session.getState().load.phase).toBe("delivering");
+      expect(app.stores.session.getState().load.phase).toBe("pending");
     } finally {
       stop();
     }
   });
 
-  it.each([
-    ["projectionPending", "Waiting for session update"],
-    ["sessionDelivering", "Sending message"],
-    ["sessionNotConnected", "Not connected to the node"],
-    ["sessionAccepted", "Message picked up"],
-  ] as const)(
+  it.each([["projectionPending", "Waiting for session update"]] as const)(
     "re-reads %s within a bounded backoff, then offers retry",
     async (code, title) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });

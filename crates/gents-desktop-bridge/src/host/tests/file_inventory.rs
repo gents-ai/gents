@@ -4,13 +4,13 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use gents::NodeIdentity;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_protocol::file_inventory::FileInventoryRequest;
 use gents_protocol::file_inventory::{
     DirectFileInventoryRequest, FileInventoryAdmission, FileInventoryObservation,
     FileInventoryReadAction, FILE_INVENTORY_OPERATOR_PATH,
 };
+use gents_store::identity::NodeIdentity;
 use identity::Identity;
 use serde_json::{json, Value};
 use tokio::io::DuplexStream;
@@ -72,9 +72,10 @@ async fn call(client: &mut Connection, node: &str, id: u64, action: Value) -> Re
 async fn inventory_requests_go_to_the_runtime_as_the_desktop_client() -> Result<()> {
     let root = tempfile::tempdir()?;
     let key = root.path().join("runtime.key");
-    let runtime =
-        tokio::task::spawn_blocking(move || gents::KeyIdentity::load_or_create(key, None))
-            .await??;
+    let runtime = tokio::task::spawn_blocking(move || {
+        gents_store::identity::KeyIdentity::load_or_create(key, None)
+    })
+    .await??;
     let server = MockServer::start().await;
     let endpoint = format!("{}/api/v0/graphql", server.uri());
     let paths = DesktopPaths::from_root(root.path().join("client"));

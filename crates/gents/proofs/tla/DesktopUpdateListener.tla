@@ -54,8 +54,8 @@ CONSTANTS
 
 Sessions == {1, 2}
 NoRead == [v |-> 0, s |-> 0]
-\* a selected request not at its owner yet, or a message still in delivery
-Waiting == {"pending", "delivering", "notConnected", "accepted"}
+\* a selected request not at its owner yet
+Waiting == {"pending"}
 
 VARIABLES
   rust,         \* the latest committed store version

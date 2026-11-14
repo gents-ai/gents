@@ -1,30 +1,23 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
+use std::collections::BTreeSet;
 use std::io::Write;
 
 use anyhow::{anyhow, Context, Result};
-use gents::documents::EvalSplit;
 use gents::eval::scoring::PILOT_PURPOSE;
-use gents::eval::OutcomeKind;
-use gents_eval::report::{load_report, EvalReport, SlotClass};
-use gents_eval::runner::{self, Capture, TrialLocator};
-use serde_json::{json, Value};
+use gents_documents::EvalSplit;
+use gents_eval::authoring::dossier::read_pack;
+use gents_eval::authoring::draft::parse_reply;
+use gents_eval::authoring::pilot::{digest_turn, failing_rows};
+use gents_eval::authoring::write::{commit, rewrite_readme, split_name, PilotNote};
+use gents_eval::report::load_report;
+use gents_eval::runner;
 
-use super::draft::parse_reply;
 use super::turn::Turn;
-use super::validate::Assembled;
-use super::write::{commit, rewrite_readme, split_name, PilotNote};
-use super::{checked, print_written, InitContext, InitOutcome};
+use super::{checked, print_written, CliWriteHost, InitContext, InitOutcome};
 use crate::cli::{CellArg, EvalRunArgs, EvalScopeArgs};
-use crate::commands::eval::render::wire;
 use crate::commands::eval::run::{follow, run_request};
 use crate::commands::eval::{Deps, EvalContext};
 
 const PILOT_CELL: &str = "pilot";
-
-const ROWS_BUDGET_BYTES: usize = 2048;
-
-const INSTRUCTION: &str = "A failing check may mean a wrong case (the case expects what the agent should not do, or its capture or params miss what the agent did: a matcher miss, empty versus absent rows, a keyword that did not survive) or a wrong subject (the agent really fails it). One trial per case cannot tell noise from either; judge each failure from its rows.";
 
 pub(crate) struct PilotOutcome {
     pub(crate) run_ids: Vec<String>,
@@ -133,7 +126,7 @@ async fn run_and_answer(
     for run_id in run_ids.iter() {
         reports.push(load_report(&ctx.access, &ctx.owner, &ctx.runs_dir(), run_id).await?);
     }
-    let rows = failing_rows(deps, assembled, &reports).await;
+    let rows = failing_rows(deps.executor, assembled, &reports).await;
     let digest = digest_turn(&reports, &rows);
     writeln!(out, "{digest}")?;
     let reply = turn.send(&digest).await?;
@@ -144,10 +137,10 @@ async fn run_and_answer(
 }
 
 async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<()> {
-    let (manifest, assets) = super::dossier::read_pack(dir)?;
-    let config = gents::pack::load_pack_config(
+    let (manifest, assets) = read_pack(dir)?;
+    let config = gents_pack::pack::load_pack_config(
         &manifest,
-        &gents::pack::PackInstallOptions {
+        &gents_pack::pack::PackInstallOptions {
             node_did: ctx.owner.clone(),
         },
         &|path| {
@@ -158,32 +151,30 @@ async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<
         },
         &|_name| None,
     )?;
-    let digest = gents::pack::digest_declared_assets(&manifest, |path| {
+    let digest = gents_pack::pack::digest_declared_assets(&manifest, |path| {
         assets
             .get(path)
             .map(Vec::as_slice)
             .with_context(|| format!("pack has no asset {path:?}"))
     })?;
-    let identity = gents::pack::PackIdentity::new(&manifest, digest, Vec::new());
+    let identity = gents_pack::pack::PackIdentity::new(&manifest, digest, Vec::new());
     let expected = config
         .eval_definitions
         .iter()
-        .map(
-            |definition| gents::store::config_client::DesiredStateExpectation {
-                collection: gents::Collection::EvalDefinition,
-                owner: ctx.owner.clone(),
-                id: definition.definition_id.clone(),
-                digest: None,
-            },
-        )
+        .map(|definition| gents_documents::DesiredStateExpectation {
+            collection: gents_store::collection::Collection::EvalDefinition,
+            owner: ctx.owner.clone(),
+            id: definition.definition_id.clone(),
+            digest: None,
+        })
         .collect();
-    gents::pack::install_pack_documents_with_expectations(
+    gents_pack::pack::install_pack_documents_with_expectations(
         &ctx.access,
         &ctx.owner,
         &identity,
         &config,
-        gents::pack::DriftPolicy::Refuse,
-        expected,
+        gents_pack::pack::DriftPolicy::Refuse,
+        expected, &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .context(
@@ -244,137 +235,6 @@ async fn run_split(
     Ok(())
 }
 
-async fn failing_rows(
-    deps: &Deps<'_>,
-    assembled: &Assembled,
-    reports: &[EvalReport],
-) -> BTreeMap<(String, String), Vec<Value>> {
-    let mut rows = BTreeMap::new();
-    let slots = reports
-        .iter()
-        .flat_map(|report| &report.cells)
-        .flat_map(|cell| &cell.slots)
-        .filter(|slot| slot.class != SlotClass::Pass);
-    for slot in slots {
-        let (Some(latest), Some(case)) = (
-            slot.latest.as_ref(),
-            assembled
-                .definition
-                .cases
-                .iter()
-                .find(|case| case.case_id == slot.case_id),
-        ) else {
-            continue;
-        };
-        let failing: BTreeSet<&str> = slot
-            .verdicts
-            .iter()
-            .filter(|verdict| verdict.kind != OutcomeKind::Passed)
-            .map(|verdict| verdict.stage_id.as_str())
-            .collect();
-        let locator = TrialLocator {
-            trial_node_did: latest.trial_node_did.clone(),
-            session_id: latest.session_id.clone(),
-            home_hint: latest.home_hint.clone(),
-        };
-        for (index, stage) in case.stages.iter().enumerate() {
-            if !failing.contains(stage.stage_id.as_str()) || stage.capture.is_empty() {
-                continue;
-            }
-            let captures: Vec<Capture> = stage.capture.iter().map(Capture::from).collect();
-            let Some(evidence) = deps.executor.recollect(&locator, &captures).await else {
-                continue;
-            };
-            let Some(read) = evidence.stages.get(index) else {
-                continue;
-            };
-            let captured = read
-                .captures
-                .iter()
-                .map(|(name, result)| json!({"capture": name, "result": result}))
-                .collect();
-            rows.insert((case.case_id.clone(), stage.stage_id.clone()), captured);
-        }
-    }
-    rows
-}
-
-pub(crate) fn digest_turn(
-    reports: &[EvalReport],
-    rows: &BTreeMap<(String, String), Vec<Value>>,
-) -> String {
-    let mut text = String::from("## Pilot results\n\n");
-    let _ = writeln!(
-        text,
-        "One trial per case, one run per split: {}.",
-        reports
-            .iter()
-            .map(|report| report.run.run_id.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-    for report in reports {
-        let split = wire(&report.run.split);
-        for slot in report.cells.iter().flat_map(|cell| &cell.slots) {
-            let _ = writeln!(text, "\n### {} ({split})\n", slot.case_id);
-            let _ = writeln!(text, "slot: {}", wire(&slot.class));
-            let mut stages: Vec<&str> = Vec::new();
-            for verdict in &slot.verdicts {
-                if !stages.contains(&verdict.stage_id.as_str()) {
-                    stages.push(&verdict.stage_id);
-                }
-            }
-            let mut budget = ROWS_BUDGET_BYTES;
-            for stage in stages {
-                let _ = writeln!(text, "stage {stage}:");
-                let mut failing = false;
-                for verdict in slot.verdicts.iter().filter(|v| v.stage_id == stage) {
-                    failing |= verdict.kind != OutcomeKind::Passed;
-                    let _ = writeln!(
-                        text,
-                        "- {} {} {} {}",
-                        verdict.check,
-                        wire(&verdict.kind),
-                        verdict
-                            .score_bp
-                            .map_or_else(|| "-".to_owned(), |bp| bp.to_string()),
-                        verdict.reason_code.as_deref().unwrap_or("-")
-                    );
-                }
-                if !failing {
-                    continue;
-                }
-                match rows.get(&(slot.case_id.clone(), stage.to_owned())) {
-                    Some(rows) => {
-                        let _ =
-                            writeln!(text, "captured rows:\n{}", render_rows(rows, &mut budget));
-                    }
-                    None => text.push_str("captured rows: none could be read back\n"),
-                }
-            }
-        }
-    }
-    let _ = write!(
-        text,
-        "\n{INSTRUCTION}\n\nReply with a full revised draft, or say 'keep'."
-    );
-    text
-}
-
-fn render_rows(rows: &[Value], budget: &mut usize) -> String {
-    let json = serde_json::to_string(rows).unwrap_or_default();
-    if json.len() <= *budget {
-        *budget -= json.len();
-        return json;
-    }
-    let mut cut = *budget;
-    while !json.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    *budget = 0;
-    format!("{}…", &json[..cut])
-}
-
 async fn revise(
     init: &InitContext<'_>,
     drafted: &InitOutcome,
@@ -416,7 +276,8 @@ async fn revise(
                 staged,
                 &written.out,
                 true,
-                &crate::home_state::resolve_home_dir(init.scope.home.as_deref()),
+                &init.home(),
+                &CliWriteHost(init.home()),
             )?;
             writeln!(out, "the author revised the draft after the pilot")?;
             print_written(init, &assembled, &written, out)?;
@@ -437,14 +298,14 @@ async fn revise(
 mod tests {
     use std::path::Path;
 
+    use gents_eval::authoring::fixtures::dossier;
+    use gents_eval::authoring::validate::{assemble, validate, Floors};
+    use gents_eval::authoring::write::stage;
     use gents_eval::checks::CheckRegistry;
     use gents_eval::report::load_runs;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use super::super::tests::draft_block;
-    use super::super::validate::tests::dossier;
-    use super::super::validate::{assemble, validate, Floors};
-    use super::super::write::{commit, stage};
     use super::*;
     use crate::commands::eval::testing::Fixture;
 
@@ -499,16 +360,27 @@ mod tests {
     }
 
     async fn drafted(init: &InitContext<'_>) -> InitOutcome {
-        let draft = super::super::draft::parse_reply(&block(&cases()))
-            .unwrap()
-            .unwrap();
+        let draft = parse_reply(&block(&cases())).unwrap().unwrap();
         let assembled = assemble(&draft, None, &init.owner, &init.dossier.slot).unwrap();
         validate(&assembled, init.registry, &init.dossier, &init.floors).unwrap();
-        let staged = stage(&assembled, SUMMARY, &init.dossier, None)
-            .await
-            .unwrap();
+        let staged = stage(
+            &assembled,
+            SUMMARY,
+            &init.dossier,
+            None,
+            &CliWriteHost(init.home()),
+        )
+        .await
+        .unwrap();
         let home = tempfile::tempdir().unwrap();
-        let written = commit(staged, &init.out, false, home.path()).unwrap();
+        let written = commit(
+            staged,
+            &init.out,
+            false,
+            home.path(),
+            &CliWriteHost(home.path().to_path_buf()),
+        )
+        .unwrap();
         InitOutcome {
             written: Some(written),
             assembled: Some(assembled),
@@ -537,9 +409,9 @@ mod tests {
         let mut existing =
             serde_json::to_value(&drafted.assembled.as_ref().unwrap().definition).unwrap();
         existing["title"] = json!("Existing instrument");
-        let plan = gents::store::config_client::DesiredStateApplyPlan::new(vec![
-            gents::store::config_client::DesiredStateApplyDocument {
-                collection: gents::Collection::EvalDefinition,
+        let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+            gents_documents::DesiredStateApplyDocument {
+                collection: gents_store::collection::Collection::EvalDefinition,
                 add: existing.clone(),
                 update: existing,
             },
@@ -550,7 +422,14 @@ mod tests {
             .access
             .transact_write("eval.pilot.existing_definition_fixture", |txn| {
                 let plan = &plan;
-                Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    gents_documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();
@@ -558,7 +437,7 @@ mod tests {
         let before = fixture.ctx.access.execute(query).await.unwrap();
         let error = install_definition(&fixture.ctx, dir).await.unwrap_err();
         assert!(
-            gents::store::config_client::stale_expectation(&error).is_some(),
+            gents_documents::stale_expectation(&error).is_some(),
             "{error:#}"
         );
         let after = fixture.ctx.access.execute(query).await.unwrap();
@@ -581,7 +460,7 @@ mod tests {
         assert_ne!(left.is_ok(), right.is_ok());
         let error = left.err().or_else(|| right.err()).unwrap();
         assert!(
-            gents::store::config_client::stale_expectation(&error).is_some(),
+            gents_documents::stale_expectation(&error).is_some(),
             "{error:#}"
         );
     }

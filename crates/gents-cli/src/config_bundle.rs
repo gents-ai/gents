@@ -1,7 +1,7 @@
 use crate::config_writes::{ConfigAccess, ConfigApplyTxn};
 use crate::{desired_state, shared::ConfigExportBundle, CONFIG_EXPORT_FORMAT};
 use anyhow::{Context, Result};
-use gents::pack::authoring::export::sort_document_rows;
+use gents_pack::pack::authoring::export::sort_document_rows;
 use serde_json::Value;
 use std::collections::BTreeSet;
 
@@ -47,7 +47,7 @@ pub(crate) async fn read_owned_config_bundle_in_txn(
     access_mode: String,
 ) -> Result<Option<ConfigExportBundle>> {
     Ok(
-        gents::pack::authoring::export::read_owned_config_in_txn(txn, node_did)
+        gents_pack::pack::authoring::export::read_owned_config_in_txn(txn, node_did)
             .await?
             .map(|config| ConfigExportBundle {
                 format: CONFIG_EXPORT_FORMAT.into(),
@@ -126,16 +126,18 @@ mod tests {
     #[tokio::test]
     async fn offline_client_access_exports_the_owned_configuration() {
         let node = std::sync::Arc::new(
-            crate::shared::test_support::fixture_node_builder()
+            gents_host::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
-        let owner = crate::shared::test_support::publish_test_node(&node).await;
+        gents_store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
+        let owner = gents_host::test_support::publish_test_node(&node).await;
         // Offline client configuration access refuses every write transaction,
         // even for the runtime's own DID.
-        let offline_client = gents::ConfigAccess::local_as(
+        let offline_client = gents_store::config_client::ConfigAccess::local_as(
             node.clone(),
             ::identity::Did::new(owner.as_str()).unwrap(),
         )

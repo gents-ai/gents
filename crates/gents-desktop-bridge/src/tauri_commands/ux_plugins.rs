@@ -33,7 +33,7 @@ fn failed(error: anyhow::Error) -> BridgeError {
 fn operator_access(
     state: &DesktopAppState,
     node_did: &str,
-) -> Result<gents::ConfigAccess, BridgeError> {
+) -> Result<gents_store::config_client::ConfigAccess, BridgeError> {
     let core = current_core(state).ok_or_else(|| {
         BridgeError::new(
             BridgeErrorCode::ClientNotRunning,
@@ -57,7 +57,7 @@ where
     Fut: std::future::Future<Output = anyhow::Result<T>>,
     T: Send + 'static,
 {
-    gents::store::local::storage_backend::drive_unsendable(
+    gents_store::local::storage_backend::drive_unsendable(
         tauri::async_runtime::handle().inner(),
         operation,
     )
@@ -101,7 +101,7 @@ pub async fn desktop_ux_plugin_source(
     node_did: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<Value, BridgeError> {
-    let module = if gents::plugin::ux::page::page_id(&id).is_some() {
+    let module = if gents_pack::plugin::ux::page::page_id(&id).is_some() {
         let node_did = node_did.ok_or_else(|| {
             BridgeError::new(
                 BridgeErrorCode::Unsupported,
@@ -149,7 +149,10 @@ pub async fn desktop_plugin_call(
             let endpoint = core
                 .local_home_operator_endpoint(&node_did, &home)
                 .map_err(|error| failed(error.into()))?;
-            Some((gents::ConfigAccess::Graphql(endpoint), node_did))
+            Some((
+                gents_store::config_client::ConfigAccess::Graphql(endpoint),
+                node_did,
+            ))
         } else {
             None
         };
@@ -232,7 +235,7 @@ pub async fn desktop_ux_data_call(
     packs::ux_data_call(
         home,
         access,
-        gents::observe::ux_data::UxDataCall {
+        gents_tools::ux_data::UxDataCall {
             ux: request.ux,
             node_did: request.node_did,
             surface: request.surface,
@@ -327,7 +330,7 @@ fn acquire(
     state: &DesktopAppState,
     node_did: &str,
     home: &std::path::Path,
-) -> Result<gents::store::config_client::GraphqlEndpoint, WatchAcquireError> {
+) -> Result<gents_store::config_client::GraphqlEndpoint, WatchAcquireError> {
     let core = current_core(state).ok_or(WatchAcquireError::ClientRestarting)?;
     Ok(core.local_home_operator_endpoint(node_did, home)?)
 }
@@ -357,7 +360,7 @@ mod tests {
             &BridgeConfig {
                 home: HomePolicy::FixedRoot(temp.path().join("desktop")),
                 bootstrap: BootstrapPolicy::PairedRemoteOnly,
-                store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
                 ..Default::default()
             },
             None,

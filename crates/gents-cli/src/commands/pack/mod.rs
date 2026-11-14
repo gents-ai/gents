@@ -2,7 +2,6 @@ pub(crate) mod account;
 pub(crate) mod build;
 mod cache;
 mod check;
-pub(crate) mod cli_process;
 mod edit;
 mod export;
 mod import;
@@ -11,7 +10,6 @@ mod install;
 mod local;
 pub(crate) mod registry;
 mod remove;
-mod review;
 pub(crate) use remove::{ensure_home_plugins_unreferenced, remove, remove_home_install_with_guard};
 mod scaffold;
 mod scenario;
@@ -22,48 +20,17 @@ mod test;
 pub(crate) mod update;
 pub(crate) mod wire;
 use crate::cli::*;
-use anyhow::{Context, Result};
-pub(crate) use install::{
-    check_expected_digest, install, install_documents_pack, install_documents_pack_resolved,
-    parse_agent_bindings, parse_dependency_variables, wire_pack_plugins,
-    wire_pack_plugins_consenting,
-};
+use anyhow::Result;
+pub(crate) use install::{install, install_documents_pack};
 pub(crate) use scope::{
     plugin_notification_scope, record_plugin_retirement, resolve_home_owner_under_plugin_store,
     resolve_scope_owner, warn_on_unrecorded_removal,
 };
 use serde_json::json;
-use source::{asset_cache_root, materialize_cached_pack};
-pub(crate) use source::{
-    resolve_pack_source, resolve_subject_pack, single_slot, single_slot_agent, PackSource,
-    SubjectPack,
-};
-use std::collections::BTreeMap;
+use source::asset_cache_root;
+pub(crate) use source::{resolve_subject_pack, single_slot, single_slot_agent, SubjectPack};
 
-use gents::pack::materialize::CacheRelease;
-use gents::pack::PackChangeError;
-
-pub(crate) fn parse_inference_slot_bindings(
-    values: &[String],
-) -> Result<gents::pack::PackInferenceBindings> {
-    let mut bindings = BTreeMap::new();
-    for value in values {
-        let (slot, profile_id) = value.split_once('=').with_context(|| {
-            format!("invalid inference slot binding {value:?}; expected NAME=PROFILE_ID")
-        })?;
-        anyhow::ensure!(
-            !slot.trim().is_empty() && !profile_id.trim().is_empty(),
-            "invalid inference slot binding {value:?}; slot and profile ID must not be blank"
-        );
-        anyhow::ensure!(
-            bindings
-                .insert(slot.trim().to_owned(), profile_id.trim().to_owned())
-                .is_none(),
-            "inference slot {slot:?} was bound more than once"
-        );
-    }
-    Ok(bindings)
-}
+use gents_pack::pack::PackChangeError;
 
 pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
     match command {
@@ -144,7 +111,7 @@ pub(crate) mod test_support {
         Ok(())
     }
 
-    pub(crate) fn build_unbuilt_plugins(dir: &Path, manifest: &gents::pack::PackManifest) {
+    pub(crate) fn build_unbuilt_plugins(dir: &Path, manifest: &gents_pack::pack::PackManifest) {
         for plugin in &manifest.metadata.plugins {
             if plugin.source.is_some() && !dir.join(&plugin.artifact).is_file() {
                 super::build::build_plugin(dir, manifest, plugin)
@@ -153,17 +120,23 @@ pub(crate) mod test_support {
         }
     }
 
-    pub(crate) fn local_pack_source(dir: &Path, home: &Path) -> super::PackSource {
+    pub(crate) fn local_pack_source(
+        dir: &Path,
+        home: &Path,
+    ) -> gents_pack::pack::resolved_pack::ResolvedPack {
         let archive = super::local::open(&super::local::LocalName::Path(dir), home)
             .unwrap_or_else(|error| panic!("opening {}: {error:#}", dir.display()));
-        super::PackSource {
-            archive: archive.into(),
-            from: super::source::Source::Local,
-            file_name: None,
-        }
+        gents_pack::pack::resolved_pack::ResolvedPack::received(
+            archive,
+            gents_pack::pack::PackSource::Local { file_name: None },
+        )
+        .unwrap_or_else(|error| panic!("receiving {}: {error:#}", dir.display()))
     }
 
-    pub(crate) fn fixture_pack_source(name: &str, home: &Path) -> super::PackSource {
+    pub(crate) fn fixture_pack_source(
+        name: &str,
+        home: &Path,
+    ) -> gents_pack::pack::resolved_pack::ResolvedPack {
         local_pack_source(&fixture_dir(name), home)
     }
 
@@ -181,18 +154,14 @@ pub(crate) mod test_support {
     }
 }
 
-pub(crate) fn split_namespace(name: &str) -> (&str, &str) {
-    gents::pack::registry::split_pack_coordinate(name)
-}
-
 async fn list(args: PackListArgs) -> Result<()> {
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     crate::print_json(&list_packs(&home)?)
 }
 
 fn list_packs(home: &std::path::Path) -> Result<serde_json::Value> {
-    let store = gents::pack::store::PackStore::new(home);
-    let (records, skipped) = gents::pack::list_home_installs_with_skips(home)?;
+    let store = gents_pack::pack::store::PackStore::new(home);
+    let (records, skipped) = gents_pack::pack::list_home_installs_with_skips(home)?;
     let installed: std::collections::BTreeMap<_, _> = records
         .into_iter()
         .map(|record| (record.coordinate.clone(), record))
@@ -204,9 +173,9 @@ fn list_packs(home: &std::path::Path) -> Result<serde_json::Value> {
     let mut entries = Vec::new();
     for (coordinate, versions) in names {
         let record = installed.get(&coordinate);
-        let listing = gents::pack::store::list_pack_versions(
+        let listing = gents_pack::pack::store::list_pack_versions(
             &versions,
-            record.map(|record| gents::pack::store::StoredName {
+            record.map(|record| gents_pack::pack::store::StoredName {
                 version: record.version.clone(),
                 digest: record.digest.clone(),
             }),
@@ -243,5 +212,19 @@ fn list_packs(home: &std::path::Path) -> Result<serde_json::Value> {
     }
     Ok(output)
 }
+/// A refused pack operation as the terminal shows it: what happened, then
+/// the command its error names.
+pub(crate) fn refusal(
+    operation: gents_protocol::operations::pack::PackOperation,
+    package: &str,
+    error: gents_protocol::operations::pack::PackOperationError,
+) -> anyhow::Error {
+    if error.passthrough().is_some() {
+        return anyhow::Error::new(error);
+    }
+    let next = crate::next_call::command(error.recovery(operation), Some(package));
+    anyhow::anyhow!("{error}. Next: {next}")
+}
+
 #[cfg(test)]
 mod tests;

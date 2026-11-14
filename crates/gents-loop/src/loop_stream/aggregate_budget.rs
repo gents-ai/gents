@@ -216,7 +216,6 @@ pub(super) fn clamp_request_aggregate_token_budget(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::Deserialize;
 
     #[test]
     fn budget_exhaustion_classifies_through_every_loop_owner() {
@@ -280,29 +279,10 @@ mod tests {
         assert_eq!(aggregate_token_budget_exhaustion_message(&other), None);
     }
 
-    #[derive(Deserialize)]
-    struct Snapshot {
-        aggregate_token_budget_cases: Vec<Case>,
-    }
-
-    #[derive(Deserialize)]
-    struct Case {
-        name: String,
-        limit: u64,
-        used: u64,
-        usage_present: bool,
-        reported_input_tokens: u64,
-        reported_output_tokens: u64,
-        reported_total_tokens: u64,
-        next_used: Option<u64>,
-        abandoned_used: Option<u64>,
-    }
-
     #[test]
-    fn generated_budget_cases_keep_all_borrowers_on_the_same_allowance() {
-        let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
-        assert!(!snapshot.aggregate_token_budget_cases.is_empty());
-        for case in snapshot.aggregate_token_budget_cases {
+    fn shared_budget_borrowers_follow_the_lean_model() {
+        use gents_lean_vocab::families::aggregate_budget_shared::{SharedInput, SharedOutput};
+        gents_lean_vocab::families::aggregate_budget_shared::replay(|case: &SharedInput| {
             let budget = AggregateTokenBudget::with_prior_usage(case.limit, case.used);
             let borrower = budget.clone();
             let usage = case.usage_present.then_some(Usage {
@@ -312,22 +292,85 @@ mod tests {
                 ..Default::default()
             });
             budget.charge_reported(usage).unwrap();
-            for observed in [&budget, &borrower] {
-                assert_eq!(
-                    observed.snapshot().ok().map(|ledger| ledger.used),
-                    case.next_used,
-                    "{}",
-                    case.name
-                );
-            }
-            borrower.invalidate().unwrap();
-            assert!(budget.charge_reported(usage).is_err(), "{}", case.name);
+            let next_used = budget.snapshot().ok().map(|ledger| ledger.used);
             assert_eq!(
-                budget.snapshot().ok().map(|ledger| ledger.used),
-                case.abandoned_used,
-                "{}",
-                case.name
+                borrower.snapshot().ok().map(|ledger| ledger.used),
+                next_used,
+                "{case:?}"
             );
-        }
+            borrower.invalidate().unwrap();
+            assert!(budget.charge_reported(usage).is_err(), "{case:?}");
+            SharedOutput {
+                next_used,
+                abandoned_used: budget.snapshot().ok().map(|ledger| ledger.used),
+            }
+        });
+    }
+
+    #[test]
+    fn owned_loop_ledger_follows_the_lean_model() {
+        use gents_lean_vocab::families::aggregate_budget_ledger::{LedgerInput, LedgerOutput};
+        gents_lean_vocab::families::aggregate_budget_ledger::replay::<String, String, String>(
+            |case: &LedgerInput<String>| {
+                assert_eq!(
+                    case.prior_prompt_tokens.len(),
+                    case.prior_completion_tokens.len(),
+                    "{case:?}"
+                );
+                let used = crate::provider_usage::sum_charged_from_persisted_parts(
+                    case.prior_prompt_tokens
+                        .iter()
+                        .zip(&case.prior_completion_tokens)
+                        .map(|(&prompt, &completion)| {
+                            (
+                                Some(i64::try_from(prompt).expect("prompt tokens fit i64")),
+                                Some(i64::try_from(completion).expect("completion tokens fit i64")),
+                            )
+                        }),
+                )
+                .expect("durable usage rows rehydrate");
+                let mut ledger = AggregateTokenBudget::with_prior_usage(case.limit, used)
+                    .snapshot()
+                    .expect("rehydrated ledger is available");
+                let effective_output_tokens = ledger
+                    .effective_output_tokens(case.input_tokens, case.configured_max_output_tokens);
+                let can_dispatch =
+                    ledger.can_dispatch(case.input_tokens, case.configured_max_output_tokens);
+                let usage = case.usage_present.then_some(Usage {
+                    input_tokens: case.reported_input_tokens,
+                    output_tokens: case.reported_output_tokens,
+                    total_tokens: case.reported_total_tokens,
+                    cached_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                });
+                let charged_tokens = usage
+                    .map(crate::provider_usage::charged_usage_total)
+                    .unwrap_or_default();
+                let charge = ledger.charge_reported(usage);
+                LedgerOutput {
+                    used,
+                    effective_output_tokens,
+                    can_dispatch,
+                    charged_tokens,
+                    charge_result: match charge {
+                        AggregateTokenCharge::Missing => "missing",
+                        AggregateTokenCharge::Within => "within",
+                        AggregateTokenCharge::Exhausted => "exhausted",
+                        AggregateTokenCharge::Overrun => "overrun",
+                    }
+                    .into(),
+                    next_used: (charge != AggregateTokenCharge::Missing).then_some(ledger.used),
+                    post_charge_action: match aggregate_post_charge_action(
+                        charge,
+                        case.terminal_valid,
+                    ) {
+                        AggregatePostChargeAction::Continue => "continue",
+                        AggregatePostChargeAction::Succeed => "succeed",
+                        AggregatePostChargeAction::Fail => "fail",
+                    }
+                    .into(),
+                }
+            },
+        );
     }
 }

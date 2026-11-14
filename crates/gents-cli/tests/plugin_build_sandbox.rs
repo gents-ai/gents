@@ -2,7 +2,7 @@
 //! started under the command sandbox, for a scaffolded Rust plugin.
 #![cfg(target_os = "macos")]
 
-use gents::pack::authoring::{pack_built, scaffold, ScaffoldInput, Template};
+use gents_pack::pack::authoring::{pack_built, scaffold, ScaffoldInput, Template};
 
 #[tokio::test]
 async fn a_scaffolded_plugin_builds_and_passes_its_cases_inside_the_sandbox() {
@@ -25,7 +25,7 @@ async fn a_scaffolded_plugin_builds_and_passes_its_cases_inside_the_sandbox() {
     )
     .unwrap();
 
-    let build = gents::run_plugin_build(&root, &dir, true)
+    let build = gents_tools::native::run_plugin_build(&root, &dir, true)
         .await
         .unwrap_or_else(|error| panic!("{error:#}"));
     assert_eq!(build.sandbox, "macos_seatbelt");

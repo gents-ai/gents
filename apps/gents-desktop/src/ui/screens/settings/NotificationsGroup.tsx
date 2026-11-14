@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { Button } from "@gents/ui/components/button";
-import { notifyPlatform, type NotifyPermission } from "@/lib/notify/platform";
+import {
+  notifyPlatform,
+  SYSTEM_BLOCKED,
+  type NotifyPermission,
+} from "@/lib/notify/platform";
 import type { NotifyKind } from "@/lib/notify/events";
 import { IS_MAC } from "@/screens/shortcutKeys";
 import { errorText } from "../../../lib/errorText";
@@ -35,10 +39,6 @@ const KINDS: { kind: NotifyKind; label: string; description: string }[] = [
   },
 ];
 
-const REFUSED = IS_MAC
-  ? "Notifications are turned off for Gents. To allow them, open System Settings, choose Notifications, then Gents, and turn on Allow notifications."
-  : "Notifications are turned off for Gents. To allow them, turn them on for Gents in your system's notification settings.";
-
 /** How the app's notifications reach this device. Showing it is what asks
     the system for permission, the first time. */
 /* a development build is sent as Terminal by the plugin, so its notices
@@ -51,12 +51,29 @@ const TEST_SENT = import.meta.env.DEV
 
 export function NotificationsGroup() {
   const fromPacks = useFlag("pack-notifications");
+  const permission = useNotifyPermission();
   return (
     <>
-      <AppNotifications />
-      {fromPacks && <PluginNotifications />}
+      <AppNotifications permission={permission} />
+      {fromPacks && <PluginNotifications blocked={permission === "denied"} />}
     </>
   );
+}
+
+function useNotifyPermission() {
+  const [permission, setPermission] = useState<NotifyPermission | null>(null);
+  useEffect(() => {
+    let live = true;
+    void notifyPlatform
+      .permission()
+      .then((now) => (now === "default" ? notifyPlatform.request() : now))
+      .then((now) => live && setPermission(now))
+      .catch(() => live && setPermission("denied"));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return permission;
 }
 
 const switchId = (key: string, kind: string) =>
@@ -69,7 +86,7 @@ const origin = (record: UxPluginRecord) =>
 /** Each kind of notification a plugin declares, off until the person turns
     it on, grouped under the plugin that declares it: a kind is listed once
     its plugin has loaded, since the module is what declares it. */
-function PluginNotifications() {
+function PluginNotifications({ blocked }: { blocked: boolean }) {
   const records = useUxPluginRecords();
   const on = usePluginNotify();
   const notifying = Object.values(records)
@@ -86,6 +103,11 @@ function PluginNotifications() {
     );
   return (
     <>
+      {blocked && (
+        <Group title="From packs">
+          <Row label="Blocked by the system" description={SYSTEM_BLOCKED} />
+        </Group>
+      )}
       {notifying.map((record) => {
         const key = notifierKey(record);
         return (
@@ -113,9 +135,8 @@ function PluginNotifications() {
   );
 }
 
-function AppNotifications() {
+function AppNotifications({ permission }: { permission: NotifyPermission | null }) {
   const kinds = useNotifyKinds();
-  const [permission, setPermission] = useState<NotifyPermission | null>(null);
   /* what the last test said: the system takes a notice without saying
      whether it showed it, so a sent test only rules out a refusal */
   const [test, setTest] = useState<{ sent: true } | { failed: string } | null>(null);
@@ -131,24 +152,13 @@ function AppNotifications() {
         (error: unknown) => setTest({ failed: errorText(error) }),
       );
   };
-  useEffect(() => {
-    let live = true;
-    void notifyPlatform
-      .permission()
-      .then((now) => (now === "default" ? notifyPlatform.request() : now))
-      .then((now) => live && setPermission(now))
-      .catch(() => live && setPermission("denied"));
-    return () => {
-      live = false;
-    };
-  }, []);
   return (
     <Group title="Notifications">
       <Row
         label="When the window is in the background"
         description={
           permission === "denied"
-            ? REFUSED
+            ? SYSTEM_BLOCKED
             : "The app tells you about your sessions through the system's notifications, and stays quiet about the session on screen."
         }
       />

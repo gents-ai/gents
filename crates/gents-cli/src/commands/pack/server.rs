@@ -1,19 +1,13 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents_store::views::runtime::NodeReadinessList;
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use serde_json::Value;
 use tokio::process::Child;
 
-use gents::store::graphql::escape_graphql_string;
-use gents_protocol::row::{
-    decode_node_readiness_snapshot, NodeReadinessRow, NodeReadinessSnapshot,
-};
-
-use crate::graphql_access::post_graphql;
-
-use super::cli_process::path_arg;
+use gents_host::cli_process::path_arg;
+use gents_protocol::row::decode_node_readiness_snapshot;
 
 pub(super) fn spawn_server_with_args_and_env(
     bin: &Path,
@@ -49,7 +43,7 @@ pub(super) fn spawn_server_with_args_and_env(
     cmd.env("GENTS_REGISTRY_STALE_MS", "300000");
     cmd.env("GENTS_ENDPOINT_HEARTBEAT_MS", "1000");
     cmd.stdout(file).stderr(errfile).kill_on_drop(true);
-    gents::tools::exec::native_spawn::spawn_tokio(&mut cmd).context("spawning pack server")
+    gents_session::exec::native_spawn::spawn_tokio(&mut cmd).context("spawning pack server")
 }
 
 pub(super) async fn wait_runtime_ready(
@@ -57,17 +51,19 @@ pub(super) async fn wait_runtime_ready(
     node_did: &str,
     server: &mut Child,
 ) -> Result<()> {
-    let query = format!(
-        r#"{{ NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{ node_did snapshot_json updated_at }} }}"#,
-        escape_graphql_string(node_did)
-    );
+    let access = ConfigAccess::Graphql(graphql.clone());
+    let view = NodeReadinessList::new(node_did);
     for _ in 0..360 {
-        if let Ok(resp) = post_graphql(graphql, &query).await {
-            if readiness_snapshot(&resp, node_did).is_some_and(|snapshot| {
-                snapshot.process_state.accepts_work()
-                    && snapshot.active_generation > 0
-                    && snapshot.router_generation == snapshot.active_generation
-            }) {
+        if let Ok(rows) = access.read_view(&view).await {
+            if rows
+                .first()
+                .and_then(|row| decode_node_readiness_snapshot(row, node_did).ok())
+                .is_some_and(|snapshot| {
+                    snapshot.process_state.accepts_work()
+                        && snapshot.active_generation > 0
+                        && snapshot.router_generation == snapshot.active_generation
+                })
+            {
                 return Ok(());
             }
         }
@@ -77,14 +73,6 @@ pub(super) async fn wait_runtime_ready(
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     bail!("timed out waiting for the pack runtime at {graphql} to become ready")
-}
-
-fn readiness_snapshot(response: &Value, expected_node_did: &str) -> Option<NodeReadinessSnapshot> {
-    let row = response
-        .pointer("/data/NodeReadiness/0")
-        .cloned()
-        .and_then(|row| serde_json::from_value::<NodeReadinessRow>(row).ok())?;
-    decode_node_readiness_snapshot(&row, expected_node_did).ok()
 }
 
 pub(super) async fn wait_http(url: &str, server: &mut Child) -> Result<()> {

@@ -18,7 +18,7 @@ fn main() {
         return;
     }
 
-    if command.as_deref() == Some(gents::PLUGIN_BUILD_COMMAND) {
+    if command.as_deref() == Some(gents_tools::native::PLUGIN_BUILD_COMMAND) {
         let _ = tracing_subscriber::fmt()
             .with_writer(std::io::stderr)
             .try_init();
@@ -108,6 +108,6 @@ fn main() {
         return;
     }
 
-    gents::enable_self_runner();
+    gents_tools::native::enable_self_runner();
     gents_desktop_tauri_lib::run()
 }

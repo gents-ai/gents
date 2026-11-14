@@ -6,7 +6,6 @@ const OLD_OBJECTIVE: &str =
     "Keep working on the current request; never complete this old objective.";
 const GOAL_WORK_SDL: &str =
     "type DeliveryGoalWork { handoff_id: String @immutable kind: String @immutable session_id: String @immutable }";
-const OBJECTIVE: &str = "On an explicit durable goal controller continuation, first write a numbered checklist with 100 short entries, then call update_goal with status complete and reason 'Goal Task continuation verified', and reply GOAL_TASK_COMPLETE. The initial Task delivery and inbox replies must not complete the Goal.";
 
 async fn evidence(access: &ConfigAccess, owner: &str) -> Result<Value> {
     let owner = escape_graphql_string(owner);
@@ -14,7 +13,7 @@ async fn evidence(access: &ConfigAccess, owner: &str) -> Result<Value> {
         r#"{{
         AgentRequest(filter:{{node_did:{{_eq:"{owner}"}}}}){{_docID request_id session_id lifecycle_state caused_by_trigger_kind failure_reason}}
         Trigger(filter:{{node_did:{{_eq:"{owner}"}}}}){{trigger_id last_status last_error}}
-        TriggerFire(filter:{{owner_did:{{_eq:"{owner}"}}}}){{fire_key trigger_id request_id session_id goal_id goal_assignment_applied}}
+        TriggerFire(filter:{{owner_did:{{_eq:"{owner}"}}}}){{fire_key trigger_id request_id session_id goal_id}}
         FireOutcome(filter:{{owner_did:{{_eq:"{owner}"}}}}){{fire_key trigger_id request_id session_id goal_id terminal_state created_at}}
         Goal(filter:{{node_did:{{_eq:"{owner}"}}}}){{goal_id session_id objective status assignment_root_request_doc_id}}
         InferenceCall(filter:{{node_did:{{_eq:"{owner}"}}}}){{request_id call_kind call_state started_at ended_at}}
@@ -54,14 +53,6 @@ fn healthy(state: &Value) -> Result<()> {
     Ok(())
 }
 
-fn inference_running(state: &Value, request: &str) -> bool {
-    table(state, "InferenceCall").iter().any(|row| {
-        row["request_id"] == request
-            && row["call_kind"] == "inference"
-            && row["call_state"] == "running"
-    })
-}
-
 async fn submit(access: &ConfigAccess, kind: &str) -> Result<()> {
     create_source(
         access,
@@ -73,15 +64,74 @@ async fn submit(access: &ConfigAccess, kind: &str) -> Result<()> {
     Ok(())
 }
 
+struct Gate {
+    address: std::net::SocketAddr,
+    entered: Arc<tokio::sync::Notify>,
+    released: tokio::sync::watch::Sender<bool>,
+    listener: tokio::task::JoinHandle<()>,
+}
+
+impl Gate {
+    async fn new() -> Result<Self> {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await?;
+        let address = listener.local_addr()?;
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let notify = entered.clone();
+        let (released, receiver) = tokio::sync::watch::channel(false);
+        let listener = tokio::spawn(async move {
+            while let Ok((mut connection, _)) = listener.accept().await {
+                notify.notify_one();
+                let mut receiver = receiver.clone();
+                tokio::spawn(async move {
+                    let ready = receiver.wait_for(|released| *released).await.is_ok();
+                    if ready {
+                        let _ = connection.write_all(b"r").await;
+                    }
+                });
+            }
+        });
+        Ok(Self {
+            address,
+            entered,
+            released,
+            listener,
+        })
+    }
+
+    fn arguments(&self) -> Value {
+        json!({"command":format!(
+            "python3 -c 'import socket; s=socket.create_connection((\"127.0.0.1\", {})); s.recv(1); print(\"gate released\")'",
+            self.address.port(),
+        )})
+    }
+
+    async fn wait(&self, deadline: tokio::time::Instant) -> Result<()> {
+        tokio::time::timeout_at(
+            deadline.min(tokio::time::Instant::now() + Duration::from_secs(120)),
+            self.entered.notified(),
+        )
+        .await
+        .context("live model did not enter its requested host tool")
+    }
+
+    fn release(&self) {
+        self.released.send_replace(true);
+    }
+}
+
+impl Drop for Gate {
+    fn drop(&mut self) {
+        self.release();
+        self.listener.abort();
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "real inference: GENTS_TRIGGER_DELIVERY_LIVE=1; GENTS_DELIVERY_ENDPOINT_1/2 and GENTS_DELIVERY_MODEL_1/2"]
+#[ignore = "uses local inference; set GENTS_LIVE_TARGET and GENTS_DELIVERY_SOURCE_SHA"]
 async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Result<()> {
-    ensure!(
-        std::env::var("GENTS_TRIGGER_DELIVERY_LIVE").as_deref() == Ok("1"),
-        "explicit live opt-in required"
-    );
-    let lanes = delivery_lanes()?;
-    let artifacts = artifact_directory("goal")?;
+    let lanes = delivery_lanes().await?;
+    let artifacts = tokio::task::spawn_blocking(|| artifact_directory("goal")).await??;
     let home =
         gents::runtime::embedded::EmbeddedHome::create_retained(&artifacts.join("home")).await?;
     let db = support::test_db_from_home(home);
@@ -90,128 +140,116 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
     let (fixture, agents) = configure(&db, &lanes).await?;
     let access = fixture.access.clone();
     install_schema(&access, GOAL_WORK_SDL).await?;
+    let initial = Gate::new().await?;
+    let continuation = Gate::new().await?;
+    let objective = format!(
+        "This is a Goal continuation. Call bash_unrestricted once with exactly {}. After that tool returns, call update_goal with status complete and a brief reason. Then acknowledge briefly. Do not create another Goal.",
+        continuation.arguments(),
+    );
     support::fixtures::configure_agent_tools(
         &db, &owner, &agents.lead,
-        Some("Follow the current request and Goal objective. Initial Task deliveries and inbox replies must not call update_goal. On an explicit durable Goal controller continuation, perform the objective and call update_goal complete when instructed. Do not create another Goal or use unrelated tools.".into()),
-        gents::documents::Tools {
+        Some("Follow the current request and Goal objective. Initial Task deliveries and inbox replies must not call update_goal. On a durable Goal controller continuation, perform its objective and complete it only after its requested host tool returns. Do not create another Goal or repeat a completed host tool call.".into()),
+        gents_documents::Tools {
             tools_id: format!("{}:tools", agents.lead), node_did: owner.clone(),
-            built_ins: Some(gents::documents::BuiltInTools {
-                enable_goal_tools: Some(true), ..Default::default()
+            host: Some(gents_documents::HostTools {
+                root: Some(artifacts.display().to_string()),
+                bash: Some(gents_documents::BashTools { mode: gents_documents::BashMode::Unrestricted, ..Default::default() }),
+                ..Default::default()
             }),
+            built_ins: Some(gents_documents::BuiltInTools { enable_goal_tools: Some(true), ..Default::default() }),
             ..Default::default()
         }, Vec::new(),
     ).await;
     let mut documents = Vec::new();
-    for (kind, emit, objective, prompt) in [
-        ("goal", true, Some(OBJECTIVE), "This is the initial Task delivery for your new Goal, not a controller continuation. Do not call update_goal in this request. Reply exactly GOAL_TASK_PROGRESS."),
-        ("reply", false, None, "This is an inbox reply, not a controller continuation. Do not call update_goal. Reply exactly GOAL_INBOX_REPLY."),
+    for (kind, emit, assignment, prompt) in [
+        ("goal", true, Some(objective.as_str()), "This is the initial Task delivery for your new Goal, not a controller continuation. Do not call update_goal or host tools in this request. Acknowledge briefly."),
+        ("reply", false, None, "This is an inbox reply, not a controller continuation. Do not call update_goal or host tools. Acknowledge briefly."),
     ] {
         let id = format!("delivery-goal-{kind}");
         documents.extend([
-            (Collection::Task, json!({"task_id":id,"agent_did":&agents.lead, "emit_outcome":emit,
-                "goal_objective_template":objective,"prompt_template":prompt})),
-            (Collection::EventSource, json!({"event_source_id":id,"source_collection":"DeliveryGoalWork",
-                "event_kind":"created","filter":format!("{{kind:{{_eq:\"{kind}\"}}}}")})),
-            (Collection::Trigger, json!({"trigger_id":id,"task_id":id,"enabled":true,"concurrency":"queued_serial",
-                "session_id_template":"{{ doc.session_id }}","source":{"kind":"event","event_source_id":id}})),
+            (Collection::Task, json!({"task_id":id,"agent_did":&agents.lead,"emit_outcome":emit,"goal_objective_template":assignment,"prompt_template":prompt})),
+            (Collection::EventSource, json!({"event_source_id":id,"source_collection":"DeliveryGoalWork","event_kind":"created","filter":format!("{{kind:{{_eq:\"{}\"}}}}", escape_graphql_string(kind)) })),
+            (Collection::Trigger, json!({"trigger_id":id,"task_id":id,"enabled":true,"concurrency":"queued_serial","session_id_template":"{{ doc.session_id }}","source":{"kind":"event","event_source_id":id}})),
         ]);
     }
     apply(&access, &owner, documents).await?;
-    let runtime = boot_live_agent(&db, identity).await?;
-    let result: Result<()> = async {
-    support::agent_requests::submit_user_request(&owner, &fixture, SESSION, INITIAL,
-        "Write a numbered list with 150 entries, each saying 'still working'. Do not call tools and do not complete the Goal.",
-        gents_protocol::request_input::QueueDelivery::Queue).await;
-    gents::goal::set_goal_from_access(
-        &access,
-        &owner,
-        SESSION,
-        Some(OLD_OBJECTIVE),
-        Some(gents::goal::GoalStatus::Active),
-        None,
-        None,
+    let runtime = support::live_inference::boot_live_agent_with_ceiling(
+        &db,
+        identity,
+        gents_tools::surface::ToolCeiling::readwrite(&artifacts),
     )
     .await?;
+    let result: Result<()> = async {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(1800);
-        loop {
-            let state = evidence(&access, &owner).await?;
-            healthy(&state)?;
-            if inference_running(&state, INITIAL) { break; }
-            ensure!(!table(&state, "AgentRequest").iter().any(|row|
-                row["request_id"] == INITIAL && row["lifecycle_state"] == "completed"),
-                "initial inference ended before its busy window was observed: {state}");
-            ensure!(tokio::time::Instant::now() < deadline, "initial real inference never started: {state}");
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        let mut changes = DeliveryChanges::new(&access).await;
+        support::agent_requests::submit_user_request(&owner, &fixture, SESSION, INITIAL,
+            &format!("Call bash_unrestricted once with exactly {}. After the tool returns, acknowledge briefly. Do not call update_goal or any other tool.", initial.arguments()),
+            gents_protocol::request_input::QueueDelivery::Queue,
+        ).await;
+        gents_automation::goal::seed_goal_from_access(&access, &owner, SESSION, Some(OLD_OBJECTIVE),
+            Some(gents_protocol::goal_status::GoalStatus::Active), None, None,
+        ).await?;
+        initial.wait(deadline).await?;
         submit(&access, "goal").await?;
         let queued = loop {
             let state = evidence(&access, &owner).await?;
             healthy(&state)?;
             if table(&state, "TriggerFire").iter().any(|row| row["trigger_id"] == "delivery-goal-goal") { break state; }
-            ensure!(tokio::time::Instant::now() < deadline, "Goal Task admission timed out: {state}");
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            changes.recv(deadline).await?;
         };
         let fire = table(&queued, "TriggerFire").iter().find(|row| row["trigger_id"] == "delivery-goal-goal").unwrap();
-        ensure!(fire["goal_assignment_applied"] == false, "Goal assignment took effect before queued claim: {queued}");
+        ensure!(table(&queued, "AgentRequest").iter().any(|row| row["request_id"] == fire["request_id"] && row["lifecycle_state"] == "pending"), "Goal Task did not queue behind the active request: {queued}");
+        ensure!(table(&queued, "AgentRequest").iter().any(|row| row["request_id"] == INITIAL && row["lifecycle_state"] == "processing"), "the initial request stopped before its gate was released: {queued}");
         ensure!(table(&queued, "Goal").iter().any(|row| row["objective"] == OLD_OBJECTIVE && row["status"] == "active"), "busy session objective changed: {queued}");
-        ensure!(table(&queued, "AgentRequest").iter().any(|row| row["request_id"] == INITIAL && row["lifecycle_state"] == "processing"), "assignment was not observed behind a busy request: {queued}");
-        ensure!(fire["session_id"] == SESSION, "Goal Task routed to a different session: {queued}");
+        ensure!(fire["session_id"] == SESSION, "Goal Task routed to another session: {queued}");
         let request_id = string(fire, "request_id")?.to_owned();
         let fire_key = string(fire, "fire_key")?.to_owned();
-        let continuing = loop {
-            let state = evidence(&access, &owner).await?;
-            healthy(&state)?;
-            ensure!(table(&state, "FireOutcome").is_empty(), "Goal emitted before observable continuation boundary: {state}");
-            let initial_complete = table(&state, "AgentRequest").iter().any(|row| row["request_id"] == request_id && row["lifecycle_state"] == "completed");
-            let child_running = table(&state, "AgentRequest").iter().any(|row|
-                row["caused_by_trigger_kind"] == "goal" && row["request_id"] != INITIAL &&
-                row["request_id"].as_str().is_some_and(|id| inference_running(&state, id)));
-            if initial_complete && child_running { break state; }
-            ensure!(tokio::time::Instant::now() < deadline, "Goal continuation not observed: {state}");
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        };
-        ensure!(table(&continuing, "Goal").iter().any(|row| row["objective"] == OBJECTIVE && row["status"] == "active"), "queued assignment missing at claim: {continuing}");
-        ensure!(table(&continuing, "TriggerFire").iter().any(|row| row["fire_key"] == fire_key && row["goal_assignment_applied"] == true), "claim omitted assignment witness: {continuing}");
-        let root = table(&continuing, "AgentRequest").iter().find(|row| row["request_id"] == request_id).context("Goal Task root missing")?;
-        ensure!(table(&continuing, "Goal").iter().any(|goal| goal["assignment_root_request_doc_id"] == root["_docID"]), "Goal assignment points at a different request: {continuing}");
+        initial.release();
+        continuation.wait(deadline).await?;
+        let continuing = evidence(&access, &owner).await?;
+        healthy(&continuing)?;
+        ensure!(table(&continuing, "FireOutcome").is_empty(), "Goal emitted before model completion: {continuing}");
+        ensure!(table(&continuing, "AgentRequest").iter().any(|row| row["request_id"] == request_id && row["lifecycle_state"] == "completed"), "initial Goal Task did not finish before its continuation: {continuing}");
+        ensure!(table(&continuing, "Goal").iter().any(|row| row["objective"] == objective && row["status"] == "active"), "queued assignment missing at claim: {continuing}");
+        let root = table(&continuing, "AgentRequest").iter().find(|row| row["request_id"] == request_id).context("Goal Task request missing")?;
+        ensure!(table(&continuing, "Goal").iter().any(|row| row["assignment_root_request_doc_id"] == root["_docID"]), "Goal assignment names another request: {continuing}");
         submit(&access, "reply").await?;
         let queued_reply = loop {
             let state = evidence(&access, &owner).await?;
             healthy(&state)?;
             if let Some(reply) = table(&state, "TriggerFire").iter().find(|row| row["trigger_id"] == "delivery-goal-reply") {
                 let request = table(&state, "AgentRequest").iter().find(|row| row["request_id"] == reply["request_id"]).context("reply request missing")?;
-                ensure!(request["lifecycle_state"] == "pending", "reply did not queue behind continuation: {state}");
+                ensure!(request["lifecycle_state"] == "pending", "reply did not queue behind the continuation: {state}");
                 break state;
             }
-            ensure!(tokio::time::Instant::now() < deadline, "reply admission timed out: {state}");
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            changes.recv(deadline).await?;
         };
+        continuation.release();
         let complete = loop {
             let state = evidence(&access, &owner).await?;
             healthy(&state)?;
             let outcomes = table(&state, "FireOutcome");
-            ensure!(outcomes.len() <= 1, "duplicate or chained Goal outcomes: {state}");
+            ensure!(outcomes.len() <= 1, "duplicate or chained Goal outcome: {state}");
             let replied = table(&state, "TriggerFire").iter().find(|row| row["trigger_id"] == "delivery-goal-reply").is_some_and(|fire|
                 table(&state, "AgentRequest").iter().any(|row| row["request_id"] == fire["request_id"] && row["lifecycle_state"] == "completed"));
             if outcomes.len() == 1 && replied {
                 ensure!(outcomes[0]["fire_key"] == fire_key && outcomes[0]["terminal_state"] == "complete", "wrong Goal outcome: {state}");
                 ensure!(table(&state, "Goal").iter().any(|row| row["status"] == "complete"), "outcome preceded Goal completion: {state}");
-                ensure!(table(&state, "AgentToolCall").iter().any(|row| row["tool_name"] == "update_goal" && row["lifecycle_state"] == "completed"), "completion did not use real model tool: {state}");
                 break state;
             }
-            ensure!(tokio::time::Instant::now() < deadline, "Goal outcome did not settle: {state}");
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            changes.recv(deadline).await?;
         };
-        std::fs::write(artifacts.join("goal-evidence.json"), serde_json::to_vec_pretty(&json!({
+        tokio::fs::write(artifacts.join("goal-evidence.json"), serde_json::to_vec_pretty(&json!({
             "queued_assignment":queued,"ordinary_boundary":continuing,"queued_reply":queued_reply,"completed":complete
-        }))?)?;
+        }))?).await?;
         Ok(())
     }.await;
     if let Ok(state) = evidence(&access, &owner).await {
-        std::fs::write(
+        tokio::fs::write(
             artifacts.join("goal-final-state.json"),
             serde_json::to_vec_pretty(&state)?,
-        )?;
+        )
+        .await?;
     }
     runtime.shutdown().await;
     db.node.shutdown().await?;

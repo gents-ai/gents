@@ -366,13 +366,23 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
     use identity::Identity as _;
 
     let (core, directory) = crate::tests::support::boot_core().await;
-    let server = wiremock::MockServer::start().await;
-    let graphql = format!("{}/api/v0/graphql", server.uri());
     let home = directory.path().join("runtime");
     std::fs::create_dir_all(&home).unwrap();
     let key_path = home.join("node.key");
-    let identity = gents::store::identity::load_or_create_file_identity(&key_path).unwrap();
+    let identity = gents_store::identity::load_or_create_file_identity(&key_path).unwrap();
     let did = identity.did().unwrap().to_string();
+    let store = core.stores().ensure(&did);
+    let database = gents_store::test_support::wire_database::WireDatabase::spawn(
+        json!({"Node": [{"_docID": "node", "node_did": did, "display_name": "Current settings"}]}),
+        std::sync::Arc::new(move |collection| {
+            if collection == "Node" {
+                store.replace_snapshot(gents_desktop_core::client::ClientStore::default());
+            }
+            Box::pin(async { Ok(()) })
+        }),
+    )
+    .await;
+    let graphql = database.graphql.clone();
     std::fs::write(
         home.join("init.json"),
         json!({"node_name":"Local", "node_did":did, "key_path":key_path}).to_string(),
@@ -393,24 +403,6 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
     )
     .await
     .unwrap();
-    let data = json!({"data":{
-        "nodes":[{"node_did":did, "display_name":"Current settings"}],
-        "agents":[], "inference_backends":[], "inference_profiles":[],
-        "runtimes":[], "node_readiness":[], "contexts":[], "tools":[],
-        "inference_sampling":[], "inference_execution":[], "tasks":[],
-        "schedules":[], "triggers":[], "skills":[], "compactions":[],
-        "tool_service_registries":[], "event_sources":[], "agent_targets":[],
-        "datastore_tool_surfaces":[], "sessions":[], "requests":[], "backend_observations":[]
-    }});
-    let store = core.store().clone();
-    wiremock::Mock::given(wiremock::matchers::method("POST"))
-        .and(wiremock::matchers::path("/api/v0/graphql"))
-        .respond_with(move |_: &wiremock::Request| {
-            store.replace_snapshot(gents_desktop_core::client::ClientStore::default());
-            wiremock::ResponseTemplate::new(200).set_body_json(&data)
-        })
-        .mount(&server)
-        .await;
     let result = ClientHost::new(core.clone())
         .execute(
             protocol::ClientCommand::InferenceSetupState {
@@ -447,7 +439,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     let home = directory.path().join("runtime");
     std::fs::create_dir_all(&home).unwrap();
     let key_path = home.join("node.key");
-    let identity = gents::store::identity::load_or_create_file_identity(&key_path).unwrap();
+    let identity = gents_store::identity::load_or_create_file_identity(&key_path).unwrap();
     let did = identity.did().unwrap().to_string();
     std::fs::write(
         home.join("init.json"),
@@ -472,7 +464,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     )
     .await
     .unwrap();
-    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
     let host = ClientHost::new(core.clone());
     assert_eq!(
         host.execute(
@@ -499,7 +491,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     let _ = core
         .pending_user_queue_projection(&did, "unavailable-session", &[])
         .await;
-    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
     let requests = server.received_requests().await.unwrap();
     assert!(!requests.is_empty());
     // Passive reads are the User's: any bearer they carry is minted by the
@@ -551,7 +543,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
         .await
         .unwrap();
     assert_eq!(settings["nodeDid"], did);
-    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
     let requests = server.received_requests().await.unwrap();
     let settings_read = requests
         .iter()
@@ -749,28 +741,23 @@ async fn retirement_acknowledgement_is_flushed_before_the_attachment_closes() {
 }
 #[test]
 fn generated_storage_failures_keep_their_code_in_host_errors() {
-    let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contract["storage_failure_cases"].as_array().unwrap();
-    assert!(!cases.is_empty());
-    for case in cases {
+    gents_lean_vocab::families::storage_failure_contracts_host_error::replay(|i| {
         let error = anyhow::Error::new(gents_protocol::database_error::GraphqlFailure::new(
             "host command",
-            json!([{"message": case["message"], "extensions": {"code": case["code"]}}]),
+            json!([{"message": i.message, "extensions": {"code": i.code}}]),
         ))
         .context("preparing a request");
         let error = super::backend_error(error);
-        assert_eq!(
-            error.code,
-            if case["full"].as_bool().unwrap() {
-                crate::BridgeErrorCode::StorageFull
-            } else {
-                crate::BridgeErrorCode::Backend
-            }
-        );
-        if case["stop_automatic_retry"].as_bool().unwrap() {
+        let full = match error.code {
+            crate::BridgeErrorCode::StorageFull => true,
+            crate::BridgeErrorCode::Backend => false,
+            other => panic!("{i:?} became {other:?}"),
+        };
+        if full {
             assert!(!error.retryable);
         }
-    }
+        gents_lean_vocab::families::storage_failure_contracts_host_error::HostErrorOutput { full }
+    });
 }
 
 #[test]

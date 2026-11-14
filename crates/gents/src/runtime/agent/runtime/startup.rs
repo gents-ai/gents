@@ -6,14 +6,14 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use super::context::StartupBarrier;
-use crate::inference::admission::AdmissionRegistry;
-use crate::inference::backends::registry;
 use crate::runtime::agent::reconcile::GenerationSupervisor;
 use crate::runtime::agent::{Gents, ProcessLifecycleState};
 use crate::runtime::status::RuntimeStatusHandle;
-use crate::tools::mcp::health::ServiceHealthMap;
-use crate::tools::surface::ToolRuntimeContext;
+use gents_inference::admission::AdmissionRegistry;
+use gents_inference::backends::registry;
 use gents_protocol::node_readiness::ReconcilePhase;
+use gents_tools::mcp::health::ServiceHealthMap;
+use gents_tools::surface::ToolRuntimeContext;
 
 mod lifecycle_coordinator;
 mod recovery;
@@ -80,11 +80,14 @@ pub(in crate::runtime::agent) async fn run_agent(
     external_shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     agent.backend_admission.validate(&agent.node).await?;
-    crate::store::schema::migration::ensure_all_runtime_migrations(agent.node.clone())
+    gents_store::schema::migration::ensure_all_runtime_migrations(agent.node.clone())
         .await
         .context("ensure runtime schema migrations")?;
-    let (runtime_status_owner, runtime_status) =
-        RuntimeStatusHandle::start(agent.node.clone(), agent.node_did().to_string());
+    let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start(
+        agent.node.clone(),
+        agent.node_did().to_string(),
+        agent.storage_fault(),
+    );
     run_agent_with_runtime_status(
         agent,
         external_shutdown,
@@ -121,7 +124,7 @@ pub(super) async fn run_agent_with_readiness_writer_and_slot_runner(
     retry_delay: std::time::Duration,
     slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
-    crate::store::schema::migration::ensure_all_runtime_migrations(agent.node.clone())
+    gents_store::schema::migration::ensure_all_runtime_migrations(agent.node.clone())
         .await
         .context("ensure runtime schema migrations")?;
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
@@ -129,6 +132,7 @@ pub(super) async fn run_agent_with_readiness_writer_and_slot_runner(
         agent.node_did().to_string(),
         writer,
         retry_delay,
+        agent.storage_fault(),
     );
     run_agent_with_runtime_status(
         agent,
@@ -185,20 +189,24 @@ async fn finish_run_agent(
     if process_state != gents_protocol::node_readiness::NodeReadinessProcessState::Shutdown {
         if process_state != gents_protocol::node_readiness::NodeReadinessProcessState::ShuttingDown
         {
-            if let Err(error) = runtime_status
-                .set_process_state_durable(ProcessLifecycleState::ShuttingDown)
-                .await
-            {
+            let persisted = crate::runtime::storage_fault::tolerate_unwritable_store(
+                runtime_status
+                    .set_process_state_durable(ProcessLifecycleState::ShuttingDown)
+                    .await,
+            );
+            if let Err(error) = persisted {
                 tracing::error!(error = %error, "failed to publish terminal ShuttingDown state");
                 teardown_error = Some(error);
             } else if let Some(observer) = &terminal_observer {
                 observer.on_process_state_change(ProcessLifecycleState::ShuttingDown);
             }
         }
-        if let Err(error) = runtime_status
-            .set_process_state_durable(ProcessLifecycleState::Shutdown)
-            .await
-        {
+        let persisted = crate::runtime::storage_fault::tolerate_unwritable_store(
+            runtime_status
+                .set_process_state_durable(ProcessLifecycleState::Shutdown)
+                .await,
+        );
+        if let Err(error) = persisted {
             tracing::error!(error = %error, "failed to publish terminal Shutdown state");
             if teardown_error.is_none() {
                 teardown_error = Some(error);
@@ -230,7 +238,7 @@ async fn resolve_startup(
     runtime_status: &RuntimeStatusHandle,
 ) -> Result<(
     Option<super::control_watcher::ControlSubscription>,
-    crate::runtime::snapshot::ResolvedRuntimeSnapshot,
+    gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot,
 )> {
     // Subscribe before reading startup configuration so racing commits remain pending.
     let control_subscription = match agent
@@ -317,6 +325,7 @@ async fn run_agent_owned(
         Some(agent.runtime_node_arc().identity.clone()),
     )
     .with_plugins(agent.plugins().clone())
+    .with_tasks(Arc::new(gents_automation::triggers::task_run::TaskRuns))
     .with_usage_cache(agent.usage_cache().clone());
     registry::probe_and_promote_enabled_backends(&agent.node).await;
 
@@ -343,7 +352,7 @@ async fn run_agent_owned(
     ));
     let admission_registry = AdmissionRegistry::new(agent.node.clone());
     let (enrollment_owner, enrollment_handle) =
-        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+        gents_p2p::p2p_reconcile::enrollment_authority_channel();
     *agent
         .enrollment_authority
         .write()
@@ -425,7 +434,9 @@ async fn run_agent_owned(
         .map_err(|_| anyhow::anyhow!("runtime snapshot binding unavailable"))? =
         Some(active_snapshot_rx.clone());
     runtime.job_driver.runtime().bind_snapshot(
-        crate::runtime::snapshot::ActiveSnapshotAgentIdentities::boxed(active_snapshot_rx.clone()),
+        gents_automation::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
+            active_snapshot_rx.clone(),
+        ),
     )?;
     let (reconcile_tx, reconcile_rx) = mpsc::channel(8);
     let _reconcile_tx_guard = reconcile_tx.clone();

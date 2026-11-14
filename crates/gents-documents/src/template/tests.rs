@@ -1,0 +1,653 @@
+use super::*;
+use crate::Task;
+
+fn task_with_template(template: &str) -> Task {
+    serde_json::from_value(serde_json::json!({
+        "node_did": "did:key:zNODE",
+        "task_id": "fence-task",
+        "agent_did": "fence",
+        "prompt_template": template
+    }))
+    .expect("compact canonical task document")
+}
+
+fn fire_scope(agent_did: &str, now: &str, args: serde_json::Value) -> TemplateScope {
+    let (node, ctx) = task_node_ctx("did:key:zNODE", agent_did, now);
+    TemplateScope {
+        session: None,
+        request: None,
+        event: serde_json::json!({}),
+        doc: None,
+        args: Some(args),
+        group: None,
+        node,
+        ctx,
+    }
+}
+
+#[test]
+fn task_template_renders_per_invocation() {
+    let task =
+        task_with_template("Review {{ args.target }} at {{ ctx.now }} on {{ node.agent_did }}.");
+
+    let first = render_template(
+        &task.prompt_template,
+        &fire_scope("fence", "T1", serde_json::json!({"target": "a"})),
+    )
+    .expect("per-request variables are legal in the task slot");
+    let second = render_template(
+        &task.prompt_template,
+        &fire_scope("fence", "T2", serde_json::json!({"target": "b"})),
+    )
+    .expect("per-request variables are legal in the task slot");
+
+    assert_eq!(first, "Review a at T1 on fence.");
+    assert_eq!(second, "Review b at T2 on fence.");
+    assert_ne!(first, second, "the task slot must vary with its binding");
+
+    let replay = render_template(
+        &task.prompt_template,
+        &fire_scope("fence", "T1", serde_json::json!({"target": "a"})),
+    )
+    .expect("re-rendering is deterministic");
+    assert_eq!(replay, first);
+}
+
+#[test]
+fn authoring_rejects_invalid_rendering_syntax_without_invocation_values() {
+    for source in ["{{.message}}", "{{ doc.message", "{% if doc.message %}"] {
+        let error = parse_template_for_validation(source).unwrap_err();
+        assert!(error.to_string().contains("MiniJinja"));
+    }
+    parse_template_for_validation("Process {{ doc.message }} for {{ args.name }}").unwrap();
+}
+
+#[test]
+fn enforces_rendered_size_cap() {
+    let big = "x".repeat(2_000_000);
+    let scope = TemplateScope {
+        session: None,
+        request: None,
+        event: serde_json::json!({"big": big}),
+        doc: None,
+        args: None,
+        group: None,
+        node: serde_json::json!({}),
+        ctx: serde_json::json!({}),
+    };
+    let err = render_template("{{ event.big }}", &scope).unwrap_err();
+    assert!(matches!(err, TemplateError::SizeCap(_)));
+}
+
+#[test]
+fn enforces_template_size_cap() {
+    let big = "x".repeat(100_000);
+    let scope = TemplateScope {
+        session: None,
+        request: None,
+        event: serde_json::json!({}),
+        doc: None,
+        args: None,
+        group: None,
+        node: serde_json::json!({}),
+        ctx: serde_json::json!({}),
+    };
+    let err = render_template(&big, &scope).unwrap_err();
+    assert!(matches!(err, TemplateError::Parse(_)));
+}
+
+#[test]
+fn parse_template_for_validation_collects_event_and_doc_paths() {
+    let template = "{{ event.fired_at }} {{ doc.customer.name }}";
+    let refs = parse_template_for_validation(template).unwrap();
+    assert_eq!(
+        refs,
+        vec![
+            VariableRef {
+                path: vec!["event".to_string(), "fired_at".to_string()],
+            },
+            VariableRef {
+                path: vec![
+                    "doc".to_string(),
+                    "customer".to_string(),
+                    "name".to_string(),
+                ],
+            },
+        ]
+    );
+}
+
+#[test]
+fn parse_template_for_validation_collects_group_paths() {
+    let template = "{{ group.correlation_value }}{% if group.complete %}complete{% endif %}";
+    let refs = parse_template_for_validation(template).unwrap();
+    assert_eq!(
+        refs,
+        vec![
+            VariableRef {
+                path: vec!["group".to_string(), "correlation_value".to_string()],
+            },
+            VariableRef {
+                path: vec!["group".to_string(), "complete".to_string()],
+            },
+        ]
+    );
+}
+
+#[test]
+fn parse_template_for_validation_ignores_unrelated_identifiers() {
+    let refs = parse_template_for_validation("hello {{ user.name }} world").unwrap();
+    assert!(refs.is_empty());
+}
+
+#[test]
+fn parse_template_for_validation_supports_bracket_string_indexing() {
+    let template = r#"{{ event["fired_at"] }} {{ args['mode'] }}"#;
+    let refs = parse_template_for_validation(template).unwrap();
+    assert_eq!(
+        refs,
+        vec![
+            VariableRef {
+                path: vec!["event".to_string(), "fired_at".to_string()],
+            },
+            VariableRef {
+                path: vec!["args".to_string(), "mode".to_string()],
+            },
+        ]
+    );
+}
+
+#[test]
+fn parse_template_for_validation_handles_statements_and_comments() {
+    let template = "{# doc.ignored #}{% if event.ok %}yes{% endif %}";
+    let refs = parse_template_for_validation(template).unwrap();
+    assert_eq!(
+        refs,
+        vec![VariableRef {
+            path: vec!["event".to_string(), "ok".to_string()],
+        }]
+    );
+}
+
+#[test]
+fn parse_template_for_validation_skips_suffix_event_in_attr_access() {
+    let template = "{{ doc.event.name }}";
+    let refs = parse_template_for_validation(template).unwrap();
+    assert_eq!(
+        refs,
+        vec![VariableRef {
+            path: vec!["doc".to_string(), "event".to_string(), "name".to_string(),],
+        }]
+    );
+}
+
+#[test]
+fn authoring_rejects_a_filter_the_engine_cannot_provide() {
+    let error = check_template_vocabulary("{{ doc.correlation | toyaml }}").unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "filter" && name == "toyaml"),
+        "{error}"
+    );
+}
+
+#[test]
+fn authoring_accepts_a_filter_the_engine_registers() {
+    check_template_vocabulary("{{ doc.correlation | tojson }}").unwrap();
+}
+
+#[test]
+fn authoring_rejects_an_unresolvable_name_a_fire_would_only_reach_conditionally() {
+    for template in [
+        "{% if doc.urgent %}{{ doc.correlation | toyaml }}{% endif %}",
+        "{% for row in doc.rows %}{{ row | toyaml }}{% endfor %}",
+        "{% if doc.urgent %}ok{% else %}{{ doc.body | toyaml }}{% endif %}",
+        "{{ doc.body | trim | toyaml }}",
+        "{% if doc.body is jsonish %}yes{% endif %}",
+        "{% if doc.urgent %}{{ doc.items | map('nosuchfilter') }}{% endif %}",
+        "{% for row in doc.rows %}{{ row.tags | select('notempty') }}{% endfor %}",
+    ] {
+        let error = check_template_vocabulary(template).unwrap_err();
+        assert!(
+            matches!(error, TemplateError::UnknownName { .. }),
+            "accepted {template}: {error}"
+        );
+    }
+}
+
+#[test]
+fn authoring_rejects_a_function_the_engine_cannot_provide() {
+    let error = check_template_vocabulary("{{ now() }}").unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "function" && name == "now"),
+        "{error}"
+    );
+}
+
+#[test]
+fn authoring_rejects_a_function_a_fire_would_only_reach_conditionally() {
+    for template in [
+        "{% if doc.urgent %}{{ now() }}{% endif %}",
+        "{% for row in doc.rows %}{{ uuid() }}{% endfor %}",
+        "{% if doc.urgent %}ok{% else %}{{ lipsum() }}{% endif %}",
+        "{% if doc.body is defined %}{{ cycler(1, 2) }}{% endif %}",
+    ] {
+        let error = check_template_vocabulary(template).expect_err(&format!("accepted {template}"));
+        assert!(
+            matches!(&error, TemplateError::UnknownName { kind, .. } if *kind == "function"),
+            "accepted {template}: {error}"
+        );
+    }
+}
+
+#[test]
+fn authoring_accepts_a_called_name_the_template_binds_itself() {
+    for template in [
+        "{% set f = args.formatter %}{{ f() }}",
+        "{% set f = args.formatter %}{% if doc.urgent %}{{ f() }}{% endif %}",
+        "{% with f = args.formatter %}{{ f() }}{% endwith %}",
+        "{% for f in group.docs %}{{ f() }}{% endfor %}",
+        "{% for row in group.docs recursive %}{{ loop(row.children) }}{% endfor %}",
+        "{{ range(3) | length }} {{ dict(a=1) }} {% set ns = namespace(n=0) %}{{ ns.n }}",
+    ] {
+        check_template_vocabulary(template).expect(template);
+    }
+}
+
+#[test]
+fn authoring_accepts_fields_configuration_cannot_enumerate() {
+    for template in [
+        "{{ doc.customer.name | upper }} at {{ ctx.now }} for {{ node.agent_did }}",
+        "{{ args.mode | default('review') }} {{ args.count | int }}",
+        "{{ doc.whatever.deeply.nested.field }}",
+        "{% for row in group.docs %}{{ row.title | default('untitled') }}{% endfor %}",
+        "{% if doc.body is defined %}{{ doc.body | trim | replace('a', 'b') }}{% endif %}",
+        "{{ group.count }} of {{ event.correlation }} ({{ group.complete }})",
+        "{% set names = doc.people | join(', ') %}{{ names | length }}",
+        "{% raw %}{{ doc.x | toyaml }}{% endraw %}",
+    ] {
+        check_template_vocabulary(template).expect(template);
+    }
+}
+
+#[test]
+fn authoring_reports_a_syntax_error_rather_than_a_missing_name() {
+    for template in [
+        "{% if doc.message %}missing endif",
+        "{% block body %}{{ doc.x | toyaml }}{% endblock %}",
+        "{% macro shout(x) %}{{ x | toyaml }}{% endmacro %}",
+    ] {
+        let error = check_template_vocabulary(template).expect_err(template);
+        assert!(
+            matches!(error, TemplateError::Parse(_)),
+            "{template}: {error}"
+        );
+    }
+}
+
+#[test]
+fn authoring_rejects_a_filter_name_map_resolves_from_its_argument() {
+    let error = check_template_vocabulary("{{ doc.items | map('nosuchfilter') }}").unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "filter" && name == "nosuchfilter"),
+        "{error}"
+    );
+}
+
+#[test]
+fn authoring_rejects_a_test_name_select_resolves_from_its_argument() {
+    let error = check_template_vocabulary("{{ doc.rows | select('notempty') }}").unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "test" && name == "notempty"),
+        "{error}"
+    );
+}
+
+#[test]
+fn authoring_rejects_a_test_name_reject_resolves_from_its_argument() {
+    let error = check_template_vocabulary("{{ doc.rows | reject('notempty') }}").unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "test" && name == "notempty"),
+        "{error}"
+    );
+}
+
+#[test]
+fn authoring_rejects_a_test_name_selectattr_resolves_from_its_argument() {
+    let error =
+        check_template_vocabulary("{{ doc.rows | selectattr('id', 'nosuchtest') }}").unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "test" && name == "nosuchtest"),
+        "{error}"
+    );
+}
+
+#[test]
+fn authoring_rejects_a_test_name_rejectattr_resolves_from_its_argument() {
+    let error =
+        check_template_vocabulary("{{ doc.rows | rejectattr('id', 'nosuchtest') }}").unwrap_err();
+    assert!(
+        matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "test" && name == "nosuchtest"),
+        "{error}"
+    );
+}
+
+#[test]
+fn authoring_rejects_a_test_the_engine_cannot_provide() {
+    for (template, unknown) in [
+        ("{% if doc.body is jsonish %}yes{% endif %}", "jsonish"),
+        ("{% if doc.body is trim %}yes{% endif %}", "trim"),
+        ("{{ doc.rows | select('trim') }}", "trim"),
+    ] {
+        let error = check_template_vocabulary(template).expect_err(template);
+        assert!(
+            matches!(&error, TemplateError::UnknownName { kind, name } if *kind == "test" && name == unknown),
+            "{template}: {error}"
+        );
+    }
+}
+
+#[test]
+fn authoring_accepts_a_name_argument_admission_cannot_decide() {
+    for template in [
+        "{{ doc.items | map('lower') }}",
+        "{{ doc.items | map(attribute='username') }}",
+        "{{ doc.items | map(attribute='username', default='anonymous') }}",
+        "{{ doc.rows | select('odd') }}",
+        "{{ doc.rows | select('gt', 3) }}",
+        "{{ doc.rows | reject('none') }}",
+        "{{ doc.rows | selectattr('id', 'even') }}",
+        "{{ doc.rows | selectattr('active') }}",
+        "{{ doc.rows | rejectattr('id', 'gt', 3) }}",
+        "{{ doc.rows | select }}",
+        "{{ doc.items | map(doc.filter_name) }}",
+        "{{ doc.items | map(*args.spec) }}",
+        "{{ doc.items | map('lower', doc.extra) }}",
+        "{% if 'nosuchfilter' is filter %}yes{% endif %}",
+        "{% if 'nosuchtest' is test %}yes{% endif %}",
+        "{{ doc.rows | select(doc.test_name, doc.threshold) }}",
+        "{{ doc.rows | selectattr('id', args.test, 3) }}",
+        "{{ doc.items | map('nosuchfilter' if doc.conditional else 'lower') }}",
+        "{{ doc.items | map('lower' if doc.conditional else 'nosuchfilter') }}",
+        "{{ doc.rows | select(doc.test_name or 'nosuchtest', doc.threshold) }}",
+        "{{ doc.rows | select('nosuchtest' if doc.conditional else 'gt', doc.threshold) }}",
+        "{{ doc.rows | selectattr('id', 'gt', doc.threshold if doc.strict else 0) }}",
+    ] {
+        check_template_vocabulary(template).expect(template);
+    }
+}
+
+#[test]
+fn authoring_accepts_a_call_on_every_name_the_render_scope_resolves() {
+    for template in [
+        "{% for row in group.docs recursive %}{% set sub = loop(row.children) %}{{ sub }}{% endfor %}",
+        "{% set inherited = super() %}{{ inherited }}",
+        "{{ doc() }} {{ args() }} {{ event() }} {{ group() }} {{ node() }} {{ ctx() }}",
+    ] {
+        check_template_vocabulary(template).expect(template);
+    }
+}
+
+#[test]
+fn authoring_rejects_a_constant_name_argument_followed_by_dynamic_arguments() {
+    for (template, kind, unknown) in [
+        (
+            "{{ doc.rows | select('nosuchtest', doc.threshold) }}",
+            "test",
+            "nosuchtest",
+        ),
+        (
+            "{{ doc.items | map('nosuchfilter', doc.extra) }}",
+            "filter",
+            "nosuchfilter",
+        ),
+        (
+            "{{ doc.rows | reject('nosuchtest', doc.threshold + 1) }}",
+            "test",
+            "nosuchtest",
+        ),
+        (
+            "{{ doc.rows | selectattr('id', 'nosuchtest', doc.threshold) }}",
+            "test",
+            "nosuchtest",
+        ),
+        (
+            "{{ doc.rows | rejectattr(doc.field, 'nosuchtest', doc.threshold) }}",
+            "test",
+            "nosuchtest",
+        ),
+        (
+            "{{ doc.rows | select('nosuchtest', doc.a if doc.flag else doc.b) }}",
+            "test",
+            "nosuchtest",
+        ),
+        (
+            "{{ doc.items | map('nosuchfilter', doc.extra | default(1), key=doc.k) }}",
+            "filter",
+            "nosuchfilter",
+        ),
+        (
+            "{{ doc.rows | select('nosuchtest', doc.a < doc.b < doc.c) }}",
+            "test",
+            "nosuchtest",
+        ),
+    ] {
+        let error = check_template_vocabulary(template).expect_err(template);
+        assert!(
+            matches!(&error, TemplateError::UnknownName { kind: found, name } if *found == kind && name == unknown),
+            "{template}: {error}"
+        );
+    }
+}
+
+#[test]
+fn conditional_name_arguments_that_admission_defers_render_for_their_invocations() {
+    for (template, flag) in [
+        (
+            "{{ doc.items | map('lower' if doc.flag else 'nosuchfilter') | join(',') }}",
+            true,
+        ),
+        (
+            "{{ doc.items | map('nosuchfilter' if doc.flag else 'lower') | join(',') }}",
+            false,
+        ),
+    ] {
+        check_template_vocabulary(template).expect(template);
+        let scope = TemplateScope {
+            session: None,
+            request: None,
+            event: serde_json::Value::Null,
+            doc: Some(serde_json::json!({ "items": ["A", "B"], "flag": flag })),
+            args: None,
+            group: None,
+            node: serde_json::Value::Null,
+            ctx: serde_json::Value::Null,
+        };
+        assert_eq!(render_template(template, &scope).expect(template), "a,b");
+    }
+}
+
+#[test]
+fn admission_defers_a_name_a_later_argument_puts_out_of_reach() {
+    for template in [
+        "{{ doc.items | map('nosuchfilter', range(*doc.z)) }}",
+        "{{ doc.rows | select('nosuchtest', range(*doc.z)) }}",
+    ] {
+        check_template_vocabulary(template).expect(template);
+    }
+}
+
+#[test]
+fn admission_reads_one_program_pass_for_a_long_argument_expression() {
+    let elements = (MAX_TEMPLATE_BYTES - 64) / ",1".len();
+    let template = format!(
+        "{{{{ doc.items | map('lower', 1, [doc.x{}]) }}}}",
+        ",1".repeat(elements)
+    );
+    assert!(template.len() <= MAX_TEMPLATE_BYTES, "{}", template.len());
+    let counted =
+        work::measure(|| check_template_vocabulary(&template).expect("long argument expression"));
+    assert_eq!(counted.program_passes, 1, "{counted:?}");
+    assert!(counted.candidates <= 2 * counted.indices, "{counted:?}");
+}
+
+#[test]
+fn admission_reads_one_program_pass_for_a_long_run_of_branching_arguments() {
+    let template = format!(
+        "{{{{ doc.items | map('lower'{}) }}}}",
+        ",1 if doc.flag else 2".repeat(1_999)
+    );
+    assert!(template.len() <= MAX_TEMPLATE_BYTES, "{}", template.len());
+    let counted =
+        work::measure(|| check_template_vocabulary(&template).expect("branching argument run"));
+    assert_eq!(counted.program_passes, 1, "{counted:?}");
+    assert!(counted.candidates <= 2 * counted.indices, "{counted:?}");
+}
+
+#[test]
+fn admission_reads_one_program_pass_for_many_name_carrying_filters() {
+    let filter = "{{ doc.x|map('lower') }}";
+    let template = filter.repeat(MAX_TEMPLATE_BYTES / filter.len());
+    assert!(template.len() <= MAX_TEMPLATE_BYTES, "{}", template.len());
+    let counted =
+        work::measure(|| check_template_vocabulary(&template).expect("many name-carrying filters"));
+    assert_eq!(counted.program_passes, 1, "{counted:?}");
+    assert!(counted.candidates <= 2 * counted.indices, "{counted:?}");
+}
+
+#[test]
+fn authoring_rejects_a_bare_variable_that_is_not_a_context_root() {
+    for template in ["{{ message }}", "Do {{ correlation }} now"] {
+        let error = check_template_vocabulary(template).unwrap_err();
+        assert!(
+            matches!(&error, TemplateError::UnknownName { kind, .. } if *kind == "variable"),
+            "{template}: {error}"
+        );
+    }
+    for template in [
+        "{{ doc.message }} {{ event.correlation }} {{ args.x }}",
+        "{% for item in doc.items %}{{ item }} {{ loop.index }}{% endfor %}",
+        "{% set name = doc.name %}{{ name }}",
+        "{{ range(3) | list }}",
+        "{{ missing | default('fallback') }}",
+        "{% if missing is defined %}{{ missing }}{% endif %}",
+    ] {
+        check_template_vocabulary(template).unwrap_or_else(|error| panic!("{template}: {error}"));
+    }
+}
+
+#[test]
+fn a_manual_render_failure_names_what_the_run_does_not_define() {
+    let scope = TemplateScope {
+        session: Some(serde_json::json!({"session_id": "s"})),
+        request: Some(serde_json::json!({"request_id": "r"})),
+        event: serde_json::json!({"trigger_kind": "manual"}),
+        doc: None,
+        args: Some(serde_json::json!({"queue": "billing"})),
+        group: None,
+        node: serde_json::json!({}),
+        ctx: serde_json::json!({}),
+    };
+    let error = render_manual_template(
+        "desk-triage",
+        "Triage {{ doc.subject }} in {{ args.queue }} for {{ args.owner }}",
+        &scope,
+    )
+    .unwrap_err();
+    assert_eq!(error.undefined, ["args.owner", "doc.subject"]);
+    assert_eq!(error.reads, ["args.owner", "args.queue", "doc.subject"]);
+    let message = error.to_string();
+    assert!(
+        message.starts_with("render manual template for task desk-triage: "),
+        "{message}"
+    );
+    assert!(
+        message.contains("reads args.owner, doc.subject, which this run does not define"),
+        "{message}"
+    );
+    assert!(
+        message.contains(r#"options.args, e.g. {"owner":"VALUE"}"#),
+        "{message}"
+    );
+    assert!(
+        message.contains("options.args cannot supply them"),
+        "{message}"
+    );
+
+    assert_eq!(
+        render_manual_template("t", "Hello {{ args.queue }}", &scope).unwrap(),
+        "Hello billing"
+    );
+}
+
+#[test]
+fn task_render_depends_only_on_read_variables() {
+    let task = task_with_template("Work {{ args.task }}");
+
+    let (node, ctx_a) = task_node_ctx("did:key:zNODE", "fence", "T1");
+    let a = TemplateScope {
+        session: None,
+        request: None,
+        event: serde_json::json!({}),
+        doc: None,
+        args: Some(serde_json::json!({"task": "triage"})),
+        group: None,
+        node,
+        ctx: ctx_a,
+    };
+    let (node_b, ctx_b) = task_node_ctx("did:key:zNODE", "fence", "T2");
+    let b = TemplateScope {
+        session: None,
+        request: None,
+        event: serde_json::json!({"unrelated": 1}),
+        doc: Some(serde_json::json!({"also": "unrelated"})),
+        args: Some(serde_json::json!({"task": "triage"})),
+        group: Some(serde_json::json!({"untracked": true})),
+        node: node_b,
+        ctx: ctx_b,
+    };
+
+    assert_eq!(
+        render_template(&task.prompt_template, &a).expect("renders"),
+        render_template(&task.prompt_template, &b).expect("renders"),
+        "renders must agree whenever every read variable agrees"
+    );
+}
+
+#[test]
+fn task_render_keeps_event_and_argument_namespaces_separate() {
+    let task = task_with_template("{{ event.trigger_kind }}:{{ args.trigger_kind }}");
+    let mut scope = fire_scope(
+        "fence",
+        "T0",
+        serde_json::json!({"trigger_kind": "argument"}),
+    );
+    scope.event = serde_json::json!({"trigger_kind": "event"});
+
+    assert_eq!(
+        render_template(&task.prompt_template, &scope).expect("both scope slots render"),
+        "event:argument"
+    );
+}
+
+#[test]
+fn task_render_fails_closed_on_unbound_variables() {
+    let task = task_with_template("Ship {{ ctx.bogus_missing }}");
+
+    let err = render_template(
+        &task.prompt_template,
+        &fire_scope("fence", "T1", serde_json::json!({})),
+    )
+    .expect_err("an unbound variable must fail the render");
+    assert!(
+        matches!(err, TemplateError::Render(_)),
+        "expected a render-time failure, got: {err:?}"
+    );
+
+    let task = task_with_template("Run {{ args.name }}");
+    let mut scope = fire_scope("fence", "T1", serde_json::json!({}));
+    scope.args = None;
+    assert!(matches!(
+        render_template(&task.prompt_template, &scope),
+        Err(TemplateError::Render(_))
+    ));
+}

@@ -29,6 +29,7 @@ help:
 	@echo "  make sweep [SWEEP_DAYS=7]  Delete target artifacts untouched for SWEEP_DAYS days"
 	@echo "  make build-desktop         Build the Tauri Rust shell"
 	@echo "  make build-desktop-ui      Build the desktop frontend"
+	@echo "  make core-packs            Build the Engineer's core packs into $(CORE_PACKS_DIR) for embedding"
 	@echo
 	@echo "Release (CI calls these; TARGET=<triple> optional, defaults to host):"
 	@echo "  make release-cli           Build the release CLI (full features)"
@@ -43,14 +44,14 @@ help:
 	@echo "Checks:"
 	@echo "  make fmt                   Format Rust and desktop UI code"
 	@echo "  make fmt-check             Check Rust and desktop UI formatting"
-	@echo "  make lint                  Run clippy on all workspace targets (-D warnings)"
+	@echo "  make lint                  Check the product build, then clippy all targets (-D warnings)"
 	@echo "  make proofs                Build Lean proofs"
 	@echo
 	@echo "Tests:"
 	@echo "  make test                  Run core Rust and CLI tests"
-	@echo "  make test-agent            Run Gents runtime tests"
+	@echo "  make test-agent            Run the runtime crates' tests (the CI runtime suite)"
 	@echo "  make test-agent-conformance  Run runtime conformance tests"
-	@echo "  make test-agent-e2e        Run deterministic agent E2E tests"
+	@echo "  make test-agent-e2e        Run live-inference agent E2E tests"
 	@echo "  make test-cli              Run CLI tests"
 	@echo
 	@echo "Desktop UI:"
@@ -72,9 +73,15 @@ help:
 	@echo "  make desktop-native-build  Build the native Tauri app bundle"
 	@echo
 	@echo "Live:"
-	@echo "  make live-cli              Run live CLI smoke test"
+	@echo "  make live-cli              Run live CLI end-to-end tests"
+	@echo "  make live-enrollment       Run live client enrollment and runtime tests"
 	@echo "  make live-onboarding       Run bare gents against real launchd and a PTY (macOS)"
-	@echo "  make live-agent            Run ignored live runtime tests"
+	@echo "  make live-eval             Run live inference eval-driver tests"
+	@echo "  make live-agent            Run live inference runtime tests"
+	@echo "  make live-delivery         Run live delivery stress tests"
+	@echo "  make live-triggers         Run live workspace trigger cycles"
+	@echo "  make live-client           Run live native client conversations and goals"
+	@echo "  make live-editor           Run a live installed-editor journey"
 	@echo "  make live-desktop-smoke    Run live desktop smoke suites"
 	@echo
 	@echo "Packs (published from gents-ai/packs):"
@@ -124,9 +131,43 @@ RELEASE_ARTIFACT := gents-$(TARGET_TRIPLE)
 RELEASE_VERSION ?= $(shell awk '/^\[workspace\.package\]$$/ { p = 1; next } /^\[/ { p = 0 } p && $$1 == "version" { gsub(/"/, "", $$3); print $$3; exit }' Cargo.toml)
 DOCS_ARTIFACT := gents-docs-$(RELEASE_VERSION)
 
+# ---- Core packs ----
+# The Engineer's packs build with the runtime and are embedded in the CLI
+# (crates/gents-core-packs). `make core-packs` compiles their plugins to
+# wasm32-wasip1 and writes $(CORE_PACKS_DIR)/gents.<name>.pack with
+# CORE_PACK_TOOL, a gents CLI (default: the one build-cli makes), from inside
+# core-packs/ so its rust-toolchain.toml (with the wasm target) applies. A release
+# build refuses to start without all of them (GENTS_REQUIRE_CORE_PACKS=1);
+# CI builds them once and every release job embeds that same set.
+CORE_PACKS := pack_builder web dynamic_workflows charts data_tables script
+CORE_PACKS_DIR ?= target/core-packs
+CLI_PROFILE_DIR := $(if $(filter-out dev,$(PROFILE)),$(PROFILE),debug)
+CORE_PACK_TOOL ?=
+CORE_PACK_TESTS ?= $(CORE_PACKS)
+
+.PHONY: core-packs core-packs-test
+core-packs:
+	@tool="$(CORE_PACK_TOOL)"; \
+	if [ -z "$$tool" ]; then $(MAKE) build-cli && tool="$(CARGO_TARGET_DIR)/$(CLI_PROFILE_DIR)/gents"; fi; \
+	tool="$$(cd "$$(dirname "$$tool")" && pwd)/$$(basename "$$tool")"; \
+	mkdir -p "$(CORE_PACKS_DIR)" && out="$$(cd "$(CORE_PACKS_DIR)" && pwd)" && \
+	for pack in $(CORE_PACKS); do \
+		(cd core-packs && "$$tool" config pack build "$$pack" --out "$$out/gents.$$pack.pack") || exit 1; \
+		"$$tool" config pack verify "$$out/gents.$$pack.pack" || exit 1; \
+	done; \
+	cd "$(CORE_PACKS_DIR)" && sha256sum $(addprefix gents.,$(addsuffix .pack,$(CORE_PACKS))) > SHA256SUMS-core-packs.txt
+	@ls -l "$(CORE_PACKS_DIR)"
+
+# Each core pack's own suite (core-packs/test-pack.sh) against CORE_PACK_TOOL.
+core-packs-test:
+	@test -n "$(CORE_PACK_TOOL)" || { echo "usage: make core-packs-test CORE_PACK_TOOL=<gents binary> [CORE_PACK_TESTS=<packs>]" >&2; exit 2; }
+	@failed=""; for pack in $(CORE_PACK_TESTS); do \
+		(cd core-packs && GENTS="$(abspath $(CORE_PACK_TOOL))" ./test-pack.sh "$$pack") || failed="$$failed $$pack"; \
+	done; test -z "$$failed" || { echo "failed:$$failed" >&2; exit 1; }
+
 .PHONY: release-cli fast-dev-cli dist-cli dist-docs measure-build-graph measure-release-cli measure-build-attribution
 release-cli:
-	CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
+	GENTS_REQUIRE_CORE_PACKS="$${GENTS_REQUIRE_CORE_PACKS:-1}" CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
 
 fast-dev-cli:
 	$(CARGO) build -p gents-cli --profile fast-dev --locked $(CARGO_TARGET_FLAG)
@@ -174,6 +215,7 @@ fmt-check:
 	$(NPM) --prefix $(DESKTOP_DIR) run format:check
 
 lint:
+	$(CARGO) check --workspace $(CARGO_PROFILE_FLAG)
 	$(CARGO) clippy --workspace --all-targets $(CARGO_PROFILE_FLAG) -- -D warnings
 
 proofs:
@@ -182,8 +224,10 @@ proofs:
 .PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-eval-drivers test-evals live-configurator-eval
 test: test-agent test-cli test-eval-drivers
 
+RUNTIME_TEST_PACKAGES := $(shell .github/scripts/compile-rust-ci-suite.sh runtime --list-packages)
+
 test-agent:
-	$(CARGO) test -p gents $(CARGO_PROFILE_FLAG)
+	$(CARGO) test --no-fail-fast $(addprefix -p ,$(RUNTIME_TEST_PACKAGES)) $(CARGO_PROFILE_FLAG)
 
 test-agent-conformance:
 	$(CARGO) test -p gents --test conformance $(CARGO_PROFILE_FLAG)
@@ -198,11 +242,7 @@ test-evals:
 live-configurator-eval:
 	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} scripts/evals/run-ladder.sh $${GENTS_EVAL_SUITE:-all} $${GENTS_EVAL_TRIALS:-3} $${GENTS_EVAL_CONCURRENCY:-4}
 
-test-agent-e2e:
-	$(CARGO) test -p gents --test e2e_lifecycle $(CARGO_PROFILE_FLAG)
-	$(CARGO) test -p gents --test e2e_runtime $(CARGO_PROFILE_FLAG)
-	$(CARGO) test -p gents --test e2e_background $(CARGO_PROFILE_FLAG)
-	$(CARGO) test -p gents --test e2e_triggers $(CARGO_PROFILE_FLAG)
+test-agent-e2e: live-agent
 
 test-cli:
 	$(CARGO) test -p gents-cli $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
@@ -261,19 +301,47 @@ desktop-native-dev: build-cli
 desktop-native-build: desktop-native-stage-sidecar
 	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build --config src-tauri/tauri.bundle.conf.json --config $(DESKTOP_LOCAL_TAURI_CONFIG)
 
-.PHONY: live-cli live-onboarding live-agent live-desktop-smoke
+.PHONY: live-eval live-cli live-enrollment live-onboarding live-agent live-triggers live-client live-editor live-desktop-smoke
 live-cli:
-	$(CARGO) test -p gents-cli --features live-e2e --test cli_live_suite cli_live::standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
+	@if [ -z "$$GENTS_LIVE_DESKTOP_BIN" ]; then $(CARGO) build -p gents-desktop --bin gents-desktop $(CARGO_PROFILE_FLAG); elif [ ! -x "$$GENTS_LIVE_DESKTOP_BIN" ]; then echo "GENTS_LIVE_DESKTOP_BIN must name an executable desktop binary" >&2; exit 2; fi
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e --test cli_live_suite $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --ignored --skip cli_onboarding_live:: --nocapture --test-threads=1
 
-LIVE_FILTER ?= cli_onboarding_live::
+LIVE_FILTER ?=
+live-enrollment:
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e --test cli_enrollment $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
+
 live-onboarding:
-	$(CARGO) test -p gents-cli --features live-e2e,native-e2e --test cli_live_suite $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e,native-e2e --test cli_live_suite $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),cli_onboarding_live::) $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
 
 live-agent:
-	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_live $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_live $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
+
+live-triggers:
+	$(CARGO) build -p gents-fs-runner $(CARGO_PROFILE_FLAG)
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_triggers $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),workspace_change_unit_cycle::change_unit_pack_) $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
+
+live-client:
+	$(CARGO) build -p gents-cli $(CARGO_PROFILE_FLAG)
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime native_client_submits_signed_input_and_observes_live_and_durable_output $(CARGO_PROFILE_FLAG) -- --exact --ignored --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime enrolled_client_resumes_a_durable_goal_and_observes_completion $(CARGO_PROFILE_FLAG) -- --exact --ignored --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features runtime-e2e --test runtime managed_runtime_replacement_preserves_running_input_enrollment_and_transcript $(CARGO_PROFILE_FLAG) -- --exact --ignored --nocapture --test-threads=1
+
+live-editor:
+	@test -d "$$GENTS_VSCODE_ROOT" || { echo "Set GENTS_VSCODE_ROOT to the installed-editor extension checkout" >&2; exit 2; }
+	@test -f "$$GENTS_VSCODE_VSIX" || { echo "Set GENTS_VSCODE_VSIX to the built editor extension package" >&2; exit 2; }
+	@unzip -Z -1 "$$GENTS_VSCODE_VSIX" '*gents-media-host*' >/dev/null 2>&1 || { echo "The editor VSIX must bundle gents-media-host; rebuild the extension package with its native helpers" >&2; exit 2; }
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features editor-e2e --test runtime $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),editor_preserves_live_session_and_draft_across_window_reload) $(CARGO_PROFILE_FLAG) -- --exact --nocapture --test-threads=1
 
 live-desktop-smoke:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:chat
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:config
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:operations
 	$(NPM) --prefix $(DESKTOP_DIR) run test:live:interrupt
+
+.PHONY: live-eval
+live-eval:
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-eval --features live-e2e --test eval_runner_canary $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1
+
+.PHONY: live-delivery
+live-delivery:
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} GENTS_DELIVERY_SOURCE_SHA=$${GENTS_DELIVERY_SOURCE_SHA:-$$(git rev-parse HEAD)} $(CARGO) test -p gents --features live-e2e --test trigger_delivery_live $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --ignored --skip process::delivery_crash_child --nocapture --test-threads=1

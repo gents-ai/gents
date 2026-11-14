@@ -1,13 +1,13 @@
 pub mod agent;
+pub(crate) mod background_completion_observer;
 pub mod embedded;
+pub mod lifecycle_hooks;
 pub mod native_logging;
 pub(crate) mod node_readiness_publisher;
 pub mod node_start;
 pub mod oneshot;
-pub mod p2p;
-pub mod periodic_recovery;
-pub mod service;
-pub(crate) mod snapshot;
+pub mod shutdown;
 pub mod startup_readiness;
 pub mod startup_recovery;
 pub(crate) mod status;
+pub mod storage_fault;

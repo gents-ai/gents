@@ -1,7 +1,8 @@
-import Proofs.GoalAutomation.HistoryProjection
-import Proofs.GoalAutomation.RequestAssignment
-import Proofs.Recovery.Sweeps.SessionMessage
+import Proofs.Automation.GoalAutomation.HistoryProjection
+import Proofs.Automation.GoalAutomation.RequestAssignment
+import Proofs.ToolCalls.Recovery.Sweeps.SessionMessage
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.GoalRequestAssignmentContracts
@@ -66,41 +67,13 @@ def inputCases : List InputCase :=
   , ⟨"captured_reference_does_not_need_session_read", ⟨some ⟨1, some 100⟩, false, false, none⟩⟩
   ]
 
-def inputCaseJson (c : InputCase) : Json :=
-  let expected := match prepareInput c.facts with
-    | .pending => Json.mkObj [("kind", toJson "pending")]
-    | .prepared reference => Json.mkObj [("kind", toJson "prepared"),
-        ("reference", reference.map referenceJson |>.getD Json.null)]
-  Json.mkObj [("name", toJson c.name),
-    ("captured", c.facts.captured.map referenceJson |>.getD Json.null),
-    ("session_readable", toJson c.facts.sessionReadable),
-    ("observation_verified", toJson c.facts.observationVerified),
-    ("observed", c.facts.observed.map referenceJson |>.getD Json.null),
-    ("expected", expected)]
-
-def inputCasesJson : String := (toJson (inputCases.map inputCaseJson)).compress
-
 example : inputCases.length = 12 := by decide
-
-def resubmissionInputJson (input : ResubmissionInput) : Json :=
-  let creation := match input.creation with
-    | none => Json.null
-    | some .agentNew => toJson "agent_new"
-    | some .pluginJob => toJson "plugin_job"
-  Json.mkObj [("creation", creation), ("reference", input.reference.map referenceJson |>.getD Json.null),
-    ("queued", toJson input.queued), ("continuation", toJson input.continuation),
-    ("authored", toJson input.authored)]
 
 def freshSessionCases : List ResubmissionInput :=
   [none, some .agentNew, some .pluginJob].flatMap fun creation =>
     [none, some ⟨1, none⟩, some ⟨1, some 100⟩].flatMap fun reference =>
       [false, true].flatMap fun queued =>
         [false, true].map fun continuation => ⟨creation, reference, queued, continuation, 42⟩
-
-def freshSessionCasesJson : String :=
-  (toJson (freshSessionCases.map fun input => Json.mkObj [
-    ("input", resubmissionInputJson input),
-    ("expected", resubmissionInputJson (freshSessionInput input))])).compress
 
 example : freshSessionCases.length = 36 := by decide
 
@@ -117,23 +90,6 @@ def messageInputCases : List MessageInputCase :=
   , ⟨"legacy_target_has_no_physical_binding", ⟨1, 10, true, true, some ⟨1, 10, 2, none⟩, some ⟨9, some 900⟩⟩⟩
   ]
 
-def messageInputCaseJson (c : MessageInputCase) : Json :=
-  let expected := match prepareMessageInput c.facts with
-    | .pending => Json.mkObj [("kind", toJson "pending")]
-    | .prepared reference => Json.mkObj [("kind", toJson "prepared"),
-        ("reference", reference.map referenceJson |>.getD Json.null)]
-  let observed := c.facts.observed.map fun a => Json.mkObj [
-    ("owner", toJson a.owner), ("session", toJson a.session),
-    ("goal", toJson a.goal), ("root", toJson a.root)]
-  Json.mkObj [("name", toJson c.name), ("owner", toJson c.facts.owner),
-    ("session", toJson c.facts.session), ("session_readable", toJson c.facts.sessionReadable),
-    ("observation_verified", toJson c.facts.observationVerified),
-    ("observed", observed.getD Json.null),
-    ("caller_reference", c.facts.callerReference.map referenceJson |>.getD Json.null),
-    ("expected", expected)]
-
-def messageInputCasesJson : String := (toJson (messageInputCases.map messageInputCaseJson)).compress
-
 example : messageInputCases.length = 5 := by decide
 
 def assignmentJson (a : Assignment) : Json :=
@@ -146,26 +102,11 @@ def entryJson (e : Entry) : Json :=
     ("reference", e.reference.map referenceJson |>.getD Json.null),
     ("signature_valid", toJson e.signatureValid)]
 
-def observationJson : Observation → Json
-  | .unassigned => Json.mkObj [("kind", toJson "unassigned")]
-  | .unknown => Json.mkObj [("kind", toJson "unknown")]
-  | .assigned goal root => Json.mkObj [("kind", toJson "assigned"),
-      ("goal", toJson goal), ("root", toJson root)]
-
 def queueScopeJson : QueueScope → Json
   | .unassigned => Json.mkObj [("kind", toJson "unassigned")]
   | .unresolved entry => Json.mkObj [("kind", toJson "unresolved"), ("entry", toJson entry)]
   | .referenced goal root => Json.mkObj [("kind", toJson "referenced"),
       ("goal", toJson goal), ("root", toJson root)]
-
-def caseJson (c : Case) : Json :=
-  Json.mkObj [("name", toJson c.name), ("assignment", assignmentJson c.assignment),
-    ("entry", entryJson c.entry), ("observed", toJson (c.observed.map assignmentJson)),
-    ("expected_member", toJson (belongs c.assignment c.entry)),
-    ("expected_observation", observationJson (observe c.observed c.entry)),
-    ("expected_queue_scope", (queueScope c.observed c.entry).map queueScopeJson |>.getD Json.null)]
-
-def casesJson : String := (toJson (cases.map caseJson)).compress
 
 example : cases.length = 18 := by decide
 
@@ -229,12 +170,6 @@ def versionJson (v : Version) : Json :=
     ("height", toJson v.height), ("parents", toJson v.parents),
     ("assignment", assignmentJson v.assignment), ("status", toJson v.status.toDefraDB)]
 
-def historyObservationJson : HistoryObservation → Json
-  | .unassigned => Json.mkObj [("kind", toJson "unassigned")]
-  | .unknown => Json.mkObj [("kind", toJson "unknown")]
-  | .assigned goal root status => Json.mkObj [("kind", toJson "assigned"),
-      ("goal", toJson goal), ("root", toJson root), ("status", toJson status.toDefraDB)]
-
 def historyHandoffReason (observation : HistoryObservation) : Option String :=
   let handoff : Recovery.AssignmentHandoff := match observation with
     | .unassigned => .absent
@@ -244,16 +179,172 @@ def historyHandoffReason (observation : HistoryObservation) : Option String :=
     | .assigned _ _ status => .live status.toDefraDB
   Recovery.sessionMessageHandoffReason true handoff
 
-def historyCaseJson (c : HistoryCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("versions", toJson (c.versions.map versionJson)),
-    ("entry", entryJson c.entry), ("retire_documents", toJson c.retireDocuments),
-    ("expected", historyObservationJson (observeHistory c.versions c.entry)),
-    ("expected_handoff_reason", toJson (historyHandoffReason (observeHistory c.versions c.entry)))]
+deriving instance ToJson for Goals.Status, Reference, Assignment, Entry, Version, HistoryCase
 
-def historyCasesJson : String := (toJson (historyCases.map historyCaseJson)).compress
+structure ObservationWire where
+  kind : String
+  goal : Option Nat
+  root : Option Nat
+  status : Option Goals.Status
+  deriving ToJson
+
+def ObservationWire.ofModel : HistoryObservation → ObservationWire
+  | .unassigned => ⟨"unassigned", none, none, none⟩
+  | .unknown => ⟨"unknown", none, none, none⟩
+  | .assigned goal root status => ⟨"assigned", some goal, some root, some status⟩
+
+/-- The assignment `latest_assignment_goals` and `observe_request_assignment`
+derive from a retained version history, over every history case. -/
+@[conformance_family]
+def history : Family HistoryCase ObservationWire where
+  inputs := historyCases
+  model := fun c => ObservationWire.ofModel (observeHistory c.versions c.entry)
+
+structure PersistedObservation where
+  observation : ObservationWire
+  handoffReason : Option String
+  deriving ToJson
+
+/-- The histories a served node can hold as written: each document's versions
+are written in order by create and update, so a history whose commits fork,
+merge, repeat or name a missing parent cannot be persisted. These cases drive
+`load_request_assignment`, its in-transaction form and the completion handoff
+over native DefraDB history. -/
+def persistedHistoryCases : List HistoryCase :=
+  historyCases.filter fun c => c.name ∈
+    ["retired_goal_keeps_its_status", "reused_goal_id_keeps_old_assignment",
+      "later_complete_goal_cannot_complete_older_active_assignment"]
+
+@[conformance_family]
+def persistedHistory : Family HistoryCase PersistedObservation where
+  inputs := persistedHistoryCases
+  model := fun c =>
+    { observation := ObservationWire.ofModel (observeHistory c.versions c.entry)
+      handoffReason := historyHandoffReason (observeHistory c.versions c.entry) }
+
+deriving instance ToJson for Case
+
+structure AssignmentObservationWire where
+  kind : String
+  goal : Option Nat
+  root : Option Nat
+  deriving ToJson
+
+def AssignmentObservationWire.ofModel : Observation → AssignmentObservationWire
+  | .unassigned => ⟨"unassigned", none, none⟩
+  | .unknown => ⟨"unknown", none, none⟩
+  | .assigned goal root => ⟨"assigned", some goal, some root⟩
+
+structure QueueScopeWire where
+  kind : String
+  entry : Option Nat
+  goal : Option Nat
+  root : Option Nat
+  deriving ToJson
+
+def QueueScopeWire.ofModel : QueueScope → QueueScopeWire
+  | .unassigned => ⟨"unassigned", none, none, none⟩
+  | .unresolved entry => ⟨"unresolved", some entry, none, none⟩
+  | .referenced goal root => ⟨"referenced", none, some goal, some root⟩
+
+structure SignedBindingOutput where
+  member : Bool
+  observation : AssignmentObservationWire
+  queueScope : Option QueueScopeWire
+  deriving ToJson
+
+/-- Membership by `request_belongs_to_goal`, the observation by
+`observe_request_assignment` and the queue scope by `request_assignment_scope`
+over the observed Goals, for every signed assignment case. -/
+@[conformance_family]
+def signedBinding : Family Case SignedBindingOutput where
+  inputs := cases
+  model := fun c =>
+    { member := belongs c.assignment c.entry
+      observation := AssignmentObservationWire.ofModel (observe c.observed c.entry)
+      queueScope := (queueScope c.observed c.entry).map QueueScopeWire.ofModel }
+
+/-- The scope `load_request_assignment_scopes` resolves when retained Goal
+history cannot be read: only a verified signed reference, with no historical
+entry to fall back on. -/
+@[conformance_family]
+def unreadHistoryScope : Family Case (Option QueueScopeWire) where
+  inputs := cases
+  model := fun c => (preferSignedQueueScope [] (some c.entry) none).map QueueScopeWire.ofModel
+
+structure MessageInputWire where
+  name : String
+  owner : Nat
+  session : Nat
+  sessionReadable : Bool
+  observationVerified : Bool
+  observed : Option Assignment
+  callerReference : Option Reference
+  deriving ToJson
+
+structure PreparedWire where
+  kind : String
+  reference : Option Reference
+  deriving ToJson
+
+def PreparedWire.ofModel : PreparedInput → PreparedWire
+  | .pending => ⟨"pending", none⟩
+  | .prepared reference => ⟨"prepared", reference⟩
+
+/-- The goal assignment `target_goal_assignment` selects for a session message,
+which planning signs and staging persists, over every message input case. -/
+@[conformance_family]
+def messageInput : Family MessageInputWire PreparedWire where
+  inputs := messageInputCases.map fun c =>
+    { name := c.name, owner := c.facts.owner, session := c.facts.session
+      sessionReadable := c.facts.sessionReadable
+      observationVerified := c.facts.observationVerified
+      observed := c.facts.observed, callerReference := c.facts.callerReference }
+  model := fun i => PreparedWire.ofModel (prepareMessageInput
+    ⟨i.owner, i.session, i.sessionReadable, i.observationVerified, i.observed, i.callerReference⟩)
+
+example : messageInputCases.all (·.facts.owner == 1) := by decide
 
 example : historyCases.length = 21 := by decide
 example : (historyCases.map fun c => observeHistory c.versions c.entry).take 2 =
     [.assigned 1 100 .stopped, .assigned 1 100 .stopped] := by native_decide
+
+structure InputBindingInput where
+  name : String
+  captured : Option Reference
+  sessionReadable : Bool
+  observationVerified : Bool
+  observed : Option Reference
+  deriving ToJson
+
+structure InputBindingOutput where
+  kind : String
+  reference : Option Reference
+  deriving ToJson
+
+@[conformance_family]
+def inputBinding : Family InputBindingInput InputBindingOutput where
+  inputs := inputCases.map fun c =>
+    { name := c.name, captured := c.facts.captured, sessionReadable := c.facts.sessionReadable,
+      observationVerified := c.facts.observationVerified, observed := c.facts.observed }
+  model := fun i =>
+    match prepareInput ⟨i.captured, i.sessionReadable, i.observationVerified, i.observed⟩ with
+    | .pending => { kind := "pending", reference := none }
+    | .prepared reference => { kind := "prepared", reference }
+
+deriving instance ToJson for CreationIntent, ResubmissionInput
+
+structure FreshSessionCase where
+  input : ResubmissionInput
+  deriving ToJson
+
+structure FreshSessionResult where
+  expected : ResubmissionInput
+  deriving ToJson
+
+@[conformance_family]
+def freshSession : Family FreshSessionCase FreshSessionResult where
+  inputs := freshSessionCases.map fun input => { input }
+  model := fun c => { expected := freshSessionInput c.input }
 
 end Conformance.GoalRequestAssignmentContracts

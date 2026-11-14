@@ -8,9 +8,9 @@ use crate::runner::executor::{Capture, InferenceBinding, Isolation};
 use crate::{
     create_run, load_run, CellSpec, RunOrigin, RunRecord, DENOMINATOR_POLICY_V1, TAXONOMY_VERSION,
 };
-use gents::documents::{EvalDefinition, EvalSplit};
-use gents::store::config_client::ConfigAccess;
-use gents::Collection;
+use gents_documents::{EvalDefinition, EvalSplit};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 
 pub(crate) mod documents;
 pub(crate) mod pack;

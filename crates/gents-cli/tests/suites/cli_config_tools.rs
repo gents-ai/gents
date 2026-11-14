@@ -215,6 +215,8 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
             "set",
             "--file",
             tools_path.to_str().unwrap(),
+            "--allow-drop",
+            "host",
         ],
     )?;
 
@@ -273,9 +275,30 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
         "--graphql",
         &graphql,
     ];
+    let foreign_identities = elsewhere.join("identities");
+    let foreign_identities_text = foreign_identities
+        .to_str()
+        .context("utf-8 foreign identities")?;
+    let foreign_env = [("GENTS_DESKTOP_HOME", foreign_identities_text)];
+    let keyless = run_cli_json_with_env(&elsewhere, &remote_args, &foreign_env)
+        .expect_err("a machine without a client identity is refused for a set-up home");
+    assert!(
+        format!("{keyless:#}").contains(&format!(
+            "This machine has no Gents client identity for {owner_home}"
+        )),
+        "{keyless:#}"
+    );
+    let foreign_paths =
+        gents_desktop_core::client::DesktopPaths::from_root(foreign_identities.join("cli"));
+    assert!(
+        !foreign_paths.identity_key_path().exists(),
+        "the refused command minted a client identity"
+    );
+    foreign_paths.ensure_root_dirs().await?;
+    gents_desktop_core::client::PrincipalIdentity::load_or_create(&foreign_paths).await?;
     // Private status reads as its caller: another client key is not an
     // administrator of this node, so it is refused the ceiling and told why.
-    let foreign = run_cli_json(&elsewhere, &remote_args)
+    let foreign = run_cli_json_with_env(&elsewhere, &remote_args, &foreign_env)
         .expect_err("a foreign client key does not read the private ceiling");
     assert!(
         format!("{foreign:#}").contains("only the served Node and its native administrators"),

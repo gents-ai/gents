@@ -2,20 +2,26 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::observe::adapter_projection::AdapterProjectionKind;
-use gents::observe::run_timeline::{
+use gents_observe::observe::run_timeline::{
     RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineRequestEvent, TimelineRequestRow,
     TimelineToolCallEvent,
 };
-use gents::store::graphql::escape_graphql_string;
+use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
+use gents_store::config_client::document_decide::{
+    decide_document_access, DocumentAccessQuestion, DocumentDecideError,
+};
+use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::config_writes::ConfigAccess;
 
 use super::load_rows;
 #[derive(Debug, Clone)]
 pub(super) struct ProjectionAcpReadScope {
+    /// The caller's own authenticated endpoint. DefraDB authorizes each
+    /// decision request as this caller (its `DacStatus` gate); `actor_did`
+    /// only narrows rows the caller already read as itself.
+    caller: gents_store::config_client::GraphqlEndpoint,
     actor_did: String,
     policy_id: String,
     api_base: String,
@@ -29,11 +35,6 @@ impl ProjectionAcpReadScope {
             .map(String::as_str)
             .unwrap_or(collection)
     }
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct ProjectionAcpDecisionResponse {
-    allowed: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -92,6 +93,7 @@ pub(super) async fn projection_acp_read_scope(
         );
     };
     Ok(Some(ProjectionAcpReadScope {
+        caller: graphql.clone(),
         actor_did: actor_did.to_string(),
         policy_id,
         api_base: crate::graphql_access::graphql_api_base(graphql.url())?,
@@ -275,7 +277,7 @@ pub(super) fn projection_binding_label(row: &ProjectionAcpBindingRow) -> &str {
     normalize_projection_binding_field(Some(&row.binding_id)).unwrap_or("<unnamed>")
 }
 
-use gents::documents::parse_projection_resource_map;
+use gents_documents::parse_projection_resource_map;
 
 pub(super) async fn apply_projection_acp_read_filter(
     rows: RunTimelineRows,
@@ -489,41 +491,36 @@ impl<'a> ProjectionAcpReadDecider<'a> {
         if let Some(allowed) = self.cache.get(&key) {
             return Ok(*allowed);
         }
-        let url = format!(
-            "{}/acp/document/decide",
-            self.scope.api_base.trim_end_matches('/')
-        );
-        let response = self
-            .client
-            .post(url)
-            .json(&json!({
-                "actor": self.scope.actor_did,
-                "permission": "read",
-                "policyID": self.scope.policy_id,
-                "resourceName": resource_name,
-                "docID": doc_id,
-            }))
-            .send()
-            .await
-            .with_context(|| {
-                format!("requesting DefraDB ACP read decision for {resource_name}/{doc_id}")
-            })?;
-        let status = response.status();
-        let text = response
-            .text()
-            .await
-            .context("reading DefraDB ACP decision response")?;
-        if !status.is_success() {
-            anyhow::bail!(
-                "DefraDB ACP decision endpoint returned {status} for {resource_name}/{doc_id}: {text}"
-            );
-        }
-        let decision =
-            serde_json::from_str::<ProjectionAcpDecisionResponse>(&text).with_context(|| {
-                format!("parsing DefraDB ACP decision response for {resource_name}/{doc_id}")
-            })?;
-        self.cache.insert(key, decision.allowed);
-        Ok(decision.allowed)
+        let allowed = decide_document_access(
+            &self.client,
+            &self.scope.api_base,
+            Some(&self.scope.caller),
+            &DocumentAccessQuestion {
+                actor: &self.scope.actor_did,
+                permission: "read",
+                policy_id: &self.scope.policy_id,
+                resource_name,
+                doc_id,
+            },
+        )
+        .await
+        .map_err(|error| match error {
+            DocumentDecideError::Request(source) => anyhow::Error::new(source).context(format!(
+                "requesting DefraDB ACP read decision for {resource_name}/{doc_id}"
+            )),
+            DocumentDecideError::ReadBody(source) => {
+                anyhow::Error::new(source).context("reading DefraDB ACP decision response")
+            }
+            DocumentDecideError::Refused { status, body } => anyhow::anyhow!(
+                "DefraDB ACP decision endpoint returned {status} for {resource_name}/{doc_id}: {body}"
+            ),
+            DocumentDecideError::Decode(source) => anyhow::Error::new(source).context(format!(
+                "parsing DefraDB ACP decision response for {resource_name}/{doc_id}"
+            )),
+            DocumentDecideError::Authorize(source) => anyhow::Error::new(source),
+        })?;
+        self.cache.insert(key, allowed);
+        Ok(allowed)
     }
 }
 
@@ -736,7 +733,7 @@ mod tests {
     use std::sync::Arc;
 
     use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
-    use gents::observe::run_timeline::{
+    use gents_observe::observe::run_timeline::{
         TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow,
         TimelineRenderedRequestRef, TimelineSessionRow, TimelineToolCallRow,
     };
@@ -789,6 +786,9 @@ mod tests {
             let _ = axum::serve(listener, router).await;
         });
         Ok(ProjectionAcpReadScope {
+            caller: gents_store::config_client::GraphqlEndpoint::anonymous(format!(
+                "http://{addr}/api/v0/graphql"
+            )),
             actor_did: "did:test:projection-reader".to_string(),
             policy_id: "projection-policy".to_string(),
             api_base: format!("http://{addr}/api/v0"),

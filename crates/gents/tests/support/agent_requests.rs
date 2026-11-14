@@ -4,14 +4,15 @@
 
 use std::sync::Arc;
 
-use gents::request::lifecycle::ExecutionOrigin;
-use gents::store::graphql::escape_graphql_string;
-use gents::{ConfigAccess, NodeIdentity, RequestLifecycle};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequest;
+use gents_session::request::lifecycle::ExecutionOrigin;
+use gents_session::request::lifecycle::RequestLifecycle;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::{config_client::ConfigAccess, identity::NodeIdentity};
 
 use super::{ManagedAgentFixture, TestDb};
 
@@ -95,7 +96,7 @@ impl RequestActors {
         );
         // Production projects the baseline from the live Agent document;
         // fixtures with no projection pass grant the same set as the node admin.
-        gents::store::identity::GrantSet::AgentBaseline
+        gents_store::identity::GrantSet::AgentBaseline
             .grant(
                 &runtime,
                 &identity::Did::new(fixture.agent.did()).expect("valid Agent DID"),
@@ -115,9 +116,9 @@ impl RequestActors {
                 let agent_did = fixture.agent.did();
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents_documents::read_desired_state_record_in_txn(
                             txn,
-                            gents::Collection::Agent,
+                            gents_store::collection::Collection::Agent,
                             node_did,
                             agent_did,
                         )
@@ -182,7 +183,7 @@ impl RequestActors {
                         )
                         .await?;
                     let session_doc =
-                        gents::store::graphql::created_doc_id(&response, "AgentSession")?;
+                        gents_store::graphql::created_doc_id(&response, "AgentSession")?;
                     txn.add_resource_relationship(
                         "AgentSession",
                         &session_doc,
@@ -238,7 +239,7 @@ impl RequestActors {
             seed.created_at,
             AgentRequestAdmissionRecord::local_self(agent),
         );
-        create.max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES.into();
+        create.max_retries = gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES.into();
         create.valid_until = seed.valid_until.map(str::to_owned);
         if let Some(input) = seed.input {
             create.input = serde_json::from_str(input).expect("request input JSON");
@@ -275,9 +276,12 @@ impl RequestActors {
         let session_doc = self.session(&create.session_id, &create.created_at).await;
         create.agent_doc_id = Some(self.agent_doc.clone());
         create.session_doc_id = Some(session_doc.clone());
-        gents::sign_agent_request_create(self.fixture.agent.as_ref(), &mut create)
-            .await
-            .expect("sign fixture request");
+        gents_session::request::admission::sign_agent_request_create(
+            self.fixture.agent.as_ref(),
+            &mut create,
+        )
+        .await
+        .expect("sign fixture request");
         let agent_did = self.agent_did().to_owned();
         self.agent_access
             .transact_write("test.agent_requests.request", |txn| {
@@ -289,7 +293,7 @@ impl RequestActors {
                     let response = txn
                         .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
                         .await?;
-                    let doc = gents::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                    let doc = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
                     txn.add_resource_relationship(
                         "AgentRequest",
                         &doc,
@@ -588,12 +592,12 @@ impl RequestActors {
                         .await?;
                     let close_doc_id = relate(
                         "AgentOutputSegment",
-                        gents::store::graphql::created_doc_id(&created, "AgentOutputSegment")?,
+                        gents_store::graphql::created_doc_id(&created, "AgentOutputSegment")?,
                     )
                     .await?;
                     let message = TranscriptMessage {
                         native_request_id: None,
-                        message_key: gents::session::sequence_message_key(
+                        message_key: gents_session::session::sequence_message_key(
                             node_did,
                             session_id,
                             requester_did,
@@ -630,7 +634,7 @@ impl RequestActors {
                         .await?;
                     relate(
                         "AgentMessage",
-                        gents::store::graphql::created_doc_id(&created, "AgentMessage")?,
+                        gents_store::graphql::created_doc_id(&created, "AgentMessage")?,
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())
@@ -692,7 +696,7 @@ pub async fn submit_user_request(
 #[allow(clippy::too_many_arguments)]
 pub async fn submit_user_request_to(
     access: &ConfigAccess,
-    user: &gents::KeyIdentity,
+    user: &gents_store::identity::KeyIdentity,
     node_did: &str,
     agent: &str,
     session: &str,
@@ -713,7 +717,7 @@ pub async fn submit_user_request_to(
         canonical_now(),
         AgentRequestAdmissionRecord::client(requester),
     );
-    request.input = gents::request::lifecycle::prepare_user_message_input(
+    request.input = gents_session::request::lifecycle::prepare_user_message_input(
         access,
         node_did,
         session,
@@ -723,7 +727,7 @@ pub async fn submit_user_request_to(
     .await
     .expect("prepare the User's message input");
     request.session_doc_id = Some(
-        gents::request::lifecycle::reserve_goal_session(access, &request)
+        gents_session::request::lifecycle::reserve_goal_session(access, &request)
             .await
             .expect("reserve the User's session"),
     );
@@ -731,9 +735,9 @@ pub async fn submit_user_request_to(
         .transact_readonly("test.user_request.agent", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::store::config_client::read_desired_state_record_in_txn(
+                    gents_documents::read_desired_state_record_in_txn(
                         txn,
-                        gents::Collection::Agent,
+                        gents_store::collection::Collection::Agent,
                         node_did,
                         agent,
                     )
@@ -746,10 +750,10 @@ pub async fn submit_user_request_to(
         .await
         .expect("read the selected Agent as its User");
     request.agent_doc_id = Some(agent_doc);
-    gents::sign_agent_request_create(user, &mut request)
+    gents_session::request::admission::sign_agent_request_create(user, &mut request)
         .await
         .expect("sign the User's request");
-    gents::request::lifecycle::submit_client_request(access, &request)
+    gents_session::request::lifecycle::submit_client_request(access, &request)
         .await
         .expect("submit the User's request");
     let response = access

@@ -15,7 +15,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { preferences, useStarterPacksDismissed } from "@/preferences";
 import { namespaceOf, shortName } from "./model";
-import { AccessAsks, ErrorDetail, Section } from "./PackCard";
+import { ErrorDetail, Section } from "./PackCard";
 import {
   isPending,
   useDefaultPacks,
@@ -23,19 +23,20 @@ import {
 } from "./useDefaultPacks";
 
 const TITLE = "Starter packs";
-const INTRO = "The packs the Engineer starts with. Installing them needs the network.";
-
-/* an approval names the archive that was shown; a pack with none can't be approved */
-const approvalOf = (pack: DefaultPack): DefaultPackApproval | null =>
-  isPending(pack) && pack.digest ? { pack: pack.pack, digest: pack.digest } : null;
+const INTRO = "The packs the Engineer starts with. They come with Gents.";
 
 const LABEL = "text-xs text-muted-foreground";
 
-/** The starter packs not yet installed: what each is for, the permissions it
-    asks for, what approving turns on and what declining costs, with Approve
-    on each and on all of them. Every word about a pack is the bridge's.
-    With `onDismiss` it is the card: Not now sits beside Approve all, and the
-    list scrolls between the heading and those buttons. */
+/* what the button on a pending pack does */
+const actionOf = (pack: DefaultPack) =>
+  pack.state === "missing" ? "Install" : "Turn on";
+
+/** The starter packs not yet installed or turned on: what each is for and
+    what the Engineer lacks without it, with Install on a pack this home is
+    missing and Turn on on one that is installed and off. Every word about a
+    pack is the bridge's. With `onDismiss` it is the card: Not now sits
+    beside Install all, and the list scrolls between the heading and those
+    buttons. */
 export function DefaultPacksReview({
   review,
   onDismiss,
@@ -45,7 +46,9 @@ export function DefaultPacksReview({
 }) {
   const { packs, busy, failed, error, approve, retry } = review;
   const open = packs.filter((pack) => pack.state !== "installed");
-  const all = open.flatMap((pack) => approvalOf(pack) ?? []);
+  const missing: DefaultPackApproval[] = open
+    .filter((pack) => pack.state === "missing")
+    .map((pack) => ({ pack: pack.pack }));
   const List = onDismiss ? CardList : PageList;
 
   return (
@@ -54,8 +57,8 @@ export function DefaultPacksReview({
         {open.length > 0 && (
           <ul aria-label={TITLE} className="divide-y divide-border/60">
             {open.map((pack) => {
-              const approval = approvalOf(pack);
               const failure = failed.find((f) => f.pack === pack.pack);
+              const action = actionOf(pack);
               return (
                 <li key={pack.pack} className="grid gap-2 py-3 first:pt-0">
                   <div className="flex items-start gap-3">
@@ -72,55 +75,29 @@ export function DefaultPacksReview({
                         {pack.purpose}
                       </p>
                     </div>
-                    {pack.state === "unavailable" ? (
+                    {isPending(pack) && (
                       <Button
                         size="sm"
                         variant="outline"
                         disabled={busy}
-                        aria-label={`Retry ${pack.pack}`}
-                        onClick={() => void retry()}
+                        aria-label={`${action} ${pack.pack}`}
+                        onClick={() => void approve([{ pack: pack.pack }])}
                       >
-                        Retry
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={busy || approval === null}
-                        aria-label={`${pack.state === "ready" ? "Install" : "Approve"} ${pack.pack}`}
-                        onClick={() => approval && void approve([approval])}
-                      >
-                        {pack.state === "ready" ? "Install" : "Approve"}
+                        {action}
                       </Button>
                     )}
                   </div>
                   {pack.state === "unavailable" && (
                     <p className="text-sm text-warning">
-                      {pack.reason ?? "This pack can't be installed right now."}
+                      {pack.reason ?? "This build of Gents doesn't include this pack."}
                     </p>
-                  )}
-                  {pack.requested.length > 0 && (
-                    <div className="grid gap-1">
-                      <span className={LABEL}>Permissions it asks for</span>
-                      <AccessAsks asks={pack.requested} />
-                    </div>
-                  )}
-                  {pack.turns_on.length > 0 && (
-                    <div className="grid gap-1">
-                      <span className={LABEL}>Approving also turns on</span>
-                      <ul className="grid gap-1 text-sm">
-                        {pack.turns_on.map((sentence) => (
-                          <li key={sentence}>{sentence}</li>
-                        ))}
-                      </ul>
-                    </div>
                   )}
                   <p className={LABEL}>{pack.without}</p>
                   {failure && (
                     <div role="alert" className="grid gap-1">
                       <p className="text-sm text-warning">
                         {failure.installed
-                          ? `${shortName(pack.pack)} is installed with its permissions granted, but setting it up for the Engineer didn't finish. Approve it again to finish.`
+                          ? `${shortName(pack.pack)} is installed, but setting it up for the Engineer didn't finish. Select ${action} again to finish.`
                           : `Couldn't install ${shortName(pack.pack)}. Nothing changed for it; you can try again.`}
                       </p>
                       <ErrorDetail error={failure.error} />
@@ -136,7 +113,7 @@ export function DefaultPacksReview({
           <div role="alert" className="grid gap-1">
             <p className="text-sm text-warning">
               {open.length > 0
-                ? "Couldn't install the packs."
+                ? "Couldn't set up the packs."
                 : "Couldn't read the starter packs."}
             </p>
             <ErrorDetail error={error} />
@@ -159,20 +136,24 @@ export function DefaultPacksReview({
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <Spinner /> The local node restarts for a moment while the packs install.
+          <Spinner /> The local node restarts for a moment while the packs are set up.
         </p>
       )}
 
-      {(all.length > 0 || onDismiss) && (
+      {(missing.length > 0 || onDismiss) && (
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           {onDismiss && (
             <Button variant="outline" disabled={busy} onClick={onDismiss}>
               Not now
             </Button>
           )}
-          {all.length > 0 && (
-            <Button variant="brand" disabled={busy} onClick={() => void approve(all)}>
-              {busy ? "Installing…" : "Approve all"}
+          {missing.length > 0 && (
+            <Button
+              variant="brand"
+              disabled={busy}
+              onClick={() => void approve(missing)}
+            >
+              {busy ? "Installing…" : "Install all"}
             </Button>
           )}
         </div>
@@ -191,15 +172,17 @@ const PageList = ({ children }: { children: ReactNode }) => (
   <div className="grid gap-4">{children}</div>
 );
 
-/** The starter packs offered once over the shell on the desktop's own node,
-    until they are installed or put off with Not now. Putting them off is
-    remembered on this device for that node; the Packs page keeps offering
-    them. Packs that could not be resolved don't open it by themselves. */
+/** The starter packs offered once over the shell on the desktop's own node
+    while one is missing from it, until they are installed or put off with
+    Not now. Putting them off is remembered on this device for that node; the
+    Packs page keeps offering them. A pack that is installed and off, or that
+    this build doesn't carry, doesn't open it by itself. */
 export function StarterPacksCard() {
   const review = useDefaultPacks();
   const dismissed = useStarterPacksDismissed(review.nodeDid);
   const { nodeDid, busy } = review;
-  const open = nodeDid !== null && !dismissed && review.packs.some(isPending);
+  const missing = review.packs.some((pack) => pack.state === "missing");
+  const open = nodeDid !== null && !dismissed && missing;
   const dismiss = () => {
     if (nodeDid !== null && !busy) preferences.dismissStarterPacks(nodeDid);
   };
@@ -217,7 +200,7 @@ export function StarterPacksCard() {
 }
 
 /** The same review as a section of the Packs page, shown while any starter
-    pack is not installed or the list could not be read. */
+    pack is not installed and on, or the list could not be read. */
 export function StarterPacksSection() {
   const review = useDefaultPacks();
   const waiting = review.packs.some((pack) => pack.state !== "installed");

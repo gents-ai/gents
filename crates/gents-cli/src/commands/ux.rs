@@ -18,29 +18,29 @@ pub(crate) async fn dispatch(command: UxCommand) -> Result<()> {
 }
 
 fn list(args: UxListArgs) -> Result<()> {
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let plugins = crate::packs::ux_list(&home)?;
     crate::print_json(&serde_json::json!({ "home": home, "plugins": plugins }))
 }
 
 async fn module(args: UxModuleArgs) -> Result<()> {
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let module = crate::packs::ux_module(home, args.id).await?;
     crate::print_json(&serde_json::to_value(module)?)
 }
 
 async fn preview(args: UxPreviewArgs) -> Result<()> {
-    use gents::observe::ux_preview as preview;
+    use gents_tools::ux_preview as preview;
     use std::io::Write as _;
 
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let home_for_run = home.clone();
     let target = preview::resolve_target(&home, &args.target, |namespace, plugin| async move {
         crate::commands::plugin::call_installed(
             &home_for_run,
             &namespace,
             &plugin,
-            gents::plugin::ux::producer_input(),
+            gents_pack::plugin::ux::producer_input(),
         )
         .await
     })
@@ -70,7 +70,7 @@ async fn preview(args: UxPreviewArgs) -> Result<()> {
 }
 
 fn lint(args: UxLintArgs) -> Result<()> {
-    let findings = gents::plugin::ux::lint_file(&args.file)?;
+    let findings = gents_pack::plugin::ux::lint_file(&args.file)?;
     crate::print_json(&serde_json::json!({
         "file": args.file,
         "admitted": findings.is_empty(),
@@ -80,7 +80,7 @@ fn lint(args: UxLintArgs) -> Result<()> {
         findings.is_empty(),
         "{} is refused by the static lint:\n{}",
         args.file.display(),
-        gents::plugin::ux::lint::describe(&findings)
+        gents_pack::plugin::ux::lint::describe(&findings)
     );
     Ok(())
 }

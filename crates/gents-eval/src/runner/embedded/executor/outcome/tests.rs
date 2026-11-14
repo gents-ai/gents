@@ -174,7 +174,7 @@ async fn a_seed_ignores_unrelated_and_stale_trigger_failures() {
         .unwrap();
     let since = "2026-06-01T00:00:00Z";
     let source = "seed-\"current";
-    let unacknowledged = gents::triggers::UNACKNOWLEDGED_STATUS;
+    let unacknowledged = gents_automation::triggers::UNACKNOWLEDGED_STATUS;
     for (trigger_id, status, doc_id, attempted) in [
         ("unrelated", "error", "another-seed", since),
         ("stale", "error", source, "2026-01-01T00:00:00Z"),
@@ -199,11 +199,11 @@ async fn a_seed_ignores_unrelated_and_stale_trigger_failures() {
             attempted,
         )
         .await;
-        gents::test_support::update_trigger_runtime_fields(
+        gents_automation::test_support::update_trigger_runtime_fields(
             &home.node,
             home.did(),
             trigger_id,
-            gents::test_support::TriggerRuntimeUpdate {
+            gents_automation::test_support::TriggerRuntimeUpdate {
                 last_fired_source_doc_id: Some(doc_id.into()),
                 ..Default::default()
             },
@@ -216,11 +216,11 @@ async fn a_seed_ignores_unrelated_and_stale_trigger_failures() {
         None,
         "another document's fire, and one attempted before the stage, is not this stage's"
     );
-    gents::test_support::update_trigger_runtime_fields(
+    gents_automation::test_support::update_trigger_runtime_fields(
         &home.node,
         home.did(),
         "stale",
-        gents::test_support::TriggerRuntimeUpdate {
+        gents_automation::test_support::TriggerRuntimeUpdate {
             last_attempt_at: Some(since.into()),
             ..Default::default()
         },
@@ -265,16 +265,16 @@ async fn a_seed_unacknowledged_trigger_is_infrastructure() {
     seed_trigger(
         &home,
         "unacknowledged",
-        gents::triggers::UNACKNOWLEDGED_STATUS,
+        gents_automation::triggers::UNACKNOWLEDGED_STATUS,
         Some("acknowledgment channel closed"),
         since,
     )
     .await;
-    gents::test_support::update_trigger_runtime_fields(
+    gents_automation::test_support::update_trigger_runtime_fields(
         &home.node,
         home.did(),
         "unacknowledged",
-        gents::test_support::TriggerRuntimeUpdate {
+        gents_automation::test_support::TriggerRuntimeUpdate {
             last_fired_source_doc_id: Some(source.into()),
             ..Default::default()
         },
@@ -297,7 +297,7 @@ async fn an_unacknowledged_seed_fire_does_not_downgrade_a_recorded_error() {
     let since = "2026-06-01T00:00:00Z";
     let source = "seed-current";
     for (trigger_id, status) in [
-        ("lost", gents::triggers::UNACKNOWLEDGED_STATUS),
+        ("lost", gents_automation::triggers::UNACKNOWLEDGED_STATUS),
         ("caused", "error"),
     ] {
         seed_trigger(
@@ -308,11 +308,11 @@ async fn an_unacknowledged_seed_fire_does_not_downgrade_a_recorded_error() {
             since,
         )
         .await;
-        gents::test_support::update_trigger_runtime_fields(
+        gents_automation::test_support::update_trigger_runtime_fields(
             &home.node,
             home.did(),
             trigger_id,
-            gents::test_support::TriggerRuntimeUpdate {
+            gents_automation::test_support::TriggerRuntimeUpdate {
                 last_fired_source_doc_id: Some(source.into()),
                 ..Default::default()
             },

@@ -10,7 +10,7 @@ use harness::*;
 use crate::support::*;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -52,29 +52,6 @@ mod no_model {
             terminal.transcript()
         );
         Ok(())
-    }
-
-    #[test]
-    #[ignore = "ignored only so `make live-onboarding` runs it; touches nothing"]
-    fn only_an_isolated_build_on_macos_passes_the_label_check() {
-        for (os, label) in [
-            ("macos", "ai.gents.runtime"),
-            ("macos", ""),
-            ("macos", "ai.gents.runtime.native-e2e.other"),
-            ("linux", "ai.gents.runtime.native-e2e"),
-        ] {
-            let metadata = json!({"os": os, "service_label": label});
-            assert!(
-                isolated_label(&metadata).is_err(),
-                "{os} {label} must be refused"
-            );
-        }
-        assert!(isolated_label(&json!({})).is_err());
-        assert_eq!(
-            isolated_label(&json!({"os": "macos", "service_label": "ai.gents.runtime.native-e2e"}))
-                .unwrap(),
-            "ai.gents.runtime.native-e2e"
-        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -314,57 +291,448 @@ mod no_model {
         Terminal::spawn(&command, &live.log(log))
     }
 
+    /// The `<home>.broken-<time>` folder a repair set `home` aside as.
+    fn set_aside_of(home: &Path) -> Option<PathBuf> {
+        let prefix = format!("{}.broken-", home.file_name()?.to_string_lossy());
+        fs::read_dir(home.parent()?)
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
+            })
+    }
+
+    /// Answers setup against the answering backend, then quits the shell it opens.
+    async fn set_up_and_quit(terminal: &mut Terminal, backend: &MockChatEndpoint) -> Result<()> {
+        terminal
+            .answer_scanned_inference(backend.endpoint(), NO_MODEL_NAME)
+            .await?;
+        terminal.quit_shell().await
+    }
+
+    fn remember_home(live: &LiveBox, home: &Path) -> Result<()> {
+        let remembered = live.remembered_home();
+        fs::create_dir_all(remembered.parent().context("remembered home directory")?)?;
+        fs::write(remembered, format!("{}\n", home.display()))?;
+        Ok(())
+    }
+
+    /// The `Start over` option of the question about `home`, which a broken home's
+    /// answer names before anything is moved.
+    fn start_over(home: &Path) -> String {
+        format!(
+            "Start over: rename {home} to {home}.broken-<date> (kept, not deleted), then set up a fresh home there",
+            home = home.display()
+        )
+    }
+
+    const LEAVE_IT: &str = "Leave it as it is and stop (nothing is changed)";
+
+    /// The question about the default home, which cannot be loaded because `why`:
+    /// 1 starts it over, 2 leaves it.
+    async fn asked_to_start_over(terminal: &mut Terminal, home: &Path, why: &str) -> Result<()> {
+        terminal
+            .expect(
+                &format!("{} can't be loaded: {why}.", home.display()),
+                RUNTIME_UP,
+            )
+            .await?;
+        terminal
+            .expect(&format!("1) {}", start_over(home)), PROMPT)
+            .await?;
+        terminal.expect(&format!("2) {LEAVE_IT}"), PROMPT).await?;
+        terminal.expect("> ", PROMPT).await
+    }
+
+    /// A broken home is moved aside only when the user answers `Start over`: leaving it
+    /// changes nothing, and starting over sets it aside and sets it up again.
+    async fn is_set_aside_and_set_up_again(
+        live: &LiveBox,
+        backend: &MockChatEndpoint,
+        home: &Path,
+        why: &str,
+    ) -> Result<()> {
+        remember_home(live, home)?;
+        let mut left = setup_of(live, home, "leave")?;
+        asked_to_start_over(&mut left, home, why).await?;
+        left.send("2\r")?;
+        left.expect(
+            &format!("{} was left as it is. Nothing was changed.", home.display()),
+            PROMPT,
+        )
+        .await?;
+        let code = left.wait_exit(EXIT).await?;
+        ensure!(code != 0, "{}", left.transcript());
+        ensure!(
+            !left.transcript().contains("Repairing: "),
+            "{}",
+            left.transcript()
+        );
+        ensure!(set_aside_of(home).is_none(), "nothing was set aside");
+        ensure!(home.is_dir(), "the home is left where it was");
+
+        let mut terminal = setup_of(live, home, "repair")?;
+        asked_to_start_over(&mut terminal, home, why).await?;
+        terminal.send("1\r")?;
+        terminal.expect("Repairing: ", RUNTIME_UP).await?;
+        terminal.expect(why, PROMPT).await?;
+        set_up_and_quit(&mut terminal, backend).await?;
+        ensure!(
+            terminal.transcript().contains("it was set aside as "),
+            "{}",
+            terminal.transcript()
+        );
+        let aside = set_aside_of(home).context("the broken folder was set aside")?;
+        ensure!(aside.is_dir(), "{} is not a folder", aside.display());
+        ensure!(home.join("init.json").is_file(), "the home is set up again");
+        ensure!(live.plist().is_file(), "the service is installed");
+        Ok(())
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
-    async fn a_setup_that_stopped_midway_asks_again() -> Result<()> {
+    async fn a_setup_that_stopped_midway_is_set_aside_and_set_up_again() -> Result<()> {
+        let backend = answering_backend()?;
         let live = LiveBox::new()?;
-        let folder = live.folder("data");
-        // An empty store folder nothing can be written into passes init's fresh-store
-        // check (any entry would make it an unknown store init refuses), then stops init
-        // after it records key custody, when the store is first written.
-        let blocker = folder.join("data");
-        fs::create_dir_all(&blocker)?;
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(&blocker, fs::Permissions::from_mode(0o555))?;
-        }
+        let home = live.init_home("data", backend.endpoint(), NO_MODEL_NAME)?;
+        // The marker init leaves while it provisions the home.
+        fs::write(
+            home.home
+                .join(gents_store::local::home::INIT_PENDING_FILE_NAME),
+            "",
+        )?;
 
-        let mut terminal = setup_of(&live, &folder, "midway")?;
-        terminal.answer_root_and_server(NO_MODEL_ENDPOINT).await?;
-        let code = terminal.wait_exit(RUNTIME_UP).await?;
+        is_set_aside_and_set_up_again(&live, &backend, &home.home, "its setup stopped midway").await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_deleted_home_with_its_node_running_is_set_up_again() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
+        live.bring_up(&home.home).await?;
+        let old_pid = live.service_pid().context("the service runs")?;
+        let old_did = node_did_of(&home.home)?;
+        fs::remove_dir_all(&home.home)?;
+        remember_home(&live, &home.home)?;
+
+        let mut terminal = setup_of(&live, &home.home, "deleted-home")?;
+        set_up_and_quit(&mut terminal, &backend).await?;
+
+        // A deleted home is set up again without a question, and the node still serving
+        // it is stopped so setup can run, which is not reported as a repair.
+        let transcript = terminal.transcript();
+        ensure!(
+            !transcript.contains("can't be loaded")
+                && !transcript.contains("Start over")
+                && !transcript.contains("Repairing: "),
+            "{transcript}"
+        );
+        assert_ne!(node_did_of(&home.home)?, old_did);
+        let pid = live.service_pid().context("the service runs again")?;
+        assert_ne!(pid, old_pid);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_missing_store_key_sets_the_home_aside() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
+        fs::remove_file(gents_store::local::store_key::home_key_file(&home.home))?;
+
+        is_set_aside_and_set_up_again(
+            &live,
+            &backend,
+            &home.home,
+            "the key for its data is missing",
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn unreadable_settings_are_set_aside() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
+        fs::write(home.home.join("init.json"), "{ not json")?;
+
+        is_set_aside_and_set_up_again(
+            &live,
+            &backend,
+            &home.home,
+            "its settings file (init.json) can't be read",
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn missing_settings_with_data_are_set_aside() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
+        fs::remove_file(home.home.join("init.json"))?;
+        // With its bootstrap marker kept, a home without settings reads as a stopped setup.
+        fs::remove_file(
+            home.home
+                .join(gents_store::local::home::BOOTSTRAP_CONSUMED_FILE_NAME),
+        )?;
+
+        is_set_aside_and_set_up_again(
+            &live,
+            &backend,
+            &home.home,
+            "its settings file (init.json) is missing",
+        )
+        .await
+    }
+
+    /// Answers setup of `home` against the answering backend while the service serves
+    /// `serving`, a home that still exists: setup finishes, and the command stops with the
+    /// refusal that names `repoint` instead of moving the service.
+    async fn set_up_and_refused(
+        terminal: &mut Terminal,
+        backend: &MockChatEndpoint,
+        home: &Path,
+        serving: &Path,
+    ) -> Result<()> {
+        const REFUSED: &str = "has no running node";
+        terminal
+            .answer_scanned_inference_until(backend.endpoint(), NO_MODEL_NAME, REFUSED)
+            .await?;
+        terminal
+            .expect(
+                &format!(
+                    "{} {REFUSED}, and the background service serves {}, which this command leaves as it is.",
+                    home.display(),
+                    serving.display()
+                ),
+                PROMPT,
+            )
+            .await?;
+        terminal
+            .expect(
+                &format!("gents runtime service repoint --home {}", home.display()),
+                PROMPT,
+            )
+            .await?;
+        terminal.expect_exit(1).await
+    }
+
+    /// `gents runtime service repoint --home <home>`, the one operation that moves the
+    /// service from the home it serves; then `gents --home <home>` opens its shell on it.
+    async fn repoint_moves_the_node(live: &LiveBox, home: &Path, from: &Path) -> Result<()> {
+        let before = live.service_pid();
+        live.gents_ok(&[
+            "runtime",
+            "service",
+            "repoint",
+            "--home",
+            &home.to_string_lossy(),
+        ])?;
+        let plist = fs::read_to_string(live.plist())?;
+        ensure!(
+            plist.contains(&*home.to_string_lossy()) && !plist.contains(&*from.to_string_lossy()),
+            "repoint moves the service to {}: {plist}",
+            home.display()
+        );
+        let pid = live.service_pid().context("the moved node runs")?;
+        ensure!(
+            Some(pid) != before,
+            "the node was restarted on the new home"
+        );
+        ensure!(from.join("init.json").is_file(), "the old home is kept");
+
+        let mut terminal = Terminal::spawn(&live.bare_gents(home), &live.log("after-repoint"))?;
+        terminal.quit_shell().await?;
+        assert_eq!(live.service_pid(), Some(pid));
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn choosing_another_folder_leaves_the_running_node_until_repoint() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let first = live.init_home("first", backend.endpoint(), NO_MODEL_NAME)?;
+        live.bring_up(&first.home).await?;
+        let pid = live.service_pid().context("the service runs")?;
+        let second = live.folder("second");
+
+        let mut terminal = Terminal::spawn(&live.first_run(), &live.log("another-folder"))?;
+        terminal
+            .answer(FOLDER_QUESTION, &second.to_string_lossy())
+            .await?;
+        set_up_and_refused(&mut terminal, &backend, &second, &first.home).await?;
+
+        ensure!(second.join("init.json").is_file(), "the second is set up");
+        let plist = fs::read_to_string(live.plist())?;
+        ensure!(
+            plist.contains(&*first.home.to_string_lossy())
+                && !plist.contains(&*second.to_string_lossy()),
+            "the service still serves the first folder: {plist}"
+        );
+        assert_eq!(
+            live.service_pid(),
+            Some(pid),
+            "the first folder's node runs on"
+        );
+        ensure!(first.home.join("init.json").is_file(), "the first is kept");
+
+        repoint_moves_the_node(&live, &second, &first.home).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_program_on_the_port_is_named() -> Result<()> {
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
+        let _listener = std::net::TcpListener::bind(("127.0.0.1", HTTP_PORT))?;
+
+        let mut terminal = Terminal::spawn(&live.bare_gents(&home.home), &live.log("port"))?;
+        let code = terminal.wait_exit(Duration::from_secs(15)).await?;
+
         ensure!(code != 0, "{}", terminal.transcript());
         ensure!(
             terminal
                 .transcript()
-                .contains("failed to open regolith store"),
-            "this must fail after init records its key custody: {}",
+                .contains("Your local node couldn't start: port 21919 is in use by"),
+            "{}",
             terminal.transcript()
         );
-        ensure!(folder.join("init.json").is_file(), "custody is recorded");
-        ensure!(!live.plist().exists(), "nothing is installed");
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(&blocker, fs::Permissions::from_mode(0o755))?;
-        }
-
-        // The rerun asks again, but the stop came after init reserved the fresh bootstrap,
-        // so it may not grant again (Lean `Identity.NodeProvisioning.
-        // bootstrap_crash_cannot_replay`): it names the explicit recovery and installs
-        // nothing.
-        let mut rerun = setup_of(&live, &folder, "midway-rerun")?;
-        rerun.answer_root_and_server(NO_MODEL_ENDPOINT).await?;
-        let code = rerun.wait_exit(RUNTIME_UP).await?;
-        ensure!(code != 0, "{}", rerun.transcript());
-        ensure!(
-            rerun.transcript().contains(
-                "fresh home bootstrap was already attempted; explicit recovery is required"
-            ),
-            "a stopped bootstrap is not replayed: {}",
-            rerun.transcript()
-        );
-        ensure!(!live.plist().exists(), "nothing is installed");
-
         Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_moved_binary_is_reinstalled() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let home = live.init_home("home", backend.endpoint(), NO_MODEL_NAME)?;
+        let copy = live.root.join("copy-of-gents");
+        fs::copy(cli_bin(), &copy)?;
+        let mut command = live.gents_from(&copy);
+        command.arg("--home").arg(&home.home);
+        let mut installing = Terminal::spawn(&command, &live.log("copy"))?;
+        installing.quit_shell().await?;
+        ensure!(
+            fs::read_to_string(live.plist())?.contains(&*copy.to_string_lossy()),
+            "the copy installed the service"
+        );
+        fs::remove_file(&copy)?;
+
+        let mut terminal = Terminal::spawn(&live.bare_gents(&home.home), &live.log("real"))?;
+        terminal.quit_shell().await?;
+
+        let plist = fs::read_to_string(live.plist())?;
+        ensure!(
+            plist.contains(cli_bin()),
+            "the real binary is named: {plist}"
+        );
+        ensure!(!plist.contains(&*copy.to_string_lossy()), "{plist}");
+        ensure!(live.service_pid().is_some(), "the node runs");
+        Ok(())
+    }
+
+    /// A default folder that is set up and running, and a second folder that cannot load.
+    async fn default_running_and_another_broken(
+        live: &LiveBox,
+        backend: &MockChatEndpoint,
+    ) -> Result<(InitializedHome, PathBuf, u32)> {
+        let default = live.init_home(".gents", backend.endpoint(), NO_MODEL_NAME)?;
+        live.bring_up(&default.home).await?;
+        let pid = live.service_pid().context("the service runs")?;
+        let broken = live.init_home("broken", backend.endpoint(), NO_MODEL_NAME)?;
+        fs::write(broken.home.join("init.json"), "{ not json")?;
+        Ok((default, broken.home, pid))
+    }
+
+    async fn asked_about(terminal: &mut Terminal, live: &LiveBox, broken: &Path) -> Result<()> {
+        terminal
+            .expect(
+                &format!(
+                    "{} can't be loaded: its settings file (init.json) can't be read.",
+                    broken.display()
+                ),
+                RUNTIME_UP,
+            )
+            .await?;
+        terminal
+            .expect(&format!("1) {}", start_over(broken)), PROMPT)
+            .await?;
+        terminal
+            .expect(
+                &format!(
+                    "2) Use your default data folder ({}) instead",
+                    live.root.join(".gents").display()
+                ),
+                PROMPT,
+            )
+            .await?;
+        terminal.expect(&format!("3) {LEAVE_IT}"), PROMPT).await?;
+        terminal.expect("> ", PROMPT).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_broken_explicit_folder_asks_and_2_opens_the_default() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let (_, broken, pid) = default_running_and_another_broken(&live, &backend).await?;
+
+        let mut terminal = Terminal::spawn(&live.bare_gents(&broken), &live.log("ask-2"))?;
+        asked_about(&mut terminal, &live, &broken).await?;
+        terminal.send("2\r")?;
+        terminal.quit_shell().await?;
+
+        assert_eq!(live.service_pid(), Some(pid));
+        ensure!(set_aside_of(&broken).is_none(), "nothing was set aside");
+        ensure!(
+            broken.join("init.json").is_file(),
+            "the folder is untouched"
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
+    async fn a_broken_explicit_folder_asks_and_1_starts_it_over() -> Result<()> {
+        let backend = answering_backend()?;
+        let live = LiveBox::new()?;
+        let (default, broken, pid) = default_running_and_another_broken(&live, &backend).await?;
+
+        let mut terminal = setup_of(&live, &broken, "ask-1")?;
+        asked_about(&mut terminal, &live, &broken).await?;
+        terminal.send("1\r")?;
+        terminal
+            .expect(
+                "Repairing: its settings file (init.json) can't be read; it was set aside as ",
+                RUNTIME_UP,
+            )
+            .await?;
+        set_up_and_refused(&mut terminal, &backend, &broken, &default.home).await?;
+
+        ensure!(set_aside_of(&broken).is_some(), "the folder was set aside");
+        ensure!(broken.join("init.json").is_file(), "the folder is set up");
+        let plist = fs::read_to_string(live.plist())?;
+        ensure!(
+            plist.contains(&*default.home.to_string_lossy())
+                && !plist.contains(&*broken.to_string_lossy()),
+            "starting a folder over leaves the service on the default folder: {plist}"
+        );
+        assert_eq!(
+            live.service_pid(),
+            Some(pid),
+            "the default folder's node runs on"
+        );
+
+        repoint_moves_the_node(&live, &broken, &default.home).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -463,7 +831,35 @@ mod no_model {
 
     /// `command` under a shell that outlives it on the same terminal and prints that
     /// terminal's flags afterward, as the shell a person returns to would find them.
-    fn reporting_terminal_flags(command: &Command) -> Command {
+    fn reporting_terminal_flags(command: &Command) -> Result<Command> {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = command
+            .get_current_dir()
+            .context("terminal fixture needs a working directory")?
+            .join("terminal-tools");
+        fs::create_dir_all(&directory)?;
+        let forwarder = directory.join("stty");
+        fs::write(
+            &forwarder,
+            br#"#!/bin/sh
+/bin/stty "$@"
+status=$?
+if [ "$status" -eq 0 ] && [ "$#" -eq 1 ] && [ "$1" = "-echo" ]; then
+    printf '%s\n' GENTS_TEST_TERMINAL_ECHO_DISABLED >&2
+fi
+exit "$status"
+"#,
+        )?;
+        fs::set_permissions(&forwarder, fs::Permissions::from_mode(0o755))?;
+        let inherited = command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new("PATH"))
+            .map(|(_, value)| value.map(std::ffi::OsStr::to_os_string))
+            .unwrap_or_else(|| std::env::var_os("PATH"));
+        let mut search = vec![directory];
+        if let Some(inherited) = inherited {
+            search.extend(std::env::split_paths(&inherited));
+        }
         let mut shell = Command::new("/bin/sh");
         shell
             .args([
@@ -482,7 +878,8 @@ mod no_model {
                 None => shell.env_remove(key),
             };
         }
-        shell
+        shell.env("PATH", std::env::join_paths(search)?);
+        Ok(shell)
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -493,14 +890,17 @@ mod no_model {
         let mut command = live.first_run();
         command.arg("--home").arg(&folder);
 
-        let mut terminal =
-            Terminal::spawn(&reporting_terminal_flags(&command), &live.log("key-prompt"))?;
+        let mut terminal = Terminal::spawn(
+            &reporting_terminal_flags(&command)?,
+            &live.log("key-prompt"),
+        )?;
         terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
         terminal.answer(INFERENCE_QUESTION, "1").await?;
         terminal.answer("connection method for OpenAI", "2").await?;
         terminal.expect("OpenAI API key (hidden)", PROMPT).await?;
-        // Echo goes off just after the prompt prints, and the interrupt has to find it off.
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        terminal
+            .expect("GENTS_TEST_TERMINAL_ECHO_DISABLED", PROMPT)
+            .await?;
         terminal.send("\x03")?;
         terminal.expect_exit(130).await?;
 
@@ -519,7 +919,7 @@ mod no_model {
         command.arg("--home").arg(&folder);
 
         let mut terminal =
-            Terminal::spawn(&reporting_terminal_flags(&command), &live.log("after-key"))?;
+            Terminal::spawn(&reporting_terminal_flags(&command)?, &live.log("after-key"))?;
         terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
         terminal.answer(INFERENCE_QUESTION, "1").await?;
         terminal.answer("connection method for OpenAI", "2").await?;
@@ -572,14 +972,17 @@ mod no_model {
         let mut command = live.first_run();
         command.arg("--home").arg(&folder);
 
-        let mut terminal =
-            Terminal::spawn(&reporting_terminal_flags(&command), &live.log("ctrl-d-key"))?;
+        let mut terminal = Terminal::spawn(
+            &reporting_terminal_flags(&command)?,
+            &live.log("ctrl-d-key"),
+        )?;
         terminal.answer(ROOT_QUESTION, WORK_FOLDER).await?;
         terminal.answer(INFERENCE_QUESTION, "1").await?;
         terminal.answer("connection method for OpenAI", "2").await?;
         terminal.expect("OpenAI API key (hidden)", PROMPT).await?;
-        // Echo goes off just after the prompt prints, and the end of input has to find it off.
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        terminal
+            .expect("GENTS_TEST_TERMINAL_ECHO_DISABLED", PROMPT)
+            .await?;
         terminal.send("\x04")?;
         let code = terminal.wait_exit(EXIT).await?;
         ensure!(code != 0, "{}", terminal.transcript());
@@ -822,7 +1225,10 @@ mod with_model {
         terminal.quit_shell().await?;
         crate::support::graphql::register_served_home(&live.root, &folder, &[], HTTP_PORT)?;
 
-        let prompt = format!("Reply with exactly this token: {}", uuid::Uuid::new_v4());
+        let prompt = format!(
+            "Give one short greeting in plain text. Do not call tools. Turn {}",
+            uuid::Uuid::new_v4()
+        );
         let mut print = live.gents();
         print.args(["-p", &prompt, "--home"]).arg(&folder);
         let output = tokio::time::timeout(
@@ -842,6 +1248,20 @@ mod with_model {
         let graphql = graphql_url(HTTP_PORT);
         let (request, _, _) = wait_for_request(&graphql, &node_did_of(&folder)?, &prompt).await?;
         wait_for_request_lifecycle_state(&graphql, &request, &["completed"], TURN).await?;
+        let access = gents_store::config_client::ConfigAccess::Graphql(
+            crate::support::graphql::served_endpoint(&graphql),
+        );
+        let answer =
+            gents::support::live_inference::terminal_assistant_answer(&access, &request).await;
+        ensure!(
+            !answer.trim().is_empty(),
+            "completed print turn has no assistant answer"
+        );
+        let printed = String::from_utf8_lossy(&output.stdout);
+        ensure!(
+            printed.contains(answer.trim()),
+            "print output omitted the persisted assistant answer: {printed}"
+        );
         Ok(())
     }
 }

@@ -3,7 +3,7 @@ use super::*;
 fn record_reset_store_key(
     home: &Path,
     desktop: &gents_desktop_core::client::DesktopPaths,
-    record: &gents::store::local::store_key::StoreEncryption,
+    record: &gents_store::local::store_key::StoreEncryption,
 ) {
     let mut init: serde_json::Value =
         serde_json::from_slice(&std::fs::read(home.join("init.json")).unwrap()).unwrap();
@@ -21,11 +21,11 @@ fn reset_file_store_keys_allow_fresh_setup_and_archives_remain_readable() {
         let temp = tempfile::tempdir().unwrap();
         let temp = std::fs::canonicalize(temp.path()).unwrap();
         let (home, desktop) = dirty_home(&temp);
-        let key_file = gents::store::local::store_key::home_key_file(&home);
+        let key_file = gents_store::local::store_key::home_key_file(&home);
         std::fs::remove_file(home.join("data/MANIFEST")).unwrap();
         std::fs::remove_file(desktop.node_data_dir().join("MANIFEST")).unwrap();
-        let record = gents::store::local::store_key::StoreEncryption::prepare(
-            gents::store::local::store_key::StoreKeyCustodyChoice::File,
+        let record = gents_store::local::store_key::StoreEncryption::prepare(
+            gents_store::local::store_key::StoreKeyCustodyChoice::File,
             &key_file,
             &home.join("data"),
         )
@@ -48,6 +48,7 @@ fn reset_file_store_keys_allow_fresh_setup_and_archives_remain_readable() {
             &desktop,
             not_the_user_home(),
             ClientBinding::Unbound,
+            false,
         )
         .unwrap();
         assert!(plan
@@ -79,8 +80,8 @@ fn reset_file_store_keys_allow_fresh_setup_and_archives_remain_readable() {
                 "other identity"
             );
         }
-        let fresh = gents::store::local::store_key::StoreEncryption::prepare(
-            gents::store::local::store_key::StoreKeyCustodyChoice::File,
+        let fresh = gents_store::local::store_key::StoreEncryption::prepare(
+            gents_store::local::store_key::StoreKeyCustodyChoice::File,
             &key_file,
             &home.join("data"),
         )
@@ -110,9 +111,9 @@ fn reset_keychain_custody_keeps_archives_and_retryable_deletion_records() {
         let temp = tempfile::tempdir().unwrap();
         let temp = std::fs::canonicalize(temp.path()).unwrap();
         let (home, desktop) = dirty_home(&temp);
-        let record = gents::store::local::store_key::StoreEncryption {
-            version: gents::store::local::store_key::STORE_ENCRYPTION_VERSION,
-            custody: gents::store::local::store_key::StoreKeyCustody::MacosKeychain {
+        let record = gents_store::local::store_key::StoreEncryption {
+            version: gents_store::local::store_key::STORE_ENCRYPTION_VERSION,
+            custody: gents_store::local::store_key::StoreKeyCustody::MacosKeychain {
                 keychain_label: "test-only-label".into(),
             },
         };
@@ -124,6 +125,7 @@ fn reset_keychain_custody_keeps_archives_and_retryable_deletion_records() {
             &desktop,
             not_the_user_home(),
             ClientBinding::Unbound,
+            false,
         )
         .unwrap();
         let backup = plan.backup_path("keychain").unwrap();
@@ -154,6 +156,7 @@ fn reset_keychain_custody_keeps_archives_and_retryable_deletion_records() {
             &desktop,
             not_the_user_home(),
             ClientBinding::Unbound,
+            false,
         )
         .unwrap();
         let mut deleted = Vec::new();
@@ -174,7 +177,7 @@ fn reset_keychain_custody_keeps_archives_and_retryable_deletion_records() {
 
 #[test]
 fn reset_pending_upgrade_retires_its_artifacts_and_recorded_custody_together() {
-    use gents::store::local::store_key::{upgrade, StoreEncryption, StoreKeyCustodyChoice};
+    use gents_store::local::store_key::{upgrade, StoreEncryption, StoreKeyCustodyChoice};
     for choice in [StoreKeyCustodyChoice::File, StoreKeyCustodyChoice::Keychain] {
         for disposition in [HomeResetDisposition::Delete, HomeResetDisposition::Archive] {
             let temp = tempfile::tempdir().unwrap();
@@ -184,7 +187,7 @@ fn reset_pending_upgrade_retires_its_artifacts_and_recorded_custody_together() {
             let stores = [
                 (
                     home.join("data"),
-                    gents::store::local::store_key::home_key_file(&home),
+                    gents_store::local::store_key::home_key_file(&home),
                 ),
                 (
                     desktop.node_data_dir().to_path_buf(),
@@ -210,6 +213,7 @@ fn reset_pending_upgrade_retires_its_artifacts_and_recorded_custody_together() {
                 &desktop,
                 not_the_user_home(),
                 ClientBinding::Unbound,
+                false,
             )
             .unwrap();
             let preview = plan.preview();
@@ -278,14 +282,15 @@ fn a_foreign_store_is_never_deleted_by_the_bridge() {
     let (home, desktop) = dirty_home(&temp);
     let plan = plan_home_reset(
         Some(&home),
-        Some(gents::store::local::storage_backend::IncompatibleStore {
-            kind: gents::store::local::storage_backend::IncompatibleStoreKind::ForeignVersion,
+        Some(gents_protocol::operations::install_repair::IncompatibleStore {
+            kind: gents_protocol::operations::install_repair::IncompatibleStoreKind::ForeignVersion,
             data_path: home.join("data"),
         }),
         None,
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     let preview = plan.preview();
@@ -313,7 +318,7 @@ fn an_insecure_old_key_scopes_the_home_like_a_refused_store() {
     let (home, desktop) = dirty_home(&temp);
     let refused = refused_runtime_store(
         &home,
-        Some(gents::store::local::storage_backend::IncompatibleStoreKind::InsecureKey),
+        Some(gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey),
     );
     assert_eq!(refused.data_path, home.join("keys"));
     let preview = plan_home_reset(
@@ -323,13 +328,16 @@ fn an_insecure_old_key_scopes_the_home_like_a_refused_store() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap()
     .preview();
     assert!(preview.stores[0].unsafe_key);
-    assert!(preview.stores[0].older);
+    assert!(!preview.stores[0].older);
     assert!(preview.delete_confirmation.is_some());
-    assert!(preview.stores[0].detail.contains("unsafe file permissions"));
+    assert!(preview.stores[0]
+        .detail
+        .contains("can be read by other users"));
 }
 
 #[test]
@@ -369,11 +377,12 @@ fn the_store_lock_neither_moves_nor_changes_the_confirmation() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap()
     .preview();
 
-    let lock = gents::store::local::home::lock_store(&home, &home.join("data")).unwrap();
+    let lock = gents_store::local::home::lock_store(&home, &home.join("data")).unwrap();
     let locked = plan_home_reset(
         Some(&home),
         refused(),
@@ -381,6 +390,7 @@ fn the_store_lock_neither_moves_nor_changes_the_confirmation() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     locked
@@ -409,7 +419,7 @@ async fn an_opener_cannot_create_the_store_while_a_storeless_home_is_retired() {
     std::fs::remove_dir_all(home.join("data")).unwrap();
     let refused = refused_runtime_store(
         &home,
-        Some(gents::store::local::storage_backend::IncompatibleStoreKind::InsecureKey),
+        Some(gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey),
     );
 
     let lock = lock_home_for_retirement(&home).unwrap();
@@ -420,6 +430,7 @@ async fn an_opener_cannot_create_the_store_while_a_storeless_home_is_retired() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     let preview = plan.preview();
@@ -435,7 +446,7 @@ async fn an_opener_cannot_create_the_store_while_a_storeless_home_is_retired() {
         tokio::spawn(async move {
             barrier.wait().await;
             std::fs::create_dir_all(home.join("data")).unwrap();
-            gents::store::local::home::lock_store(&home, &home.join("data")).is_ok()
+            gents_store::local::home::lock_store(&home, &home.join("data")).is_ok()
         })
     };
     barrier.wait().await;
@@ -459,7 +470,7 @@ async fn an_opener_cannot_create_the_store_while_a_storeless_home_is_retired() {
         "a store created under the lock is not retired"
     );
     drop(lock);
-    assert!(gents::store::local::home::lock_store(&home, &home.join("data")).is_ok());
+    assert!(gents_store::local::home::lock_store(&home, &home.join("data")).is_ok());
 }
 
 #[test]
@@ -477,7 +488,8 @@ fn broad_roots_are_never_retired() {
                 None,
                 &desktop,
                 &user_home,
-                ClientBinding::Unbound
+                ClientBinding::Unbound,
+                false
             )
             .unwrap_err()
             .code,
@@ -492,7 +504,8 @@ fn broad_roots_are_never_retired() {
             None,
             &desktop,
             &user_home,
-            ClientBinding::Unbound
+            ClientBinding::Unbound,
+            false
         )
         .unwrap_err()
         .code,
@@ -510,7 +523,8 @@ fn broad_roots_are_never_retired() {
                 None,
                 &desktop,
                 &aliased,
-                ClientBinding::Unbound
+                ClientBinding::Unbound,
+                false
             )
             .unwrap_err()
             .code,
@@ -531,19 +545,20 @@ fn a_store_from_another_build_is_not_reported_as_older() {
     let (home, desktop) = dirty_home(&temp);
     let preview = plan_home_reset(
         Some(&home),
-        Some(gents::store::local::storage_backend::IncompatibleStore {
-            kind: gents::store::local::storage_backend::IncompatibleStoreKind::ForeignVersion,
+        Some(gents_protocol::operations::install_repair::IncompatibleStore {
+            kind: gents_protocol::operations::install_repair::IncompatibleStoreKind::ForeignVersion,
             data_path: home.join("data"),
         }),
         None,
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap()
     .preview();
     assert!(!preview.stores[0].older);
-    assert!(preview.stores[0].detail.contains("different Gents version"));
+    assert!(preview.stores[0].detail.contains("newer version of Gents"));
 }
 
 #[test]
@@ -561,7 +576,8 @@ fn reset_rejects_healthy_store_wrong_confirmation_and_unknown_endpoint() {
             None,
             &desktop,
             not_the_user_home(),
-            ClientBinding::Unbound
+            ClientBinding::Unbound,
+            false
         )
         .unwrap_err()
         .code,
@@ -576,6 +592,7 @@ fn reset_rejects_healthy_store_wrong_confirmation_and_unknown_endpoint() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -634,7 +651,8 @@ fn reset_rejects_symlinked_homes_and_stores() {
             None,
             &desktop,
             not_the_user_home(),
-            ClientBinding::Unbound
+            ClientBinding::Unbound,
+            false
         )
         .unwrap_err()
         .code,
@@ -649,7 +667,8 @@ fn reset_rejects_symlinked_homes_and_stores() {
             None,
             &desktop,
             not_the_user_home(),
-            ClientBinding::Unbound
+            ClientBinding::Unbound,
+            false
         )
         .unwrap_err()
         .code,

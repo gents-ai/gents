@@ -124,25 +124,25 @@ async fn private_snapshot_keeps_the_current_requesters_questions_without_config_
     let node = served.node_did().to_owned();
     let agent = served.runtime.agent_access(&served.agent).await;
     let file = |id: &str, recipient: &str, kind: &str, action: &str, payload: Option<String>| {
-        let context = gents::session::mailbox::MailboxStampContext {
+        let context = gents_session::session::mailbox::MailboxStampContext {
             requester_did: recipient.to_owned(),
             node_did: node.clone(),
             agent_did: served.agent.agent_did.clone(),
             session_id: Some("chat".into()),
         };
-        let args: gents::session::mailbox::FileMailboxItemArgs = serde_json::from_value(json!({
+        let args: gents_session::session::mailbox::FileMailboxItemArgs = serde_json::from_value(json!({
             "kind": kind, "action": action, "title": "Choose work", "payload": payload,
             "source_kind": "agent", "source_id": id, "session_id": "chat", "request_id": "request",
         }))
         .unwrap();
         let (runtime, agent) = (served.runtime.node().clone(), agent.clone());
         async move {
-            gents::session::mailbox::stamp_create_with_access(
+            gents_session::session::mailbox::stamp_create_with_access(
                 &runtime,
                 &agent,
                 &context,
                 args,
-                gents::session::mailbox::MAILBOX_CLOSE_COLLECTIONS,
+                gents_session::session::mailbox::MAILBOX_CLOSE_COLLECTIONS,
             )
             .await
             .unwrap()
@@ -168,13 +168,13 @@ async fn private_snapshot_keeps_the_current_requesters_questions_without_config_
     )
     .await;
     let closed = file("closed", &requester, "flag", "ack", None).await;
-    gents::session::mailbox::dismiss_mailbox_item_on(
+    gents_session::operations::mailbox::dismiss(
         &core.operator_access(&node).unwrap(),
         &closed.doc_id,
     )
     .await
     .unwrap();
-    core.refresh_store().await.unwrap();
+    core.refresh_node(&node).await.unwrap();
     let host = ClientHost::new(core.clone());
     let result = host
         .execute(

@@ -5,13 +5,13 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::runner::embedded::home::EmbeddedHome;
-use gents::request::lifecycle::{
+use gents_session::request::lifecycle::{
     build_signed_client_request, submit_client_request, ClaimOutcome, ExecutionOrigin,
     RequestIdentity, RequestLifecycle, RequestSigner, RequestSpec,
 };
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
-use gents::store::identity::NodeIdentity;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -93,7 +93,7 @@ pub(super) async fn install(
         anyhow::bail!("expired request must have one visible physical document")
     };
     let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone())?;
-    gents::verify_request_receipt_signature(&row)?;
+    gents_store::identity::request_receipt::verify_request_receipt_signature(&row)?;
     let request = gents_protocol::row::AgentRequest::try_from(row)?;
     let mut lifecycle = RequestLifecycle::new_with_node_did(node, request, 60);
     lifecycle.bind_managed_agent(agent_identity)?;

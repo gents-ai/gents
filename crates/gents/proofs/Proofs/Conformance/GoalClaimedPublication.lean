@@ -1,9 +1,10 @@
-import Proofs.GoalAutomation.ClaimedPublication
+import Proofs.Automation.GoalAutomation.ClaimedPublication
 import Proofs.Conformance.GoalOperatorResume
+import Proofs.Conformance.Family
 
 namespace Conformance.GoalClaimedPublicationContracts
 open GoalAutomation.OperatorResume
-open Conformance.GoalOperatorResumeContracts (parentBinding snapshotJson bindingJson)
+open Conformance.GoalOperatorResumeContracts (parentBinding SnapshotWire SnapshotWire.ofModel SnapshotWire.toModel)
 
 def claimed : Snapshot :=
   ⟨⟨.active, 2, false, false⟩, 1, some 10, 10, [], 37, some 1000⟩
@@ -168,61 +169,124 @@ theorem abandoned_wrapup_claim_stays_inert :
       publishClaimed budgetWrapupAbandoned budgetRequest noWait true =
         (budgetWrapupAbandoned, .illegal) := by decide
 
-private def outcomeJson : Outcome → String
-  | .denied => "denied" | .stale => "stale" | .illegal => "illegal"
-  | .conflict => "conflict" | .rolledBack => "rolled_back"
-  | .created => "created" | .recovered => "recovered"
-  | .deferred => "deferred" | .invalidEvidence => "invalid_evidence"
-  | .unavailable => "unavailable"
+deriving instance Lean.ToJson for BackgroundState, WaitResult, WaitControl
 
-def backgroundJson (b : BackgroundTool) : String :=
-  "{\"doc_id\":" ++ toString b.docId ++ ",\"origin\":" ++
-    (match b.origin with
-    | .spawned parent key => "{\"kind\":\"spawned\",\"parent_tool_doc\":" ++ toString parent ++
-        ",\"stable_key\":" ++ Conformance.Contracts.jsonString key ++ "}"
-    | .nonSpawned => "{\"kind\":\"non_spawned\"}") ++
-  ",\"handle\":" ++ Conformance.Contracts.jsonString b.handle ++
-  ",\"owner\":" ++ Conformance.Contracts.jsonString b.owner ++
-  ",\"session\":" ++ Conformance.Contracts.jsonString b.session ++
-  ",\"requester\":" ++ (match b.requester with | none => "null" | some x => Conformance.Contracts.jsonString x) ++
-  ",\"state\":" ++ Conformance.Contracts.jsonString
-    (match b.state with | .pending => "pending" | .running => "running" | .completionPending => "completion_pending" | .terminal => "terminal") ++ "}"
+structure OriginWire where
+  kind : String
+  parentToolDoc : Option Nat
+  stableKey : Option String
+  deriving Lean.ToJson
 
-def waitJson (w : WaitControl) : String :=
-  "{\"doc_id\":" ++ toString w.docId ++ ",\"parent_request_doc\":" ++ toString w.parentRequestDoc ++
-  ",\"owner\":" ++ Conformance.Contracts.jsonString w.owner ++
-  ",\"session\":" ++ Conformance.Contracts.jsonString w.session ++
-  ",\"requester\":" ++ (match w.requester with | none => "null" | some x => Conformance.Contracts.jsonString x) ++
-  ",\"accepted_tool\":" ++ Conformance.Contracts.jsonString w.acceptedTool ++
-  ",\"accepted_handle\":" ++ Conformance.Contracts.jsonString w.acceptedHandle ++
-  ",\"reply_handle\":" ++ Conformance.Contracts.jsonString w.replyHandle ++
-  ",\"reply\":" ++ Conformance.Contracts.jsonString (match w.reply with | .timedOutRunning => "timed_out_running" | .other => "other" | .argumentError => "argument_error" | .settledDiagnostic => "settled_diagnostic" | .malformed => "malformed") ++
-  ",\"terminal\":" ++ (if w.terminal then "true" else "false") ++
-  ",\"replied\":" ++ (if w.replied then "true" else "false") ++ "}"
+def OriginWire.ofModel : BackgroundOrigin → OriginWire
+  | .spawned parent key => ⟨"spawned", some parent, some key⟩
+  | .nonSpawned => ⟨"non_spawned", none, none⟩
 
-def observationJson (o : PublicationObservation) : String :=
-  "{\"waits\":" ++ Conformance.Contracts.jsonArray (o.waits.map waitJson) ++
-  ",\"backgrounds\":" ++
-    (match o.backgrounds with
-    | none => "null"
-    | some rows => Conformance.Contracts.jsonArray (rows.map backgroundJson)) ++
-  ",\"storage_failed\":" ++ (if o.storageFailed then "true" else "false") ++ "}"
+def OriginWire.toModel (o : OriginWire) : BackgroundOrigin :=
+  match o.kind, o.parentToolDoc, o.stableKey with
+  | "spawned", some parent, some key => .spawned parent key
+  | _, _, _ => .nonSpawned
 
-def requestJson (r : ClaimedRequest) : String :=
-  let base := Conformance.GoalOperatorResumeContracts.requestJson r.toRequest
-  String.mk (base.toList.take (base.length - 1)) ++ ",\"expected_last_continued_from\":" ++
-    (match r.expectedLastContinuedFrom with | none => "null" | some n => toString n) ++
-    ",\"requester\":" ++ (match r.requester with | none => "null" | some x => Conformance.Contracts.jsonString x) ++ "}"
+structure BackgroundWire where
+  docId : Nat
+  origin : OriginWire
+  handle : String
+  owner : String
+  session : String
+  requester : Option String
+  state : BackgroundState
+  deriving Lean.ToJson
 
-def caseJson (c : PublicationCase) : String :=
-  "{\"name\":" ++ Conformance.Contracts.jsonString c.name ++
-  ",\"before\":" ++ snapshotJson c.before ++ ",\"request\":" ++ requestJson c.request ++
-  ",\"observation\":" ++ observationJson c.observation ++
-  ",\"commit\":" ++ (if c.commit then "true" else "false") ++
-  ",\"expected\":" ++ snapshotJson c.expected ++ ",\"outcome\":" ++
-  Conformance.Contracts.jsonString (outcomeJson c.outcome) ++ "}"
+def BackgroundWire.ofModel (b : BackgroundTool) : BackgroundWire :=
+  { docId := b.docId, origin := .ofModel b.origin, handle := b.handle, owner := b.owner
+    session := b.session, requester := b.requester, state := b.state }
 
-def casesJson : String := Conformance.Contracts.jsonArray (cases.map caseJson)
+def BackgroundWire.toModel (b : BackgroundWire) : BackgroundTool :=
+  { docId := b.docId, origin := b.origin.toModel, handle := b.handle, owner := b.owner
+    session := b.session, requester := b.requester, state := b.state }
+
+structure ObservationWire where
+  waits : List WaitControl
+  backgrounds : Option (List BackgroundWire)
+  storageFailed : Bool
+  deriving Lean.ToJson
+
+def ObservationWire.ofModel (o : PublicationObservation) : ObservationWire :=
+  { waits := o.waits, backgrounds := o.backgrounds.map (·.map .ofModel)
+    storageFailed := o.storageFailed }
+
+def ObservationWire.toModel (o : ObservationWire) : PublicationObservation :=
+  { waits := o.waits, backgrounds := o.backgrounds.map (·.map (·.toModel))
+    storageFailed := o.storageFailed }
+
+structure ClaimedRequestWire where
+  expectedStatus : Goals.Status
+  expectedSequence : Nat
+  authorized : Bool
+  parentBelongsToGoal : Bool
+  terminalParent : Bool
+  sessionIdle : Bool
+  binding : Binding
+  expectedLastContinuedFrom : Option Nat
+  requester : Option String
+  deriving Lean.ToJson
+
+def ClaimedRequestWire.ofModel (r : ClaimedRequest) : ClaimedRequestWire :=
+  { expectedStatus := r.expectedStatus, expectedSequence := r.expectedSequence
+    authorized := r.authorized, parentBelongsToGoal := r.parentBelongsToGoal
+    terminalParent := r.terminalParent, sessionIdle := r.sessionIdle, binding := r.binding
+    expectedLastContinuedFrom := r.expectedLastContinuedFrom, requester := r.requester }
+
+def ClaimedRequestWire.toModel (r : ClaimedRequestWire) : ClaimedRequest :=
+  { expectedStatus := r.expectedStatus, expectedSequence := r.expectedSequence
+    authorized := r.authorized, parentBelongsToGoal := r.parentBelongsToGoal
+    terminalParent := r.terminalParent, sessionIdle := r.sessionIdle, binding := r.binding
+    expectedLastContinuedFrom := r.expectedLastContinuedFrom, requester := r.requester }
+
+structure PublicationInput where
+  name : String
+  before : SnapshotWire
+  request : ClaimedRequestWire
+  observation : ObservationWire
+  commit : Bool
+  deriving Lean.ToJson
+
+def PublicationInput.ofCase (c : PublicationCase) : PublicationInput :=
+  { name := c.name, before := .ofModel c.before, request := .ofModel c.request
+    observation := .ofModel c.observation, commit := c.commit }
+
+structure PublicationOutput where
+  expected : SnapshotWire
+  outcome : Outcome
+  deriving Lean.ToJson
+
+def publicationOf (i : PublicationInput) : PublicationOutput :=
+  let result := publishClaimed i.before.toModel i.request.toModel i.observation.toModel i.commit
+  { expected := .ofModel result.1, outcome := result.2 }
+
+/-- Publications whose parent turn ran no tool: the fixture stages them from a
+Goal snapshot and request alone, inside one transaction it commits or
+discards. -/
+@[conformance_family]
+def historical : Family PublicationInput PublicationOutput where
+  inputs := (cases.filter fun c =>
+    c.observation.waits.isEmpty && c.name != "launched_without_wait_publishes").map .ofCase
+  model := publicationOf
+
+/-- The parent turn waits on a background process that is still running when
+the publication is attempted. -/
+@[conformance_family]
+def runningWait : Family PublicationInput PublicationOutput where
+  inputs := (cases.filter fun c => c.name == "claimed_wait_running_defers").map .ofCase
+  model := publicationOf
+
+/-- The parent turn launched or waited on background tools through the real
+tool-call lifecycle before it terminated. -/
+@[conformance_family]
+def waitObservation : Family PublicationInput PublicationOutput where
+  inputs := (cases.filter fun c =>
+    c.name == "launched_without_wait_publishes" ||
+      (!c.observation.waits.isEmpty && c.name != "claimed_wait_running_defers")).map .ofCase
+  model := publicationOf
 
 def identityCases : List (String × String × String × String) :=
   [("agent", "agent", "agent", "agent"),
@@ -230,38 +294,84 @@ def identityCases : List (String × String × String × String) :=
    ("agent", "agent", "node", "agent"),
    ("agent", "agent", "agent", "node")]
 
-def identityCaseJson (c : String × String × String × String) : String :=
+structure IdentityInput where
+  selected : String
+  signer : String
+  actor : String
+  parent : String
+  deriving Lean.ToJson
+
+def IdentityInput.ofCase (c : String × String × String × String) : IdentityInput :=
   let (selected, signer, actor, parent) := c
-  "{\"selected\":" ++ Conformance.Contracts.jsonString selected ++
-  ",\"signer\":" ++ Conformance.Contracts.jsonString signer ++
-  ",\"actor\":" ++ Conformance.Contracts.jsonString actor ++
-  ",\"parent\":" ++ Conformance.Contracts.jsonString parent ++
-  ",\"allowed\":" ++ (if continuationIdentityValid selected signer actor parent then "true" else "false") ++
-  ",\"candidate_allowed\":" ++ (if goalCandidateInScope actor selected parent then "true" else "false") ++ "}"
+  { selected, signer, actor, parent }
 
-def identityCasesJson : String := Conformance.Contracts.jsonArray (identityCases.map identityCaseJson)
+structure CandidateOutput where
+  candidateAllowed : Bool
+  deriving Lean.ToJson
 
-def targetCases : List (String × String × String × String × String × Bool × Bool) :=
-  [("created", "session", "session", "agent", "agent", true, true),
-   ("aborted", "session", "session", "agent", "agent", true, false),
-   ("duplicate-after-revocation", "session", "session", "agent", "agent", false, true),
-   ("wrong-session", "other", "session", "agent", "agent", true, true),
-   ("wrong-agent", "session", "session", "other", "agent", true, true),
-   ("missing-session", "", "session", "agent", "agent", true, true),
-   ("missing-agent", "session", "session", "", "agent", true, true)]
+@[conformance_family]
+def identityCandidate : Family IdentityInput CandidateOutput where
+  inputs := identityCases.map IdentityInput.ofCase
+  model := fun i => { candidateAllowed := goalCandidateInScope i.actor i.selected i.parent }
 
-def targetCaseJson (c : String × String × String × String × String × Bool × Bool) : Lean.Json :=
-  let (name, session, observedSession, agent, observedAgent, fresh, commit) := c
-  let before : Identity.SessionChild.ClientRequestPublication :=
-    if fresh then ⟨false, false, false⟩ else ⟨true, false, false⟩
-  let after := commitClaimedRequest before "agent" "agent" "agent" "agent"
-    session observedSession agent observedAgent fresh commit
-  Lean.Json.mkObj [("name", Lean.toJson name), ("session", Lean.toJson session),
-    ("observed_session", Lean.toJson observedSession), ("agent", Lean.toJson agent),
-    ("observed_agent", Lean.toJson observedAgent), ("fresh", Lean.toJson fresh),
-    ("commit", Lean.toJson commit), ("committed", Lean.toJson after.committed),
-    ("grants", Lean.toJson after.grants)]
+structure StagedOutput where
+  allowed : Bool
+  deriving Lean.ToJson
 
-def targetCasesJson : String := (Lean.toJson (targetCases.map targetCaseJson)).compress
+/-- The claimed-publication fixture stages a continuation from its one parent
+request, which the selected Agent owns, so only cases whose parent is the
+selected identity can be staged. -/
+def identityStagedCases : List (String × String × String × String) :=
+  identityCases.filter fun (selected, _, _, parent) => parent == selected
+
+@[conformance_family]
+def identityStaged : Family IdentityInput StagedOutput where
+  inputs := identityStagedCases.map IdentityInput.ofCase
+  model := fun i => { allowed := continuationIdentityValid i.selected i.signer i.actor i.parent }
+
+/-- model-production-gap: no production scenario stages a claimed continuation
+from a parent request owned by another identity; the goal source never offers
+such a parent (`identityCandidate`), and the staging fixture has no foreign
+parent request. -/
+@[conformance_family]
+def identityStagedUnreached : Family IdentityInput StagedOutput where
+  inputs := (identityCases.filter fun (selected, _, _, parent) => parent != selected).map
+    IdentityInput.ofCase
+  model := fun i => { allowed := continuationIdentityValid i.selected i.signer i.actor i.parent }
+
+structure TargetInput where
+  name : String
+  session : String
+  observedSession : String
+  agent : String
+  observedAgent : String
+  fresh : Bool
+  commit : Bool
+  deriving Lean.ToJson
+
+structure TargetOutput where
+  committed : Bool
+  grants : Bool
+  deriving Lean.ToJson
+
+/-- `grants` is whether the User sees a request bound to the claimed session
+and Agent. A forged case starts from an existing signed request whose targets
+differ; that request is the observed target, not a publication. -/
+@[conformance_family]
+def claimedTarget : Family TargetInput TargetOutput where
+  inputs :=
+    [ ⟨"created", "session", "session", "agent", "agent", true, true⟩
+    , ⟨"aborted", "session", "session", "agent", "agent", true, false⟩
+    , ⟨"duplicate-after-revocation", "session", "session", "agent", "agent", false, true⟩
+    , ⟨"wrong-session", "other", "session", "agent", "agent", true, true⟩
+    , ⟨"wrong-agent", "session", "session", "other", "agent", true, true⟩
+    , ⟨"missing-session", "", "session", "agent", "agent", true, true⟩
+    , ⟨"missing-agent", "session", "session", "", "agent", true, true⟩ ]
+  model := fun i =>
+    let before : Identity.SessionChild.ClientRequestPublication :=
+      if i.fresh then ⟨false, false, false⟩ else ⟨true, false, false⟩
+    let after := commitClaimedRequest before "agent" "agent" "agent" "agent"
+      i.session i.observedSession i.agent i.observedAgent i.fresh i.commit
+    { committed := after.committed, grants := after.grants }
 
 end Conformance.GoalClaimedPublicationContracts

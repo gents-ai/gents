@@ -1,4 +1,4 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use std::collections::BTreeSet;
 
 use super::*;
@@ -130,15 +130,15 @@ fn scenario_allowed_folders_are_written_inside_the_tool_root() {
     let root = root.path().canonicalize().unwrap();
     assert!(root.join("out").is_dir(), "a missing folder is made");
     assert_eq!(
-        gents::plugin::allowed::list(home.path()).unwrap(),
+        gents_pack::plugin::allowed::list(home.path()).unwrap(),
         vec![
-            gents::plugin::allowed::AllowedDir {
+            gents_pack::plugin::allowed::AllowedDir {
                 path: root.join("data"),
-                access: gents::pack::BindAccess::Read,
+                access: gents_pack::pack::BindAccess::Read,
             },
-            gents::plugin::allowed::AllowedDir {
+            gents_pack::plugin::allowed::AllowedDir {
                 path: root.join("out"),
-                access: gents::pack::BindAccess::ReadWrite,
+                access: gents_pack::pack::BindAccess::ReadWrite,
             },
         ]
     );
@@ -191,7 +191,7 @@ fn scenario_staging_preserves_slots_until_runtime_installation() {
         &std::fs::read(staged.path().join(distribution.config.as_ref().unwrap())).unwrap(),
     )
     .unwrap();
-    assert!(config["node"]["default_agent_did"].is_null());
+    assert!(config.get("default_agent_selection").is_none());
     assert!(staged.path().join("manifest.json").is_file());
     for agent in config["agents"].as_array().unwrap() {
         assert!(agent["agent_slot"].is_string());
@@ -223,7 +223,7 @@ fn scenario_refuses_a_pack_that_selects_the_default_agent() {
     validate_scenario_defaults(authored_pack.path()).unwrap();
     let config_path = authored_pack.path().join("pack_config.json");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
-    config["node"]["default_agent_did"] = json!("fixture-worker");
+    config["default_agent_selection"] = json!({"default_agent_did": "fixture-worker"});
     std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
 
     let error = format!(
@@ -274,22 +274,25 @@ async fn documents_fixture_staging_installs_its_declared_schemas() {
     }
 
     let node = std::sync::Arc::new(
-        crate::shared::test_support::node_builder()
+        gents_host::test_support::node_builder()
             .build()
             .await
             .unwrap(),
     );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::local(node.clone());
-    let phase = crate::commands::schema::apply_pack_schemas_if_present(&access, staged.path())
+    gents_store::schema::ensure_runtime_schemas(&node)
         .await
-        .unwrap()
-        .expect("staged pack must have schemas");
+        .unwrap();
+    let access = ConfigAccess::local(node.clone());
+    let phase =
+        gents_pack::pack::schema_apply::apply_pack_schemas_if_present(&access, staged.path())
+            .await
+            .unwrap()
+            .expect("staged pack must have schemas");
     assert_eq!(phase.schema_files.len(), schema_assets.len());
 
-    let config = gents::pack::load_pack_authoring_config(
+    let config = gents_pack::pack::load_pack_authoring_config(
         &distribution,
-        &gents::pack::PackInstallOptions {
+        &gents_pack::pack::PackInstallOptions {
             node_did: "did:key:scenario-owner".to_owned(),
         },
         &|path| Ok(std::fs::read(staged.path().join(path))?),

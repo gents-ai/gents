@@ -2,12 +2,16 @@
 mod contract;
 #[path = "cli_enrollment/household.rs"]
 mod household;
+#[cfg(feature = "live-e2e")]
 #[path = "cli_enrollment/live_delegation.rs"]
 mod live_delegation;
+#[cfg(feature = "live-e2e")]
 #[path = "cli_enrollment/live_goal.rs"]
 mod live_goal;
+#[cfg(feature = "live-e2e")]
 #[path = "cli_enrollment/live_plugin_denial.rs"]
 mod live_plugin_denial;
+#[cfg(feature = "live-e2e")]
 #[path = "cli_enrollment/live_two_agent.rs"]
 mod live_two_agent;
 mod support;
@@ -17,20 +21,30 @@ use std::fs;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+#[cfg(feature = "live-e2e")]
+use anyhow::anyhow;
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
+use gents::support::snapshots::{SnapshotChanges, SnapshotReader};
+#[cfg(feature = "live-e2e")]
 use gents_desktop_core::client::canonical_output::{
     project_canonical_message, CanonicalMessageProjection,
 };
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
+#[cfg(feature = "live-e2e")]
 use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
-use gents_protocol::output::{MessageRole, TerminalOutput};
+#[cfg(feature = "live-e2e")]
+use gents_protocol::output::MessageRole;
+use gents_protocol::output::TerminalOutput;
+#[cfg(feature = "live-e2e")]
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+#[cfg(feature = "live-e2e")]
 use gents_protocol::row::AgentRequestRow;
+use gents_store::config_client::ConfigAccess;
 use serde_json::Value;
 use tokio::sync::Mutex;
-use tokio::time::{sleep, Instant};
+use tokio::time::Instant;
 use uuid::Uuid;
 
 static ENROLLMENT_E2E_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -39,8 +53,9 @@ fn enrollment_e2e_lock() -> &'static Mutex<()> {
     ENROLLMENT_E2E_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+#[cfg(feature = "live-e2e")]
 async fn grant_configured_workspace_root_readers(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     graphql: &str,
     init: &Value,
     owner_home: &std::path::Path,
@@ -50,8 +65,9 @@ async fn grant_configured_workspace_root_readers(
     let authored_root = init["tool_root"]
         .as_str()
         .context("init has no configured host root")?;
-    let root =
-        gents::tools::surface::resolve_configured_tool_root(std::path::Path::new(authored_root))?;
+    let root = gents_session::workspace::root_resolution::resolve_configured_tool_root(
+        std::path::Path::new(authored_root),
+    )?;
     let root = root.to_str().context("configured host root is not UTF-8")?;
     let bootstrap_user = gents_desktop_core::client::PrincipalIdentity::load_existing(
         &DesktopPaths::from_root(owner_home.join("cli")),
@@ -60,11 +76,11 @@ async fn grant_configured_workspace_root_readers(
         bootstrap_user.did() != node_did,
         "workspace root creator must be a distinct User"
     );
-    let owner_access = gents::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, bootstrap_user.did())
-            .with_client_signing_capability(gents::NodeIdentity::client_signing_capability(
-            &bootstrap_user,
-        )?)?,
+    let owner_access = gents_store::config_client::ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(graphql, bootstrap_user.did())
+            .with_client_signing_capability(
+                gents_store::identity::NodeIdentity::client_signing_capability(&bootstrap_user)?,
+            )?,
     );
     let query = format!(
         "{{ WorkspaceRoot(filter: {{node_did: {{_eq: \"{}\"}}, root_path: {{_eq: \"{}\"}}}}) {{_docID node_did root_path enabled}} }}",
@@ -106,7 +122,7 @@ async fn grant_configured_workspace_root_readers(
     );
     let runtime = identity_from_init(init)?;
     for binding in bindings {
-        gents::tools::surface::grant_workspace_root_reader(access, root, &binding.agent_did)
+        gents_tools::surface::grant_workspace_root_reader(access, root, &binding.agent_did)
             .await
             .with_context(|| {
                 format!(
@@ -114,9 +130,9 @@ async fn grant_configured_workspace_root_readers(
                     binding.agent_did
                 )
             })?;
-        let agent = gents::store::identity::resolve_agent_identity(&runtime, binding)?;
-        let reader = gents::ConfigAccess::Graphql(
-            gents::store::config_client::GraphqlEndpoint::as_principal(graphql, &binding.agent_did)
+        let agent = gents_store::identity::resolve_agent_identity(&runtime, binding)?;
+        let reader = gents_store::config_client::ConfigAccess::Graphql(
+            gents_store::config_client::GraphqlEndpoint::as_principal(graphql, &binding.agent_did)
                 .with_client_signing_capability(agent.client_signing_capability()?)?,
         );
         let visible = reader.execute(&query).await.with_context(|| {
@@ -136,7 +152,9 @@ async fn grant_configured_workspace_root_readers(
     Ok(())
 }
 
+#[cfg(feature = "live-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "select GENTS_LIVE_TARGET and run make live-enrollment"]
 async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node() -> Result<()> {
     let _guard = enrollment_e2e_lock().lock().await;
 
@@ -206,7 +224,7 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
             wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
             let status_url = format!("http://127.0.0.1:{port}");
-            let (status, _) = wait_for_enrollment_token(&status_url).await?;
+            let (status, _) = wait_for_enrollment_token(&status_url, &graphql).await?;
             assert_eq!(
                 status.get("node_name").and_then(Value::as_str),
                 Some(agent_name.as_str())
@@ -255,7 +273,7 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
                 "a resend never authors another request"
             );
             wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
-            let requests = gents_server::server_host::pending_managed_enrollments(&home_dir, &graphql)
+            let requests = gents_service::server_host::pending_managed_enrollments(&home_dir, &graphql)
                 .await
                 .context("listing managed pending enrollments")?;
             let client_did = core.node_identity().did();
@@ -267,10 +285,10 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
             };
             assert_eq!(request.owner_node_did, node_did);
             assert_eq!(request.candidate_did, client_did);
-            let owner_endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+            let owner_endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
                 &graphql, bootstrap_user.did(),
-            ).with_client_signing_capability(gents::NodeIdentity::client_signing_capability(&bootstrap_user)?)?;
-            let owner_access = gents::ConfigAccess::Graphql(owner_endpoint);
+            ).with_client_signing_capability(gents_store::identity::NodeIdentity::client_signing_capability(&bootstrap_user)?)?;
+            let owner_access = gents_store::config_client::ConfigAccess::Graphql(owner_endpoint);
             let nodes = owner_access.execute(&format!(
                 r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
                 escape_graphql_string(&node_did),
@@ -301,11 +319,11 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
             assert_eq!(granted["node_did"], node_did);
             assert_eq!(granted["candidate_did"], client_did);
             assert_eq!(granted["node_administrator_granted"], true);
-            let outcome = gents_server::server_host::decide_managed_enrollment(
+            let outcome = gents_service::server_host::decide_managed_enrollment(
                 &home_dir,
                 &graphql,
                 &pending.request_id,
-                gents_server::server_host::ManagedEnrollmentDecision::Approve {
+                gents_service::server_host::ManagedEnrollmentDecision::Approve {
                     lease_seconds: 3600,
                 },
             )
@@ -313,7 +331,7 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
             .context("approving managed enrollment request")?;
             assert_eq!(outcome.request_id, pending.request_id);
             assert_eq!(outcome.state, "approved");
-            assert!(!gents_server::server_host::pending_managed_enrollments(&home_dir, &graphql)
+            assert!(!gents_service::server_host::pending_managed_enrollments(&home_dir, &graphql)
                 .await?
                 .iter()
                 .any(|item| item.request_id == pending.request_id));
@@ -335,7 +353,7 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
                 principals.iter().all(|did| did == &node_did),
                 "the client may hold only the runtime's replicated Node; found {principals:?}"
             );
-            let snapshot = core.store().snapshot();
+            let snapshot = core.stores().snapshot(&node_did);
             assert!(
                 snapshot.nodes.iter().all(|node| node.node_did == node_did),
                 "the client store may materialize only the runtime's Node; found {:?}",
@@ -419,57 +437,18 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
         .await
 }
 
+#[cfg(feature = "live-e2e")]
 async fn resolve_live_inference() -> Result<(String, String)> {
-    let endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_MODEL_ENDPOINT.to_string());
-    let models_url = format!("{}/models", endpoint.trim_end_matches('/'));
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()?
-        .get(&models_url)
-        .send()
-        .await
-        .with_context(|| {
-            format!("live inference at {endpoint} is unreachable; set GENTS_CLI_E2E_MODEL_ENDPOINT")
-        })?;
-    anyhow::ensure!(
-        response.status().is_success(),
-        "live inference GET {models_url} returned {}",
-        response.status()
-    );
-    let body: Value = response
-        .json()
-        .await
-        .context("decoding live inference /models")?;
-    let advertised = body
-        .pointer("/data")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row.get("id").and_then(Value::as_str).map(str::to_owned))
-        .collect::<Vec<_>>();
-    anyhow::ensure!(
-        !advertised.is_empty(),
-        "live inference at {endpoint} advertised no models: {body}"
-    );
-    let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME").unwrap_or_else(|_| {
-        advertised
-            .iter()
-            .find(|name| name.as_str() == "GLM-5.3-Flash-NVFP4")
-            .cloned()
-            .unwrap_or_else(|| advertised[0].clone())
-    });
-    anyhow::ensure!(
-        advertised.iter().any(|name| name == &model_name),
-        "live inference at {endpoint} does not serve {model_name}; advertised {advertised:?}"
-    );
-    Ok((endpoint, model_name))
+    let target = gents::support::live_inference::live_target().await;
+    Ok((target.endpoint().to_owned(), target.model().to_owned()))
 }
 
-async fn wait_for_enrollment_token(status_url: &str) -> Result<(Value, String)> {
+async fn wait_for_enrollment_token(status_url: &str, graphql: &str) -> Result<(Value, String)> {
     let deadline = Instant::now() + Duration::from_secs(30);
+    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let mut changes = observed_changes(&access, &["NodeRuntime", "NodeReadiness"]).await;
     loop {
-        match fetch_runtime_connection_payload(status_url).await {
+        match fetch_runtime_connection_payload(status_url, None).await {
             Ok(status) => {
                 let token = status
                     .pointer("/enrollment/token")
@@ -490,12 +469,14 @@ async fn wait_for_enrollment_token(status_url: &str) -> Result<(Value, String)> 
                 }
             }
         }
-        sleep(Duration::from_millis(200)).await;
+        observe_change_until(&mut changes, deadline).await;
     }
 }
 
 async fn wait_for_runtime_enrollment_request(graphql: &str, request_id: &str) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
+    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let mut changes = observed_changes(&access, &["NetworkEnrollmentRequest"]).await;
     loop {
         let response =
             graphql_query(graphql, r#"{ NetworkEnrollmentRequest { request_id } }"#).await?;
@@ -513,7 +494,7 @@ async fn wait_for_runtime_enrollment_request(graphql: &str, request_id: &str) ->
                 "timed out waiting for runtime to observe enrollment request {request_id}; last={response}"
             );
         }
-        sleep(Duration::from_millis(200)).await;
+        observe_change_until(&mut changes, deadline).await;
     }
 }
 
@@ -524,6 +505,8 @@ async fn wait_for_runtime_agent_request(
     content: &str,
 ) -> Result<(String, String, String)> {
     let deadline = Instant::now() + Duration::from_secs(60);
+    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let mut changes = observed_changes(&access, &["AgentRequest"]).await;
     loop {
         match graphql_query(
             graphql,
@@ -540,7 +523,7 @@ async fn wait_for_runtime_agent_request(
                         content
                     }}
                 }}"#,
-                gents::session::public_request_filter(&format!(
+                gents_session::session::public_request_filter(&format!(
                     r#"node_did: {{ _eq: "{}" }}, content: {{ _eq: "{}" }}"#,
                     escape_graphql_string(node_did),
                     escape_graphql_string(content),
@@ -574,9 +557,12 @@ async fn wait_for_runtime_agent_request(
             }
         }
         if Instant::now() >= deadline {
-            let client_requests = client_node
-                .execute("{ AgentRequest { request_id node_did content requester_did } }")
-                .await;
+            let client_requests = gents_store::graphql::graphql_with_transaction_retry(
+                client_node,
+                "{ AgentRequest { request_id node_did content requester_did } }",
+                "test.enrollment.diagnostic",
+            )
+            .await?;
             let runtime_all = graphql_query(
                 graphql,
                 "{ AgentRequest { request_id node_did content requester_did } }",
@@ -589,7 +575,7 @@ async fn wait_for_runtime_agent_request(
                 client_requests.data
             );
         }
-        sleep(Duration::from_millis(250)).await;
+        observe_change_until(&mut changes, deadline).await;
     }
 }
 
@@ -599,18 +585,25 @@ async fn wait_for_complete_agent_response(
     session: &str,
     timeout: Duration,
 ) -> Result<RuntimeTerminalReply> {
-    let access = gents::ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let access = gents_store::config_client::ConfigAccess::Graphql(
+        crate::support::graphql::served_endpoint(graphql),
+    );
     wait_for_complete_agent_response_with_access(&access, request_id, session, timeout).await
 }
 
 async fn wait_for_complete_agent_response_with_access(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request_id: &str,
     session: &str,
     timeout: Duration,
 ) -> Result<RuntimeTerminalReply> {
     let deadline = Instant::now() + timeout;
     let mut empty_terminal_since = None::<Instant>;
+    let mut changes = observed_changes(
+        access,
+        &["AgentRequest", "AgentMessage", "AgentOutputSegment"],
+    )
+    .await;
     loop {
         let response = access
             .execute(&format!(
@@ -656,9 +649,10 @@ async fn wait_for_complete_agent_response_with_access(
                 );
             }
             if request.is_terminal() {
-                let output = gents::session::observe_request_output(access, &request).await?;
+                let output =
+                    gents_session::session::observe_request_output(access, &request).await?;
                 let visible = match &output {
-                    gents::session::CanonicalRequestOutput::TerminalMessage {
+                    gents_session::session::CanonicalRequestOutput::TerminalMessage {
                         header,
                         presentation,
                         ..
@@ -670,13 +664,13 @@ async fn wait_for_complete_agent_response_with_access(
                         );
                         Some(presentation.body_markdown.clone())
                     }
-                    gents::session::CanonicalRequestOutput::TerminalNoMessage => bail!(
+                    gents_session::session::CanonicalRequestOutput::TerminalNoMessage => bail!(
                         "live inference completed without a canonical terminal message for {request_id}: {output:?}"
                     ),
-                    gents::session::CanonicalRequestOutput::Denied
-                    | gents::session::CanonicalRequestOutput::Invalid
-                    | gents::session::CanonicalRequestOutput::Conflicted
-                    | gents::session::CanonicalRequestOutput::Retracted => bail!(
+                    gents_session::session::CanonicalRequestOutput::Denied
+                    | gents_session::session::CanonicalRequestOutput::Invalid
+                    | gents_session::session::CanonicalRequestOutput::Conflicted
+                    | gents_session::session::CanonicalRequestOutput::Retracted => bail!(
                         "canonical terminal output is not presentable for {request_id}: {output:?}"
                     ),
                     _ => None,
@@ -687,8 +681,12 @@ async fn wait_for_complete_agent_response_with_access(
                     else {
                         bail!("terminal message output lost its header identity for {request_id}: {row}");
                     };
+                    #[cfg(not(feature = "live-e2e"))]
+                    let _ = (message_doc_id, visible);
                     return Ok(RuntimeTerminalReply {
+                        #[cfg(feature = "live-e2e")]
                         header_doc_id: message_doc_id,
+                        #[cfg(feature = "live-e2e")]
                         text: visible,
                     });
                 }
@@ -708,16 +706,22 @@ async fn wait_for_complete_agent_response_with_access(
                 "timed out waiting for canonical terminal output with visible text for {request_id}; last={response}"
             );
         }
-        sleep(Duration::from_millis(250)).await;
+        let until = empty_terminal_since
+            .map(|seen| deadline.min(seen + Duration::from_secs(15)))
+            .unwrap_or(deadline);
+        observe_change_until(&mut changes, until).await;
     }
 }
 
 #[derive(Debug, Clone)]
 struct RuntimeTerminalReply {
+    #[cfg(feature = "live-e2e")]
     header_doc_id: String,
+    #[cfg(feature = "live-e2e")]
     text: String,
 }
 
+#[cfg(feature = "live-e2e")]
 fn client_selected_reply(
     requests: &[AgentRequestRow],
     messages: &[TranscriptMessageRow],
@@ -747,6 +751,7 @@ fn client_selected_reply(
     }
 }
 
+#[cfg(feature = "live-e2e")]
 async fn wait_for_client_complete_response(
     core: &ClientCore,
     session_id: &str,
@@ -755,7 +760,9 @@ async fn wait_for_client_complete_response(
     runtime_reply: &RuntimeTerminalReply,
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
+    let mut changes = core.store_updates();
     loop {
+        changes.borrow_and_update();
         let page = gents_desktop_core::client::load_session_transcript_page_on(
             &core.operator_access(node_did)?,
             session_id,
@@ -779,7 +786,7 @@ async fn wait_for_client_complete_response(
             &page_request_doc_ids,
         )
         .await?;
-        let snapshot = core.store().snapshot();
+        let snapshot = core.stores().snapshot(node_did);
         let client_reply = client_selected_reply(
             &snapshot.requests,
             &page.store.transcript_messages,
@@ -808,7 +815,7 @@ async fn wait_for_client_complete_response(
                 snapshot.transcript_messages
             );
         }
-        sleep(Duration::from_millis(250)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.changed()).await;
     }
 }
 
@@ -849,9 +856,9 @@ async fn wait_for_chat_ready_enrollment(
 
 async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
-    let mut updates = core.store_change_updates();
+    let mut updates = core.store_updates();
     loop {
-        let snapshot = core.store().snapshot();
+        let snapshot = core.stores().snapshot(node_did);
         let has_agent = snapshot.agents.iter().any(|row| row.node_did == node_did);
         let has_readiness = snapshot
             .node_readiness
@@ -886,13 +893,29 @@ async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Re
     }
 }
 
+async fn observed_changes(access: &ConfigAccess, collections: &[&str]) -> Vec<SnapshotChanges> {
+    let mut changes = Vec::with_capacity(collections.len());
+    for collection in collections {
+        changes.push(access.subscribe_changes(collection).await);
+    }
+    changes
+}
+
+async fn observe_change_until(changes: &mut [SnapshotChanges], deadline: Instant) {
+    let futures = changes.iter_mut().map(|change| Box::pin(change.recv()));
+    let _ = tokio::time::timeout_at(deadline, futures::future::select_all(futures)).await;
+}
+
 async fn query_collection_dids(
     node: &gents::defra_node::Node,
     collection: &str,
 ) -> Result<Vec<String>> {
-    let response = node
-        .execute(&format!("{{ {collection} {{ node_did }} }}"))
-        .await;
+    let response = gents_store::graphql::graphql_with_transaction_retry(
+        node,
+        &format!("{{ {collection} {{ node_did }} }}"),
+        "test.enrollment.collection_ids",
+    )
+    .await?;
     if response.has_errors() {
         bail!("query {collection} failed: {:?}", response.errors);
     }
@@ -909,134 +932,4 @@ async fn query_collection_dids(
                 .map(str::to_owned)
         })
         .collect())
-}
-
-#[test]
-fn client_reply_requires_the_runtime_selected_terminal_header() {
-    use gents_protocol::output::{
-        MessageBlock, MessagePublication, OutputOutcome, OutputSegment, OutputSource, OutputWriter,
-        PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
-        StreamDeclaration, StreamPayload, TranscriptMessage,
-    };
-    const REQUEST_DOC: &str = "bae-request";
-    const TEXT: &str = "hello";
-    let segment = |doc_id: &str, key: &str| OutputSegmentRow {
-        doc_id: doc_id.into(),
-        segment: OutputSegment {
-            node_did: "did:key:agent".into(),
-            requester_did: None,
-            session_id: "session".into(),
-            request_doc_id: REQUEST_DOC.into(),
-            source: OutputSource::Authored { key: key.into() },
-            writer: OutputWriter::RequestExecution {
-                execution_generation: "generation".into(),
-            },
-            ordinal: Some(0),
-            runs: vec![SegmentRun {
-                stream: 0,
-                bytes: TEXT.len() as u32,
-                declaration: Some(StreamDeclaration {
-                    block_index: 0,
-                    part_index: 0,
-                    payload: StreamPayload::Text,
-                }),
-            }],
-            payload: TEXT.into(),
-            close: Some(SourceClose::Closed {
-                outcome: OutputOutcome::Complete,
-                segments: 1,
-                stream_bytes: vec![TEXT.len() as u64],
-            }),
-            created_at: "2026-09-25T00:00:00Z".into(),
-        },
-    };
-    let header =
-        |doc_id: &str, close_doc_id: &str, sequence: u32, role: MessageRole| TranscriptMessageRow {
-            doc_id: doc_id.into(),
-            message: TranscriptMessage {
-                native_request_id: None,
-                message_key: format!("session:{sequence}"),
-                session_id: "session".into(),
-                node_did: "did:key:agent".into(),
-                requester_did: None,
-                request_doc_id: Some(REQUEST_DOC.into()),
-                publication: MessagePublication::RequestExecution {
-                    execution_generation: "generation".into(),
-                },
-                outcome: OutputOutcome::Complete,
-                sequence,
-                role,
-                native_id: None,
-                blocks: vec![MessageBlock::Text {
-                    text: PresentedPayload {
-                        output: PayloadRef {
-                            close_doc_id: close_doc_id.into(),
-                            stream: 0,
-                        },
-                        presentation: PayloadPresentation::Full,
-                    },
-                }],
-                created_at: "2026-09-25T00:00:00Z".into(),
-            },
-        };
-    let request = |state: RequestLifecycleState, terminal: Option<&str>| AgentRequestRow {
-        doc_id: Some(REQUEST_DOC.into()),
-        request_id: "request".into(),
-        lifecycle_state: Some(state),
-        terminal_output: terminal.map(|message_doc_id| TerminalOutput::Message {
-            message_doc_id: message_doc_id.into(),
-        }),
-        ..Default::default()
-    };
-    let prompt = header("bae-prompt", "bae-prompt-close", 1, MessageRole::User);
-    let earlier = header(
-        "bae-earlier",
-        "bae-earlier-close",
-        2,
-        MessageRole::Assistant,
-    );
-    let selected = header(
-        "bae-selected",
-        "bae-selected-close",
-        3,
-        MessageRole::Assistant,
-    );
-    let segments = vec![
-        segment("bae-prompt-close", "prompt"),
-        segment("bae-earlier-close", "earlier"),
-        segment("bae-selected-close", "selected"),
-    ];
-    let completed = [request(
-        RequestLifecycleState::Completed,
-        Some("bae-selected"),
-    )];
-    let replicated_prefix = [prompt.clone(), earlier.clone()];
-    for (label, requests, messages) in [
-        (
-            "prompt and earlier turn only",
-            &completed[..],
-            &replicated_prefix[..],
-        ),
-        (
-            "request not yet completed",
-            &[request(RequestLifecycleState::Processing, None)][..],
-            &[prompt.clone(), earlier.clone(), selected.clone()][..],
-        ),
-    ] {
-        assert_eq!(
-            client_selected_reply(requests, messages, &segments, "request", "bae-selected"),
-            None,
-            "{label} must not satisfy the client wait"
-        );
-    }
-    let all = [prompt, earlier, selected];
-    assert_eq!(
-        client_selected_reply(&completed, &all, &segments[..2], "request", "bae-selected"),
-        None,
-        "the selected header must reconstruct Ready, not just exist"
-    );
-    assert_eq!(
-        client_selected_reply(&completed, &all, &segments, "request", "bae-selected").as_deref(),
-        Some(TEXT)
-    );
 }

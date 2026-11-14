@@ -1,23 +1,22 @@
 use std::sync::Arc;
 
-use gents::documents::apply_desired_state_plan;
-use gents::store::config_client::{
-    read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{
+    read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::store::graphql::escape_graphql_string;
-use gents::tools::builtin::self_config::build_runtime_self_config_tools;
-use gents::tools::surface::{
-    BashMode, FileToolMode, SelfConfigProcessCeiling, SelfConfigToolConfig,
-};
-use gents::Collection;
+use gents_documents::{BashMode, FileToolMode};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
+use gents_tools::builtin::self_config::build_runtime_self_config_tools;
+use gents_tools::surface::{SelfConfigProcessCeiling, SelfConfigToolConfig};
 use serde_json::{json, Value};
 
 use crate::support::agent_requests::RequestActors;
 use crate::support::{test_db, TestDb};
 
-fn test_plugins() -> Arc<gents::plugin::executor::PluginExecutor> {
-    Arc::new(gents::plugin::executor::PluginExecutor::default())
+fn test_plugins() -> Arc<gents_toolcalls::plugin::executor::PluginExecutor> {
+    Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::default())
 }
 
 const CONTEXT_ID: &str = "self-config-context";
@@ -58,7 +57,7 @@ impl SelfConfig {
     async fn tools(
         &self,
         config: &SelfConfigToolConfig,
-    ) -> Vec<Box<dyn gents::inference::llm::tool::ToolDyn>> {
+    ) -> Vec<Box<dyn gents_loop::tool::ToolDyn>> {
         build_runtime_self_config_tools(
             std::sync::Arc::default(),
             self.db.node.clone(),
@@ -66,6 +65,7 @@ impl SelfConfig {
             self.db.node_identity.clone(),
             config,
             test_plugins(),
+            std::sync::Arc::new(gents_automation::triggers::task_run::TaskRuns),
         )
         .await
         .expect("runtime registers the Agent's config tool")
@@ -91,7 +91,14 @@ impl SelfConfig {
         self.user()
             .transact_write("test.self_config.seed", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();
@@ -99,13 +106,16 @@ impl SelfConfig {
 
     async fn seed(&self) {
         let node_did = self.node_did().to_owned();
-        let mut node = self.read(Collection::Node, &node_did).await;
-        node["default_agent_did"] = self.agent_did().into();
+        let node = self.read(Collection::Node, &node_did).await;
         let mut agent = self.read(Collection::Agent, self.agent_did()).await;
         agent["context_id"] = CONTEXT_ID.into();
         agent["inference_profile_id"] = PROFILE_ID.into();
         self.apply(vec![
             (Collection::Node, node),
+            (
+                Collection::DefaultAgentSelection,
+                json!({"node_did":node_did,"default_agent_did":self.agent_did()}),
+            ),
             (Collection::InferenceBackend, json!({"node_did":node_did,"backend_id":BACKEND_ID,"name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:11434/v1","auth":{"kind":"api_key","key":SECRET},"max_concurrent":1})),
             (Collection::InferenceSampling, json!({"node_did":node_did,"sampling_id":"sampling","temperature":0.7})),
             (Collection::InferenceExecution, json!({"node_did":node_did,"execution_id":"execution","max_turns":40})),
@@ -121,10 +131,8 @@ impl SelfConfig {
             .transact_write("test.self_config.grant_selected", |txn| {
                 let node_did = &node_did;
                 Box::pin(async move {
-                    gents::store::config_client::grant_selected_self_configuration(
-                        txn, node_did, agent_did,
-                    )
-                    .await
+                    gents_documents::grant_selected_self_configuration(txn, node_did, agent_did)
+                        .await
                 })
             })
             .await
@@ -135,7 +143,7 @@ impl SelfConfig {
             self.db.node.clone(),
             identity::Did::new(self.node_did()).unwrap(),
         );
-        gents::store::identity::GrantSet::PolicyDelegate
+        gents_store::identity::GrantSet::PolicyDelegate
             .grant(&admin, &identity::Did::new(agent_did).unwrap())
             .await
             .expect("init grants the default Agent its direct set");
@@ -210,7 +218,7 @@ fn tool_config(
 }
 
 async fn call_tool(
-    tools: &[Box<dyn gents::inference::llm::tool::ToolDyn>],
+    tools: &[Box<dyn gents_loop::tool::ToolDyn>],
     name: &str,
     args: Value,
 ) -> Result<String, String> {
@@ -572,6 +580,55 @@ async fn configure_automation_creates_one_chain_and_preserves_runtime_ownership(
     );
 }
 
+/// `task run` fires through the runtime's real `TaskRuns` service, which
+/// lives above the tool crate.
+#[tokio::test]
+async fn task_run_fires_a_task_now_and_reuses_target_id() {
+    let f = SelfConfig::new("self-config-task-run").await;
+    let tools = f
+        .tools(&f.config(&["tools", "automation"], false, false))
+        .await;
+    let config = |argv: Value| {
+        let tools = &tools;
+        async move {
+            tools
+                .iter()
+                .find(|tool| tool.name() == "config")
+                .unwrap()
+                .call(argv.to_string())
+                .await
+        }
+    };
+    config(json!({"argv":["task","create","review","--set",r#"prompt_template="Review {{ args.what }}""#]}))
+        .await
+        .unwrap();
+
+    let text = config(
+        json!({"argv":["task","run"],"target_id":"review","options":{"args":{"what":"the bill"}}}),
+    )
+    .await
+    .unwrap();
+    let fired: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(fired["status"], "pending", "{fired}");
+    assert_eq!(fired["duplicate"], false, "{fired}");
+    let request_id = fired["request_id"].as_str().unwrap();
+    let query = format!(
+        r#"query {{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ content }} }}"#,
+        escape_graphql_string(request_id)
+    );
+    let response = f.actors.agent_access.execute(&query).await.unwrap();
+    assert_eq!(
+        response["data"]["AgentRequest"][0]["content"], "Review the bill",
+        "{response}"
+    );
+
+    let missing = config(json!({"argv":["task","run","absent"]}))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(missing.contains("task absent was not found"), "{missing}");
+}
+
 #[tokio::test]
 async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings() {
     let f = SelfConfig::new("self-config-boundaries").await;
@@ -584,7 +641,7 @@ async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings()
         "Sibling agent",
     )
     .await;
-    let sibling = gents::NodeIdentity::did(sibling.as_ref()).to_owned();
+    let sibling = gents_store::identity::NodeIdentity::did(sibling.as_ref()).to_owned();
     let node_did = f.node_did().to_owned();
     f.apply(vec![
         (

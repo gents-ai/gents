@@ -1,4 +1,5 @@
 use anyhow::Result;
+use gents_protocol::operations::inference::InferenceDocument;
 
 use crate::cli::*;
 
@@ -9,6 +10,7 @@ pub(crate) mod binding;
 pub(crate) mod crud;
 pub(crate) mod diff;
 pub(crate) mod export;
+pub(crate) mod inference_failure;
 pub(crate) mod profile;
 pub(crate) mod skill;
 pub(crate) mod task_run;
@@ -28,18 +30,25 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             BackendCommand::Pool(args) => backend::backend_pool(args).await,
             BackendCommand::List(args) => crud::config_list(crud::BACKEND_SPEC, args).await,
             BackendCommand::Show(args) => crud::config_show(crud::BACKEND_SPEC, args).await,
-            BackendCommand::Rm(args) => crud::config_rm(crud::BACKEND_SPEC, args).await,
+            BackendCommand::Rm(args) => crud::inference_rm(InferenceDocument::Backend, args).await,
         },
         ConfigCommand::Agent { command } => match command {
             AgentCommand::Set(args) => behavior::agent_set(args).await,
             AgentCommand::Create(args) => behavior::agent_create(args).await,
             AgentCommand::Clone(args) => behavior::agent_clone(args).await,
             AgentCommand::Disable(args) => behavior::agent_disable(args).await,
+            AgentCommand::Default(args) => behavior::agent_default(args).await,
             AgentCommand::GrantSelfConfig(args) => {
                 behavior::agent_self_config_permission(args, true).await
             }
             AgentCommand::RevokeSelfConfig(args) => {
                 behavior::agent_self_config_permission(args, false).await
+            }
+            AgentCommand::GrantCatalog(args) => {
+                behavior::agent_catalog_permission(args, true).await
+            }
+            AgentCommand::RevokeCatalog(args) => {
+                behavior::agent_catalog_permission(args, false).await
             }
             AgentCommand::List(args) => crud::config_list(crud::AGENT_SPEC, args).await,
             AgentCommand::Show(args) => behavior::agent_show(args).await,
@@ -49,7 +58,7 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             ToolsConfigCommand::Set(args) => tools::tools_set(args).await,
             ToolsConfigCommand::List(args) => crud::config_list(crud::TOOLS_SPEC, args).await,
             ToolsConfigCommand::Show(args) => crud::config_show(crud::TOOLS_SPEC, args).await,
-            ToolsConfigCommand::Rm(args) => crud::config_rm(crud::TOOLS_SPEC, args).await,
+            ToolsConfigCommand::Rm(args) => tools::tools_rm(args).await,
             ToolsConfigCommand::AgentTargetEntry(args) => tools::agent_target_entry_command(args),
             ToolsConfigCommand::Explain(command) => crate::commands::tools::dispatch(command).await,
         },
@@ -58,7 +67,9 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             InferenceProfileCommand::SetAccount(args) => profile::profile_set_account(args).await,
             InferenceProfileCommand::List(args) => profile::profile_list(args).await,
             InferenceProfileCommand::Show(args) => profile::profile_show(args).await,
-            InferenceProfileCommand::Rm(args) => crud::config_rm(crud::PROFILE_SPEC, args).await,
+            InferenceProfileCommand::Rm(args) => {
+                crud::inference_rm(InferenceDocument::Profile, args).await
+            }
         },
         ConfigCommand::Trigger { command } => match command {
             ConfigTriggerCommand::List(args) => crud::config_list(crud::TRIGGER_SPEC, args).await,

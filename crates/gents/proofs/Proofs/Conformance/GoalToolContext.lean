@@ -1,5 +1,6 @@
-import Proofs.GoalAutomation.ToolContext
+import Proofs.Automation.GoalAutomation.ToolContext
 import Proofs.Conformance.GoalRequestAssignment
+import Proofs.Conformance.Family
 
 namespace Conformance.GoalToolContextContracts
 
@@ -38,24 +39,42 @@ def cases : List Case :=
       entry := ⟨100, 1, 10, none, true⟩, current := some ⟨20, 2, 100⟩}
   ]
 
-def identityJson (identity : Identity) : Json :=
-  Json.mkObj [("document", toJson identity.document), ("goal", toJson identity.goal), ("root", toJson identity.root)]
+deriving instance ToJson for GoalAutomation.ToolContext.Identity
 
-def observationJson : GoalAutomation.ToolContext.Observation → Json
-  | .unassigned => Json.mkObj [("kind", toJson "unassigned")]
-  | .unknown => Json.mkObj [("kind", toJson "unknown")]
-  | .assigned identity => Json.mkObj [("kind", toJson "assigned"), ("identity", identityJson identity)]
+structure ContextInput where
+  name : String
+  versions : List Version
+  entry : Entry
+  retireDocuments : List Nat
+  current : Option GoalAutomation.ToolContext.Identity
+  deriving ToJson
 
-def caseJson (c : Case) : Json :=
-  let observed := GoalAutomation.ToolContext.observe c.versions c.entry
-  Json.mkObj [("name", toJson c.name), ("versions", toJson (c.versions.map versionJson)),
-    ("entry", entryJson c.entry), ("retire_documents", toJson c.retired),
-    ("current", c.current.map identityJson |>.getD Json.null),
-    ("observation", observationJson observed),
-    ("read_only", toJson (readOnly observed c.current)),
-    ("can_create", toJson (canCreate observed c.current)), ("can_update", toJson (canWrite observed c.current))]
+structure ObservationWire where
+  kind : String
+  identity : Option GoalAutomation.ToolContext.Identity
+  deriving ToJson
 
-def casesJson : String := (toJson (cases.map caseJson)).compress
+def ObservationWire.ofModel : GoalAutomation.ToolContext.Observation → ObservationWire
+  | .unassigned => ⟨"unassigned", none⟩
+  | .unknown => ⟨"unknown", none⟩
+  | .assigned identity => ⟨"assigned", some identity⟩
+
+structure ContextOutput where
+  observation : ObservationWire
+  readOnly : Bool
+  canCreate : Bool
+  canUpdate : Bool
+  deriving ToJson
+
+@[conformance_family]
+def context : Family ContextInput ContextOutput where
+  inputs := cases.map fun c => ⟨c.name, c.versions, c.entry, c.retired, c.current⟩
+  model := fun i =>
+    let observed := GoalAutomation.ToolContext.observe i.versions i.entry
+    { observation := ObservationWire.ofModel observed
+      readOnly := readOnly observed i.current
+      canCreate := canCreate observed i.current
+      canUpdate := canWrite observed i.current }
 
 example : cases.length = 11 := by decide
 

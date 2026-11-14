@@ -1,4 +1,4 @@
-import Proofs.ClientShell.SessionLoad
+import Proofs.Clients.ClientShell.SessionLoad
 
 namespace Conformance.ClientSessionLoad
 open _root_.ClientSessionLoad
@@ -15,8 +15,8 @@ private def optBool : Option Bool → String
 
 def phaseName : Phase → String
   | .idle => "idle" | .loading => "loading" | .pending => "pending"
-  | .delivering => "delivering" | .notConnected => "notConnected"
-  | .accepted => "accepted" | .loaded => "loaded" | .failed => "failed"
+  | .loaded => "loaded" | .failed => "failed"
+  | .cached => "cached"
 
 def layerName : Layer → String
   | .localDatabase => "localDatabase" | .p2p => "p2p" | .sessionSync => "sessionSync"
@@ -56,7 +56,7 @@ def blockerJson : Option Blocker → String
       toString b.configureInference ++ "}"
 
 def phases : List Phase :=
-  [.idle, .loading, .pending, .delivering, .notConnected, .accepted, .loaded, .failed]
+  [.idle, .loading, .pending, .loaded, .failed, .cached]
 
 def bools : List Bool := [false, true]
 
@@ -124,7 +124,10 @@ sequence of the user's, the runtime's and the client's actions; between them
 the observer's drain loop starts any owed read, one at a time (`settle`). Each
 action is a `Step` (`apply_reachable`), so every observed state is `Reachable`
 and `phase_has_exit` covers it. The retry action is taken only while the
-projected status offers it, which is when no read runs. -/
+projected status offers it and no read runs. A shown session dropped while its
+refresh runs offers it beside that read; production then holds two reads whose
+older answer fails the refresh fence, and a trace answers only the latest, so
+the driver leaves that case out. -/
 
 structure Driver where
   s : State
@@ -132,26 +135,26 @@ structure Driver where
   drainBusy : Bool
 
 inductive Reply where
-  | found | missing | pending | delivering | notConnected | accepted | failed | mismatch
+  | found | missing | pending | failed | refused
+  | mismatch
   deriving DecidableEq, Repr
 
 def Reply.outcome : Reply → Outcome
   | .found => .found
   | .missing => .missing
   | .pending => .waiting .pending rfl
-  | .delivering => .waiting .delivering rfl
-  | .notConnected => .waiting .notConnected rfl
-  | .accepted => .waiting .accepted rfl
   | .failed => .failed
+  | .refused => .refused
   | .mismatch => .mismatch
 
 def Reply.name : Reply → String
   | .found => "found" | .missing => "missing" | .pending => "pending"
-  | .delivering => "delivering" | .notConnected => "notConnected"
-  | .accepted => "accepted" | .failed => "failed" | .mismatch => "mismatch"
+  | .failed => "failed" | .refused => "refused"
+  | .mismatch => "mismatch"
 
 def replies : List Reply :=
-  [.found, .missing, .pending, .delivering, .notConnected, .accepted, .failed, .mismatch]
+  [.found, .missing, .pending, .failed, .refused,
+    .mismatch]
 
 inductive Act where
   | select (drop : Bool)
@@ -169,14 +172,11 @@ def settle (d : Driver) : Driver :=
   else d
 
 def retryOffered (s : State) : Bool :=
-  (project (input s none)).bind (·.action) == some .retryLocal
+  s.reading.isNone && (project (input s none)).bind (·.action) == some .retryLocal
 
 def other (n : Nat) : Nat := if n == 0 then 1 else 0
 
-def selectState (s : State) (drop : Bool) : State :=
-  { s with selected := other s.selected, queued := s.queued || s.running,
-           fresh := s.fresh || s.running, timer := false,
-           shown := if drop then none else s.shown }
+def selectState (s : State) (drop : Bool) : State := selectTarget s (other s.selected) drop
 
 def apply (d : Driver) : Act → Option Driver
   | .select drop => some (settle { d with s := selectState d.s drop })
@@ -292,7 +292,7 @@ def obsJson (d : Driver) : String :=
   let loadMatches := s.load == some s.selected
   "{\"selected\":" ++ toString s.selected ++ ",\"status\":" ++ status ++
   ",\"loadPhase\":" ++ q (phaseName s.phase) ++ ",\"load\":" ++ optNat s.load ++
-  ",\"reread\":" ++ (if loadMatches then toString (s.reading.isSome || s.timer) else "null") ++
+  ",\"reread\":" ++ (if loadMatches then toString s.loadReread else "null") ++
   ",\"reading\":" ++ toString s.reading.isSome ++ ",\"shown\":" ++ optNat s.shown ++ "}"
 
 /-- Runs a trace, keeping only the enabled prefix. -/
@@ -341,19 +341,39 @@ def waitingStreak (r : Reply) : List Act :=
 
 /-- Scenarios a walk rarely reaches: a spent streak in each waiting phase, a
 streak a notice resets, the client stopping while a read or a re-read waits,
-a retry while it is stopped, a selection while it is stopped, and a mismatched reply. -/
+a retry while it is stopped, a selection while it is stopped, a mismatched reply,
+a refresh of a shown session that is dropped, stopped or answered with a
+waiting phase, and recent reads: reopened and confirmed, refused, reopened
+while another read runs, settled without confirmation, and stopped. -/
 def scripted : List (List Act) :=
-  [.pending, .delivering, .notConnected, .accepted].map waitingStreak ++
+  [.pending].map waitingStreak ++
   [ [.complete .pending, .fire, .complete .pending, .notice, .complete .pending, .fire,
       .complete .pending, .fire, .complete .pending, .fire, .complete .pending, .fire,
       .complete .pending, .fire, .complete .pending],
     [.stop, .retry, .complete .found, .restart, .complete .found],
     [.complete .pending, .stop, .retry, .complete .pending, .restart, .complete .pending, .fire],
-    [.complete .notConnected, .fire, .stop, .select true, .restart, .complete .found,
+    [.complete .pending, .fire, .stop, .select true, .restart, .complete .found,
       .select false, .complete .missing],
     [.complete .mismatch, .retry, .complete .mismatch, .notice, .complete .found],
     [.complete .found, .drop, .retry, .complete .found, .select false, .complete .pending,
-      .select false, .complete .found] ]
+      .select false, .complete .found],
+    [.complete .found, .notice, .drop, .complete .found, .drop, .retry, .complete .found,
+      .notice, .complete .found],
+    [.complete .found, .notice, .stop, .restart, .complete .found, .notice,
+      .complete .pending, .fire, .complete .found],
+    [.complete .found, .notice, .complete .missing, .notice, .complete .found],
+    [.complete .found, .select false, .complete .found, .select false, .complete .found,
+      .select true, .complete .refused, .select false, .select false, .complete .found],
+    [.complete .found, .select false, .complete .found, .notice, .select false,
+      .complete .found, .complete .found],
+    [.complete .found, .select false, .complete .found, .select false, .complete .pending,
+      .select false, .complete .failed, .select false, .complete .mismatch],
+    [.complete .found, .select false, .complete .found, .select false, .stop, .restart,
+      .complete .found],
+    [.complete .found, .select false, .complete .found, .select false, .complete .missing,
+      .select false, .select false, .complete .found],
+    [.complete .found, .select false, .complete .found, .notice, .select false,
+      .complete .refused, .complete .found, .select false] ]
 
 def traceRows : List String :=
   (exhaustive 3 start).map traceJson ++

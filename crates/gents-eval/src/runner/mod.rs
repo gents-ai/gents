@@ -61,7 +61,7 @@ use crate::runner::liveness::{cancel_requested, clear_cancel, marker_poll, refus
 use crate::runner::progress::ProgressWriter;
 use crate::runner::trial::{execute_trial, Slot, ViewWriter};
 use crate::TrialRecord;
-use gents::store::config_client::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunOutcome {

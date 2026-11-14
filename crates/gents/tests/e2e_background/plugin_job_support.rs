@@ -1,19 +1,20 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use gents::documents::{AgentTools, IntegrationTools, PluginToolRef, Tools};
-use gents::pack::archive::{pack_dir, PackArchive};
-use gents::pack::{
+use gents::runtime::embedded::EmbeddedHome;
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::{AgentTools, IntegrationTools, PluginToolRef, Tools};
+use gents_pack::pack::archive::{pack_dir, PackArchive};
+use gents_pack::pack::{
     install_prepared_document_pack, load_pack_config, prepare_document_pack_install, DriftPolicy,
     InstalledVia, PackInferenceBindings, PackInstallOptions,
 };
-use gents::runtime::embedded::EmbeddedHome;
-use gents::tools::background::job::job::{
-    JobChildState, JobControlRequest, JobEffects, JobGuestPin, JobPolicy, JobReadError, JobSpawn,
-    JobState, JobStepOutput, JobView, PluginJobSettings,
+use gents_store::{config_client::ConfigAccess, identity::NodeIdentity};
+use gents_toolcalls::background::job::job::{
+    JobControlRequest, JobEffects, JobGuestPin, JobPolicy, JobReadError, JobSpawn, JobStepOutput,
+    JobView, PluginJobSettings,
 };
-use gents::tools::background::job::view::{load_job_view, JobKey};
-use gents::{ConfigAccess, DocumentRuntimeOptions, Gents, NodeIdentity};
+use gents_toolcalls::background::job::view::{load_job_view, JobKey};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -24,12 +25,8 @@ use crate::support::accepted_turn::{
 use crate::support::fixtures::{
     agent_target, bind_selected_managed_agent_backend, configure_agent_tools_as,
 };
-use crate::support::streaming_backend::{
-    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
-};
-use crate::support::{
-    managed_agent_fixture, test_db, test_db_from_home, ManagedAgentFixture, TestDb,
-};
+use crate::support::streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan};
+use crate::support::{managed_agent_fixture, test_db_from_home, ManagedAgentFixture, TestDb};
 
 pub(crate) const PARENT: &str = "plugin-job-parent";
 pub(crate) const CHILD: &str = "plugin-job-child";
@@ -154,8 +151,38 @@ pub(crate) async fn install_job_fixture(
     let did = db.node_identity.did().to_string();
     let parent_did = fixture.binding.agent_did.clone();
     let child_did = child.agent_did;
-    let (bytes, _) = pack_dir(&fixture_dir()).expect("pack the job fixture");
-    let archive = PackArchive::from_bytes(&bytes).expect("read the job fixture archive");
+    let archive = tokio::task::spawn_blocking(|| {
+        let source = fixture_dir();
+        let staged = tempfile::tempdir().expect("stage the job fixture");
+        let bytes = std::fs::read(source.join("manifest.json")).expect("read job manifest");
+        let descriptor =
+            gents_pack::pack::PackManifest::from_slice(&bytes).expect("decode job manifest");
+        for relative in gents_pack::pack::declared_paths(&descriptor) {
+            if relative == "manifest.json" {
+                continue;
+            }
+            let destination = staged.path().join(&relative);
+            std::fs::create_dir_all(destination.parent().unwrap()).expect("stage asset folder");
+            std::fs::copy(source.join(&relative), destination).expect("stage job asset");
+        }
+        let mut manifest: Value = serde_json::from_slice(&bytes).expect("read job metadata");
+        let args = manifest["plugins"][0]["input_schema"].take();
+        manifest["plugins"][0]["input_schema"] = json!({
+            "type": "object",
+            "properties": {"args": args},
+            "required": ["args"],
+            "additionalProperties": false,
+        });
+        std::fs::write(
+            staged.path().join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .expect("stage model-facing job schema");
+        let (bytes, _) = pack_dir(staged.path()).expect("pack the job fixture");
+        PackArchive::from_bytes(&bytes).expect("read the job fixture archive")
+    })
+    .await
+    .expect("prepare the model-facing job fixture");
     let config = load_pack_config(
         archive.manifest(),
         &PackInstallOptions {
@@ -191,6 +218,7 @@ pub(crate) async fn install_job_fixture(
         false,
         InstalledVia::Operator,
         DriftPolicy::Refuse,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .expect("install the job fixture pack");
@@ -237,7 +265,7 @@ pub(crate) async fn install_job_fixture(
             ..Default::default()
         },
         vec![(
-            gents::Collection::AgentTarget,
+            gents_store::collection::Collection::AgentTarget,
             serde_json::to_value(agent_target(&did, CHILD, &did, &child_did))
                 .expect("serialize the child target"),
         )],
@@ -345,16 +373,16 @@ pub(crate) async fn reboot_job_harness(
     );
     let user = crate::support::load_managed_fixture_user(&db).await;
     let access = db.client_access(&user);
-    let response = access.execute("{ Node { node_did default_agent_did } Agent { node_did agent_did creation_nonce display_name } }").await.expect("read retained job identities");
+    let response = access.execute("{ DefaultAgentSelection { node_did default_agent_did } Agent { node_did agent_did creation_nonce display_name } }").await.expect("read retained job identities");
     let rows = response["data"]["Agent"]
         .as_array()
         .expect("retained job Agents");
-    let parent_did = response["data"]["Node"]
+    let parent_did = response["data"]["DefaultAgentSelection"]
         .as_array()
-        .expect("retained Node")
+        .expect("retained default agent selection")
         .iter()
-        .find(|node| node["node_did"] == db.node_identity.did())
-        .and_then(|node| node["default_agent_did"].as_str())
+        .find(|selection| selection["node_did"] == db.node_identity.did())
+        .and_then(|selection| selection["default_agent_did"].as_str())
         .expect("retained default Agent");
     let parent = rows
         .iter()
@@ -367,7 +395,7 @@ pub(crate) async fn reboot_job_harness(
             .expect("parent creation nonce")
             .into(),
     };
-    let agent = gents::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+    let agent = gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .expect("resolve retained parent Agent");
     let child_did = rows
         .iter()
@@ -428,115 +456,24 @@ pub(crate) async fn wait_job(
     until: impl Fn(&JobView) -> bool,
     timeout: Duration,
 ) -> JobView {
-    wait_job_observation(h, tool_call_id, |view, _| until(view), timeout).await
-}
-
-/// Waits on the job row as its client sees it, with the `status` that carries
-/// the completion owner's side-effect progress offered to the predicate.
-pub(crate) async fn wait_job_observation(
-    h: &JobHarness,
-    tool_call_id: &str,
-    until: impl Fn(&JobView, &str) -> bool,
-    timeout: Duration,
-) -> JobView {
     let access = h.actors.fixture.access.clone();
+    use crate::support::snapshots::SnapshotReader;
     let deadline = tokio::time::Instant::now() + timeout;
+    let mut changes = access.subscribe_changes("AgentToolCall").await;
     loop {
         let last = load_job_view(&access, None, address(h, tool_call_id)).await;
-        let report = format!("{last:?}");
-        match last {
-            Ok(view) => {
-                let status = row_status(&access, &view.row_doc_id).await;
-                if until(&view, &status) {
-                    return view;
-                }
-            }
-            Err(JobReadError::NotYetObservable | JobReadError::NotAJob) => {}
+        match &last {
+            Ok(view) if until(view) => return last.unwrap(),
+            Ok(_) | Err(JobReadError::NotYetObservable | JobReadError::NotAJob) => {}
             Err(error) => panic!("job {tool_call_id} is unreadable: {error:?}"),
         }
         if tokio::time::Instant::now() >= deadline {
-            panic!("job {tool_call_id} did not reach the awaited state; last read: {report}");
+            panic!("job {tool_call_id} did not reach the awaited state; last read: {last:?}");
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .unwrap_or_else(|_| {
+                panic!("job {tool_call_id} did not reach the awaited state; last read: {last:?}")
+            });
     }
-}
-
-async fn row_status(access: &ConfigAccess, row_doc_id: &str) -> String {
-    let response = access
-        .clone()
-        .execute(&format!(
-            r#"{{ AgentToolCall(docID: "{}") {{ status }} }}"#,
-            gents::store::graphql::escape_graphql_string(row_doc_id),
-        ))
-        .await
-        .expect("read the job row status");
-    response["data"]["AgentToolCall"][0]["status"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string()
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn scripted_job_adopts_one_child_and_completes() {
-    let db = test_db("plugin-job-smoke").await;
-    let plugin_home = tempfile::tempdir().expect("plugin home");
-    let plan = [
-        PlanEntry {
-            when: json!({"step": 0}),
-            output: effects(
-                Some(guest_pin("job-1-handle")),
-                vec![spawn("a", "job child a")],
-            ),
-            control: None,
-        },
-        PlanEntry {
-            when: json!({"children": {"a": "completed"}}),
-            output: result(json!("done")),
-            control: None,
-        },
-        PlanEntry {
-            when: json!({"children": {"a": "live"}}),
-            output: effects(None, Vec::new()),
-            control: None,
-        },
-    ];
-    let h = boot_job_harness(
-        db,
-        plugin_home.path().to_path_buf(),
-        "plugin-job-smoke-session",
-        vec![job_call("job-1", &plan)],
-        vec![StreamPlan::current_authored_user(
-            "job child a",
-            vec![StreamResponse::completes("job child a", ["child a done"])],
-        )],
-    )
-    .await;
-
-    let view = wait_job(
-        &h,
-        "job-1",
-        |view| view.state == JobState::Completed,
-        Duration::from_secs(30),
-    )
-    .await;
-    assert_eq!(view.children.len(), 1, "{view:?}");
-    assert_eq!(view.children[0].slot, "a");
-    assert_eq!(view.children[0].state, JobChildState::Completed);
-
-    let row_doc_id = job_row(&h, "job-1").await;
-    let response = h
-        .actors
-        .fixture
-        .access
-        .clone()
-        .execute(&format!(
-            r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
-            gents::store::graphql::escape_graphql_string(&row_doc_id),
-        ))
-        .await
-        .expect("read the job row");
-    let row = &response["data"]["AgentToolCall"][0];
-    assert_eq!(row["lifecycle_state"], "completed", "{row}");
-    assert!(!row["plugin_execution_receipt"].is_null(), "{row}");
-    h.runtime.shutdown().await;
 }

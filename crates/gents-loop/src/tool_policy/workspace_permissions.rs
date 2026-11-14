@@ -102,6 +102,20 @@ where
         .is_some_and(|grant| grant.scope == input.current && grant.action == input.action)
 }
 
+pub fn resolve<'a, E, K, F>(
+    entries: &'a [E],
+    session: Option<&K>,
+    default: &K,
+    key: F,
+) -> Option<&'a E>
+where
+    K: PartialEq,
+    F: for<'b> Fn(&'b E) -> &'b K,
+{
+    let find = |wanted: &K| entries.iter().find(|entry| key(entry) == wanted);
+    session.and_then(find).or_else(|| find(default))
+}
+
 pub fn approval_scope_matches<W>(available: &[Scope<W>], expected: &Scope<W>) -> bool
 where
     W: PartialEq,
@@ -244,95 +258,156 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::Deserialize;
 
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    struct Case {
-        input: Input<u64, u64>,
-        review: Review,
-        reviewed_grant: Grant<u64, u64>,
-        expected_route: Route,
-        expected_reviewed_route: Route,
-        expected_valid_grant: bool,
+    fn mode(value: &str) -> Mode {
+        match value {
+            "ask" => Mode::Ask,
+            "autoReview" => Mode::AutoReview,
+            "fullAccess" => Mode::FullAccess,
+            other => panic!("unknown mode {other}"),
+        }
     }
 
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase", deny_unknown_fields)]
-    struct WriteCase {
-        previous: Option<Preference<u64>>,
-        expected: u64,
-        mode: Mode,
-        requested_task: Option<u64>,
-        accepted: bool,
-        changed: bool,
-        next: Option<Preference<u64>>,
+    fn mode_name(value: Mode) -> String {
+        match value {
+            Mode::Ask => "ask",
+            Mode::AutoReview => "autoReview",
+            Mode::FullAccess => "fullAccess",
+        }
+        .into()
     }
 
-    #[derive(Deserialize)]
-    struct Snapshot {
-        workspace_permission_cases: Vec<Case>,
-        workspace_permission_write_cases: Vec<WriteCase>,
+    fn review(value: &str) -> Review {
+        match value {
+            "allow" => Review::Allow,
+            "ask" => Review::Ask,
+            "deny" => Review::Deny,
+            "unavailable" => Review::Unavailable,
+            other => panic!("unknown review {other}"),
+        }
+    }
+
+    fn route_name(value: Route) -> String {
+        match value {
+            Route::Allow => "allow",
+            Route::Ask => "ask",
+            Route::Review => "review",
+            Route::Deny => "deny",
+        }
+        .into()
     }
 
     #[test]
-    fn generated_command_grant_lookups() {
-        #[derive(Deserialize)]
-        struct Lookup {
-            grants: Vec<Grant<u64, u64>>,
-            expected: Grant<u64, u64>,
-            allowed: bool,
-        }
-        #[derive(Deserialize)]
-        struct Lookups {
-            workspace_command_grant_lookups: Vec<Lookup>,
-        }
-        let snapshot: Lookups = gents_lean_contract::load_contract_snapshot().unwrap();
-        assert_eq!(snapshot.workspace_command_grant_lookups.len(), 24);
-        for case in snapshot.workspace_command_grant_lookups {
-            assert_eq!(
-                has_command_grant(&case.grants, &case.expected),
-                case.allowed
-            );
-        }
+    fn command_grant_lookup_follows_the_lean_model() {
+        use gents_lean_vocab::families::workspace_command_grants_lookup::{
+            Grant as Wire, LookupInput,
+        };
+        let grant = |wire: &Wire| Grant {
+            scope: Scope {
+                workspace: wire.scope.workspace,
+                revision: wire.scope.revision,
+            },
+            action: wire.action,
+        };
+        gents_lean_vocab::families::workspace_command_grants_lookup::replay(
+            |case: &LookupInput| {
+                has_command_grant(
+                    &case.grants.iter().map(grant).collect::<Vec<_>>(),
+                    &grant(&case.expected),
+                )
+            },
+        );
     }
 
     #[test]
-    fn generated_workspace_permission_write_cases() {
-        let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
-        assert!(!snapshot.workspace_permission_write_cases.is_empty());
-        for case in snapshot.workspace_permission_write_cases {
-            let result = select_mode(
-                case.previous.as_ref(),
-                case.expected,
-                case.mode,
-                case.requested_task,
-            );
-            assert_eq!(result.is_ok(), case.accepted);
-            match result {
-                Ok(selection) => {
-                    assert_eq!(Some(selection.next), case.next);
-                    assert_eq!(selection.changed, case.changed);
+    fn workspace_mode_selection_follows_the_lean_model() {
+        use gents_lean_vocab::families::workspace_permissions_selection::{
+            Preference as Wire, SelectionInput, WriteResult,
+        };
+        let preference = |wire: &Wire<String>| Preference {
+            revision: wire.revision,
+            mode: mode(&wire.mode),
+            review_task: wire.review_task,
+        };
+        let wire = |value: &Preference<u64>| Wire {
+            revision: value.revision,
+            mode: mode_name(value.mode),
+            review_task: value.review_task,
+        };
+        gents_lean_vocab::families::workspace_permissions_selection::replay::<String>(
+            |case: &SelectionInput<String>| {
+                let previous = case.previous.as_ref().map(preference);
+                match select_mode(
+                    previous.as_ref(),
+                    case.expected,
+                    mode(&case.mode),
+                    case.requested_task,
+                ) {
+                    Ok(selection) => WriteResult {
+                        accepted: true,
+                        changed: selection.changed,
+                        next: Some(wire(&selection.next)),
+                    },
+                    Err(_) => WriteResult {
+                        accepted: false,
+                        changed: false,
+                        next: previous.as_ref().map(wire),
+                    },
                 }
-                Err(_) => {
-                    assert_eq!(case.previous, case.next);
-                    assert!(!case.changed);
-                }
-            }
-        }
+            },
+        );
     }
 
     #[test]
-    fn generated_workspace_permission_cases() {
-        let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
-        assert!(!snapshot.workspace_permission_cases.is_empty());
-        for case in snapshot.workspace_permission_cases {
-            assert_eq!(valid_grant(&case.input), case.expected_valid_grant);
-            assert_eq!(route(&case.input), case.expected_route);
-            assert_eq!(
-                reviewed_route(&case.input, case.review, &case.reviewed_grant),
-                case.expected_reviewed_route,
-            );
-        }
+    fn workspace_routing_follows_the_lean_model() {
+        use gents_lean_vocab::families::workspace_permissions_routing::{
+            Grant as GrantWire, RoutingInput, RoutingOutput,
+        };
+        let grant = |wire: &GrantWire| Grant {
+            scope: Scope {
+                workspace: wire.scope.workspace,
+                revision: wire.scope.revision,
+            },
+            action: wire.action,
+        };
+        gents_lean_vocab::families::workspace_permissions_routing::replay::<String, String, String>(
+            |case: &RoutingInput<String, String>| {
+                let input = Input {
+                    current: Scope {
+                        workspace: case.input.current.workspace,
+                        revision: case.input.current.revision,
+                    },
+                    configured_workspace: case.input.configured_workspace,
+                    mode: mode(&case.input.mode),
+                    action: case.input.action,
+                    ceiling_allows: case.input.ceiling_allows,
+                    crosses_boundary: case.input.crosses_boundary,
+                    grant: case.input.grant.as_ref().map(grant),
+                };
+                RoutingOutput {
+                    valid_grant: valid_grant(&input),
+                    route: route_name(route(&input)),
+                    reviewed_route: route_name(reviewed_route(
+                        &input,
+                        review(&case.review),
+                        &grant(&case.reviewed_grant),
+                    )),
+                }
+            },
+        );
+    }
+}
+
+#[cfg(test)]
+mod mode_conformance {
+    use super::Mode;
+
+    #[test]
+    fn workspace_permission_modes_are_the_lean_modes() {
+        gents_lean_vocab::families::tool_policy_workspace_permissions_mode_vocabulary::replay(&[
+            Mode::Ask,
+            Mode::AutoReview,
+            Mode::FullAccess,
+        ]);
     }
 }

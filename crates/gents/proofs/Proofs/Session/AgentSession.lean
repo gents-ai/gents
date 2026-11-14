@@ -1,0 +1,971 @@
+import Proofs.Session.Request.State
+
+/-! Durable session owner; Nat identifiers/times abstract validated canonical
+strings. Authorization and atomic query/write remain DB adapter obligations.
+Read-only session discovery uses the authenticated caller's DefraDB ACP visibility;
+node/requester fields identify a selected row, not additional read permissions.
+Presentation and provenance never select execution configuration. -/
+namespace AgentSession
+structure Scope where
+  node : Nat
+  session : SessionId
+  requester : Option Nat
+  deriving DecidableEq, Repr
+inductive TitleSource where
+  | placeholder | generated | task | user
+  deriving DecidableEq, Repr
+def TitleSource.toWireName : TitleSource → String
+  | .placeholder => "placeholder"
+  | .generated => "generated"
+  | .task => "task"
+  | .user => "user"
+
+structure Title where
+  text : String
+  source : TitleSource
+  deriving DecidableEq, Repr
+
+/-- The title a manual request carries: the trimmed conversation title, with
+source task, or none when the title is absent or blank. -/
+def requestTitle (raw : Option String) : Option Title :=
+  match raw with
+  | none => none
+  | some text =>
+      if text.trim.isEmpty then none
+      else some { text := text.trim, source := .task }
+
+/-- Enqueueing a manual request publishes its AgentSession, carrying the
+request's title, in the request's own transaction: the router waits on an
+absent session, so a request left for the claim to materialize would stay
+pending forever (`RuntimeState.materializedSessionVisible`). -/
+def enqueueMaterializesSession : Bool := true
+
+theorem writes_manual_request_with_its_titled_session :
+    (requestTitle (some "mini-host-health-20260430t180405z")).map (·.text) =
+      some "mini-host-health-20260430t180405z" ∧
+    enqueueMaterializesSession = true := by
+  native_decide
+
+structure ForkOrigin where
+  sourceSession : SessionId
+  atUserTurn : Nat
+  deriving DecidableEq, Repr
+structure StarterEvidence where
+  source : Scope
+  parentRequestDoc : Nat
+  deriving DecidableEq, Repr
+
+/-- A receipt is signed by the creating Agent in the transaction that creates
+the session. For agent_new and PluginJob that is the requester; the selected Agent is the
+worker and may differ. The node identifier is routing data, not the signer. Its
+request and causal kind bind the verified opening evidence; a
+pre-existing session never receives one from a later request. -/
+structure CreationReceipt where
+  scope : Scope
+  sessionDoc : Nat
+  agent : AgentDid
+  openingRequestDoc : Nat
+  causalKind : Nat
+  causeBinding : Nat
+  starter : Option StarterEvidence := none
+  deriving DecidableEq, Repr
+
+def creationReceiptSigner (creatorSigned : Bool) (requester : Option AgentDid)
+    (selected : AgentDid) : Option AgentDid :=
+  if creatorSigned then requester else some selected
+
+theorem agent_new_receipt_uses_creator (creator worker : AgentDid) :
+    creationReceiptSigner true (some creator) worker = some creator := rfl
+
+theorem agent_new_receipt_requires_creator (worker : AgentDid) :
+    creationReceiptSigner true none worker = none := rfl
+
+theorem plugin_job_receipt_uses_creator (creator worker : AgentDid) :
+    creationReceiptSigner true (some creator) worker = some creator := rfl
+
+def creationReceiptAtEnsure (existing : Bool) (receipt : CreationReceipt) : Option CreationReceipt :=
+  if existing then none else some receipt
+
+theorem existing_session_never_receives_creation_receipt (receipt : CreationReceipt) :
+    creationReceiptAtEnsure true receipt = none := by
+  simp [creationReceiptAtEnsure]
+
+theorem new_session_receives_creation_receipt (receipt : CreationReceipt) :
+    creationReceiptAtEnsure false receipt = some receipt := by
+  simp [creationReceiptAtEnsure]
+
+/-- A PluginJob opening binds the signed immediate author, accepted parent
+tool and pinned spawn identity before reserving the target. The session,
+opening request, working-agent link and creation receipt commit together. -/
+structure PluginJobOpening where
+  authorMatches : Bool
+  parentVerified : Bool
+  pinnedSpawnMatches : Bool
+  targetAbsent : Bool
+  writesComplete : Bool
+  deriving DecidableEq, Repr
+
+def pluginJobOpeningCommits (opening : PluginJobOpening) : Bool :=
+  opening.authorMatches && opening.parentVerified && opening.pinnedSpawnMatches &&
+    opening.targetAbsent && opening.writesComplete
+
+theorem plugin_job_missing_parent_refused (opening : PluginJobOpening)
+    (missing : opening.parentVerified = false) :
+    pluginJobOpeningCommits opening = false := by
+  simp [pluginJobOpeningCommits, missing]
+
+theorem plugin_job_incomplete_write_refused (opening : PluginJobOpening)
+    (incomplete : opening.writesComplete = false) :
+    pluginJobOpeningCommits opening = false := by
+  simp [pluginJobOpeningCommits, incomplete]
+
+theorem plugin_job_existing_target_refused (opening : PluginJobOpening)
+    (existing : opening.targetAbsent = false) :
+    pluginJobOpeningCommits opening = false := by
+  simp [pluginJobOpeningCommits, existing]
+
+structure Provenance where
+  task : Option Nat := none
+  parentRequestDoc : Option Nat := none
+  /-- The signed calling request carries its source session because the receiver
+      need not hold that request. Creation records the complete scope once;
+      neither this reference nor its indexed node/session projection grants
+      access or creates runtime hierarchy. The absent requester remains exact
+      absence, never a wildcard. Older sessions may have no recorded scope. -/
+  startedBy : Option Scope := none
+  /-- The request whose admission created this session through a
+      calling tool call or a Task delivery. It is written once and
+      never rewritten (`advance`, `rename` and `setClosed` keep
+      `provenance`). `DurableLineage.openingRequest` opens the session at
+      it; a session created before it was recorded has none. -/
+  openingRequestDoc : Option Nat := none
+  fork : Option ForkOrigin := none
+  deriving DecidableEq, Repr
+
+/-- The fire is immutable task-delivery evidence. Its canonical identity and
+trigger kind are checked by the adapter before it can name a task; a mismatched
+scope or ambiguous receipt is never projected as provenance. -/
+structure TaskFireEvidence where
+  node : Nat
+  session : SessionId
+  request : Nat
+  task : Nat
+  valid : Bool
+  deriving DecidableEq, Repr
+
+def taskForOpening (node : Nat) (session : SessionId) (request : Nat)
+    (fires : List TaskFireEvidence) : Option Nat :=
+  match fires with
+  | [fire] =>
+      if fire.valid && fire.node == node && fire.session == session && fire.request == request
+      then some fire.task else none
+  | _ => none
+
+theorem ambiguous_task_fire_is_not_provenance (node : Nat) (session : SessionId)
+    (request : Nat) (a b : TaskFireEvidence) (rest : List TaskFireEvidence) :
+    taskForOpening node session request (a :: b :: rest) = none := by
+  simp [taskForOpening]
+
+/-- A starter in this projection has already been verified against the signed
+creation receipt. A Task is scoped to its owning node; an unreadable, ambiguous,
+or cyclic parent chain does not establish an originating Task. -/
+structure TaskLineageRow where
+  scope : Scope
+  task : Option Nat
+  starter : Option Scope
+  deriving DecidableEq, Repr
+
+def originatingTask (owner : Nat) (scope : Scope) (rows : List TaskLineageRow)
+    (visited : List Scope) : Nat → Option Nat
+  | 0 => none
+  | fuel + 1 =>
+      if scope.node != owner || visited.contains scope then none
+      else
+        match rows.filter (fun row => row.scope == scope) with
+        | [row] =>
+            match row.task with
+            | some task => some task
+            | none => match row.starter with
+              | some parent => originatingTask owner parent rows (scope :: visited) fuel
+              | none => none
+        | _ => none
+
+theorem foreign_task_lineage_is_not_attributed (owner : Nat) (scope : Scope)
+    (rows : List TaskLineageRow) (visited : List Scope) (fuel : Nat)
+    (different : scope.node ≠ owner) :
+    originatingTask owner scope rows visited (fuel + 1) = none := by
+  simp [originatingTask, different]
+
+theorem repeated_task_lineage_is_not_attributed (owner : Nat) (scope : Scope)
+    (rows : List TaskLineageRow) (visited : List Scope) (fuel : Nat)
+    (seen : scope ∈ visited) :
+    originatingTask owner scope rows visited (fuel + 1) = none := by
+  simp [originatingTask, seen]
+
+/-- The task identity includes its node; session and task rows are limited to
+those the authenticated reader can see, and starter edges have been verified. -/
+structure ScopedTask where
+  node : Nat
+  task : Nat
+  deriving DecidableEq, Repr
+
+def originatingScopedTask (scope : Scope) (rows : List TaskLineageRow)
+    (visited : List Scope) : Nat → Option ScopedTask
+  | 0 => none
+  | fuel + 1 =>
+      if visited.contains scope then none
+      else
+        match rows.filter (fun row => row.scope == scope) with
+        | [row] =>
+            match row.task with
+            | some task => some ⟨scope.node, task⟩
+            | none => match row.starter with
+              | some parent => originatingScopedTask parent rows (scope :: visited) fuel
+              | none => none
+        | _ => none
+
+theorem scoped_repeated_lineage_is_not_attributed (scope : Scope)
+    (rows : List TaskLineageRow) (visited : List Scope) (fuel : Nat)
+    (seen : scope ∈ visited) :
+    originatingScopedTask scope rows visited (fuel + 1) = none := by
+  simp [originatingScopedTask, seen]
+
+theorem scoped_ambiguous_lineage_is_not_attributed (scope : Scope)
+    (rows : List TaskLineageRow) (visited : List Scope) (fuel : Nat)
+    (ambiguous : (rows.filter (fun row => row.scope == scope)).length ≠ 1) :
+    originatingScopedTask scope rows visited (fuel + 1) = none := by
+  simp only [originatingScopedTask]
+  split
+  · rfl
+  · generalize found : rows.filter (fun row => row.scope == scope) = foundRows
+    cases foundRows with
+    | nil => rfl
+    | cons row tail =>
+      cases tail with
+      | nil => simp [found] at ambiguous
+      | cons _ _ => rfl
+
+def openingRequestAtCreation (request : Nat) (toolCall taskTrigger : Bool) : Option Nat :=
+  if toolCall || taskTrigger then some request else none
+
+theorem task_opening_recorded (request : Nat) :
+    openingRequestAtCreation request false true = some request := by
+  simp [openingRequestAtCreation]
+structure RequestObservation where
+  /-- An interned (collection, `_docID`) reference, never a raw cross-collection
+  `_docID`: equal raw IDs in different collections are distinct values here. -/
+  docId : Nat
+  requestId : RequestId
+  state : RequestState
+  deriving DecidableEq, Repr
+structure Observation where
+  activity : Time
+  preview : Option String
+  latest : Option RequestObservation
+  replyPreview : Option String := none
+  deriving DecidableEq, Repr
+structure Document where
+  scope : Scope
+  agent : AgentDid
+  createdAt : Time
+  closedAt : Option Time := none
+  stoppedAt : Option Time := none
+  archivedAt : Option Time := none
+  archiveRevision : Nat := 0
+  title : Option Title := none
+  tags : List String := []
+  provenance : Option Provenance := none
+  observation : Option Observation := none
+  deriving DecidableEq, Repr
+
+/-- Creation reserves immutable scope and agent selection. A Client submission
+ensures a new session and inserts its signed request in one transaction under the
+client actor: the session's native document owner is that user. An unattended
+agent submission creates its session under that agent. Reuse preserves the complete
+document and its native owner, including closed state and presentation metadata.
+Runtime admission requires an existing Client session and must never repair a
+missing one under agent authority. Atomic commit/rollback and native owner assignment
+are obligations of the database transaction adapter, not application ACP checks. -/
+def ensure? (existing : Option Document) (requested : Document) : Option Document :=
+  match existing with
+  | none => some requested
+  | some current =>
+      if current.scope = requested.scope ∧ current.agent = requested.agent then some current
+      else none
+
+theorem ensure_existing_preserves_document (current requested : Document)
+    (scope : current.scope = requested.scope) (agent : current.agent = requested.agent) :
+    ensure? (some current) requested = some current := by simp [ensure?, scope, agent]
+
+/-- The completed logical admission retains its existing session and identifies
+the request/session creators and intended relationships. ACP1 installs the
+relationships after document commit; `OwnershipPublication` models that window.
+Existing sessions retain owner, title, provenance and creation receipt. -/
+structure AdmissionState where
+  session : Option Document := none
+  sessionOwner : Option Nat := none
+  sessionDoc : Option Nat := none
+  sessionParent : Option Nat := none
+  sessionWorker : Option Nat := none
+  receipt : Option CreationReceipt := none
+  requestDoc : Option Nat := none
+  requestOwner : Option Nat := none
+  requestParent : Option Nat := none
+  requestWorker : Option Nat := none
+  deriving DecidableEq, Repr
+
+structure AdmissionInput where
+  requested : Document
+  actor : Nat
+  sessionDoc : Nat
+  agentDoc : Nat
+  requestDoc : Nat
+  receipt : Option CreationReceipt
+  authorized : Bool
+  commit : Bool
+  deriving DecidableEq, Repr
+
+def admitRequest (before : AdmissionState) (input : AdmissionInput) : AdmissionState :=
+  if !input.authorized || !input.commit || (before.session.isSome && before.sessionDoc.isNone)
+  then before else
+  match ensure? before.session input.requested with
+  | none => before
+  | some session =>
+    let fresh := before.session.isNone
+    let sessionDoc := if fresh then input.sessionDoc else before.sessionDoc.getD input.sessionDoc
+    { session := some session
+      sessionOwner := if fresh then some input.actor else before.sessionOwner
+      sessionDoc := some sessionDoc
+      sessionParent := if fresh then some input.agentDoc else before.sessionParent
+      sessionWorker := if fresh && input.actor != session.agent then some session.agent else before.sessionWorker
+      receipt := if fresh then input.receipt else before.receipt
+      requestDoc := some input.requestDoc
+      requestOwner := some input.actor
+      requestParent := some sessionDoc
+      requestWorker := if input.actor != session.agent then some session.agent else none }
+
+theorem failed_admission_is_unchanged (before : AdmissionState) (input : AdmissionInput)
+    (aborted : input.commit = false) : admitRequest before input = before := by
+  simp [admitRequest, aborted]
+
+theorem unauthorized_admission_is_unchanged (before : AdmissionState) (input : AdmissionInput)
+    (denied : input.authorized = false) : admitRequest before input = before := by
+  simp [admitRequest, denied]
+
+/-- ACP1 creation commits the authenticated owner's document before relation
+updates. Missing relationships deny the corresponding inherited access, while
+the owner retains native access during recovery. Node-level document-write
+grants are a trusted-actors trial premise; they do not enforce per-agent invoke
+or target isolation. Recovery retries each owner-authorized grant idempotently
+without substituting node authority. -/
+structure OwnershipPublication where
+  committed : Bool := false
+  owner : Option Nat := none
+  parent : Bool := false
+  worker : Bool := false
+  deriving DecidableEq, Repr
+
+def publishOwned (actor : Nat) : OwnershipPublication := ⟨true, some actor, false, false⟩
+
+def grantParent (publication : OwnershipPublication) (actor : Nat) : OwnershipPublication :=
+  if publication.committed && publication.owner == some actor then
+    { publication with parent := true }
+  else publication
+
+def grantWorker (publication : OwnershipPublication) (actor : Nat) : OwnershipPublication :=
+  if publication.committed && publication.owner == some actor then
+    { publication with worker := true }
+  else publication
+
+theorem published_owner_retains_access_before_grants (actor : Nat) :
+    (publishOwned actor).owner = some actor ∧
+      (publishOwned actor).parent = false ∧ (publishOwned actor).worker = false := by
+  exact ⟨rfl, rfl, rfl⟩
+
+theorem owner_can_recover_publication (actor : Nat) :
+    let completed := grantWorker (grantParent (publishOwned actor) actor) actor
+    completed.parent = true ∧ completed.worker = true := by simp [publishOwned, grantParent, grantWorker]
+
+theorem repeated_grants_are_idempotent (publication : OwnershipPublication) (actor : Nat) :
+    grantWorker (grantWorker publication actor) actor = grantWorker publication actor := by
+  simp [grantWorker]; split <;> simp_all
+
+/-- The physical opening request is staged first so the creator can bind its
+session provenance to that document. Session creation precedes Goal creation;
+all three become visible together on commit, or none do on failure. -/
+structure GoalAdmission where
+  request : Bool := false
+  session : Bool := false
+  goal : Bool := false
+  owner : Option Nat := none
+  deriving DecidableEq, Repr
+
+def admitGoal (before : GoalAdmission) (actor : Nat)
+    (requestStaged sessionStaged goalStaged commit : Bool) : GoalAdmission :=
+  if requestStaged && sessionStaged && goalStaged && commit then
+    ⟨true, true, true, some actor⟩
+  else before
+
+theorem incomplete_goal_admission_is_unchanged (before : GoalAdmission) (actor : Nat)
+    (requestStaged goalStaged commit : Bool) :
+    admitGoal before actor requestStaged false goalStaged commit = before := by
+  simp [admitGoal]
+
+theorem committed_goal_admission_binds_creator (before : GoalAdmission) (actor : Nat) :
+    admitGoal before actor true true true true = ⟨true, true, true, some actor⟩ := by rfl
+
+/-- Indexed display is evidence only when the target receipt is authenticated
+    against its selected Agent DID,
+    belongs to the physical session and binds the same source, parent and index.
+    These observations do not authorize session control. -/
+def verifiedStarter (receipt : CreationReceipt) (physical : Nat)
+    (source : Scope) (parent : Nat) (indexed : Nat × SessionId)
+    (signatureValid : Bool) : Option Scope :=
+  if signatureValid && receipt.sessionDoc == physical &&
+      receipt.starter == some ⟨source, parent⟩ && indexed == (source.node, source.session)
+  then some source else none
+
+theorem verified_starter_rejects_other_physical (receipt : CreationReceipt)
+    (physical : Nat) (source : Scope) (parent : Nat) (indexed : Nat × SessionId)
+    (valid : Bool) (mismatch : receipt.sessionDoc ≠ physical) :
+    verifiedStarter receipt physical source parent indexed valid = none := by
+  simp [verifiedStarter, mismatch]
+
+def startedBy (session : Document) : Option Scope :=
+  session.provenance.bind (·.startedBy)
+
+/-- Scalar storage indexes are derived from the canonical provenance, not
+    independently writable origins. Requester scope remains in provenance. -/
+def starterIndex (session : Document) : Option (Nat × SessionId) :=
+  (startedBy session).map fun scope => (scope.node, scope.session)
+
+theorem ensure_preserves_starter (current requested : Document)
+    (scope : current.scope = requested.scope) (agent : current.agent = requested.agent) :
+    (ensure? (some current) requested).bind startedBy = startedBy current := by
+  rw [ensure_existing_preserves_document current requested scope agent]
+  rfl
+
+theorem starter_index_retains_node (session : Document) (source : Scope)
+    (h : startedBy session = some source) :
+    starterIndex session = some (source.node, source.session) := by
+  simp [starterIndex, h]
+
+/-- The one starter reading of a stored row. The immutable index columns select
+    verification; the mutable provenance never does, so removing `startedBy` or
+    rewriting `parentRequestDoc` cannot route an indexed row to a weaker lookup.
+    An unindexed row has no starter: no signed or immutable field separates a
+    row created before the index from a new row whose starter failed
+    verification, so a parent pointer alone is never lineage. -/
+def observedStarter (indexed : Option (Nat × SessionId)) (receipt : Option CreationReceipt)
+    (physical : Nat) (recorded : Option Scope) (parent : Option Nat)
+    (signatureValid : Bool) : Option Scope :=
+  match indexed, receipt, recorded, parent with
+  | some index, some receipt, some source, some parent =>
+      verifiedStarter receipt physical source parent index signatureValid
+  | _, _, _, _ => none
+
+theorem unindexed_row_has_no_starter (receipt : Option CreationReceipt) (physical : Nat)
+    (recorded : Option Scope) (parent : Option Nat) (valid : Bool) :
+    observedStarter none receipt physical recorded parent valid = none := rfl
+
+theorem removed_starter_has_no_fallback (indexed : Option (Nat × SessionId))
+    (receipt : Option CreationReceipt) (physical : Nat) (parent : Option Nat) (valid : Bool) :
+    observedStarter indexed receipt physical none parent valid = none := by
+  cases indexed <;> cases receipt <;> cases parent <;> rfl
+
+theorem observed_starter_is_signed (indexed : Option (Nat × SessionId))
+    (receipt : Option CreationReceipt) (physical : Nat) (recorded : Option Scope)
+    (parent : Option Nat) (valid : Bool) (source : Scope)
+    (h : observedStarter indexed receipt physical recorded parent valid = some source) :
+    ∃ r p, receipt = some r ∧ r.starter = some ⟨source, p⟩ := by
+  cases indexed <;> cases receipt <;> cases recorded <;> cases parent <;>
+    simp [observedStarter, verifiedStarter] at h
+  case some.some.some.some index r s p =>
+    obtain ⟨⟨⟨⟨_, _⟩, hs⟩, _⟩, rfl⟩ := h
+    exact ⟨r, p, rfl, hs⟩
+
+theorem ensure_cannot_rebind_agent (current requested : Document)
+    (agent : current.agent ≠ requested.agent) : ensure? (some current) requested = none := by
+  simp [ensure?, agent]
+/-- Authoritative query projection, not another writable request/index.
+`terminalizedAt` is the runtime-written terminal time (sub-second); a live row
+has none. -/
+structure RequestFact where
+  purpose : RequestPurpose
+  scope : Scope
+  agent : AgentDid
+  createdAt : Time
+  observed : RequestObservation
+  terminalizedAt : Option Time := none
+  deriving DecidableEq, Repr
+
+def liveRank (r : RequestFact) : Nat :=
+  if HasTerminal.isTerminal r.observed.state then 0 else 1
+
+def terminalRank (r : RequestFact) : Nat := r.terminalizedAt.getD 0
+
+/-- The canonical latest-request order. `created_at` is signed by the requester
+with whole-second precision, so requests sharing a second have no admission
+order of their own, and `request_id` is a random identifier, not an order.
+Within one second a live request is newer than a terminal one, so the head
+errs toward a busy session and never toward an idle one; among terminal rows
+the later runtime terminalization is newer; `request_id` only separates rows
+that carry no other evidence. Under the `request_id`-only tie a request
+claimed in the same second as its predecessor's completion could lose to that
+predecessor and never be observed (#3604). -/
+abbrev newerP (a b : RequestFact) : Prop :=
+  a.createdAt > b.createdAt ∨ (a.createdAt = b.createdAt ∧
+    (liveRank a > liveRank b ∨ (liveRank a = liveRank b ∧
+      (terminalRank a > terminalRank b ∨ (terminalRank a = terminalRank b ∧
+        a.observed.requestId > b.observed.requestId)))))
+
+def newer (a b : RequestFact) : Bool := decide (newerP a b)
+
+theorem newer_irrefl (a : RequestFact) : newer a a = false := by
+  unfold newer newerP
+  simp only [decide_eq_false_iff_not]
+  try dsimp only [Time, RequestId]
+  omega
+
+theorem newer_trans {a b c : RequestFact} (hab : newer a b = true) (hbc : newer b c = true) :
+    newer a c = true := by
+  unfold newer newerP at *
+  simp only [decide_eq_true_eq] at *
+  try dsimp only [Time, RequestId] at *
+  omega
+
+/-- The order is total up to equal keys: a row that is not newer than `b`
+is no newer than anything `b` is no newer than. -/
+theorem not_newer_trans {a b c : RequestFact} (hab : newer a b = false) (hbc : newer b c = false) :
+    newer a c = false := by
+  unfold newer newerP at *
+  simp only [decide_eq_false_iff_not] at *
+  try dsimp only [Time, RequestId] at *
+  omega
+
+theorem newer_of_newer_not_newer {a b c : RequestFact} (hab : newer a b = true)
+    (hcb : newer c b = false) : newer a c = true := by
+  unfold newer newerP at *
+  simp only [decide_eq_true_eq, decide_eq_false_iff_not] at *
+  try dsimp only [Time, RequestId] at *
+  omega
+
+/-- A request claimed in the same second its predecessor finished is the
+session's latest, whatever their random `request_id`s (#3604). -/
+theorem live_newer_than_same_second_terminal (a b : RequestFact)
+    (hc : a.createdAt = b.createdAt) (ha : ¬ HasTerminal.isTerminal a.observed.state)
+    (hb : HasTerminal.isTerminal b.observed.state) : newer a b = true := by
+  have hla : liveRank a = 1 := by simp [liveRank, ha]
+  have hlb : liveRank b = 0 := by simp [liveRank, hb]
+  unfold newer newerP
+  simp only [decide_eq_true_eq]
+  try dsimp only [Time, RequestId] at *
+  omega
+
+/-- Same-second terminal rows follow their runtime terminalization order, so a
+finished claim stays the head after its completion. -/
+theorem later_terminalization_newer (a b : RequestFact)
+    (hc : a.createdAt = b.createdAt) (ha : HasTerminal.isTerminal a.observed.state)
+    (hb : HasTerminal.isTerminal b.observed.state) (ht : terminalRank b < terminalRank a) :
+    newer a b = true := by
+  have hla : liveRank a = 0 := by simp [liveRank, ha]
+  have hlb : liveRank b = 0 := by simp [liveRank, hb]
+  unfold newer newerP
+  simp only [decide_eq_true_eq]
+  try dsimp only [Time, RequestId] at *
+  omega
+
+def newest : List RequestFact → Option RequestFact
+  | [] => none
+  | row :: rest => match newest rest with
+    | none => some row
+    | some previous => if newer row previous then some row else some previous
+
+/-- `none` queries all requesters; `some none` queries exact absent scope. -/
+def latest (rows : List RequestFact) (node session : Nat)
+    (requester : Option (Option Nat)) : Option RequestFact :=
+  newest (rows.filter fun r => r.purpose == .normal && r.scope.node == node && r.scope.session == session &&
+    requester.all (fun scope => r.scope.requester == scope))
+
+theorem newest_member (rows : List RequestFact) (r : RequestFact)
+    (h : newest rows = some r) : r ∈ rows := by
+  induction rows with
+  | nil => simp [newest] at h
+  | cons row rest ih =>
+    simp only [newest] at h
+    cases hn : newest rest with
+    | none => simp [hn] at h; subst r; simp
+    | some previous =>
+      simp only [hn] at h
+      split at h
+      · simp only [Option.some.injEq] at h; subst r; simp
+      · simp only [Option.some.injEq] at h; subst r
+        exact List.mem_cons_of_mem _ (ih hn)
+
+theorem newest_none (rows : List RequestFact) (h : newest rows = none) : rows = [] := by
+  cases rows with
+  | nil => rfl
+  | cons row rest =>
+    simp only [newest] at h
+    cases hn : newest rest with
+    | none => rw [hn] at h; simp at h
+    | some p => rw [hn] at h; dsimp only at h; split at h <;> simp at h
+
+theorem newest_maximal (rows : List RequestFact) (r : RequestFact)
+    (h : newest rows = some r) : ∀ candidate ∈ rows, newer candidate r = false := by
+  induction rows generalizing r with
+  | nil => simp [newest] at h
+  | cons row rest ih =>
+    simp only [newest] at h
+    cases hn : newest rest with
+    | none =>
+      have empty := newest_none rest hn
+      subst rest
+      simp only [newest, Option.some.injEq] at h
+      subst r
+      intro candidate hm
+      simp only [List.mem_singleton] at hm
+      subst candidate
+      exact newer_irrefl _
+    | some previous =>
+      have hb := ih previous hn
+      simp only [hn] at h
+      split at h
+      · rename_i hc
+        simp only [Option.some.injEq] at h
+        subst r
+        intro candidate hm
+        rcases List.mem_cons.mp hm with he | he
+        · subst candidate; exact newer_irrefl _
+        · have hcp := hb candidate he
+          cases hcr : newer candidate row
+          · rfl
+          · have := newer_trans hcr hc
+            simp [hcp] at this
+      · rename_i hc
+        simp only [Option.some.injEq] at h
+        subst r
+        intro candidate hm
+        rcases List.mem_cons.mp hm with he | he
+        · subst candidate; simpa using hc
+        · exact hb candidate he
+
+theorem newest_filter_preserves (rows : List RequestFact) (r : RequestFact)
+    (p : RequestFact → Bool) (h : newest rows = some r) (hr : p r = true) :
+    newest (rows.filter p) = some r := by
+  induction rows generalizing r with
+  | nil => simp [newest] at h
+  | cons row rest ih =>
+    simp only [newest] at h
+    cases hn : newest rest with
+    | none =>
+      have empty := newest_none rest hn
+      subst rest
+      simp only [newest, Option.some.injEq] at h
+      subst r
+      simp [hr, newest]
+    | some previous =>
+      simp only [hn] at h
+      split at h
+      · rename_i hc
+        simp only [Option.some.injEq] at h
+        subst r
+        simp only [List.filter_cons, hr, Bool.true_eq, ↓reduceIte, newest]
+        cases hf : newest (rest.filter p) with
+        | none => rfl
+        | some filtered =>
+          have hm := newest_member _ filtered hf
+          have hb := newest_maximal rest previous hn filtered (List.mem_filter.mp hm).1
+          have hbetter : newer row filtered = true := newer_of_newer_not_newer hc hb
+          simp [hbetter]
+      · rename_i hc
+        simp only [Option.some.injEq] at h
+        subst r
+        have hf := ih previous hn hr
+        cases hp : p row <;> simp [List.filter_cons, hp, newest, hf, hc]
+
+theorem latest_scope (rows : List RequestFact) (node session : Nat)
+    (requester : Option (Option Nat)) (r : RequestFact)
+    (h : latest rows node session requester = some r) :
+    r ∈ rows ∧ r.scope.node = node ∧ r.scope.session = session ∧
+      requester.all (fun scope => r.scope.requester == scope) = true := by
+  have hm := newest_member _ r h
+  simp only [List.mem_filter, Bool.and_eq_true, beq_iff_eq, and_assoc] at hm
+  exact ⟨hm.1, hm.2.2⟩
+
+theorem latest_is_normal (rows : List RequestFact) (node session : Nat)
+    (requester : Option (Option Nat)) (r : RequestFact)
+    (h : latest rows node session requester = some r) : r.purpose = .normal := by
+  have hm := newest_member _ r h
+  simp only [List.mem_filter, Bool.and_eq_true, beq_iff_eq, and_assoc] at hm
+  exact hm.2.1
+
+theorem latest_maximal (rows : List RequestFact) (node session : Nat)
+    (requester : Option (Option Nat)) (r candidate : RequestFact)
+    (h : latest rows node session requester = some r)
+    (hm : candidate ∈ rows) (ha : candidate.scope.node = node)
+    (hs : candidate.scope.session = session)
+    (hp : candidate.purpose = .normal)
+    (hr : requester.all (fun scope => candidate.scope.requester == scope) = true) :
+    newer candidate r = false := by
+  apply newest_maximal _ r h candidate
+  simp [List.mem_filter, hm, ha, hs, hp, hr]
+
+theorem title_arrival_preserves_latest (rows : List RequestFact) (title : RequestFact)
+    (node session : Nat) (requester : Option (Option Nat))
+    (hp : title.purpose = .titleAudit) :
+    latest (title :: rows) node session requester = latest rows node session requester := by
+  simp [latest, hp]
+
+theorem latest_exact_of_session_winner (rows : List RequestFact) (node session : Nat)
+    (r : RequestFact) (h : latest rows node session none = some r) :
+    latest rows node session (some r.scope.requester) = some r := by
+  have hf := newest_filter_preserves
+    (rows.filter fun row => row.purpose == .normal && row.scope.node == node && row.scope.session == session)
+    r (fun row => row.scope.requester == r.scope.requester) (by simpa [latest] using h) (by simp)
+  simpa [latest, List.filter_filter, Bool.and_assoc, Bool.and_comm, Bool.and_left_comm] using hf
+
+/-- Run with complete authoritative rows inside the admission/successor transaction,
+including the currently indexed request. `preview` is whitespace-normalized by the
+existing projection adapter before this character-bound operation. -/
+def advance (s : Document) (rows : List RequestFact) (r : RequestFact)
+    (preview : String) (now : Time) : Document :=
+  if r.scope = s.scope ∧ r.agent = s.agent ∧
+      r ∈ rows ∧ latest rows s.scope.node s.scope.session (some s.scope.requester) = some r then
+    { s with observation := some {
+      activity := max now (s.observation.map (·.activity) |>.getD s.createdAt)
+      preview := some (String.mk (preview.toList.take 240))
+      latest := some r.observed } }
+  else s
+theorem title_does_not_advance (s : Document) (rows : List RequestFact)
+    (r : RequestFact) (preview : String) (now : Time)
+    (hp : r.purpose = .titleAudit) : advance s rows r preview now = s := by
+  unfold advance
+  split
+  · rename_i h
+    have hn := latest_is_normal rows s.scope.node s.scope.session
+      (some s.scope.requester) r h.2.2.2
+    simp [hp] at hn
+  · rfl
+
+/-- Missing exact rows remain unknown; never return an older local request. -/
+def observedRequest (rows : List RequestFact) (o : RequestObservation) : Option RequestFact :=
+  rows.find? (fun r => r.purpose == .normal && r.observed.docId == o.docId && r.observed.requestId == o.requestId)
+
+theorem title_arrival_preserves_observed (rows : List RequestFact) (title : RequestFact)
+    (o : RequestObservation) (hp : title.purpose = .titleAudit) :
+    observedRequest (title :: rows) o = observedRequest rows o := by
+  simp [observedRequest, hp]
+/-- A notification supplies identity only. Resolve its current authoritative row
+inside the existing projection transaction; event payload state cannot overwrite
+newer request facts. DB snapshot freshness remains the adapter's obligation. -/
+def refresh (s : Document) (rows : List RequestFact) (event : RequestObservation)
+    (now : Time) : Document :=
+  match s.observation with
+  | some o => match o.latest with
+    | some old => if old.docId = event.docId ∧ old.requestId = event.requestId then
+        match observedRequest rows event with
+        | some current => if current.scope = s.scope ∧ current.agent = s.agent then
+            { s with observation := some { o with latest := some current.observed, activity := max now o.activity } }
+          else s
+        | none => s
+      else s
+    | none => s
+  | none => s
+
+/-- `reply` is reconstructed from the exact terminal output selected by the
+authoritative request. The adapter supplies only visible assistant text; missing
+or unreadable output remains absent. It is presentation, never work authority. -/
+def observeReply (o : Observation) (current : RequestObservation)
+    (reply : Option String) : Observation :=
+  if o.latest.any (fun latest => latest.docId == current.docId && latest.requestId == current.requestId)
+      && decide (HasTerminal.isTerminal current.state) then
+    { o with replyPreview := reply.map (fun text => String.mk (text.toList.take 240)) }
+  else o
+
+theorem nonterminal_reply_preserves_observation (o : Observation)
+    (current : RequestObservation) (reply : Option String)
+    (h : ¬ HasTerminal.isTerminal current.state) : observeReply o current reply = o := by
+  simp [observeReply, h]
+
+theorem reply_preserves_request_identity (o : Observation)
+    (current : RequestObservation) (reply : Option String) :
+    (observeReply o current reply).latest = o.latest := by
+  unfold observeReply
+  split <;> rfl
+
+/-- Only a newly published tool terminal emits activity, in the same transaction.
+Replays and losing publications emit no notification. Request lifecycle state
+need not change; identity is resolved through the authoritative request row. -/
+def toolActivity (s : Document) (rows : List RequestFact) (event : RequestObservation)
+    (now : Time) (published : Bool) : Document :=
+  if published then refresh s rows event now else s
+
+theorem unpublished_tool_activity_noop (s : Document) (rows : List RequestFact)
+    (event : RequestObservation) (now : Time) :
+    toolActivity s rows event now false = s := by simp [toolActivity]
+
+theorem published_tool_activity (s : Document) (o : Observation)
+    (r : RequestFact) (now : Time)
+    (ho : s.observation = some o) (hl : o.latest = some r.observed)
+    (hs : r.scope = s.scope) (hb : r.agent = s.agent)
+    (hp : r.purpose = .normal) :
+    toolActivity s [r] r.observed now true =
+      { s with observation := some { o with latest := some r.observed, activity := max now o.activity } } := by
+  simp [toolActivity, refresh, ho, hl, observedRequest, hp, hs, hb]
+
+theorem refresh_ignores_event_state (s : Document) (rows : List RequestFact)
+    (event : RequestObservation) (state : RequestState) (now : Time) :
+    refresh s rows { event with state } now = refresh s rows event now := rfl
+
+def touch (s : Document) (now : Time) : Document :=
+  { s with observation := some (match s.observation with
+      | some o => { o with activity := max now o.activity }
+      | none => { activity := max now s.createdAt, preview := none, latest := none }) }
+def rename (s : Document) (title : Option Title) (now : Time) : Document :=
+  { touch s now with title }
+def setClosed (s : Document) (closed : Option Time) (now : Time) : Document :=
+  { touch s now with closedAt := closed }
+theorem advance_preserves_identity (s : Document) (rows : List RequestFact)
+    (r : RequestFact) (preview : String) (now : Time) :
+    (advance s rows r preview now).scope = s.scope ∧
+    (advance s rows r preview now).agent = s.agent ∧
+    (advance s rows r preview now).provenance = s.provenance := by
+  unfold advance
+  split <;> simp
+theorem stale_refresh_noop (s : Document) (o : Observation)
+    (old r : RequestObservation) (rows : List RequestFact) (now : Time)
+    (ho : s.observation = some o) (hl : o.latest = some old)
+    (hne : old.docId ≠ r.docId ∨ old.requestId ≠ r.requestId) :
+    refresh s rows r now = s := by
+  simp only [refresh, ho, hl]
+  split <;> simp_all
+theorem rename_preserves_request (s : Document) (o : Observation)
+    (title : Option Title) (now : Time) (ho : s.observation = some o) :
+    (rename s title now).observation = some { o with activity := max now o.activity } ∧
+    (rename s title now).closedAt = s.closedAt ∧
+    (rename s title now).provenance = s.provenance := by
+  simp [rename, touch, ho]
+theorem reopen_preserves_creation (s : Document) (now : Time) :
+    (setClosed s none now).createdAt = s.createdAt ∧
+    (setClosed s none now).title = s.title ∧
+    (setClosed s none now).provenance = s.provenance := by
+  simp [setClosed, touch]
+theorem touch_activity_monotone (s : Document) (o : Observation) (now : Time)
+    (h : s.observation = some o) :
+    ∃ next, (touch s now).observation = some next ∧ o.activity ≤ next.activity := by
+  refine ⟨{ o with activity := max now o.activity }, ?_, Nat.le_max_right _ _⟩
+  simp [touch, h]
+
+/-- Rows of a session whose observed head is the newer request (created one second
+later) and whose other request is the stale predecessor. -/
+def staleCompletionRows (newer stale : RequestState) : List RequestFact :=
+  [ { purpose := .normal, scope := { node := 1, session := 1, requester := none }, agent := 1,
+      createdAt := 1, observed := ⟨2, 2, newer⟩ }
+  , { purpose := .normal, scope := { node := 1, session := 1, requester := none }, agent := 1,
+      createdAt := 0, observed := ⟨1, 1, stale⟩ } ]
+
+/-- The observation after the stale predecessor terminalizes while the newer request
+is the observed head. The terminal event carries the stale identity, so `refresh`
+leaves the newer request observed whatever state the stale request reached. -/
+def staleCompletionLatest (newer stale : RequestState) : Option RequestObservation :=
+  let rows := staleCompletionRows newer stale
+  match latest rows 1 1 none with
+  | none => none
+  | some head =>
+    let session : Document :=
+      { scope := head.scope, agent := head.agent, createdAt := 0
+        observation := some { activity := 1, preview := none, latest := some head.observed } }
+    (refresh session rows ⟨1, 1, stale⟩ 2).observation.bind (·.latest)
+
+theorem complete_does_not_overwrite_session_observation_for_newer_request
+    (newer stale : RequestState) :
+    staleCompletionLatest newer stale = some ⟨2, 2, newer⟩ := by
+  cases newer <;> cases stale <;> decide
+
+/-- Whether `advance` publishes `r` as the observed head; the owner reports it. -/
+def advances (s : Document) (rows : List RequestFact) (r : RequestFact) : Bool :=
+  decide (r.scope = s.scope ∧ r.agent = s.agent ∧
+    r ∈ rows ∧ latest rows s.scope.node s.scope.session (some s.scope.requester) = some r)
+
+theorem advance_without_advances (s : Document) (rows : List RequestFact)
+    (r : RequestFact) (preview : String) (now : Time) (h : advances s rows r = false) :
+    advance s rows r preview now = s := by
+  unfold advance
+  rw [if_neg]
+  simpa [advances] using h
+
+/-- Whether `refresh` re-reads the observed request; the owner reports it. -/
+def refreshes (s : Document) (rows : List RequestFact) (event : RequestObservation) : Bool :=
+  match s.observation with
+  | some o => match o.latest with
+    | some old => decide (old.docId = event.docId ∧ old.requestId = event.requestId) &&
+        match observedRequest rows event with
+        | some current => decide (current.scope = s.scope ∧ current.agent = s.agent)
+        | none => false
+    | none => false
+  | none => false
+
+/-- A terminal boundary (`some reply`) also observes the reply of the request it
+refreshed; ordinary activity (`none`) keeps the last reply. -/
+def refreshReply (s : Document) (rows : List RequestFact) (event : RequestObservation)
+    (reply : Option (Option String)) (now : Time) : Document :=
+  let next := refresh s rows event now
+  match reply, next.observation, observedRequest rows event with
+  | some text, some o, some current =>
+      if refreshes s rows event then
+        { next with observation := some (observeReply o current.observed text) }
+      else next
+  | _, _, _ => next
+
+/-- Reopening clears a close and reports whether the session was closed. -/
+def reopen (s : Document) (now : Time) : Document × Bool :=
+  if s.closedAt.isSome then (setClosed s none now, true) else (s, false)
+
+theorem reopen_keeps_observation (s : Document) (o : Observation) (now : Time)
+    (h : s.observation = some o) :
+    ((reopen s now).1.observation.map (·.latest)) = some o.latest ∧
+    ((reopen s now).1.observation.map (·.replyPreview)) = some o.replyPreview ∧
+    (reopen s now).1.tags = s.tags ∧ (reopen s now).1.createdAt = s.createdAt := by
+  unfold reopen
+  split <;> simp [setClosed, touch, h]
+
+def refreshFixture : Document := { scope := ⟨1, 1, none⟩, agent := 1, createdAt := 1000 }
+def refreshFixtureRow : RequestFact :=
+  { purpose := .normal, scope := ⟨1, 1, none⟩, agent := 1, createdAt := 0,
+    observed := ⟨0, 1, .completed⟩ }
+def refreshForeignRow : RequestFact :=
+  { refreshFixtureRow with scope := ⟨1, 2, none⟩, observed := ⟨1, 1, .failed⟩ }
+def refreshFixtureObserved (row : RequestFact) : Document :=
+  let observation : Observation :=
+    { activity := 1000, preview := some "prompt", latest := some row.observed,
+      replyPreview := some "Finished" }
+  { refreshFixture with observation := some observation }
+
+/-- An absent requester is its own exact scope: a session without a requester
+refreshes its own request, and an observation naming a request of another
+session, even with the same logical request id, is never refreshed from it. -/
+theorem refresh_accepts_null_requester_and_rejects_changed_session_scope :
+    refreshes (refreshFixtureObserved refreshFixtureRow) [refreshFixtureRow, refreshForeignRow]
+      refreshFixtureRow.observed = true ∧
+    refreshes (refreshFixtureObserved refreshForeignRow) [refreshFixtureRow, refreshForeignRow]
+      refreshForeignRow.observed = false := by
+  decide
+
+def tiePredecessor : RequestFact :=
+  { purpose := .normal, scope := ⟨1, 1, none⟩, agent := 1, createdAt := 0,
+    observed := ⟨0, 9, .completed⟩, terminalizedAt := some 400 }
+def tieSuccessor : RequestFact :=
+  { tiePredecessor with observed := ⟨1, 4, .claimed⟩, terminalizedAt := none }
+def tieSuccessorDone : RequestFact :=
+  { tieSuccessor with observed := ⟨1, 4, .completed⟩, terminalizedAt := some 1300 }
+
+/-- #3604: a claim admitted in the second its predecessor finished advances the
+observation although its request id sorts lower, and stays the head once it
+completes later. -/
+theorem same_second_claim_after_completion_becomes_the_observed_head :
+    advances refreshFixture [tiePredecessor, tieSuccessor] tieSuccessor = true ∧
+    latest [tiePredecessor, tieSuccessorDone] 1 1 (some none) = some tieSuccessorDone := by
+  decide
+
+end AgentSession

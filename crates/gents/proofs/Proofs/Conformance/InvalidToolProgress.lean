@@ -1,9 +1,9 @@
-import Proofs.CompletionRetry.InvalidToolProgress
-import Proofs.CompletionRetry.RepeatedToolFailure
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Shared.CompletionRetry.InvalidToolProgress
+import Proofs.Shared.CompletionRetry.RepeatedToolFailure
+import Proofs.Conformance.Family
 
 namespace Conformance.InvalidToolProgressContracts
-open CompletionRetry.InvalidToolProgress Conformance.Contracts
+open Lean CompletionRetry.InvalidToolProgress
 
 structure Case where
   name : String
@@ -29,15 +29,6 @@ def cases : List Case :=
   , ⟨"success_after_exhaustion_not_dispatched",
       List.replicate 8 .policyDenied ++ [.success]⟩ ]
 
-private def outcomeString : Outcome → String
-  | .invalidArguments => "invalidArguments"
-  | .policyDenied => "policyDenied"
-  | .unknownTool => "unknownTool"
-  | .success => "success"
-  | .ordinaryFailure => "ordinaryFailure"
-  | .skipped => "skipped"
-  | .backgroundCompletion => "backgroundCompletion"
-
 private def outcomeCall : Outcome → Nat
   | .invalidArguments => 0
   | .policyDenied => 1
@@ -50,21 +41,28 @@ private def outcomeCall : Outcome → Nat
 def composedEvents (outcomes : List Outcome) : List CompletionRetry.RepeatedToolFailure.Event :=
   outcomes.map fun o => ⟨outcomeCall o, o, if o = .ordinaryFailure then some 0 else none⟩
 
-private def composedJson (outcomes : List Outcome) : String :=
-  let (actions, ending) := CompletionRetry.RepeatedToolFailure.run {} (composedEvents outcomes)
-  ",\"composed_actions\":" ++
-    jsonArray (actions.map (jsonString ∘ CompletionRetry.RepeatedToolFailure.actionName)) ++
-  ",\"composed_ending\":" ++
-    (match ending with
-      | none => "null"
-      | some ending => jsonString (CompletionRetry.RepeatedToolFailure.endingName ending)) ++
-  ",\"composed_invalid_used\":" ++
-    toString (CompletionRetry.RepeatedToolFailure.invalidUsed {} (composedEvents outcomes))
+deriving instance ToJson for Outcome, CompletionRetry.RepeatedToolFailure.Action,
+  CompletionRetry.RepeatedToolFailure.Ending
 
-private def caseJson (c : Case) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-  ",\"outcomes\":" ++ jsonArray (c.outcomes.map (jsonString ∘ outcomeString)) ++
-  composedJson c.outcomes ++ "}"
+structure ComposedInput where
+  name : String
+  outcomes : List Outcome
+  deriving ToJson
 
-def casesJson := jsonArray (cases.map caseJson)
+structure ComposedOutput where
+  composedActions : List CompletionRetry.RepeatedToolFailure.Action
+  composedEnding : Option CompletionRetry.RepeatedToolFailure.Ending
+  composedInvalidUsed : Nat
+  deriving ToJson
+
+@[conformance_family]
+def composed : Family ComposedInput ComposedOutput where
+  inputs := cases.map fun c => { name := c.name, outcomes := c.outcomes }
+  model := fun i =>
+    let (actions, ending) := CompletionRetry.RepeatedToolFailure.run {} (composedEvents i.outcomes)
+    { composedActions := actions
+      composedEnding := ending
+      composedInvalidUsed :=
+        CompletionRetry.RepeatedToolFailure.invalidUsed {} (composedEvents i.outcomes) }
+
 end Conformance.InvalidToolProgressContracts

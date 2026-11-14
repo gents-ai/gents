@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use sha2::{Digest, Sha512};
 
-use gents::{NodeIdentity, ServiceAccount};
+use gents_store::identity::{NodeIdentity, ServiceAccount};
 
 #[allow(dead_code)]
 pub(crate) struct StubNodeIdentity {
@@ -28,10 +28,7 @@ impl NodeIdentity for StubNodeIdentity {
         &self.did
     }
 
-    async fn sign(
-        &self,
-        _payload: &[u8],
-    ) -> Result<Vec<u8>, gents::store::identity::IdentityError> {
+    async fn sign(&self, _payload: &[u8]) -> Result<Vec<u8>, gents_store::identity::IdentityError> {
         panic!(
             "StubNodeIdentity::sign called for {} — routing tests must not sign",
             self.did
@@ -43,7 +40,7 @@ impl NodeIdentity for StubNodeIdentity {
         _did: &str,
         _payload: &[u8],
         _sig: &[u8],
-    ) -> Result<bool, gents::store::identity::IdentityError> {
+    ) -> Result<bool, gents_store::identity::IdentityError> {
         panic!(
             "StubNodeIdentity::verify called for {} — routing tests must not verify",
             self.did
@@ -83,7 +80,7 @@ impl NodeIdentity for SigningStubNodeIdentity {
         &self.did
     }
 
-    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, gents::store::identity::IdentityError> {
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, gents_store::identity::IdentityError> {
         Ok(self.signature(payload))
     }
 
@@ -92,7 +89,7 @@ impl NodeIdentity for SigningStubNodeIdentity {
         did: &str,
         payload: &[u8],
         signature: &[u8],
-    ) -> Result<bool, gents::store::identity::IdentityError> {
+    ) -> Result<bool, gents_store::identity::IdentityError> {
         Ok(did == self.did && signature == self.signature(payload))
     }
 

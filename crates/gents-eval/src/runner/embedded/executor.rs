@@ -30,9 +30,11 @@ use crate::runner::embedded::observe::{
 use crate::runner::executor::{
     Capture, Isolation, StageEvidence, TrialEvidence, TrialExecutor, TrialLocator, TrialSpec,
 };
-use gents::tools::native::CommandExecutionMode;
-use gents::tools::surface::{BashMode, FileToolMode, ToolCeiling, ToolPolicySurface};
-use gents::{DocumentRuntimeOptions, RuntimeSnapshotObserver};
+use gents::DocumentRuntimeOptions;
+use gents_automation::triggers::snapshot_observer::RuntimeSnapshotObserver;
+use gents_documents::{BashMode, FileToolMode};
+use gents_tools::native::CommandExecutionMode;
+use gents_tools::surface::{ToolCeiling, ToolPolicySurface};
 
 const POLL: Duration = Duration::from_millis(250);
 const LIVE_EVERY: Duration = Duration::from_secs(5);
@@ -43,8 +45,8 @@ pub struct EmbeddedExecutor {
     runtime: tokio::runtime::Handle,
     provisioned: Mutex<RapidHashMap<String, Provisioned>>,
     evaluator: Option<(
-        Arc<dyn gents::store::identity::NodeIdentity>,
-        gents::store::config_client::ClientSigningCapability,
+        Arc<dyn gents_store::identity::NodeIdentity>,
+        gents_store::config_client::ClientSigningCapability,
     )>,
 }
 
@@ -71,8 +73,8 @@ impl EmbeddedExecutor {
 
     pub fn with_evaluator_identity(
         mut self,
-        identity: Arc<dyn gents::store::identity::NodeIdentity>,
-        capability: gents::store::config_client::ClientSigningCapability,
+        identity: Arc<dyn gents_store::identity::NodeIdentity>,
+        capability: gents_store::config_client::ClientSigningCapability,
     ) -> Self {
         self.evaluator = Some((identity, capability));
         self
@@ -458,7 +460,7 @@ where
     Open: FnOnce() -> Opening + Send + 'static,
     Opening: std::future::Future<Output = Result<EmbeddedHome>>,
 {
-    gents::store::local::storage_backend::drive_unsendable(runtime, open)
+    gents_store::local::storage_backend::drive_unsendable(runtime, open)
         .await
         .context("opening a trial home")?
 }

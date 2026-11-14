@@ -1,8 +1,8 @@
 use super::*;
-use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentityAction};
-use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::{created_doc_id, escape_graphql_string};
-use crate::store::identity::NodeIdentity;
+use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::{created_doc_id, escape_graphql_string};
+use gents_store::identity::NodeIdentity;
 use serde_json::Value;
 
 #[tokio::test]
@@ -41,7 +41,8 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
         })
         .expect("modeled sibling");
     let directory = tempfile::tempdir()?;
-    let owner = crate::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
+    let owner =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
     let user = owner.did();
     let node = Arc::new(
         defra_node::Node::builder()
@@ -55,7 +56,7 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
     // The sibling is also a managed Agent holding the baseline, so its refusal is
     // the document policy's, not a missing node grant.
     for agent_did in [&actor, &identity::Did::new(sibling)?] {
-        crate::store::identity::GrantSet::AgentBaseline
+        gents_store::identity::GrantSet::AgentBaseline
             .grant(&user_access, agent_did)
             .await?;
     }
@@ -75,10 +76,26 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
     };
     let mut docs = Vec::new();
     for (collection, field, value) in [
-        (crate::Collection::Agent, "agent_did", "agent"),
-        (crate::Collection::AgentContext, "context_id", "context"),
-        (crate::Collection::Tools, "tools_id", "tools"),
-        (crate::Collection::AgentContext, "context_id", "replacement"),
+        (
+            gents_store::collection::Collection::Agent,
+            "agent_did",
+            "agent",
+        ),
+        (
+            gents_store::collection::Collection::AgentContext,
+            "context_id",
+            "context",
+        ),
+        (
+            gents_store::collection::Collection::Tools,
+            "tools_id",
+            "tools",
+        ),
+        (
+            gents_store::collection::Collection::AgentContext,
+            "context_id",
+            "replacement",
+        ),
     ] {
         let name = collection.graphql_type();
         let response = user_access
@@ -113,12 +130,12 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
         };
         let selected = vec![
             SelectedConfigurationDocument {
-                collection: crate::Collection::Agent,
+                collection: gents_store::collection::Collection::Agent,
                 doc_id: docs[0].clone(),
                 logical_id: None,
             },
             SelectedConfigurationDocument {
-                collection: crate::Collection::AgentContext,
+                collection: gents_store::collection::Collection::AgentContext,
                 doc_id: if item["missing_context"] == true {
                     docs[3].clone()
                 } else {
@@ -127,7 +144,7 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
                 logical_id: None,
             },
             SelectedConfigurationDocument {
-                collection: crate::Collection::Tools,
+                collection: gents_store::collection::Collection::Tools,
                 doc_id: docs[2].clone(),
                 logical_id: None,
             },
@@ -174,7 +191,8 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
         })
         .expect("modeled sibling");
     let directory = tempfile::tempdir()?;
-    let owner = crate::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
+    let owner =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
     let user = owner.did();
     let node = Arc::new(
         defra_node::Node::builder()
@@ -185,7 +203,7 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
     );
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(user)?);
     for agent_did in [agent, sibling] {
-        crate::store::identity::GrantSet::AgentBaseline
+        gents_store::identity::GrantSet::AgentBaseline
             .grant(&access, &identity::Did::new(agent_did)?)
             .await?;
     }
@@ -231,12 +249,30 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
         .add_actor_relationship("Agent", &agent_doc, "executor", &identity::Did::new(agent)?)
         .await?;
     let documents = [
-        ("profile", crate::Collection::InferenceProfile),
-        ("sampling", crate::Collection::InferenceSampling),
-        ("execution", crate::Collection::InferenceExecution),
-        ("retry", crate::Collection::InferenceRetryPolicy),
-        ("compaction", crate::Collection::Compaction),
-        ("summary-profile", crate::Collection::InferenceProfile),
+        (
+            "profile",
+            gents_store::collection::Collection::InferenceProfile,
+        ),
+        (
+            "sampling",
+            gents_store::collection::Collection::InferenceSampling,
+        ),
+        (
+            "execution",
+            gents_store::collection::Collection::InferenceExecution,
+        ),
+        (
+            "retry",
+            gents_store::collection::Collection::InferenceRetryPolicy,
+        ),
+        (
+            "compaction",
+            gents_store::collection::Collection::Compaction,
+        ),
+        (
+            "summary-profile",
+            gents_store::collection::Collection::InferenceProfile,
+        ),
     ];
     let modeled_documents = case.configuration_inference_provider_cases[0]["documents"]
         .as_array()
@@ -294,7 +330,7 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
                 .await?;
         }
         let mut selected = vec![SelectedConfigurationDocument {
-            collection: crate::Collection::Agent,
+            collection: gents_store::collection::Collection::Agent,
             doc_id: agent_doc.clone(),
             logical_id: None,
         }];
@@ -345,7 +381,7 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
 
 #[tokio::test]
 async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::Result<()> {
-    use crate::store::config_client::{GraphqlEndpoint, NodePermission};
+    use gents_store::config_client::{GraphqlEndpoint, NodePermission};
 
     let case = lean_identity_household_cases()
         .iter()
@@ -361,8 +397,8 @@ async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::
     let key_path = directory.path().to_owned();
     let (runtime, user) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         Ok((
-            crate::KeyIdentity::load_or_create(key_path.join("runtime"), None)?,
-            crate::KeyIdentity::load_or_create(key_path.join("user"), None)?,
+            gents_store::identity::KeyIdentity::load_or_create(key_path.join("runtime"), None)?,
+            gents_store::identity::KeyIdentity::load_or_create(key_path.join("user"), None)?,
         ))
     })
     .await??;
@@ -413,12 +449,18 @@ async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::
         .await?;
     let mut docs = Vec::new();
     for (collection, field) in [
-        (crate::Collection::Agent, "agent_did"),
-        (crate::Collection::InferenceProfile, "profile_id"),
-        (crate::Collection::InferenceBackend, "backend_id"),
+        (gents_store::collection::Collection::Agent, "agent_did"),
+        (
+            gents_store::collection::Collection::InferenceProfile,
+            "profile_id",
+        ),
+        (
+            gents_store::collection::Collection::InferenceBackend,
+            "backend_id",
+        ),
     ] {
         let name = collection.graphql_type();
-        let resource = if collection == crate::Collection::Agent {
+        let resource = if collection == gents_store::collection::Collection::Agent {
             "agents"
         } else {
             "configuration"
@@ -473,17 +515,17 @@ async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::
             actor.clone(),
             vec![
                 SelectedConfigurationDocument {
-                    collection: crate::Collection::Agent,
+                    collection: gents_store::collection::Collection::Agent,
                     doc_id: docs[0].clone(),
                     logical_id: None,
                 },
                 SelectedConfigurationDocument {
-                    collection: crate::Collection::InferenceProfile,
+                    collection: gents_store::collection::Collection::InferenceProfile,
                     doc_id: docs[1].clone(),
                     logical_id: None,
                 },
                 SelectedConfigurationDocument {
-                    collection: crate::Collection::InferenceBackend,
+                    collection: gents_store::collection::Collection::InferenceBackend,
                     doc_id: docs[2].clone(),
                     logical_id: None,
                 },

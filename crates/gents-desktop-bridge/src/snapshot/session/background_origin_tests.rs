@@ -1,43 +1,33 @@
 use super::*;
 use crate::snapshot::tests::push_canonical_text_message;
-use gents::store::config_client::ConfigAccess;
 use gents_desktop_core::client::{ClientStoreRows, TranscriptWindow};
 use gents_protocol::output::rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use gents_protocol::output::{MessageBlock, MessageRole};
+use gents_store::config_client::ConfigAccess;
 
 #[tokio::test]
 async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
-    use gents::NodeIdentity as _;
-    let home = tempfile::tempdir().unwrap();
-    let identity = gents::KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
-    let amy = identity.did().to_owned();
-    let binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
-    let agent = binding.agent_did.clone();
-    let node = std::sync::Arc::new(
-        gents::defra_node::Node::builder()
-            .with_node_identity_did(&amy)
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::local(node.clone());
-    for mutation in [
-        format!(
-            r#"mutation {{ create_Agent(input: {{node_did:"{amy}", agent_did:"{agent}", creation_nonce:"{}", inference_profile_id:"profile", enabled:true}}) {{ _docID }} }}"#,
-            binding.creation_nonce
-        ),
-        format!(
+    let (db, _user, _user_access, binding) = gents_inference::test_support::signed_test_node(
+        "background-origin",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = db.node.clone();
+    let amy = db.node_identity.did().to_owned();
+    let agent = binding.agent_did;
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(&amy).unwrap());
+    ConfigAccess::write_local(
+        &node,
+        "test.background_origin",
+        &format!(
             r#"mutation {{ create_AgentSession(input: {{node_did:"{amy}", agent_did:"{agent}", session_id:"origin", created_at:"2026-10-26T00:00:00Z"}}) {{ _docID }} }}"#
         ),
-    ] {
-        ConfigAccess::write_local(&node, "test.background_origin", &mutation)
-            .await
-            .unwrap();
-    }
+    )
+    .await
+    .unwrap();
     let mut requests = Vec::new();
     for (id, input) in [
         (
@@ -52,9 +42,9 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
         let response = ConfigAccess::write_local(&node, "test.background_origin", &query)
             .await
             .unwrap();
-        requests.push(gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap());
+        requests.push(gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap());
     }
-    let wake = gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
+    let wake = gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
     let success = "<tool-completion tool_call_id=\"spawned:one\" status=\"completed\"><result>done</result></tool-completion>";
     let failure = "<tool-completion tool_call_id=\"spawned:two\" status=\"failed\"><result>failed</result></tool-completion>";
     let messages = [
@@ -104,7 +94,7 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
                         &output_segment_create_variables(&segment)?,
                     )
                     .await?;
-                let close = gents::store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
+                let close = gents_store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
                 if let MessageBlock::Text { text } = &mut header.blocks[0] {
                     text.output.close_doc_id = close;
                 }
@@ -138,7 +128,7 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
                 .zip([(success, true), (failure, true), (wake, false)])
         {
             assert!(matches!(item, RenderedTimelineItem::AutomatedInput {
-                origin: RequestOriginView::BackgroundCompletion { notification: observed },
+                origin: RequestOriginView::BackgroundCompletion { notification: observed, .. },
                 content: Some(content),
                 ..
             } if content == expected && *observed == notification));

@@ -1,13 +1,2 @@
-use std::collections::BTreeSet;
-
-pub use gents::runtime::agent::p2p_reconcile::{PairingApplied, PairingDesired};
-
-pub mod invariants;
 pub mod runner;
 pub mod scenario;
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PairingActual {
-    pub replicator_addresses: BTreeSet<String>,
-    pub connected: bool,
-}

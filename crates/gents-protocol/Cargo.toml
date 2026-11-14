@@ -17,6 +17,7 @@ native = ["dep:reqwest"]
 typescript = ["dep:ts-rs"]
 
 [dependencies]
+regex = "1"
 rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "serde-json-impl", "no-serde-warnings"] }
 base64.workspace = true
@@ -29,6 +30,7 @@ reqwest = { workspace = true, optional = true }
 schemars = "1"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+semver = { version = "1", features = ["serde"] }
 sha2 = "0.10"
 thiserror = { workspace = true }
 # Not `workspace = true`: the workspace's tokio pins `features = ["full"]`,
@@ -43,6 +45,9 @@ tracing = { workspace = true }
 [dev-dependencies]
 axum = "0.8"
 gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true
+query.workspace = true
 rig-core.workspace = true
 serde_json = { workspace = true }
+semver = { version = "1", features = ["serde"] }
 tokio = { workspace = true, features = ["net", "rt", "macros"] }

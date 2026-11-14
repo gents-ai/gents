@@ -12,6 +12,7 @@ pub mod host_browser;
 pub mod inference_setup;
 pub mod interrupt;
 pub mod job_control;
+pub mod job_view;
 mod local_pairing;
 pub mod logging;
 #[cfg(feature = "tauri-host")]
@@ -39,8 +40,7 @@ pub use config::{
     TracingConfig,
 };
 pub use error::{BridgeError, BridgeErrorCode};
-pub use gents::store::local::store_key::StoreKeyCustodyChoice;
-pub use gents_server::enrollment;
+pub use gents_store::local::store_key::StoreKeyCustodyChoice;
 pub use package_tools::{prefer_host_tools, prepare_host_command};
 #[cfg(feature = "tauri-host")]
 pub use plugin::init;

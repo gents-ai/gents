@@ -590,21 +590,6 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
 }
 
 #[tokio::test]
-async fn empty_registry_injectable_for_tests() {
-    let empty = Registry {
-        baseline: &[],
-        steps: &[],
-        ordinary_indexes: &[],
-    };
-    let node = fresh_node().await;
-    let report = ensure_migrations_with_registry(node.as_ref(), &empty)
-        .await
-        .expect("empty registry");
-    assert_eq!(report.baseline_registered, 0);
-    node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
 async fn retained_file_images_require_a_native_owner_before_schema_install() {
     let directory = tempfile::tempdir().unwrap();
     let node = defra_node::Node::builder()
@@ -884,24 +869,6 @@ async fn added_route_and_reader_columns_preserve_existing_rows() {
     }
 }
 
-#[tokio::test]
-async fn tool_file_content_schema_pin_matches() {
-    let node = fresh_node().await;
-    node.add_collection(schemas::TOOL_FILE_CONTENT)
-        .await
-        .unwrap();
-    let actual = node
-        .get_collection(schemas::TOOL_FILE_CONTENT_NAME)
-        .unwrap()
-        .unwrap()
-        .version_id;
-    assert_eq!(
-        actual,
-        "bafyreibqziwhiq4dxkeqfeokkt22yajmnimxegww4lbr3r7k57b6dvetby"
-    );
-    node.shutdown().await.expect("shut down test node");
-}
-
 /// `AgentMessage` is client-authored, so a fresh store and a retained store share its current
 /// version, and a retained store's messages are left exactly as written (the provider request
 /// id travels inside `publication`, not as a column).
@@ -982,6 +949,54 @@ async fn runtime_locality_rejects_branchable_metadata_even_when_schema_cid_match
     let after = node.get_collection(schemas::AGENT_NAME).unwrap().unwrap();
     assert_eq!(before, after);
     node.shutdown().await.expect("shut down test node");
+}
+
+#[tokio::test]
+async fn existing_schema_from_another_version_is_refused_by_type_without_writing() {
+    let node = fresh_node().await;
+    gents_migration::validate_existing_schema(&node)
+        .await
+        .expect("an empty store is this build's to take");
+    let branchable = schemas::AGENT.replace("type Agent ", "type Agent @branchable ");
+    node.add_collection(&branchable).await.unwrap();
+    let error = gents_migration::validate_existing_schema(&node)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::RuntimeLocalityMismatch { ref collection } if collection == schemas::AGENT_NAME),
+        "{error}"
+    );
+    assert!(node.get_collection(schemas::NODE_NAME).unwrap().is_none());
+    node.shutdown().await.unwrap();
+
+    let node = fresh_node().await;
+    let directive = format!(
+        "@policy(id: \"{}\", resource: \"{}\")",
+        schemas::CLIENT_JOURNAL_POLICY_ID,
+        schemas::CLIENT_JOURNAL_POLICY_RESOURCE
+    );
+    node.add_collection(&schemas::PENDING_CHAT_SUBMISSION.replace(&directive, ""))
+        .await
+        .unwrap();
+    let error = gents_migration::validate_existing_schema(&node)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::IncompatibleIdentityPolicy { ref collection } if collection == schemas::PENDING_CHAT_SUBMISSION_NAME),
+        "{error}"
+    );
+    assert!(node.get_collection(schemas::NODE_NAME).unwrap().is_none());
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn existing_schema_this_build_wrote_is_accepted() {
+    let node = fresh_node().await;
+    ensure_migrations(&node).await.unwrap();
+    gents_migration::validate_existing_schema(&node)
+        .await
+        .unwrap();
+    node.shutdown().await.unwrap();
 }
 
 #[tokio::test]

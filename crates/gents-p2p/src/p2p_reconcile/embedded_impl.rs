@@ -1,0 +1,234 @@
+use std::future::Future;
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use defra_p2p_adapter::{P2PError, P2PResult};
+use tokio::time::timeout;
+
+use defra_node::Node as EmbeddedNode;
+
+use super::templates::{to_replication_filters, PairingFilters};
+use super::{
+    resolve_embedded_collection_id, resolve_embedded_collection_name, RemoteP2pAdmin,
+    RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
+};
+
+pub(super) const DEFAULT_EMBEDDED_ADMIN_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Clone)]
+pub struct EmbeddedRemoteP2pAdmin {
+    node: Arc<EmbeddedNode>,
+    timeout: Duration,
+}
+
+impl EmbeddedRemoteP2pAdmin {
+    pub fn new(node: Arc<EmbeddedNode>) -> Self {
+        Self {
+            node,
+            timeout: DEFAULT_EMBEDDED_ADMIN_TIMEOUT,
+        }
+    }
+
+    pub fn with_timeout(node: Arc<EmbeddedNode>, timeout: Duration) -> Self {
+        Self { node, timeout }
+    }
+
+    async fn require_replicable_collections(
+        &self,
+        collections: &[String],
+    ) -> RemoteP2pAdminResult<()> {
+        if collections.is_empty() {
+            return Err(RemoteP2pAdminError::LocalError(
+                "replication requires explicit collections".into(),
+            ));
+        }
+        let mut application = std::collections::BTreeSet::new();
+        for token in collections {
+            let name = resolve_embedded_collection_name(&self.node, token)?
+                .unwrap_or_else(|| token.clone());
+            if gents_protocol::schemas::is_replicated_protocol_collection(&name) {
+                continue;
+            }
+            if gents_protocol::peer_schema::is_managed_collection(&name) {
+                return Err(RemoteP2pAdminError::RuntimeLocalCollection(name));
+            }
+            application.insert(name);
+        }
+        if application.is_empty() {
+            return Ok(());
+        }
+        match super::templates::admit_app_collections(self.node.clone(), &application).await {
+            Ok(_) => Ok(()),
+            Err(
+                super::templates::AppCollectionAdmissionError::Refused { collection, .. }
+                | super::templates::AppCollectionAdmissionError::NotRegistered { collection },
+            ) => Err(RemoteP2pAdminError::RuntimeLocalCollection(collection)),
+            Err(error) => Err(RemoteP2pAdminError::LocalError(error.to_string())),
+        }
+    }
+
+    #[cfg(test)]
+    fn require_protocol_collections(&self, collections: &[String]) -> RemoteP2pAdminResult<()> {
+        for token in collections {
+            let name = resolve_embedded_collection_name(&self.node, token)?
+                .unwrap_or_else(|| token.clone());
+            if !gents_protocol::schemas::is_replicated_protocol_collection(&name) {
+                return Err(RemoteP2pAdminError::RuntimeLocalCollection(name));
+            }
+        }
+        Ok(())
+    }
+
+    fn p2p(&self) -> RemoteP2pAdminResult<Arc<dyn defra_p2p_adapter::P2POperations>> {
+        gents_store::identity::node_p2p(&self.node).ok_or_else(|| {
+            RemoteP2pAdminError::LocalError("embedded node has no P2P transport".into())
+        })
+    }
+
+    async fn run<T, F>(&self, operation: &'static str, future: F) -> RemoteP2pAdminResult<T>
+    where
+        F: Future<Output = P2PResult<T>>,
+    {
+        self.run_within(operation, self.timeout, future).await
+    }
+
+    async fn run_within<T, F>(
+        &self,
+        operation: &'static str,
+        within: Duration,
+        future: F,
+    ) -> RemoteP2pAdminResult<T>
+    where
+        F: Future<Output = P2PResult<T>>,
+    {
+        match timeout(within, future).await {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => Err(map_p2p_error(operation, error)),
+            Err(_) => Err(RemoteP2pAdminError::RpcTimeout),
+        }
+    }
+}
+
+#[async_trait]
+impl RemoteP2pAdmin for EmbeddedRemoteP2pAdmin {
+    async fn peer_info(&self) -> RemoteP2pAdminResult<Vec<String>> {
+        let p2p = self.p2p()?;
+        let peer_id = self.run("local_peer_id", p2p.local_peer_id()).await?;
+        let addresses = self.run("listen_addresses", p2p.listen_addresses()).await?;
+        Ok(addresses
+            .into_iter()
+            .map(|addr| {
+                if addr.starts_with('/') {
+                    format!("{addr}/p2p/{peer_id}")
+                } else {
+                    addr
+                }
+            })
+            .collect())
+    }
+
+    async fn active_peers(&self) -> RemoteP2pAdminResult<Vec<String>> {
+        let p2p = self.p2p()?;
+        self.run("connected_peers", p2p.connected_peers()).await
+    }
+
+    async fn connect(&self, addresses: &[String]) -> RemoteP2pAdminResult<()> {
+        let p2p = self.p2p()?;
+        for addr in addresses {
+            self.run("connect_peer", p2p.connect_peer(addr)).await?;
+        }
+        Ok(())
+    }
+
+    async fn list_replicators(&self) -> RemoteP2pAdminResult<Vec<RemoteReplicator>> {
+        let p2p = self.p2p()?;
+        let replicators = self.run("get_replicators", p2p.get_replicators()).await?;
+        Ok(replicators
+            .into_iter()
+            .map(|r| RemoteReplicator {
+                id: r.id,
+                collections: r.collections,
+                address: r.address,
+                filters: Some(r.filters),
+            })
+            .collect())
+    }
+
+    async fn add_replicator(
+        &self,
+        addresses: &[String],
+        collections: &[String],
+        filters: &PairingFilters,
+    ) -> RemoteP2pAdminResult<()> {
+        self.require_replicable_collections(collections).await?;
+        let p2p = self.p2p()?;
+        let addr = addresses.first().map(String::as_str);
+        let defra_filters =
+            to_replication_filters(filters).map_err(RemoteP2pAdminError::LocalError)?;
+        self.run(
+            "add_replicator",
+            p2p.add_replicator(collections.to_vec(), addr, defra_filters, Vec::new(), None),
+        )
+        .await
+    }
+
+    async fn delete_replicator(
+        &self,
+        id: &str,
+        collections: &[String],
+    ) -> RemoteP2pAdminResult<()> {
+        let p2p = self.p2p()?;
+        let addr = (!id.trim().is_empty()).then_some(id);
+        self.run(
+            "remove_replicator",
+            p2p.remove_replicator(collections.to_vec(), addr),
+        )
+        .await
+    }
+
+    async fn resolve_collection_id(&self, name: &str) -> RemoteP2pAdminResult<Option<String>> {
+        resolve_embedded_collection_id(&self.node, name)
+    }
+
+    async fn resolve_collection_name(&self, id: &str) -> RemoteP2pAdminResult<Option<String>> {
+        resolve_embedded_collection_name(&self.node, id)
+    }
+}
+
+#[cfg(test)]
+pub(super) async fn push_documents_to_peer(
+    node: &Arc<EmbeddedNode>,
+    peer_id: &str,
+    documents: Vec<defra_p2p_adapter::P2pDocumentRequest>,
+) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
+    let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
+    let collections = documents
+        .iter()
+        .map(|document| document.collection.clone())
+        .collect::<Vec<_>>();
+    admin.require_protocol_collections(&collections)?;
+    let p2p = gents_store::identity::node_p2p(node)
+        .context("embedded node has no P2P transport for document delivery")?;
+    p2p.push_documents_to_peer(peer_id, documents)
+        .await
+        .with_context(|| format!("push documents to peer {peer_id}"))
+}
+
+fn map_p2p_error(operation: &'static str, error: P2PError) -> RemoteP2pAdminError {
+    match error {
+        P2PError::NotFound(message) => RemoteP2pAdminError::RemoteNotFound(message),
+        P2PError::Unauthorized(_) => RemoteP2pAdminError::RemoteUnauthorized,
+        P2PError::Transport(message) | P2PError::Internal(message) => {
+            RemoteP2pAdminError::RpcError(format!("{operation}: {message}"))
+        }
+        P2PError::InvalidInput(message) | P2PError::Unsupported(message) => {
+            RemoteP2pAdminError::LocalError(format!("{operation}: {message}"))
+        }
+    }
+}
+
+#[cfg(test)]
+pub(super) mod tests;

@@ -64,9 +64,7 @@ async fn create_as_agent(
             let variables = &variables;
             Box::pin(async move {
                 let response = txn.execute_with_variables(mutation, variables).await?;
-                Ok::<_, anyhow::Error>(gents::store::graphql::created_doc_id(
-                    &response, collection,
-                )?)
+                Ok::<_, anyhow::Error>(gents_store::graphql::created_doc_id(&response, collection)?)
             })
         })
         .await
@@ -142,7 +140,7 @@ pub async fn import(
     };
     let message = TranscriptMessage {
         native_request_id: None,
-        message_key: gents::session::sequence_message_key(
+        message_key: gents_session::session::sequence_message_key(
             node_did,
             &source.session,
             Some(&source.requester),
@@ -226,7 +224,7 @@ pub async fn compaction(
     compacted_through_sequence: u32,
 ) {
     let input = serde_json::json!({
-        "compaction_key": gents::session::compaction_key(
+        "compaction_key": gents_session::session::compaction_key(
             actors.node_did(), &source.session, Some(&source.requester), sequence,
         ),
         "session_id": source.session,
@@ -256,7 +254,7 @@ pub async fn compaction(
                         &serde_json::json!({"input": input}),
                     )
                     .await?;
-                let doc = gents::store::graphql::created_doc_id(&response, "CompactionEntry")?;
+                let doc = gents_store::graphql::created_doc_id(&response, "CompactionEntry")?;
                 txn.add_resource_relationship(
                     "CompactionEntry",
                     &doc,

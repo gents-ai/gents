@@ -1,0 +1,76 @@
+name: Core packs
+
+# Builds the Engineer's core packs (core-packs/) once, runs each pack's suite
+# against the CLI of the same commit, and uploads the archives as the
+# `core-packs` artifact. Release workflows call this and embed exactly that
+# set (crates/gents-core-packs, GENTS_REQUIRE_CORE_PACKS=1), so a release
+# carries the pack builds it was tested with. Compiled plugins embed build
+# paths, so one job builds the set every platform embeds.
+
+on:
+  pull_request:
+    paths:
+      - "core-packs/**"
+      - "crates/gents-core-packs/**"
+      - "crates/gents-pack/**"
+      - ".github/workflows/core-packs.yml"
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# One runner builds the packs for half an hour; a newer push to the same pull
+# request supersedes the build it queued behind. Release callers keep their own run.
+concurrency:
+  group: core-packs-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  build:
+    name: Build and test core packs
+    timeout-minutes: 150
+    runs-on: [self-hosted, Linux, X64, workstation-1]
+    container: rust:1-bookworm
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: wasm32-unknown-unknown,wasm32-wasip1
+
+      - name: Install build and suite dependencies
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential clang cmake git jq libclang-dev libssl-dev \
+            nodejs pkg-config protobuf-compiler python3
+
+      - name: Build the CLI that builds the packs
+        run: make fast-dev-cli
+
+      - name: Build core packs
+        run: make core-packs CORE_PACK_TOOL=target/fast-dev/gents
+
+      - name: Test core packs
+        run: make core-packs-test CORE_PACK_TOOL=target/fast-dev/gents
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: core-packs
+          path: |
+            target/core-packs/*.pack
+            target/core-packs/SHA256SUMS-core-packs.txt
+          if-no-files-found: error
+          retention-days: 30

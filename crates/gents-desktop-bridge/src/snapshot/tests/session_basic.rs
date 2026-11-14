@@ -174,7 +174,6 @@ fn session_context_window_follows_the_runtime_resolution_of_the_profile() {
             backend_observations: vec![
                 serde_json::from_value(observation.clone()).expect("observation")
             ],
-            backend_observation_source_node_dids: vec![Some("did:test:amy".into())],
             inference_profiles: vec![serde_json::from_value(profile).expect("profile")],
             ..ClientStoreRows::default()
         };
@@ -209,7 +208,7 @@ fn session_context_window_follows_the_runtime_resolution_of_the_profile() {
     assert_eq!(
         (unset.context_window, unset.context_window_error),
         (
-            i64::try_from(gents::inference::resolved::DEFAULT_CONTEXT_WINDOW).unwrap(),
+            i64::try_from(gents_inference::resolved::DEFAULT_CONTEXT_WINDOW).unwrap(),
             None
         )
     );

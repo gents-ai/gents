@@ -1,66 +1,107 @@
-import Proofs.ClientShell.Installation
+import Proofs.Clients.ClientShell.Installation
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.ClientInstallation
 open Lean _root_.ClientInstallation
 
-private def phaseJson (phase : Phase) : Json := toJson <| match phase with
-  | .accepting => "accepting"
-  | .draining => "draining"
-  | .released => "released"
+deriving instance ToJson for Phase
 
-private def stateJson (state : State) : Json := Json.mkObj
-  [("phase", phaseJson state.phase), ("history", toJson state.history),
-   ("attachments", toJson state.observation.attachments),
-   ("requested", toJson state.observation.requested)]
+structure CompatibilityInput where
+  protocolMatches : Bool
+  frameLimitMatches : Bool
+  requiredCommands : List String
+  availableCommands : List String
+  deriving ToJson
 
-private def actionJson : Action → Json
-  | .attach => Json.mkObj [("kind", toJson "attach")]
-  | .detach => Json.mkObj [("kind", toJson "detach")]
-  | .retire => Json.mkObj [("kind", toJson "retire")]
-  | .release => Json.mkObj [("kind", toJson "release")]
-  | .replace reserved => Json.mkObj [("kind", toJson "replace"), ("startupReserved", toJson reserved)]
+private def commandSets : List (List String × List String) :=
+  [([], []), (["a"], ["a"]), (["a"], ["a", "b"]), (["a", "b"], ["a"]), (["a"], [])]
 
-private def traceJson (initial : State) (actions : List Action) : Json := Id.run do
-  let mut state := initial
-  let mut trace := []
-  for action in actions do
+@[conformance_family]
+def compatibility : Conformance.Family CompatibilityInput Bool where
+  inputs := [false, true].flatMap fun protocolMatches =>
+    [false, true].flatMap fun frameLimitMatches =>
+      commandSets.map fun (requiredCommands, availableCommands) =>
+        { protocolMatches, frameLimitMatches, requiredCommands, availableCommands }
+  model := fun i =>
+    canReuse i.protocolMatches i.frameLimitMatches i.requiredCommands i.availableCommands
+
+inductive ActionKind where
+  | attach
+  | detach
+  | retire
+  | release
+  | replace
+  deriving ToJson
+
+/-- `startupReserved` is read only by `replace`; every other action carries `false`. -/
+structure ActionWire where
+  kind : ActionKind
+  startupReserved : Bool
+  deriving ToJson
+
+def ActionWire.toAction (action : ActionWire) : Action :=
+  match action.kind with
+  | .attach => .attach
+  | .detach => .detach
+  | .retire => .retire
+  | .release => .release
+  | .replace => .replace action.startupReserved
+
+structure StateWire where
+  phase : Phase
+  attachments : Nat
+  deriving ToJson
+
+structure TraceStep where
+  accepted : Bool
+  state : StateWire
+  deriving ToJson
+
+structure TraceInput where
+  phase : Phase
+  attachments : Nat
+  trace : List ActionWire
+  deriving ToJson
+
+private def runSteps : State → List Action → List TraceStep
+  | _, [] => []
+  | state, action :: rest =>
     let result := step state action
-    state := result.getD state
-    trace := trace ++ [Json.mkObj [("action", actionJson action),
-      ("accepted", toJson result.isSome), ("state", stateJson state)]]
-  return Json.mkObj [("initial", stateJson initial), ("trace", toJson trace)]
+    let next := result.getD state
+    ({ accepted := result.isSome,
+       state := { phase := next.phase, attachments := next.attachments } } : TraceStep)
+      :: runSteps next rest
 
-private def actions : List Action := [.attach, .detach, .retire, .release, .replace false, .replace true]
+private def initialState (phase : Phase) (attachments : Nat) : State :=
+  { phase, history := 11, attachments }
 
-private def traces : List (List Action) :=
-  actions.flatMap fun first => actions.flatMap fun second =>
-    actions.map fun third => [first, second, third]
+private def act (kind : ActionKind) : ActionWire := { kind, startupReserved := false }
 
-def casesJson : String :=
-  let generated := [Phase.accepting, .draining, .released].flatMap fun phase =>
+private def replaceAct (startupReserved : Bool) : ActionWire :=
+  { kind := .replace, startupReserved }
+
+private def actionWires : List ActionWire :=
+  [act .attach, act .detach, act .retire, act .release, replaceAct false, replaceAct true]
+
+private def actionTraces : List (List ActionWire) :=
+  actionWires.flatMap fun first => actionWires.flatMap fun second =>
+    actionWires.map fun third => [first, second, third]
+
+private def retirementInput : TraceInput :=
+  { phase := .accepting, attachments := 2,
+    trace := [act .retire, act .attach, replaceAct true, act .detach, act .release,
+      act .detach, act .release, replaceAct false, replaceAct true] }
+
+private def generatedInputs : List TraceInput :=
+  [Phase.accepting, .draining, .released].flatMap fun phase =>
     (List.range 3).flatMap fun attachments =>
-      traces.map fun trace => traceJson
-        { phase, history := 11, observation := { requested := some 7, attachments } } trace
-  let retirement := traceJson
-    { phase := .accepting, history := 11, observation := { requested := some 7, attachments := 2 } }
-    [.retire, .attach, .replace true, .detach, .release, .detach, .release, .replace false, .replace true]
-  (toJson (retirement :: generated)).compress
+      actionTraces.map fun trace => { phase, attachments, trace }
 
-private def compatibilityCase (protocolMatches frameLimitMatches : Bool)
-    (requiredCommands availableCommands : List String) : Json := Json.mkObj
-  [("protocolMatches", toJson protocolMatches),
-   ("frameLimitMatches", toJson frameLimitMatches),
-   ("requiredCommands", toJson requiredCommands),
-   ("availableCommands", toJson availableCommands),
-   ("reuse", toJson (canReuse protocolMatches frameLimitMatches requiredCommands availableCommands))]
-
-def compatibilityCasesJson : String :=
-  let commandSets := [([], []), (["a"], ["a"]), (["a"], ["a", "b"]),
-    (["a", "b"], ["a"]), (["a"], [])]
-  (toJson (([false, true].flatMap fun protocolMatches =>
-    [false, true].flatMap fun frameMatches =>
-      commandSets.map fun (required, available) =>
-        compatibilityCase protocolMatches frameMatches required available))).compress
+@[conformance_family]
+def traces : Conformance.Family TraceInput (List TraceStep) where
+  inputs := retirementInput :: generatedInputs
+  model := fun i =>
+    runSteps (initialState i.phase i.attachments) (i.trace.map ActionWire.toAction)
 
 end Conformance.ClientInstallation

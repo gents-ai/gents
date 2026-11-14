@@ -1,0 +1,524 @@
+import Proofs.Runtime.RuntimeReconcile.Transition
+
+namespace RuntimeState
+
+inductive Action where
+  | ackWrite (resolved : ResolvedSnapshot)
+  | observeDoc (resolved : ResolvedSnapshot)
+  | startResolve
+  | resolveVisible (resolved : ResolvedSnapshot)
+  | diffNoop (resolved : ResolvedSnapshot)
+  | beginApply (resolved : ResolvedSnapshot)
+  | publish (resolved : ResolvedSnapshot)
+  | applyFailed
+  | routerObserve (process : ProcessState)
+  /-- Mandatory agent is decoded from the authenticated request before this
+  Nat identifier abstraction. -/
+  | acceptRequest (process : ProcessState) (sessionId : SessionId) (requestId : RequestId)
+      (requested : AgentDid)
+  | finishRequest (requestId : RequestId)
+  | retireGeneration (generation : Generation)
+  deriving DecidableEq, Repr
+
+def noInFlightDependsOn (s : RuntimeState) (generation : Generation) : Prop :=
+  s.inFlight.filter (fun rid => s.requestGeneration rid = generation) = ∅
+
+instance (s : RuntimeState) (generation : Generation) :
+    Decidable (noInFlightDependsOn s generation) := by
+  unfold noInFlightDependsOn
+  infer_instance
+
+theorem noInFlightDependsOn_iff
+    {s : RuntimeState}
+    {generation : Generation} :
+    noInFlightDependsOn s generation ↔
+      ∀ rid, rid ∈ s.inFlight → s.requestGeneration rid ≠ generation := by
+  unfold noInFlightDependsOn
+  constructor
+  · intro h_clear rid h_rid h_eq
+    exact (Finset.filter_eq_empty_iff.mp h_clear (x := rid) h_rid) h_eq
+  · intro h_clear
+    exact Finset.filter_eq_empty_iff.mpr (by intro rid h_rid h_eq; exact h_clear rid h_rid h_eq)
+
+def step? (pre : RuntimeState) : Action → Option RuntimeState
+  | .ackWrite resolved =>
+      some { pre with ackedResolved := some resolved }
+  | .observeDoc resolved =>
+      if pre.ackedResolved = some resolved ∧ pre.pendingResolved = none then
+        some { pre with phase := .debouncing, observedResolved := some resolved }
+      else
+        none
+  | .startResolve =>
+      if pre.phase = .debouncing then
+        some { pre with phase := .resolving }
+      else
+        none
+  | .resolveVisible resolved =>
+      if pre.phase = .resolving ∧ pre.observedResolved = some resolved ∧ resolved.wellFormed then
+        some { pre with phase := .diffing, pendingResolved := some resolved }
+      else
+        none
+  | .diffNoop resolved =>
+      if pre.phase = .diffing ∧ pre.pendingResolved = some resolved ∧ resolved = pre.lastResolved then
+        some { pre with phase := .idle, pendingResolved := none }
+      else
+        none
+  | .beginApply resolved =>
+      if pre.phase = .diffing ∧ pre.pendingResolved = some resolved ∧ resolved ≠ pre.lastResolved then
+        some { pre with phase := .applying }
+      else
+        none
+  | .publish resolved =>
+      if pre.phase = .applying ∧ pre.pendingResolved = some resolved ∧ resolved ≠ pre.lastResolved then
+        some
+          { pre with
+            phase := .idle
+          , lastResolved := resolved
+          , pendingResolved := none
+          , active := resolved.activate (pre.active.generation + 1)
+          , readyGenerations := insert (pre.active.generation + 1) pre.readyGenerations
+          , liveGenerations := insert (pre.active.generation + 1) pre.liveGenerations
+          }
+      else
+        none
+  | .applyFailed =>
+      if pre.phase = .applying then
+        some { pre with phase := .idle, pendingResolved := none }
+      else
+        none
+  | .routerObserve process =>
+      if process.acceptsWork ∧ pre.active.generation ∈ pre.readyGenerations then
+        some { pre with routerObservedGeneration := pre.active.generation }
+      else
+        none
+  | .acceptRequest process sessionId requestId requested =>
+      if CanAdmitRequest process pre sessionId requestId requested then
+        some
+          { pre with
+            accepted := insert requestId pre.accepted
+          , inFlight := insert requestId pre.inFlight
+          , requestGeneration := Function.update pre.requestGeneration requestId pre.routerObservedGeneration
+          , requestSession := Function.update pre.requestSession requestId sessionId
+          , requestAgent := Function.update pre.requestAgent requestId requested
+          , sessionAgent := pre.bindSessionIfNeeded sessionId requested
+          , requestSettings := Function.update pre.requestSettings requestId
+              (pre.generationSettings pre.routerObservedGeneration requested)
+          }
+      else
+        none
+  | .finishRequest requestId =>
+      if requestId ∈ pre.inFlight then
+        some { pre with inFlight := pre.inFlight.erase requestId }
+      else
+        none
+  | .retireGeneration generation =>
+      if generation ∈ pre.liveGenerations ∧
+          generation ≠ pre.active.generation ∧
+          generation ≠ pre.routerObservedGeneration ∧
+          noInFlightDependsOn pre generation then
+        some
+          { pre with
+            liveGenerations := pre.liveGenerations.erase generation
+          , readyGenerations := pre.readyGenerations.erase generation
+          }
+      else
+        none
+
+inductive Trace : RuntimeState → RuntimeState → Prop where
+  | refl {s : RuntimeState} : Trace s s
+  | step {s₁ s₂ s₃ : RuntimeState} :
+      Transition s₁ s₂ → Trace s₂ s₃ → Trace s₁ s₃
+
+def replay? : RuntimeState → List Action → Option RuntimeState
+  | s, [] => some s
+  | s, action :: rest =>
+      match step? s action with
+      | some s' => replay? s' rest
+      | none => none
+
+theorem step_sound
+    {pre post : RuntimeState}
+    {action : Action}
+    (h_step : step? pre action = some post) :
+    Transition pre post := by
+  cases action with
+  | ackWrite resolved =>
+      simp [step?] at h_step
+      exact Transition.ack_write resolved h_step.symm
+  | observeDoc resolved =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_observed, h_pending⟩, h_post⟩
+      exact Transition.observe_doc resolved h_observed h_pending h_post.symm
+  | startResolve =>
+      simp [step?] at h_step
+      exact Transition.start_resolve h_step.1 h_step.2.symm
+  | resolveVisible resolved =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_phase, h_observed, h_resolved⟩, h_post⟩
+      exact Transition.resolve_visible resolved h_phase h_observed h_resolved h_post.symm
+  | diffNoop resolved =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_phase, h_pending, h_same⟩, h_post⟩
+      exact Transition.diff_noop resolved h_phase h_pending h_same h_post.symm
+  | beginApply resolved =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_phase, h_pending, h_changed⟩, h_post⟩
+      exact Transition.begin_apply resolved h_phase h_pending h_changed h_post.symm
+  | publish resolved =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_phase, h_pending, h_changed⟩, h_post⟩
+      exact Transition.publish resolved h_phase h_pending h_changed h_post.symm
+  | applyFailed =>
+      simp [step?] at h_step
+      exact Transition.apply_failed h_step.1 h_step.2.symm
+  | routerObserve process =>
+      simp [step?] at h_step
+      exact Transition.router_observe process h_step.1.1 h_step.1.2 h_step.2.symm
+  | acceptRequest process sessionId requestId requested =>
+      simp [step?] at h_step
+      exact Transition.accept_request process sessionId requestId requested h_step.1 h_step.2.symm
+  | finishRequest requestId =>
+      simp [step?] at h_step
+      exact Transition.finish_request requestId h_step.1 h_step.2.symm
+  | retireGeneration generation =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_live, h_not_active, h_not_router, h_clear⟩, h_post⟩
+      exact Transition.retire_generation generation h_live h_not_active h_not_router
+        (noInFlightDependsOn_iff.mp h_clear) h_post.symm
+
+theorem transition_complete
+    {pre post : RuntimeState}
+    (h_trans : Transition pre post) :
+    ∃ action : Action, step? pre action = some post := by
+  cases h_trans with
+  | ack_write resolved h_post =>
+      exact ⟨.ackWrite resolved, by simp [step?, h_post]⟩
+  | observe_doc resolved h_observed h_pending h_post =>
+      exact ⟨.observeDoc resolved, by simp [step?, h_observed, h_pending, h_post]⟩
+  | start_resolve h_phase h_post =>
+      exact ⟨.startResolve, by simp [step?, h_phase, h_post]⟩
+  | resolve_visible resolved h_phase h_observed h_resolved h_post =>
+      exact ⟨.resolveVisible resolved, by simp [step?, h_phase, h_observed, h_resolved, h_post]⟩
+  | diff_noop resolved h_phase h_pending h_same h_post =>
+      exact ⟨.diffNoop resolved, by simp [step?, h_phase, h_pending, h_same, h_post]⟩
+  | begin_apply resolved h_phase h_pending h_changed h_post =>
+      exact ⟨.beginApply resolved, by simp [step?, h_phase, h_pending, h_changed, h_post]⟩
+  | publish resolved h_phase h_pending h_changed h_post =>
+      exact ⟨.publish resolved, by simp [step?, h_phase, h_pending, h_changed, h_post]⟩
+  | apply_failed h_phase h_post =>
+      exact ⟨.applyFailed, by simp [step?, h_phase, h_post]⟩
+  | router_observe process h_process h_ready h_post =>
+      exact ⟨.routerObserve process, by simp [step?, h_process, h_ready, h_post]⟩
+  | accept_request process sessionId requestId requested h_can h_post =>
+      exact ⟨.acceptRequest process sessionId requestId requested, by simp [step?, h_can, h_post]⟩
+  | finish_request requestId h_inFlight h_post =>
+      exact ⟨.finishRequest requestId, by simp [step?, h_inFlight, h_post]⟩
+  | retire_generation generation h_live h_not_active h_not_router h_clear h_post =>
+      have h_no_dep : noInFlightDependsOn pre generation :=
+        noInFlightDependsOn_iff.mpr h_clear
+      exact ⟨.retireGeneration generation,
+        by simp [step?, h_live, h_not_active, h_not_router, h_no_dep, h_post]⟩
+
+theorem replay_sound
+    {pre post : RuntimeState}
+    {actions : List Action}
+    (h_replay : replay? pre actions = some post) :
+    Trace pre post := by
+  induction actions generalizing pre with
+  | nil =>
+      simp [replay?] at h_replay
+      subst h_replay
+      exact Trace.refl
+  | cons action rest ih =>
+      simp [replay?] at h_replay
+      rcases h_step : step? pre action with (_ | next)
+      · simp [h_step] at h_replay
+      · simp [h_step] at h_replay
+        exact Trace.step (step_sound h_step) (ih h_replay)
+
+theorem trace_complete
+    {pre post : RuntimeState}
+    (h_trace : Trace pre post) :
+    ∃ actions : List Action, replay? pre actions = some post := by
+  induction h_trace with
+  | refl =>
+      exact ⟨[], rfl⟩
+  | step h_trans h_trace ih =>
+      rcases transition_complete h_trans with ⟨action, h_action⟩
+      rcases ih with ⟨actions, h_actions⟩
+      exact ⟨action :: actions, by simp [replay?, h_action, h_actions]⟩
+
+theorem step_generation_monotone
+    {pre post : RuntimeState}
+    {action : Action}
+    (h_step : step? pre action = some post) :
+    pre.active.generation ≤ post.active.generation :=
+  transition_generation_monotone (step_sound h_step)
+
+theorem step_coherent_preserved
+    {pre post : RuntimeState}
+    {action : Action}
+    (h_coherent : pre.coherent)
+    (h_step : step? pre action = some post) :
+    post.coherent :=
+  coherent_preserved h_coherent (step_sound h_step)
+
+theorem publish_step_resolved_wellFormed
+    {pre post : RuntimeState}
+    {resolved : ResolvedSnapshot}
+    (h_coherent : pre.coherent)
+    (h_step : step? pre (.publish resolved) = some post) :
+    resolved.wellFormed := by
+  rcases h_coherent with
+    ⟨_, _, _, _, _, _, _, _, _, _, h_pending, _, _⟩
+  simp [step?] at h_step
+  exact (h_pending resolved h_step.1.2.1).2
+
+theorem publish_step_runnable_dependencies_satisfied
+    {pre post : RuntimeState}
+    {resolved : ResolvedSnapshot}
+    {agentDid : AgentDid}
+    (h_coherent : pre.coherent)
+    (h_step : step? pre (.publish resolved) = some post)
+    (h_runnable : agentDid ∈ post.active.runnable) :
+    agentDid ∈ post.active.dependenciesSatisfied := by
+  have h_wellFormed := publish_step_resolved_wellFormed h_coherent h_step
+  simp [step?] at h_step
+  rcases h_step with ⟨_, h_post⟩
+  cases h_post
+  exact h_wellFormed.2.1 h_runnable
+
+theorem accept_step_router_observed_ready_live
+    {pre post : RuntimeState}
+    {process : ProcessState}
+    {sessionId : SessionId}
+    {requestId : RequestId}
+    {requested : AgentDid}
+    (h_coherent : pre.coherent)
+    (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
+    pre.routerObservedGeneration = pre.active.generation ∧
+      pre.routerObservedGeneration ∈ pre.readyGenerations ∧
+      pre.routerObservedGeneration ∈ pre.liveGenerations := by
+  simp [step?] at h_step
+  rcases h_step.1 with ⟨_, _, ⟨_, _, h_router_eq, _, _⟩, _⟩
+  have h_router_ready := coherent_aligned_router_is_ready h_coherent h_router_eq
+  rcases h_coherent with ⟨_, _, _, _, _, _, _, _, h_ready_live, _, _, _, _⟩
+  exact ⟨h_router_eq, h_router_ready, h_ready_live _ h_router_ready⟩
+
+theorem accept_step_binding_coherent
+    {pre post : RuntimeState}
+    {process : ProcessState}
+    {sessionId : SessionId}
+    {requestId : RequestId}
+    {requested : AgentDid}
+    (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
+    requestId ∈ post.accepted ∧
+      requestId ∈ post.inFlight ∧
+      post.requestGeneration requestId = pre.routerObservedGeneration ∧
+      post.requestSession requestId = sessionId ∧
+      post.requestAgent requestId = requested ∧
+      post.sessionAgent (post.requestSession requestId) =
+        some (post.requestAgent requestId) := by
+  simp [step?] at h_step
+  rcases h_step with ⟨h_can, h_post⟩
+  rcases h_can with ⟨_, h_fresh, _, h_binding⟩
+  cases h_post
+  simp [Function.update, bindSessionIfNeeded_requested pre sessionId requested h_binding, h_fresh]
+
+theorem mismatched_session_agent_denied
+    (pre : RuntimeState) (process : ProcessState) (sessionId : SessionId)
+    (requestId requested bound : Nat)
+    (hbound : pre.sessionAgent sessionId = some bound) (hne : bound ≠ requested) :
+    step? pre (.acceptRequest process sessionId requestId requested) = none := by
+  simp [step?, CanAdmitRequest, hbound, hne]
+
+/-- Admission is the atomic boundary: an accepted request already owns its
+session/agent projection. -/
+theorem accept_step_projects_session_atomically
+    {pre post : RuntimeState}
+    {process : ProcessState}
+    {sessionId : SessionId}
+    {requestId : RequestId}
+    {requested : AgentDid}
+    (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
+    requestId ∈ post.accepted ∧
+      post.requestSession requestId = sessionId ∧
+      post.sessionAgent sessionId = some (post.requestAgent requestId) := by
+  have h := accept_step_binding_coherent h_step
+  exact ⟨h.1, h.2.2.2.1, by simpa [h.2.2.2.1] using h.2.2.2.2.2⟩
+
+theorem accept_step_replay_rejected
+    {pre post : RuntimeState}
+    {process : ProcessState}
+    {sessionId : SessionId}
+    {requestId : RequestId}
+    {requested : AgentDid}
+    (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
+    step? post (.acceptRequest process sessionId requestId requested) = none := by
+  simp [step?] at h_step
+  rcases h_step with ⟨h_can, h_post⟩
+  rcases h_can with ⟨h_unaccepted, _, _⟩
+  cases h_post
+  simp [step?, CanAdmitRequest, h_unaccepted]
+
+theorem accepted_step_monotone
+    {pre post : RuntimeState}
+    {action : Action}
+    (h_step : step? pre action = some post) :
+    pre.accepted ⊆ post.accepted :=
+  transition_accepted_monotone (step_sound h_step)
+
+/-- Admission is where settings become effective: the request records exactly
+the settings the generation the router observed holds for the agent it chose.
+The native runtime fixes the same values at the same point, when the router
+hands the request to that generation's slot, and its claim records them. -/
+theorem accept_step_binds_generation_settings
+    {pre post : RuntimeState}
+    {process : ProcessState}
+    {sessionId : SessionId}
+    {requestId : RequestId}
+    {requested : AgentDid}
+    (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
+    post.requestSettings requestId =
+      pre.generationSettings pre.routerObservedGeneration requested := by
+  simp [step?] at h_step
+  rcases h_step with ⟨_, h_post⟩
+  cases h_post
+  simp [Function.update]
+
+/-- A settings change never disturbs work already in flight: no step of any
+kind rewrites an in-flight request's settings. Together with
+`retire_generation_denies_inFlight_dependency`, the generation that dispatched
+a request survives it and the request keeps the settings it was dispatched
+with, so applying a change never interrupts, restarts or replays work. -/
+theorem settings_stable_while_inFlight
+    {pre post : RuntimeState}
+    {action : Action}
+    {rid : RequestId}
+    (h_inFlight : rid ∈ pre.inFlight)
+    (h_step : step? pre action = some post) :
+    post.requestSettings rid = pre.requestSettings rid := by
+  cases action with
+  | ackWrite resolved =>
+      simp [step?] at h_step; cases h_step; rfl
+  | observeDoc resolved =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post; rfl
+  | startResolve =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post; rfl
+  | resolveVisible resolved =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post; rfl
+  | diffNoop resolved =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post; rfl
+  | beginApply resolved =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post; rfl
+  | publish resolved =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post; rfl
+  | applyFailed =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post; rfl
+  | routerObserve process =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post; rfl
+  | acceptRequest process sessionId requestId requested =>
+      simp [step?] at h_step
+      rcases h_step with ⟨h_can, h_post⟩
+      have h_ne : rid ≠ requestId := by
+        rintro rfl
+        exact h_can.2.1 h_inFlight
+      cases h_post
+      simp [Function.update, h_ne]
+  | finishRequest requestId =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post; rfl
+  | retireGeneration generation =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post; rfl
+
+theorem step_preserves_settingsOnlyWhenAccepted
+    {pre post : RuntimeState}
+    {action : Action}
+    (h_invariant : pre.settingsOnlyWhenAccepted)
+    (h_step : step? pre action = some post) :
+    post.settingsOnlyWhenAccepted := by
+  intro rid h_rid
+  cases action with
+  | ackWrite resolved =>
+      simp [step?] at h_step; cases h_step; exact h_invariant rid h_rid
+  | observeDoc resolved =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post
+      exact h_invariant rid h_rid
+  | startResolve =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post
+      exact h_invariant rid h_rid
+  | resolveVisible resolved =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post
+      exact h_invariant rid h_rid
+  | diffNoop resolved =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post
+      exact h_invariant rid h_rid
+  | beginApply resolved =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post
+      exact h_invariant rid h_rid
+  | publish resolved =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post
+      exact h_invariant rid h_rid
+  | applyFailed =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post
+      exact h_invariant rid h_rid
+  | routerObserve process =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post
+      exact h_invariant rid h_rid
+  | acceptRequest process sessionId requestId requested =>
+      simp [step?] at h_step
+      rcases h_step with ⟨_, h_post⟩
+      cases h_post
+      simp only [Finset.mem_insert, not_or] at h_rid
+      simp [Function.update, h_rid.1, h_invariant rid h_rid.2]
+  | finishRequest requestId =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post
+      exact h_invariant rid h_rid
+  | retireGeneration generation =>
+      simp [step?] at h_step; rcases h_step with ⟨_, h_post⟩; cases h_post
+      exact h_invariant rid h_rid
+
+theorem replay_preserves_settingsOnlyWhenAccepted
+    {pre post : RuntimeState}
+    {actions : List Action}
+    (h_invariant : pre.settingsOnlyWhenAccepted)
+    (h_replay : replay? pre actions = some post) :
+    post.settingsOnlyWhenAccepted := by
+  induction actions generalizing pre with
+  | nil =>
+      simp [replay?] at h_replay
+      subst h_replay
+      exact h_invariant
+  | cons action rest ih =>
+      simp [replay?] at h_replay
+      rcases h_step : step? pre action with (_ | next)
+      · simp [h_step] at h_replay
+      · simp [h_step] at h_replay
+        exact ih (step_preserves_settingsOnlyWhenAccepted h_invariant h_step) h_replay
+
+/-- A request that has not been accepted has no effective settings, in every
+reachable state. An observation that reports the agent's configured selection
+for such a request is reporting something the runtime has not decided. -/
+theorem pending_request_has_no_settings
+    {resolved : ResolvedSnapshot}
+    {post : RuntimeState}
+    {actions : List Action}
+    {rid : RequestId}
+    (h_replay : replay? (bootState resolved) actions = some post)
+    (h_pending : rid ∉ post.accepted) :
+    post.requestSettings rid = none :=
+  replay_preserves_settingsOnlyWhenAccepted
+    (bootState_settingsOnlyWhenAccepted resolved) h_replay rid h_pending
+
+theorem retire_generation_denies_inFlight_dependency
+    {pre post : RuntimeState}
+    {generation : Generation}
+    {requestId : RequestId}
+    (h_inFlight : requestId ∈ pre.inFlight)
+    (h_generation : pre.requestGeneration requestId = generation) :
+    step? pre (.retireGeneration generation) ≠ some post := by
+  intro h_step
+  simp [step?] at h_step
+  rcases h_step with ⟨⟨_, _, _, h_clear⟩, _⟩
+  exact (noInFlightDependsOn_iff.mp h_clear requestId h_inFlight) h_generation
+
+end RuntimeState

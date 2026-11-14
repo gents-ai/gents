@@ -19,12 +19,12 @@ fn checked_in_targets_decode_through_runtime_configuration() {
         let target = InferenceTarget::load(&name).unwrap_or_else(|error| panic!("{error:#}"));
         assert_eq!(target.name, name);
         assert!(
-            !matches!(target.auth(), gents::documents::BackendAuth::ApiKey { .. }),
+            !matches!(target.auth(), gents_documents::BackendAuth::ApiKey { .. }),
             "{name} stores a key"
         );
         let backend = target.backend("did:key:owner");
         assert_eq!(backend.node_did, "did:key:owner");
-        gents::documents::InferenceBackend::from_value(&serde_json::to_value(&backend).unwrap())
+        gents_documents::InferenceBackend::from_value(&serde_json::to_value(&backend).unwrap())
             .unwrap();
         assert_eq!(
             target.profile("did:key:owner").backend_id,
@@ -165,7 +165,7 @@ fn target_sampling_binds_owner_and_preserves_explicit_unset_knobs() {
         "explicit sampling must not acquire fixture defaults"
     );
     assert_eq!(live.top_k, Some(1));
-    let resolved = gents::inference::resolved::ResolvedInference {
+    let resolved = gents_inference::resolved::ResolvedInference {
         backend: target.backend("did:key:fresh-node"),
         profile: target.profile("did:key:fresh-node"),
         sampling: Some(sampling),

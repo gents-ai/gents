@@ -65,7 +65,7 @@ const readCount = (p: Extract<ToolPresentationView, { kind: "fileRead" }>) => {
 };
 
 /* the mailbox tool's own arguments say what it filed */
-const mailboxFiling = (
+export const mailboxFiling = (
   input: string | null,
 ): { kind: string | null; title: string | null } => {
   try {

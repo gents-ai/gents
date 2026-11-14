@@ -3,21 +3,23 @@
 //! The runtime must swap the materialized route to the new generation in place
 //! and keep the lease, principal and template otherwise unchanged.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
-use gents::runtime::agent::p2p_reconcile::{
+use gents_p2p::p2p_reconcile::{
     enrollment_authority_channel, run_enrollment_reconciler, run_pairing_reconciler,
     GraphqlEnrollmentStore,
 };
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::enrollment::{
     AuthorizationLease, AuthorizationLeaseState, EnrollmentDecisionKind, EnrollmentRenewalPolicy,
 };
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 use tokio_util::sync::CancellationToken;
 
-use crate::support::enrollment::{authorize_enrollment_generation, EnrollmentGeneration};
+use crate::support::snapshots::SnapshotReader;
 use crate::support::{self, TestDb};
+use gents_p2p::test_support::enrollment::{authorize_enrollment_generation, EnrollmentGeneration};
 
 struct Stop(CancellationToken);
 impl Drop for Stop {
@@ -44,6 +46,9 @@ async fn enrollment_route(db: &TestDb, peer: &str) -> Vec<serde_json::Value> {
 
 async fn wait_for_route_sequence(db: &TestDb, peer: &str, sequence: i64) -> serde_json::Value {
     let deadline = Instant::now() + Duration::from_secs(30);
+    let mut changes = ConfigAccess::local(db.node.clone())
+        .subscribe_changes("PeerPairingDesired")
+        .await;
     loop {
         let rows = enrollment_route(db, peer).await;
         if let [row] = rows.as_slice() {
@@ -55,40 +60,31 @@ async fn wait_for_route_sequence(db: &TestDb, peer: &str, sequence: i64) -> serd
             Instant::now() < deadline,
             "enrollment route never reached sequence {sequence}: {rows:?}"
         );
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
 #[tokio::test]
 async fn opted_in_members_renew_over_authenticated_routes() {
-    use gents::runtime::agent::p2p_reconcile::enrollment_candidate::request_enrollment;
-    use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::{
+    use gents_p2p::p2p_reconcile::enrollment_candidate::request_enrollment;
+    use gents_p2p::p2p_reconcile::enrollment_member_authority::{
         load_status_enrollment_approvals, EnrollmentAuthorityOutcome,
     };
 
-    let snapshot: serde_json::Value =
-        serde_json::from_str(&gents_lean_contract::load_contract_json().unwrap()).unwrap();
-    let modeled = |name: &str| {
-        snapshot["enrollment_renewal_intent_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["name"] == name)
-            .unwrap()["allowed"]
-            .as_bool()
-            .unwrap()
-    };
+    let mut offered = std::collections::BTreeMap::new();
     let server = support::test_p2p_db("automatic-renewal-server").await;
     let member = support::test_p2p_db("automatic-renewal-member").await;
-    gents::documents::ensure_node(&server.node, server.node_identity.did())
+    gents_documents::ensure_node(&server.node, server.node_identity.did())
         .await
         .unwrap();
-    gents::documents::ensure_node(&member.node, member.node_identity.did())
+    gents_documents::ensure_node(&member.node, member.node_identity.did())
         .await
         .unwrap();
-    let (member_peer, _) = support::enrollment::wait_for_peer_identity(&member.node).await;
-    let (server_peer, _) = support::enrollment::wait_for_peer_identity(&server.node).await;
-    let (_, token) = support::enrollment::signed_enrollment_offer(
+    let (member_peer, _) =
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(&member.node).await;
+    let (server_peer, _) =
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(&server.node).await;
+    let (_, token) = gents_p2p::test_support::enrollment::signed_enrollment_offer(
         &server.node,
         "automatic-renewal-network",
         "Renewal network",
@@ -101,6 +97,9 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         .unwrap();
     let store = GraphqlEnrollmentStore::new(server.node.clone(), server.node_identity.clone());
     let deadline = Instant::now() + Duration::from_secs(30);
+    let mut changes = ConfigAccess::local(server.node.clone())
+        .subscribe_changes("NetworkEnrollmentRequest")
+        .await;
     loop {
         if store
             .load_projection()
@@ -116,7 +115,7 @@ async fn opted_in_members_renew_over_authenticated_routes() {
             Instant::now() < deadline,
             "initial enrollment request did not arrive"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
     store
         .decide_request_with_lease(
@@ -141,7 +140,7 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         member_sig: vec![0; 64],
     };
     let disabled_result = store.issue_renewal_offer(&forged).await;
-    assert_eq!(disabled_result.is_ok(), modeled("disabled"));
+    offered.insert("disabled", disabled_result.is_ok());
     let disabled = disabled_result.unwrap_err();
     assert!(disabled
         .to_string()
@@ -153,19 +152,35 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         })
         .await
         .unwrap();
+    let before_invalid_signature = store.load_projection().await.unwrap();
     let signature_result = store.issue_renewal_offer(&forged).await;
-    assert_eq!(signature_result.is_ok(), modeled("unsigned"));
+    offered.insert("unsigned", signature_result.is_ok());
     let invalid_signature = signature_result.unwrap_err();
-    assert!(format!("{invalid_signature:#}").contains("signature verification failed"));
+    assert!(
+        gents_protocol::error_chain::find_map_source(invalid_signature.as_ref(), |cause| {
+            cause
+                .downcast_ref::<gents_store::identity::IdentityError>()
+                .map(|error| {
+                    matches!(error, gents_store::identity::IdentityError::VerifyPayload { did, .. }
+                    if did == member.node_identity.did())
+                })
+        })
+        .unwrap_or(false),
+        "expected the member signature to be rejected: {invalid_signature:#}",
+    );
+    assert_eq!(
+        store.load_projection().await.unwrap(),
+        before_invalid_signature
+    );
     forged.member_sig = member
         .node_identity
         .sign(&forged.signing_payload())
         .await
         .unwrap();
     forged.member_peer = "another-peer".into();
-    assert_eq!(
+    offered.insert(
+        "wrong_peer",
         store.issue_renewal_offer(&forged).await.is_ok(),
-        modeled("wrong_peer")
     );
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
@@ -183,6 +198,17 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         cancel.clone(),
     ));
     let deadline = Instant::now() + Duration::from_secs(30);
+    let mut changes = gents_store::subscription_source::subscribe_collections(
+        &member.node,
+        [
+            "NetworkAdminPin",
+            "NetworkEnrollmentRequest",
+            "NetworkEnrollmentDecision",
+            "NetworkAuthorizationRevision",
+            "NetworkEnrollmentRouteReceipt",
+        ],
+    )
+    .unwrap();
     loop {
         let (outcomes, _) = load_status_enrollment_approvals(
             &member.node,
@@ -201,7 +227,7 @@ async fn opted_in_members_renew_over_authenticated_routes() {
             Instant::now() < deadline,
             "member did not observe the initial signed route"
         );
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
     let (member_owner, _member_authority) = enrollment_authority_channel();
     let member_task = tokio::spawn(run_enrollment_reconciler(
@@ -211,13 +237,22 @@ async fn opted_in_members_renew_over_authenticated_routes() {
         cancel.clone(),
     ));
     let deadline = Instant::now() + Duration::from_secs(110);
+    let mut changes = gents_store::subscription_source::subscribe_collections(
+        &server.node,
+        [
+            "NetworkEnrollmentRequest",
+            "NetworkEnrollmentDecision",
+            "NetworkAuthorizationRevision",
+        ],
+    )
+    .unwrap();
     loop {
         let projection = store.load_projection().await.unwrap();
         if let Some(active) = projection.active.iter().find(|entry| {
             entry.request.candidate_did == member.node_identity.did()
                 && entry.revision.sequence == 2
         }) {
-            assert!(modeled("valid"));
+            offered.insert("valid", true);
             assert_ne!(active.request.request_id, first.request_id);
             assert_eq!(active.request.candidate_peer, member_peer);
             let lease =
@@ -231,12 +266,22 @@ async fn opted_in_members_renew_over_authenticated_routes() {
             Instant::now() < deadline,
             "automatic renewal did not create the next generation"
         );
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
     cancel.cancel();
     server_task.await.unwrap().unwrap();
     member_task.await.unwrap().unwrap();
     pairing_task.await.unwrap().unwrap();
+    for case in gents_lean_vocab::families::enrollment_auto_renewal_offer::cases() {
+        let allowed = offered
+            .remove(case.input.name.as_str())
+            .unwrap_or_else(|| panic!("the offer scenario never reached {}", case.input.name));
+        case.check(gents_lean_vocab::families::enrollment_auto_renewal_offer::Offer { allowed });
+    }
+    assert!(
+        offered.is_empty(),
+        "unmodeled offer observations: {offered:?}"
+    );
 }
 
 #[tokio::test]
@@ -244,13 +289,14 @@ async fn re_enrolling_an_active_member_renews_its_lease_in_place() {
     let server = support::test_p2p_db("renewal-server").await;
     let member = support::test_p2p_db("renewal-member").await;
     let member_did = member.node_identity.did().to_string();
-    gents::documents::ensure_node(&server.node, server.node_identity.did())
+    gents_documents::ensure_node(&server.node, server.node_identity.did())
         .await
         .unwrap();
-    gents::documents::ensure_node(&member.node, &member_did)
+    gents_documents::ensure_node(&member.node, &member_did)
         .await
         .unwrap();
-    let (peer, address) = support::enrollment::wait_for_peer_identity(&member.node).await;
+    let (peer, address) =
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(&member.node).await;
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
     let (owner, authority) = enrollment_authority_channel();

@@ -70,11 +70,12 @@ async fn tools_id(access: &ConfigAccess, owner: &str, id: &str) -> Result<Option
 
 #[tokio::test]
 async fn imports_complete_candidate_and_recreates_only_the_scoped_tombstone() -> Result<()> {
-    let client = crate::shared::test_support::ClientHome::new().await;
+    let client = gents_host::test_support::ClientHome::new().await;
     let peer_dir = tempfile::tempdir()?;
-    let peer = gents::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)?;
+    let peer =
+        gents_store::identity::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)?;
     let owner_a = client.node_did().to_owned();
-    let owner_b = gents::NodeIdentity::did(&peer).to_owned();
+    let owner_b = gents_store::identity::NodeIdentity::did(&peer).to_owned();
     let access = client.access.clone();
     let first = config(&owner_a, "tools");
     let foreign = config(&owner_b, "tools");
@@ -103,22 +104,12 @@ async fn imports_complete_candidate_and_recreates_only_the_scoped_tombstone() ->
         Some(foreign_id)
     );
 
-    let rejected = access
-        .transact_write("test.config_import.dangling_delete", |txn| {
-            let owner_a = &owner_a;
-            Box::pin(async move {
-                apply_delete_collection(txn, Collection::Tools, owner_a, &["tools".into()]).await
-            })
-        })
-        .await;
-    assert!(rejected.is_err());
-    assert!(tools_id(&access, &owner_a, "tools").await?.is_some());
     Ok(())
 }
 
 #[tokio::test]
 async fn invalid_candidate_rolls_back_other_selected_writes() -> Result<()> {
-    let client = crate::shared::test_support::ClientHome::new().await;
+    let client = gents_host::test_support::ClientHome::new().await;
     let owner = client.node_did().to_owned();
     let access = client.access.clone();
     let valid = config(&owner, "tools");

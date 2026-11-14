@@ -73,7 +73,7 @@ export async function writeAgentDraft({
     description: next.description.trim() || null,
     context_id: contextId || null,
     inference_profile_id: next.inferenceProfileId,
-    enabled: draftMode ? Boolean(draftMode.enabled) : agent.enabled,
+    ...(draftMode ? {} : { enabled: agent.enabled }),
     tags: next.tags.length ? next.tags : null,
     created_at: agent.createdAt,
   };
@@ -127,19 +127,12 @@ export async function writeAgentDraft({
         },
       ],
     });
-  else if (target && edited) {
-    await changeConfig("patchConfigComponents", {
-      nodeDid: deployment.nodeDid,
-      patches: [
-        {
-          collection: "AgentContext",
-          id: target.context_id,
-          changes: changedFields,
-        },
-      ],
+  else if (target && edited)
+    await changeConfig("saveAgentConfig", {
+      document: agentDocument,
+      contextPatch: { contextId: target.context_id, changes: changedFields },
     });
-    await changeConfig("saveAgentConfig", { document: agentDocument });
-  } else await changeConfig("saveAgentConfig", { document: agentDocument });
+  else await changeConfig("saveAgentConfig", { document: agentDocument });
   return { creating, contextId, newName };
 }
 

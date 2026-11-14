@@ -6,10 +6,10 @@ use crate::runner::executor::StageEvidence;
 use crate::{Anchor, TrialUsage};
 #[cfg(test)]
 use gents::defra_node::Node as EmbeddedNode;
-use gents::store::graphql::escape_graphql_string;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 #[cfg(test)]
-use gents::store::graphql::graphql_with_transaction_retry;
-use gents::ConfigAccess;
+use gents_store::graphql::graphql_with_transaction_retry;
 
 pub(super) struct SessionRequest {
     pub(super) request_id: String,
@@ -21,8 +21,9 @@ pub(super) async fn session_requests_with_access(
     session_id: &str,
 ) -> Result<Vec<SessionRequest>> {
     let session_id = escape_graphql_string(session_id);
-    let scope =
-        gents::session::public_request_filter(&format!(r#"session_id: {{ _eq: "{session_id}" }}"#));
+    let scope = gents_session::session::public_request_filter(&format!(
+        r#"session_id: {{ _eq: "{session_id}" }}"#
+    ));
     let query = format!(
         r#"{{ AgentRequest(filter: {{ {scope} }}, order: {{ created_at: ASC }}) {{ request_id lifecycle_state }} }}"#
     );

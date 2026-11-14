@@ -20,6 +20,14 @@ clap.workspace = true
 chrono.workspace = true
 defra-p2p-adapter.workspace = true
 gents = { path = "../../../crates/gents" }
+gents-store = { workspace = true }
+gents-documents = { workspace = true }
+gents-inference = { workspace = true }
+gents-p2p = { workspace = true }
+gents-pack = { workspace = true }
+gents-session = { workspace = true }
+gents-tools = { workspace = true }
+gents-observe = { workspace = true }
 gents-fs-runner = { path = "../../../crates/gents-fs-runner" }
 gents-desktop-bridge = { workspace = true }
 gents-desktop-core.workspace = true
@@ -49,9 +57,10 @@ custom-protocol = ["tauri/custom-protocol"]
 native-e2e = ["gents-desktop-bridge/native-e2e"]
 
 [dev-dependencies]
+gents-service = { workspace = true, features = ["test-home-guard"] }
 gents = { path = "../../../crates/gents", features = ["test-home-guard"] }
 axum = "0.8"
-gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 mimalloc.workspace = true

@@ -1,8 +1,9 @@
-import Proofs.NativeClaimLifetime
+import Proofs.Store.NativeClaimLifetime
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.NativeClaimLifetime
-open _root_.NativeClaimLifetime Conformance.Contracts
+open Lean _root_.NativeClaimLifetime Conformance.Contracts
 
 structure Case where
   name : String
@@ -37,64 +38,113 @@ def cases : List Case :=
       [.nativeStarted, .nativeReturned, .transactionCommitted,
         .gateReleaseRequested, .accessReleased]⟩ ]
 
-def laneName : Lane → String
-  | .mutationTransaction => "mutation_transaction"
-  | .autoCommitWrite => "auto_commit_write"
-  | .readOnlyTransaction => "read_only_transaction"
-  | .periodicRenewal => "periodic_renewal"
-  | .claimedRead => "claimed_read"
-  | .claimedSchema => "claimed_schema"
-  | .clientShutdown => "client_shutdown"
+def initialOf : Lane → State
+  | .mutationTransaction => mutationTransaction
+  | .autoCommitWrite => autoCommitWrite
+  | .readOnlyTransaction => readOnlyTransaction
+  | .periodicRenewal => periodicRenewal
+  | .claimedRead => claimedRead
+  | .claimedSchema => claimedSchema
+  | .clientShutdown => clientShutdown
 
-def callerName : Caller → String
-  | .waiting => "waiting"
-  | .returned => "returned"
-  | .timedOut => "timed_out"
-  | .cancelled => "cancelled"
+example : cases.all (fun c => initialOf c.initial.lane == c.initial) = true := by native_decide
 
-def eventName : Event → String
-  | .nativeStarted => "native_started"
-  | .nativeReturned => "native_returned"
-  | .callerReturned => "caller_returned"
-  | .callerTimedOut => "caller_timed_out"
-  | .callerCancelled => "caller_cancelled"
-  | .accessReleased => "access_released"
-  | .transactionDropped => "transaction_dropped"
-  | .transactionCommitted => "transaction_committed"
-  | .rollbackReturned => "rollback_returned"
-  | .retryRequested => "retry_requested"
-  | .gateReleaseRequested => "gate_release_requested"
-  | .lifecycleGuardReleased => "lifecycle_guard_released"
-  | .renewalAttemptReturned => "renewal_attempt_returned"
-  | .renewalRequested => "renewal_requested"
+def observations (lane : Lane) (events : List Event) : List State :=
+  (events.scanl step (initialOf lane)).drop 1
+
+def observedAt (lane : Lane) (events : List Event) (index : Nat) : State :=
+  (observations lane events).getD index (initialOf lane)
+
+private def caseNamed (name : String) : Case :=
+  (cases.find? (·.name == name)).getD ⟨name, clientShutdown, []⟩
+
+private def finalOf (c : Case) : State := run c.initial c.events
+
+example : [ "claimed_read_timeout_retains_claim", "auto_commit_cancel_retains_claim"
+    , "readonly_transaction_cleanup_retains_claim", "mutation_transaction_cleanup_retains_claim"
+    , "schema_future_timeout_retains_claim_until_return" ].all (fun name =>
+      !claimHeld (finalOf (caseNamed name)) && !(finalOf (caseNamed name)).mutationGateHeld) =
+    true := by decide
+
+example :
+    let c := caseNamed "periodic_renewal_retains_claim_without_mutex"
+    let renewal := observedAt c.initial.lane c.events 3
+    let cleanup := observedAt c.initial.lane c.events 7
+    (claimHeld renewal && renewal.transactionOwnerAlive && !claimHeld cleanup &&
+      cleanup.rollbackReturned && !cleanup.cleanupPending &&
+      !(observedAt c.initial.lane c.events 0).mutationGateHeld) = true := by native_decide
+
+example :
+    let c := caseNamed "committed_transaction_keeps_live_access_claim"
+    (!claimHeld (finalOf c) && !(finalOf c).mutationGateHeld) = true := by native_decide
+
+deriving instance ToJson for Lane, Event
+
+structure TraceInput where
+  name : String
+  lane : Lane
+  events : List Event
+  /-- The positions in `events` after which the scenario observes production;
+  the other events have no synchronous observation point in it. -/
+  checkpoints : List Nat
+  deriving ToJson
+
+private def traceOf (name : String) (checkpoints : List Nat) : TraceInput :=
+  let c := caseNamed name
+  { name, lane := c.initial.lane, events := c.events, checkpoints }
+
+structure StoreView where
+  claimHeld : Bool
+  mutationGateHeld : Bool
+  deriving ToJson
+
+/-- The served store scenarios: each drives one claimed-store owner through its
+trace on a real embedded node and reads the store lock and the mutation gate. -/
+@[conformance_family]
+def storeScenario : Family TraceInput (List StoreView) where
+  inputs :=
+    [ traceOf "auto_commit_cancel_retains_claim" [0, 1, 2, 3]
+    , traceOf "claimed_read_timeout_retains_claim" [0, 1, 2, 3]
+    , traceOf "schema_future_timeout_retains_claim_until_return" [0, 1, 2, 3]
+    , traceOf "readonly_transaction_cleanup_retains_claim" [0, 1, 2, 3, 5]
+    , traceOf "mutation_transaction_cleanup_retains_claim" [0, 1, 2, 3, 5]
+    , traceOf "periodic_renewal_retains_claim_without_mutex" [0, 1, 2, 3, 5]
+    , traceOf "committed_transaction_keeps_live_access_claim" [2, 3] ]
+  model := fun i => i.checkpoints.map fun index =>
+    let s := observedAt i.lane i.events index
+    { claimHeld := claimHeld s, mutationGateHeld := s.mutationGateHeld }
+
+/-- The poisoned mutation transaction dropped from an OS thread: the rollback
+cleanup is paused, so the native return is observable before cleanup ends. -/
+@[conformance_family]
+def threadDropScenario : Family TraceInput (List StoreView) where
+  inputs := [traceOf "mutation_transaction_cleanup_retains_claim" [1, 3, 5, 6]]
+  model := fun i => i.checkpoints.map fun index =>
+    let s := observedAt i.lane i.events index
+    { claimHeld := claimHeld s, mutationGateHeld := s.mutationGateHeld }
+
+/-- The desktop client core's single-flight shutdown with a cancelled waiter;
+it observes the store lock only. -/
+@[conformance_family]
+def clientCoreScenario : Family TraceInput (List Bool) where
+  inputs := [traceOf "client_shutdown_cancel_retains_claim_until_return" [1, 2, 3]]
+  model := fun i => i.checkpoints.map fun index => claimHeld (observedAt i.lane i.events index)
+
+structure ExclusionView where
+  claimHeld : Bool
+  lifecycleGuardHeld : Bool
+  deriving ToJson
+
+/-- The desktop bridge's lifecycle exclusion with a cancelled waiter; it
+observes the store lock and the lifecycle guard. -/
+@[conformance_family]
+def clientExclusionScenario : Family TraceInput (List ExclusionView) where
+  inputs := [traceOf "client_shutdown_cancel_retains_claim_until_return" [1, 3, 4]]
+  model := fun i => i.checkpoints.map fun index =>
+    let s := observedAt i.lane i.events index
+    { claimHeld := claimHeld s, lifecycleGuardHeld := s.lifecycleGuardHeld }
 
 private def boolJson (value : Bool) : String := if value then "true" else "false"
-
-def observationJson (state : State) : String :=
-  "{\"lane\":" ++ jsonString (laneName state.lane) ++
-  ",\"caller\":" ++ jsonString (callerName state.caller) ++
-  ",\"claim_held\":" ++ boolJson (claimHeld state) ++
-  ",\"claim_attached\":" ++ boolJson state.claimAttached ++
-  ",\"access_owner_alive\":" ++ boolJson state.accessOwnerAlive ++
-  ",\"transaction_owner_alive\":" ++ boolJson state.transactionOwnerAlive ++
-  ",\"native_outstanding\":" ++ toString state.nativeOutstanding ++
-  ",\"poisoned\":" ++ boolJson state.poisoned ++
-  ",\"cleanup_pending\":" ++ boolJson state.cleanupPending ++
-  ",\"rollback_returned\":" ++ boolJson state.rollbackReturned ++
-  ",\"mutation_gate_held\":" ++ boolJson state.mutationGateHeld ++
-  ",\"retry_started\":" ++ boolJson state.retryStarted ++
-  ",\"renewal_attempt_returned\":" ++ boolJson state.renewalAttemptReturned ++
-  ",\"next_renewal_started\":" ++ boolJson state.nextRenewalStarted ++
-  ",\"lifecycle_guard_held\":" ++ boolJson state.lifecycleGuardHeld ++ "}"
-
-def caseJson (c : Case) : String :=
-  let observations := (c.events.scanl step c.initial).drop 1
-  "{\"name\":" ++ jsonString c.name ++
-  ",\"initial\":" ++ observationJson c.initial ++
-  ",\"events\":" ++ jsonStringArray (c.events.map eventName) ++
-  ",\"observations\":" ++ jsonArray (observations.map observationJson) ++ "}"
-
-def casesJson : String := jsonArray (cases.map caseJson)
 
 structure ShutdownCase where
   name : String
@@ -151,10 +201,6 @@ def shutdownCaseJson (c : ShutdownCase) : String :=
   ",\"events\":" ++ jsonStringArray (c.events.map shutdownEventName) ++
   ",\"observations\":" ++ jsonArray (observations.map shutdownObservationJson) ++ "}"
 
-/-- Derived cases are exported separately so the existing claim-lifetime
-fixture keeps its wire format until the local shutdown owner consumes them. -/
 def shutdownCasesJson : String := jsonArray (shutdownCases.map shutdownCaseJson)
 
 end Conformance.NativeClaimLifetime
-
-def main : IO Unit := IO.println Conformance.NativeClaimLifetime.casesJson

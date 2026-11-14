@@ -1,4 +1,4 @@
-import Proofs.Workspace.EditorUndoCheckpoint
+import Proofs.Session.Workspace.EditorUndoCheckpoint
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.EditorUndoCheckpoint

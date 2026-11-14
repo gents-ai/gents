@@ -81,7 +81,7 @@ export function completionOf(
 const isBackgroundResult = (item: RenderedTimelineItem): item is AutomatedInputItem =>
   item.kind === "automatedInput" && item.origin.kind === "backgroundCompletion";
 
-/* BACKGROUND_COMPLETION_WAKE_PROMPT in crates/gents/src/tools/background/completion.rs */
+/* BACKGROUND_COMPLETION_WAKE_PROMPT in crates/gents-protocol/src/background_completion.rs */
 const WAKE_PROMPT =
   "Review the new background completion results and continue the task if needed.";
 

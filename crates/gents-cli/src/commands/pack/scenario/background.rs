@@ -1,15 +1,15 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
-use super::super::cli_process::{path_arg, run_cli_json};
 use super::manifest::BackgroundCompletionExpectation;
 use super::results::graphql_rows;
-use gents::store::graphql::escape_graphql_string;
+use gents_host::cli_process::{path_arg, run_cli_json};
 use gents_protocol::client_protocol::RequestLifecycleState;
+use gents_store::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone)]
 pub(super) struct BackgroundCompletionEvidence {
@@ -121,7 +121,7 @@ async fn load_background_completion_evidence(
             .context("decoding background-completion request input")?
             .unwrap_or_default();
         if row.get("execution_origin").and_then(Value::as_str) == Some("scheduled")
-            && gents::request::lifecycle::is_background_completion_request(&input)
+            && gents_session::request::lifecycle::is_background_completion_request(&input)
             && RequestLifecycleState::parse_opt(Some(lifecycle_state))
                 == Some(RequestLifecycleState::Completed)
         {

@@ -14,11 +14,11 @@ use gents_loop::claude_messages_body::{
 use gents_loop::loop_stream::LoopConfig;
 use gents_protocol::session::{SessionCreationCause, SessionScope};
 
-use crate::inference::resolved::ResolvedAgent;
-use crate::request::lifecycle::ExecutionOrigin;
-use crate::session::origin::{self, CreationOrigin};
-use crate::store::config_client::ConfigAccess;
 use crate::AgentRequest;
+use gents_inference::resolved::ResolvedAgent;
+use gents_session::request::lifecycle::ExecutionOrigin;
+use gents_session::session::origin::{self, CreationOrigin};
+use gents_store::config_client::ConfigAccess;
 
 /// Longest starter chain read to find the session a conversation started from.
 const MAX_CHAIN_HOPS: usize = 32;
@@ -230,151 +230,50 @@ pub(crate) fn with_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::origin::SessionLink;
-    use rapidhash::{HashMapExt, RapidHashMap};
+    use gents_lean_vocab::families::runtime_claude_session_lineage_session_origin as family;
+    use gents_session::session::origin::SessionLink;
 
-    fn scope(session_id: &str) -> SessionScope {
+    fn scope(session: u64) -> SessionScope {
         SessionScope {
             node_did: "did:test:node".into(),
-            session_id: session_id.into(),
+            session_id: session.to_string(),
             requester_did: Some("did:test:node".into()),
         }
     }
 
-    /// `(session, cause, starter)` rows; a session without a row was opened by a client.
-    async fn origin(
-        rows: &[(&str, SessionCreationCause, Option<&str>)],
-        session: &str,
-    ) -> SessionOrigin {
-        let mut chain = RapidHashMap::new();
-        for (id, cause, starter) in rows {
-            chain.insert(
-                id.to_string(),
-                CreationOrigin {
-                    cause: *cause,
-                    starter: starter.map(|starter| SessionLink {
-                        scope: scope(starter),
-                        cause_request_doc_id: format!("bae-{starter}"),
+    #[tokio::test]
+    async fn generated_session_origin_cases_replay_the_verified_walk() {
+        for case in family::cases::<Cause>() {
+            let input = &case.input;
+            let actual = walk(&scope(input.session), |scope| {
+                let row = input
+                    .rows
+                    .iter()
+                    .find(|row| row.session.to_string() == scope.session_id);
+                std::future::ready(Ok(row.map(|row| CreationOrigin {
+                    cause: match row.cause {
+                        Cause::AgentNew => SessionCreationCause::AgentNew,
+                        Cause::TaskTrigger => SessionCreationCause::TaskTrigger,
+                        Cause::PluginJob => SessionCreationCause::PluginJob,
+                        Cause::Client => panic!("client sessions have no receipt"),
+                    },
+                    starter: row.starter.as_ref().map(|link| SessionLink {
+                        scope: self::scope(link.session),
+                        cause_request_doc_id: link.request.to_string(),
                     }),
-                },
-            );
-        }
-        walk(&scope(session), |scope| {
-            std::future::ready(Ok(chain.get(&scope.session_id).cloned()))
-        })
-        .await
-        .unwrap()
-    }
-
-    fn expected(
-        cause: Cause,
-        root_client: bool,
-        main: &str,
-        parent: Option<&str>,
-        prompt: Option<&str>,
-    ) -> SessionOrigin {
-        SessionOrigin {
-            cause,
-            root_client,
-            main_session_id: main.into(),
-            parent_subagent_session_id: parent.map(Into::into),
-            main_prompt_doc_id: prompt.map(Into::into),
-        }
-    }
-
-    #[tokio::test]
-    async fn subagents_run_under_their_chains_main_session() {
-        use SessionCreationCause::{AgentNew, PluginJob, TaskTrigger};
-        let rows = [
-            ("a", AgentNew, Some("client")),
-            ("b", AgentNew, Some("a")),
-            ("job", PluginJob, Some("b")),
-            ("cron", TaskTrigger, None),
-            ("cron-agent", AgentNew, Some("cron")),
-            ("orphan", AgentNew, None),
-        ];
-        for (session, want) in [
-            (
-                "client",
-                expected(Cause::Client, true, "client", None, None),
-            ),
-            (
-                "a",
-                expected(Cause::AgentNew, true, "client", None, Some("bae-client")),
-            ),
-            (
-                "b",
-                expected(
-                    Cause::AgentNew,
-                    true,
-                    "client",
-                    Some("a"),
-                    Some("bae-client"),
-                ),
-            ),
-            (
-                "job",
-                expected(
-                    Cause::PluginJob,
-                    true,
-                    "client",
-                    Some("b"),
-                    Some("bae-client"),
-                ),
-            ),
-            (
-                "cron",
-                expected(Cause::TaskTrigger, false, "cron", None, None),
-            ),
-            (
-                "cron-agent",
-                expected(Cause::AgentNew, false, "cron", None, Some("bae-cron")),
-            ),
-            (
-                "orphan",
-                expected(Cause::AgentNew, false, "orphan", None, None),
-            ),
-        ] {
-            assert_eq!(origin(&rows, session).await, want, "{session}");
-        }
-    }
-
-    #[tokio::test]
-    async fn a_chain_past_the_walk_runs_as_background_work_of_the_deepest_session_read() {
-        let ids = (0..=MAX_CHAIN_HOPS + 1)
-            .map(|hop| format!("s{hop}"))
-            .collect::<Vec<_>>();
-        let rows = ids
-            .windows(2)
-            .map(|pair| {
-                (
-                    pair[0].as_str(),
-                    SessionCreationCause::AgentNew,
-                    Some(pair[1].as_str()),
-                )
+                })))
             })
-            .collect::<Vec<_>>();
-        let deepest = format!("s{MAX_CHAIN_HOPS}");
-        assert_eq!(
-            origin(&rows, "s0").await,
-            expected(
-                Cause::AgentNew,
-                false,
-                &deepest,
-                Some("s1"),
-                Some(&format!("bae-{deepest}"))
-            )
-        );
-        let within = format!("s{}", MAX_CHAIN_HOPS - 1);
-        assert_eq!(
-            origin(&rows[..MAX_CHAIN_HOPS - 1], "s0").await,
-            expected(
-                Cause::AgentNew,
-                true,
-                &within,
-                Some("s1"),
-                Some(&format!("bae-{within}"))
-            )
-        );
+            .await
+            .unwrap();
+            case.check(family::Observation {
+                cause: actual.cause,
+                root_client: actual.root_client,
+                main_session: actual.main_session_id.parse().unwrap(),
+                parent_subagent: actual
+                    .parent_subagent_session_id
+                    .map(|id| id.parse().unwrap()),
+                main_prompt: actual.main_prompt_doc_id.map(|id| id.parse().unwrap()),
+            });
+        }
     }
 }

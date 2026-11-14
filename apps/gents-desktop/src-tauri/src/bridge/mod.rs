@@ -282,7 +282,7 @@ fn platform_bridge_config() -> BridgeConfig {
         snapshot_grants: SnapshotGrants::all(),
         managed_server: platform_managed_server_policy(),
         client_host: cfg!(all(desktop, any(unix, windows))),
-        store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::default(),
+        store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::default(),
     };
     #[cfg(all(feature = "native-e2e", debug_assertions, desktop))]
     let config = native_local_e2e_config(config);
@@ -311,7 +311,7 @@ fn native_local_e2e_config(config: BridgeConfig) -> BridgeConfig {
         store_key_custody: if std::env::var("GENTS_E2E_FILE_STORE_KEYS").ok().as_deref()
             == Some("1")
         {
-            gents::store::local::store_key::StoreKeyCustodyChoice::File
+            gents_store::local::store_key::StoreKeyCustodyChoice::File
         } else {
             config.store_key_custody
         },

@@ -104,13 +104,13 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
         )
         .await;
         assert!(
-            core.store()
-                .snapshot()
+            core.stores()
+                .snapshot(&node_did)
                 .requests
                 .iter()
                 .any(|row| row.request_id == request_id),
             "refreshed request {request_id} missing from store: {:?}",
-            core.store().snapshot().requests
+            core.stores().snapshot(&node_did).requests
         );
     }
 
@@ -118,7 +118,7 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
         let access = served.runtime.user_access();
         let query = format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ session_doc_id }} }}"#,
-            gents::store::graphql::escape_graphql_string(request_doc)
+            gents_store::graphql::escape_graphql_string(request_doc)
         );
         async move {
             access.execute(&query).await.unwrap()["data"]["AgentRequest"][0]["session_doc_id"]
@@ -205,7 +205,7 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
                             &serde_json::json!({"input": call}),
                         )
                         .await?;
-                    let doc = gents::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                    let doc = gents_store::graphql::created_doc_id(&response, "InferenceCall")?;
                     txn.add_resource_relationship(
                         "InferenceCall",
                         &doc,
@@ -222,13 +222,13 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
         .unwrap();
 
     assert!(
-        core.store()
-            .snapshot()
+        core.stores()
+            .snapshot(&node_did)
             .requests
             .iter()
             .any(|row| row.request_id == "request-pending"),
         "pending request lost before snapshot: {:?}",
-        core.store().snapshot().requests
+        core.stores().snapshot(&node_did).requests
     );
     let snapshot = build_session_snapshot_for_node(
         core.as_ref(),

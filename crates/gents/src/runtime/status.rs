@@ -10,9 +10,11 @@ use crate::runtime::agent::ProcessLifecycleState;
 use crate::runtime::node_readiness_publisher::{
     NodeReadinessPublisherHandle, NodeReadinessPublisherOwner,
 };
-use crate::runtime::snapshot::ActiveRuntimeSnapshot;
-use crate::store::graphql::escape_graphql_string;
+use crate::runtime::storage_fault::StorageFaultObservation;
+use gents_automation::goal::GoalReconcileSettled;
+use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_protocol::node_readiness::{ReconcilePhase, ReconcileResult};
+use gents_store::graphql::escape_graphql_string;
 
 /// Reconcile-phase transitions are only observable through this event stream:
 /// `NodeRuntime.reconcile_phase` holds only the phase the runtime is in now.
@@ -63,12 +65,26 @@ pub(crate) struct RuntimeStatusHandle {
     node: Arc<defra_node::Node>,
     state: Arc<Mutex<RuntimeStatusRow>>,
     readiness: NodeReadinessPublisherHandle,
+    storage_fault: StorageFaultObservation,
+}
+
+#[async_trait::async_trait]
+impl GoalReconcileSettled for RuntimeStatusHandle {
+    async fn goal_reconcile_settled(&self) -> bool {
+        let row = self.state.lock().await;
+        !row.last_reconcile_result.is_empty()
+            && gents_automation::goal::goal_reconcile_settled(
+                Some(&row.reconcile_phase),
+                Some(&row.last_reconcile_result),
+            )
+    }
 }
 
 impl RuntimeStatusHandle {
     pub(crate) fn start(
         node: Arc<defra_node::Node>,
         node_did: impl Into<String>,
+        storage_fault: StorageFaultObservation,
     ) -> (RuntimeStatusOwner, Self) {
         let node_did = node_did.into();
         let (readiness_owner, readiness) =
@@ -81,6 +97,7 @@ impl RuntimeStatusHandle {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
+                storage_fault,
             },
         )
     }
@@ -91,6 +108,7 @@ impl RuntimeStatusHandle {
         node_did: impl Into<String>,
         writer: Arc<dyn crate::runtime::node_readiness_publisher::NodeReadinessWriter>,
         retry_delay: Duration,
+        storage_fault: StorageFaultObservation,
     ) -> (RuntimeStatusOwner, Self) {
         let node_did = node_did.into();
         let (readiness_owner, readiness) =
@@ -103,6 +121,7 @@ impl RuntimeStatusHandle {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
+                storage_fault,
             },
         )
     }
@@ -118,6 +137,7 @@ impl RuntimeStatusHandle {
             node,
             state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
             readiness,
+            storage_fault: StorageFaultObservation::new(),
         }
     }
 
@@ -140,25 +160,31 @@ impl RuntimeStatusHandle {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
                 readiness,
+                storage_fault: StorageFaultObservation::new(),
             },
         )
-    }
-
-    pub(crate) async fn goal_reconcile_settled(&self) -> bool {
-        let row = self.state.lock().await;
-        !row.last_reconcile_result.is_empty()
-            && crate::goal::goal_reconcile_settled(
-                Some(&row.reconcile_phase),
-                Some(&row.last_reconcile_result),
-            )
     }
 
     pub(crate) fn readiness(&self) -> &NodeReadinessPublisherHandle {
         &self.readiness
     }
 
+    #[cfg(test)]
+    pub(crate) fn storage_fault(&self) -> &StorageFaultObservation {
+        &self.storage_fault
+    }
+
+    fn record_readiness_write<T>(&self, result: anyhow::Result<T>) -> anyhow::Result<T> {
+        if let Err(error) = &result {
+            if gents_store::graphql::is_storage_full(error.as_ref()) {
+                self.storage_fault.record_unavailable(format!("{error:#}"));
+            }
+        }
+        result
+    }
+
     pub(crate) async fn initialize_startup(&self, default_agent_did: &str) -> anyhow::Result<()> {
-        self.readiness.initialize(default_agent_did).await?;
+        self.record_readiness_write(self.readiness.initialize(default_agent_did).await)?;
         Ok(())
     }
 
@@ -166,14 +192,7 @@ impl RuntimeStatusHandle {
         &self,
         state: ProcessLifecycleState,
     ) -> anyhow::Result<()> {
-        self.readiness.set_process_state(state).await
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn set_process_state(&self, state: ProcessLifecycleState) {
-        if let Err(error) = self.set_process_state_durable(state).await {
-            tracing::error!(?state, error = %error, "agent readiness publisher stopped");
-        }
+        self.record_readiness_write(self.readiness.set_process_state(state).await)
     }
 
     pub(crate) async fn set_reconcile_phase(&self, phase: ReconcilePhase) {
@@ -238,9 +257,7 @@ impl RuntimeStatusHandle {
     }
 
     pub(crate) async fn publish_router_generation(&self, generation: u64) -> anyhow::Result<()> {
-        self.readiness
-            .set_router_generation(generation)
-            .await
+        self.record_readiness_write(self.readiness.set_router_generation(generation).await)
             .with_context(|| format!("publish agent readiness router generation {generation}"))
     }
 
@@ -255,7 +272,7 @@ impl RuntimeStatusHandle {
         snapshot: &ActiveRuntimeSnapshot,
         result: ReconcileResult,
     ) -> anyhow::Result<()> {
-        self.readiness.publish_snapshot(snapshot).await?;
+        self.record_readiness_write(self.readiness.publish_snapshot(snapshot).await)?;
         let executor_status = executor_status_fields(snapshot);
         self.update(|row| {
             let mut changed = false;
@@ -366,7 +383,7 @@ async fn upsert_runtime_status(
         }}"#,
     );
     let runtime_did = row.node_did.as_str();
-    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
     access
         .transact_write("upsert_runtime_status", |txn| {
             let mutation = &mutation;
@@ -402,7 +419,7 @@ async fn upsert_runtime_status(
                 let doc =
                     gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeRuntime")?;
                 if rows.is_empty() {
-                    crate::store::config_client::publish_node_child_in_txn(
+                    gents_documents::publish_node_child_in_txn(
                         txn,
                         "NodeRuntime",
                         &doc,

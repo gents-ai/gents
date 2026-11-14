@@ -1,4 +1,4 @@
-use gents::documents::EventSource;
+use gents_documents::EventSource;
 use gents_shell::source::{Doc, FieldKind, Form, FormError, FormField};
 use serde_json::{json, Value};
 
@@ -131,7 +131,7 @@ pub(super) fn document(
 
 #[cfg(test)]
 mod tests {
-    use gents::documents::EventGroupCount;
+    use gents_documents::EventGroupCount;
     use gents_shell::source::{FormAct, FormAction, FormRef};
     use serde_json::json;
 

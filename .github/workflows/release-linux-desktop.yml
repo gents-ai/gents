@@ -13,7 +13,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The Engineer's core packs, built and tested once; the CLI embeds them.
+  core-packs:
+    uses: ./.github/workflows/core-packs.yml
+
   package:
+    needs: core-packs
     runs-on: [self-hosted, Linux, X64, workstation-1]
     container: rust:1-bookworm
     timeout-minutes: 120
@@ -57,8 +62,16 @@ jobs:
             echo "Release tag does not match package version" >&2
             exit 1
           fi
+      - name: Download core packs
+        uses: actions/download-artifact@v7
+        with:
+          name: core-packs
+          path: target/core-packs
       - name: Build and stage managed runtime CLI
+        env:
+          GENTS_REQUIRE_CORE_PACKS: "1"
         run: |
+          (cd target/core-packs && sha256sum -c SHA256SUMS-core-packs.txt)
           cargo build --release --locked -p gents-cli
           bash scripts/stage-tauri-sidecar.sh --source target/release/gents
       - name: Build desktop installers with embedded managed runtime

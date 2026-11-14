@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use gents::store::config_client::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -16,7 +16,7 @@ async fn native_export_keeps_long_fields_and_all_cursor_pages() {
         .await
         .unwrap();
     let long = format!("{}😀", "é".repeat(1500));
-    let escaped = gents::store::graphql::escape_graphql_string(&long);
+    let escaped = gents_store::graphql::escape_graphql_string(&long);
     // DocIDs derive from content, so each row carries its own sequence.
     let inputs = (0..70)
         .map(|index| {
@@ -89,16 +89,16 @@ async fn native_export_retains_relationship_ids() {
     )
     .await
     .unwrap();
-    let author_id = gents::store::graphql::created_doc_id(&author, "ExportAuthor").unwrap();
+    let author_id = gents_store::graphql::created_doc_id(&author, "ExportAuthor").unwrap();
     let author_id = author_id.as_str();
     let mutation = format!(
         r#"mutation {{ create_ExportBook(input:{{title:"Book",_authorID:"{}"}}) {{_docID}} }}"#,
-        gents::store::graphql::escape_graphql_string(author_id)
+        gents_store::graphql::escape_graphql_string(author_id)
     );
     let book = ConfigAccess::write_local(&node, "test.export.book", &mutation)
         .await
         .unwrap();
-    let book_id = gents::store::graphql::created_doc_id(&book, "ExportBook").unwrap();
+    let book_id = gents_store::graphql::created_doc_id(&book, "ExportBook").unwrap();
     let book_id = book_id.as_str();
     let output = tempfile::tempdir().unwrap();
     let collections = BTreeSet::from(["ExportAuthor".to_owned(), "ExportBook".to_owned()]);

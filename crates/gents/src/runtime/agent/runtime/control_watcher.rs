@@ -6,10 +6,10 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::{mpsc, watch};
 
-use crate::runtime::snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime::status::RuntimeStatusHandle;
-use crate::tools::surface::ToolRuntimeContext;
+use gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
 use gents_protocol::node_readiness::ReconcilePhase;
+use gents_tools::surface::ToolRuntimeContext;
 
 use super::super::document_view;
 use super::super::DocumentResolveContext;
@@ -46,7 +46,7 @@ pub(super) struct ControlSubscription {
 
 pub(super) fn subscribe_control_changes(node: &defra_node::Node) -> Result<ControlSubscription> {
     let names = document_view::control_collection_names().collect::<Vec<_>>();
-    let ids = crate::collection_ids(node, names.iter().copied())?;
+    let ids = gents_store::subscription_source::collection_ids(node, names.iter().copied())?;
     Ok(ControlSubscription {
         changes: node.subscribe_collection_changes(ids.clone()),
         names_by_id: ids.into_iter().zip(names).collect(),
@@ -55,7 +55,7 @@ pub(super) fn subscribe_control_changes(node: &defra_node::Node) -> Result<Contr
 
 pub(super) struct ControlWatcherInputs {
     pub(super) node: Arc<defra_node::Node>,
-    pub(super) backend_admission: crate::store::local::backend_protection::BackendAdmission,
+    pub(super) backend_admission: gents_store::local::backend_protection::BackendAdmission,
     pub(super) subscription: ControlSubscription,
     pub(super) node_did: String,
     pub(super) resolve_context: DocumentResolveContext,
@@ -107,7 +107,7 @@ pub(super) async fn run_control_watcher_with_timing(
         names_by_id,
     } = subscription;
     let mut measured_mcp_availability =
-        crate::tools::surface::measured_available_mcp_service_ids(&node, &node_did)
+        gents_tools::surface::measured_available_mcp_service_ids(&node, &node_did)
             .await?
             .into_iter()
             .collect::<BTreeSet<_>>();
@@ -281,7 +281,7 @@ pub(super) async fn run_control_watcher_with_timing(
                         .copied()
                         .unwrap_or(update.collection_id.as_str());
                     if collection_name == "ToolServiceHealthState" {
-                        let current = match crate::tools::surface::measured_available_mcp_service_ids(
+                        let current = match gents_tools::surface::measured_available_mcp_service_ids(
                             &node,
                             &node_did,
                         )

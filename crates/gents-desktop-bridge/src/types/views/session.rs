@@ -104,7 +104,18 @@ pub enum RequestOriginView {
         wrapup: Option<bool>,
     },
     #[serde(rename_all = "camelCase")]
-    BackgroundCompletion { notification: bool },
+    BackgroundCompletion {
+        notification: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        tool_call_doc_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        tool_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        status_kind: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]

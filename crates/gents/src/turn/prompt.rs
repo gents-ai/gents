@@ -1,11 +1,11 @@
-use crate::inference::llm::message::Message;
-#[cfg(test)]
-use crate::inference::llm::message::{Text, UserContent};
 use anyhow::Result;
+use gents_inference::llm::message::Message;
+#[cfg(test)]
+use gents_inference::llm::message::{Text, UserContent};
 use gents_loop::loop_stream::TaggedMessage;
 
-use crate::inference::resolved::ResolvedAgent;
-use crate::tools::surface::ToolSurface;
+use gents_inference::resolved::ResolvedAgent;
+use gents_tools::surface::ToolSurface;
 
 const TITLE_GENERATION_SUFFIX: &str = "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
 
@@ -49,18 +49,6 @@ pub struct BuiltPrompt {
     pub messages: Vec<TaggedMessage>,
 }
 
-impl BuiltPrompt {
-    /// Continuation evidence stays on `messages` until the owned provider boundary
-    /// narrows one prepared request for estimate, capture and send.
-    #[cfg(test)]
-    pub(crate) fn native_messages(&self) -> Vec<Message> {
-        self.messages
-            .iter()
-            .map(|row| row.message.clone())
-            .collect()
-    }
-}
-
 pub trait PromptBuilder: Send + Sync {
     fn build(
         &self,
@@ -71,8 +59,8 @@ pub trait PromptBuilder: Send + Sync {
 
 pub struct LayeredPromptBuilder {
     preamble: String,
-    skills: Vec<crate::documents::skills::Skill>,
-    skill_ceiling: crate::documents::skills::SkillToolCeiling,
+    skills: Vec<gents_documents::skills::Skill>,
+    skill_ceiling: gents_documents::skills::SkillToolCeiling,
 }
 
 impl LayeredPromptBuilder {
@@ -90,12 +78,12 @@ impl LayeredPromptBuilder {
             tool_surface.includes_meta_tools(),
             allowed_targets,
         );
-        if let Some(catalog) = crate::documents::skills::render_skill_catalog(&agent.skills) {
+        if let Some(catalog) = gents_documents::skills::render_skill_catalog(&agent.skills) {
             builder.preamble.push_str("\n\n");
             builder.preamble.push_str(&catalog);
         }
         builder.skills = agent.skills.clone();
-        builder.skill_ceiling = crate::documents::skills::skill_tool_ceiling(
+        builder.skill_ceiling = gents_documents::skills::skill_tool_ceiling(
             tool_names.iter().cloned(),
             tool_surface.allowed_mcp_service_ids(),
             tool_surface.includes_meta_tools(),
@@ -111,9 +99,9 @@ impl LayeredPromptBuilder {
             if id.is_empty() || !seen.insert(id.to_string()) {
                 continue;
             }
-            if let Some(skill) = crate::documents::skills::find_skill(&self.skills, id) {
+            if let Some(skill) = gents_documents::skills::find_skill(&self.skills, id) {
                 let body =
-                    crate::documents::skills::render_activated_skill(skill, &self.skill_ceiling);
+                    gents_documents::skills::render_activated_skill(skill, &self.skill_ceiling);
                 reminders.push(Self::system_reminder(&body));
             }
         }
@@ -137,7 +125,7 @@ impl LayeredPromptBuilder {
         Self {
             preamble,
             skills: Vec::new(),
-            skill_ceiling: crate::documents::skills::SkillToolCeiling::default(),
+            skill_ceiling: gents_documents::skills::SkillToolCeiling::default(),
         }
     }
 
@@ -194,7 +182,7 @@ pub(crate) fn build_preamble_with_targets(
     }
 
     if include_meta_tool_guidance
-        && crate::tools::mcp::meta::META_TOOL_NAMES
+        && gents_protocol::tool_names::META_TOOL_NAMES
             .iter()
             .all(|name| tool_names.contains(name))
     {
@@ -245,7 +233,7 @@ fn strip_title_generation_suffix(system_prompt: &str) -> &str {
     let trimmed = system_prompt.trim();
     if let Some(stripped) = trimmed
         .strip_suffix(TITLE_GENERATION_SUFFIX)
-        .or_else(|| trimmed.strip_suffix(crate::session::title_text::GENERATION_PREAMBLE))
+        .or_else(|| trimmed.strip_suffix(gents_session::session::title_text::GENERATION_PREAMBLE))
     {
         stripped.trim_end()
     } else {

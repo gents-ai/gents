@@ -1,20 +1,15 @@
-use std::collections::BTreeMap;
-
 use anyhow::{Context, Result};
-use gents::session::{fork_on, ForkBoundary, ForkError, ForkOutcome, ForkParams};
-use gents::store::graphql::escape_graphql_string;
-use serde_json::{json, Value};
-
-use crate::cli::args::{ConfigListArgs, ConfigShowArgs, SessionCommand, SessionForkArgs};
-use crate::cli::output_format::OutputFormat;
-use crate::config_writes::ConfigAccess;
-use crate::request_helpers::resolve_dual_id;
-use crate::{
-    graphql_rows, graphql_string_list_literal, print_json, resolve_config_access, resolve_node_did,
+use gents_protocol::operations::session::{
+    SessionEntry, SessionForkBoundary, SessionForkInput, SessionListInput, SessionRef,
 };
+use serde_json::json;
 
-const SESSION_FIELDS: &str = "session_id node_did requester_did agent_did created_at closed_at \
-title tags provenance observation";
+use crate::cli::args::{ConfigShowArgs, SessionCommand, SessionForkArgs, SessionListArgs};
+use crate::cli::output_format::OutputFormat;
+use crate::operation_failure::OperationFailure;
+use crate::request_helpers::resolve_dual_id;
+use crate::{print_json, resolve_config_access};
+use gents_service::home_state::resolve_node_did;
 
 pub(crate) async fn dispatch(command: SessionCommand) -> Result<()> {
     match command {
@@ -24,25 +19,44 @@ pub(crate) async fn dispatch(command: SessionCommand) -> Result<()> {
     }
 }
 
-async fn session_list(args: ConfigListArgs) -> Result<()> {
+async fn session_list(args: SessionListArgs) -> Result<()> {
     let output = args
+        .list
         .output
         .ensure_supported("sessions list", &[OutputFormat::Table, OutputFormat::Json])?;
-    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
+    let (access, _) =
+        resolve_config_access(args.list.home.as_deref(), args.list.graphql.as_deref())
+            .await
+            .context("resolving access for session list")?;
+    let node_did = super::config::binding::resolve_target_node_did(
+        None,
+        args.list
+            .graphql
+            .as_ref()
+            .map(|_| crate::cli::ManifestNodeDidBindingArg::Live),
+        args.list.home.as_deref(),
+        args.list.graphql.as_deref(),
+        Some(&access),
+    )
+    .await
+    .context("resolving session list node")?;
+    let input = SessionListInput {
+        node_did: Some(node_did),
+        include_archived: args.include_archived,
+        ..Default::default()
+    };
+    let entries = gents_session::operations::session::list(&access, &input)
         .await
-        .context("resolving access for session list")?;
-    let mut rows = query_sessions(&access, None).await?;
-    sort_sessions(&mut rows);
-    add_request_counts(&access, &mut rows).await?;
+        .map_err(OperationFailure::from)?;
 
     match output {
         OutputFormat::Json => print_json(&json!({
             "collection": "AgentSession",
-            "count": rows.len(),
-            "items": rows,
+            "count": entries.len(),
+            "items": entries,
         })),
         OutputFormat::Table => {
-            print_session_table(&rows);
+            print_session_table(&entries);
             Ok(())
         }
         _ => unreachable!("ensure_supported restricts session list output formats"),
@@ -59,17 +73,21 @@ async fn session_show(args: ConfigShowArgs) -> Result<()> {
     let output = args
         .output
         .ensure_supported("sessions show", &[OutputFormat::Json])?;
+    let node_did = resolve_node_did(args.home.as_deref(), None)?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .context("resolving access for session show")?;
-    let mut rows = query_sessions(&access, Some(&id)).await?;
-    let mut row = rows.pop().ok_or_else(|| {
-        anyhow::anyhow!("not found: no AgentSession document with session_id {id}")
-    })?;
-    add_request_count(&access, &mut row).await?;
+    let reference = SessionRef {
+        node_did,
+        session_id: id,
+        requester_did: None,
+    };
+    let entry = gents_session::operations::session::get(&access, &reference)
+        .await
+        .map_err(OperationFailure::from)?;
 
     match output {
-        OutputFormat::Json => print_json(&row),
+        OutputFormat::Json => print_json(&entry),
         _ => unreachable!("ensure_supported restricts session show output formats"),
     }
 }
@@ -82,129 +100,40 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
         .await
         .context("resolving authenticated access for session fork")?;
 
-    let outcome = fork_on(
-        &access,
-        ForkParams {
-            source_session_id: &args.from,
-            boundary: ForkBoundary::UserTurn(args.at_user_turn),
-            caller_node_did: &node_did,
-            caller_requester_did: args.requester_did.as_deref(),
-            target_agent_did: args.agent.as_deref(),
+    let input = SessionForkInput {
+        source: SessionRef {
+            node_did,
+            session_id: args.from.clone(),
+            requester_did: args.requester_did.clone(),
         },
-    )
-    .await
-    .map_err(map_fork_error)?;
-
-    print_fork_outcome(&args, outcome)?;
-    Ok(())
-}
-
-async fn query_sessions(access: &ConfigAccess, session_id: Option<&str>) -> Result<Vec<Value>> {
-    let args = session_id
-        .map(|id| {
-            format!(
-                r#"(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1)"#,
-                escape_graphql_string(id)
-            )
-        })
-        .unwrap_or_default();
-    let query = format!(
-        r#"{{
-            AgentSession{args} {{
-                {SESSION_FIELDS}
-            }}
-        }}"#
-    );
-    graphql_rows(access, "AgentSession", &query).await
-}
-
-async fn add_request_count(access: &ConfigAccess, row: &mut Value) -> Result<()> {
-    let Some(session_id) = row.get("session_id").and_then(Value::as_str) else {
-        return Ok(());
+        boundary: SessionForkBoundary::UserTurn(args.at_user_turn),
+        target_agent_did: args.agent.clone(),
     };
-    let counts = request_counts_by_session(access, &[session_id.to_string()]).await?;
-    set_request_count(row, counts.get(session_id).copied().unwrap_or(0));
-    Ok(())
+    let receipt = gents_session::operations::session::fork(&access, &input)
+        .await
+        .map_err(OperationFailure::from)?;
+    let copied = receipt.copied;
+    print_json(&json!({
+        "session_id": receipt.session_id,
+        "source_session_id": receipt.source_session_id,
+        "fork_at_user_turn": args.at_user_turn,
+        "copied_messages": copied.map(|copied| copied.messages),
+        "copied_tool_calls": copied.map(|copied| copied.tool_calls),
+        "copied_tool_results": copied.map(|copied| copied.tool_results),
+        "copied_compaction_entries": copied.map(|copied| copied.compaction_entries),
+    }))
 }
 
-async fn add_request_counts(access: &ConfigAccess, rows: &mut [Value]) -> Result<()> {
-    let session_ids = rows
-        .iter()
-        .filter_map(|row| row.get("session_id").and_then(Value::as_str))
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    let counts = request_counts_by_session(access, &session_ids).await?;
-    for row in rows {
-        let count = row
-            .get("session_id")
-            .and_then(Value::as_str)
-            .and_then(|id| counts.get(id).copied())
-            .unwrap_or(0);
-        set_request_count(row, count);
-    }
-    Ok(())
-}
-
-async fn request_counts_by_session(
-    access: &ConfigAccess,
-    session_ids: &[String],
-) -> Result<BTreeMap<String, u64>> {
-    if session_ids.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    let sessions = graphql_string_list_literal(session_ids);
-    let scope =
-        gents::session::public_request_filter(&format!("session_id: {{ _in: {sessions} }}"));
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ {scope} }}) {{
-                session_id
-            }}
-        }}"#
-    );
-    let rows = graphql_rows(access, "AgentRequest", &query).await?;
-    let mut counts = BTreeMap::new();
-    for row in rows {
-        if let Some(session_id) = row.get("session_id").and_then(Value::as_str) {
-            *counts.entry(session_id.to_string()).or_insert(0) += 1;
-        }
-    }
-    Ok(counts)
-}
-
-fn set_request_count(row: &mut Value, count: u64) {
-    if let Some(object) = row.as_object_mut() {
-        object.insert("request_count".to_string(), json!(count));
-    }
-}
-
-fn sort_sessions(rows: &mut [Value]) {
-    rows.sort_by(|a, b| {
-        a.get("session_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .cmp(
-                b.get("session_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-            )
-    });
-}
-
-fn print_session_table(rows: &[Value]) {
+fn print_session_table(entries: &[SessionEntry]) {
     let headers = ["SESSION_ID", "STATE", "REQUESTS", "CREATED_AT"];
-    let rendered = rows
+    let rendered = entries
         .iter()
-        .map(|row| {
+        .map(|entry| {
             [
-                string_cell(row, "session_id"),
-                Some(if row.get("closed_at").is_some_and(Value::is_string) {
-                    "closed".to_string()
-                } else {
-                    "open".to_string()
-                }),
-                count_cell(row, "request_count"),
-                string_cell(row, "created_at"),
+                Some(entry.session.session_id.clone()),
+                Some(entry.state.as_str().to_owned()),
+                Some(entry.request_count.to_string()),
+                Some(entry.session.created_at.clone()),
             ]
         })
         .collect::<Vec<_>>();
@@ -229,20 +158,6 @@ fn print_session_table(rows: &[Value]) {
     }
 }
 
-fn string_cell(row: &Value, field: &str) -> Option<String> {
-    row.get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn count_cell(row: &Value, field: &str) -> Option<String> {
-    row.get(field)
-        .and_then(Value::as_u64)
-        .map(|count| count.to_string())
-}
-
 fn column_widths<const N: usize>(headers: &[&str; N], rows: &[[Option<String>; N]]) -> [usize; N] {
     std::array::from_fn(|index| {
         rows.iter()
@@ -261,32 +176,4 @@ fn print_table_row<const N: usize>(cells: &[&str; N], widths: &[usize; N]) {
         print!("{cell:<width$}", width = widths[index]);
     }
     println!();
-}
-
-fn print_fork_outcome(args: &SessionForkArgs, outcome: ForkOutcome) -> Result<()> {
-    print_json(&json!({
-        "session_id": outcome.session_id,
-        "source_session_id": args.from,
-        "fork_at_user_turn": args.at_user_turn,
-        "copied_messages": outcome.copied_messages,
-        "copied_tool_calls": outcome.copied_tool_calls,
-        "copied_tool_results": outcome.copied_tool_results,
-        "copied_compaction_entries": outcome.copied_compaction_entries,
-    }))?;
-    Ok(())
-}
-
-fn map_fork_error(error: ForkError) -> anyhow::Error {
-    match error {
-        ForkError::ForkSourceNotFound(_)
-        | ForkError::ForkAtUserTurnOutOfRange(_, _)
-        | ForkError::ForkAgentNotFound(_)
-        | ForkError::ForkNotSameAgent
-        | ForkError::ForkSourceBusy
-        | ForkError::ForkMessageNotEditable(_)
-        | ForkError::CrossAgentForkUnavailable
-        | ForkError::ForkRecoveryIntentRequired(_) => anyhow::Error::new(error),
-        error @ ForkError::ForkRelationshipIncomplete { .. } => anyhow::Error::new(error),
-        ForkError::ForkCopyFailed(inner) => inner.context("fork copy step failed"),
-    }
 }

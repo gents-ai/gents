@@ -1,5 +1,8 @@
 pub const NODE_NAME: &str = "Node";
 pub const NODE: &str = include_str!("../schemas/agent/node.graphql");
+pub const DEFAULT_AGENT_SELECTION_NAME: &str = "DefaultAgentSelection";
+pub const DEFAULT_AGENT_SELECTION: &str =
+    include_str!("../schemas/agent/default_agent_selection.graphql");
 pub const AGENT_NAME: &str = "Agent";
 pub const AGENT: &str = include_str!("../schemas/agent/agent.graphql");
 pub const AGENT_CONTEXT_NAME: &str = "AgentContext";
@@ -12,6 +15,8 @@ pub const NODE_RUNTIME_NAME: &str = "NodeRuntime";
 pub const NODE_RUNTIME: &str = include_str!("../schemas/agent/node_runtime.graphql");
 pub const NODE_READINESS_NAME: &str = "NodeReadiness";
 pub const NODE_READINESS: &str = include_str!("../schemas/agent/node_readiness.graphql");
+pub const OWED_DELIVERY_NAME: &str = "OwedDelivery";
+pub const OWED_DELIVERY: &str = include_str!("../schemas/agent/owed_delivery.graphql");
 pub const NODE_DIRECTORY_ENTRY_NAME: &str = "NodeDirectoryEntry";
 pub const NODE_DIRECTORY_ENTRY: &str =
     include_str!("../schemas/agent/node_directory_entry.graphql");
@@ -27,7 +32,7 @@ pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.gra
 pub const AGENT_OWNERSHIP_POLICY: &str =
     include_str!("../schemas/agent/agent_ownership_policy.yaml");
 pub const AGENT_OWNERSHIP_POLICY_ID: &str =
-    "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e";
+    "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c";
 pub const SESSION_POLICY_RESOURCE: &str = "sessions";
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
@@ -209,12 +214,14 @@ pub const GOAL_OBSERVATION: &str = include_str!("../schemas/agent/goal_observati
 
 pub const ALL: &[&str] = &[
     NODE,
+    DEFAULT_AGENT_SELECTION,
     AGENT,
     COMPACTION_CONFIG,
     AGENT_CONTEXT,
     AGENT_TARGET,
     NODE_RUNTIME,
     NODE_READINESS,
+    OWED_DELIVERY,
     NODE_DIRECTORY_ENTRY,
     TOOLS,
     SKILL,
@@ -292,12 +299,14 @@ pub const ALL: &[&str] = &[
 
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NODE_NAME,
+    DEFAULT_AGENT_SELECTION_NAME,
     AGENT_NAME,
     COMPACTION_CONFIG_NAME,
     AGENT_CONTEXT_NAME,
     AGENT_TARGET_NAME,
     NODE_RUNTIME_NAME,
     NODE_READINESS_NAME,
+    OWED_DELIVERY_NAME,
     NODE_DIRECTORY_ENTRY_NAME,
     TOOLS_NAME,
     SKILL_NAME,
@@ -373,7 +382,9 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     PACK_INSTALLATION_NAME,
 ];
 
-/// Only discovery and enrollment protocol documents may cross a runtime boundary.
+/// The discovery and enrollment documents Gents' own routes carry across a
+/// runtime boundary. Application data crosses only on a node's explicit pairing,
+/// never on these routes.
 pub const REPLICATED_PROTOCOL_COLLECTION_NAMES: &[&str] = &[
     PEER_REGISTRY_NAME,
     NODE_DIRECTORY_ENTRY_NAME,
@@ -415,6 +426,7 @@ pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] = &[
     ENROLLMENT_RENEWAL_POLICY_NAME,
     FILE_INVENTORY_REPLY_NAME,
     FILE_INVENTORY_PROGRESS_NAME,
+    OWED_DELIVERY_NAME,
     PENDING_CHAT_SUBMISSION_NAME,
 ];
 
@@ -431,6 +443,16 @@ pub trait Collection {
     const NAME: &'static str;
 }
 
+pub trait FieldSelection<C>: Sized {
+    fn field<K>(self, field: Field<C, K>) -> Self;
+}
+
+pub trait SelectFields: Collection + Sized {
+    fn select_fields<S>(selection: S) -> S
+    where
+        S: FieldSelection<Self>;
+}
+
 /// A collection keyed by the node, session and requester that own a session.
 /// Implemented by the generator for every type that declares all three.
 pub trait SessionScoped: Collection + Sized {
@@ -443,6 +465,8 @@ pub trait SessionScoped: Collection + Sized {
 /// field accepts in filters and inputs, and the GraphQL variable type that
 /// carries them.
 pub mod kind {
+    pub struct Relation<C>(std::marker::PhantomData<fn() -> C>);
+
     pub trait Kind {
         const GRAPHQL: &'static str;
     }
@@ -468,6 +492,7 @@ pub mod kind {
         Json => "JSON",
         Blob => "Blob",
         StrList => "[String!]",
+        IntList => "[Int!]",
         DocId => "String",
     }
 }

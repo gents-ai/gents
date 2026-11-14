@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gents::documents::trigger_explain::explain_trigger_in_txn;
+use gents_documents::trigger_explain::explain_trigger_in_txn;
 
 use crate::cli::ConfigTriggerExplainArgs;
 use crate::{print_json, resolve_config_access};

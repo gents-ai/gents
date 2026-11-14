@@ -8,17 +8,19 @@ async fn oneshot_fixture(
     name: &str,
 ) -> (
     crate::support::TestDb,
-    crate::KeyIdentity,
-    crate::ConfigAccess,
-    crate::ConfigAccess,
+    gents_store::identity::KeyIdentity,
+    gents_store::config_client::ConfigAccess,
+    gents_store::config_client::ConfigAccess,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    use crate::store::config_client::NodePermission;
-    let (db, user, user_access, binding) = crate::test_support::signed_test_node(name).await;
-    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
-        .unwrap();
-    let admin =
-        crate::ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
+    use gents_store::config_client::NodePermission;
+    let (db, user, user_access, binding) = crate::test_support::root::signed_test_node(name).await;
+    let agent =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
+    let admin = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        db.node_identity.did().parse().unwrap(),
+    );
     let did = identity::Did::new(agent.did()).unwrap();
     for permission in [
         NodePermission::CollectionGet,
@@ -30,8 +32,12 @@ async fn oneshot_fixture(
     ] {
         admin.grant_node_permission(&did, permission).await.unwrap();
     }
-    let agent_access =
-        crate::ConfigAccess::local_managed_agent(db.node.clone(), did, agent.as_ref()).unwrap();
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        did,
+        agent.as_ref(),
+    )
+    .unwrap();
     (db, user, user_access, agent_access, binding)
 }
 
@@ -48,9 +54,9 @@ async fn capture_scripted_request(
         .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
     body["stream"] = serde_json::Value::Bool(true);
     body["stream_options"] = serde_json::json!({ "include_usage": true });
-    let inner = crate::inference::rendered_request::transport::CountingInner::default();
+    let inner = gents_inference::rendered_request::transport::CountingInner::default();
     let transport =
-        crate::inference::rendered_request::transport::RenderedRequestCapturingHttpClient::new(
+        gents_inference::rendered_request::transport::RenderedRequestCapturingHttpClient::new(
             inner.clone(),
         );
     let outbound = rig::http_client::Request::builder()
@@ -128,21 +134,21 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
     let mut behavior = crate::runtime::agent::PendingAgent::new("oneshot-lease")
         .with_identity_binding_for_test(binding)
         .build_with_identity_arc_for_test(db.node_identity.clone());
-    behavior.model_name = "scripted".to_owned();
-    behavior.stream_liveness_timeout = Duration::from_secs(1);
-    behavior.deadline_duration = Duration::from_secs(60);
+    Arc::make_mut(&mut behavior.agent).model_name = "scripted".to_owned();
+    Arc::make_mut(&mut behavior.agent).stream_liveness_timeout = Duration::from_secs(1);
+    Arc::make_mut(&mut behavior.agent).deadline_duration = Duration::from_secs(60);
     let prompt = LayeredPromptBuilder::for_agent(
-        &behavior.system_prompt,
-        &behavior.agent_did,
+        &behavior.agent.system_prompt,
+        &behavior.agent.agent_did,
         &[],
         false,
         &[],
     );
     let config = loop_config(
-        &behavior,
+        &behavior.agent,
         prompt.preamble().to_owned(),
         0,
-        crate::inference::rendered_request::CaptureScopeKind::OneShot,
+        gents_inference::rendered_request::CaptureScopeKind::OneShot,
     );
     let observations = Arc::new(AtomicUsize::new(0));
     let observe_renewal = async {
@@ -174,7 +180,8 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         let (result, ()) = tokio::join!(
             run_oneshot_owned(
                 node.clone(),
-                &behavior,
+                &behavior.agent,
+                &behavior.tools,
                 None,
                 &prompt,
                 PartialThenEmptyProvider(observations.clone()),
@@ -183,7 +190,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
                 config,
                 &[],
                 BackgroundToolRegistry::default(),
-                crate::tools::native::lsp::LspPool::new(),
+                gents_tools::native::lsp::LspPool::new(),
             ),
             observe_renewal
         );
@@ -223,7 +230,10 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         data["RenderedRequest"][0]["session_id"],
         data["AgentRequest"][0]["session_id"]
     );
-    assert_eq!(data["RenderedRequest"][0]["agent_did"], behavior.agent_did);
+    assert_eq!(
+        data["RenderedRequest"][0]["agent_did"],
+        behavior.agent.agent_did
+    );
     assert_eq!(data["AgentRequest"][0]["lifecycle_state"], "failed");
     use gents_protocol::output::TerminalOutput;
     let request = &data["AgentRequest"][0];
@@ -234,10 +244,10 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         panic!("durable text partial must be the request's exact terminal selection")
     };
     let requester_did = request["requester_did"].as_str();
-    let (header, native) = crate::session::load_canonical_message(
+    let (header, native) = gents_session::session::load_canonical_message(
         &agent_access,
         &message_doc_id,
-        behavior.node_did(),
+        behavior.agent.node_did(),
         requester_did,
     )
     .await
@@ -256,8 +266,8 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         .contains("durable one-shot partial"));
     let repeated = RequestLifecycle::recover_all_with_identities(
         &node,
-        behavior.node_did(),
-        &[behavior.agent_identity.clone()],
+        behavior.agent.node_did(),
+        &[behavior.agent.agent_identity.clone()],
     )
     .await
     .unwrap();
@@ -269,7 +279,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
 #[derive(Clone)]
 struct OutputObligationProvider {
     calls: Arc<AtomicUsize>,
-    access: crate::ConfigAccess,
+    access: gents_store::config_client::ConfigAccess,
 }
 
 #[allow(refining_impl_trait)]
@@ -337,10 +347,10 @@ impl CompletionModel for OutputObligationProvider {
 
 #[tokio::test]
 async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger_scope() {
-    use crate::documents::{
+    use gents_documents::{
         WriteToolDecl, WriteToolField, WriteToolOutputObligation, WriteToolOutputObligationScope,
     };
-    use crate::tools::surface::{AgentToolSurfaceConfig, ToolCeiling, ToolRuntimeContext};
+    use gents_tools::surface::{AgentToolSurfaceConfig, ToolCeiling, ToolRuntimeContext};
 
     for request_scoped in [true, false] {
         let dir = tempfile::tempdir().unwrap();
@@ -353,9 +363,9 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         let mut behavior = crate::runtime::agent::PendingAgent::new("oneshot-output")
             .with_identity_binding_for_test(binding)
             .build_with_identity_arc_for_test(db.node_identity.clone());
-        behavior.model_name = "scripted".into();
-        behavior.stream_liveness_timeout = Duration::from_secs(60);
-        behavior.deadline_duration = Duration::from_secs(120);
+        Arc::make_mut(&mut behavior.agent).model_name = "scripted".into();
+        Arc::make_mut(&mut behavior.agent).stream_liveness_timeout = Duration::from_secs(60);
+        Arc::make_mut(&mut behavior.agent).deadline_duration = Duration::from_secs(120);
         let declaration = WriteToolDecl {
             notification: None,
             tool_name: "write_oneshot_result".into(),
@@ -376,55 +386,68 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
                 expected_count_field: None,
             }),
         };
-        let tool_doc: crate::documents::Tools = serde_json::from_value(serde_json::json!({
-            "node_did":behavior.node_did(), "tools_id":format!("{}:tools", behavior.agent_did),
+        let tool_doc: gents_documents::Tools = serde_json::from_value(serde_json::json!({
+            "node_did":behavior.agent.node_did(), "tools_id":format!("{}:tools", behavior.agent.agent_did),
             "datastore":{"datastore_tool_surface_ids":["oneshot-surface"]},
         }))
         .unwrap();
-        let surface_doc: crate::documents::DatastoreToolSurfaceDocument =
+        let surface_doc: gents_documents::DatastoreToolSurfaceDocument =
             serde_json::from_value(serde_json::json!({
-                "node_did":behavior.node_did(), "surface_id":"oneshot-surface",
-                "entries":[crate::documents::SurfaceToolDecl::Create(declaration)],
+                "node_did":behavior.agent.node_did(), "surface_id":"oneshot-surface",
+                "entries":[gents_documents::SurfaceToolDecl::Create(declaration)],
             }))
             .unwrap();
         let documents = [
             (
-                crate::Collection::Tools,
+                gents_store::collection::Collection::Tools,
                 serde_json::to_value(&tool_doc).unwrap(),
             ),
             (
-                crate::Collection::DatastoreToolSurface,
+                gents_store::collection::Collection::DatastoreToolSurface,
                 serde_json::to_value(&surface_doc).unwrap(),
             ),
         ]
         .into_iter()
         .map(
-            |(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+            |(collection, value)| gents_documents::DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
                 update: value,
             },
         )
         .collect();
-        let plan = crate::store::config_client::DesiredStateApplyPlan::new(documents).unwrap();
+        let plan = gents_documents::DesiredStateApplyPlan::new(documents).unwrap();
         user_access
             .transact_write("test.oneshot.select_surface", |txn| {
                 let plan = &plan;
-                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    gents_documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();
-        behavior.tools = AgentToolSurfaceConfig::from_tools_document_with_surfaces(
-            &behavior.agent_did,
-            &tool_doc,
-            &[surface_doc],
-            &ToolCeiling::readwrite(dir.path()),
-            Vec::new(),
-        )
-        .unwrap();
+        behavior.tools = Arc::new(
+            AgentToolSurfaceConfig::from_tools_document_with_surfaces(
+                &behavior.agent.agent_did,
+                &tool_doc,
+                &[surface_doc],
+                &ToolCeiling::readwrite(dir.path()),
+                Vec::new(),
+            )
+            .unwrap(),
+        );
         let surface = behavior
             .tools
-            .resolve(&node, behavior.node_did(), &Default::default())
+            .resolve(
+                &node,
+                behavior.agent.node_did(),
+                &gents_tools::plugin_host::NoPluginHost,
+            )
             .await
             .unwrap();
         let obligations = surface.output_obligations();
@@ -433,21 +456,23 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
             1,
             "configured writer contract must survive surface resolution"
         );
-        let runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), behavior.node_did())
-            .for_agent(&behavior);
+        let runtime =
+            ToolRuntimeContext::oneshot_with_node_did(node.clone(), behavior.agent.node_did())
+                .for_agent(&behavior.agent);
         let tools = Arc::new(surface.build_tools(&runtime).await.unwrap());
-        let prompt = LayeredPromptBuilder::new(&behavior, &surface, &[]);
+        let prompt = LayeredPromptBuilder::new(&behavior.agent, &surface, &[]);
         let mut config = loop_config(
-            &behavior,
+            &behavior.agent,
             prompt.preamble().to_owned(),
             tools.len(),
-            crate::inference::rendered_request::CaptureScopeKind::OneShot,
+            gents_inference::rendered_request::CaptureScopeKind::OneShot,
         );
         config.max_turns = 4;
         let calls = Arc::new(AtomicUsize::new(0));
         let result = run_oneshot_owned(
             node.clone(),
-            &behavior,
+            &behavior.agent,
+            &behavior.tools,
             None,
             &prompt,
             OutputObligationProvider {
@@ -567,15 +592,15 @@ async fn oneshot_bash_uses_owned_request_context() {
     let mut agent = crate::runtime::agent::PendingAgent::new("oneshot-bash")
         .with_identity_binding_for_test(binding)
         .build_with_identity_arc_for_test(db.node_identity.clone());
-    agent.model_name = "scripted".into();
-    agent.stream_liveness_timeout = Duration::from_secs(60);
-    agent.deadline_duration = Duration::from_secs(120);
+    Arc::make_mut(&mut agent.agent).model_name = "scripted".into();
+    Arc::make_mut(&mut agent.agent).stream_liveness_timeout = Duration::from_secs(60);
+    Arc::make_mut(&mut agent.agent).deadline_duration = Duration::from_secs(120);
     let root = tempfile::tempdir().unwrap();
     tokio::fs::write(root.path().join("oneshot-visible.txt"), "visible")
         .await
         .unwrap();
     let tools = Arc::new(
-        crate::tools::native::ToolSet::builder()
+        gents_tools::native::ToolSet::builder()
             .read_root(root.path())
             .bash_read_only()
             .build()
@@ -583,24 +608,25 @@ async fn oneshot_bash_uses_owned_request_context() {
             .unwrap(),
     );
     let prompt = LayeredPromptBuilder::for_agent(
-        &agent.system_prompt,
-        &agent.agent_did,
+        &agent.agent.system_prompt,
+        &agent.agent.agent_did,
         &["bash"],
         false,
         &[],
     );
     let mut config = loop_config(
-        &agent,
+        &agent.agent,
         prompt.preamble().to_owned(),
         tools.len(),
-        crate::inference::rendered_request::CaptureScopeKind::OneShot,
+        gents_inference::rendered_request::CaptureScopeKind::OneShot,
     );
     config.max_turns = 4;
-    let runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), agent.node_did());
+    let runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), agent.agent.node_did());
     let calls = Arc::new(AtomicUsize::new(0));
     let result = run_oneshot_owned(
         node.clone(),
-        &agent,
+        &agent.agent,
+        &agent.tools,
         None,
         &prompt,
         OneshotBashProvider(calls.clone()),

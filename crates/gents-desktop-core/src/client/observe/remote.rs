@@ -4,15 +4,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use gents::store::config_client::{ConfigAccess, GraphqlEndpoint, TransactionFailure};
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, TransactionFailure};
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
 
-use super::{ObservedStore, ObserverMetrics, RuntimeConnectionEvent};
+use super::{ObservedStore, ObservedStores, ObserverMetrics, RuntimeConnectionEvent};
 use crate::client::query::OBSERVED_COLLECTIONS;
 use crate::client::{PeerRecord, SnapshotReadError};
-use gents::store::config_client::SubscriptionEnd;
+use gents_store::config_client::SubscriptionEnd;
 
 /// One event of a source task (`RuntimeConnectionObservation.armedEvent` or
 /// `streamEndEvent`).
@@ -43,7 +43,8 @@ pub(super) fn armed_after(was_armed: bool, event: RuntimeConnectionEvent) -> boo
 }
 
 /// `RuntimeConnectionObservation.SnapshotOutcome` of a read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(super) enum SnapshotOutcome {
     Succeeded,
     Refused,
@@ -118,9 +119,11 @@ const RECONNECT_FLAT_ATTEMPTS: u32 = 5;
 const RECONNECT_CAP_MS: u64 = 30_000;
 /// `RuntimeConnectionObservation.reconnectStableMs`.
 pub(super) const RECONNECT_STABLE: Duration = Duration::from_secs(30);
+pub(super) const RETRY_NOW_COUNT: u32 = 0;
 
 /// `RuntimeConnectionObservation.Origin`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(super) enum Origin {
     /// A notice of the source task (its handshake or its stream).
     Source,
@@ -170,7 +173,7 @@ impl Sources {
         node: &str,
         origin: Origin,
         event: RuntimeConnectionEvent,
-        store: &ObservedStore,
+        stores: &ObservedStores,
         now: Instant,
         metrics: &ObserverMetrics,
     ) {
@@ -185,7 +188,7 @@ impl Sources {
             }
             _ => {}
         }
-        store.observe_runtime_connection(node, event);
+        stores.observe_runtime_connection(node, event);
         if event == RuntimeConnectionEvent::SnapshotSucceeded {
             self.connected_at.entry(node.to_owned()).or_insert(now);
         }
@@ -207,6 +210,16 @@ impl Sources {
         }
         self.attempts
             .insert(node.to_owned(), attempt.saturating_add(1));
+    }
+
+    pub(super) fn retry_now(&mut self, node: &str, now: Instant) -> bool {
+        let Some(source) = self.entries.get_mut(node) else {
+            return false;
+        };
+        source.reconnect_at = Some(now);
+        source.abort.abort();
+        self.attempts.insert(node.to_owned(), RETRY_NOW_COUNT);
+        true
     }
 
     /// A source for `node` whose task never sends, as `reconcile` would start
@@ -252,16 +265,17 @@ impl Sources {
     }
 
     /// Starts, keeps or drops each peer's source and owns every node's
-    /// connection status: a peer without an operator endpoint shows
-    /// `noEndpoint`, and a node no longer in the directory has no status.
+    /// connection status and store: a peer without an operator endpoint shows
+    /// `noEndpoint`, and a node no longer in the directory has neither a
+    /// status nor a store. Returns the nodes no longer observed.
     pub(super) fn reconcile(
         &mut self,
         peers: &[PeerRecord],
-        capability: &gents::store::config_client::ClientSigningCapability,
+        capability: &gents_store::config_client::ClientSigningCapability,
         notices: &mpsc::UnboundedSender<Notice>,
-        store: &Arc<ObservedStore>,
+        stores: &Arc<ObservedStores>,
         metrics: &Arc<ObserverMetrics>,
-    ) {
+    ) -> Vec<String> {
         let mut unavailable = BTreeSet::new();
         let endpoints: BTreeMap<_, _> = peers
             .iter()
@@ -274,14 +288,19 @@ impl Sources {
             })
             .collect();
         let observed: BTreeSet<String> = endpoints.keys().chain(&unavailable).cloned().collect();
-        for removed in self.observed.difference(&observed) {
-            store.set_runtime_connection(removed, None);
+        let removed: Vec<String> = self.observed.difference(&observed).cloned().collect();
+        for node in &removed {
+            stores.set_runtime_connection(node, None);
+            stores.remove(node);
+        }
+        for node in &observed {
+            stores.ensure(node);
         }
         for node in unavailable
             .iter()
             .filter(|node| !endpoints.contains_key(*node))
         {
-            store.observe_runtime_connection(node, RuntimeConnectionEvent::EndpointMissing);
+            stores.observe_runtime_connection(node, RuntimeConnectionEvent::EndpointMissing);
         }
         self.observed = observed;
         // A source of an unchanged endpoint is kept even after its task
@@ -304,7 +323,7 @@ impl Sources {
             // A reconnect keeps the shown status: an outage stays
             // `disconnected` until the runtime answers.
             if reconnecting.get(&node) != Some(&endpoint.to_string()) {
-                store.observe_runtime_connection(&node, RuntimeConnectionEvent::SourceStarted);
+                stores.observe_runtime_connection(&node, RuntimeConnectionEvent::SourceStarted);
             }
             self.connected_at.remove(&node);
             self.generation += 1;
@@ -314,7 +333,7 @@ impl Sources {
                 endpoint.clone(),
                 current,
                 notices.clone(),
-                store.clone(),
+                stores.ensure(&node),
                 metrics.clone(),
             ));
             self.entries.insert(
@@ -327,6 +346,7 @@ impl Sources {
                 },
             );
         }
+        removed
     }
 }
 
@@ -431,7 +451,7 @@ async fn observe(
         };
         current = None;
         // Changes committed while no subscription is armed are not delivered.
-        store.observe_request_event(None);
+        store.observe_request_event();
         let Some(event) = stream_end_event(ended) else {
             continue;
         };
@@ -499,15 +519,59 @@ async fn arm(
     let renew_at = period.map(|period| renewal_start(started, started.elapsed(), period));
     let mut tasks = JoinSet::new();
     for (collection, mut stream) in streams {
-        let node = node.to_owned();
         let store = store.clone();
         let metrics = metrics.clone();
         tasks.spawn(async move {
             while let Some(envelope) = stream.recv().await? {
-                super::delivery::deliver(&store, &metrics, &node, collection, &envelope)?;
+                super::delivery::deliver(&store, &metrics, collection, &envelope)?;
             }
             Ok::<_, anyhow::Error>(stream.end().unwrap_or(SubscriptionEnd::Completed))
         });
     }
     Ok(Armed { tasks, renew_at })
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn armed_event_matches_lean() {
+        gents_lean_vocab::families::runtime_connection_observation_armed_event::replay(|i| {
+            armed_event(i.renewal)
+        });
+    }
+
+    #[test]
+    fn armed_after_matches_lean() {
+        gents_lean_vocab::families::runtime_connection_observation_armed_after::replay(|i| {
+            armed_after(i.was_armed, i.event)
+        });
+    }
+
+    #[test]
+    fn snapshot_event_matches_lean() {
+        gents_lean_vocab::families::runtime_connection_observation_snapshot_event::replay(|i| {
+            snapshot_event(i.snapshot_outcome)
+        });
+    }
+
+    #[test]
+    fn failed_snapshot_matches_lean() {
+        use gents_store::config_client::access_classification_fixture::AccessFailure;
+        gents_lean_vocab::families::runtime_connection_observation_failed_snapshot::replay::<
+            AccessFailure,
+            SnapshotOutcome,
+        >(|i| {
+            let read = anyhow::Error::from(gents_store::views::ViewError::from(i.failure.error()));
+            snapshot_outcome(&SnapshotReadError::from(read))
+        });
+    }
+
+    #[test]
+    fn reconnects_matches_lean() {
+        gents_lean_vocab::families::runtime_connection_observation_reconnects::replay(|i| {
+            reconnects(i.origin, i.event)
+        });
+    }
 }

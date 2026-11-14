@@ -51,42 +51,21 @@ async fn startup_subscriptions_use_one_batch_with_the_exact_allowed_scope() {
 }
 
 #[tokio::test]
+async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
+    for case in gents_lean_vocab::families::native_claim_lifetime_client_core_scenario::cases::<
+        String,
+        String,
+    >() {
+        case.check(cancelled_shutdown_waiter_claim_observations().await);
+    }
+}
+
 #[expect(
     clippy::disallowed_methods,
     reason = "retries a file lock on a blocking-pool thread; the lock has no release notification"
 )]
-async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../gents/tests/fixtures/native_claim_lifetime.json"
-    ))
-    .expect("generated native claim lifetime fixture");
-    let case = fixture
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["name"] == "client_shutdown_cancel_retains_claim_until_return")
-        .expect("Lean client shutdown cancellation case");
-    let events = case["events"].as_array().unwrap();
-    let expected_events = [
-        "native_started",
-        "caller_cancelled",
-        "native_returned",
-        "access_released",
-        "lifecycle_guard_released",
-        "gate_release_requested",
-    ]
-    .map(|event| serde_json::Value::String(event.to_owned()));
-    assert_eq!(events, expected_events.as_slice());
-    let claim_held_for = |event: &str| {
-        let index = events
-            .iter()
-            .position(|candidate| candidate == event)
-            .expect("event in generated trace");
-        case["observations"][index]["claim_held"]
-            .as_bool()
-            .expect("claim observation in generated trace")
-    };
-
+async fn cancelled_shutdown_waiter_claim_observations() -> Vec<bool> {
+    let mut observed = Vec::new();
     let temp = tempfile::tempdir().expect("temporary desktop home");
     let paths = DesktopPaths::from_root(temp.path().join("client"));
     let core = Arc::new(
@@ -116,11 +95,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     assert!(waiter.await.unwrap_err().is_cancelled());
     drop(core);
 
-    assert_eq!(
-        gents::store::local::home::lock_store(&home, &data).is_err(),
-        claim_held_for("caller_cancelled"),
-        "the claim observation after shutdown waiter cancellation"
-    );
+    observed.push(gents_store::local::home::lock_store(&home, &data).is_err());
 
     pause.allow_node_shutdown.notify_one();
     tokio::time::timeout(
@@ -129,11 +104,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     )
     .await
     .expect("native shutdown returns before the claim is released");
-    assert_eq!(
-        gents::store::local::home::lock_store(&home, &data).is_err(),
-        claim_held_for("native_returned"),
-        "the claim observation after native shutdown return"
-    );
+    observed.push(gents_store::local::home::lock_store(&home, &data).is_err());
 
     pause.allow_access_release.notify_one();
     let retry_home = home.clone();
@@ -141,7 +112,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     let reacquired = tokio::task::spawn_blocking(move || {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
-            match gents::store::local::home::lock_store(&retry_home, &retry_data) {
+            match gents_store::local::home::lock_store(&retry_home, &retry_data) {
                 Ok(lock) => return lock,
                 Err(_) if std::time::Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(10));
@@ -156,11 +127,8 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     .await
     .expect("store lock probe panicked");
     drop(reacquired);
-    assert_eq!(
-        gents::store::local::home::lock_store(&home, &data).is_err(),
-        claim_held_for("access_released"),
-        "the claim observation after access release"
-    );
+    observed.push(gents_store::local::home::lock_store(&home, &data).is_err());
+    observed
 }
 
 #[tokio::test]
@@ -501,24 +469,21 @@ async fn restart_clears_and_defers_persisted_enrollment_until_current_authority(
         core.local_peer_id().to_owned(),
         core.options().operator_identity_interaction,
     ));
-    let options = ClientCoreOptions {
+    super::supervisor::FirstRepairCycle {
+        bus: core.node().event_bus().as_ref(),
+        p2p: &p2p,
+        sync_state: &owner,
+        remote_admin_actor: &Arc::new(core.node_identity().clone()),
+        route_manager: &route_manager,
         install_replicators_on_bootstrap: true,
-        ..ClientCoreOptions::local_only()
-    };
-    let (statuses, errors) = super::bootstrap::bootstrap_saved_peers(
-        &core.node_arc(),
-        &p2p,
-        &owner.records(),
-        &options,
-        core.node_identity(),
-        &route_manager,
-        &mut || {},
-    )
+        force_repair: false,
+    }
+    .run()
     .await;
-    assert!(errors.is_empty());
+    let statuses = owner.snapshot().peers;
     assert_eq!(statuses.len(), 1);
     assert!(!statuses[0].dial_succeeded);
-    assert!(statuses[0].pairing.is_empty());
+    assert!(statuses[0].last_error.is_none());
     assert!(statuses[0].routes.is_empty());
     assert!(recording.connect_calls().is_empty());
     assert!(recording.add_replicator_calls().is_empty());
@@ -578,7 +543,7 @@ async fn expired_enrollment_lease_neither_gates_nor_rewrites_the_route() {
         "{error:#}"
     );
     assert!(core.sync_state.records()[0].pairing_ready);
-    assert!(core.store().snapshot().requests.is_empty());
+    assert!(core.stores().snapshot("did:key:owner").requests.is_empty());
     let persisted = crate::client::load_peer_records(core.paths().peer_directory_path())
         .await
         .unwrap();
@@ -606,8 +571,8 @@ async fn saved_peer_cleanup_removes_replicator_before_idempotent_disconnect() {
     assert!(calls[0].starts_with(&format!("remove-replicator:{}:", record.addr)));
     assert!(calls[1].starts_with(&format!("remove-replicator:{}:", record.addr)));
     assert_eq!(calls[2], format!("disconnect:{}", record.addr));
-    for collection in gents::runtime::agent::p2p_reconcile::client_route_collections(
-        gents::runtime::agent::p2p_reconcile::PairingDirection::ClientToRuntime,
+    for collection in gents_p2p::p2p_reconcile::client_route_collections(
+        gents_p2p::p2p_reconcile::PairingDirection::ClientToRuntime,
     ) {
         assert!(calls[0].contains(collection));
     }
@@ -643,7 +608,6 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         addr: record.addr.clone(),
         dial_succeeded: true,
         last_error: None,
-        pairing: Vec::new(),
         routes: Vec::new(),
     });
     assert!(core
@@ -651,7 +615,7 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         .peers
         .iter()
         .any(|status| status.peer_id == record.peer_id));
-    let route = gents::runtime::agent::p2p_reconcile::ClientRouteIdentity::new(
+    let route = gents_p2p::p2p_reconcile::ClientRouteIdentity::new(
         record.peer_id.clone(),
         "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
         "did:key:desktop-requester",
@@ -662,7 +626,7 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
     let manual_write = lifecycle
         .upsert_desired(
             &route,
-            gents::runtime::agent::p2p_reconcile::PairingDirection::RuntimeToClient,
+            gents_p2p::p2p_reconcile::PairingDirection::RuntimeToClient,
         )
         .await;
     assert!(manual_write
@@ -697,7 +661,7 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         .iter()
         .any(|status| status.peer_id == record.peer_id));
     let peer_id = gents_protocol::graphql::escape_graphql_string(
-        &route.desired_id(gents::runtime::agent::p2p_reconcile::PairingDirection::RuntimeToClient),
+        &route.desired_id(gents_p2p::p2p_reconcile::PairingDirection::RuntimeToClient),
     );
     let response = core
         .node()
@@ -741,7 +705,6 @@ async fn repair_saved_peer_refreshes_network_before_redial() {
             addr: record.addr.clone(),
             dial_succeeded: false,
             last_error: Some("peer Workshop Bay dial failed".to_string()),
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
         "did:key:desktop",
@@ -778,7 +741,6 @@ async fn failed_redial_clears_stale_configured_peer_connectivity() {
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
         "did:key:desktop",
@@ -817,7 +779,6 @@ async fn repair_saved_graphql_peer_leaves_replicator_installation_to_route_manag
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
         "did:key:desktop",
@@ -856,7 +817,6 @@ async fn saved_peer_needs_repair_when_live_connection_has_dropped() {
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
     )
@@ -886,7 +846,6 @@ async fn saved_peer_does_not_need_repair_while_live_connection_is_healthy() {
             addr: record.addr.clone(),
             dial_succeeded: true,
             last_error: None,
-            pairing: Vec::new(),
             routes: Vec::new(),
         }),
     )
@@ -951,31 +910,6 @@ fn p2p_health_materially_changed_ignores_probe_timestamps() {
 }
 
 #[tokio::test]
-async fn selected_node_did_channel_updates_subscribers() {
-    use crate::client::paths::DesktopPaths;
-
-    let tmp = tempfile::TempDir::new().expect("tmpdir");
-    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
-    let options = ClientCoreOptions::local_only();
-    let core = ClientCore::start_with_paths_and_options(paths, options)
-        .await
-        .expect("client core");
-
-    let mut rx = core.selected_node_did_rx();
-    assert_eq!(rx.borrow().clone(), None);
-
-    core.set_selected_node_did(Some("did:alpha".to_string()));
-    rx.changed().await.expect("watch update");
-    assert_eq!(rx.borrow().clone(), Some("did:alpha".to_string()));
-
-    core.set_selected_node_did(None);
-    rx.changed().await.expect("watch update");
-    assert_eq!(rx.borrow().clone(), None);
-
-    Arc::new(core).shutdown().await.expect("shutdown");
-}
-
-#[tokio::test]
 async fn scoped_refresh_of_an_unrouted_node_fails_without_a_local_replica() {
     use crate::client::paths::DesktopPaths;
 
@@ -986,21 +920,17 @@ async fn scoped_refresh_of_an_unrouted_node_fails_without_a_local_replica() {
         .await
         .expect("client core");
 
-    core.refresh_store().await.expect("refresh full");
-    let before = core.store().projection_revision().store_version;
-
     // Node configuration is read from its runtime's authenticated endpoint;
     // there is no replica to fall back to.
-    core.set_selected_node_did(Some("did:any".to_string()));
     let error = core
-        .refresh_store()
+        .refresh_node("did:any")
         .await
-        .expect_err("a selected node without a route has no readable store");
+        .expect_err("a node without a route has no readable store");
     assert!(
         format!("{error:#}").contains("has no authenticated database endpoint"),
         "{error:#}"
     );
-    assert_eq!(core.store().projection_revision().store_version, before);
+    assert!(core.stores().snapshot("did:any").nodes.is_empty());
 
     Arc::new(core).shutdown().await.expect("shutdown");
 }
@@ -1047,7 +977,7 @@ async fn failed_selection_refresh_schedules_scoped_observer_recovery() {
     );
     let observer = core.observer.lock().await.take().expect("observer owner");
     observer.shutdown().await;
-    let _ = core.store.take_resync_requests();
+    let _ = core.stores.take_resync_requests();
 
     core.node.shutdown().await.unwrap();
     let error = core
@@ -1056,9 +986,10 @@ async fn failed_selection_refresh_schedules_scoped_observer_recovery() {
         .expect_err("a stopped local database cannot refresh the selected scope");
     assert!(!error.to_string().is_empty());
 
-    let (full, scopes) = core.store.take_resync_requests();
-    assert!(!full, "the failed selected refresh remains scoped");
-    assert_eq!(scopes, vec!["did:test:selection-recovery"]);
+    assert_eq!(
+        core.stores.take_resync_requests(),
+        vec!["did:test:selection-recovery"]
+    );
 
     core.shutdown().await.expect("shutdown client core");
 }
@@ -1120,11 +1051,11 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
     let core = Arc::new(core);
     core.shutdown().await.expect("shutdown");
     drop(core);
-    let record: gents::store::local::store_key::StoreEncryption =
+    let record: gents_store::local::store_key::StoreEncryption =
         serde_json::from_slice(&std::fs::read(paths.store_encryption_path()).unwrap()).unwrap();
     assert_eq!(
         record.custody,
-        gents::store::local::store_key::StoreKeyCustody::File
+        gents_store::local::store_key::StoreKeyCustody::File
     );
     assert!(paths.store_key_path().is_file());
 
@@ -1147,17 +1078,57 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
         Err(error) => error,
     };
     assert_eq!(
-        gents::store::local::storage_backend::incompatible_store(
+        gents_store::local::storage_backend::incompatible_store(
             error.as_ref(),
             paths.node_data_dir()
         )
         .map(|store| store.kind),
-        Some(gents::store::local::storage_backend::IncompatibleStoreKind::MissingStoreKey)
+        Some(gents_protocol::operations::install_repair::IncompatibleStoreKind::MissingStoreKey)
     );
     assert!(
         !paths.store_key_path().exists(),
         "no replacement key is created"
     );
+}
+
+#[tokio::test]
+async fn startup_observes_runtimes_without_waiting_for_saved_peer_dials() {
+    use crate::client::paths::DesktopPaths;
+
+    const NODE: &str = "did:test:unreachable-runtime";
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().join("client"));
+    paths.ensure_root_dirs().await.unwrap();
+    let mut directory = PeerDirectory::open_writer(paths.peer_directory_path())
+        .await
+        .unwrap();
+    let mut peer = PeerRecord::new(
+        "Unreachable",
+        "127.0.0.1:9/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
+        NODE,
+    );
+    peer.graphql = Some("http://127.0.0.1:9/api/v0/graphql".into());
+    directory.upsert(peer).await.unwrap();
+    drop(directory);
+
+    let core = tokio::time::timeout(
+        BOOTSTRAP_OPERATION_TIMEOUT / 4,
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()),
+    )
+    .await
+    .expect("startup does not wait for the saved peer's dial")
+    .expect("client core");
+    let core = Arc::new(core);
+    assert_eq!(
+        tokio::time::timeout(
+            BOOTSTRAP_OPERATION_TIMEOUT / 4,
+            core.reconnect_runtime_now(NODE)
+        )
+        .await
+        .expect("the observer answers while the dial is still retrying"),
+        Some(crate::client::RuntimeConnectionStatus::Disconnected)
+    );
+    core.shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
@@ -1227,7 +1198,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
             let response = access
                 .execute(&format!(
                     "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{ request_id requester_did admission_kind admission_signer_did }} }}",
-                    gents::store::graphql::escape_graphql_string(&request_id),
+                    gents_store::graphql::escape_graphql_string(&request_id),
                 ))
                 .await?;
             anyhow::Ok(
@@ -1243,7 +1214,9 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
         .submit_request("session", &owner, "send directly", Some(&agent.agent_did))
         .await?;
     assert_eq!(
-        core.store().focused_request_id(),
+        core.stores()
+            .store(&owner)
+            .and_then(|store| store.focused_request_id()),
         Some(submitted.request_id.clone())
     );
     let rows = owner_request(submitted.request_id.clone()).await?;
@@ -1291,12 +1264,6 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
             .contains(crate::client::peer_directory::ChatRouteCause::NoEndpoint.token()),
         "{denied:#}"
     );
-    // Losing the endpoint also detaches the route's projection, so resend
-    // refuses before it can name the fence; either way nothing is written.
-    core.resend_request_in_scope(&submitted.request_id, Some(&owner))
-        .await
-        .expect_err("resend has no write path");
-
     // Pairing records the discovery-only P2P legs, not the HTTP write path.
     let mut unpaired = record.clone();
     unpaired.pairing_ready = false;
@@ -1362,13 +1329,14 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
     let owner = runtime.node_did().to_owned();
     let agent = runtime.provision_agent().await;
     let user = runtime.user_access();
-    gents::documents::write_inference_backend_document(
+    gents_documents::write_inference_backend_document(
         &user,
         &serde_json::from_value(serde_json::json!({
             "node_did": owner, "backend_id": "backend", "name": "Backend",
             "provider_kind": "OpenAiCompatible", "endpoint": "http://localhost:8000/v1",
             "auth": {"kind": "unauthenticated"}
         }))?,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     crate::client::mutations::upsert_inference_profile_on(
@@ -1379,9 +1347,10 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
         }))?,
     )
     .await?;
-    core.save_agent(&serde_json::from_value(
-        runtime.agent_value(&agent, "profile"),
-    )?)
+    core.save_agent(
+        &serde_json::from_value(runtime.agent_value_for_create(&agent, "profile").await)?,
+        None,
+    )
     .await?;
     let session_doc = runtime
         .agent_session(&agent, "terminal-page", core.node_identity.did())
@@ -1407,7 +1376,7 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
                                 &serde_json::json!({"input": input}),
                             )
                             .await?;
-                        let doc = gents::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                        let doc = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
                         txn.add_resource_relationship("AgentRequest", &doc, "parent", "agents", agent_doc)
                             .await?;
                         txn.add_resource_relationship("AgentRequest", &doc, "session", "sessions", session_doc)
@@ -1428,13 +1397,13 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
             "test.terminal_page.session",
             &format!(
                 "mutation {{ update_AgentSession(docID: \"{}\", input: {{observation: {observation}}}) {{_docID}} }}",
-                gents::store::graphql::escape_graphql_string(&session_doc)
+                gents_store::graphql::escape_graphql_string(&session_doc)
             ),
         )
         .await?;
     assert!(matches!(
         core.refresh_node(&owner).await?,
-        Some(StoreRefresh::Published { .. })
+        StoreRefresh::Published { .. }
     ));
     let first = core
         .refresh_local_request(&owner, "terminal-page", Some("latest"), None, &docs)
@@ -1452,8 +1421,8 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
         second.published_version
     );
     assert!(core
-        .store
-        .snapshot()
+        .stores
+        .snapshot(&owner)
         .request_row_by_doc_id(&docs[0])
         .is_some());
     core.shutdown().await?;
@@ -1470,10 +1439,8 @@ async fn direct_refresh_distinguishes_published_from_superseded_reads() -> anyho
 
     let tmp = tempfile::tempdir()?;
     let (core, runtime) = served_core_without_observer(&tmp).await?;
-    let mut proxy = GatedRuntimeProxy::start(runtime.graphql(), |body| {
-        body.contains("query DesktopSnapshot")
-    })
-    .await;
+    let mut proxy =
+        GatedRuntimeProxy::start(runtime.graphql(), GatedRuntimeProxy::node_snapshot).await;
     core.add_local_standard_peer_route_for_test(
         "Served Runtime",
         "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
@@ -1489,40 +1456,32 @@ async fn direct_refresh_distinguishes_published_from_superseded_reads() -> anyho
         async move { core.refresh_node(&node).await }
     });
     proxy.next().await.release();
-    assert!(matches!(
-        refresh.await??,
-        Some(StoreRefresh::Published { .. })
-    ));
-    let _ = core.store.take_resync_requests();
+    assert!(matches!(refresh.await??, StoreRefresh::Published { .. }));
+    let _ = core.stores.take_resync_requests();
 
     let refresh = tokio::spawn({
         let (core, node) = (core.clone(), node.clone());
         async move { core.refresh_node(&node).await }
     });
     let held = proxy.next().await;
-    let newer = core
-        .store
-        .merge_observer_patch(crate::client::store::ClientStore::from_rows(
-            crate::client::store::ClientStoreRows {
-                sessions: vec![serde_json::from_value(serde_json::json!({
-                    "node_did": node, "session_id": "newer", "agent_did": "agent",
-                    "created_at": "2026-01-01T00:00:00Z",
-                }))?],
-                ..Default::default()
-            },
-        ));
+    let newer =
+        core.stores
+            .ensure(&node)
+            .merge_chat_patch(crate::client::store::ClientStore::from_rows(
+                crate::client::store::ClientStoreRows {
+                    sessions: vec![serde_json::from_value(serde_json::json!({
+                        "node_did": node, "session_id": "newer", "agent_did": "agent",
+                        "created_at": "2026-01-01T00:00:00Z",
+                    }))?],
+                    ..Default::default()
+                },
+            ));
     held.release();
-    assert_eq!(
-        refresh.await??,
-        Some(StoreRefresh::Superseded { version: newer })
-    );
-    assert_eq!(
-        core.store.take_resync_requests(),
-        (false, vec![node.clone()])
-    );
+    assert_eq!(refresh.await??, StoreRefresh::Superseded { version: newer });
+    assert_eq!(core.stores.take_resync_requests(), vec![node.clone()]);
     assert!(core
-        .store
-        .snapshot()
+        .stores
+        .snapshot(&node)
         .sessions
         .iter()
         .any(|session| session.session_id == "newer"));
@@ -1533,7 +1492,7 @@ async fn direct_refresh_distinguishes_published_from_superseded_reads() -> anyho
 
 #[tokio::test]
 async fn inference_activity_selects_authenticated_transport_by_peer_authority() {
-    use gents::store::identity::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
     use identity::Identity as _;
     use wiremock::{
         matchers::{method, path},
@@ -1563,12 +1522,12 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
         std::fs::create_dir_all(&home).unwrap();
         let key_path = home.join("node.key");
         let did = if authenticated {
-            gents::store::identity::KeyIdentity::load_or_create(&key_path, None)
+            gents_store::identity::KeyIdentity::load_or_create(&key_path, None)
                 .unwrap()
                 .did()
                 .to_owned()
         } else {
-            gents::store::identity::load_or_create_file_identity(&key_path)
+            gents_store::identity::load_or_create_file_identity(&key_path)
                 .unwrap()
                 .did()
                 .unwrap()
@@ -1592,7 +1551,7 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
         core.sync_state.upsert_for_test(record).await.unwrap();
         let operator = core.operator_observation_endpoint(&did).await.unwrap();
         assert!(!operator.is_anonymous(), "{case}");
-        let key = gents::observe::inference_observation::InferenceKey {
+        let key = gents_inference::inference_observation::InferenceKey {
             node: did.clone(),
             session: case.into(),
             request: "request".into(),
@@ -1648,31 +1607,59 @@ async fn chat_write_route_selection_matches_lean() -> anyhow::Result<()> {
     );
     // Selection runs every Lean route under every route observation; none of
     // them may change which route a chat write selects.
-    let cases = crate::client::peer_directory::tests::chat_readiness_cases();
-    assert_eq!(cases.len(), 1 + 4 * 2 * 2 * 8, "{}", cases.len());
-    for (index, (record, refusal)) in cases.into_iter().enumerate() {
-        let node_did = format!("did:key:runtime-{index}");
-        if let Some(mut record) = record.clone() {
-            record.node_did = node_did.clone();
-            core.sync_state.upsert_for_test(record).await?;
-        }
-        let selected = core.peer_record_for_chat_write(&node_did);
-        let gated = selected.and_then(|peer| {
-            super::writes::ensure_peer_chat_ready(&node_did, peer.as_ref()).map(|()| peer)
-        });
-        match refusal {
-            None => assert!(gated?.is_some_and(|peer| peer.node_did == node_did)),
-            Some(token) => {
-                let error = gated.expect_err("refused route must not select a write target");
-                assert_eq!(
+    use crate::client::peer_directory::tests::{chat_case_record, with_route_observations};
+    let mut index = 0usize;
+    for case in gents_lean_vocab::families::chat_readiness_cases_write_selection::cases::<
+        crate::client::peer_directory::ChatRouteCause,
+    >() {
+        let records = match case.input.route.as_ref() {
+            None => vec![None],
+            Some(route) => with_route_observations(&chat_case_record(
+                route.source.as_deref(),
+                route.operator_endpoint,
+                route.managed,
+            ))
+            .into_iter()
+            .map(Some)
+            .collect(),
+        };
+        let mut refusals = Vec::new();
+        for record in records {
+            index += 1;
+            let node_did = format!("did:key:runtime-{index}");
+            if let Some(mut record) = record.clone() {
+                record.node_did = node_did.clone();
+                core.sync_state.upsert_for_test(record).await?;
+            }
+            let selected = core.peer_record_for_chat_write(&node_did);
+            let gated = selected.and_then(|peer| {
+                super::writes::ensure_peer_chat_ready(&node_did, peer.as_ref()).map(|()| peer)
+            });
+            refusals.push(match gated {
+                Ok(peer) => {
+                    assert!(
+                        peer.is_some_and(|peer| peer.node_did == node_did),
+                        "{record:?}"
+                    );
+                    None
+                }
+                Err(error) => Some(
                     error
                         .downcast_ref::<super::writes::ChatRouteRefusal>()
-                        .map(|refusal| refusal.cause().token()),
-                    Some(token.as_str()),
-                    "{record:?}: {error:#}"
-                );
-            }
+                        .map(|refusal| refusal.cause())
+                        .unwrap_or_else(|| panic!("{record:?}: {error:#}")),
+                ),
+            });
         }
+        assert!(
+            refusals.windows(2).all(|pair| pair[0] == pair[1]),
+            "{refusals:?}"
+        );
+        case.check(
+            gents_lean_vocab::families::chat_readiness_cases_write_selection::FenceOutput {
+                refusal: refusals[0],
+            },
+        );
     }
     core.shutdown().await?;
     Ok(())
@@ -1681,20 +1668,15 @@ async fn chat_write_route_selection_matches_lean() -> anyhow::Result<()> {
 #[test]
 fn route_leg_combination_matches_lean() {
     use super::route_manager::{combined_route_readiness, RouteReconcileState};
-    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = snapshot["client_route_pairing_legs"].as_array().unwrap();
-    assert_eq!(cases.len(), 9);
-    let leg = |value: &serde_json::Value| match value.as_str().unwrap() {
+    let leg = |value: &str| match value {
         "ready" => RouteReconcileState::Ready,
         "drifted" => RouteReconcileState::Drifted,
         "unavailable" => RouteReconcileState::Unavailable,
         other => panic!("unknown leg {other}"),
     };
-    for case in cases {
-        assert_eq!(
-            combined_route_readiness(leg(&case["outbound"]), leg(&case["inbound"])),
-            case["combined"].as_bool(),
-            "{case}"
-        );
-    }
+    gents_lean_vocab::families::chat_readiness_cases_route_pairing_legs::replay::<String>(|i| {
+        gents_lean_vocab::families::chat_readiness_cases_route_pairing_legs::LegsOutput {
+            combined: combined_route_readiness(leg(&i.outbound), leg(&i.inbound)),
+        }
+    });
 }

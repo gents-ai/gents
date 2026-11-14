@@ -1,6 +1,11 @@
+import { useEffect, useState } from "react";
+
 import { Button } from "@gents/ui/components/button";
 
+import { connectNodeState, connectScreen } from "../lib/connectScreen";
+import { errorText } from "../lib/errorText";
 import { projectStartupLoadingStatus, startupSteps } from "../lib/loadingStatus";
+import { continueLabel } from "../lib/remoteNodes";
 import { useApp } from "../ui/app/AppContext";
 import { Mark } from "../ui/app/Mark";
 import { useStartup } from "../ui/hooks/useClient";
@@ -13,8 +18,104 @@ export function StartupScreen({
   configurationPending?: boolean;
   initConfigStatus?: "absent" | "configured" | "unreadable" | null;
 }) {
-  const { actions, lifecycle } = useApp();
+  const { actions, lifecycle, stores } = useApp();
   const startup = useStartup();
+  const { watchLocalServer } = actions;
+  const localNode = stores.localServer.use.status();
+  const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const waitsOnLocalNode = configurationPending && initConfigStatus === "configured";
+  useEffect(
+    () => (waitsOnLocalNode ? watchLocalServer() : undefined),
+    [waitsOnLocalNode, watchLocalServer],
+  );
+  const [shown, refusal] = localNode
+    ? connectScreen(connectNodeState(localNode), localNode.pairingReady)
+    : (["loading_settings", null] as const);
+  const unconnected = waitsOnLocalNode && shown === "not_connected";
+  const blocked =
+    refusal === "node_not_running"
+      ? "The node on this computer is not running. Start it in a terminal with `gents runtime server`, then choose Try again."
+      : refusal
+        ? (localNode?.error ?? "The node on this computer cannot be connected to yet.")
+        : null;
+  const reread = () =>
+    Promise.all([actions.refreshSnapshot(), actions.refreshLocalServer()]);
+  const retry = () => void reread();
+  const connect = async () => {
+    setConnecting(true);
+    setConnectError(null);
+    try {
+      await actions.enrollLocalServer();
+      await reread();
+    } catch (cause) {
+      setConnectError(errorText(cause));
+    } finally {
+      setConnecting(false);
+    }
+  };
+  if (configurationPending && unconnected) {
+    return (
+      <section
+        aria-labelledby="startup-title"
+        className="viewport-frame grid place-items-center bg-background px-8 text-foreground"
+        data-testid="startup-configuration-pending"
+      >
+        <div className="grid w-full max-w-md gap-6">
+          <Mark className="h-5 w-7 text-ink" />
+          <div className="grid gap-2">
+            <h1
+              id="startup-title"
+              className="font-heading text-xl font-medium text-heading"
+            >
+              This desktop is not connected to your node
+            </h1>
+            <p aria-live="polite" className="text-sm text-muted-foreground">
+              The node on this computer was set up outside this app, so the app cannot
+              read its settings and sessions yet. Connect this desktop to the node with
+              the node owner’s approval.
+            </p>
+            {blocked && (
+              <p
+                role="status"
+                className="text-sm wrap-break-word text-muted-foreground"
+                data-testid="startup-connect-blocked"
+              >
+                {blocked}
+              </p>
+            )}
+            {connectError && (
+              <p
+                role="alert"
+                className="text-sm wrap-break-word text-destructive"
+                data-testid="startup-connect-error"
+              >
+                Couldn’t connect this desktop: {connectError}
+              </p>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="brand"
+              disabled={connecting}
+              data-testid="startup-connect-desktop"
+              onClick={() => void connect()}
+            >
+              {connecting ? "Connecting this desktop…" : "Connect this desktop"}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={connecting}
+              data-testid="startup-connect-retry"
+              onClick={retry}
+            >
+              Try again
+            </Button>
+          </div>
+        </div>
+      </section>
+    );
+  }
   if (configurationPending) {
     return (
       <section
@@ -55,15 +156,17 @@ export function StartupScreen({
   const status = projectStartupLoadingStatus(phase, lifecycle.supportsManagedServer);
   const wait =
     managedServerWait && phase === "checking-managed-server" ? managedServerWait : null;
-  const skip = (testId: string) => (
-    <Button
-      variant="outline"
-      data-testid={testId}
-      onClick={lifecycle.skipManagedServerWait}
-    >
-      Continue without the local node
-    </Button>
-  );
+  const label = continueLabel(startup.repairPeers);
+  const skip = (testId: string) =>
+    label && (
+      <Button
+        variant="outline"
+        data-testid={testId}
+        onClick={lifecycle.skipManagedServerWait}
+      >
+        {label}
+      </Button>
+    );
 
   return (
     <section
@@ -99,20 +202,8 @@ export function StartupScreen({
               >
                 Try again
               </Button>
-              {phase === "managed-server-error" && (
-                <>
-                  {startup.canRestartManagedServer && (
-                    <Button
-                      variant="outline"
-                      data-testid="startup-restart-managed-server"
-                      onClick={() => void lifecycle.restartManagedServer()}
-                    >
-                      Restart node
-                    </Button>
-                  )}
-                  {skip("startup-continue-without-managed-server")}
-                </>
-              )}
+              {phase === "managed-server-error" &&
+                skip("startup-continue-without-managed-server")}
             </>
           }
         />

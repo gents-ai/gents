@@ -7,8 +7,8 @@ use crate::{
     append_verdict, complete_trial, create_trial, load_trials, TrialCompletion, TrialIdentity,
     TrialRecord, VerdictDraft,
 };
-use gents::documents::EvalSplit;
-use gents::store::config_client::ConfigAccess;
+use gents_documents::EvalSplit;
+use gents_store::config_client::ConfigAccess;
 
 #[async_trait::async_trait]
 pub trait Recorder: Send + Sync {
@@ -102,56 +102,17 @@ mod tests {
     use super::*;
     use crate::{load_verdicts, Anchor, OutcomeKind, TrialUsage};
     use futures::{stream, StreamExt, TryStreamExt};
-    use gents::documents::EvalTier;
+    use gents_documents::EvalTier;
     use serde_json::json;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn thirty_two_trials_record_over_http_without_losing_completions_or_verdicts() {
-        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = probe.local_addr().unwrap();
-        drop(probe);
-        let node = Arc::new(
-            crate::test_support::node_builder()
-                .with_http(gents::defra_node::HttpConfig::with_addr(address))
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                if tokio::net::TcpStream::connect(address).await.is_ok() {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
-        use gents::store::identity::NodeIdentity;
-        let keys = tempfile::tempdir().unwrap();
-        let user = gents::KeyIdentity::load_or_create(keys.path().join("user.key"), None).unwrap();
-        let access = ConfigAccess::Graphql(
-            gents::store::config_client::GraphqlEndpoint::as_principal(
-                format!("http://{address}/api/v0/graphql"),
-                user.did(),
-            )
-            .with_client_signing_capability(user.client_signing_capability().unwrap())
-            .unwrap()
-            .with_client_signed_agent_creates(),
-        );
-        let owner = node.node_identity_did().unwrap();
-        let node_input = json!({"input": {"node_did": owner}});
-        access.transact_write("test.recorder.node", |txn| {
-            let node_input = &node_input;
-            Box::pin(async move {
-                txn.execute_client_signed_create(
-                    "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-                    node_input, gents_protocol::schemas::NODE,
-                ).await.map(|_| ())
-            })
-        }).await.unwrap();
+        let (db, _user, access) = gents_inference::test_support::signed_test_node_without_agent(
+            "thirty-two-trials-record-over-http",
+            gents_automation::lifecycle_hooks::composition(),
+        )
+        .await;
+        let owner = db.node_identity.did();
         let recorder = DocumentRecorder::new(&access);
         let completion = TrialCompletion {
             ended_at: "2026-09-30T00:00:00Z".into(),
@@ -228,6 +189,6 @@ mod tests {
                 .len(),
             32
         );
-        node.shutdown().await.expect("shutdown node");
+        db.node.shutdown().await.expect("shutdown node");
     }
 }

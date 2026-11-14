@@ -1,7 +1,6 @@
 use super::*;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use super::lean_vocab_test::{lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases};
 use crate::types::{SessionSummary, TriggerView};
 
 fn canonical_session(requester: Option<&str>) -> AgentSession {
@@ -374,66 +373,30 @@ fn task_histories_keep_eight_latest_rows_per_task_without_foreign_or_duplicate_t
 
 #[test]
 fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_cases() {
-    let cases = lean_trigger_dispatch_cases();
-    assert!(
-        !cases.is_empty(),
-        "Lean trigger dispatch contract should emit recent-runs cases"
-    );
-    assert_eq!(
-        cases.len(),
-        lean_trigger_dispatch_case_count(),
-        "Lean trigger dispatch case-count sentinel drifted"
-    );
-
-    let fired_task_cases = cases
-        .iter()
-        .filter(|case| {
-            case.expected_result == "fired"
-                && matches!(
-                    case.expected_request_caused_by_kind.as_deref(),
-                    Some("schedule" | "event")
-                )
-        })
-        .collect::<Vec<_>>();
-
-    assert!(
-        fired_task_cases
-            .iter()
-            .any(|case| case.expected_request_caused_by_kind.as_deref() == Some("schedule")),
-        "Lean trigger dispatch contract must include a fired schedule lineage case"
-    );
-    assert!(
-        fired_task_cases
-            .iter()
-            .any(|case| case.expected_request_caused_by_kind.as_deref() == Some("event")),
-        "Lean trigger dispatch contract must include a fired event lineage case"
-    );
-
-    for (index, case) in fired_task_cases.into_iter().enumerate() {
-        let task_id = format!("contract-task-{}", case.name);
+    for (index, case) in
+        gents_lean_vocab::families::trigger_contracts_recent_run::cases::<String, String, String>()
+            .into_iter()
+            .enumerate()
+    {
+        let input = &case.input;
+        let task_id = format!("contract-task-{}", input.name);
         let request_id = format!("contract-req-{index}");
         let created_at = format!("2026-04-21T12:{index:02}:00Z");
-        let trigger_id = case
-            .expected_request_caused_by_id
+        let trigger_id = input
+            .trigger_id
             .as_deref()
-            .expect("fired schedule/event cases carry a trigger id");
-        let trigger_kind = case
-            .expected_request_caused_by_kind
-            .as_deref()
-            .expect("fired schedule/event cases carry a trigger kind");
-
-        assert_eq!(
-            case.expected_materialize_trigger_id.as_deref(),
-            Some(trigger_id),
-            "case {} materialized trigger id should feed recent-runs lineage",
-            case.name
-        );
-        assert_eq!(
-            case.expected_materialize_trigger_kind.as_deref(),
-            Some(trigger_kind),
-            "case {} materialized trigger kind should feed recent-runs lineage",
-            case.name
-        );
+            .expect("schedule and event dispatches carry a trigger id");
+        let kind = match input.trigger_kind.as_str() {
+            "schedule" => gents_documents::task_delivery::TriggerKind::Schedule,
+            "event" => gents_documents::task_delivery::TriggerKind::Event,
+            other => panic!(
+                "case {} is not a trigger-caused dispatch: {other}",
+                input.name
+            ),
+        };
+        let trigger_kind = kind.as_str();
+        let execution_origin =
+            gents_automation::triggers::engine::production_materializer::execution_origin_for_trigger_kind(kind);
 
         let source = if trigger_kind == "schedule" {
             serde_json::json!({"kind":"schedule","schedule_id":"schedule"})
@@ -443,7 +406,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
         let triggers = vec![TriggerView {
             config: serde_json::from_value(serde_json::json!({
                 "node_did":"did:test:contract-node", "trigger_id": trigger_id,
-                "task_id": task_id, "source":source, "concurrency":case.concurrency
+                "task_id": task_id, "source":source, "concurrency":input.concurrency
             }))
             .unwrap(),
             next_run_at: None,
@@ -468,7 +431,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
                 max_total_tokens: None,
                 lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
-                execution_origin: case.expected_execution_origin.clone(),
+                execution_origin: Some(execution_origin.as_str().to_owned()),
                 failure_reason: None,
                 terminalized_at: None,
                 terminal_redrive_attempts: None,
@@ -498,36 +461,36 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
         assert_eq!(
             recent_runs.total_fires, 1,
             "case {} should project one recent fire",
-            case.name
+            input.name
         );
         assert_eq!(
             recent_runs.last_attempt_at.as_deref(),
             Some(created_at.as_str()),
             "case {} should surface the trigger bookkeeping timestamp",
-            case.name
+            input.name
         );
         assert_eq!(
             recent_runs.last_status.as_deref(),
             Some("completed"),
             "case {} should surface the latest attempt's status",
-            case.name
+            input.name
         );
         assert!(
             recent_runs.last_error.is_none(),
             "case {} must not invent an error for a clean latest attempt",
-            case.name
+            input.name
         );
         assert_eq!(
             recent_runs.schedule_count,
             usize::from(trigger_kind == "schedule"),
             "case {} schedule count drifted",
-            case.name
+            input.name
         );
         assert_eq!(
             recent_runs.event_count,
             usize::from(trigger_kind == "event"),
             "case {} event trigger count drifted",
-            case.name
+            input.name
         );
 
         let histories = task_run_histories(&store, "did:test:contract-node", &triggers);
@@ -536,17 +499,16 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
             run_history.len(),
             1,
             "case {} should project one recent-runs history row",
-            case.name
+            input.name
         );
         let run = &run_history[0];
         assert_eq!(run.request_id, request_id);
-        assert_eq!(run.caused_by_trigger_id.as_deref(), Some(trigger_id));
-        assert_eq!(run.caused_by_trigger_kind.as_deref(), Some(trigger_kind));
-        assert_eq!(
-            run.execution_origin.as_deref(),
-            case.expected_execution_origin.as_deref(),
-            "case {} should preserve Lean trigger execution origin",
-            case.name
+        case.check(
+            gents_lean_vocab::families::trigger_contracts_recent_run::RecentRunOutput {
+                request_caused_by_id: run.caused_by_trigger_id.clone(),
+                request_caused_by_kind: run.caused_by_trigger_kind.clone(),
+                execution_origin: run.execution_origin.clone(),
+            },
         );
     }
 }
@@ -577,9 +539,11 @@ fn starter_receipt(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
     use crate::tests::support::OPERATOR;
-    use gents::NodeIdentity;
+    use gents_store::identity::NodeIdentity;
     let (core, tmp) = crate::tests::support::boot_core().await;
-    let signer = gents::KeyIdentity::load_or_create(tmp.path().join("fleet.key"), None).unwrap();
+    let signer =
+        gents_store::identity::KeyIdentity::load_or_create(tmp.path().join("fleet.key"), None)
+            .unwrap();
     let node_did = signer.did().to_owned();
     let creator = crate::tests::support::fixture_signer(7);
     let source = |session_id: &str| gents_protocol::session::SessionReference {
@@ -603,11 +567,11 @@ async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
         )
         .await;
     }
-    let access = gents::store::config_client::ConfigAccess::local(core.node_arc());
+    let access = gents_store::config_client::ConfigAccess::local(core.node_arc());
     let load = |session_id: &'static str| {
         let access = access.clone();
         async move {
-            gents::session::origin::load_session(&access, session_id, Some(OPERATOR))
+            gents_session::session::origin::load_session(&access, session_id, Some(OPERATOR))
                 .await
                 .unwrap()
                 .unwrap_or_else(|| panic!("fixture session {session_id} must load"))
@@ -718,14 +682,14 @@ async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
 
 #[tokio::test]
 async fn recorded_summary_starters_follow_the_starter_verification_model() {
-    use gents::NodeIdentity;
+    use gents_store::identity::NodeIdentity;
     struct SessionRead(serde_json::Value, std::sync::atomic::AtomicUsize);
     #[async_trait::async_trait]
-    impl gents::store::config_client::ConfigRead for SessionRead {
+    impl gents_store::config_client::ConfigRead for SessionRead {
         async fn execute_read(
             &self,
             query: &str,
-        ) -> Result<serde_json::Value, gents::store::config_client::ConfigClientError> {
+        ) -> Result<serde_json::Value, gents_store::config_client::ConfigClientError> {
             assert!(
                 query.contains("AgentSession") && !query.contains("AgentRequest"),
                 "a starter is verified from its session row alone: {query}"
@@ -734,17 +698,11 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
             Ok(serde_json::json!({"data": {"AgentSession": [self.0.clone()]}}))
         }
     }
-    let model: serde_json::Value = tokio::task::spawn_blocking(
-        gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let cases = model["session_document_cases"]["starter_verification"]
-        .as_array()
-        .unwrap();
+    let cases = gents_lean_vocab::families::contracts_starter_verification::cases();
     let dir = tempfile::tempdir().unwrap();
-    let signer = gents::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
+    let signer =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
+            .unwrap();
     for requester in [None, Some("did:test:source-requester")] {
         // An agent-started session's receipt is signed by its requester, the
         // Agent that created it.
@@ -804,15 +762,13 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
             }
             row
         };
-        for case in cases {
-            let name = case["name"].as_str().unwrap();
-            let expected = case["accepted"].as_bool().unwrap();
+        for case in &cases {
+            let name = case.input.name.as_str();
             let candidate = candidate(name);
             let read = SessionRead(candidate.clone(), Default::default());
-            let verified = gents::session::origin::verified_recorded_starter(&read, &scope)
+            let verified = gents_session::session::origin::verified_recorded_starter(&read, &scope)
                 .await
                 .unwrap();
-            assert_eq!(verified.is_some(), expected, "{name}");
             let mut stored = candidate.clone();
             for field in ["_docID", "started_by_node_did", "started_by_session_id"] {
                 stored.as_object_mut().unwrap().remove(field);
@@ -823,7 +779,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
             super::super::runtime_tasks::resolve_summary_starters(&read, &cache, &mut summaries)
                 .await;
             let summarized = summaries[0].started_by.as_ref();
-            assert_eq!(summarized.is_some(), expected, "{name}");
+            assert_eq!(summarized.is_some(), verified.is_some(), "{name}");
             if let (Some(link), Some(view)) = (&verified, summarized) {
                 assert_eq!(view.node_did, source.node_did);
                 assert_eq!(view.session_id, source.session_id);
@@ -839,6 +795,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
                 before,
                 "{name}: a rebuild with verified evidence does not read"
             );
+            case.check(verified.is_some());
         }
     }
 }

@@ -1,4 +1,4 @@
-use crate::inference::llm::message::Message;
+use gents_inference::llm::message::Message;
 use std::sync::atomic::AtomicBool;
 
 const ACTIVE_STREAM_INTERVAL: Duration = Duration::from_millis(300);
@@ -32,7 +32,7 @@ impl CompletionModel for RecoveringProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        crate::test_support::capture_scripted_provider_request(&request, "backend-recovery")
+        gents_inference::test_support::capture_scripted_provider_request(&request, "backend-recovery")
             .await?;
         if !self.available.load(Ordering::SeqCst) {
             let error = CompletionError::ProviderError("HTTP status 503: unavailable".into());
@@ -81,6 +81,7 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
     );
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(RecoveringProvider {
@@ -92,7 +93,7 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+            gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
                 agent_config.agent_identity.as_ref(),
             )
@@ -106,10 +107,10 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+        request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             agent_config.node_identity().clone(),
-            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+            gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
         ),
     })
     .unwrap();
@@ -122,7 +123,7 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
         .process_request(request.clone(), shutdown_rx.clone())
         .await
         .unwrap();
-    let doc = crate::store::graphql::escape_graphql_string(&doc_id);
+    let doc = gents_store::graphql::escape_graphql_string(&doc_id);
     let read_state = || async {
         let response = held_daemon_query(&agent_access, &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ lifecycle_state execution_generation deadline failure_reason }} }}"#)).await;
         response.data.unwrap()["AgentRequest"][0].clone()
@@ -132,18 +133,18 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
     let old_generation = parked["execution_generation"].as_str().unwrap().to_owned();
     let deadline = parked["deadline"].clone();
     available.store(true, Ordering::SeqCst);
-    let past = crate::store::graphql::escape_graphql_string(
+    let past = gents_store::graphql::escape_graphql_string(
         &(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
     );
     let wait = held_daemon_query(&agent_access, &format!(r#"{{ AgentRequestBackendWait(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}) {{ _docID }} }}"#)).await;
-    let wait_doc = crate::store::graphql::escape_graphql_string(
+    let wait_doc = gents_store::graphql::escape_graphql_string(
         wait.data.as_ref().unwrap()["AgentRequestBackendWait"][0]["_docID"]
             .as_str()
             .expect("the parking Agent reads its wait record"),
     );
     let resumed = held_daemon_query(&agent_access, &format!(r#"mutation {{ update_AgentRequestBackendWait(docID: "{wait_doc}", input: {{ retry_at: "{past}" }}) {{ _docID }} }}"#)).await;
     assert!(!resumed.has_errors(), "{:?}", resumed.errors);
-    let resumed_request = crate::request::admission::load_request_for_admission_test_as(
+    let resumed_request = gents_session::request::admission::load_request_for_admission_test_as(
         &node,
         &doc_id,
         &agent_config.agent_did,
@@ -158,7 +159,7 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
     assert_eq!(completed["lifecycle_state"], "completed", "{completed}");
     assert_ne!(completed["execution_generation"], old_generation);
     assert_eq!(completed["deadline"], deadline);
-    let history = crate::session::load_history_with_access(
+    let history = gents_session::session::load_history_with_access(
         &agent_access,
         &request.session_id,
         &request.node_did,
@@ -232,7 +233,7 @@ impl CompletionModel for BufferedReasoningShutdownProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        crate::test_support::capture_scripted_provider_request(&request, "shutdown-reasoning")
+        gents_inference::test_support::capture_scripted_provider_request(&request, "shutdown-reasoning")
             .await?;
         let processed_two = self.processed_two.clone();
         let events: rig::streaming::StreamingResult<()> =
@@ -287,6 +288,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
     );
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(model.clone()),
@@ -295,7 +297,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+            gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
                 agent_config.agent_identity.as_ref(),
             )
@@ -309,10 +311,10 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+        request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
-            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+            gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
         ),
     })
     .unwrap();
@@ -330,7 +332,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             _ = &mut process => panic!("request exited before both reasoning chunks were processed"),
         }
     }).await.expect("both provider chunks must be processed");
-    let escaped = crate::store::graphql::escape_graphql_string(&doc_id);
+    let escaped = gents_store::graphql::escape_graphql_string(&doc_id);
     let query = format!(
         r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
     );
@@ -357,7 +359,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             "completed" | "failed" | "dead" => {
                 format!(
                     "lifecycle_state: \"{}\"",
-                    crate::store::graphql::escape_graphql_string(loss)
+                    gents_store::graphql::escape_graphql_string(loss)
                 )
             }
             _ => panic!("unsupported ownership-loss fixture"),
@@ -425,7 +427,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
 
     if fail_drain {
         let (result, injected_writes) =
-            crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            gents_store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
                 Some(1),
                 async {
                     shutdown_tx.send_replace(true);
@@ -610,7 +612,7 @@ impl CompletionModel for LeaseLossProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        crate::test_support::capture_scripted_provider_request(&request, "lease-loss").await?;
+        gents_inference::test_support::capture_scripted_provider_request(&request, "lease-loss").await?;
         let events = vec![
             Ok(RawStreamingChoice::ToolCall(
                 rig::streaming::RawStreamingToolCall::new(
@@ -632,17 +634,17 @@ struct LeaseBlockingTool {
     entered: Option<Arc<AtomicBool>>,
 }
 
-impl crate::inference::llm::tool::ToolDyn for LeaseBlockingTool {
+impl gents_loop::tool::ToolDyn for LeaseBlockingTool {
     fn name(&self) -> String {
         "lease_block".into()
     }
     fn definition<'a>(
         &'a self,
         _: String,
-    ) -> crate::inference::llm::tool::BoxFuture<'a, crate::inference::llm::tool::ToolDefinition>
+    ) -> gents_loop::tool::BoxFuture<'a, gents_loop::tool::ToolDefinition>
     {
         Box::pin(async {
-            crate::inference::llm::tool::ToolDefinition {
+            gents_loop::tool::ToolDefinition {
                 name: "lease_block".into(),
                 description: "wait for lease replacement".into(),
                 parameters: serde_json::json!({"type":"object"}),
@@ -652,9 +654,9 @@ impl crate::inference::llm::tool::ToolDyn for LeaseBlockingTool {
     fn call<'a>(
         &'a self,
         _: String,
-    ) -> crate::inference::llm::tool::BoxFuture<
+    ) -> gents_loop::tool::BoxFuture<
         'a,
-        Result<String, crate::inference::llm::tool::ToolError>,
+        Result<String, gents_loop::tool::ToolError>,
     > {
         let entered = self.entered.clone();
         Box::pin(async move {
@@ -682,16 +684,17 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
     );
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(LeaseLossProvider),
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool { entered: None })
-            as Box<dyn crate::inference::llm::tool::ToolDyn>]),
+            as Box<dyn gents_loop::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+            gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
                 agent_config.agent_identity.as_ref(),
             )
@@ -705,10 +708,10 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+        request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
-            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+            gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
         ),
     })
     .unwrap();
@@ -733,7 +736,7 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
             _ = &mut observe_running => {}
             _ = &mut process => panic!("daemon exited before the accepted tool reached running"),
         }
-        let escaped = crate::store::graphql::escape_graphql_string(&request_doc_id);
+        let escaped = gents_store::graphql::escape_graphql_string(&request_doc_id);
         let replaced = held_daemon_query(&agent_access, &format!(r#"mutation {{ update_AgentRequest(filter:{{_docID:{{_eq:"{escaped}"}}}},input:{{execution_generation:"replacement-generation"}}){{_docID}} }}"#)).await;
         assert!(!replaced.has_errors(), "{:?}", replaced.errors);
         (&mut process).await.expect("lease replacement handling completes");
@@ -774,7 +777,7 @@ impl CompletionModel for NonTerminalProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted").await?;
 
         self.stream_calls.fetch_add(1, Ordering::SeqCst);
         if self.reasoning_prefix {
@@ -856,6 +859,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
     );
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(model.clone()),
@@ -864,7 +868,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+            gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
                 agent_config.agent_identity.as_ref(),
             )
@@ -878,10 +882,10 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+        request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
-            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+            gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
         ),
     })
     .expect("construct daemon with valid execution configuration");
@@ -898,7 +902,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         let request_doc_id = request.doc_id.clone();
         let session_id = request.session_id.clone();
         let requester_did = request.requester_did.clone();
-        let escaped_doc = crate::store::graphql::escape_graphql_string(&request_doc_id);
+        let escaped_doc = gents_store::graphql::escape_graphql_string(&request_doc_id);
         let query = format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc}" }} }}) {{
                 lifecycle_state execution_generation execution_lease_expires_at terminal_output
@@ -914,7 +918,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                         None;
                     loop {
                         tokio::time::sleep(Duration::from_millis(100)).await;
-                        let recovered = crate::RequestLifecycle::recover_all_with_identities(&node, &node_did, &[agent_config.agent_identity.clone()])
+                        let recovered = gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(&node, &node_did, &[agent_config.agent_identity.clone()])
                             .await
                             .unwrap();
                         if !empty_forever || observed_renewal {
@@ -953,7 +957,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                             "recovery must not steal a silently renewing owner"
                         );
                         observed_renewal = true;
-                        crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+                        gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
                             &agent_access,
                             &request_doc_id,
                             &node_did,
@@ -986,7 +990,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                 serde_json::from_value(row["terminal_output"].clone()).expect("terminal selection");
             match selected {
                 gents_protocol::output::TerminalOutput::Message { message_doc_id } => {
-                    let (header, native) = crate::session::load_canonical_message(
+                    let (header, native) = gents_session::session::load_canonical_message(
                         &agent_access, &message_doc_id, &node_did, requester_did.as_deref(),
                     ).await.unwrap();
                     assert_eq!(header.request_doc_id.as_deref(), Some(request_doc_id.as_str()));
@@ -1027,7 +1031,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                     assert!(streams.iter().any(|stream| stream.text.contains("durable partial incident text")));
                 }
             }
-            let second = crate::RequestLifecycle::recover_all_with_identities(&node, &node_did, &[agent_config.agent_identity.clone()])
+            let second = gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(&node, &node_did, &[agent_config.agent_identity.clone()])
                 .await
                 .unwrap();
             assert_eq!(second.requests_recovered, 0);
@@ -1082,6 +1086,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     );
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(LeaseLossProvider),
@@ -1089,11 +1094,11 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool {
             entered: Some(tool_entered.clone()),
         })
-            as Box<dyn crate::inference::llm::tool::ToolDyn>]),
+            as Box<dyn gents_loop::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+            gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
                 agent_config.agent_identity.as_ref(),
             )
@@ -1107,10 +1112,10 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+        request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
-            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+            gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
         ),
     })
     .unwrap();
@@ -1123,7 +1128,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let process = daemon.process_request(request, shutdown_rx);
     tokio::pin!(process);
-    let escaped_request_doc = crate::store::graphql::escape_graphql_string(&request_doc_id);
+    let escaped_request_doc = gents_store::graphql::escape_graphql_string(&request_doc_id);
     tokio::time::timeout(Duration::from_secs(10), async {
         let wait_for_blocked_tool = async {
             loop {
@@ -1159,7 +1164,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     .await
     .expect("accepted tool should block after its running state commits");
 
-    crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+    gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
         &agent_access,
         &request_doc_id,
         &node_did,
@@ -1204,7 +1209,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         .await
         .expect("interrupted daemon request should terminalize")
         .expect("interrupted request handling completes");
-    let wake_id = crate::store::graphql::escape_graphql_string(wake_id);
+    let wake_id = gents_store::graphql::escape_graphql_string(wake_id);
     let result = agent_access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{wake_id}" }} }}) {{ lifecycle_state }} AgentRequestParent: AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_request_doc}" }} }}) {{ lifecycle_state terminal_output }} }}"#
@@ -1233,7 +1238,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     let agent_access = held_daemon_agent_access(&db, &agent_config);
     {
         let agent_config = Arc::get_mut(&mut agent_config).unwrap();
-        agent_config.stream_batch_ms = crate::inference::resolved::DEFAULT_STREAM_BATCH_MS;
+        agent_config.stream_batch_ms = gents_inference::resolved::DEFAULT_STREAM_BATCH_MS;
         agent_config.stream_liveness_timeout = lease;
         agent_config.deadline_duration = Duration::from_secs(120);
     }
@@ -1255,6 +1260,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     );
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(model.clone()),
@@ -1263,7 +1269,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+            gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
                 agent_config.agent_identity.as_ref(),
             )
@@ -1277,10 +1283,10 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+        request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
-            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+            gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
         ),
     })
     .unwrap();
@@ -1300,7 +1306,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     .expect("active stream completes across multiple lease durations")
     .expect("active request handling completes");
 
-    let request_id = crate::store::graphql::escape_graphql_string(&request_id);
+    let request_id = gents_store::graphql::escape_graphql_string(&request_id);
     let result = held_daemon_query(&agent_access, &format!(
             r#"{{
                 AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state terminal_output }}
@@ -1315,7 +1321,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     let gents_protocol::output::TerminalOutput::Message { message_doc_id } = selected else {
         panic!("completed streaming request must select its canonical message: {data}");
     };
-    let (header, message) = crate::session::load_canonical_message(
+    let (header, message) = gents_session::session::load_canonical_message(
         &agent_access,
         &message_doc_id,
         &node_did,
@@ -1373,6 +1379,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
     );
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(model.clone()),
@@ -1381,7 +1388,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+            gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
                 agent_config.agent_identity.as_ref(),
             )
@@ -1395,10 +1402,10 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+        request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
-            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+            gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
         ),
     })
     .unwrap();
@@ -1415,7 +1422,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
     .expect("request deadline must stop the nonterminal provider")
     .expect("deadline request handling completes");
 
-    let escaped = crate::store::graphql::escape_graphql_string(&doc_id);
+    let escaped = gents_store::graphql::escape_graphql_string(&doc_id);
     let response = held_daemon_query(&agent_access, &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#
         ))

@@ -1,5 +1,4 @@
-use super::request_patch_cache_reusable;
-use crate::client::observe::ObservedStore;
+use super::{record_request_patch_publication, request_patch_cache_reusable};
 use crate::client::store::{ClientStore, ClientStoreRows};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -28,7 +27,8 @@ fn request_patch(row: AgentRequestRow) -> ClientStore {
 
 #[test]
 fn cached_rows_must_match_physical_rows_at_the_current_fence() {
-    let (store, _) = ObservedStore::new(request_patch(request_row("pending")));
+    let store = crate::client::observe::ObservedStores::new()
+        .insert_for_test("did:test:node", request_patch(request_row("pending")));
     let patch = request_patch(request_row("pending"));
     let captured = store.capture_read();
     assert_eq!(
@@ -46,53 +46,83 @@ fn cached_rows_must_match_physical_rows_at_the_current_fence() {
 }
 
 #[test]
-fn generated_publication_cases_drive_request_patch_cache_admission() {
-    let snapshot: serde_json::Value =
-        gents_lean_contract::load_contract_snapshot().expect("Lean contract snapshot");
-    let fixture = &snapshot["client_request_patch_publication_cases"];
-    for case in fixture["reuse"].as_array().expect("reuse cases") {
-        assert_eq!(
-            request_patch_cache_reusable(
-                case["memoized"].as_bool().expect("memoized state"),
-                case["same_signature"]
-                    .as_bool()
-                    .expect("signature comparison"),
-                case["fence_accepted"].as_bool().expect("publication fence"),
-                case["rows_current"]
-                    .as_bool()
-                    .expect("physical row comparison"),
+fn generated_reuse_cases_drive_request_patch_cache_admission() {
+    gents_lean_vocab::families::request_patch_publication_cases_reuse::replay(|case| {
+        gents_lean_vocab::families::request_patch_publication_cases_reuse::ReuseOutput {
+            reuse: request_patch_cache_reusable(
+                case.memoized,
+                case.same_signature,
+                case.fence_accepted,
+                case.rows_current,
             ),
-            case["expected_reuse"].as_bool().expect("Lean result"),
-            "{}",
-            case["name"].as_str().expect("case name")
-        );
-    }
-    for case in fixture["fresh_read"].as_array().expect("fresh-read cases") {
-        let (store, _) = ObservedStore::new(ClientStore::from_rows(ClientStoreRows::default()));
-        let captured = store.capture_read();
-        let fence_accepted = case["fence_accepted"].as_bool().expect("fence expectation");
-        if !fence_accepted {
-            store.merge_chat_patch(request_patch(request_row("processing")));
         }
-        let published = case["patch_available"]
-            .as_bool()
-            .expect("fresh patch availability")
-            .then(|| {
-                store.merge_chat_patch_at_read(&captured, request_patch(request_row("pending")))
-            })
-            .flatten()
-            .is_some();
-        let action = match (case["patch_available"].as_bool().unwrap(), published) {
-            (false, false) => "no_patch",
-            (true, true) => "merge_fresh",
-            (true, false) => "reject_candidate",
-            (false, true) => panic!("missing patch was published"),
-        };
-        assert_eq!(
-            action,
-            case["expected_action"].as_str().expect("Lean action"),
-            "{}",
-            case["name"].as_str().expect("case name")
-        );
-    }
+    });
+}
+
+#[test]
+fn generated_fresh_read_cases_drive_request_patch_publication() {
+    gents_lean_vocab::families::request_patch_publication_cases_fresh_read::replay::<String>(
+        |case| {
+            let store = crate::client::observe::ObservedStores::new().insert_for_test(
+                "did:test:node",
+                ClientStore::from_rows(ClientStoreRows::default()),
+            );
+            let captured = store.capture_read();
+            if !case.fence_accepted {
+                store.merge_chat_patch(request_patch(request_row("processing")));
+            }
+            let published = case
+                .patch_available
+                .then(|| {
+                    store.merge_chat_patch_at_read(&captured, request_patch(request_row("pending")))
+                })
+                .flatten()
+                .is_some();
+            let action = match (case.patch_available, published) {
+                (false, false) => "no_patch",
+                (true, true) => "merge_fresh",
+                (true, false) => "reject_candidate",
+                (false, true) => panic!("missing patch was published"),
+            };
+            gents_lean_vocab::families::request_patch_publication_cases_fresh_read::FreshReadOutput {
+            action: action.to_owned(),
+        }
+        },
+    );
+}
+
+#[test]
+fn generated_publication_cases_memoize_only_accepted_patches() {
+    gents_lean_vocab::families::request_patch_publication_cases_publications::replay::<String>(
+        |case| {
+            let key = "source\0did:test:node\0session\0<null>\0request".to_owned();
+            let signature = (1, 1, 1);
+            let mut signatures = rapidhash::RapidHashMap::default();
+            if case.before == "memoized" {
+                record_request_patch_publication(&mut signatures, key.clone(), signature);
+            }
+            let store = crate::client::observe::ObservedStores::new().insert_for_test(
+                "did:test:node",
+                ClientStore::from_rows(ClientStoreRows::default()),
+            );
+            let captured = store.capture_read();
+            if !case.accepted {
+                store.merge_chat_patch(request_patch(request_row("processing")));
+            }
+            if store
+                .merge_chat_patch_at_read(&captured, request_patch(request_row("pending")))
+                .is_some()
+            {
+                record_request_patch_publication(&mut signatures, key.clone(), signature);
+            }
+            gents_lean_vocab::families::request_patch_publication_cases_publications::PublicationOutput {
+                after: if signatures.get(&key) == Some(&signature) {
+                    "memoized"
+                } else {
+                    "empty"
+                }
+                .to_owned(),
+            }
+        },
+    );
 }

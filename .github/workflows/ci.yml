@@ -354,7 +354,8 @@ jobs:
             -p gents-claude-login \
             -p gents-fs-runner \
             -p gents-shell \
-            -p gents-lean-contract
+            -p gents-lean-contract \
+            -p gents-lean-vocab
 
       - name: Collect migration lens diagnostics on support failure
         if: failure() && matrix.suite == 'support'
@@ -377,22 +378,20 @@ jobs:
           RUST_MIN_STACK: 16777216
         run: |
           cargo test -p gents --lib runtime::status::tests::
-          cargo test -p gents --lib tools::native::tests::read_only_bash
-          cargo test -p gents --lib tools::exec::
-          cargo test -p gents --lib artifact_
+          cargo test -p gents-tools --lib native::tests::read_only_bash
+          cargo test -p gents-session --lib exec::
+          cargo test -p gents-session --lib artifact_
+          cargo test -p gents-tools --lib artifact_
           # Live-output byte evidence for background tools must fail the PR
           # that breaks it, not the post-merge main run (#2686).
-          cargo test -p gents --lib tools::call::hook::tests::r4c_list_background_tools::
-          cargo test -p gents --lib triggers::callback::
+          cargo test -p gents-toolcalls --lib call::hook::tests::r4c_list_background_tools::
+          cargo test -p gents-automation --lib triggers::callback::
           cargo test -p gents-eval --test onboarding_evals
           cargo test -p gents-eval --test eval_runner_canary
           # Per-request store budgets: a capture, segment or write-drop
           # regression must fail the PR that grows the store, not a user's
           # node after release.
           cargo test -p gents --test e2e_runtime storage_budget:: -- --nocapture
-          # The client-authored list-sync fence (#1123/#1125) must fail the
-          # PR that drifts the surface, not the post-merge main run.
-          cargo test -p gents --test misc client_authored_collections_fence::
           cargo test -p gents --test misc ordered_read_plans::
           # DefraDB-free; the extraction's wasm claim is otherwise unenforced
           # on PRs (full -p gents-loop is main-only below).
@@ -413,7 +412,21 @@ jobs:
         if: matrix.suite == 'runtime' && github.event_name != 'pull_request'
         env:
           RUST_MIN_STACK: 16777216
-        run: cargo test --no-fail-fast -p gents -p gents-eval -p gents-loop --lib --tests
+        run: |
+          cargo test --no-fail-fast --lib --tests \
+            -p gents \
+            -p gents-eval \
+            -p gents-loop \
+            -p gents-store \
+            -p gents-documents \
+            -p gents-inference \
+            -p gents-p2p \
+            -p gents-pack \
+            -p gents-session \
+            -p gents-tools \
+            -p gents-toolcalls \
+            -p gents-automation \
+            -p gents-observe
 
       - name: Run desktop Rust package tests
         if: matrix.suite == 'desktop'
@@ -439,7 +452,12 @@ jobs:
         # builds: Afterburner reads their standard, source-local target output.
         run: |
           env -u CARGO_TARGET_DIR cargo test --target-dir "$CARGO_TARGET_DIR" \
-            --no-fail-fast -p gents-cli -- --nocapture --test-threads=1
+            --no-fail-fast \
+            -p gents-cli \
+            -p gents-service \
+            -p gents-host \
+            -p gents-core-packs \
+            -- --nocapture --test-threads=1
 
       - name: Check the iOS simulator build
         if: matrix.suite == 'desktop' && github.event_name != 'pull_request'
@@ -497,6 +515,11 @@ jobs:
         run: |
           python3 .github/scripts/test-lean-import-closure.py
           cd crates/gents/proofs && lake build importClosure
+
+      - name: Check proof import layers
+        run: |
+          python3 .github/scripts/test-lean-import-layers.py
+          cd crates/gents/proofs && lake build importLayers
 
       - name: Build proofs
         working-directory: crates/gents/proofs
@@ -594,7 +617,9 @@ jobs:
     # Rust/Lean work that benefits from persistent host caches.
     name: desktop-ui (${{ matrix.suite }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The browser journeys take 44 to 58 minutes on one Playwright worker on a
+    # hosted runner (#3786); 60 cut a run whose journeys had passed.
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:

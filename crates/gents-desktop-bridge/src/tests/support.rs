@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_protocol::job::JobProgress;
+use gents_store::graphql::escape_graphql_string;
 use tempfile::TempDir;
 
 /// A test's `#[tokio::test]` runtime is its entry point; code under test takes
@@ -17,11 +17,12 @@ pub fn runtime_handle() -> tokio::runtime::Handle {
 }
 
 pub fn node_builder() -> gents::defra_node::NodeBuilder {
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
 
     let directory = tempfile::tempdir().unwrap();
     let identity =
-        gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)
+            .unwrap();
     gents::defra_node::Node::builder().with_node_identity_did(identity.did())
 }
 
@@ -54,7 +55,6 @@ pub async fn served_desktop() -> ServedDesktop {
         .unwrap(),
     );
     let (runtime, agent) = served_runtime_for(&core, ServedRoute::CoHosted).await;
-    core.set_selected_node_did(Some(runtime.node_did().to_owned()));
     ServedDesktop {
         core,
         runtime,
@@ -191,10 +191,18 @@ impl RunningDesktop {
             .publish_delegating_agents(provider.endpoint(), SCRIPTED_MODEL)
             .await;
         runtime
-            .publish_node(serde_json::json!({"default_agent_did": lead.agent_did}))
+            .apply_as_user(
+                "test.served_runtime.default_agent",
+                vec![(
+                    gents_store::collection::Collection::DefaultAgentSelection,
+                    serde_json::json!({
+                        "node_did": runtime.node_did(),
+                        "default_agent_did": lead.agent_did,
+                    }),
+                )],
+            )
             .await;
         runtime.connect(&core).await;
-        core.set_selected_node_did(Some(runtime.node_did().to_owned()));
         let running = runtime.boot().await;
         Self {
             core,
@@ -375,7 +383,7 @@ pub async fn provenance_fixture() -> ProvenanceFixture {
         .enable_dynamic_followups("PARENT-OPENS-WORK");
 
     // The lead Agent opens `sess_existing` with itself as a client.
-    let lead = gents::store::identity::resolve_agent_identity(
+    let lead = gents_store::identity::resolve_agent_identity(
         desktop.runtime.runtime().as_ref(),
         &desktop.lead,
     )
@@ -482,8 +490,8 @@ pub async fn try_submit_request(
 /// signer's own access), reserving the session first. `shape` sets the
 /// content and input before signing. Returns the request's document.
 pub async fn submit_signed(
-    access: &gents::store::config_client::ConfigAccess,
-    signer: &dyn gents::NodeIdentity,
+    access: &gents_store::config_client::ConfigAccess,
+    signer: &dyn gents_store::identity::NodeIdentity,
     runtime: &gents_desktop_core::test_fixtures::ServedRuntimeHome,
     agent: &gents_protocol::agent_identity::AgentIdentityBinding,
     session_id: &str,
@@ -509,10 +517,10 @@ pub async fn submit_signed(
     );
     shape(&mut create);
     create.session_doc_id =
-        Some(gents::request::lifecycle::reserve_goal_session(access, &create).await?);
+        Some(gents_session::request::lifecycle::reserve_goal_session(access, &create).await?);
     create.agent_doc_id = Some(runtime.agent_doc_id(agent).await);
-    gents::sign_agent_request_create(signer, &mut create).await?;
-    gents::request::lifecycle::submit_client_request(access, &create).await?;
+    gents_session::request::admission::sign_agent_request_create(signer, &mut create).await?;
+    gents_session::request::lifecycle::submit_client_request(access, &create).await?;
     let response = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
@@ -545,13 +553,13 @@ pub async fn reject_admission(
         .unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    let mut lifecycle = gents::request::lifecycle::RequestLifecycle::new_with_node_did(
+    let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
         runtime.node().clone(),
         row.try_into().unwrap(),
         300,
     );
     let identity =
-        gents::store::identity::resolve_agent_identity(runtime.runtime().as_ref(), agent).unwrap();
+        gents_store::identity::resolve_agent_identity(runtime.runtime().as_ref(), agent).unwrap();
     lifecycle.bind_managed_agent(identity.as_ref()).unwrap();
     lifecycle.reject_admission(reason).await.unwrap();
 }
@@ -561,13 +569,13 @@ pub async fn reject_admission(
 pub const OPERATOR: &str = "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z";
 
 /// A fixed test key, so fixture rows can name its DID as a constant.
-pub fn fixture_signer(seed: u8) -> gents::KeyIdentity {
+pub fn fixture_signer(seed: u8) -> gents_store::identity::KeyIdentity {
     use std::io::Write as _;
     // A named temporary file is created private to its owner, as a key must be.
     let mut key = tempfile::NamedTempFile::new().unwrap();
     key.write_all(&crypto::ed25519_key_from_seed(&[seed; 32]).unwrap())
         .unwrap();
-    gents::KeyIdentity::load_existing(key.path(), None).unwrap()
+    gents_store::identity::KeyIdentity::load_existing(key.path(), None).unwrap()
 }
 
 /// Write `session` as creation writes a started session: the immutable
@@ -575,16 +583,16 @@ pub fn fixture_signer(seed: u8) -> gents::KeyIdentity {
 /// physical document, binding `source`, `parent` and `opening`.
 pub async fn create_started_session(
     core: &Arc<ClientCore>,
-    signer: &gents::KeyIdentity,
+    signer: &gents_store::identity::KeyIdentity,
     mut session: gents_protocol::session::AgentSession,
     source: &gents_protocol::session::SessionReference,
     parent: &str,
     opening: &str,
 ) {
-    use gents::NodeIdentity as _;
     use gents_protocol::session::{
         SessionCreationCause, SessionCreationReceipt, SessionCreationStarter,
     };
+    use gents_store::identity::NodeIdentity as _;
     assert_eq!(
         session.requester_did.as_deref(),
         Some(signer.did()),
@@ -669,12 +677,12 @@ pub fn fixture_session(node_did: &str, session_id: &str) -> gents_protocol::sess
 }
 
 pub struct CountingRead {
-    inner: gents::store::config_client::ConfigAccess,
+    inner: gents_store::config_client::ConfigAccess,
     queries: std::sync::atomic::AtomicUsize,
 }
 
 impl CountingRead {
-    pub fn new(inner: gents::store::config_client::ConfigAccess) -> Self {
+    pub fn new(inner: gents_store::config_client::ConfigAccess) -> Self {
         Self {
             inner,
             queries: std::sync::atomic::AtomicUsize::new(0),
@@ -687,14 +695,30 @@ impl CountingRead {
 }
 
 #[async_trait::async_trait]
-impl gents::store::config_client::ConfigRead for CountingRead {
+impl gents_store::config_client::ConfigRead for CountingRead {
+    fn reader_did(&self) -> Option<String> {
+        self.inner.reader_did()
+    }
+
     async fn execute_read(
         &self,
         document: &str,
-    ) -> Result<serde_json::Value, gents::store::config_client::ConfigClientError> {
+    ) -> Result<serde_json::Value, gents_store::config_client::ConfigClientError> {
         self.queries
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.inner.execute_read(document).await
+    }
+
+    async fn execute_read_with_variables(
+        &self,
+        document: &str,
+        variables: &serde_json::Value,
+    ) -> Result<serde_json::Value, gents_store::config_client::ConfigClientError> {
+        self.queries
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner
+            .execute_read_with_variables(document, variables)
+            .await
     }
 }
 
@@ -731,7 +755,7 @@ async fn created_doc_id(core: &Arc<ClientCore>, mutation: &str, collection: &str
         "seed {collection}: {:?}",
         response.errors
     );
-    gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+    gents_store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
         .expect("created document")
         .and_then(|document| document["_docID"].as_str())
         .expect("created document id")
@@ -810,7 +834,6 @@ pub async fn seed_job_row_for_node(
     progress: &JobProgress,
     coded_output: Option<(&str, &str)>,
 ) -> String {
-    use gents::store::config_client::ConfigAccess;
     use gents_protocol::job::{JobCeiling, JobOrigin, JobPin};
     use gents_protocol::output::rows::{
         output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -819,6 +842,7 @@ pub async fn seed_job_row_for_node(
         OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
         StreamDeclaration, StreamPayload,
     };
+    use gents_store::config_client::ConfigAccess;
 
     let access = ConfigAccess::local(core.node_arc());
     let request_doc_id = create_request(
@@ -1117,7 +1141,7 @@ pub async fn seed_served_job_row(
                         &serde_json::json!({"input": call}),
                     )
                     .await?;
-                let row = gents::store::graphql::created_doc_id(&response, "AgentToolCall")?;
+                let row = gents_store::graphql::created_doc_id(&response, "AgentToolCall")?;
                 txn.add_resource_relationship("AgentToolCall", &row, "parent", "sessions", session_doc)
                     .await?;
                 pin.chain_root_doc_id = row.clone();
@@ -1166,7 +1190,7 @@ pub async fn seed_served_job_row(
                         )
                         .await?;
                     let doc =
-                        gents::store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
+                        gents_store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
                     txn.add_resource_relationship(
                         "AgentOutputSegment",
                         &doc,
@@ -1226,7 +1250,7 @@ pub async fn seed_served_tool_call(
                         &serde_json::json!({"input": call}),
                     )
                     .await?;
-                let row = gents::store::graphql::created_doc_id(&response, "AgentToolCall")?;
+                let row = gents_store::graphql::created_doc_id(&response, "AgentToolCall")?;
                 txn.add_resource_relationship("AgentToolCall", &row, "parent", "sessions", session_doc)
                     .await?;
                 Ok::<_, anyhow::Error>(row)

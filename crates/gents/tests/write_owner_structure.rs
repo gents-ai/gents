@@ -5,17 +5,17 @@ use syn::visit::{self, Visit};
 use syn::{Expr, ExprCall, ExprMethodCall, ItemConst, ItemFn, ItemImpl, ItemMod};
 
 const OWNER_FILES: &[&str] = &[
-    "crates/gents/src/store/config_client/graphql.rs",
-    "crates/gents/src/store/config_client/retry.rs",
-    "crates/gents/src/store/config_client/txn/auto_commit.rs",
-    "crates/gents/src/store/config_client/txn/execute.rs",
-    "crates/gents/src/store/config_client/txn/transact_entry.rs",
+    "crates/gents-store/src/config_client/graphql.rs",
+    "crates/gents-store/src/config_client/retry.rs",
+    "crates/gents-store/src/config_client/txn/auto_commit.rs",
+    "crates/gents-store/src/config_client/txn/execute.rs",
+    "crates/gents-store/src/config_client/txn/transact_entry.rs",
     "crates/gents-protocol/src/graphql/transport.rs",
 ];
 
 const READ_OWNER_FILES: &[&str] = &[
-    "crates/gents/src/store/config_client/txn/auto_commit.rs",
-    "crates/gents/src/store/graphql.rs",
+    "crates/gents-store/src/config_client/txn/auto_commit.rs",
+    "crates/gents-store/src/graphql.rs",
 ];
 
 #[rustfmt::skip]
@@ -232,6 +232,57 @@ fn production_defradb_writes_have_one_owner() {
     assert!(
         violations.is_empty(),
         "production DefraDB writes bypass ConfigAccess::write/transact_write:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn workspace_consent_resolution_has_one_owner() {
+    #[rustfmt::skip]
+    const EXACT_KEY_READER_SITES: &[(&str, usize)] = &[
+        ("crates/gents-tools/src/plugin/approval/workspace.rs", 1),
+        ("crates/gents-tools/src/plugin/approval/workspace/context.rs", 1),
+    ];
+    let root = repo_root();
+    let owner = root.join("crates/gents-tools/src/plugin/approval/workspace.rs");
+    let source = std::fs::read_to_string(&owner).expect("workspace consent owner");
+    assert_eq!(
+        source
+            .matches("fn entry(home: &Path, key: &WorkspaceKey)")
+            .count(),
+        1,
+        "the exact-key reader moved or changed shape"
+    );
+    assert!(
+        !source.contains("pub fn entry")
+            && !source.contains("pub(crate) fn entry")
+            && !source.contains("pub(super) fn entry"),
+        "the exact-key reader must stay private to its module"
+    );
+    let mut violations = Vec::new();
+    for path in production_sources(&root) {
+        let relative = path
+            .strip_prefix(&root)
+            .expect("repository path")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let count = std::fs::read_to_string(&path)
+            .expect("production source")
+            .matches("entry(home")
+            .count();
+        let allowed = EXACT_KEY_READER_SITES
+            .iter()
+            .find(|(file, _)| *file == relative)
+            .map_or(0, |(_, count)| *count);
+        if count != allowed {
+            violations.push(format!(
+                "{relative}: {count} exact-key reads, expected {allowed}"
+            ));
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "workspace consent is read without resolving the session:\n{}",
         violations.join("\n")
     );
 }
@@ -971,7 +1022,286 @@ fn test_fixtures_fence_flags_production_and_default_enablement() {
     }
 }
 
-const OAUTH_CREDENTIAL_OWNER: &str = "crates/gents/src/inference/auth/credential";
+/// The feature that cuts a test build off the machine's service manager
+/// (`gents_service::native_service::isolation`). The per-user service label
+/// is not per `HOME`, so a `gents` a test spawns with a temporary `HOME`
+/// otherwise addresses the user's own node: on 2026-11-13 test binaries
+/// stopped the maintainer's nodes through it.
+const SERVICE_ISOLATION: (&str, &str) = ("gents-service", "test-home-guard");
+
+struct Workspace {
+    inherited: toml::Table,
+    members: BTreeMap<String, (String, toml::Table)>,
+}
+
+impl Workspace {
+    fn load(root: &Path) -> Self {
+        let workspace = toml_file(&root.join("Cargo.toml"));
+        let inherited = workspace["workspace"]
+            .get("dependencies")
+            .and_then(toml::Value::as_table)
+            .cloned()
+            .unwrap_or_default();
+        let members = workspace["workspace"]["members"]
+            .as_array()
+            .expect("workspace members")
+            .iter()
+            .map(|member| {
+                let member = member.as_str().expect("member path").to_owned();
+                let manifest = toml_file(&root.join(&member).join("Cargo.toml"));
+                let name = manifest["package"]["name"]
+                    .as_str()
+                    .expect("package name")
+                    .to_owned();
+                (name, (member, manifest))
+            })
+            .collect();
+        Self { inherited, members }
+    }
+
+    /// Every dependency entry of `manifest` in the tables of `kind`, with the
+    /// package it names and the features it enables (inherited ones included).
+    fn entries(&self, manifest: &toml::Table, kind: &str) -> Vec<(String, String, Vec<String>)> {
+        let mut tables = vec![manifest.get(kind)];
+        if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+            tables.extend(targets.values().map(|target| target.get(kind)));
+        }
+        if kind == "workspace.dependencies" {
+            tables = vec![manifest
+                .get("workspace")
+                .and_then(|workspace| workspace.get("dependencies"))];
+        }
+        let features = |value: Option<&toml::Value>| {
+            value
+                .and_then(|value| value.get("features"))
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        tables
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_table)
+            .flat_map(|table| table.iter())
+            .map(|(key, specification)| {
+                let mut enabled = features(Some(specification));
+                if specification
+                    .get("workspace")
+                    .and_then(toml::Value::as_bool)
+                    == Some(true)
+                {
+                    enabled.extend(features(self.inherited.get(key)));
+                }
+                (
+                    key.clone(),
+                    package_name(key, specification, &self.inherited),
+                    enabled,
+                )
+            })
+            .collect()
+    }
+
+    /// Whether enabling `features` of `package` enables the service isolation.
+    fn isolates(&self, package: &str, features: &[String]) -> bool {
+        self.isolates_from(package, features, &mut BTreeSet::new())
+    }
+
+    fn isolates_from(
+        &self,
+        package: &str,
+        features: &[String],
+        seen: &mut BTreeSet<(String, String)>,
+    ) -> bool {
+        features.iter().any(|feature| {
+            if (package, feature.as_str()) == SERVICE_ISOLATION {
+                return true;
+            }
+            if !seen.insert((package.to_owned(), feature.clone())) {
+                return false;
+            }
+            let Some((_, manifest)) = self.members.get(package) else {
+                return false;
+            };
+            let dependencies = self.entries(manifest, "dependencies");
+            manifest
+                .get("features")
+                .and_then(|table| table.get(feature))
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .any(|entry| match entry.split_once('/') {
+                    Some((dependency, enabled)) => {
+                        let dependency = dependency.trim_end_matches('?');
+                        dependencies
+                            .iter()
+                            .find(|(key, _, _)| key == dependency)
+                            .is_some_and(|(_, target, _)| {
+                                self.isolates_from(target, &[enabled.to_owned()], seen)
+                            })
+                    }
+                    None if entry.starts_with("dep:") => false,
+                    None => self.isolates_from(package, &[entry.to_owned()], seen),
+                })
+        })
+    }
+
+    /// Workspace members `package` builds against, transitively.
+    fn reaches(&self, package: &str, target: &str) -> bool {
+        let mut pending = vec![package.to_owned()];
+        let mut seen = BTreeSet::new();
+        while let Some(next) = pending.pop() {
+            if next == target {
+                return true;
+            }
+            if !seen.insert(next.clone()) {
+                continue;
+            }
+            if let Some((_, manifest)) = self.members.get(&next) {
+                pending.extend(dependency_names(manifest, &self.inherited));
+            }
+        }
+        false
+    }
+}
+
+/// Sites that would enable the service isolation in a production build: a
+/// normal, build or workspace dependency enabling it, or a feature other than
+/// a test feature (`test-home-guard`, `test-fixtures`) that does.
+fn service_isolation_leaks(workspace: &Workspace) -> Vec<String> {
+    let mut leaks = Vec::new();
+    for (name, (member, manifest)) in &workspace.members {
+        for kind in [
+            "dependencies",
+            "build-dependencies",
+            "workspace.dependencies",
+        ] {
+            for (key, package, features) in workspace.entries(manifest, kind) {
+                if workspace.isolates(&package, &features) {
+                    leaks.push(format!("{member}/Cargo.toml [{kind}] {key}"));
+                }
+            }
+        }
+        for feature in manifest
+            .get("features")
+            .and_then(toml::Value::as_table)
+            .into_iter()
+            .flat_map(|table| table.keys())
+        {
+            let test_feature = matches!(feature.as_str(), "test-home-guard" | "test-fixtures");
+            if !test_feature && workspace.isolates(name, std::slice::from_ref(feature)) {
+                leaks.push(format!("{member}/Cargo.toml [features] {feature}"));
+            }
+        }
+    }
+    leaks
+}
+
+#[test]
+fn service_isolation_stays_test_only() {
+    let workspace = Workspace::load(&repo_root());
+    assert!(
+        workspace.isolates("gents-service", &["test-home-guard".to_owned()]),
+        "the service isolation feature is gents-service's test-home-guard"
+    );
+    let leaks = service_isolation_leaks(&workspace);
+    assert!(
+        leaks.is_empty(),
+        "a production build would never reach the service manager; enable gents-service's `test-home-guard` only from [dev-dependencies] or a test feature:\n{}",
+        leaks.join("\n")
+    );
+}
+
+/// Every package whose tests can reach the service manager, by building
+/// against gents-service or by spawning the `gents` binary, builds it with
+/// the isolation through its dev-dependencies, so that the `gents` its tests
+/// spawn is cut off from the machine's service manager too.
+#[test]
+fn tests_reaching_the_service_manager_are_isolated() {
+    let root = repo_root();
+    let workspace = Workspace::load(&root);
+    let mut unisolated = Vec::new();
+    for (name, (member, manifest)) in &workspace.members {
+        let mut sources = Vec::new();
+        for directory in ["src", "tests", "benches", "examples"] {
+            let directory = root.join(member).join(directory);
+            if directory.is_dir() {
+                all_rust_sources(&directory, &mut sources);
+            }
+        }
+        let spawns_gents = sources.iter().any(|path| {
+            std::fs::read_to_string(path).is_ok_and(|text| text.contains("CARGO_BIN_EXE_gents\""))
+        });
+        if !spawns_gents && !workspace.reaches(name, SERVICE_ISOLATION.0) {
+            continue;
+        }
+        let isolated = workspace
+            .entries(manifest, "dev-dependencies")
+            .iter()
+            .any(|(_, package, features)| workspace.isolates(package, features));
+        if !isolated {
+            unisolated.push(format!(
+                "{member}: its tests reach the service manager; add `{} = {{ workspace = true, features = [\"{}\"] }}` (or a test feature enabling it) to its [dev-dependencies]",
+                SERVICE_ISOLATION.0, SERVICE_ISOLATION.1
+            ));
+        }
+    }
+    assert!(unisolated.is_empty(), "{}", unisolated.join("\n"));
+}
+
+#[test]
+fn service_isolation_fence_flags_production_enablement() {
+    let workspace = |manifests: &[(&str, &str)]| Workspace {
+        inherited: toml::Table::new(),
+        members: manifests
+            .iter()
+            .map(|(name, manifest)| {
+                let manifest: toml::Table = format!("[package]\nname = \"{name}\"\n{manifest}")
+                    .parse()
+                    .expect("parse manifest");
+                ((*name).to_owned(), ((*name).to_owned(), manifest))
+            })
+            .collect(),
+    };
+    let service = ("gents-service", "[features]\ntest-home-guard = []");
+    let leaking = workspace(&[
+        service,
+        (
+            "host",
+            "[dependencies]\ngents-service = { path = \"x\" }\n[features]\nfixtures = [\"gents-service/test-home-guard\"]\ntest-fixtures = [\"gents-service/test-home-guard\"]",
+        ),
+        (
+            "cli",
+            "[dependencies]\nhost = { path = \"h\", features = [\"test-fixtures\"] }",
+        ),
+    ]);
+    assert_eq!(
+        service_isolation_leaks(&leaking),
+        [
+            "cli/Cargo.toml [dependencies] host",
+            "host/Cargo.toml [features] fixtures"
+        ]
+    );
+    let fenced = workspace(&[
+        service,
+        (
+            "host",
+            "[dependencies]\ngents-service = { path = \"x\" }\n[features]\ntest-fixtures = [\"gents-service/test-home-guard\"]",
+        ),
+        (
+            "cli",
+            "[dependencies]\nhost = { path = \"h\" }\n[dev-dependencies]\nhost = { path = \"h\", features = [\"test-fixtures\"] }",
+        ),
+    ]);
+    assert!(service_isolation_leaks(&fenced).is_empty());
+    assert!(fenced.isolates("host", &["test-fixtures".to_owned()]));
+    assert!(fenced.reaches("cli", "gents-service"));
+}
+
+const OAUTH_CREDENTIAL_OWNER: &str = "crates/gents-inference/src/auth/credential";
 
 const REMOVED_OAUTH_PICKERS: &[&str] = &[
     "lookup_oauth_credential",
@@ -1166,7 +1496,7 @@ const RIG_OWNER_MODULES: &[&str] = &[
     "crates/gents-loop/src/rig_compat.rs",
     "crates/gents-loop/src/provider_input",
     "crates/gents-loop/src/loop_stream",
-    "crates/gents/src/inference/llm/rig_compat.rs",
+    "crates/gents-inference/src/llm/rig_compat.rs",
     "crates/gents/src/turn/provider_input",
     "crates/gents/src/runtime/agent/loop_stream",
 ];
@@ -1177,21 +1507,21 @@ const RIG_PATH_ALLOWLIST: &[&str] = &[
     "crates/gents-loop/src/provider_stream.rs",
     "crates/gents-loop/src/provider_usage.rs",
     "crates/gents-loop/src/rendered_request/transport.rs",
-    "crates/gents/src/inference/clients/chatgpt_codex.rs",
-    "crates/gents/src/inference/clients/claude_messages/error.rs",
-    "crates/gents/src/inference/clients/claude_messages/mod.rs",
-    "crates/gents/src/inference/clients/claude_messages/send.rs",
-    "crates/gents/src/inference/clients/claude_messages/sse.rs",
-    "crates/gents/src/inference/clients/claude_messages/sse_body.rs",
-    "crates/gents/src/inference/clients/claude_messages/sse_state.rs",
-    "crates/gents/src/inference/clients/claude_messages/transport.rs",
-    "crates/gents/src/inference/clients/claude_subscription.rs",
-    "crates/gents/src/inference/clients/inference_http.rs",
-    "crates/gents/src/inference/llm/backend_client.rs",
-    "crates/gents/src/inference/auth/http.rs",
-    "crates/gents/src/inference/clients/provider_http.rs",
-    "crates/gents/src/inference/usage_observation.rs",
-    "crates/gents/src/inference/clients/xai_grok.rs",
+    "crates/gents-inference/src/clients/chatgpt_codex.rs",
+    "crates/gents-inference/src/clients/claude_messages/error.rs",
+    "crates/gents-inference/src/clients/claude_messages/mod.rs",
+    "crates/gents-inference/src/clients/claude_messages/send.rs",
+    "crates/gents-inference/src/clients/claude_messages/sse.rs",
+    "crates/gents-inference/src/clients/claude_messages/sse_body.rs",
+    "crates/gents-inference/src/clients/claude_messages/sse_state.rs",
+    "crates/gents-inference/src/clients/claude_messages/transport.rs",
+    "crates/gents-inference/src/clients/claude_subscription.rs",
+    "crates/gents-inference/src/clients/inference_http.rs",
+    "crates/gents-inference/src/llm/backend_client.rs",
+    "crates/gents-inference/src/auth/http.rs",
+    "crates/gents-inference/src/clients/provider_http.rs",
+    "crates/gents-inference/src/usage_observation.rs",
+    "crates/gents-inference/src/clients/xai_grok.rs",
 ];
 
 #[derive(Default)]
@@ -1396,8 +1726,8 @@ fn rig_fence_counts_paths_uses_and_macros_outside_tests() {
 #[rustfmt::skip]
 const STD_HASH_ALLOWLIST: &[&str] = &[
     "crates/gents-lenses/fixture_add_label/src/lib.rs",
-    "crates/gents/src/tools/mcp/pool.rs",
-    "crates/gents/src/turn/provider_input/tests.rs",
+    "crates/gents-tools/src/mcp/pool.rs",
+    "crates/gents-inference/src/clients/pushdown_tests.rs",
 ];
 
 const STD_HASH_NAMES: &[&str] = &["HashMap", "HashSet", "DefaultHasher"];
@@ -1648,12 +1978,12 @@ const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-loop/src/rendered_request/scope.rs", 1, "request context read inside Rig's HTTP client; thread through a per-call provider client"),
     ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", 2, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents-loop/src/tool_effects.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents/src/inference/admission/client.rs", 1, "request context read inside Rig's CompletionModel and HTTP client; thread through a per-call provider client"),
-    ("crates/gents/src/store/config_client/txn/native.rs", 1, "re-entrant write fence inside a transaction callback; the handle itself is passed explicitly"),
-    ("crates/gents/src/tools/exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents/src/plugin/approval.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents/src/tools/call/lifecycle/runtime.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents-inference/src/admission/client.rs", 1, "request context read inside Rig's CompletionModel and HTTP client; thread through a per-call provider client"),
+    ("crates/gents-store/src/config_client/txn/native.rs", 1, "re-entrant write fence inside a transaction callback; the handle itself is passed explicitly"),
+    ("crates/gents-session/src/exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents-tools/src/plugin/approval.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents-tools/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents-tools/src/runtime_context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
 ];
 
 #[derive(Default)]
@@ -1763,23 +2093,23 @@ const OWNER_MODULES: &[&str] = &[
     "crates/gents-loop/src",
     "crates/gents-migration/src",
     "crates/gents/src/operations",
-    "crates/gents/src/store/config_client/common.rs",
-    "crates/gents/src/store/config_client/error.rs",
-    "crates/gents/src/store/config_client/graphql.rs",
-    "crates/gents/src/store/config_client/mod.rs",
-    "crates/gents/src/store/config_client/patch.rs",
-    "crates/gents/src/store/config_client/retry.rs",
-    "crates/gents/src/store/config_client/schema_contract.rs",
-    "crates/gents/src/store/config_client/schema_install.rs",
-    "crates/gents/src/store/config_client/schema_management.rs",
-    "crates/gents/src/store/config_client/txn",
-    "crates/gents/src/store/config_client/write_telemetry.rs",
-    "crates/gents/src/store/graphql",
-    "crates/gents/src/store/local/home",
-    "crates/gents/src/store/identity",
-    "crates/gents/src/store/schema/migration",
-    "crates/gents/src/store/local/storage_backend",
-    "crates/gents/src/store/local/store_key",
+    "crates/gents-store/src/config_client/common.rs",
+    "crates/gents-store/src/config_client/error.rs",
+    "crates/gents-store/src/config_client/graphql.rs",
+    "crates/gents-store/src/config_client/mod.rs",
+    "crates/gents-documents/src/patch.rs",
+    "crates/gents-store/src/config_client/retry.rs",
+    "crates/gents-store/src/config_client/schema_contract.rs",
+    "crates/gents-store/src/config_client/schema_install.rs",
+    "crates/gents-store/src/config_client/schema_management.rs",
+    "crates/gents-store/src/config_client/txn",
+    "crates/gents-store/src/config_client/write_telemetry.rs",
+    "crates/gents-store/src/graphql",
+    "crates/gents-store/src/local/home",
+    "crates/gents-store/src/identity",
+    "crates/gents-store/src/schema/migration",
+    "crates/gents-store/src/local/storage_backend",
+    "crates/gents-store/src/local/store_key",
 ];
 
 #[derive(Default)]
@@ -1939,15 +2269,14 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-cli/src/commands/eval/manage.rs", 1),
-    ("crates/gents-cli/src/commands/prepare_runtime.rs", 1),
     ("crates/gents-client-host/src/editor_store.rs", 1),
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
     ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/launch.rs", 4),
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/native.rs", 1),
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
-    ("crates/gents-desktop-core/src/client/core/route_manager.rs", 2),
-    ("crates/gents-desktop-core/src/error.rs", 1),
+    ("crates/gents-desktop-core/src/client/core/route_manager.rs", 1),
+    ("crates/gents-desktop-core/src/error.rs", 2),
     ("crates/gents-desktop-core/src/inference.rs", 2),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
     ("crates/gents-protocol/src/database_error.rs", 1),
@@ -1955,65 +2284,66 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-protocol/src/graphql/transport.rs", 3),
     ("crates/gents/src/runtime/agent/daemon.rs", 1),
     ("crates/gents/src/runtime/agent/daemon/owned_work.rs", 1),
-    ("crates/gents/src/runtime/agent/stream_processor.rs", 1),
+    ("crates/gents-session/src/request/seam_error.rs", 1),
     ("crates/gents/src/runtime/agent/daemon/request.rs", 1),
     ("crates/gents/src/runtime/agent/document_view/snapshot.rs", 1),
     ("crates/gents/src/runtime/agent/reconcile.rs", 1),
-    ("crates/gents/src/plugin/application_write/mod.rs", 1),
-    ("crates/gents/src/tools/background/status/final_output.rs", 1),
-    ("crates/gents/src/store/config_client/desired_state/plan.rs", 1),
-    ("crates/gents/src/store/config_client/retry.rs", 2),
-    ("crates/gents/src/store/config_client/schema_install.rs", 2),
-    ("crates/gents/src/tools/builtin/defra_query/mod.rs", 1),
+    ("crates/gents-toolcalls/src/plugin/application_write/mod.rs", 1),
+    ("crates/gents-toolcalls/src/background/status/final_output.rs", 1),
+    ("crates/gents-documents/src/desired_state/plan.rs", 1),
+    ("crates/gents-store/src/config_client/retry.rs", 2),
+    ("crates/gents-store/src/config_client/schema_install.rs", 2),
+    ("crates/gents-tools/src/builtin/defra_query/mod.rs", 1),
     ("crates/gents/src/eval/documents.rs", 3),
     ("crates/gents-eval/src/report/mod.rs", 1),
     ("crates/gents-eval/src/report/store.rs", 1),
     ("crates/gents-eval/src/runner/freeze.rs", 1),
     ("crates/gents-eval/src/runner/mod.rs", 1),
-    ("crates/gents/src/goal/creation.rs", 2),
-    ("crates/gents/src/store/graphql.rs", 1),
-    ("crates/gents/src/store/local/home.rs", 3),
-    ("crates/gents/src/tools/call/hook/persistence/background_tools.rs", 1),
-    ("crates/gents/src/tools/call/hook/persistence/session_message.rs", 1),
-    ("crates/gents/src/store/identity/error.rs", 1),
-    ("crates/gents/src/request/lifecycle.rs", 1),
-    ("crates/gents/src/request/lifecycle/canonical_recovery.rs", 2),
-    ("crates/gents/src/request/lifecycle/execution_lease.rs", 2),
-    ("crates/gents/src/request/lifecycle/execution_renewal.rs", 1),
-    ("crates/gents/src/request/lifecycle/queue/position.rs", 1),
+    ("crates/gents-automation/src/goal/creation.rs", 2),
+    ("crates/gents-store/src/graphql.rs", 1),
+    ("crates/gents-store/src/local/home.rs", 3),
+    ("crates/gents-toolcalls/src/call/hook/persistence/background_tools.rs", 1),
+    ("crates/gents-toolcalls/src/call/hook/persistence/session_message.rs", 1),
+    ("crates/gents-store/src/identity/error.rs", 1),
+    ("crates/gents-session/src/request/lifecycle.rs", 1),
+    ("crates/gents-session/src/request/lifecycle/canonical_recovery.rs", 2),
+    ("crates/gents-session/src/request/lifecycle/execution_lease.rs", 2),
+    ("crates/gents-session/src/request/lifecycle/execution_renewal.rs", 1),
+    ("crates/gents-session/src/request/lifecycle/queue/position.rs", 1),
     ("crates/gents/src/runtime/node_readiness_publisher.rs", 1),
     ("crates/gents-eval/src/optimization/driver.rs", 2),
     ("crates/gents-eval/src/optimization/job.rs", 1),
     ("crates/gents-eval/src/optimization/promote.rs", 2),
-    ("crates/gents/src/tools/builtin/p2p.rs", 1),
-    ("crates/gents/src/pack/resolve.rs", 1),
-    ("crates/gents/src/plugin/allowed.rs", 2),
-    ("crates/gents/src/plugin/approval.rs", 2),
-    ("crates/gents/src/plugin/executor.rs", 2),
-    ("crates/gents/src/plugin/http_calls.rs", 1),
-    ("crates/gents/src/plugin/install.rs", 1),
-    ("crates/gents/src/plugin/store.rs", 1),
-    ("crates/gents/src/tools/background/job/driver.rs", 1),
-    ("crates/gents/src/tools/background/job/driver/step.rs", 1),
+    ("crates/gents-tools/src/builtin/p2p.rs", 1),
+    ("crates/gents-pack/src/pack/core_packs.rs", 1),
+    ("crates/gents-pack/src/pack/resolve.rs", 1),
+    ("crates/gents-pack/src/plugin/allowed.rs", 2),
+    ("crates/gents-tools/src/plugin/approval.rs", 2),
+    ("crates/gents-toolcalls/src/plugin/executor.rs", 2),
+    ("crates/gents-pack/src/plugin/http_calls.rs", 1),
+    ("crates/gents-pack/src/plugin/install.rs", 1),
+    ("crates/gents-pack/src/plugin/store.rs", 1),
+    ("crates/gents-toolcalls/src/background/job/driver.rs", 1),
+    ("crates/gents-toolcalls/src/background/job/driver/step.rs", 1),
     ("crates/gents/src/turn/provider_input/replay.rs", 1),
     // rmcp erases transport errors behind DynamicTransportError; the pool's
     // McpAuthRefusal is then asked for on its erased source chain
-    ("crates/gents/src/tools/mcp/pool/auth_refusal.rs", 2),
-    ("crates/gents/src/inference/rendered_request/mod.rs", 2),
-    ("crates/gents/src/request/admission.rs", 2),
-    ("crates/gents/src/tools/builtin/schema_help/mod.rs", 2),
-    ("crates/gents/src/tools/builtin/self_config/command/guidance.rs", 5),
-    ("crates/gents/src/tools/builtin/self_config/command/validate.rs", 1),
-    ("crates/gents/src/session/fork.rs", 1),
-    ("crates/gents/src/session/output/replay_candidates.rs", 1),
-    ("crates/gents/src/session/output/replay_capture.rs", 1),
-    ("crates/gents/src/session/output/replay_request.rs", 1),
-    ("crates/gents/src/session/request_output.rs", 1),
-    ("crates/gents/src/store/local/storage_backend.rs", 9),
-    ("crates/gents/src/store/local/store_key.rs", 2),
-    ("crates/gents/src/request/streaming.rs", 1),
-    ("crates/gents/src/tools/call/lifecycle/delivery/terminalize.rs", 1),
-    ("crates/gents/src/triggers/engine/mod.rs", 2),
+    ("crates/gents-tools/src/mcp/pool/auth_refusal.rs", 2),
+    ("crates/gents-inference/src/rendered_request/mod.rs", 2),
+    ("crates/gents-session/src/request/admission.rs", 2),
+    ("crates/gents-tools/src/builtin/schema_help/mod.rs", 2),
+    ("crates/gents-tools/src/builtin/self_config/command/guidance.rs", 5),
+    ("crates/gents-tools/src/builtin/self_config/command/validate.rs", 1),
+    ("crates/gents-session/src/session/fork.rs", 1),
+    ("crates/gents-session/src/session/output/replay_candidates.rs", 1),
+    ("crates/gents-session/src/session/output/replay_capture.rs", 1),
+    ("crates/gents-session/src/session/output/replay_request.rs", 1),
+    ("crates/gents-session/src/session/request_output.rs", 1),
+    ("crates/gents-store/src/local/storage_backend.rs", 9),
+    ("crates/gents-store/src/local/store_key.rs", 2),
+    ("crates/gents-session/src/request/streaming.rs", 1),
+    ("crates/gents-toolcalls/src/call/lifecycle/delivery/terminalize.rs", 1),
+    ("crates/gents-automation/src/triggers/engine/mod.rs", 2),
 ];
 
 #[derive(Default)]
@@ -2141,8 +2471,6 @@ fn downcast_fence_counts_type_classification_outside_tests() {
 const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // regolith store-lock messages through the node builder
     ("crates/gents-cli/src/commands/eval/watch.rs", 1),
-    // launchctl print output
-    ("crates/gents-cli/src/native_service.rs", 1),
     // provider text through Rig's ProviderError(String) (ProviderReport)
     ("crates/gents-loop/src/error.rs", 21),
     // serde_json schema-mismatch message prefixes
@@ -2155,27 +2483,29 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-protocol/src/graphql/response.rs", 4),
     // replicated AgentRequest failure_reason
     ("crates/gents-protocol/src/node_readiness.rs", 1),
+    // launchctl print output
+    ("crates/gents-service/src/native_service.rs", 1),
     // DefraDB HTTP 409 commit body
-    ("crates/gents/src/store/config_client/retry.rs", 3),
+    ("crates/gents-store/src/config_client/retry.rs", 3),
     // JSON-RPC node pruned-history wording
     // persisted AgentRequest failure_reason
     ("crates/gents-eval/src/runner/embedded/executor/outcome.rs", 2),
     // MCP probe transport/OS error text (metric label)
-    ("crates/gents/src/tools/mcp/health.rs", 8),
+    ("crates/gents-tools/src/mcp/health.rs", 8),
     // display only: appends a next-call hint when absent
-    ("crates/gents/src/tools/builtin/p2p.rs", 1),
+    ("crates/gents-tools/src/builtin/p2p.rs", 1),
     // DefraDB SDL parser messages (help page choice)
-    ("crates/gents/src/tools/builtin/schema_help/mod.rs", 6),
+    ("crates/gents-tools/src/builtin/schema_help/mod.rs", 6),
     // serde `invalid type: string` message
-    ("crates/gents/src/tools/builtin/self_config/command/patch.rs", 1),
+    ("crates/gents-tools/src/builtin/self_config/command/patch.rs", 1),
     // display only: appends a next-call hint when absent
-    ("crates/gents/src/tools/native/session_history.rs", 1),
+    ("crates/gents-tools/src/native/session_history.rs", 1),
     // persisted AgentRequest failure_reason
-    ("crates/gents/src/observe/trace_export.rs", 6),
+    ("crates/gents-observe/src/observe/trace_export.rs", 6),
     // serde `unknown variant` message
-    ("crates/gents/src/tools/workspace/action_plan.rs", 1),
+    ("crates/gents-session/src/workspace/action_plan.rs", 1),
     // git show stderr
-    ("crates/gents/src/tools/workspace/adapter.rs", 2),
+    ("crates/gents-session/src/workspace/adapter.rs", 2),
 ];
 
 const TEXT_TESTS: &[&str] = &["contains", "starts_with", "ends_with", "eq", "ne"];
@@ -2545,257 +2875,177 @@ fn error_text_fence_counts_decisions_on_error_renderings() {
     }
 }
 
-/// Layers of `crates/gents/src`, bottom to top. A module may name its own
-/// layer and those below it; the peer tier names none of its siblings.
-/// Root-level modules outside these directories are not ranked.
-const LAYERS: &[&[&str]] = &[
-    &["store"],
-    &["documents"],
-    &["inference"],
-    &[
-        "request", "session", "goal", "triggers", "tools", "plugin", "pack",
-    ],
-    &["operations"],
-    &["observe"],
-    &["turn"],
-    &["runtime"],
-    &["eval"],
+/// Workspace crates by layer, bottom to top. A crate names only crates in layers
+/// below its own in `[dependencies]`, `[build-dependencies]` and
+/// `[dev-dependencies]`, so Cargo itself rejects an upward or peer reference in
+/// source; this test fixes the direction the manifests may declare. Two crates
+/// in one layer are peers and name neither. The Lean decoders are test-only
+/// leaves that a lower crate may dev-depend on although they name `gents-protocol`.
+const CRATE_LAYERS: &[&[&str]] = &[
+    &["gents-schemas"],
+    &["gents-protocol"],
+    &["gents-lean-vocab"],
+    &["gents-loop"],
+    &["gents-store"],
+    &["gents-documents"],
+    &["gents-inference", "gents-p2p"],
+    &["gents-pack"],
+    &["gents-session"],
+    &["gents-tools"],
+    &["gents-toolcalls"],
+    &["gents-automation"],
+    &["gents-observe"],
+    &["gents"],
 ];
 
-const PEER_TIER: usize = 3;
+const TEST_ONLY_DECODERS: &[&str] = &["gents-lean-vocab", "gents-lean-contract"];
 
-/// Upward and peer-crossing `crate::` edges as (from, to, references). The
-/// list only shrinks.
-#[rustfmt::skip]
-const LAYER_EDGE_ALLOWLIST: &[(&str, &str, usize)] = &[
-    ("documents", "goal", 4),
-    ("documents", "inference", 7),
-    ("documents", "observe", 1),
-    ("documents", "pack", 3),
-    ("documents", "plugin", 3),
-    ("documents", "session", 3),
-    ("documents", "tools", 26),
-    ("documents", "triggers", 4),
-    ("goal", "request", 18),
-    ("goal", "session", 6),
-    ("goal", "tools", 3),
-    ("goal", "triggers", 6),
-    ("inference", "observe", 3),
-    ("inference", "request", 2),
-    ("inference", "runtime", 1),
-    ("inference", "tools", 1),
-    ("inference", "turn", 1),
-    ("observe", "runtime", 1),
-    ("pack", "plugin", 31),
-    ("pack", "tools", 2),
-    ("plugin", "pack", 40),
-    ("plugin", "session", 1),
-    ("plugin", "tools", 28),
-    ("plugin", "triggers", 2),
-    ("request", "goal", 10),
-    ("request", "runtime", 3),
-    ("request", "session", 32),
-    ("request", "tools", 24),
-    ("request", "triggers", 32),
-    ("request", "turn", 1),
-    ("session", "goal", 8),
-    ("session", "observe", 1),
-    ("session", "request", 27),
-    ("session", "tools", 28),
-    ("session", "turn", 4),
-    ("store", "documents", 37),
-    ("store", "inference", 2),
-    ("tools", "goal", 35),
-    ("tools", "observe", 4),
-    ("tools", "pack", 14),
-    ("tools", "plugin", 73),
-    ("tools", "request", 43),
-    ("tools", "runtime", 17),
-    ("tools", "session", 90),
-    ("tools", "turn", 1),
-    ("triggers", "goal", 27),
-    ("triggers", "plugin", 16),
-    ("triggers", "request", 18),
-    ("triggers", "runtime", 11),
-    ("triggers", "session", 1),
-    ("triggers", "tools", 22),
-    ("turn", "runtime", 2),
+/// Crates that operate or expose the runtime; no layered crate may name them.
+const CLIENT_CRATES: &[&str] = &[
+    "gents-cli",
+    "gents-eval",
+    "gents-desktop-core",
+    "gents-desktop",
+    "gents-desktop-bridge",
+    "gents-client-host",
+    "gents-media-host",
 ];
 
-fn layer_rank(top: &str) -> Option<usize> {
-    LAYERS.iter().position(|layer| layer.contains(&top))
+fn crate_layer(name: &str) -> Option<usize> {
+    CRATE_LAYERS.iter().position(|layer| layer.contains(&name))
 }
 
-fn layer_edge_violates(from: &str, to: &str) -> bool {
-    match (layer_rank(from), layer_rank(to)) {
-        (Some(lower), Some(higher)) if lower < higher => true,
-        (Some(PEER_TIER), Some(PEER_TIER)) => from != to,
-        _ => false,
+/// Package names a manifest declares in the given dependency table kinds,
+/// including target-specific tables.
+fn declared_dependencies(
+    manifest: &toml::Table,
+    inherited: &toml::Table,
+    kind: &str,
+) -> BTreeSet<String> {
+    let mut tables = vec![manifest.get(kind)];
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        tables.extend(targets.values().map(|target| target.get(kind)));
     }
+    tables
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_table)
+        .flat_map(|table| table.iter())
+        .map(|(key, specification)| package_name(key, specification, inherited))
+        .collect()
 }
 
-fn source_top(relative: &str) -> Option<&str> {
-    let rest = relative.strip_prefix("crates/gents/src/")?;
-    let first = rest.split('/').next()?;
-    Some(first.strip_suffix(".rs").unwrap_or(first))
-}
-
-#[derive(Default)]
-struct CrateTopVisitor {
-    targets: Vec<String>,
-}
-
-impl CrateTopVisitor {
-    fn use_targets(&mut self, tree: &syn::UseTree, under_crate: bool) {
-        match tree {
-            syn::UseTree::Path(path) if under_crate => self.targets.push(path.ident.to_string()),
-            syn::UseTree::Path(path) if path.ident == "crate" => self.use_targets(&path.tree, true),
-            syn::UseTree::Name(name) if under_crate => self.targets.push(name.ident.to_string()),
-            syn::UseTree::Rename(rename) if under_crate => {
-                self.targets.push(rename.ident.to_string())
-            }
-            syn::UseTree::Group(group) => {
-                for item in &group.items {
-                    self.use_targets(item, under_crate);
+fn crate_dependency_violations(
+    manifests: &BTreeMap<String, toml::Table>,
+    inherited: &toml::Table,
+) -> Vec<String> {
+    let mut violations = Vec::new();
+    for (name, manifest) in manifests {
+        let Some(own) = crate_layer(name) else {
+            continue;
+        };
+        for kind in ["dependencies", "build-dependencies", "dev-dependencies"] {
+            for dependency in declared_dependencies(manifest, inherited, kind) {
+                if dependency == *name {
+                    continue;
                 }
-            }
-            _ => {}
-        }
-    }
-
-    fn macro_targets(&mut self, stream: proc_macro2::TokenStream) {
-        let tokens = stream.into_iter().collect::<Vec<_>>();
-        for (index, token) in tokens.iter().enumerate() {
-            match token {
-                proc_macro2::TokenTree::Group(group) => self.macro_targets(group.stream()),
-                proc_macro2::TokenTree::Ident(ident) if ident == "crate" => {
-                    let colons = tokens.get(index + 1..index + 3).is_some_and(|pair| {
-                        pair.iter().all(|token| {
-                            matches!(token, proc_macro2::TokenTree::Punct(punct) if punct.as_char() == ':')
-                        })
-                    });
-                    if let (true, Some(proc_macro2::TokenTree::Ident(target))) =
-                        (colons, tokens.get(index + 3))
-                    {
-                        self.targets.push(target.to_string());
+                if CLIENT_CRATES.contains(&dependency.as_str()) {
+                    violations.push(format!("{name} [{kind}] names client crate {dependency}"));
+                    continue;
+                }
+                if kind == "dev-dependencies" && TEST_ONLY_DECODERS.contains(&dependency.as_str()) {
+                    continue;
+                }
+                if let Some(theirs) = crate_layer(&dependency) {
+                    if theirs >= own {
+                        violations.push(format!(
+                            "{name} [{kind}] names {dependency}, which is not in a lower layer"
+                        ));
                     }
                 }
-                _ => {}
             }
         }
     }
-}
-
-impl<'ast> Visit<'ast> for CrateTopVisitor {
-    fn visit_item(&mut self, item: &'ast syn::Item) {
-        if !item_cfg_test(item) {
-            visit::visit_item(self, item);
-        }
-    }
-
-    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
-        self.use_targets(&item.tree, false);
-        visit::visit_item_use(self, item);
-    }
-
-    fn visit_path(&mut self, path: &'ast syn::Path) {
-        if path.segments.len() > 1 && path.segments[0].ident == "crate" {
-            self.targets.push(path.segments[1].ident.to_string());
-        }
-        visit::visit_path(self, path);
-    }
-
-    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
-        self.macro_targets(invocation.tokens.clone());
-        visit::visit_macro(self, invocation);
-    }
-}
-
-fn layer_edges(from: &str, syntax: &syn::File) -> BTreeMap<(String, String), usize> {
-    let mut visitor = CrateTopVisitor::default();
-    visitor.visit_file(syntax);
-    let mut edges = BTreeMap::new();
-    for to in visitor.targets {
-        if layer_edge_violates(from, &to) {
-            *edges.entry((from.to_string(), to)).or_default() += 1;
-        }
-    }
-    edges
+    violations
 }
 
 #[test]
-fn layer_edges_only_shrink() {
+fn crate_dependencies_follow_the_layers() {
     let root = repo_root();
-    let mut actual = BTreeMap::<(String, String), usize>::new();
-    for (relative, syntax) in parse_production(&root, production_sources(&root)) {
-        let Some(from) = source_top(&relative) else {
-            continue;
-        };
-        for (edge, count) in layer_edges(from, &syntax) {
-            *actual.entry(edge).or_default() += count;
+    let inherited = toml_file(&root.join("Cargo.toml"))["workspace"]
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+        .cloned()
+        .unwrap_or_default();
+    let mut manifests = BTreeMap::new();
+    for layer in CRATE_LAYERS {
+        for name in *layer {
+            let directory = if *name == "gents" { "gents" } else { name };
+            manifests.insert(
+                (*name).to_string(),
+                toml_file(&root.join("crates").join(directory).join("Cargo.toml")),
+            );
         }
     }
-    let allowed = LAYER_EDGE_ALLOWLIST
-        .iter()
-        .map(|(from, to, count)| ((from.to_string(), to.to_string()), *count))
-        .collect::<BTreeMap<_, _>>();
-    let mut violations = Vec::new();
-    for edge in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
-        let (from, to) = edge;
-        let found = actual.get(edge).copied().unwrap_or_default();
-        match allowed.get(edge).copied() {
-            None => violations.push(format!(
-                "{from} -> {to}: {found} new upward or peer reference(s); move the shared item down to a layer both may name"
-            )),
-            Some(limit) if found > limit => violations.push(format!(
-                "{from} -> {to}: {found} references exceed the allowlisted {limit}"
-            )),
-            Some(limit) if found < limit => violations.push(format!(
-                "{from} -> {to}: {found} references; lower the allowlist entry from {limit}"
-            )),
-            Some(_) => {}
-        }
-    }
-    let current = actual
-        .iter()
-        .map(|((from, to), count)| format!("    (\"{from}\", \"{to}\", {count}),"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let violations = crate_dependency_violations(&manifests, &inherited);
     assert!(
         violations.is_empty(),
-        "layer edge ratchet failed:\n{}\n\ncurrent edges:\n{current}",
+        "crate layering ratchet failed:\n{}",
         violations.join("\n")
     );
 }
 
 #[test]
-fn layer_edges_count_upward_and_peer_references_outside_tests() {
-    let syntax = syn::parse_file(
-        r#"
-        use crate::{inference::Model, store::Key, tools::{a, b}};
-        use crate::session as chat;
-        fn f() -> crate::eval::Score { crate::request::admit(); crate::store::read(); }
-        fn g() { tracing::info!(target: "x", "{}", crate::goal::NAME); }
-        #[cfg(test)]
-        mod tests { use crate::eval::Case; }
-        "#,
-    )
-    .expect("parse snippet");
-    let edges = layer_edges("request", &syntax)
-        .into_iter()
-        .map(|((_, to), count)| (to, count))
-        .collect::<Vec<_>>();
+fn crate_layer_fence_flags_upward_peer_and_client_references() {
+    let manifest = |dependencies: &str| -> toml::Table {
+        format!("[package]\nname = \"x\"\n{dependencies}")
+            .parse()
+            .expect("parse snippet")
+    };
+    let inherited = toml::Table::new();
+    let check = |name: &str, dependencies: &str| {
+        crate_dependency_violations(
+            &BTreeMap::from([(name.to_string(), manifest(dependencies))]),
+            &inherited,
+        )
+        .len()
+    };
     assert_eq!(
-        edges,
-        [
-            ("eval".to_string(), 1),
-            ("goal".to_string(), 1),
-            ("session".to_string(), 1),
-            ("tools".to_string(), 1),
-        ]
+        check("gents-store", "[dependencies]\ngents-protocol = \"1\"\n"),
+        0
     );
-    assert!(!layer_edge_violates("eval", "store"));
-    assert!(layer_edge_violates("tools", "operations"));
-    assert!(!layer_edge_violates("operations", "tools"));
-    assert!(!layer_edge_violates("request", "agent"));
+    assert_eq!(
+        check("gents-store", "[dependencies]\ngents-documents = \"1\"\n"),
+        1
+    );
+    assert_eq!(
+        check("gents-inference", "[dependencies]\ngents-p2p = \"1\"\n"),
+        1
+    );
+    assert_eq!(
+        check(
+            "gents-tools",
+            "[dev-dependencies]\ngents-toolcalls = \"1\"\n"
+        ),
+        1
+    );
+    assert_eq!(
+        check(
+            "gents-store",
+            "[dev-dependencies]\ngents-lean-vocab = \"1\"\n"
+        ),
+        0
+    );
+    assert_eq!(check("gents", "[dev-dependencies]\ngents = \"1\"\n"), 0);
+    assert_eq!(
+        check("gents-observe", "[dependencies]\ngents-cli = \"1\"\n"),
+        1
+    );
+    assert_eq!(
+        check(
+            "gents-session",
+            "[target.'cfg(unix)'.dependencies]\ngents-tools = \"1\"\n"
+        ),
+        1
+    );
 }

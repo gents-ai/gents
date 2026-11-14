@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use gents::observe::run_timeline_fetch::load_run_timeline_rows;
-use gents::store::config_client::ConfigAccess;
 use gents_desktop_core::client::ClientCore;
+use gents_observe::observe::run_timeline_fetch::load_run_timeline_rows;
+use gents_store::config_client::ConfigAccess;
 use serde::Serialize;
 
 use crate::live_fixture::LiveBridgeFixture;
@@ -103,10 +103,14 @@ pub(crate) struct RequestDiagnosticsBundle {
 pub(crate) async fn build_desktop_client_snapshot(
     fixture: &LiveBridgeFixture,
 ) -> DesktopClientSnapshot {
-    let _ = refresh_store_with_timeout(fixture.desktop_core().as_ref()).await;
+    let _ = refresh_with_timeout(crate::live_fixture::refresh_every_node(
+        fixture.desktop_core().as_ref(),
+    ))
+    .await;
     DesktopClientSnapshot {
         bootstrap: fixture.build_bootstrap_summary().await,
         client: Some(build_runtime_snapshot(fixture.desktop_core().as_ref()).await),
+        repair_note: None,
     }
 }
 
@@ -117,17 +121,19 @@ pub(crate) async fn build_desktop_session_snapshot(
     request_id: Option<&str>,
     timeline_limit: Option<usize>,
 ) -> Option<DesktopSessionSnapshot> {
-    let _ = refresh_store_with_timeout(fixture.desktop_core().as_ref()).await;
-    let resolved_node_did = node_did.map(str::to_owned).or_else(|| {
-        fixture
-            .desktop_core()
-            .store()
-            .snapshot()
-            .sessions
-            .iter()
-            .find(|session| session.session_id == session_id)
-            .map(|session| session.node_did.clone())
-    });
+    let resolved_node_did = node_did
+        .map(str::to_owned)
+        .or_else(|| fixture.selected_node_did());
+    if let Some(node_did) = resolved_node_did.as_deref() {
+        let _ = refresh_with_timeout(async {
+            fixture
+                .desktop_core()
+                .refresh_node(node_did)
+                .await
+                .map(|_| ())
+        })
+        .await;
+    }
     let node_did = resolved_node_did.as_deref();
     let requester_scope = fixture.requester_scope(node_did, session_id, request_id);
     let access = fixture.desktop_core().operator_access(node_did?).ok()?;
@@ -285,15 +291,17 @@ async fn build_request_diagnostics(
         DiagnosticSource::Remote => {
             match gents_desktop_core::client::load_node_snapshot_on(access, node_did).await {
                 Ok(snapshot) => {
-                    core.store().replace_snapshot(snapshot);
+                    core.stores().ensure(node_did).replace_snapshot(snapshot);
                     None
                 }
                 Err(error) => Some(error.to_string()),
             }
         }
-        DiagnosticSource::Desktop => refresh_store_with_timeout(core).await,
+        DiagnosticSource::Desktop => {
+            refresh_with_timeout(async { core.refresh_node(node_did).await.map(|_| ()) }).await
+        }
     };
-    let snapshot = core.store().snapshot();
+    let snapshot = core.stores().snapshot(node_did);
     let request = snapshot
         .requests
         .iter()
@@ -492,8 +500,10 @@ async fn build_request_diagnostics(
     }
 }
 
-async fn refresh_store_with_timeout(core: &ClientCore) -> Option<String> {
-    match tokio::time::timeout(Duration::from_secs(5), core.refresh_store()).await {
+async fn refresh_with_timeout(
+    refresh: impl std::future::Future<Output = anyhow::Result<()>>,
+) -> Option<String> {
+    match tokio::time::timeout(Duration::from_secs(5), refresh).await {
         Ok(Ok(_)) => None,
         Ok(Err(error)) => Some(error.to_string()),
         Err(_) => Some("timed out refreshing store".to_string()),

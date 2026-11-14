@@ -1,9 +1,9 @@
-import Proofs.Basic
-import Proofs.Background.ProcessControl
-import Proofs.Scheduling
-import Proofs.RuntimeReconcile.State
-import Proofs.CanonicalOutput.State
-import Proofs.Recovery.Sweeps.BackgroundRestart
+import Proofs.Shared.Basic
+import Proofs.ToolCalls.Background.ProcessControl
+import Proofs.Inference.Scheduling
+import Proofs.Automation.RuntimeReconcile.State
+import Proofs.Shared.CanonicalOutput.State
+import Proofs.ToolCalls.Recovery.Sweeps.BackgroundRestart
 
 namespace Conformance.ContractCases
 
@@ -46,6 +46,7 @@ structure ClientAgentReadinessCase where
   unavailable : Bool
   startupDemoted : Bool
   runtimeUnavailableReason : String
+  storageUnavailable : Bool
   expectedState : String
   expectedReason : Option String
   expectedRuntimeAdmissible : Bool
@@ -292,34 +293,6 @@ structure FleetSlotAccountingCase where
   aggregateReconstructedNotPersisted : Bool
   deriving Repr
 
-structure PersistenceFailurePolicyCase where
-  name : String
-  policy : String
-  action : String
-  prePersistence : String
-  postPersistence : String
-  postStorageObservation : String
-  hookDecision : String
-  recordsFailure : Bool
-  recordsSuccess : Bool
-  externalDurabilityClaimed : Bool
-  deriving Repr
-
-structure StorageObservationRuntimeCase where
-  name : String
-  policy : String
-  action : String
-  preObservation : String
-  mutationResult : String
-  postObservation : String
-  postPersistence : String
-  hookResult : String
-  recordsFailure : Bool
-  recordsSuccess : Bool
-  terminalWriteObserved : Bool
-  externalVisibilityClaimed : Bool
-  deriving Repr
-
 structure BackendHealthAdmissionCase where
   name : String
   enabled : Bool
@@ -338,9 +311,6 @@ structure NativeFilesystemBoundaryCase where
   innerPollBlocks : Bool
   requestDeadlineMs : Nat
   blockerMs : Nat
-  expectedTerminal : String
-  expectedFailureClass : Option String
-  queueAdvancesBeforeBlockerReturns : Bool
   deriving Repr
 
 structure ManagedExecToolBoundaryCase where
@@ -353,53 +323,6 @@ structure ManagedExecToolBoundaryCase where
   cancelRequiresKill : Bool
   descendantsInTerminationScope : Bool
   captureDrainBounded : Bool
-  deriving Repr
-
-structure PairingReconcileShutdownBoundaryCase where
-  name : String
-  supervisor : String
-  workClass : String
-  boundary : String
-  perAdminCallTimeoutMs : Nat
-  cancellationObservedInsideSweep : Bool
-  currentAdminFutureDropped : Bool
-  remainingPeersSkipped : Bool
-  shutdownJoinBounded : Bool
-  deriving Repr
-
-structure PairingReconcileSweepRetryBoundaryCase where
-  name : String
-  supervisor : String
-  workClass : String
-  boundary : String
-  failureScope : String
-  failureTerminal : Bool
-  retryTrigger : String
-  cancellationPrioritized : Bool
-  convergenceRetried : Bool
-  deriving Repr
-
-structure PairingReconcileSweepSchedulingCase where
-  name : String
-  supervisor : String
-  workClass : String
-  boundary : String
-  maxConcurrentPeerPreparations : Nat
-  peerPreparationBounded : Bool
-  topologyMutationSerialized : Bool
-  stalePeerBlocksReadyPeer : Bool
-  everyPeerResultAccounted : Bool
-  deriving Repr
-
-structure ManagedExecLivenessCase where
-  name : String
-  trigger : String
-  preExecState : String
-  preToolState : String
-  expectedExecState : String
-  expectedToolState : String
-  maxSteps : Nat
-  killSignalRequired : Bool
   deriving Repr
 
 structure ProcessStopCase where
@@ -563,38 +486,6 @@ structure R6BackgroundingCase where
   wakeCreated : Option Bool := none
   redriveAllowed : Option Bool := none
   operation : Option String := none
-  deriving Repr
-
-structure BackgroundTheoremWitness where
-  theoremName : String
-  witnessKind : String
-  scenario : String
-  numericBound : Nat
-  kindFields : List (String × String)
-  deriving Repr
-
-structure ComposedInvariantWitness where
-  theoremName : String
-  witnessKind : String
-  scenario : String
-  rustPath : String
-  traceStepCount : Nat
-  transitionPath : List String
-  preRequestState : String
-  preRequestAdmission : String
-  toolPreState : String
-  toolPostState : String
-  requestId : Nat
-  toolRequestId : Nat
-  toolCallId : Nat
-  requestDeadline : Nat
-  requestCurrentTime : Nat
-  toolDeadline : Nat
-  toolCurrentTime : Nat
-  deadlineExceeded : Bool
-  wellFormedSource : String
-  preToolPersisted : Bool
-  cancelCause : Option String
   deriving Repr
 
 namespace R4cWitnesses

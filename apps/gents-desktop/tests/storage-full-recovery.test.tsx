@@ -7,11 +7,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { ChatDeliveryFeedback } from "../src/ui/screens/session/ChatDeliveryFeedback";
-import {
-  loadChatDrafts,
-  retainChatDraft,
-  saveChatDraft,
-} from "../src/hooks/chatDrafts";
+import { loadChatDrafts, chatDraftOf, saveChatDraft } from "../src/hooks/chatDrafts";
 import { node, renderIn, testApp } from "./app-fixture";
 import { acceptedChat } from "./chat-delivery-fixture";
 import { goalDeliveryStorage } from "./goal-delivery-storage";
@@ -67,7 +63,7 @@ function fixture(error = failure) {
     async () => app.stores.client.getState().snapshot!,
   );
   app.drafts.setState({ drafts: { newer: "Keep this newer draft too" } });
-  const draft = retainChatDraft(request, null);
+  const draft = chatDraftOf(request, null);
   saveChatDraft(app.stores.chat, { ...draft, failure });
   const render = () =>
     renderIn(
@@ -223,7 +219,7 @@ it("removes disk-full recovery once the failure is no longer storage", () => {
   const f = fixture();
   act(() =>
     saveChatDraft(f.app.stores.chat, {
-      ...retainChatDraft(f.request, null),
+      ...chatDraftOf(f.request, null),
       failure: { message: "unreachable", error: null },
     }),
   );

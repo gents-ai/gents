@@ -1,6 +1,7 @@
 pub use crate::plugin_access::{AllowedFoldersView, PluginApprovalView, PluginApprovalsView};
-use gents::pack::BindAccess;
-use gents::plugin::{allowed, approval};
+use gents_pack::pack::BindAccess;
+use gents_pack::plugin::allowed;
+use gents_tools::plugin::approval;
 use tauri::{Runtime, State, WebviewWindow};
 
 use crate::error::{BridgeError, BridgeErrorCode};

@@ -1,5 +1,5 @@
 import Lean
-import Proofs.ClientShell.AuthorityRestart
+import Proofs.Clients.ClientShell.AuthorityRestart
 
 namespace Conformance.ClientAuthorityRestart
 open Lean ClientShell.AuthorityRestart

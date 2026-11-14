@@ -45,6 +45,7 @@ import {
   shortName,
   showPublisher,
   sizeOf,
+  sourceOf,
   statusOf,
   summaryOf,
   text,
@@ -358,6 +359,7 @@ export function PackPage({
   const installed = local ? packs?.find((p) => p.pack === pack) : undefined;
   const status = installed ? statusOf(installed) : null;
   const shown = installed && !previewing;
+  const from = installed && !previewing ? sourceOf(installed) : null;
   const parts = shown && node ? partsOf(node, pack, records, pages) : [];
   const plugins = shown ? pluginsOf(records, pack) : [];
   const withPages = plugins.filter((p) => pageOf(pages, p.id));
@@ -427,6 +429,7 @@ export function PackPage({
                       : "Not installed",
                 fromFile && `From ${requestedName(request!)}`,
                 request?.source === "link" && "From a link",
+                from,
               ]
                 .filter(Boolean)
                 .join(" · ")}
@@ -438,7 +441,8 @@ export function PackPage({
             </p>
           ) : (
             read === "unread" &&
-            !request && (
+            !request &&
+            !from && (
               <p className="text-xs text-muted-foreground">
                 The registry has no record of it, so it may have come from a file or a
                 link

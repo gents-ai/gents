@@ -1,5 +1,5 @@
-import Proofs.Configuration.Initialization
-import Lean
+import Proofs.Documents.Configuration.Initialization
+import Proofs.Conformance.Family
 
 namespace Conformance.Initialization
 
@@ -7,7 +7,28 @@ open Configuration.Initialization Lean
 
 def localDefault : String := "google/gemma-4-12B-it-qat-q4_0-gguf"
 
-def inputs : List Input :=
+structure SeedInput where
+  engineer : Bool
+  requestedModel : Option String
+  preset : Option String
+  presetDefault : Option String
+  localDefault : String
+  concurrent : Option Int
+  deriving ToJson
+
+structure SeedPlan where
+  model : Option String
+  enabled : Bool
+  concurrent : Option Int
+  effectiveConcurrent : Nat
+  contextOverride : Option Int
+  outputOverride : Option Int
+  recordsProbe : Bool
+  unselectedModelReason : Option String
+  enabledUnselectedModelReason : Option String
+  deriving ToJson
+
+def seedInputs : List SeedInput :=
   let defaults :=
     [false, true].flatMap fun engineer =>
       [none, some "model-a", some "  model-b  ", some " "].flatMap fun requested =>
@@ -20,23 +41,20 @@ def inputs : List Input :=
         presetDefault := if preset == "llama-cpp" then some localDefault else none,
         localDefault, concurrent := none}
 
-def casesJson : String := (toJson (inputs.map fun input =>
-  Json.mkObj [
-    ("engineer", toJson input.engineer),
-    ("requested_model", toJson input.requestedModel),
-    ("local_default", toJson input.localDefault),
-    ("preset", toJson input.preset),
-    ("preset_default", toJson input.presetDefault),
-    ("concurrent", toJson input.concurrent),
-    ("expected", (seed input).map (fun plan => Json.mkObj [
-      ("model", toJson plan.model), ("enabled", toJson plan.enabled),
-      ("concurrent", toJson plan.concurrent),
-      ("effective_concurrent", toJson plan.effectiveConcurrent),
-      ("context_override", toJson plan.contextOverride),
-      ("output_override", toJson plan.outputOverride),
-      ("records_probe", toJson plan.recordsProbe),
-      ("unselected_model_reason", toJson (unselectedModelReason plan.enabled plan.model)),
-      ("enabled_unselected_model_reason", toJson (unselectedModelReason true plan.model))])
-      |>.getD Json.null)])).compress
+@[conformance_family]
+def initialInference : Conformance.Family SeedInput (Option SeedPlan) where
+  inputs := seedInputs
+  model := fun i =>
+    (seed { engineer := i.engineer, requestedModel := i.requestedModel, preset := i.preset
+            presetDefault := i.presetDefault, localDefault := i.localDefault
+            concurrent := i.concurrent }).map fun plan =>
+      { model := plan.model, enabled := plan.enabled
+        concurrent := plan.concurrent
+        effectiveConcurrent := plan.effectiveConcurrent
+        contextOverride := plan.contextOverride
+        outputOverride := plan.outputOverride
+        recordsProbe := plan.recordsProbe
+        unselectedModelReason := unselectedModelReason plan.enabled plan.model
+        enabledUnselectedModelReason := unselectedModelReason true plan.model }
 
 end Conformance.Initialization

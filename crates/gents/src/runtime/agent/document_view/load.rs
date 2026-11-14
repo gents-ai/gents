@@ -1,9 +1,10 @@
 use super::{DocumentRecord, DocumentRuntimeView};
-use crate::store::collection::Collection;
-use crate::store::config_client::{config_projection, ConfigAccess, ConfigApplyTxn};
-use crate::store::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
+use gents_documents::config_projection;
+use gents_store::collection::Collection;
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents_store::graphql::escape_graphql_string;
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde::de::DeserializeOwned;
 
@@ -32,6 +33,9 @@ pub(crate) async fn load_document_runtime_view_as(
                 let mut unknown_kind_backends = RapidHashMap::new();
                 let mut view = DocumentRuntimeView {
                     node: principal,
+                    default_selection: load_records(txn, &owner, Collection::DefaultAgentSelection)
+                        .await?
+                        .remove(&owner),
                     agents: load_records(txn, &owner, Collection::Agent).await?,
                     contexts: load_records(txn, &owner, Collection::AgentContext).await?,
                     compactions: load_records(txn, &owner, Collection::Compaction).await?,
@@ -99,7 +103,7 @@ pub(crate) async fn load_document_runtime_view_as(
                 );
                 for backend_id in view.backends.keys() {
                     if let Some(observation) =
-                        crate::inference::backends::registry::lookup_backend_observation_in_txn(
+                        gents_inference::backends::registry::lookup_backend_observation_in_txn(
                             txn, &owner, backend_id,
                         )
                         .await?
@@ -115,7 +119,7 @@ pub(crate) async fn load_document_runtime_view_as(
     .await?;
     let access = ConfigAccess::local_as(node.clone(), reader);
     for credential in
-        crate::inference::auth::credential::list_oauth_credentials_on(&access, node_did).await?
+        gents_inference::auth::credential::list_oauth_credentials_on(&access, node_did).await?
     {
         let doc_id = credential
             .doc_id
@@ -179,7 +183,7 @@ where
 {
     let name = collection.graphql_type();
     let fields = if collection == Collection::InferenceBackend {
-        crate::documents::backend_metadata_fields()?
+        gents_documents::backend_metadata_fields()?
     } else {
         config_projection(collection, None)?.0
     };
@@ -216,7 +220,7 @@ where
             .with_context(|| format!("{name} missing logical key"))?
             .to_owned();
         if collection == Collection::InferenceBackend {
-            if let Some(kind) = crate::inference::backends::registry::unknown_provider_kind(&row) {
+            if let Some(kind) = gents_inference::backends::registry::unknown_provider_kind(&row) {
                 tracing::warn!(
                     backend_id = id,
                     provider_kind = kind,
@@ -227,7 +231,7 @@ where
             }
         }
         if collection == Collection::InferenceBackend {
-            let metadata: crate::documents::InferenceBackendMetadata = serde_json::from_value(row)?;
+            let metadata: gents_documents::InferenceBackendMetadata = serde_json::from_value(row)?;
             row = serde_json::to_value(metadata.into_backend()?)?;
         }
         let (_, canonical) = config_projection(collection, Some(&row))?;

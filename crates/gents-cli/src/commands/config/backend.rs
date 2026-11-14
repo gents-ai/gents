@@ -1,58 +1,47 @@
+use super::inference_failure::InferenceFailure;
 use crate::cli::*;
 use crate::shared::ResolvedBackendConfig;
-use crate::{resolve_node_did, BackendResolutionMode};
+use crate::BackendResolutionMode;
 use anyhow::{Context, Result};
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{BackendAuth, InferenceBackend};
-use gents::inference::backends::rotation::{set_backend_rotation, BackendRotation};
-use gents::store::config_client::{
-    read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
+use gents_documents::BackendAuth;
+use gents_inference::backends::provider::discover_models as discover_backend_models;
+use gents_inference::backends::rotation::{set_backend_rotation, BackendRotation};
+use gents_protocol::operations::inference::{
+    DocumentWrite, InferenceDocument, InferenceOperationError, WriteMode,
 };
-use gents::{discover_backend_models, Collection};
+use gents_service::home_state::resolve_node_did;
+use gents_store::config_client::ConfigAccess;
 use serde_json::json;
 
-fn backend_plan(contents: &[u8]) -> Result<(InferenceBackend, DesiredStateApplyPlan)> {
-    let backend: InferenceBackend =
-        serde_json::from_slice(contents).context("decoding canonical InferenceBackend document")?;
-    backend.validate()?;
-    let value = serde_json::to_value(&backend)?;
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::InferenceBackend,
-        add: value.clone(),
-        update: value,
-    }])?;
-    Ok((backend, plan))
+fn failure(verb: &'static str) -> impl Fn(InferenceOperationError) -> InferenceFailure {
+    move |error| InferenceFailure::new(error, InferenceDocument::Backend, verb)
 }
 
 pub(super) async fn backend_set(args: BackendSetArgs) -> Result<()> {
-    let (backend, plan) = backend_plan(
+    let value: serde_json::Value = serde_json::from_slice(
         &std::fs::read(&args.file).with_context(|| format!("reading {}", args.file.display()))?,
-    )?;
+    )
+    .context("decoding canonical InferenceBackend document")?;
+    let (node_did, write) =
+        DocumentWrite::from_document(InferenceDocument::Backend, &value, WriteMode::Put)
+            .map_err(failure("update"))?;
     let (access, _) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let doc_id = access
-        .transact_write("cli.backend.set", |txn| {
-            let backend = &backend;
-            let plan = &plan;
+    let receipt = gents_inference::operations::write(&access, &node_did, &write)
+        .await
+        .map_err(failure("update"))?;
+    let backend = access
+        .transact_readonly("cli.backend.set.read", |txn| {
+            let (node_did, backend_id) = (&node_did, &write.id);
             Box::pin(async move {
-                apply_desired_state_plan(txn, plan).await?;
-                Ok::<_, anyhow::Error>(
-                    read_desired_state_record_in_txn(
-                        txn,
-                        Collection::InferenceBackend,
-                        &backend.node_did,
-                        &backend.backend_id,
-                    )
+                gents_documents::load_inference_backend_in_txn(txn, node_did, backend_id)
                     .await?
-                    .context("replaced backend missing")?
-                    .0,
-                )
+                    .context("written backend missing")
             })
         })
         .await?;
     crate::print_json(
-        &json!({"doc_id":doc_id,"node_did":backend.node_did,"backend_id":backend.backend_id,"provider_kind":backend.provider_kind.as_str(),"endpoint":backend.endpoint}),
+        &json!({"doc_id":receipt.doc_id,"node_did":backend.node_did,"backend_id":backend.backend_id,"provider_kind":backend.provider_kind.as_str(),"endpoint":backend.endpoint,"created":receipt.created,"changed":receipt.changed}),
     )
 }
 
@@ -92,75 +81,14 @@ pub(super) async fn backend_pool(args: BackendPoolArgs) -> Result<()> {
 }
 
 pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> Result<()> {
-    let (stored, target) = resolve_backend_discovery_target(&args).await?;
-    if let Some(backend) = stored.as_ref().filter(|backend| {
-        matches!(&backend.auth, BackendAuth::Credential { .. }) || backend.auth.uses_node_oauth()
-    }) {
-        let (access, _) =
-            crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-        let models = match &access {
-            ConfigAccess::Local(_) => {
-                let node = access.local_node().context("runtime is unavailable")?;
-                let actor = access
-                    .actor_did()
-                    .context("runtime discovery requires an authenticated actor")?;
-                gents::inference::backends::registry::discover_backend_for_actor(
-                    node,
-                    &identity::Did::new(&actor)?,
-                    &backend.node_did,
-                    &backend.backend_id,
-                )
-                .await?
-            }
-            ConfigAccess::Graphql(endpoint) => {
-                let mut url = reqwest::Url::parse(endpoint.url())?;
-                url.set_path(crate::http::inference_activity::BACKEND_DISCOVERY_PATH);
-                url.set_query(None);
-                url.set_fragment(None);
-                let client = reqwest::Client::builder()
-                    .redirect(reqwest::redirect::Policy::none())
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build()?;
-                let response = endpoint
-                    .authorize(client.post(url))?
-                    .json(&json!({"node_did":backend.node_did.as_str(), "backend_id":backend.backend_id.as_str()}))
-                    .send()
-                    .await?;
-                anyhow::ensure!(
-                    response.status().is_success(),
-                    "runtime backend discovery failed (HTTP {})",
-                    response.status()
-                );
-                let body: serde_json::Value = response.json().await?;
-                serde_json::from_value(
-                    body.get("discovered_models")
-                        .cloned()
-                        .context("runtime discovery returned no models")?,
-                )?
-            }
-        };
-        return crate::print_json(
-            &json!({"backend_id":args.backend_id, "provider_kind":backend.provider_kind.as_str(),
-            "endpoint":backend.endpoint.as_str(), "api_key":(!backend.auth.uses_node_oauth()).then_some("<redacted>"), "discovered_models":models, "catalog_written":true}),
-        );
+    if let Some(id) = args.backend_id.as_deref() {
+        return discover_stored_backend(&args, id).await;
     }
-    let timeout = std::time::Duration::from_secs(
-        stored
-            .as_ref()
-            .and_then(|backend| backend.discovery_timeout_secs)
-            .unwrap_or(10) as u64,
-    );
-    let connect = std::time::Duration::from_secs(
-        stored
-            .as_ref()
-            .and_then(|backend| backend.connect_timeout_secs)
-            .unwrap_or(10) as u64,
-    )
-    .min(timeout);
+    let target = resolve_backend_discovery_target(&args)?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(connect)
-        .timeout(timeout)
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(10))
         .build()
         .context("building backend discovery client")?;
     anyhow::ensure!(
@@ -175,75 +103,96 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         None,
     )
     .await?;
-
-    let catalog_written = if let Some(backend) = stored.as_ref() {
-        let (access, _) =
-            crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-        gents::record_discovered_catalog_on(&access, backend, discovered_models.clone()).await?;
-        true
-    } else {
-        false
-    };
     crate::print_json(&json!({
         "backend_id":args.backend_id,"backend_preset":args.backend_preset.map(BackendPresetArg::as_str),
         "provider_kind":target.provider_kind.as_str(),"endpoint":target.endpoint,
         "api_key":target.api_key.as_ref().map(|_|"<redacted>"),"api_key_env_var":target.api_key_env_var,
-        "discovered_models":discovered_models,"catalog_written":catalog_written,
+        "discovered_models":discovered_models,"catalog_written":false,
     }))
 }
 
-fn stored_backend_target(backend: &InferenceBackend) -> Result<ResolvedBackendConfig> {
-    backend.validate()?;
-    Ok(ResolvedBackendConfig {
-        provider_kind: backend.provider_kind,
-        openai_wire_api: backend.openai_wire_api,
-        endpoint: backend.endpoint.clone(),
-        api_key: match &backend.auth {
-            BackendAuth::Credential { .. } => None,
-            auth if auth.uses_node_oauth() => None,
-            auth => auth.probe_key()?,
-        },
-        api_key_env_var: match &backend.auth {
-            BackendAuth::Environment { variable } => Some(variable.clone()),
-            _ => None,
-        },
-    })
+async fn discover_stored_backend(args: &BackendDiscoverModelsArgs, id: &str) -> Result<()> {
+    anyhow::ensure!(
+        args.backend_preset.is_none()
+            && args.provider_kind.is_none()
+            && args.endpoint.is_none()
+            && args.api_key.is_none()
+            && args.api_key_env_var.is_none(),
+        "--backend-id uses stored configuration; explicit provider, endpoint and auth flags cannot override it"
+    );
+    let owner = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
+    let (access, _) =
+        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let (backend, models, catalog_written) = match &access {
+        ConfigAccess::Graphql(endpoint) => {
+            let backend = stored_backend(&access, &owner, id).await?;
+            let mut url = reqwest::Url::parse(endpoint.url())?;
+            url.set_path(gents_host::http::inference_activity::BACKEND_DISCOVERY_PATH);
+            url.set_query(None);
+            url.set_fragment(None);
+            let client = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(30))
+                .build()?;
+            let response = endpoint
+                .authorize(client.post(url))?
+                .json(&json!({"node_did":backend.node_did.as_str(), "backend_id":backend.backend_id.as_str()}))
+                .send()
+                .await?;
+            anyhow::ensure!(
+                response.status().is_success(),
+                "runtime backend discovery failed (HTTP {})",
+                response.status()
+            );
+            let body: serde_json::Value = response.json().await?;
+            let models = body
+                .get("discovered_models")
+                .cloned()
+                .context("runtime discovery returned no models")?;
+            let written = body
+                .get("catalog_written")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true);
+            (backend, models, written)
+        }
+        _ => {
+            let discovery = gents_inference::operations::discover(&access, &owner, id)
+                .await
+                .map_err(failure("discover"))?;
+            let written = discovery.answer
+                == gents_protocol::operations::inference::DiscoveryAnswer::ContactsProvider;
+            (
+                discovery.backend,
+                serde_json::to_value(discovery.models.unwrap_or_default())?,
+                written,
+            )
+        }
+    };
+    crate::print_json(
+        &json!({"backend_id":id, "provider_kind":backend.provider_kind.as_str(),
+        "endpoint":backend.endpoint.as_str(), "api_key":(!backend.auth.uses_node_oauth()).then_some("<redacted>"), "discovered_models":models, "catalog_written":catalog_written}),
+    )
 }
 
-async fn resolve_backend_discovery_target(
-    args: &BackendDiscoverModelsArgs,
-) -> Result<(Option<InferenceBackend>, ResolvedBackendConfig)> {
-    if let Some(id) = args.backend_id.as_deref() {
-        anyhow::ensure!(
-            args.backend_preset.is_none()
-                && args.provider_kind.is_none()
-                && args.endpoint.is_none()
-                && args.api_key.is_none()
-                && args.api_key_env_var.is_none(),
-            "--backend-id uses stored configuration; explicit provider, endpoint and auth flags cannot override it"
-        );
-        let owner = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
-        let (access, _) =
-            crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-        let backend = access
-            .transact_readonly("cli.backend.discovery_target", |txn| {
-                let owner = &owner;
-                Box::pin(async move {
-                    let (_, value) = read_desired_state_record_in_txn(
-                        txn,
-                        Collection::InferenceBackend,
-                        owner,
-                        id,
-                    )
+async fn stored_backend(
+    access: &ConfigAccess,
+    owner: &str,
+    id: &str,
+) -> Result<gents_documents::InferenceBackend> {
+    access
+        .transact_readonly("cli.backend.discovery_target", |txn| {
+            Box::pin(async move {
+                gents_documents::load_inference_backend_in_txn(txn, owner, id)
                     .await?
-                    .context("backend absent in selected owner")?;
-                    Ok::<_, anyhow::Error>(serde_json::from_value::<InferenceBackend>(value)?)
-                })
+                    .context("backend absent in selected owner")
             })
-            .await?;
-        let target = stored_backend_target(&backend)?;
-        return Ok((Some(backend), target));
-    }
+        })
+        .await
+}
+
+fn resolve_backend_discovery_target(
+    args: &BackendDiscoverModelsArgs,
+) -> Result<ResolvedBackendConfig> {
     let mut target = crate::resolve_helpers::resolve_backend_config_with_preset(
         args.backend_preset,
         args.endpoint.as_deref(),
@@ -261,22 +210,22 @@ async fn resolve_backend_discovery_target(
             .resolve_api_key()?;
         }
     }
-    Ok((None, target))
+    Ok(target)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::inference::auth::credential::{set_account_enabled, store_sign_in};
+    use gents_inference::auth::credential::{set_account_enabled, store_sign_in};
 
-    const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+    const DID: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
     const CLAUDE: &str = "claude-subscription";
 
-    fn claude_sign_in(who: &str) -> gents::inference::auth::credential::OAuthCredential {
-        gents::inference::auth::claude::credential_from_login_tokens(
+    fn claude_sign_in(who: &str) -> gents_inference::auth::credential::OAuthCredential {
+        gents_inference::auth::claude::credential_from_login_tokens(
             DID,
             CLAUDE,
-            &gents::inference::auth::claude::ClaudeLoginTokens {
+            &gents_inference::auth::claude::ClaudeLoginTokens {
                 access_token: "access-SECRET".into(),
                 refresh_token: format!("refresh-SECRET-{who}"),
                 expires_in: Some(3600),
@@ -290,18 +239,12 @@ mod tests {
     }
 
     async fn seeded() -> ConfigAccess {
-        let node = std::sync::Arc::new(
-            crate::shared::test_support::fixture_node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
-        crate::shared::test_support::publish_test_node(&node).await;
-        let access = ConfigAccess::local_as(
-            node,
-            ::identity::Did::new(crate::caused_sessions::fixtures::FIXTURE_DID).unwrap(),
-        );
+        let served = gents_host::test_support::served_config(json!({})).await;
+        let user = served.user.held_client_signing_capability().unwrap().did();
+        let access =
+            ConfigAccess::local_as(served.node.clone(), ::identity::Did::new(user).unwrap())
+                .with_client_signed_writes_through(served.user.clone())
+                .unwrap();
         for (id, kind, endpoint, auth) in [
             (
                 "claude",
@@ -327,9 +270,13 @@ mod tests {
                 "provider_kind": kind, "endpoint": endpoint, "auth": auth,
             }))
             .unwrap();
-            gents::documents::write_inference_backend_document(&access, &backend)
-                .await
-                .unwrap();
+            gents_documents::write_inference_backend_document(
+                &access,
+                &backend,
+                &gents_inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .unwrap();
         }
         access
     }
@@ -338,7 +285,7 @@ mod tests {
         access
             .transact_readonly("test.backend.pool.read", |txn| {
                 Box::pin(async move {
-                    gents::store::config_client::load_inference_backend_in_txn(txn, DID, backend_id)
+                    gents_documents::load_inference_backend_in_txn(txn, DID, backend_id)
                         .await?
                         .context("backend missing")
                 })
@@ -395,9 +342,13 @@ mod tests {
             "auth": {"kind": "node_oauth", "account_ref": "pinned"},
         }))
         .unwrap();
-        gents::documents::write_inference_backend_document(&access, &pinned)
-            .await
-            .unwrap();
+        gents_documents::write_inference_backend_document(
+            &access,
+            &pinned,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
         pool_output(&access, DID, "claude", BackendRotation::Single)
             .await
             .unwrap();

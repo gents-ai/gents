@@ -10,16 +10,17 @@ use serde_json::json;
 
 use super::inference::tests::InterruptionCapture;
 use super::{AgentDaemon, AgentDaemonInit};
-use crate::inference::llm::tool::ToolDyn;
-use crate::inference::resolved::ResolvedAgent;
 use crate::runtime::agent::runtime::StartupBarrier;
-use crate::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-use crate::tools::call::hook::{
+use crate::turn::prompt::LayeredPromptBuilder;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_inference::resolved::ResolvedAgent;
+use gents_loop::tool::ToolDyn;
+use gents_protocol::row::AgentRequest;
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
+use gents_toolcalls::call::hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
 };
-use crate::turn::prompt::LayeredPromptBuilder;
-use crate::Collection;
-use gents_protocol::row::AgentRequest;
 use tracing::instrument::WithSubscriber;
 
 const TASK_ID: &str = "hook-task";
@@ -54,7 +55,8 @@ impl CompletionModel for ScriptedModel {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
+            .await?;
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.fail {
             return Err(CompletionError::ProviderError("agent refused".into()));
@@ -80,10 +82,11 @@ enum Lineage {
 struct Harness {
     node: Arc<defra_node::Node>,
     agent_config: Arc<ResolvedAgent>,
+    tool_config: Arc<gents_tools::surface::AgentToolSurfaceConfig>,
     calls: Arc<AtomicUsize>,
     marks: tempfile::TempDir,
     _db: crate::support::TestDb,
-    _user: crate::KeyIdentity,
+    _user: gents_store::identity::KeyIdentity,
     user_access: ConfigAccess,
     agent_access: ConfigAccess,
 }
@@ -94,12 +97,12 @@ impl Harness {
     }
 
     async fn with_deadline(deadline: Duration) -> Self {
-        use crate::store::config_client::NodePermission;
+        use gents_store::config_client::NodePermission;
         let (db, user, user_access, binding) =
-            crate::test_support::signed_test_node("task-hooks").await;
+            crate::test_support::root::signed_test_node("task-hooks").await;
         let node = db.node.clone();
         let agent_identity =
-            crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+            gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();
         let agent_did = identity::Did::new(agent_identity.did()).unwrap();
         let admin = ConfigAccess::local_as(node.clone(), db.node_identity.did().parse().unwrap());
@@ -119,14 +122,16 @@ impl Harness {
         let agent_access =
             ConfigAccess::local_managed_agent(node.clone(), agent_did, agent_identity.as_ref())
                 .unwrap();
-        let mut agent_config = crate::runtime::agent::PendingAgent::new("task-hooks")
+        let built = crate::runtime::agent::PendingAgent::new("task-hooks")
             .with_identity_binding_for_test(binding)
             .build_with_identity_arc_for_test(db.node_identity.clone());
-        agent_config.deadline_duration = deadline;
-        let agent_config = Arc::new(agent_config);
+        let tool_config = built.tools;
+        let mut agent_config = built.agent;
+        Arc::make_mut(&mut agent_config).deadline_duration = deadline;
         Self {
             node,
             agent_config,
+            tool_config,
             calls: Arc::new(AtomicUsize::new(0)),
             marks: tempfile::tempdir().expect("hook marker directory"),
             _db: db,
@@ -163,7 +168,14 @@ impl Harness {
         self.user_access
             .transact_write("test.task_hooks", |txn| {
                 let plan = &plan;
-                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    gents_documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();
@@ -206,8 +218,8 @@ impl Harness {
     async fn trigger_doc_id(&self) -> String {
         let response = self.user_access.execute(&format!(
             r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(self.owner()),
-            crate::store::graphql::escape_graphql_string(TRIGGER_ID),
+            gents_store::graphql::escape_graphql_string(self.owner()),
+            gents_store::graphql::escape_graphql_string(TRIGGER_ID),
         )).await.unwrap();
         let rows = response["data"]["Trigger"].as_array().unwrap();
         let [row] = rows.as_slice() else {
@@ -227,7 +239,7 @@ impl Harness {
                 source_doc_id: uuid::Uuid::new_v4().to_string(),
             };
             gents_protocol::trigger_delivery::TriggerFire {
-                fire_key: crate::request::lifecycle::task_fire_key(&identity),
+                fire_key: gents_automation::triggers::task_fire_key(&identity),
                 request_id: identity.request_id(),
                 session_id: identity.session_id(),
                 identity,
@@ -289,12 +301,15 @@ impl Harness {
             create.workspace_authority = Some("readWrite".into());
             create.workspace_owner_node_did = Some(owner.clone());
         }
-        crate::sign_agent_request_create(self.agent_config.agent_identity.as_ref(), &mut create)
-            .await
-            .unwrap();
+        gents_session::request::admission::sign_agent_request_create(
+            self.agent_config.agent_identity.as_ref(),
+            &mut create,
+        )
+        .await
+        .unwrap();
         let doc_id = match &fire {
             Some(fire) => {
-                crate::request::lifecycle::write_task_delivery(
+                gents_automation::triggers::write_task_delivery(
                     &self.agent_access,
                     fire,
                     false,
@@ -314,10 +329,10 @@ impl Harness {
                     )
                     .await
                     .expect("create task-hook AgentRequest");
-                crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
+                gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
             }
         };
-        crate::request::admission::load_request_for_admission_test_as(
+        gents_session::request::admission::load_request_for_admission_test_as(
             &self.node,
             &doc_id,
             &self.agent_config.agent_did,
@@ -353,6 +368,7 @@ impl Harness {
         );
         AgentDaemon::new(AgentDaemonInit {
             node: self.node.clone(),
+            tool_config: self.tool_config.clone(),
             agent_config: self.agent_config.clone(),
             provider_family: None,
             model: Arc::new(ScriptedModel {
@@ -365,7 +381,7 @@ impl Harness {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                     self.node.clone(),
                     self.agent_config.agent_identity.as_ref(),
                 )
@@ -379,10 +395,10 @@ impl Harness {
                 self.owner().to_string(),
             ),
             slot_generation: 1,
-            request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+            request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
                 self.node.clone(),
                 self.agent_config.node_identity().clone(),
-                crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+                gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
             ),
         })
         .unwrap()
@@ -391,7 +407,7 @@ impl Harness {
     async fn request_row(&self, doc_id: &str) -> serde_json::Value {
         let response = self.agent_access.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state failure_reason }} }}"#,
-            crate::store::graphql::escape_graphql_string(doc_id),
+            gents_store::graphql::escape_graphql_string(doc_id),
         )).await.unwrap();
         let rows = response["data"]["AgentRequest"].as_array().unwrap();
         let [row] = rows.as_slice() else {
@@ -432,7 +448,7 @@ impl Harness {
             while !marker.exists() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+            gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
                 &self.agent_access,
                 &doc_id,
                 self.owner(),
@@ -577,7 +593,7 @@ async fn passing_hooks_leave_a_manual_task_run_completed() {
     let request = harness.create_request(Lineage::ManualFire, false).await;
     let fire_query = format!(
         r#"{{ TriggerFire(filter: {{request_id: {{_eq: "{}"}}}}) {{_docID task_id}} }}"#,
-        crate::store::graphql::escape_graphql_string(&request.request_id),
+        gents_store::graphql::escape_graphql_string(&request.request_id),
     );
     let selected = harness.agent_access.execute(&fire_query).await.unwrap();
     assert_eq!(selected["data"]["TriggerFire"][0]["task_id"], TASK_ID);
@@ -679,19 +695,67 @@ async fn interrupting_a_before_hook_skips_the_agent_and_still_cleans_up() {
 }
 
 #[tokio::test]
-async fn a_request_bound_to_a_missing_task_fails_closed() {
-    let harness = Harness::new().await;
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    let row = harness.run(request, false).await;
-    assert_eq!(harness.calls(), 0, "{row}");
-    assert_eq!(row["lifecycle_state"], "failed", "{row}");
-    assert!(reason(&row).contains("no longer exists"), "{row}");
+async fn task_bindings_follow_the_lean_model() {
+    use gents_toolcalls::call::task_hooks::TaskBindingRefusal;
+    for case in gents_lean_vocab::families::task_hooks_hookless_bound_request::cases::<
+        String,
+        gents_protocol::request_lifecycle::RequestLifecycleState,
+        String,
+    >() {
+        let harness = Harness::new().await;
+        if case.input.binding != "missing" {
+            harness.install_task(json!([])).await;
+        }
+        let request = harness.create_request(Lineage::ManualFire, false).await;
+        if case.input.binding == "disabled" {
+            harness
+                .apply(vec![(
+                    Collection::Task,
+                    json!({
+                        "node_did": harness.owner(),
+                        "task_id": TASK_ID,
+                        "agent_did": harness.agent_config.agent_did,
+                        "prompt_template": "run the gate",
+                        "enabled": false,
+                    }),
+                )])
+                .await;
+        }
+        let row = harness.run(request, false).await;
+        let refusals = [
+            (
+                "missing",
+                TaskBindingRefusal::Missing {
+                    task_id: TASK_ID.into(),
+                },
+            ),
+            (
+                "disabled",
+                TaskBindingRefusal::Disabled {
+                    task_id: TASK_ID.into(),
+                },
+            ),
+        ];
+        let refusal = refusals
+            .iter()
+            .filter(|(_, refusal)| reason(&row).contains(&refusal.to_string()))
+            .map(|(name, _)| (*name).to_owned())
+            .next();
+        case.check(
+            gents_lean_vocab::families::task_hooks_hookless_bound_request::BoundRequest {
+                agent_ran: harness.calls() > 0,
+                request_state: serde_json::from_value(row["lifecycle_state"].clone())
+                    .expect("persisted lifecycle state"),
+                refusal,
+            },
+        );
+    }
 }
 
 async fn install_workspace(harness: &Harness, host_path: &Path) {
     let owner = harness.owner().to_string();
-    let workspace = crate::tools::workspace::IsolatedWorkspaceDoc {
-        path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(vec![
+    let workspace = gents_session::workspace::IsolatedWorkspaceDoc {
+        path_capability: gents_session::workspace::WorkspacePathCapability::exact_paths(vec![
             "patch.rs".to_string(),
         ])
         .unwrap(),
@@ -700,10 +764,10 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
         repository_id: "hook-repo".to_string(),
         base_sha: "0".repeat(40),
         branch: "gents/hook-task".to_string(),
-        creation_policy: crate::tools::workspace::CreationPolicy::GitWorktreeDiff
+        creation_policy: gents_session::workspace::CreationPolicy::GitWorktreeDiff
             .as_str()
             .to_string(),
-        adapter: crate::tools::workspace::WorkspaceAdapterKind::GitWorktree
+        adapter: gents_session::workspace::WorkspaceAdapterKind::GitWorktree
             .as_str()
             .to_string(),
         owner_node_did: owner.clone(),
@@ -716,12 +780,12 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
         caused_by_correlation: "hook-correlation".to_string(),
         route: Default::default(),
     };
-    let placement = crate::tools::workspace::WorkspacePlacementDoc {
+    let placement = gents_session::workspace::WorkspacePlacementDoc {
         workspace_id: WORKSPACE_ID.to_string(),
         owner_node_did: owner,
         host_path: host_path.to_str().expect("utf-8 path").to_string(),
         repository_placement_id: "hook-repo".to_string(),
-        adapter: crate::tools::workspace::WorkspaceAdapterKind::GitWorktree
+        adapter: gents_session::workspace::WorkspaceAdapterKind::GitWorktree
             .as_str()
             .to_string(),
         adapter_version: "gents-workspace-adapter/1".to_string(),
@@ -732,8 +796,8 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
     };
     let updated_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     for mutation in [
-        crate::tools::workspace::isolated_workspace_upsert_mutation(&workspace),
-        crate::tools::workspace::workspace_placement_upsert_mutation(&placement, &updated_at),
+        gents_session::workspace::isolated_workspace_upsert_mutation(&workspace),
+        gents_session::workspace::workspace_placement_upsert_mutation(&placement, &updated_at),
     ] {
         harness
             .agent_access
@@ -745,27 +809,27 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
 
 async fn workspace_bindings(
     harness: &Harness,
-) -> Vec<crate::tools::workspace::WorkspaceBindingDoc> {
+) -> Vec<gents_session::workspace::WorkspaceBindingDoc> {
     let response = harness.agent_access.execute(
         &format!(
             r#"{{ WorkspaceBinding(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ binding_id workspace_id request_id request_doc_id authority owner_node_did seal_hash lifecycle_state }} }}"#,
-            crate::store::graphql::escape_graphql_string(WORKSPACE_ID),
-            crate::store::graphql::escape_graphql_string(harness.owner()),
+            gents_store::graphql::escape_graphql_string(WORKSPACE_ID),
+            gents_store::graphql::escape_graphql_string(harness.owner()),
         ),
     )
     .await
     .unwrap();
     let response: query::QueryResponse = serde_json::from_value(response).unwrap();
-    crate::store::graphql::rows(&response, "WorkspaceBinding").unwrap()
+    gents_store::graphql::rows(&response, "WorkspaceBinding").unwrap()
 }
 
 async fn materialize_writer_binding(harness: &Harness, request: &AgentRequest) {
-    crate::tools::workspace::materialize_workspace_binding(
+    gents_session::workspace::materialize_workspace_binding(
         &harness.node,
         &request.request_id,
         &request.doc_id,
         harness.agent_config.agent_identity.as_ref(),
-        &crate::request::lifecycle::WorkspaceLineage {
+        &gents_session::request::lifecycle::WorkspaceLineage {
             workspace_id: request.workspace_id.clone(),
             workspace_authority: request.workspace_authority.clone(),
             workspace_owner_node_did: request.workspace_owner_node_did.clone(),
@@ -792,8 +856,8 @@ async fn claim_admission_rejection_releases_the_bound_workspace() {
         "test.remove_workspace_placement",
         &format!(
             r#"mutation {{ delete_WorkspacePlacement(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(WORKSPACE_ID),
-            crate::store::graphql::escape_graphql_string(harness.owner()),
+            gents_store::graphql::escape_graphql_string(WORKSPACE_ID),
+            gents_store::graphql::escape_graphql_string(harness.owner()),
         ),
     )
     .await
@@ -852,7 +916,7 @@ async fn a_skipped_gate_releases_the_bound_workspace() {
     assert!(workspace_bindings(&harness)
         .await
         .iter()
-        .any(crate::tools::workspace::WorkspaceBindingDoc::is_active_read_write));
+        .any(gents_session::workspace::WorkspaceBindingDoc::is_active_read_write));
     let row = harness.run(request, false).await;
     assert_eq!(row["lifecycle_state"], "completed", "{row}");
     assert_eq!(harness.calls(), 0, "{row}");
@@ -877,7 +941,7 @@ async fn a_failing_before_hook_releases_the_bound_workspace() {
     assert!(workspace_bindings(&harness)
         .await
         .iter()
-        .any(crate::tools::workspace::WorkspaceBindingDoc::is_active_read_write));
+        .any(gents_session::workspace::WorkspaceBindingDoc::is_active_read_write));
     let row = harness.run(request, false).await;
     assert_eq!(harness.calls(), 0, "{row}");
     assert_eq!(row["lifecycle_state"], "failed", "{row}");
@@ -886,7 +950,7 @@ async fn a_failing_before_hook_releases_the_bound_workspace() {
     assert!(
         !bindings
             .iter()
-            .any(crate::tools::workspace::WorkspaceBindingDoc::is_active_read_write),
+            .any(gents_session::workspace::WorkspaceBindingDoc::is_active_read_write),
         "{bindings:?}"
     );
 }
@@ -1038,7 +1102,7 @@ async fn losing_the_lease_mid_work_skips_after_failure_and_still_cleans_up() {
             "test.replace_task_hook_generation",
             &format!(
                 r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
-                crate::store::graphql::escape_graphql_string(&doc_id),
+                gents_store::graphql::escape_graphql_string(&doc_id),
             ),
         )
         .await
@@ -1101,29 +1165,6 @@ async fn shutdown_before_any_hook_launches_leaves_no_record_to_recover() {
 }
 
 #[tokio::test]
-async fn a_request_bound_to_a_disabled_hookless_task_fails_closed() {
-    let harness = Harness::new().await;
-    harness.install_task(json!([])).await;
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    harness
-        .apply(vec![(
-            Collection::Task,
-            json!({
-                "node_did": harness.owner(),
-                "task_id": TASK_ID,
-                "agent_did": harness.agent_config.agent_did,
-                "prompt_template": "run the gate",
-                "enabled": false,
-            }),
-        )])
-        .await;
-    let row = harness.run(request, false).await;
-    assert_eq!(harness.calls(), 0, "{row}");
-    assert_eq!(row["lifecycle_state"], "failed", "{row}");
-    assert!(reason(&row).contains("disabled"), "{row}");
-}
-
-#[tokio::test]
 async fn a_before_hook_that_outlives_the_request_deadline_fails_the_request_clearly() {
     let harness = Harness::with_deadline(Duration::from_secs(2)).await;
     harness
@@ -1157,12 +1198,12 @@ async fn workspace_seal_completes_before_the_after_phase_is_selected() {
         ]))
         .await;
     let request = harness.create_request(Lineage::Trigger, true).await;
-    crate::tools::workspace::materialize_workspace_binding(
+    gents_session::workspace::materialize_workspace_binding(
         &harness.node,
         &request.request_id,
         &request.doc_id,
         harness.agent_config.agent_identity.as_ref(),
-        &crate::request::lifecycle::WorkspaceLineage {
+        &gents_session::request::lifecycle::WorkspaceLineage {
             workspace_id: request.workspace_id.clone(),
             workspace_authority: request.workspace_authority.clone(),
             workspace_owner_node_did: request.workspace_owner_node_did.clone(),
@@ -1198,7 +1239,7 @@ impl Harness {
                 "test.supersede_task_hook_execution",
                 &format!(
                     r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
-                    crate::store::graphql::escape_graphql_string(&doc_id),
+                    gents_store::graphql::escape_graphql_string(&doc_id),
                 ),
             )
             .await
@@ -1290,55 +1331,80 @@ async fn revocation_during_an_after_success_hook_cancels_it_and_still_cleans_up(
 
 #[tokio::test]
 async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
-    let mut harness = Harness::new().await;
-    Arc::get_mut(&mut harness.agent_config)
-        .unwrap()
-        .stream_liveness_timeout = Duration::from_secs(120);
-    let gate = harness.mark("revoked");
-    let first = format!(
-        "sleep 0.3; {}; while [ ! -e {} ]; do sleep 0.01; done",
-        harness.touch("ready"),
-        gate.display()
-    );
-    harness.install_task(json!([
-        {"hook_id":"first", "phase":"before", "command":["sh","-c",first], "timeout_secs":10},
-        {"hook_id":"second", "phase":"before", "command":["sh","-c",harness.touch("second")], "timeout_secs":10},
-        {"hook_id":"cleanup", "phase":"finally", "command":["sh","-c",harness.touch("cleanup")], "timeout_secs":10}
-    ])).await;
-    let request = harness.create_request(Lineage::ManualFire, false).await;
-    let doc_id = request.doc_id.clone();
-    let mut daemon = harness.daemon(false);
-    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let revoke = async {
-        while !harness.mark("ready").exists() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        harness.agent_access.write("test.revoke_between_task_hooks", &format!(
-            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(&doc_id)
-        )).await.unwrap();
-        std::fs::write(gate, "revoked").unwrap();
-    };
-    let (result, ()) = tokio::time::timeout(Duration::from_secs(15), async {
-        tokio::join!(daemon.process_request(request, shutdown_rx), revoke)
-    })
-    .await
-    .unwrap();
-    result.unwrap();
-    let modeled = crate::lean_vocab_test::lean_task_hook_run_cases()
-        .iter()
-        .find(|case| case.name == "revoked_between_before_hooks_refuses_the_next_launch")
+    for case in gents_lean_vocab::families::task_hooks_contracts_daemon_revocation::cases::<
+        String,
+        String,
+        gents_documents::TaskHookPhase,
+    >() {
+        let mut harness = Harness::new().await;
+        Arc::get_mut(&mut harness.agent_config)
+            .unwrap()
+            .stream_liveness_timeout = Duration::from_secs(120);
+        let gate = harness.mark("revoked");
+        let gated = case
+            .input
+            .hooks
+            .iter()
+            .find(|hook| {
+                hook.phase == gents_documents::TaskHookPhase::Before
+                    && !case.input.revoked.contains(&hook.hook_id)
+            })
+            .map(|hook| hook.hook_id.clone())
+            .expect("the scenario revokes after an owned before hook");
+        let hooks = case
+            .input
+            .hooks
+            .iter()
+            .map(|hook| {
+                let command = if hook.hook_id == gated {
+                    format!(
+                        "sleep 0.3; {}; {}; while [ ! -e {} ]; do sleep 0.01; done",
+                        harness.touch(&hook.hook_id),
+                        harness.touch("ready"),
+                        gate.display()
+                    )
+                } else {
+                    harness.touch(&hook.hook_id)
+                };
+                json!({"hook_id": hook.hook_id, "phase": hook.phase,
+                       "command": ["sh", "-c", command], "timeout_secs": 10})
+            })
+            .collect::<Vec<_>>();
+        harness.install_task(json!(hooks)).await;
+        let request = harness.create_request(Lineage::ManualFire, false).await;
+        let doc_id = request.doc_id.clone();
+        let mut daemon = harness.daemon(false);
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let revoke = async {
+            while !harness.mark("ready").exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            harness.agent_access.write("test.revoke_between_task_hooks", &format!(
+                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
+                gents_store::graphql::escape_graphql_string(&doc_id)
+            )).await.unwrap();
+            std::fs::write(&gate, "revoked").unwrap();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::join!(daemon.process_request(request, shutdown_rx), revoke)
+        })
+        .await
         .unwrap();
-    assert!(modeled
-        .refused_before_launch
-        .iter()
-        .any(|id| id == "second"));
-    assert_eq!(harness.calls() > 0, modeled.expected_agent_ran);
-    assert!(harness.mark("cleanup").exists());
-    assert!(
-        !harness.mark("second").exists(),
-        "second ordinary hook launched AFTER the revocation write committed"
-    );
+        result.unwrap();
+        let refused_before_launch = case
+            .input
+            .hooks
+            .iter()
+            .filter(|hook| !harness.mark(&hook.hook_id).exists())
+            .map(|hook| hook.hook_id.clone())
+            .collect();
+        case.check(
+            gents_lean_vocab::families::task_hooks_contracts_daemon_revocation::DaemonOutput {
+                refused_before_launch,
+                agent_ran: harness.calls() > 0,
+            },
+        );
+    }
 }
 
 #[tokio::test]

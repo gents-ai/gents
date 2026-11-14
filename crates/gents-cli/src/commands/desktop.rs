@@ -7,10 +7,10 @@ use gents_desktop_core::{
     },
 };
 
-use crate::{
-    cli::DesktopCommand,
-    native_service::{NativeServiceConfig, NativeServiceManager, NativeServicePlatform},
-};
+use crate::cli::DesktopCommand;
+use gents_service::native_service::NativeServiceConfig;
+use gents_service::native_service::NativeServiceManager;
+use gents_service::native_service::NativeServicePlatform;
 
 pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
     if !cfg!(target_os = "macos") {
@@ -85,7 +85,7 @@ async fn reset(
     let home = match explicit_home {
         Some(home) => home,
         None => gents_desktop_core::home_reset::reviewed_reset_home(&desktop)?
-            .unwrap_or_else(|| crate::resolve_home_dir(None)),
+            .unwrap_or_else(|| gents_service::home_state::resolve_home_dir(None)),
     };
     let home = crate::absolutize(home)?;
     *retry = retry_command(&home, desktop.root())?;
@@ -137,7 +137,7 @@ async fn reset(
     if still_running {
         bail!("The managed service is still running; quit Gents and stop it before resetting.");
     }
-    let server = crate::server_host::ServerConfig::standard(home.clone());
+    let server = gents_service::server_host::ServerConfig::standard(home.clone());
     let address = std::net::SocketAddr::new(server.http_addr, server.http_port);
     match std::net::TcpStream::connect_timeout(&address, std::time::Duration::from_millis(150)) {
         Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {}
@@ -146,7 +146,7 @@ async fn reset(
         ),
     }
     let _home_lock = if plan.runtime.is_some() {
-        Some(gents::store::local::home::lock_home_store(&home)?)
+        Some(gents_store::local::home::lock_home_store(&home)?)
     } else {
         None
     };
@@ -211,7 +211,7 @@ fn notify(message: &str) {
     tracing::info!(message, "desktop reset finished");
     #[cfg(target_os = "macos")]
     {
-        let _ = gents::tools::exec::native_spawn::status_std(
+        let _ = gents_session::exec::native_spawn::status_std(
             std::process::Command::new("/usr/bin/osascript")
                 .args([
                     "-e",
@@ -230,21 +230,14 @@ fn notify(message: &str) {
 async fn wait_for_exit(pid: u32) -> Result<()> {
     #[cfg(unix)]
     {
-        let pid = i32::try_from(pid).context("invalid desktop process ID")?;
-        if pid <= 0 {
+        const DESKTOP_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+        if i32::try_from(pid).map_or(true, |pid| pid <= 0) {
             bail!("invalid desktop process ID");
         }
-        loop {
-            let result = unsafe { libc::kill(pid, 0) };
-            if result != 0 {
-                let error = std::io::Error::last_os_error();
-                if error.raw_os_error() == Some(libc::ESRCH) {
-                    return Ok(());
-                }
-                return Err(error).context("waiting for desktop process shutdown");
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        if !gents_service::native_service::wait_for_process_exit(pid, DESKTOP_EXIT_TIMEOUT).await {
+            bail!("desktop process {pid} did not exit");
         }
+        Ok(())
     }
     #[cfg(not(unix))]
     {
@@ -310,7 +303,7 @@ fn run_browser_helper(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(stderr.try_clone()?);
-    let mut child = gents::tools::exec::native_spawn::spawn_std(&mut command).context("starting Gents to clear browser data; install the matching Gents desktop app before resetting")?;
+    let mut child = gents_session::exec::native_spawn::spawn_std(&mut command).context("starting Gents to clear browser data; install the matching Gents desktop app before resetting")?;
     let status = match child.wait_timeout(timeout) {
         Ok(Some(status)) => status,
         result => {
@@ -338,7 +331,8 @@ fn run_browser_helper(
         let mut diagnostic = String::new();
         stderr.take(64 * 1024).read_to_string(&mut diagnostic)?;
         bail!(
-            "Gents could not clear browser data: {}. Install the matching Gents desktop app and retry.",
+            "{} did not answer as the Gents desktop app that matches this CLI, so browser data was left alone. Name that app's executable with `--desktop-executable <Gents.app>/Contents/MacOS/gents-desktop-tauri` and retry. It said: {}",
+            executable.display(),
             diagnostic.trim()
         );
     }
@@ -411,6 +405,23 @@ mod tests {
         let error = run_browser_helper(&executable, BrowserHelper::Check, BROWSER_CHECK_TIMEOUT)
             .unwrap_err();
         assert!(format!("{error:#}").contains("store held"), "{error:#}");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\necho \"error: unexpected argument '--check' found\" >&2\nexit 2\n",
+        )
+        .unwrap();
+        let error = run_browser_helper(&executable, BrowserHelper::Check, BROWSER_CHECK_TIMEOUT)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.starts_with(&executable.display().to_string()),
+            "{error}"
+        );
+        assert!(error.contains("--desktop-executable"), "{error}");
+        assert!(
+            error.ends_with("unexpected argument '--check' found"),
+            "{error}"
+        );
     }
 
     fn initialized_reset(user: &std::path::Path) -> (std::path::PathBuf, HomeResetPlan) {

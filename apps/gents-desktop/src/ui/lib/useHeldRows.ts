@@ -8,22 +8,28 @@ import type {
   SessionRowsView,
   SessionRowsWindow,
 } from "@source-inc/gents-desktop-client";
+import { acceptsAsyncResult } from "../../hooks/observationOrdering";
 import { applyRowsRead, drawnRows, noRows } from "./transcriptRows";
 
 const RETRY_MS = [500, 1000, 2000, 4000];
 
+const ownerKey = (nodeDid: string | null, sessionId: string | null) =>
+  sessionId === null ? null : `${nodeDid ?? ""}\0${sessionId}`;
+
 export function useHeldRows(
+  nodeDid: string | null,
   sessionId: string | null,
   newest: readonly RenderedTimelineItem[],
   newestHasOlder: boolean,
   load: (window: SessionRowsWindow) => Promise<SessionRowsView | null>,
 ) {
-  const [held, setHeld] = useState(() => noRows(sessionId));
-  const current = held.sessionId === sessionId ? held : noRows(sessionId);
-  if (held.sessionId !== sessionId) setHeld(current);
+  const key = ownerKey(nodeDid, sessionId);
+  const [held, setHeld] = useState(() => ({ key, rows: noRows(sessionId) }));
+  const current = held.key === key ? held : { key, rows: noRows(sessionId) };
+  if (held !== current) setHeld(current);
   const drawn = useMemo(
-    () => drawnRows(current, [...newest], newestHasOlder),
-    [current, newest, newestHasOlder],
+    () => drawnRows(current.rows, [...newest], newestHasOlder),
+    [current.rows, newest, newestHasOlder],
   );
   const [loading, setLoading] = useState<"older" | "newer" | "jump" | null>(null);
   const [failure, setFailure] = useState<{ message: string; denied: boolean } | null>(
@@ -33,17 +39,21 @@ export function useHeldRows(
   const busy = useRef(false);
   const failures = useRef(0);
   const retry = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const owner = useRef(sessionId);
-  owner.current = sessionId;
+
+  const latest = useRef(0);
+  const owner = useRef(key);
+  owner.current = key;
   useEffect(
     () => () => {
       if (retry.current) clearTimeout(retry.current);
+      latest.current += 1;
       busy.current = false;
       failures.current = 0;
       failedRead.current = null;
+      setLoading(null);
       setFailure(null);
     },
-    [sessionId],
+    [key],
   );
 
   /* `apply` lets the caller choose when the rows land, so rows added above
@@ -58,30 +68,38 @@ export function useHeldRows(
       if (busy.current) return;
       if (retry.current) clearTimeout(retry.current);
       busy.current = true;
+      const mine = ++latest.current;
       setLoading(kind);
       setFailure(null);
       failedRead.current = null;
-      const session = owner.current;
+      const reader = owner.current;
+      const settles = () => {
+        if (!acceptsAsyncResult(latest.current, mine)) return false;
+        busy.current = false;
+        setLoading(null);
+        return true;
+      };
       load(window).then(
         (view) => {
-          busy.current = false;
-          setLoading(null);
-          if (!view || owner.current !== session) return;
+          if (!settles() || !view) return;
           if (view.unreadable) {
             setFailure({ message: view.unreadable, denied: false });
             failedRead.current = () => read(window, kind, apply, landed);
             return;
           }
           failures.current = 0;
+
           apply(() => {
-            setHeld((now) => applyRowsRead(now, window, view));
+            setHeld((now) =>
+              now.key === reader
+                ? { key: reader, rows: applyRowsRead(now.rows, window, view) }
+                : now,
+            );
             landed?.();
           });
         },
         (error: unknown) => {
-          busy.current = false;
-          setLoading(null);
-          if (owner.current !== session) return;
+          if (!settles()) return;
           const denied =
             error instanceof BridgeInvokeError && error.code === "permissionDenied";
           setFailure({
@@ -91,16 +109,18 @@ export function useHeldRows(
             denied,
           });
           if (denied) {
-            setHeld(noRows(session));
+            setHeld((now) =>
+              now.key === reader
+                ? { key: reader, rows: noRows(now.rows.sessionId) }
+                : now,
+            );
             return;
           }
           failedRead.current = () => read(window, kind, apply, landed);
           if (error instanceof BridgeInvokeError && error.retryable) {
             const delay = RETRY_MS[Math.min(failures.current, RETRY_MS.length - 1)]!;
             failures.current += 1;
-            retry.current = setTimeout(() => {
-              if (owner.current === session) read(window, kind, apply, landed);
-            }, delay);
+            retry.current = setTimeout(() => read(window, kind, apply, landed), delay);
           }
         },
       );
@@ -128,7 +148,10 @@ export function useHeldRows(
     },
     [read],
   );
-  const reset = useCallback(() => setHeld(noRows(owner.current)), []);
+  const reset = useCallback(
+    () => setHeld((now) => ({ ...now, rows: noRows(now.rows.sessionId) })),
+    [],
+  );
 
   const retryRead = useCallback(() => {
     if (retry.current) clearTimeout(retry.current);

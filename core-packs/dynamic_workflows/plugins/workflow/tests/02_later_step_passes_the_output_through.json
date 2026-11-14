@@ -1,0 +1,14 @@
+{
+  "input": {
+    "pin": {
+      "script_id": "4021c9117ba95e0fd52f8f8421f01367a79b975c890fb021a1af35d81f3d4a9a"
+    },
+    "script": "module.exports = (i) => ({result: {done: true}})",
+    "args": {}
+  },
+  "expect": {
+    "result": {
+      "done": true
+    }
+  }
+}

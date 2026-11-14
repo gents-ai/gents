@@ -1,4 +1,5 @@
-use gents::{DocumentRuntimeOptions, Gents, NodeIdentity};
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_store::identity::NodeIdentity;
 
 use super::fixtures::{bind_agent_backend, bind_selected_managed_agent_backend};
 use super::interrupt::BootedAgent;
@@ -65,9 +66,12 @@ pub async fn enqueue_local_accepted_request_until(
         ),
     );
     request.valid_until = valid_until.map(str::to_owned);
-    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut request)
-        .await
-        .expect("sign follow-up accepted-turn request");
+    gents_session::request::admission::sign_agent_request_create(
+        db.node_identity.as_ref(),
+        &mut request,
+    )
+    .await
+    .expect("sign follow-up accepted-turn request");
     let response = db.node.execute(&request.graphql_mutation().unwrap()).await;
     assert!(
         !response.has_errors(),
@@ -111,7 +115,7 @@ pub async fn enqueue_managed_accepted_request_until(
     );
     request.valid_until = valid_until.map(str::to_owned);
     request.session_doc_id = Some(
-        gents::request::lifecycle::reserve_goal_session(&fixture.access, &request)
+        gents_session::request::lifecycle::reserve_goal_session(&fixture.access, &request)
             .await
             .expect("reserve follow-up session"),
     );
@@ -121,9 +125,9 @@ pub async fn enqueue_managed_accepted_request_until(
             .transact_readonly("test.followup.agent", |txn| {
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents_documents::read_desired_state_record_in_txn(
                             txn,
-                            gents::Collection::Agent,
+                            gents_store::collection::Collection::Agent,
                             node_did,
                             agent_did,
                         )
@@ -136,10 +140,10 @@ pub async fn enqueue_managed_accepted_request_until(
             .await
             .expect("read follow-up Agent"),
     );
-    gents::sign_agent_request_create(&fixture.user, &mut request)
+    gents_session::request::admission::sign_agent_request_create(&fixture.user, &mut request)
         .await
         .expect("sign follow-up as held user");
-    gents::request::lifecycle::submit_client_request(&fixture.access, &request)
+    gents_session::request::lifecycle::submit_client_request(&fixture.access, &request)
         .await
         .expect("submit follow-up as held user");
 }
@@ -215,7 +219,7 @@ pub async fn prepare_managed_accepted_turn(
         setup(&mut request);
     }
     request.session_doc_id = Some(
-        gents::request::lifecycle::reserve_goal_session(&fixture.access, &request)
+        gents_session::request::lifecycle::reserve_goal_session(&fixture.access, &request)
             .await
             .expect("reserve accepted-turn session"),
     );
@@ -225,9 +229,9 @@ pub async fn prepare_managed_accepted_turn(
             .transact_readonly("test.accepted_turn.agent", |txn| {
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents_documents::read_desired_state_record_in_txn(
                             txn,
-                            gents::Collection::Agent,
+                            gents_store::collection::Collection::Agent,
                             node_did,
                             spec.parent_agent_did,
                         )
@@ -245,7 +249,7 @@ pub async fn prepare_managed_accepted_turn(
         .transact_write("test.accepted_turn.title", |txn| {
             let now = &now;
             Box::pin(async move {
-                gents::session::apply_title_in_txn(
+                gents_session::session::apply_title_in_txn(
                     txn,
                     node_did,
                     Some(user_did),
@@ -259,10 +263,10 @@ pub async fn prepare_managed_accepted_turn(
         })
         .await
         .expect("set accepted-turn session title");
-    gents::sign_agent_request_create(&fixture.user, &mut request)
+    gents_session::request::admission::sign_agent_request_create(&fixture.user, &mut request)
         .await
         .expect("sign accepted-turn request as held user");
-    gents::request::lifecycle::submit_client_request(&fixture.access, &request)
+    gents_session::request::lifecycle::submit_client_request(&fixture.access, &request)
         .await
         .expect("submit accepted-turn request as held user");
     PreparedAcceptedTurn { backend }
@@ -320,7 +324,7 @@ pub async fn prepare_accepted_turn_with_signer(
         });
         super::create_session_document(db.node.as_ref(), &session).await;
     } else if existing_session.is_some_and(|session| session.title.is_none()) {
-        let session_id = gents::store::graphql::escape_graphql_string(spec.session_id);
+        let session_id = gents_store::graphql::escape_graphql_string(spec.session_id);
         let title = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
             "text": "generated-title",
             "source": "generated"
@@ -357,7 +361,7 @@ pub async fn prepare_accepted_turn_with_signer(
     if let Some(setup) = spec.request_setup.take() {
         setup(&mut request);
     }
-    gents::sign_agent_request_create(signer, &mut request)
+    gents_session::request::admission::sign_agent_request_create(signer, &mut request)
         .await
         .expect("sign accepted-turn request");
     let response = db.node.execute(&request.graphql_mutation().unwrap()).await;
@@ -423,8 +427,8 @@ pub async fn boot_managed_accepted_turn_with_backend_capacity(
     runtime_options: DocumentRuntimeOptions,
     max_concurrent: usize,
 ) -> AcceptedTurnRuntime {
-    use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     assert!(max_concurrent > 0);
@@ -438,7 +442,7 @@ pub async fn boot_managed_accepted_turn_with_backend_capacity(
             Box::pin(async move {
                 let (_, mut backend) = read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::InferenceBackend,
+                    gents_store::collection::Collection::InferenceBackend,
                     did,
                     backend_id,
                 )
@@ -446,11 +450,17 @@ pub async fn boot_managed_accepted_turn_with_backend_capacity(
                 .expect("accepted-turn backend");
                 backend["max_concurrent"] = max_concurrent.into();
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: gents::Collection::InferenceBackend,
+                    collection: gents_store::collection::Collection::InferenceBackend,
                     add: backend.clone(),
                     update: backend,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await
@@ -498,12 +508,12 @@ async fn boot_accepted_turn_with_backend_capacity_inner(
     if let Some(marker) = dynamic_marker {
         prepared.backend.enable_dynamic_followups(marker);
     }
-    use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let did = db.node_identity.did();
-    gents::ConfigAccess::transact_local_write(
+    gents_store::config_client::ConfigAccess::transact_local_write(
         &db.node,
         None,
         "test.accepted_turn_backend_capacity",
@@ -512,7 +522,7 @@ async fn boot_accepted_turn_with_backend_capacity_inner(
             Box::pin(async move {
                 let (_, mut backend) = read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::InferenceBackend,
+                    gents_store::collection::Collection::InferenceBackend,
                     did,
                     &backend_id,
                 )
@@ -520,11 +530,17 @@ async fn boot_accepted_turn_with_backend_capacity_inner(
                 .ok_or_else(|| anyhow::anyhow!("accepted-turn backend {backend_id} missing"))?;
                 backend["max_concurrent"] = max_concurrent.into();
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: gents::Collection::InferenceBackend,
+                    collection: gents_store::collection::Collection::InferenceBackend,
                     add: backend.clone(),
                     update: backend,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         },
     )

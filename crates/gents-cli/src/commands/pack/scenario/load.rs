@@ -7,7 +7,7 @@ use super::validate::{
     validate_manifest, validate_prompt_tool_contracts, validate_task_goal_declarations,
 };
 use crate::desired_state::interpolate::interpolate_with;
-use gents::store::graphql::validate_collection_identifier;
+use gents_store::graphql::validate_collection_identifier;
 
 pub(super) fn validate_source_pack_path(path: &Path) -> Result<()> {
     anyhow::ensure!(
@@ -22,18 +22,20 @@ pub(super) fn validate_source_pack_path(path: &Path) -> Result<()> {
         .and_then(|name| name.to_str())
         .context("source pack path needs a UTF-8 directory name")?;
     anyhow::ensure!(
-        gents::pack::is_valid_pack_name(name),
+        gents_documents::pack_spec::is_valid_pack_name(name),
         "source pack directory name must be snake_case"
     );
     Ok(())
 }
 
-pub(super) fn read_distribution_manifest(root: &Path) -> Result<gents::pack::PackManifest> {
+pub(super) fn read_distribution_manifest(root: &Path) -> Result<gents_pack::pack::PackManifest> {
     let path = root.join("manifest.json");
-    serde_json::from_slice(
+    let manifest: gents_pack::pack::PackManifest = serde_json::from_slice(
         &std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?,
     )
-    .with_context(|| format!("parsing {}", path.display()))
+    .with_context(|| format!("parsing {}", path.display()))?;
+    gents_pack::pack::core_packs::check_plugin_interface(&manifest)?;
+    Ok(manifest)
 }
 
 pub(super) async fn resolve_scenario_dir(
@@ -41,8 +43,8 @@ pub(super) async fn resolve_scenario_dir(
     registry: Option<&str>,
 ) -> Result<(
     PathBuf,
-    Option<gents::store::local::file_lock::FileLock>,
-    gents::pack::PackManifest,
+    Option<gents_store::local::file_lock::FileLock>,
+    gents_pack::pack::PackManifest,
 )> {
     let direct = PathBuf::from(target);
     if direct.join("experiment.json").is_file() {
@@ -50,28 +52,29 @@ pub(super) async fn resolve_scenario_dir(
         let distribution = read_distribution_manifest(&direct)?;
         return Ok((direct, None, distribution));
     }
-    let home = crate::home_state::resolve_home_dir(None);
-    let pack = super::super::resolve_pack_source(target, registry, &home).await?;
+    let home = gents_service::home_state::resolve_home_dir(None);
+    let pack =
+        gents_pack::pack::resolved_pack::resolve_pack_source(target, registry, &home).await?;
     anyhow::ensure!(
-        gents::pack::declared_paths(pack.manifest())
+        gents_pack::pack::declared_paths(pack.manifest())
             .iter()
             .any(|path| path == "experiment.json"),
         "pack {target} has no scenario (experiment.json)"
     );
-    let (root, lease) = super::super::materialize_cached_pack(&home, &pack)?;
+    let (root, lease) = gents_pack::pack::resolved_pack::materialize_cached_pack(&home, &pack)?;
     Ok((root, Some(lease), pack.manifest().clone()))
 }
 
 pub(super) fn load_manifest(
     pack: &Path,
-    distribution: &gents::pack::PackManifest,
+    distribution: &gents_pack::pack::PackManifest,
 ) -> Result<ScenarioManifest> {
     load_manifest_with(pack, distribution, &|name| std::env::var(name).ok())
 }
 
 pub(super) fn load_manifest_with(
     pack: &Path,
-    distribution: &gents::pack::PackManifest,
+    distribution: &gents_pack::pack::PackManifest,
     lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<ScenarioManifest> {
     let path = pack.join("experiment.json");
@@ -106,11 +109,11 @@ pub(super) fn load_manifest_with(
 fn load_pack_config_with(
     pack: &Path,
     lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<gents::pack::AuthoredPackConfig> {
+) -> Result<gents_pack::pack::AuthoredPackConfig> {
     let distribution = read_distribution_manifest(pack)?;
-    gents::pack::load_pack_authoring_config(
+    gents_pack::pack::load_pack_authoring_config(
         &distribution,
-        &gents::pack::PackInstallOptions {
+        &gents_pack::pack::PackInstallOptions {
             node_did: "did:key:zScenarioPackValidationOwner".into(),
         },
         &|path| Ok(std::fs::read(pack.join(path))?),
@@ -124,16 +127,14 @@ pub(super) fn read_pack_sidecar(pack: &Path, reference: &str) -> Result<String> 
         .strip_prefix("./")
         .context("pack sidecar path must start with ./")?;
     anyhow::ensure!(
-        gents::pack::is_distributable_asset_path(relative),
+        gents_pack::pack::is_distributable_asset_path(relative),
         "pack sidecar path is not a pack asset path: {reference}"
     );
     std::fs::read_to_string(pack.join(relative))
         .with_context(|| format!("reading pack sidecar {relative}"))
 }
 
-pub(super) fn scenario_config(
-    manifest: &ScenarioManifest,
-) -> Result<&gents::documents::PackConfig> {
+pub(super) fn scenario_config(manifest: &ScenarioManifest) -> Result<&gents_documents::PackConfig> {
     manifest
         .config
         .as_ref()
@@ -157,17 +158,17 @@ pub(super) fn trigger_source_collections(
 }
 
 fn scenario_event_source<'a>(
-    config: &'a gents::documents::PackConfig,
+    config: &'a gents_documents::PackConfig,
     trigger_id: &str,
-) -> Result<&'a gents::documents::EventSource> {
+) -> Result<&'a gents_documents::EventSource> {
     let trigger = config
         .triggers
         .iter()
         .find(|trigger| trigger.trigger_id == trigger_id)
         .with_context(|| format!("missing Trigger {trigger_id}"))?;
     let event_source_id = match &trigger.source {
-        gents::documents::TriggerSource::Event { event_source_id } => event_source_id,
-        gents::documents::TriggerSource::Schedule { .. } => {
+        gents_documents::TriggerSource::Event { event_source_id } => event_source_id,
+        gents_documents::TriggerSource::Schedule { .. } => {
             bail!("scenario Trigger {trigger_id} must use an event source")
         }
     };

@@ -1,20 +1,20 @@
 use super::super::*;
-use crate::store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::identity::{KeyIdentity, NodeIdentity};
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::thread::JoinHandle;
 
-pub(super) use crate::documents::Tools;
 pub(super) use crate::runtime::status::RuntimeStatusHandle;
-pub(super) use crate::store::graphql::escape_graphql_string;
-pub(super) use crate::tools::surface::ToolCeiling;
+pub(super) use gents_documents::Tools;
 pub(super) use gents_protocol::node_readiness::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessProcessState,
     NodeReadinessSnapshot,
 };
 pub(super) use gents_protocol::row::AgentRequest;
+pub(super) use gents_store::graphql::escape_graphql_string;
+pub(super) use gents_tools::surface::ToolCeiling;
 pub(super) use serde_json::Value;
 
 pub(super) fn test_identity(name: &str) -> KeyIdentity {
@@ -26,13 +26,13 @@ pub(super) struct PluginRuntimeFixture {
     pub db: crate::support::TestDb,
     pub node: Arc<defra_node::Node>,
     pub runtime: Arc<dyn NodeIdentity>,
-    pub user_access: crate::store::config_client::ConfigAccess,
-    pub agent_access: crate::store::config_client::ConfigAccess,
-    pub node_binding: crate::store::config_client::ConfigurationNodeBinding,
+    pub user_access: gents_store::config_client::ConfigAccess,
+    pub agent_access: gents_store::config_client::ConfigAccess,
+    pub node_binding: gents_documents::ConfigurationNodeBinding,
 }
 
 impl PluginRuntimeFixture {
-    pub fn admission(&self) -> crate::store::local::backend_protection::BackendAdmission {
+    pub fn admission(&self) -> gents_store::local::backend_protection::BackendAdmission {
         self.db.home.backend_admission()
     }
 }
@@ -42,11 +42,10 @@ pub(super) async fn plugin_runtime_fixture(
     backend_id: &str,
     endpoint: &str,
 ) -> anyhow::Result<PluginRuntimeFixture> {
-    use crate::store::config_client::{
-        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
-    use crate::store::identity::GrantSet;
-    use crate::Collection;
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents_store::collection::Collection;
+    use gents_store::config_client::ConfigAccess;
+    use gents_store::identity::GrantSet;
     use serde_json::json;
 
     let db = crate::support::test_db(name).await;
@@ -66,16 +65,23 @@ pub(super) async fn plugin_runtime_fixture(
     user_access
         .transact_write("test.plugin.node", |txn| {
             let plan = &node_plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
-    let binding = crate::store::identity::provision_agent_identity_authorized(
+    let binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         runtime.as_ref(),
         &user_did,
     )
     .await?;
-    let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
+    let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
     let agent_did = binding.agent_did.clone();
     let context_id = format!("{agent_did}:context");
     let tools_id = format!("{agent_did}:tools");
@@ -91,11 +97,18 @@ pub(super) async fn plugin_runtime_fixture(
     user_access
         .transact_write("test.plugin.configuration", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let runtime_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
-    crate::inference::backends::registry::set_backend_probe_status_as(
+    gents_inference::backends::registry::set_backend_probe_status_as(
         &runtime_access,
         runtime.did(),
         backend_id,
@@ -109,17 +122,31 @@ pub(super) async fn plugin_runtime_fixture(
         .and_then(|row| row["_docID"].as_str())
         .ok_or_else(|| anyhow::anyhow!("plugin fixture Node missing"))?
         .to_owned();
-    let default_node =
-        json!({"node_did":runtime.did(), "enabled":true, "default_agent_did":agent_did});
-    let default_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::Node,
-        add: default_node.clone(),
-        update: default_node,
-    }])?;
+    let default_node = json!({"node_did":runtime.did(), "enabled":true});
+    let default_selection = json!({"node_did":runtime.did(), "default_agent_did":agent_did});
+    let default_plan = DesiredStateApplyPlan::new(vec![
+        DesiredStateApplyDocument {
+            collection: Collection::Node,
+            add: default_node.clone(),
+            update: default_node,
+        },
+        DesiredStateApplyDocument {
+            collection: Collection::DefaultAgentSelection,
+            add: default_selection.clone(),
+            update: default_selection,
+        },
+    ])?;
     user_access
         .transact_write("test.plugin.default", |txn| {
             let plan = &default_plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let agent_access = ConfigAccess::local_managed_agent(
@@ -127,7 +154,7 @@ pub(super) async fn plugin_runtime_fixture(
         identity::Did::new(agent.did())?,
         agent.as_ref(),
     )?;
-    let node_binding = crate::store::config_client::ConfigurationNodeBinding {
+    let node_binding = gents_documents::ConfigurationNodeBinding {
         node_did: identity::Did::new(runtime.did())?,
         doc_id: node_doc,
         enabled: true,
@@ -147,9 +174,9 @@ pub(super) async fn plugin_runtime_fixture(
 /// user's own signed desired-state transaction. Ordinary GraphQL mutations
 /// are refused for a client-signed endpoint.
 pub(super) async fn merge_fixture_document(
-    access: &crate::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     operation: &'static str,
-    collection: crate::Collection,
+    collection: gents_store::collection::Collection,
     node_did: &str,
     id: &str,
     fields: Value,
@@ -162,26 +189,30 @@ pub(super) async fn merge_fixture_document(
             let id = id.clone();
             let fields = fields.clone();
             Box::pin(async move {
-                let (_, mut document) =
-                    crate::store::config_client::read_desired_state_record_in_txn(
-                        txn, collection, &node_did, &id,
-                    )
-                    .await?
-                    .expect("fixture document must exist before its update");
+                let (_, mut document) = gents_documents::read_desired_state_record_in_txn(
+                    txn, collection, &node_did, &id,
+                )
+                .await?
+                .expect("fixture document must exist before its update");
                 if let (Some(target), Some(source)) = (document.as_object_mut(), fields.as_object())
                 {
                     for (key, value) in source {
                         target.insert(key.clone(), value.clone());
                     }
                 }
-                let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
-                    crate::store::config_client::DesiredStateApplyDocument {
+                let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+                    gents_documents::DesiredStateApplyDocument {
                         collection,
                         add: document.clone(),
                         update: document,
                     },
                 ])?;
-                crate::documents::apply_desired_state_plan(txn, &plan).await
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
             })
         })
         .await
@@ -192,7 +223,7 @@ pub(super) async fn merge_fixture_document(
 /// `working_agent` receives the working relationship that lets that Agent read
 /// the session under ACP.
 pub(super) async fn create_user_agent_session(
-    access: &crate::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
@@ -226,7 +257,7 @@ pub(super) async fn create_user_agent_session(
                         gents_protocol::schemas::AGENT_SESSION,
                     )
                     .await?;
-                let doc = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
+                let doc = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
                 if let Some(working_agent) = working_agent {
                     let working_agent = identity::Did::new(&working_agent)?;
                     txn.add_actor_relationship("AgentSession", &doc, "working_agent", &working_agent)
@@ -242,20 +273,22 @@ pub(super) async fn create_user_agent_session(
 pub(super) struct HeldRuntimeFixture {
     pub db: crate::support::TestDb,
     pub user: KeyIdentity,
-    pub user_access: crate::ConfigAccess,
+    pub user_access: gents_store::config_client::ConfigAccess,
     pub agent: std::sync::Arc<dyn NodeIdentity>,
 }
 
 impl HeldRuntimeFixture {
-    pub fn admission(&self) -> crate::store::local::backend_protection::BackendAdmission {
+    pub fn admission(&self) -> gents_store::local::backend_protection::BackendAdmission {
         self.db.home.backend_admission()
     }
 
-    pub async fn agent_config_access(&self) -> crate::ConfigAccess {
-        use crate::store::config_client::NodePermission;
+    pub async fn agent_config_access(&self) -> gents_store::config_client::ConfigAccess {
+        use gents_store::config_client::NodePermission;
         let runtime_did = self.db.node_identity.did();
-        let admin =
-            crate::ConfigAccess::local_as(self.db.node.clone(), runtime_did.parse().unwrap());
+        let admin = gents_store::config_client::ConfigAccess::local_as(
+            self.db.node.clone(),
+            runtime_did.parse().unwrap(),
+        );
         let agent_did = identity::Did::new(self.agent.did()).unwrap();
         for permission in [
             NodePermission::CollectionGet,
@@ -271,7 +304,7 @@ impl HeldRuntimeFixture {
             .transact_write("test.runtime.agent_config", |txn| {
                 let agent_did = &agent_did;
                 Box::pin(async move {
-                    crate::store::config_client::grant_selected_self_configuration(
+                    gents_documents::grant_selected_self_configuration(
                         txn,
                         runtime_did,
                         agent_did.as_str(),
@@ -281,7 +314,7 @@ impl HeldRuntimeFixture {
             })
             .await
             .unwrap();
-        crate::ConfigAccess::local_managed_agent(
+        gents_store::config_client::ConfigAccess::local_managed_agent(
             self.db.node.clone(),
             agent_did,
             self.agent.as_ref(),
@@ -305,20 +338,20 @@ pub(super) async fn held_runtime_fixture_with_status(
     max_concurrent: i64,
     probe_status: &str,
 ) -> HeldRuntimeFixture {
-    use crate::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    let (db, user, user_access, binding) = crate::test_support::signed_test_node(name).await;
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    let (db, user, user_access, binding) = crate::test_support::root::signed_test_node(name).await;
     let node_did = db.node_identity.did();
     let profile_id = format!("{}:inference", binding.agent_did);
     let docs = [
         (
-            crate::Collection::InferenceProfile,
+            gents_store::collection::Collection::InferenceProfile,
             serde_json::json!({
                 "node_did": node_did, "profile_id": profile_id,
                 "backend_id": backend_id, "model_name": "default"
             }),
         ),
         (
-            crate::Collection::InferenceBackend,
+            gents_store::collection::Collection::InferenceBackend,
             serde_json::json!({
                 "node_did": node_did, "backend_id": backend_id,
                 "name": backend_id, "provider_kind": "OpenAiCompatible", "endpoint": endpoint,
@@ -337,12 +370,22 @@ pub(super) async fn held_runtime_fixture_with_status(
     user_access
         .transact_write("test.runtime.inference", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
-    let runtime_access = crate::ConfigAccess::local_as(db.node.clone(), node_did.parse().unwrap());
-    crate::inference::backends::registry::set_backend_probe_status_as(
+    let runtime_access = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        node_did.parse().unwrap(),
+    );
+    gents_inference::backends::registry::set_backend_probe_status_as(
         &runtime_access,
         node_did,
         backend_id,
@@ -350,8 +393,8 @@ pub(super) async fn held_runtime_fixture_with_status(
     )
     .await
     .unwrap();
-    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
-        .unwrap();
+    let agent =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     grant_held_agent_operations(&db.node, db.node_identity.as_ref(), agent.as_ref()).await;
     HeldRuntimeFixture {
         db,
@@ -366,8 +409,11 @@ pub(super) async fn grant_held_agent_operations(
     runtime: &dyn NodeIdentity,
     agent: &dyn NodeIdentity,
 ) {
-    use crate::store::config_client::NodePermission;
-    let admin = crate::ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
+    use gents_store::config_client::NodePermission;
+    let admin = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        runtime.did().parse().unwrap(),
+    );
     let agent_did = identity::Did::new(agent.did()).unwrap();
     for permission in [
         NodePermission::CollectionGet,
@@ -405,12 +451,15 @@ pub(super) async fn create_held_agent_request(
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did),
     );
-    crate::sign_agent_request_create(agent, &mut create)
+    gents_session::request::admission::sign_agent_request_create(agent, &mut create)
         .await
         .unwrap();
-    let access =
-        crate::ConfigAccess::local_managed_agent(node.clone(), did.parse().unwrap(), agent)
-            .unwrap();
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        did.parse().unwrap(),
+        agent,
+    )
+    .unwrap();
     let response = access
         .write(
             "test.runtime.create_request",
@@ -418,7 +467,7 @@ pub(super) async fn create_held_agent_request(
         )
         .await
         .unwrap();
-    crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
+    gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
 pub(super) fn request(agent_did: Option<&str>, session_id: &str) -> AgentRequest {
@@ -440,6 +489,11 @@ pub(super) fn request(agent_did: Option<&str>, session_id: &str) -> AgentRequest
         execution_generation: None,
         execution_lease_expires_at: None,
         execution_lease_secs: None,
+        executed_model_name: None,
+        executed_reasoning_effort: None,
+        executed_service_tier: None,
+        executed_inference_profile_id: None,
+        executed_runtime_generation: None,
         request_hop: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -790,8 +844,9 @@ pub(super) async fn update_backend_probe_status(
     backend_id: &str,
     probe_status: &str,
 ) {
-    let access = crate::ConfigAccess::local_as(node.clone(), node_did.parse().unwrap());
-    crate::inference::backends::registry::set_backend_probe_status_as(
+    let access =
+        gents_store::config_client::ConfigAccess::local_as(node.clone(), node_did.parse().unwrap());
+    gents_inference::backends::registry::set_backend_probe_status_as(
         &access,
         node_did,
         backend_id,

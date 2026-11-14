@@ -1,8 +1,8 @@
-use gents::documents::EvalCapture;
 use gents::eval::OutcomeKind;
-use gents::pack::{load_pack_config, PackInstallOptions, PackManifest};
+use gents_documents::EvalCapture;
 use gents_eval::checks::CheckRegistry;
 use gents_eval::runner::{CaptureResult, ScriptedExecutor};
+use gents_pack::pack::{load_pack_config, PackInstallOptions, PackManifest};
 use std::path::Path;
 
 #[test]
@@ -77,10 +77,10 @@ fn schema_cases_use_valid_native_sdl_and_grade_saved_state() {
 
 #[tokio::test]
 async fn admiral_search_fixture_grades_native_writes_and_ranked_results() {
-    use gents::plugin::application_write::{WriteParams, WriteTool};
-    use gents::store::config_client::ConfigAccess;
-    use gents::tools::builtin::defra_query::{execute_command, CollectionScope, QueryParams};
     use gents_eval::runner::embedded::observe::ToolCallEvidence;
+    use gents_store::config_client::ConfigAccess;
+    use gents_toolcalls::plugin::application_write::{WriteParams, WriteTool};
+    use gents_tools::builtin::defra_query::{execute_command, CollectionScope, QueryParams};
     use serde_json::{json, Value};
     use std::collections::BTreeSet;
     use std::sync::Arc;

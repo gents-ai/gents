@@ -6,8 +6,26 @@ license.workspace = true
 repository.workspace = true
 description = "Evaluation and optimization drivers for Gents"
 
+[[test]]
+name = "optimization_live"
+path = "tests/optimization_live.rs"
+required-features = ["live-e2e"]
+
+[features]
+live-e2e = ["gents/live-e2e"]
+test-fixtures = []
+
 [dependencies]
 gents = { path = "../gents" }
+gents-store = { workspace = true }
+gents-documents = { workspace = true }
+gents-inference = { workspace = true }
+gents-pack = { workspace = true }
+gents-session = { workspace = true }
+gents-tools = { workspace = true }
+gents-toolcalls = { workspace = true }
+gents-automation = { workspace = true }
+gents-observe = { workspace = true }
 schema.workspace = true
 rapidhash = { workspace = true }
 anyhow.workspace = true
@@ -28,13 +46,16 @@ tracing.workspace = true
 uuid.workspace = true
 tokio-util = "0.7"
 tempfile = "3"
+# `gents utils eval init` holds a draft's check params to each check's schema.
+jsonschema = { version = "0.46.5", default-features = false }
 
 [dev-dependencies]
 proptest = "1"
 gents = { path = "../gents", features = ["test-fixtures"] }
 acp.workspace = true
+gents-loop.workspace = true
 gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true
 db.workspace = true
 defra-core.workspace = true
-jsonschema = { version = "0.46.5", default-features = false }
 tracing-subscriber.workspace = true

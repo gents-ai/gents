@@ -26,7 +26,8 @@ pub struct SyncHealthView {
     pub cause: Option<String>,
     pub next_action: Option<String>,
     pub last_error: Option<String>,
-    pub connected_peer_count: usize,
+    pub runtime_count: usize,
+    pub connected_runtime_count: usize,
     pub activation_error_count: usize,
 }
 
@@ -66,6 +67,7 @@ pub enum AgentReadinessUnknownReasonView {
     ProcessNotReady,
     RouterGenerationStale,
     AgentNotAssigned,
+    StorageUnavailable,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
@@ -139,7 +141,7 @@ pub struct AgentEnvironmentView {
     pub active_session_count: usize,
 }
 
-pub use gents::documents::{
+pub use gents_documents::{
     Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
     EventSource, InferenceExecution, InferenceProfile, InferenceSampling, Node, Schedule,
     ToolServiceRegistry, Tools, Trigger,
@@ -156,7 +158,7 @@ pub struct TaskView {
     pub prompt_template: Option<String>,
     pub goal_objective_template: Option<String>,
     pub goal_token_budget: Option<i64>,
-    pub hooks: Vec<gents::documents::TaskHook>,
+    pub hooks: Vec<gents_documents::TaskHook>,
     pub enabled: Option<bool>,
     pub output_schema_ref: Option<String>,
     pub tags: Vec<String>,
@@ -399,9 +401,6 @@ pub struct DeploymentView {
     pub runtime_connection: Option<String>,
     pub chat_safe: bool,
     pub chat_refusal: Option<ChatRefusalView>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub pairing_ready: Option<bool>,
     /// When this desktop's enrollment authorization on a joined node runs
     /// out, after which reconciliation removes the node from this desktop;
     /// none for a node this desktop reaches without enrollment. The node's
@@ -488,6 +487,10 @@ impl From<gents_desktop_core::client::EndedAccess> for EndedAccessView {
 pub struct DesktopClientSnapshot {
     pub bootstrap: DesktopBootstrapSummary,
     pub client: Option<DesktopRuntimeSnapshot>,
+    /// What this client start set aside before opening, for the repair banner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub repair_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

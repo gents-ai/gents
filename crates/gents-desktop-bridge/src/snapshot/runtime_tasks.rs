@@ -31,8 +31,6 @@ fn recent_runs_view(runs: &TaskRecentRuns) -> TaskRecentRunsView {
     }
 }
 
-pub(super) use gents_desktop_core::client::source_matches_node;
-
 pub(super) fn request_matches_node(request: &AgentRequestRow, node_did: &str) -> bool {
     request.node_did.as_deref() == Some(node_did)
 }
@@ -67,7 +65,7 @@ pub(super) fn recent_runs_for_task_views(
             .filter(|trigger| {
                 matches!(
                     trigger.config.source,
-                    gents::documents::TriggerSource::Schedule { .. }
+                    gents_documents::TriggerSource::Schedule { .. }
                 )
             })
             .count(),
@@ -76,17 +74,17 @@ pub(super) fn recent_runs_for_task_views(
             .filter(|trigger| {
                 matches!(
                     trigger.config.source,
-                    gents::documents::TriggerSource::Event { .. }
+                    gents_documents::TriggerSource::Event { .. }
                 )
             })
             .count(),
     })
 }
 
-pub(crate) use gents_desktop_core::client::SessionOrderKey as SessionSummaryOrderKey;
-
-pub(crate) fn session_summary_order_key(summary: &SessionSummary) -> SessionSummaryOrderKey {
-    gents_desktop_core::client::session_order_key(
+pub(crate) fn session_summary_order_key(
+    summary: &SessionSummary,
+) -> gents_protocol::operations::session::SessionOrderKey {
+    gents_protocol::operations::session::session_order_key(
         summary.updated_at.as_deref(),
         summary.created_at.as_deref(),
         &summary.session_id,
@@ -143,7 +141,7 @@ pub(crate) fn session_summaries(
                 title: session
                     .title
                     .as_ref()
-                    .map(gents::session::display_session_title),
+                    .map(gents_session::session::display_session_title),
                 preview_text: observation.and_then(|value| value.preview.clone()),
                 reply_preview: observation
                     .and_then(|value| value.reply_preview.as_deref())
@@ -389,7 +387,10 @@ fn starter_evidence(
 #[derive(Default)]
 pub(crate) struct StarterCache(
     std::sync::Mutex<
-        std::collections::BTreeMap<StarterEvidence, Option<gents::session::origin::SessionLink>>,
+        std::collections::BTreeMap<
+            StarterEvidence,
+            Option<gents_session::session::origin::SessionLink>,
+        >,
     >,
 );
 
@@ -398,7 +399,7 @@ pub(super) async fn resolve_summary_starters<'a, R>(
     cache: &StarterCache,
     summaries: impl IntoIterator<Item = &'a mut SessionSummary>,
 ) where
-    R: gents::store::config_client::ConfigRead + ?Sized,
+    R: gents_store::config_client::ConfigRead + ?Sized,
 {
     let mut started = Vec::new();
     for summary in summaries {
@@ -432,7 +433,7 @@ pub(super) async fn resolve_summary_starters<'a, R>(
         missing
     };
     if !missing.is_empty() {
-        match gents::session::origin::verified_recorded_starters(access, &missing).await {
+        match gents_session::session::origin::verified_recorded_starters(access, &missing).await {
             Ok(observed) => {
                 let mut known = cache
                     .0

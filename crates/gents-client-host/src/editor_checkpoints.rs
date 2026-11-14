@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use anyhow::Context;
 use anyhow::{bail, ensure, Result};
-use gents::store::local::file_lock::FileLock;
+use gents_store::local::file_lock::FileLock;
 use serde::{Deserialize, Serialize};
 
 pub const VERSION: u32 = 1;

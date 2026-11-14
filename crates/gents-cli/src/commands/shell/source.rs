@@ -3,24 +3,23 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-use anyhow::Context;
 use chrono::{DateTime, Local, Utc};
-use gents::session::mailbox::MailboxItem;
-use gents::store::config_client::{ConfigAccess, GraphqlSubscription, SubscriptionEnd};
-use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::canonical_output::CanonicalLiveText;
 use gents_desktop_core::client::{
-    interrupt_request_on, load_node_snapshot_on, load_session_compaction_entries_on,
-    load_session_live_text_on, load_session_transcript_window_on, tool_file_changes_on,
-    ClientStore, TranscriptWindow,
+    load_node_snapshot_on, load_session_compaction_entries_on, load_session_live_text_on,
+    load_session_transcript_window_on, tool_file_changes_on, ClientStore, TranscriptWindow,
 };
 use gents_desktop_core::inference::{load_inference_setup_state, AgentView};
 use gents_protocol::node_readiness::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
 };
-use gents_protocol::request_input::{QueueDelivery, RequestInput};
+use gents_protocol::operations::request::{
+    MessageSendInput, RequestInterruptInput, RequestReceipt,
+};
+use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::session::SessionScope;
+use gents_session::session::mailbox::MailboxItem;
 use gents_shell::app::ChatLine;
 use gents_shell::keys::KeySet;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone};
@@ -28,6 +27,8 @@ use gents_shell::source::{
     BackgroundCall, Change, Connection, Doc, FormRef, FormValues, Input, Intent, Job, MenuAct,
     PackAct, Prompt, SavedAccount, Session, Skill, Update,
 };
+use gents_store::config_client::{ConfigAccess, GraphqlSubscription, SubscriptionEnd};
+use gents_store::graphql::escape_graphql_string;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde_json::Value;
 use tokio::runtime::Handle;
@@ -38,10 +39,10 @@ use super::sections::{self, new_id};
 use super::tree::git_changes;
 use super::work::{self, Work};
 use super::{forms, git, items, menus, packs, prefs, setup, usage};
-use crate::caused_sessions::{load_caused_sessions_as, CausedSession};
 use crate::commands::accounts::account_rows;
 use crate::commands::config::crud::{query_collection_sorted, SKILL_SPEC};
 use crate::commands::mailbox;
+use gents_session::session::caused::{load_caused_sessions_as, CausedSession};
 
 /// What the shell opens with. `work` is why the shell has no runtime when it is `Err`.
 pub(super) struct Opening {
@@ -374,9 +375,9 @@ async fn read_work(work: Work, subscribe: bool, sessions: Vec<String>) -> Read {
 
 async fn read_mailbox(work: Work, subscribe: bool) -> Asked {
     let changes = watch(&work, MAILBOX_WATCHED, subscribe).await;
-    let items = mailbox::served_items(&work.access(), false)
+    let items = gents_session::operations::mailbox::list(&work.access(), &Default::default())
         .await
-        .map_err(|error| format!("{error:#}"));
+        .map_err(|error| format!("{:#}", mailbox::failure(error)));
     Asked { changes, items }
 }
 
@@ -1919,10 +1920,9 @@ impl Source {
         let Ok(work) = &self.work else {
             return;
         };
-        let dismissed =
-            gents::session::mailbox::dismiss_mailbox_item_on(&work.access(), item).await;
+        let dismissed = gents_session::operations::mailbox::dismiss(&work.access(), item).await;
         if let Err(error) = dismissed {
-            self.tell(Update::Notice(format!("{error:#}")));
+            self.tell(Update::Notice(format!("{:#}", mailbox::failure(error))));
         }
         self.reread_prompts();
     }
@@ -1933,11 +1933,21 @@ impl Source {
             return;
         };
         let replied = async {
-            let item = mailbox::load_item(&work.access(), item)
-                .await?
-                .context("MailboxItem not found")?;
-            let reply = work::reply_from_text(text, &item).map_err(anyhow::Error::msg)?;
-            mailbox::reply_to(&work.endpoint, &item, reply).await
+            use gents_protocol::operations::mailbox::MailboxReply;
+            use gents_session::operations::mailbox as operations;
+            let item = operations::get(&work.access(), item)
+                .await
+                .map_err(mailbox::failure)?;
+            let reply = match work::reply_from_text(text, &item).map_err(anyhow::Error::msg)? {
+                MailboxReply::Answer(answer) => MailboxReply::Answer(
+                    operations::answer_observing((&item).into(), answer)
+                        .map_err(mailbox::failure)?,
+                ),
+                text => text,
+            };
+            let prepared = operations::prepare_reply((&item).into(), reply, &Default::default())
+                .map_err(mailbox::failure)?;
+            mailbox::send_reply(&work.access(), prepared).await
         };
         if let Err(error) = replied.await {
             self.tell(Update::Notice(format!("{error:#}")));
@@ -2071,28 +2081,19 @@ impl Source {
         let session = self.session_for(tab, session);
         let principal = &self.principal;
         let submitted = async {
-            // The owner requires a retry key, by which it recognises a retried submission.
-            let request_id = uuid::Uuid::new_v4().to_string();
-            let options = crate::RequestSubmitOptions {
-                retry_key: Some(format!("goal-request:{request_id}")),
-                ..Default::default()
-            };
-            let prepared = crate::prepare_agent_request_with_input(
-                &work.endpoint,
-                principal,
-                &objective,
-                Some(&session),
-                Some(agent),
-                Some(request_id),
-                options,
+            let access = work.access();
+            let create = crate::request_helpers::goal_request(
+                &access, principal, &session, agent, &objective,
             )
             .await?;
-            let access = work.access();
-            let create = &prepared.create;
-            gents::goal::submit_goal_backed_request(
-                &access, principal, &session, &objective, None, create,
-            )
-            .await
+            let input = gents_protocol::operations::goal::GoalStartInput {
+                session_id: session.clone(),
+                objective: objective.clone(),
+                token_budget: None,
+            };
+            gents_automation::operations::goal::start(&access, principal, &input, &create)
+                .await
+                .map_err(anyhow::Error::from)
         };
         match submitted.await {
             Ok(_) => {
@@ -2112,10 +2113,13 @@ impl Source {
         let Ok(work) = self.work.clone() else {
             return;
         };
-        if !ended(&work.access(), &self.principal, &turn).await {
-            let stopped = interrupt_request_on(&work.access(), &self.principal, &turn).await;
-            if let Err(error) = stopped {
-                return self.tell(Update::Notice(error));
+        let request = crate::request_helpers::request_ref(&self.principal, &turn);
+        let input = RequestInterruptInput { request };
+        match gents::operations::request::interrupt(&work.access(), input).await {
+            Ok(_) => {}
+            Err(error) => {
+                let failure = crate::operation_failure::OperationFailure::from(error);
+                return self.tell(Update::Notice(failure.to_string()));
             }
         }
         self.interrupted.insert(turn.clone());
@@ -2128,7 +2132,8 @@ impl Source {
     }
 }
 
-/// The user's message, queued as the desktop queues one: it steers a running turn.
+/// The user's message. A turn still running in the session finishes first: the shell has no
+/// per-message choice to steer it.
 async fn submit(
     work: &Work,
     node: &str,
@@ -2136,25 +2141,26 @@ async fn submit(
     agent: &str,
     text: &str,
     skills: Vec<String>,
-) -> anyhow::Result<crate::SubmittedRequest> {
-    let input = RequestInput {
-        selected_skill_ids: skills,
+) -> anyhow::Result<RequestReceipt> {
+    let access = work.access();
+    let signer = crate::request_helpers::client_signer(&access)?;
+    let input = MessageSendInput {
+        node_did: node.to_owned(),
+        session_id: Some(session.to_owned()),
+        agent_did: Some(agent.to_owned()),
+        content: text.to_owned(),
+        input: RequestInput {
+            selected_skill_ids: skills,
+            ..Default::default()
+        },
         ..Default::default()
     };
-    let (access, steer) = (work.access(), QueueDelivery::Steer);
-    let input =
-        gents::request::lifecycle::prepare_user_message_input(&access, node, session, input, steer);
-    let options = crate::RequestSubmitOptions {
-        input: Some(input.await?),
-        ..Default::default()
-    };
-    let (session, agent) = (Some(session), Some(agent));
-    let endpoint = &work.endpoint;
-    let prepared =
-        crate::prepare_agent_request(endpoint, node, text, session, agent, None, options);
-    crate::submit_prepared_agent_request_committed(endpoint, &prepared.await?).await
+    let sent = gents::operations::request::send(&access, &signer, input).await;
+    Ok(sent.map_err(crate::operation_failure::OperationFailure::from)?)
 }
 
+/// The goal's first request, signed by this CLI's User. The goal owner commits it with the goal
+/// and recognises a retried submission by its retry key, so it is built here rather than sent.
 /// The session's running request, unless the user stopped it.
 fn turn_of(
     store: &ClientStore,
@@ -2165,18 +2171,6 @@ fn turn_of(
     let request = store.turn_request_id_for_session_for_node(session, node)?;
     let state = store.derive_turn_for_request_for_node(&request, node)?;
     (!state.is_terminal() && !stopped.contains(&request)).then_some(request)
-}
-
-/// Whether `request` has ended, as the node has it now; a request that cannot be read is
-/// taken to run, so the interrupt owner says why it cannot be stopped.
-async fn ended(access: &ConfigAccess, node: &str, request: &str) -> bool {
-    let query = crate::request_terminal_query(request, None);
-    let rows = crate::graphql_rows(access, "AgentRequest", &query).await;
-    let mut rows = rows.into_iter().flatten();
-    rows.any(|row| {
-        row["node_did"] == node
-            && RequestLifecycleState::is_terminal_str(row["lifecycle_state"].as_str())
-    })
 }
 
 /// Why `request` failed, when it did.
@@ -2211,7 +2205,7 @@ fn blank() -> ChatLine {
 mod tests {
     use std::time::Duration;
 
-    use gents::pack::PackChangeError;
+    use gents_pack::pack::PackChangeError;
 
     use super::super::tests::{home_serving, within};
     use super::*;
@@ -2430,8 +2424,8 @@ mod tests {
         let keys = tempfile::tempdir().unwrap();
         let key = keys.path().join("principal.key");
         let (home, _) = home_serving("http://127.0.0.1:1/api/v0/graphql", Some(&key));
-        crate::shared::test_support::cli_user().await;
-        let work = work::work_for(home.path());
+        gents_host::test_support::cli_user().await;
+        let work = work::work_for(home.path()).await;
         assert!(work.is_ok(), "this CLI's User signs: {:?}", work.err());
         let (updates, told) = std::sync::mpsc::channel();
         let (watching, watched) = mpsc::unbounded_channel();
@@ -2502,7 +2496,7 @@ mod tests {
             !reread_asked(source, watched).await,
             "a failure reads nothing"
         );
-        let data = crate::home_state::default_data_dir(home.path());
+        let data = gents_service::home_state::default_data_dir(home.path());
         assert!(!data.exists(), "a pack call opened the store");
     }
 

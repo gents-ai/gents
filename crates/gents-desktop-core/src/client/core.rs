@@ -5,7 +5,6 @@ mod file_inventory;
 mod file_review;
 mod goal;
 mod inference_observation;
-mod observation_scope;
 mod p2p_ops;
 mod route_manager;
 mod supervisor;
@@ -25,29 +24,25 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
-use gents::store::config_client::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 
-use super::observe::{ObservedStore, ObserverHandle};
+use super::observe::{ObservedStores, ObserverHandle};
 use super::paths::DesktopPaths;
 use super::peer_directory::{EndedAccess, PeerRecord};
 use super::principal_identity::PrincipalIdentity;
-use super::query::{
-    load_full_snapshot_with_peer_records, load_node_scoped_snapshot_with_peer_records,
-};
+use super::query::load_node_scoped_snapshot_with_peer_records;
 use crate::remote_admin::PairingErrorClass;
 
+pub use bootstrap::{client_store_from_other_version, client_store_key_missing};
 pub use enrollment::EnrollmentRequestResult;
 pub use file_review::tool_file_changes_on;
 pub use goal::{GoalSubmissionReference, RetainedGoalSubmission};
 pub use inference_observation::{InferenceActivity, InferenceObservation, InferenceTarget};
-pub use observation_scope::ClientObservationAttachment;
 pub use writes::{ChatRouteRefusal, LocalHomeAccessError, RefreshedRequestProjection};
 
-/// Peer bootstrap retries need a deadline so an unreachable peer does not hold
-/// startup indefinitely.
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 /// Route installation must report an unresponsive peer-add operation.
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -77,7 +72,7 @@ pub struct ClientCoreOptions {
     pub rate_limit_rate: f64,
     pub max_pending_dags: usize,
     pub install_replicators_on_bootstrap: bool,
-    pub store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice,
+    pub store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice,
     pub store_key_provider: Option<Arc<dyn ClientStoreKeyProvider>>,
     /// Headless observation must not open platform credential dialogs. Explicit
     /// user commands retain their existing operator authority requirements.
@@ -94,17 +89,17 @@ pub trait ClientStoreKeyProvider: std::fmt::Debug + Send + Sync {
     /// Retained stores and pending upgrades always use `load`.
     async fn create(
         &self,
-        record: &gents::store::local::store_key::StoreEncryption,
+        record: &gents_store::local::store_key::StoreEncryption,
         key_file: &std::path::Path,
         data_path: &std::path::Path,
-    ) -> Result<gents::store::local::store_key::StoreKey>;
+    ) -> Result<gents_store::local::store_key::StoreKey>;
 
     async fn load(
         &self,
-        record: &gents::store::local::store_key::StoreEncryption,
+        record: &gents_store::local::store_key::StoreEncryption,
         key_file: &std::path::Path,
         data_path: &std::path::Path,
-    ) -> Result<gents::store::local::store_key::StoreKey>;
+    ) -> Result<gents_store::local::store_key::StoreKey>;
 }
 
 impl Default for ClientCoreOptions {
@@ -122,7 +117,7 @@ impl Default for ClientCoreOptions {
             rate_limit_rate: DESKTOP_P2P_RATE_LIMIT_RATE,
             max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
             install_replicators_on_bootstrap: true,
-            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::default(),
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::default(),
             store_key_provider: None,
             operator_identity_interaction: Default::default(),
         }
@@ -135,7 +130,7 @@ impl ClientCoreOptions {
             bind_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
             relay_mode: IrohRelayModeConfig::Disabled,
             discovery: IrohDiscoveryConfig::Disabled,
-            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             ..Self::default()
         }
     }
@@ -157,7 +152,6 @@ pub struct ClientPeerStatus {
     pub addr: String,
     pub dial_succeeded: bool,
     pub last_error: Option<String>,
-    pub pairing: Vec<PairingCollectionStatus>,
     pub routes: Vec<ClientRouteStatus>,
 }
 
@@ -179,75 +173,14 @@ pub struct ClientRouteStatus {
     pub last_retry_error_class: Option<PairingErrorClass>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PairingCollectionStatus {
-    pub collection_id: String,
-    pub pairing_retry_count: u32,
-    pub last_retry_at: Option<SystemTime>,
-    pub last_retry_error_class: Option<PairingErrorClass>,
-    pub stuck_since: Option<SystemTime>,
-    first_failure_at: Option<SystemTime>,
-}
-
-/// Repeated unsuccessful attempts report a stuck pairing; success clears it.
-pub const STUCK_THRESHOLD_ATTEMPTS: u32 = 6;
-/// A long-running failure also reports stuck when attempts are infrequent.
-pub const STUCK_THRESHOLD_DURATION: Duration = Duration::from_secs(5 * 60);
-
-impl PairingCollectionStatus {
-    pub fn new(collection_id: impl Into<String>) -> Self {
-        Self {
-            collection_id: collection_id.into(),
-            pairing_retry_count: 0,
-            last_retry_at: None,
-            last_retry_error_class: None,
-            stuck_since: None,
-            first_failure_at: None,
-        }
-    }
-
-    pub fn record_retry(&mut self, class: PairingErrorClass) {
-        let now = SystemTime::now();
-        self.pairing_retry_count = self.pairing_retry_count.saturating_add(1);
-        self.last_retry_at = Some(now);
-        self.last_retry_error_class = Some(class);
-        if self.first_failure_at.is_none() {
-            self.first_failure_at = Some(now);
-        }
-    }
-
-    pub fn record_success(&mut self) {
-        self.pairing_retry_count = 0;
-        self.last_retry_at = None;
-        self.last_retry_error_class = None;
-        self.stuck_since = None;
-        self.first_failure_at = None;
-    }
-
-    pub fn update_stuck_indicator(&mut self, now: SystemTime) {
-        if self.stuck_since.is_some() {
-            return;
-        }
-        let attempts_trigger = self.pairing_retry_count >= STUCK_THRESHOLD_ATTEMPTS;
-        let duration_trigger = self
-            .first_failure_at
-            .and_then(|first| now.duration_since(first).ok())
-            .map(|elapsed| elapsed >= STUCK_THRESHOLD_DURATION)
-            .unwrap_or(false);
-        if attempts_trigger || duration_trigger {
-            self.stuck_since = Some(now);
-        }
-    }
-}
-
 /// How a direct refresh read settled (`ObserverResync.Settlement`). Both
-/// carry the store version after the refresh.
+/// carry the node's store version after the refresh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreRefresh {
-    /// The read replaced its scope.
+    /// The read replaced the node's store.
     Published { version: u64 },
-    /// A newer publication into the scope rejected the read; the observer was
-    /// asked to read the scope again and owns its catch-up.
+    /// A newer publication into the node's store rejected the read; the
+    /// observer was asked to read the node again and owns its catch-up.
     Superseded { version: u64 },
 }
 
@@ -374,11 +307,10 @@ pub struct ClientCore {
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
     route_manager: Arc<route_manager::ClientRouteManager>,
-    store: Arc<ObservedStore>,
+    stores: Arc<ObservedStores>,
     observer: Mutex<Option<ObserverHandle>>,
     sync_state: sync_state::ClientSyncStateOwner,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
-    observation_scope: observation_scope::ObservationScope,
     inference_observation_epoch: std::sync::atomic::AtomicU64,
     inference_observations: std::sync::Mutex<
         RapidHashMap<(String, String), inference_observation::InferenceObservationOwner>,
@@ -392,7 +324,6 @@ pub struct ClientCore {
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
     listen_addresses: Vec<String>,
-    bootstrap_errors: Vec<String>,
 }
 
 #[cfg(test)]
@@ -551,22 +482,6 @@ impl ClientCore {
             .context("queueing desktop P2P supervisor command")
     }
 
-    pub fn set_selected_node_did(&self, node_did: Option<String>) {
-        self.observation_scope.select(node_did);
-    }
-
-    pub fn selected_node_did(&self) -> Option<String> {
-        self.observation_scope.current()
-    }
-
-    pub fn selected_node_did_rx(&self) -> watch::Receiver<Option<String>> {
-        self.observation_scope.subscribe()
-    }
-
-    pub fn observe_all_nodes(&self) -> Result<ClientObservationAttachment> {
-        self.observation_scope.attach()
-    }
-
     pub async fn peer_records(&self) -> Vec<PeerRecord> {
         self.sync_state.records()
     }
@@ -579,20 +494,16 @@ impl ClientCore {
         self.sync_state.dismiss_ended_access(node_did).await
     }
 
-    pub fn store(&self) -> &Arc<ObservedStore> {
-        &self.store
+    /// Every node's own store; each is published only through its node's
+    /// connection.
+    pub fn stores(&self) -> &Arc<ObservedStores> {
+        &self.stores
     }
 
+    /// Advances on every publication into any node's store and every change
+    /// of the observed nodes or their connection status.
     pub fn store_updates(&self) -> watch::Receiver<u64> {
-        self.store.subscribe()
-    }
-
-    pub fn store_change_updates(&self) -> watch::Receiver<super::StoreUpdateNotice> {
-        self.store.subscribe_changes()
-    }
-
-    pub fn bootstrap_errors(&self) -> &[String] {
-        &self.bootstrap_errors
+        self.stores.subscribe()
     }
 
     pub fn last_mutation_error(&self) -> Option<String> {
@@ -606,72 +517,33 @@ impl ClientCore {
         self.send_p2p_command(P2PSupervisorCommand::RepairNow).await
     }
 
-    /// Reads the selected node, or every routed node, and publishes the read
-    /// through the store fence. A read superseded by a newer publication is
-    /// handed to the observer, which reads the node again.
-    pub async fn refresh_store(&self) -> Result<StoreRefresh> {
-        let scoped = self.selected_node_did();
-        let captured = self.store.capture_read();
-        let records = self.sync_state.records();
-        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
-            self.node_identity.private_key_bytes(),
-        )?;
-        let (snapshot, refused) = match scoped.as_deref() {
-            Some(did) => {
-                match load_node_scoped_snapshot_with_peer_records(did, &records, &capability).await
-                {
-                    Ok(snapshot) => (snapshot, Vec::new()),
-                    Err(error) => {
-                        self.observe_refresh_failure(did, &error);
-                        return Err(error);
-                    }
-                }
-            }
-            None => {
-                let snapshots = load_full_snapshot_with_peer_records(&records, &capability).await;
-                (snapshots.store, snapshots.refused)
-            }
-        };
-        let rows = snapshot.row_count();
-        let published =
-            self.store
-                .replace_reloaded_snapshot_at_read(&captured, scoped.as_deref(), snapshot);
-        if !published {
-            self.store.request_resync(scoped.as_deref());
-        }
-        for node_did in &refused {
-            self.store.clear_node_after_refused_read(node_did);
-        }
-        let refresh = StoreRefresh::at(published, self.store.projection_revision().store_version);
-        tracing::debug!(
-            target: "gents_desktop_core::replication",
-            ?refresh,
-            rows,
-            scoped = scoped.is_some(),
-            "desktop runtime snapshot refreshed"
-        );
-        Ok(refresh)
+    pub async fn reconnect_runtime_now(
+        &self,
+        node_did: &str,
+    ) -> Option<super::RuntimeConnectionStatus> {
+        let settled = self.observer.lock().await.as_ref()?.retry_now(node_did);
+        settled.await
     }
 
-    /// Reads the node a write landed on. A write names its node, so it never
-    /// reads every routed node, which `refresh_store` does while no single
-    /// window selection names one.
-    pub(crate) async fn refresh_written_node(&self, node_did: &str) -> Result<StoreRefresh> {
-        match self.refresh_node(node_did).await? {
-            Some(refresh) => Ok(refresh),
-            None => self.refresh_store().await,
+    pub async fn request_runtime_reconnect(&self, node_did: Option<&str>) {
+        if let Some(observer) = self.observer.lock().await.as_ref() {
+            match node_did {
+                Some(node_did) => drop(observer.retry_now(node_did)),
+                None => observer.retry_all_now(),
+            }
         }
     }
 
-    /// [`Self::refresh_store`] for one node; `None` when `node_did` is blank.
-    pub async fn refresh_node(&self, node_did: &str) -> Result<Option<StoreRefresh>> {
+    /// Reads `node_did` through its own connection and publishes the read
+    /// into its own store through the store fence. A read superseded by a
+    /// newer publication is handed to the observer, which reads the node again.
+    pub async fn refresh_node(&self, node_did: &str) -> Result<StoreRefresh> {
         let node_did = node_did.trim();
-        if node_did.is_empty() {
-            return Ok(None);
-        }
-        let captured = self.store.capture_read();
+        anyhow::ensure!(!node_did.is_empty(), "a refresh names its node");
+        let store = self.stores.ensure(node_did);
+        let captured = store.capture_read();
         let records = self.sync_state.records();
-        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             self.node_identity.private_key_bytes(),
         )?;
         let snapshot = match load_node_scoped_snapshot_with_peer_records(
@@ -688,13 +560,11 @@ impl ClientCore {
             }
         };
         let rows = snapshot.row_count();
-        let published =
-            self.store
-                .replace_reloaded_snapshot_at_read(&captured, Some(node_did), snapshot);
+        let published = store.replace_reloaded_snapshot_at_read(&captured, snapshot);
         if !published {
-            self.store.request_resync(Some(node_did));
+            store.request_resync();
         }
-        let refresh = StoreRefresh::at(published, self.store.projection_revision().store_version);
+        let refresh = StoreRefresh::at(published, store.projection_revision().store_version);
         tracing::debug!(
             target: "gents_desktop_core::replication",
             node_did,
@@ -702,16 +572,17 @@ impl ClientCore {
             rows,
             "desktop refreshed node projection from its runtime"
         );
-        Ok(Some(refresh))
+        Ok(refresh)
     }
 
     /// The observer owns runtime connection state: a refusal clears the
     /// node's rows and asks it to confirm with its own authenticated read.
     fn observe_refresh_failure(&self, node_did: &str, error: &anyhow::Error) {
-        if gents::store::config_client::TransactionFailure::permission_denied(error) {
-            self.store.clear_node_after_refused_read(node_did);
+        let store = self.stores.ensure(node_did);
+        if gents_store::config_client::TransactionFailure::permission_denied(error) {
+            store.clear_after_refused_read();
         } else {
-            self.store.request_resync(Some(node_did));
+            store.request_resync();
         }
     }
 

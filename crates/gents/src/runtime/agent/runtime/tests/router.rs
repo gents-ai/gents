@@ -1,8 +1,9 @@
 use super::support::*;
 use super::*;
-use crate::lean_vocab_test::lean_runtime_reconcile_case;
+use crate::runtime::agent::runtime::router::session_selection::UNRESOLVED_SESSION_ATTEMPT_BOUND;
 use crate::runtime::agent::runtime::router::{RouterInputs, RouterWaitState, RuntimeAdmissionGate};
 use crate::runtime::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
+use gents_lean_vocab::families::contracts_runtime_reconcile_router::ReconcileInput;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 struct CountingWatcher {
@@ -10,7 +11,7 @@ struct CountingWatcher {
     calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
-impl crate::request::watcher::Watcher for CountingWatcher {
+impl gents_session::request::watcher::Watcher for CountingWatcher {
     async fn next_request(&mut self) -> Option<anyhow::Result<AgentRequest>> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.rx.recv().await
@@ -38,34 +39,37 @@ fn routed_snapshot(
     generation: u64,
     agent_did: &str,
     dispatcher: mpsc::Sender<AgentRequest>,
-) -> Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot> {
-    Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
-        generation,
-        node: None,
-        local_did: String::new(),
-        default_agent_did: agent_did.to_owned(),
-        agents: RapidHashMap::new(),
-        tool_surfaces: RapidHashMap::new(),
-        backend_admission_configs: RapidHashMap::new(),
-        unavailable_agents: RapidHashMap::new(),
-        active_schedules: RapidHashMap::new(),
-        unavailable_schedules: rapidhash::RapidHashSet::default(),
-        active_event_triggers: RapidHashMap::new(),
-        unavailable_event_triggers: rapidhash::RapidHashSet::default(),
-        active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::from_iter([(agent_did.to_owned(), dispatcher)]),
-        agent_executor_capacities: RapidHashMap::new(),
-        agent_executor_queue_capacities: RapidHashMap::new(),
-    })
+) -> Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot> {
+    Arc::new(
+        gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+            generation,
+            node: None,
+            local_did: String::new(),
+            default_agent_did: agent_did.to_owned(),
+            tool_configs: Default::default(),
+            agents: RapidHashMap::new(),
+            tool_surfaces: RapidHashMap::new(),
+            backend_admission_configs: RapidHashMap::new(),
+            unavailable_agents: RapidHashMap::new(),
+            active_schedules: RapidHashMap::new(),
+            unavailable_schedules: rapidhash::RapidHashSet::default(),
+            active_event_triggers: RapidHashMap::new(),
+            unavailable_event_triggers: rapidhash::RapidHashSet::default(),
+            active_tasks: RapidHashMap::new(),
+            dispatchers: RapidHashMap::from_iter([(agent_did.to_owned(), dispatcher)]),
+            agent_executor_capacities: RapidHashMap::new(),
+            agent_executor_queue_capacities: RapidHashMap::new(),
+        },
+    )
 }
 
 #[tokio::test]
 async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_router() {
     let (db, _user, _access, binding) =
-        crate::test_support::signed_test_node("invalid-origin-route").await;
+        crate::test_support::root::signed_test_node("invalid-origin-route").await;
     let node = db.node.clone();
     let root = db.node_identity.clone();
-    let agent = crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+    let agent = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
     grant_held_agent_operations(&node, root.as_ref(), agent.as_ref()).await;
     let node_did = root.did();
     let agent_did = agent.did();
@@ -95,7 +99,7 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
     .expect("invalid origin must be terminalized, not escape the router");
 
     // The Agent-owned request row is read through the owning Agent's managed access.
-    let access = crate::ConfigAccess::local_managed_agent(
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         agent_did.parse().unwrap(),
         agent.as_ref(),
@@ -127,10 +131,155 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
     node.shutdown().await.expect("node shutdown");
 }
 
+fn routed_snapshot_with_agent(
+    generation: u64,
+    agent: Arc<gents_inference::resolved::ResolvedAgent>,
+    dispatcher: mpsc::Sender<AgentRequest>,
+) -> Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot> {
+    let agent_did = agent.agent_did.clone();
+    let Ok(mut snapshot) = Arc::try_unwrap(routed_snapshot(generation, &agent_did, dispatcher))
+    else {
+        panic!("the snapshot has a sole reference");
+    };
+    snapshot.agents = RapidHashMap::from_iter([(agent_did, agent)]);
+    Arc::new(snapshot)
+}
+
+#[tokio::test]
+async fn unresolvable_session_terminalizes_the_request_at_the_attempt_bound() {
+    let (db, _user, _access, binding) =
+        crate::test_support::root::signed_test_node("unresolved-session").await;
+    let node = db.node.clone();
+    let root = db.node_identity.clone();
+    let agent = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+    grant_held_agent_operations(&node, root.as_ref(), agent.as_ref()).await;
+    let node_did = root.did().to_owned();
+    let agent_did = agent.did().to_owned();
+    let doc_id = create_held_agent_request(
+        &node,
+        &node_did,
+        agent.as_ref(),
+        "unresolved-session-request",
+        "unresolved-session",
+        "hello",
+    )
+    .await;
+    let resolved = Arc::new(
+        crate::runtime::agent::PendingAgent::new("unresolved-session")
+            .with_identity_binding_for_test(binding)
+            .build_with_identity_arc_for_test(root.clone()),
+    );
+
+    let (dispatcher, mut executor_rx) = mpsc::channel(1);
+    let snapshot = routed_snapshot_with_agent(1, resolved.agent.clone(), dispatcher);
+    let (_active_tx, active_rx) = watch::channel(snapshot.clone());
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (request_tx, request_rx) = mpsc::channel(1);
+    let (status_owner, status) =
+        RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did.clone());
+    status.initialize_startup(&agent_did).await.unwrap();
+    status
+        .readiness()
+        .register_slot(&agent_did, 1)
+        .await
+        .unwrap();
+    status
+        .readiness()
+        .publish_snapshot(snapshot.as_ref())
+        .await
+        .unwrap();
+    status
+        .set_process_state_durable(crate::runtime::agent::ProcessLifecycleState::Ready)
+        .await
+        .unwrap();
+    let gate = RuntimeAdmissionGate::closed();
+    gate.open().await;
+
+    let mut routed = request(Some(&agent_did), "unresolved-session");
+    routed.node_did = node_did.clone();
+    routed.doc_id = doc_id;
+    routed.request_id = "unresolved-session-request".to_owned();
+    routed.requester_did = Some(agent_did.clone());
+    routed.execution_origin = Some("interactive".to_owned());
+    let mut updates = node.subscribe(&[defra_node::EventName::Update]);
+    request_tx.send(Ok(routed)).await.unwrap();
+
+    let router_node = node.clone();
+    let router_node_did = node_did.clone();
+    let router = tokio::spawn(async move {
+        super::super::router::run_router_with_watcher(RouterInputs {
+            node: router_node,
+            node_did: router_node_did,
+            watcher: ScriptedWatcher { rx: request_rx },
+            active_snapshot_rx: active_rx,
+            shutdown: shutdown_rx,
+            admission_gate: gate,
+            runtime_status: status,
+            runtime_snapshot_observer: None,
+            unresolved_session_bound: 1,
+        })
+        .await
+    });
+
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let reason = loop {
+        let response = access
+            .execute(
+                r#"{
+                    AgentRequest(
+                        filter: { request_id: { _eq: "unresolved-session-request" } }
+                        limit: 1
+                    ) { lifecycle_state failure_reason }
+                }"#,
+            )
+            .await
+            .expect("reload routed row");
+        let row = response["data"]["AgentRequest"]
+            .as_array()
+            .and_then(|rows| rows.first())
+            .cloned()
+            .expect("routed request row");
+        if row.get("lifecycle_state").and_then(Value::as_str) == Some("failed") {
+            break row
+                .get("failure_reason")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+        }
+        tokio::time::timeout_at(deadline, updates.recv())
+            .await
+            .expect("router left an unresolvable request pending")
+            .expect("request update subscription closed");
+    };
+    assert!(
+        reason.contains("unresolved-session") && reason.contains("routing attempts"),
+        "failure reason must name the session: {reason}"
+    );
+    assert!(
+        executor_rx.try_recv().is_err(),
+        "an unresolvable request must not dispatch"
+    );
+
+    shutdown_tx.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), router)
+        .await
+        .expect("router must stop")
+        .unwrap()
+        .unwrap();
+    status_owner.close().await.unwrap();
+    node.shutdown().await.expect("node shutdown");
+}
+
 #[tokio::test]
 async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
     let (db, _user, _user_access, binding) =
-        crate::test_support::signed_test_node("runtime-router").await;
+        crate::test_support::root::signed_test_node("runtime-router").await;
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;
@@ -179,6 +328,7 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
             admission_gate: gate_for_router,
             runtime_status: status,
             runtime_snapshot_observer: None,
+            unresolved_session_bound: UNRESOLVED_SESSION_ATTEMPT_BOUND,
         })
         .await
     });
@@ -207,104 +357,147 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
 }
 
 #[tokio::test]
-async fn snapshot_change_reroutes_request_blocked_on_old_executor_queue() {
-    let (db, _user, user_access, binding) =
-        crate::test_support::signed_test_node("runtime-router").await;
-    let node = db.node.clone();
-    let node_did = db.node_identity.did().to_owned();
-    let agent_did = binding.agent_did;
-    create_user_agent_session(
-        &user_access,
-        &node_did,
-        None,
-        "blocked-dispatch",
-        &agent_did,
-        Some(&agent_did),
-    )
-    .await;
-    let (old_dispatcher, mut old_rx) = mpsc::channel(1);
-    old_dispatcher
-        .send(request(Some(&agent_did), "already-queued"))
-        .await
-        .unwrap();
-    let (new_dispatcher, mut new_rx) = mpsc::channel(1);
-    let initial_snapshot = routed_snapshot(1, &agent_did, old_dispatcher);
-    let updated_snapshot = routed_snapshot(2, &agent_did, new_dispatcher);
-    let (active_tx, active_rx) = watch::channel(initial_snapshot.clone());
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let (request_tx, request_rx) = mpsc::channel(1);
-    let (status_owner, status) =
-        RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did.clone());
-    status.initialize_startup(&agent_did).await.unwrap();
-    status
-        .readiness()
-        .register_slot(&agent_did, 1)
-        .await
-        .unwrap();
-    status
-        .readiness()
-        .publish_snapshot(initial_snapshot.as_ref())
-        .await
-        .unwrap();
-    status
-        .set_process_state_durable(crate::runtime::agent::ProcessLifecycleState::Ready)
-        .await
-        .unwrap();
-    let gate = RuntimeAdmissionGate::closed();
-    gate.open().await;
+async fn blocked_dispatch_follows_the_lean_model() {
+    for case in
+        gents_lean_vocab::families::router_dispatch_blocked_dispatch::cases::<String, String>()
+    {
+        let (db, _user, user_access, binding) =
+            crate::test_support::root::signed_test_node("runtime-router").await;
+        let node = db.node.clone();
+        let node_did = db.node_identity.did().to_owned();
+        let agent_did = binding.agent_did;
+        create_user_agent_session(
+            &user_access,
+            &node_did,
+            None,
+            "blocked-dispatch",
+            &agent_did,
+            Some(&agent_did),
+        )
+        .await;
+        let (old_dispatcher, mut old_rx) = mpsc::channel(1);
+        old_dispatcher
+            .send(request(Some(&agent_did), "already-queued"))
+            .await
+            .unwrap();
+        let (new_dispatcher, mut new_rx) = mpsc::channel(1);
+        let initial_snapshot = routed_snapshot(1, &agent_did, old_dispatcher);
+        let updated_snapshot = routed_snapshot(2, &agent_did, new_dispatcher);
+        let (active_tx, active_rx) = watch::channel(initial_snapshot.clone());
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (request_tx, request_rx) = mpsc::channel(1);
+        let (status_owner, status) =
+            RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did.clone());
+        status.initialize_startup(&agent_did).await.unwrap();
+        status
+            .readiness()
+            .register_slot(&agent_did, 1)
+            .await
+            .unwrap();
+        status
+            .readiness()
+            .publish_snapshot(initial_snapshot.as_ref())
+            .await
+            .unwrap();
+        status
+            .set_process_state_durable(crate::runtime::agent::ProcessLifecycleState::Ready)
+            .await
+            .unwrap();
+        let gate = RuntimeAdmissionGate::closed();
+        gate.open().await;
 
-    let mut routed = request(Some(&agent_did), "blocked-dispatch");
-    routed.node_did = node_did.to_string();
-    request_tx.send(Ok(routed)).await.unwrap();
-    let gate_for_router = gate.clone();
-    let router_node = node.clone();
-    let status_for_router = status.clone();
-    let router_node_did = node_did.clone();
-    let router = tokio::spawn(async move {
-        super::super::router::run_router_with_watcher(RouterInputs {
-            node: router_node,
-            node_did: router_node_did,
-            watcher: ScriptedWatcher { rx: request_rx },
-            active_snapshot_rx: active_rx,
-            shutdown: shutdown_rx,
-            admission_gate: gate_for_router,
-            runtime_status: status_for_router,
-            runtime_snapshot_observer: None,
-        })
-        .await
-    });
+        let mut routed = request(Some(&agent_did), "blocked-dispatch");
+        routed.node_did = node_did.to_string();
+        request_tx.send(Ok(routed)).await.unwrap();
+        let gate_for_router = gate.clone();
+        let router_node = node.clone();
+        let status_for_router = status.clone();
+        let router_node_did = node_did.clone();
+        let mut router = tokio::spawn(async move {
+            super::super::router::run_router_with_watcher(RouterInputs {
+                node: router_node,
+                node_did: router_node_did,
+                watcher: ScriptedWatcher { rx: request_rx },
+                active_snapshot_rx: active_rx,
+                shutdown: shutdown_rx,
+                admission_gate: gate_for_router,
+                runtime_status: status_for_router,
+                runtime_snapshot_observer: None,
+                unresolved_session_bound: UNRESOLVED_SESSION_ATTEMPT_BOUND,
+            })
+            .await
+        });
 
-    tokio::time::timeout(Duration::from_secs(1), gate.wait_for_entry_for_test())
-        .await
-        .expect("router must reach the full queue");
-    status
-        .readiness()
-        .publish_snapshot(updated_snapshot.as_ref())
-        .await
-        .unwrap();
-    active_tx.send(updated_snapshot).unwrap();
-    let dispatched = tokio::time::timeout(Duration::from_secs(1), new_rx.recv())
-        .await
-        .expect("router must leave the old full queue")
-        .expect("updated executor must receive the request");
-    assert_eq!(dispatched.session_id, "blocked-dispatch");
-    assert_eq!(old_rx.recv().await.unwrap().session_id, "already-queued");
-    assert!(old_rx.try_recv().is_err());
-
-    shutdown_tx.send(true).unwrap();
-    tokio::time::timeout(Duration::from_secs(1), router)
-        .await
-        .expect("router must shut down")
-        .unwrap()
-        .unwrap();
-    status_owner.close().await.unwrap();
-    node.shutdown().await.expect("node shutdown");
+        tokio::time::timeout(Duration::from_secs(1), gate.wait_for_entry_for_test())
+            .await
+            .expect("router must reach the full queue");
+        match case.input.event.as_str() {
+            "snapshot_changed" => {
+                status
+                    .readiness()
+                    .publish_snapshot(updated_snapshot.as_ref())
+                    .await
+                    .unwrap();
+                active_tx.send(updated_snapshot.clone()).unwrap();
+            }
+            "admission_closed" => {
+                tokio::time::timeout(Duration::from_secs(1), gate.close())
+                    .await
+                    .expect("gate close must cancel the blocked executor send");
+            }
+            _ => {}
+        }
+        let newest = tokio::time::timeout(Duration::from_secs(1), new_rx.recv())
+            .await
+            .ok()
+            .flatten()
+            .map(|request| request.session_id);
+        let stopped = tokio::time::timeout(Duration::from_millis(500), &mut router).await;
+        let router_stopped = stopped.is_ok();
+        match stopped {
+            Ok(joined) => joined.unwrap().unwrap(),
+            Err(_) => {
+                shutdown_tx.send(true).unwrap();
+                tokio::time::timeout(Duration::from_secs(1), router)
+                    .await
+                    .expect("router must shut down")
+                    .unwrap()
+                    .unwrap();
+            }
+        }
+        let mut routed_queue = Vec::new();
+        while let Ok(queued) = old_rx.try_recv() {
+            routed_queue.push(queued.session_id);
+        }
+        assert_eq!(
+            routed_queue.first().map(String::as_str),
+            Some("already-queued")
+        );
+        let on_routed = routed_queue
+            .iter()
+            .any(|session| session == "blocked-dispatch");
+        let on_newest = newest.as_deref() == Some("blocked-dispatch");
+        let destination = match (on_routed, on_newest) {
+            (true, false) => "routed_executor",
+            (false, true) => "newest_executor",
+            (false, false) => "undispatched",
+            (true, true) => panic!("{:?}: the request reached two executors", case.input),
+        };
+        case.check(
+            gents_lean_vocab::families::router_dispatch_blocked_dispatch::BlockedDispatch {
+                destination: destination.to_owned(),
+                router_stopped,
+            },
+        );
+        status_owner.close().await.unwrap();
+        node.shutdown().await.expect("node shutdown");
+    }
 }
 
 #[tokio::test]
 async fn router_generation_write_failure_closes_admission_before_dequeue_or_dispatch() {
     let (db, _user, _user_access, binding) =
-        crate::test_support::signed_test_node("runtime-router").await;
+        crate::test_support::root::signed_test_node("runtime-router").await;
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;
@@ -318,6 +511,7 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
         node_did.clone(),
         Arc::new(RejectRouterGenerationWriter),
         Duration::from_millis(1),
+        crate::runtime::storage_fault::StorageFaultObservation::new(),
     );
     status.initialize_startup(&agent_did).await.unwrap();
     status
@@ -353,6 +547,7 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
         admission_gate: gate.clone(),
         runtime_status: status,
         runtime_snapshot_observer: None,
+        unresolved_session_bound: UNRESOLVED_SESSION_ATTEMPT_BOUND,
     })
     .await
     .expect_err("router generation persistence failure must stop the router");
@@ -371,48 +566,50 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
     node.shutdown().await.expect("node shutdown");
 }
 
-#[tokio::test]
-async fn router_holds_request_during_generation_handoff_and_dispatches_after_alignment() {
-    let accept = lean_runtime_reconcile_case("accept_request_after_router_observe");
-    assert!(accept.legal);
-
+async fn accept_after_generation_handoff(input: &ReconcileInput) -> (bool, u64) {
     let node_did = "did:test:router-latest-snapshot";
-    let initial_snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
-        generation: 1,
-        node: None,
-        local_did: String::new(),
-        default_agent_did: "general".to_string(),
-        agents: RapidHashMap::new(),
-        tool_surfaces: RapidHashMap::new(),
-        backend_admission_configs: RapidHashMap::new(),
-        unavailable_agents: RapidHashMap::new(),
-        active_schedules: RapidHashMap::new(),
-        unavailable_schedules: rapidhash::RapidHashSet::default(),
-        active_event_triggers: RapidHashMap::new(),
-        unavailable_event_triggers: rapidhash::RapidHashSet::default(),
-        active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::new(),
-        agent_executor_capacities: RapidHashMap::new(),
-        agent_executor_queue_capacities: RapidHashMap::new(),
-    });
-    let updated_snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
-        generation: 2,
-        node: None,
-        local_did: String::new(),
-        default_agent_did: "code".to_string(),
-        agents: RapidHashMap::new(),
-        tool_surfaces: RapidHashMap::new(),
-        backend_admission_configs: RapidHashMap::new(),
-        unavailable_agents: RapidHashMap::new(),
-        active_schedules: RapidHashMap::new(),
-        unavailable_schedules: rapidhash::RapidHashSet::default(),
-        active_event_triggers: RapidHashMap::new(),
-        unavailable_event_triggers: rapidhash::RapidHashSet::default(),
-        active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::new(),
-        agent_executor_capacities: RapidHashMap::new(),
-        agent_executor_queue_capacities: RapidHashMap::new(),
-    });
+    let initial_snapshot = Arc::new(
+        gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+            generation: 1,
+            node: None,
+            local_did: String::new(),
+            default_agent_did: "general".to_string(),
+            tool_configs: Default::default(),
+            agents: RapidHashMap::new(),
+            tool_surfaces: RapidHashMap::new(),
+            backend_admission_configs: RapidHashMap::new(),
+            unavailable_agents: RapidHashMap::new(),
+            active_schedules: RapidHashMap::new(),
+            unavailable_schedules: rapidhash::RapidHashSet::default(),
+            active_event_triggers: RapidHashMap::new(),
+            unavailable_event_triggers: rapidhash::RapidHashSet::default(),
+            active_tasks: RapidHashMap::new(),
+            dispatchers: RapidHashMap::new(),
+            agent_executor_capacities: RapidHashMap::new(),
+            agent_executor_queue_capacities: RapidHashMap::new(),
+        },
+    );
+    let updated_snapshot = Arc::new(
+        gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+            generation: input.pre_active_generation,
+            node: None,
+            local_did: String::new(),
+            default_agent_did: "code".to_string(),
+            tool_configs: Default::default(),
+            agents: RapidHashMap::new(),
+            tool_surfaces: RapidHashMap::new(),
+            backend_admission_configs: RapidHashMap::new(),
+            unavailable_agents: RapidHashMap::new(),
+            active_schedules: RapidHashMap::new(),
+            unavailable_schedules: rapidhash::RapidHashSet::default(),
+            active_event_triggers: RapidHashMap::new(),
+            unavailable_event_triggers: rapidhash::RapidHashSet::default(),
+            active_tasks: RapidHashMap::new(),
+            dispatchers: RapidHashMap::new(),
+            agent_executor_capacities: RapidHashMap::new(),
+            agent_executor_queue_capacities: RapidHashMap::new(),
+        },
+    );
     let (active_tx, mut active_rx) = watch::channel(initial_snapshot);
     let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let (watcher_tx, watcher_rx) = mpsc::channel(1);
@@ -428,7 +625,10 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
     admission_gate.open().await;
     let mut admission_rx = admission_gate.subscribe();
     let (_readiness_tx, mut readiness_rx) = watch::channel(
-        crate::runtime::node_readiness_publisher::AgentAdmissionObservation::for_test(2, []),
+        crate::runtime::node_readiness_publisher::AgentAdmissionObservation::for_test(
+            input.pre_active_generation,
+            [],
+        ),
     );
     let mut pending_request = None;
     let mut deferred = Default::default();
@@ -462,38 +662,37 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
             .expect("request should be returned")
     };
 
-    assert_eq!(request.request_id, "req-router");
-    assert_eq!(routed_observation.source_generation(), 2);
-    assert_eq!(routed_snapshot.generation, 2);
-    assert_eq!(routed_snapshot.default_agent_did, "code");
     assert_eq!(
-        active_snapshot.generation,
-        accept.post_router_generation as u64
+        routed_observation.source_generation(),
+        input.pre_active_generation
     );
+    assert_eq!(routed_snapshot.generation, input.pre_active_generation);
+    assert_eq!(routed_snapshot.default_agent_did, "code");
     assert_eq!(active_snapshot.default_agent_did, "code");
+    (
+        request.request_id == "req-router",
+        active_snapshot.generation,
+    )
 }
 
-#[tokio::test]
-async fn router_publishes_observed_generation_without_waiting_for_request() {
-    let router = lean_runtime_reconcile_case("router_observe_published_generation");
-    assert!(router.legal);
-
+async fn observed_generation_publication(input: &ReconcileInput) -> (bool, u64) {
     let (db, _user, _user_access, binding) =
-        crate::test_support::signed_test_node("runtime-router").await;
+        crate::test_support::root::signed_test_node("runtime-router").await;
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;
-    let initial_snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
-        generation: 1,
+    let initial_snapshot = Arc::new(gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+        generation: input.pre_router_generation,
         node: None,
         local_did: String::new(),
         default_agent_did: agent_did.clone(),
+        tool_configs: Default::default(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
         unavailable_agents: RapidHashMap::from_iter([(
             agent_did.clone(),
-            crate::runtime::snapshot::UnavailableAgent::new(
+            gents_automation::triggers::runtime_snapshot::UnavailableAgent::new(
                 gents_protocol::row::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                 "test fixture has no executor",
             ),
@@ -507,17 +706,18 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         agent_executor_capacities: RapidHashMap::new(),
         agent_executor_queue_capacities: RapidHashMap::new(),
     });
-    let updated_snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
-        generation: 2,
+    let updated_snapshot = Arc::new(gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+        generation: input.pre_active_generation,
         node: None,
         local_did: String::new(),
         default_agent_did: agent_did.clone(),
+        tool_configs: Default::default(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
         unavailable_agents: RapidHashMap::from_iter([(
             agent_did.clone(),
-            crate::runtime::snapshot::UnavailableAgent::new(
+            gents_automation::triggers::runtime_snapshot::UnavailableAgent::new(
                 gents_protocol::row::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                 "test fixture has no executor",
             ),
@@ -593,7 +793,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         node_did = escape_graphql_string(&node_did),
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
-    loop {
+    let published = loop {
         let response = node.execute(&query).await;
         assert!(
             !response.has_errors(),
@@ -611,19 +811,35 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
             .and_then(|snapshot| serde_json::from_str::<NodeReadinessSnapshot>(snapshot).ok())
             .map(|snapshot| snapshot.router_generation)
             .unwrap_or_default();
-        if router_generation == router.post_router_generation as u64 {
-            break;
+        if router_generation != input.pre_router_generation
+            || tokio::time::Instant::now() >= deadline
+        {
+            break router_generation;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "router generation did not advance to {}; last value={router_generation}",
-            router.post_router_generation
-        );
         tokio::task::yield_now().await;
         tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    };
 
     let _ = shutdown_tx.send(true);
     assert!(router_task.await.unwrap().unwrap().is_none());
     runtime_status_owner.close().await.unwrap();
+    node.shutdown().await.expect("node shutdown");
+    (published != input.pre_router_generation, published)
+}
+
+#[tokio::test]
+async fn router_generation_steps_match_lean_runtime_reconcile_cases() {
+    for case in gents_lean_vocab::families::contracts_runtime_reconcile_router::cases() {
+        let (legal, post_router_generation) = match case.input.action.as_str() {
+            "routerObserve" => observed_generation_publication(&case.input).await,
+            "acceptRequest" => accept_after_generation_handoff(&case.input).await,
+            other => panic!("the router fixture cannot drive {other}"),
+        };
+        case.check(
+            gents_lean_vocab::families::contracts_runtime_reconcile_router::ReconcileRouterOutput {
+                legal,
+                post_router_generation,
+            },
+        );
+    }
 }

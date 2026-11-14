@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
 use crate::preference::{StoredManagedServer, MANAGED_SERVER_CONFIG};
-const ARCHIVE_CONSEQUENCE: &str = "The selected local state is moved into a timestamped backup. The desktop User identity, key custody, and saved peers are retained.";
+const ARCHIVE_CONSEQUENCE: &str = "The selected local state is moved into a timestamped backup. The desktop User identity, key custody, and saved peers other than the pairing with this node are retained.";
 const DELETE_CONSEQUENCE: &str =
-    "The selected local state is permanently deleted. The desktop User identity, key custody, and saved peers are retained.";
+    "The selected local state is permanently deleted. The desktop User identity, key custody, and saved peers other than the pairing with this node are retained.";
 const FULL_ARCHIVE_CONSEQUENCE: &str = "The managed home, client state and service definition are backed up. Browser storage and caches are permanently cleared and are not included in the backup.";
 const FULL_DELETE_CONSEQUENCE: &str = "The managed home, client state and service definition are permanently deleted. Browser storage and caches are permanently cleared.";
 
@@ -57,6 +57,51 @@ pub struct ManagedServerResetResult {
     pub browser_paths: Vec<String>,
     /// Browser data whose native clearing completed during this reset.
     pub cleared_browser_paths: Vec<String>,
+    /// Why this home is in scope, so the screen explains the right thing.
+    pub reason: HomeResetReason,
+    /// Pairings this desktop dropped because the node they name was retired.
+    pub retired_pairings: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum HomeResetReason {
+    /// A store this version refuses to open.
+    IncompatibleStore,
+    /// A home whose provisioning committed a node name but never served or
+    /// paired, so there is nothing of the person's in it yet.
+    UnfinishedSetup,
+    /// An explicit reset of everything Gents keeps on this computer.
+    FullReset,
+}
+
+/// A home whose setup recorded core packs it never installed, or whose
+/// provisioning committed a node name but never served or paired.
+/// `runtime.json` is written only by a serving runtime and removed only by an
+/// explicit reset, so its absence, with `init.json` present and no peer record
+/// naming the node, is evidence that no start ever completed.
+pub fn local_setup_unfinished<'a, I>(
+    node_home: &Path,
+    node_did: Option<&str>,
+    peer_node_dids: I,
+) -> bool
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    if gents_store::local::home::init_config_path(node_home).is_file()
+        && gents_store::local::home::unfinished_setup(node_home).is_some()
+    {
+        return true;
+    }
+    let Some(node_did) = node_did.map(str::trim).filter(|did| !did.is_empty()) else {
+        return false;
+    };
+    gents_store::local::home::init_config_path(node_home).is_file()
+        && !node_home
+            .join(gents_store::local::home::RUNTIME_STATE_FILE_NAME)
+            .exists()
+        && !peer_node_dids.into_iter().any(|peer| peer == node_did)
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS)]
@@ -152,13 +197,13 @@ pub struct HomeResetPlan {
     /// client state was paired with it.
     pub runtime: Option<(
         PathBuf,
-        Option<gents::store::local::storage_backend::IncompatibleStore>,
+        Option<gents_protocol::operations::install_repair::IncompatibleStore>,
     )>,
-    client: Option<gents::store::local::storage_backend::IncompatibleStore>,
+    client: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
     /// The client state is retired because its paired node is gone.
     orphaned_client: bool,
     desktop_root: PathBuf,
-    runtime_entries: gents::store::local::home::HomeEntries,
+    runtime_entries: gents_store::local::home::HomeEntries,
     /// The runtime entries a Delete removes: the owned entries, except that
     /// `keys/` is narrowed to the managed home's identity and recorded store key (other homes
     /// may keep keys there). Explicit full reset also uses this scope for
@@ -176,6 +221,8 @@ pub struct HomeResetPlan {
     browser_entries: Vec<PathBuf>,
     /// The decoded records that prove each root is Gents'; retired last.
     ownership_records: Vec<PathBuf>,
+    /// The home is in scope because its provisioning never finished.
+    unfinished_setup: bool,
 }
 
 /// Keychain custody outlives filesystem retirement. Its record stays until
@@ -183,7 +230,7 @@ pub struct HomeResetPlan {
 /// retain both the key and its record so the archived store remains readable.
 #[derive(Debug)]
 struct RetiredStoreKey {
-    record: gents::store::local::store_key::StoreEncryption,
+    record: gents_store::local::store_key::StoreEncryption,
     key_file: PathBuf,
     record_files: Vec<PathBuf>,
 }
@@ -229,7 +276,7 @@ fn decoded_desktop_records(paths: &crate::client::DesktopPaths, preference: &Pat
             .then(|| std::fs::read(path).ok())
             .flatten()
     };
-    let journal = gents::store::local::store_key::upgrade::journal_path(paths.node_data_dir());
+    let journal = gents_store::local::store_key::upgrade::journal_path(paths.node_data_dir());
     [
         (
             paths.principal_metadata_path().to_path_buf(),
@@ -239,14 +286,14 @@ fn decoded_desktop_records(paths: &crate::client::DesktopPaths, preference: &Pat
         (
             paths.store_encryption_path().to_path_buf(),
             read(paths.store_encryption_path()).is_some_and(|bytes| {
-                serde_json::from_slice::<gents::store::local::store_key::StoreEncryption>(&bytes)
+                serde_json::from_slice::<gents_store::local::store_key::StoreEncryption>(&bytes)
                     .is_ok()
             }),
         ),
         (
             journal.clone(),
             read(&journal).is_some()
-                && gents::store::local::store_key::upgrade::pending_record(paths.node_data_dir())
+                && gents_store::local::store_key::upgrade::pending_record(paths.node_data_dir())
                     .is_ok_and(|record| record.is_some()),
         ),
         (
@@ -270,12 +317,12 @@ fn upgrade_retirement(
     key_file: PathBuf,
 ) -> Result<(Vec<PathBuf>, Option<RetiredStoreKey>), BridgeError> {
     let read = || -> anyhow::Result<_> {
-        let entries = gents::store::local::store_key::upgrade::retirement_entries(data)?;
-        let key = gents::store::local::store_key::upgrade::pending_record(data)?.map(|record| {
+        let entries = gents_store::local::store_key::upgrade::retirement_entries(data)?;
+        let key = gents_store::local::store_key::upgrade::pending_record(data)?.map(|record| {
             RetiredStoreKey {
                 record,
                 key_file,
-                record_files: vec![gents::store::local::store_key::upgrade::journal_path(data)],
+                record_files: vec![gents_store::local::store_key::upgrade::journal_path(data)],
             }
         });
         Ok((entries, key))
@@ -292,7 +339,7 @@ fn upgrade_retirement(
 /// `init.json` names it (`key_path`, else the default for `node_name`).
 fn own_home_key(home: &Path, keys: &Path) -> Option<PathBuf> {
     let record: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(gents::store::local::home::init_config_path(home)).ok()?,
+        &std::fs::read(gents_store::local::home::init_config_path(home)).ok()?,
     )
     .ok()?;
     let key = record
@@ -307,7 +354,7 @@ fn own_home_key(home: &Path, keys: &Path) -> Option<PathBuf> {
                 .and_then(serde_json::Value::as_str)
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
-                .map(|name| gents::store::local::home::default_key_path(home, name))
+                .map(|name| gents_store::local::home::default_key_path(home, name))
         })?;
     let parent = std::fs::canonicalize(key.parent()?).ok()?;
     let name = key.file_name()?;
@@ -316,8 +363,8 @@ fn own_home_key(home: &Path, keys: &Path) -> Option<PathBuf> {
 
 pub fn lock_home_for_retirement(
     home: &Path,
-) -> Result<gents::store::local::home::StoreLock, BridgeError> {
-    gents::store::local::home::lock_home_store(home).map_err(|error| {
+) -> Result<gents_store::local::home::StoreLock, BridgeError> {
+    gents_store::local::home::lock_home_store(home).map_err(|error| {
         BridgeError::new(
             BridgeErrorCode::InvalidArgument,
             gents_protocol::error_chain::ErrorChain(&error).to_string(),
@@ -327,7 +374,7 @@ pub fn lock_home_for_retirement(
 
 fn is_store_lock(path: &Path) -> bool {
     path.parent().is_some_and(|home| {
-        gents::store::local::home::default_data_dir(home)
+        gents_store::local::home::default_data_dir(home)
             .file_name()
             .is_some_and(|data| {
                 path.file_name()
@@ -349,11 +396,12 @@ pub fn present(path: &Path) -> Result<bool, BridgeError> {
 
 pub fn plan_home_reset(
     runtime_home: Option<&Path>,
-    runtime_store: Option<gents::store::local::storage_backend::IncompatibleStore>,
-    client_store: Option<gents::store::local::storage_backend::IncompatibleStore>,
+    runtime_store: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
+    client_store: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
     desktop_paths: &crate::client::DesktopPaths,
     user_home: &Path,
     binding: ClientBinding,
+    unfinished_setup: bool,
 ) -> Result<HomeResetPlan, BridgeError> {
     plan_reset(
         runtime_home,
@@ -362,7 +410,10 @@ pub fn plan_home_reset(
         desktop_paths,
         user_home,
         binding,
-        false,
+        ResetScope {
+            full_reset: false,
+            unfinished_setup,
+        },
     )
 }
 
@@ -383,7 +434,10 @@ pub fn plan_full_reset(
         desktop_paths,
         user_home,
         ClientBinding::Unbound,
-        true,
+        ResetScope {
+            full_reset: true,
+            unfinished_setup: false,
+        },
     )?;
     let mut paths = vec![("service", service_definition.to_path_buf())];
     if cfg!(target_os = "macos") {
@@ -459,17 +513,28 @@ pub fn plan_full_reset(
     Ok(plan)
 }
 
+/// Why a home is in scope beyond a store this version refuses.
+#[derive(Debug, Clone, Copy)]
+struct ResetScope {
+    full_reset: bool,
+    unfinished_setup: bool,
+}
+
 fn plan_reset(
     runtime_home: Option<&Path>,
-    runtime_store: Option<gents::store::local::storage_backend::IncompatibleStore>,
-    client_store: Option<gents::store::local::storage_backend::IncompatibleStore>,
+    runtime_store: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
+    client_store: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
     desktop_paths: &crate::client::DesktopPaths,
     user_home: &Path,
     binding: ClientBinding,
-    full_reset: bool,
+    scope: ResetScope,
 ) -> Result<HomeResetPlan, BridgeError> {
+    let ResetScope {
+        full_reset,
+        unfinished_setup,
+    } = scope;
     let inspect = |path: &Path| {
-        gents::store::local::storage_backend::incompatible_store_kind(path).map_err(|error| {
+        gents_store::local::storage_backend::incompatible_store_kind(path).map_err(|error| {
             BridgeError::new(
                 BridgeErrorCode::Backend,
                 format!("Inspecting {}: {error}", path.display()),
@@ -480,24 +545,24 @@ fn plan_reset(
         Some(configured_home) if present(configured_home)? => {
             reject_symlink(configured_home, "managed home")?;
             let home = canonical_root(configured_home, "managed home")?;
-            let data = gents::store::local::home::default_data_dir(&home);
+            let data = gents_store::local::home::default_data_dir(&home);
             reject_symlink_if_present(&data, "managed data")?;
             reject_symlink_if_present(
-                &gents::store::local::home::init_config_path(&home),
+                &gents_store::local::home::init_config_path(&home),
                 "managed init marker",
             )?;
             let marked = inspect(&data)?.map(|kind| {
-                gents::store::local::storage_backend::IncompatibleStore {
+                gents_protocol::operations::install_repair::IncompatibleStore {
                     kind,
                     data_path: data.clone(),
                 }
             });
             marked
                 .or(runtime_store.map(|store| match store.kind {
-                    gents::store::local::storage_backend::IncompatibleStoreKind::InsecureKey => {
+                    gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey => {
                         store
                     }
-                    _ => gents::store::local::storage_backend::IncompatibleStore {
+                    _ => gents_protocol::operations::install_repair::IncompatibleStore {
                         data_path: data.clone(),
                         ..store
                     },
@@ -512,7 +577,7 @@ fn plan_reset(
     reject_symlink_if_present(desktop_paths.node_data_dir(), "desktop client store")?;
     let client = inspect(desktop_paths.node_data_dir())?
         .map(
-            |kind| gents::store::local::storage_backend::IncompatibleStore {
+            |kind| gents_protocol::operations::install_repair::IncompatibleStore {
                 kind,
                 data_path: desktop_paths.node_data_dir().to_path_buf(),
             },
@@ -525,9 +590,10 @@ fn plan_reset(
         // runtime on a store that may not open.
         full_reset
             || store.is_some()
+            || (unfinished_setup && gents_store::local::home::init_config_path(home).is_file())
             || (client.is_some()
                 && binding == ClientBinding::BoundToHome
-                && gents::store::local::home::init_config_path(home).is_file())
+                && gents_store::local::home::init_config_path(home).is_file())
     });
     if !full_reset && runtime.is_none() && client.is_none() && !orphaned_client {
         return Err(BridgeError::new(
@@ -550,7 +616,7 @@ fn plan_reset(
     }
     let mut runtime_entries = match runtime.as_ref() {
         Some((home, _)) => {
-            gents::store::local::home::home_entries(home, std::slice::from_ref(&desktop_root))
+            gents_store::local::home::home_entries(home, std::slice::from_ref(&desktop_root))
                 .map_err(|error| {
                     BridgeError::new(
                         BridgeErrorCode::Backend,
@@ -562,13 +628,13 @@ fn plan_reset(
                     )
                 })?
         }
-        None => gents::store::local::home::HomeEntries::default(),
+        None => gents_store::local::home::HomeEntries::default(),
     };
     // A home proves it is a Gents home only through a readable init marker;
     // names from the runtime inventory alone also occur in user projects.
     let initialized = match runtime.as_ref() {
         Some((home, _)) => {
-            let record = gents::store::local::home::read_init_config::<
+            let record = gents_store::local::home::read_init_config::<
                 serde_json::Value,
                 serde_json::Value,
             >(home)
@@ -605,7 +671,7 @@ fn plan_reset(
     let home_record = runtime
         .as_ref()
         .filter(|_| initialized)
-        .map(|(home, _)| gents::store::local::home::init_config_path(home));
+        .map(|(home, _)| gents_store::local::home::init_config_path(home));
     let mut client_entries = Vec::new();
     // Like a runtime home, a desktop home proves itself only through a record
     // the desktop wrote; its entry names alone also occur in user projects.
@@ -621,7 +687,10 @@ fn plan_reset(
         let entries = if full_reset {
             canonical.client_state_entries()
         } else {
-            vec![canonical.node_data_dir().to_path_buf()]
+            vec![
+                canonical.node_data_dir().to_path_buf(),
+                canonical.retired_local_peers_path(),
+            ]
         };
         for entry in entries.into_iter().chain(std::iter::once(preference)) {
             if desktop_owned && present(&entry)? {
@@ -664,16 +733,16 @@ fn plan_reset(
     }
     if let Some((home, _)) = runtime.as_ref() {
         let (entries, upgrade_key) = upgrade_retirement(
-            &gents::store::local::home::default_data_dir(home),
-            gents::store::local::store_key::home_key_file(home),
+            &gents_store::local::home::default_data_dir(home),
+            gents_store::local::store_key::home_key_file(home),
         )?;
         runtime_entries
             .retained
             .retain(|path| !entries.contains(path));
         runtime_entries.owned.extend(entries);
         if let Some(key) = recorded_store_key(
-            gents::store::local::home::init_config_path(home),
-            gents::store::local::store_key::home_key_file(home),
+            gents_store::local::home::init_config_path(home),
+            gents_store::local::store_key::home_key_file(home),
             true,
         ) {
             add_store_key(&mut store_keys, key);
@@ -683,11 +752,11 @@ fn plan_reset(
         }
         for key in store_keys
             .iter()
-            .filter(|key| key.key_file == gents::store::local::store_key::home_key_file(home))
+            .filter(|key| key.key_file == gents_store::local::store_key::home_key_file(home))
         {
             if matches!(
                 key.record.custody,
-                gents::store::local::store_key::StoreKeyCustody::File
+                gents_store::local::store_key::StoreKeyCustody::File
             ) && std::fs::canonicalize(home.join("keys"))
                 .is_ok_and(|keys| keys == home.join("keys"))
                 && present(&key.key_file)?
@@ -715,7 +784,13 @@ fn plan_reset(
     delete_home_entries.sort();
     delete_home_entries.dedup();
     if let Some((home, _)) = runtime.as_ref().filter(|_| full_reset && !initialized) {
-        if let Some(entry) = delete_home_entries.first() {
+        // Unlike the other owned entries, the reservation's name never occurs
+        // in a user project, so it needs no init.json to be shown to belong to
+        // Gents and never stands as the evidence this refusal reports.
+        if let Some(entry) = delete_home_entries.iter().find(|entry| {
+            entry.file_name().and_then(std::ffi::OsStr::to_str)
+                != Some(gents_store::local::home::BOOTSTRAP_CONSUMED_FILE_NAME)
+        }) {
             return Err(BridgeError::new(
                 BridgeErrorCode::InvalidArgument,
                 format!(
@@ -773,10 +848,20 @@ fn plan_reset(
         host_entries: Vec::new(),
         browser_entries: Vec::new(),
         ownership_records: home_record.into_iter().chain(ownership_records).collect(),
+        unfinished_setup,
     })
 }
 
 impl HomeResetPlan {
+    /// Leaves `managed-server.json` (the reviewed host access and auto-start)
+    /// in place when only a client store is being set aside.
+    pub fn keeping_managed_server_preference(mut self) -> Self {
+        let preference = self.desktop_root.join(MANAGED_SERVER_CONFIG);
+        self.client_entries.retain(|entry| *entry != preference);
+        self.ownership_records.retain(|entry| *entry != preference);
+        self
+    }
+
     /// The desktop client state is retired with its runtime: its pairing
     /// names the runtime identity being retired.
     pub fn retires_client_state(&self) -> bool {
@@ -791,7 +876,7 @@ impl HomeResetPlan {
 
     fn refused_stores(
         &self,
-    ) -> impl Iterator<Item = &gents::store::local::storage_backend::IncompatibleStore> {
+    ) -> impl Iterator<Item = &gents_protocol::operations::install_repair::IncompatibleStore> {
         self.runtime
             .iter()
             .filter_map(|(_, store)| store.as_ref())
@@ -912,16 +997,17 @@ impl HomeResetPlan {
     }
 
     pub fn preview(&self) -> ManagedServerResetResult {
-        let view = |scope, store: &gents::store::local::storage_backend::IncompatibleStore| {
-            IncompatibleStoreView {
+        let view =
+            |scope, store: &gents_protocol::operations::install_repair::IncompatibleStore| {
+                IncompatibleStoreView {
                 scope,
                 path: store.data_path.to_string_lossy().into_owned(),
                 detail: store.to_string(),
-                older: store.kind.is_older(),
+                older: store.kind.made_by_older_version(),
                 unsafe_key: store.kind
-                    == gents::store::local::storage_backend::IncompatibleStoreKind::InsecureKey,
+                    == gents_protocol::operations::install_repair::IncompatibleStoreKind::InsecureKey,
             }
-        };
+            };
         let paths = |paths: &mut dyn Iterator<Item = &PathBuf>| {
             paths
                 .map(|path| path.to_string_lossy().into_owned())
@@ -956,6 +1042,14 @@ impl HomeResetPlan {
                 ARCHIVE_CONSEQUENCE
             }
             .into(),
+            reason: if self.full_reset {
+                HomeResetReason::FullReset
+            } else if self.unfinished_setup && self.refused_stores().next().is_none() {
+                HomeResetReason::UnfinishedSetup
+            } else {
+                HomeResetReason::IncompatibleStore
+            },
+            retired_pairings: 0,
             completed: false,
             disposition: None,
             backup_path: None,
@@ -998,9 +1092,9 @@ impl HomeResetPlan {
     fn groups(
         &self,
         disposition: HomeResetDisposition,
-    ) -> Vec<gents::store::local::home::RetireGroup<'_>> {
+    ) -> Vec<gents_store::local::home::RetireGroup<'_>> {
         let mut groups = vec![
-            gents::store::local::home::RetireGroup {
+            gents_store::local::home::RetireGroup {
                 name: "home",
                 entries: if self.full_reset && disposition == HomeResetDisposition::Archive {
                     &self.archive_home_entries
@@ -1008,19 +1102,19 @@ impl HomeResetPlan {
                     self.home_entries(disposition)
                 },
             },
-            gents::store::local::home::RetireGroup {
+            gents_store::local::home::RetireGroup {
                 name: "desktop",
                 entries: &self.client_entries,
             },
         ];
         if self.full_reset && disposition == HomeResetDisposition::Archive {
-            groups.push(gents::store::local::home::RetireGroup {
+            groups.push(gents_store::local::home::RetireGroup {
                 name: "keys",
                 entries: &self.archive_keys,
             });
         }
         groups.extend(self.host_entries.iter().map(|(name, path)| {
-            gents::store::local::home::RetireGroup {
+            gents_store::local::home::RetireGroup {
                 name,
                 entries: std::slice::from_ref(path),
             }
@@ -1029,7 +1123,7 @@ impl HomeResetPlan {
     }
 
     pub fn preflight(&self, backup: &Path) -> Result<(), BridgeError> {
-        gents::store::local::home::archive_preflight(
+        gents_store::local::home::archive_preflight(
             &self.groups(HomeResetDisposition::Archive),
             backup,
         )
@@ -1056,17 +1150,17 @@ impl HomeResetPlan {
         disposition: HomeResetDisposition,
         backup: Option<&Path>,
         mut delete_key: impl FnMut(
-            &gents::store::local::store_key::StoreEncryption,
+            &gents_store::local::store_key::StoreEncryption,
             &Path,
         ) -> anyhow::Result<()>,
     ) -> Result<ManagedServerResetResult, BridgeError> {
         let retire_as = match (disposition, backup) {
             (HomeResetDisposition::Archive, Some(backup)) => {
                 self.preflight(backup)?;
-                gents::store::local::home::RetireDisposition::Archive { backup }
+                gents_store::local::home::RetireDisposition::Archive { backup }
             }
             (HomeResetDisposition::Delete, None) => {
-                gents::store::local::home::RetireDisposition::Delete
+                gents_store::local::home::RetireDisposition::Delete
             }
             _ => {
                 return Err(BridgeError::new(
@@ -1082,7 +1176,7 @@ impl HomeResetPlan {
                 disposition == HomeResetDisposition::Delete
                     && matches!(
                         key.record.custody,
-                        gents::store::local::store_key::StoreKeyCustody::MacosKeychain { .. }
+                        gents_store::local::store_key::StoreKeyCustody::MacosKeychain { .. }
                     )
             })
             .collect();
@@ -1109,23 +1203,23 @@ impl HomeResetPlan {
             .cloned()
             .collect();
         let mut groups = vec![
-            gents::store::local::home::RetireGroup {
+            gents_store::local::home::RetireGroup {
                 name: "home",
                 entries: &home_entries,
             },
-            gents::store::local::home::RetireGroup {
+            gents_store::local::home::RetireGroup {
                 name: "desktop",
                 entries: &client_entries,
             },
         ];
         if self.full_reset && disposition == HomeResetDisposition::Archive {
-            groups.push(gents::store::local::home::RetireGroup {
+            groups.push(gents_store::local::home::RetireGroup {
                 name: "keys",
                 entries: &self.archive_keys,
             });
         }
         groups.extend(self.host_entries.iter().map(|(name, path)| {
-            gents::store::local::home::RetireGroup {
+            gents_store::local::home::RetireGroup {
                 name,
                 entries: std::slice::from_ref(path),
             }
@@ -1146,10 +1240,10 @@ impl HomeResetPlan {
         let ordered: Vec<_> = dependents.into_iter().chain(records).collect();
         let groups: Vec<_> = ordered
             .iter()
-            .map(|(name, entries)| gents::store::local::home::RetireGroup { name, entries })
+            .map(|(name, entries)| gents_store::local::home::RetireGroup { name, entries })
             .collect();
         let mut retired =
-            gents::store::local::home::retire_entries(&groups, retire_as).map_err(|error| {
+            gents_store::local::home::retire_entries(&groups, retire_as).map_err(|error| {
                 BridgeError::new(
                     BridgeErrorCode::Backend,
                     gents_protocol::error_chain::ErrorChain(&error).to_string(),
@@ -1163,12 +1257,12 @@ impl HomeResetPlan {
                 )
             })?;
             retired.extend(
-                gents::store::local::home::retire_entries(
-                    &[gents::store::local::home::RetireGroup {
+                gents_store::local::home::retire_entries(
+                    &[gents_store::local::home::RetireGroup {
                         name: "key_record",
                         entries: &key.record_files,
                     }],
-                    gents::store::local::home::RetireDisposition::Delete,
+                    gents_store::local::home::RetireDisposition::Delete,
                 )
                 .map_err(|error| {
                     BridgeError::new(
@@ -1252,20 +1346,20 @@ pub fn lock_desktop_process(
 /// so each lock a desktop holds has its own type.
 #[derive(Debug)]
 pub struct DesktopProcessLock {
-    _lock: gents::store::local::file_lock::FileLock,
+    _lock: gents_store::local::file_lock::FileLock,
 }
 
 /// [`lock_browser_store`]'s lock; see [`DesktopProcessLock`].
 #[derive(Debug)]
 pub struct BrowserStoreLock {
-    _lock: gents::store::local::file_lock::FileLock,
+    _lock: gents_store::local::file_lock::FileLock,
 }
 
 /// A reset reserves the next process-lock acquisition before asking the app to
 /// exit. Startup takes this lock first, so it cannot overtake the waiting reset.
 pub fn lock_reset(
     paths: &crate::client::DesktopPaths,
-) -> anyhow::Result<gents::store::local::file_lock::FileLock> {
+) -> anyhow::Result<gents_store::local::file_lock::FileLock> {
     lock_file(paths, ".reset.lock", false)
 }
 
@@ -1275,11 +1369,11 @@ pub fn lock_reset(
 pub fn lock_client_state(
     paths: &crate::client::DesktopPaths,
 ) -> anyhow::Result<(
-    gents::store::local::home::StoreLock,
-    gents::store::local::file_lock::FileLock,
+    gents_store::local::home::StoreLock,
+    gents_store::local::file_lock::FileLock,
 )> {
     use anyhow::Context;
-    let store = gents::store::local::home::lock_store_at(paths.root(), paths.node_data_dir())
+    let store = gents_store::local::home::lock_store_at(paths.root(), paths.node_data_dir())
         .context("Quit Gents before resetting its desktop state")?;
     let peers = paths.peer_directory_path().with_extension("lock");
     reject_symlink_if_present(&peers, "peer directory lock")?;
@@ -1290,7 +1384,7 @@ pub fn lock_client_state(
         .truncate(false)
         .open(&peers)
         .with_context(|| format!("opening {}", peers.display()))?;
-    let peers = gents::store::local::file_lock::FileLock::try_exclusive(file)
+    let peers = gents_store::local::file_lock::FileLock::try_exclusive(file)
         .context("Quit Gents before resetting its desktop state")?;
     Ok((store, peers))
 }
@@ -1308,7 +1402,7 @@ pub fn lock_browser_store(isolated_store: Option<&str>) -> anyhow::Result<Browse
             .context("unable to resolve a local application data directory")?
             .join("gents"),
     };
-    gents::store::local::home::refuse_real_gents_home(&directory, "HOME");
+    gents_store::local::home::refuse_real_gents_home(&directory, "HOME");
     lock_browser_store_in(&directory, isolated_store)
 }
 
@@ -1327,7 +1421,7 @@ fn lock_file(
     paths: &crate::client::DesktopPaths,
     name: &str,
     wait: bool,
-) -> anyhow::Result<gents::store::local::file_lock::FileLock> {
+) -> anyhow::Result<gents_store::local::file_lock::FileLock> {
     lock_in(paths.root(), name, wait)
 }
 
@@ -1335,7 +1429,7 @@ fn lock_in(
     directory: &Path,
     name: &str,
     wait: bool,
-) -> anyhow::Result<gents::store::local::file_lock::FileLock> {
+) -> anyhow::Result<gents_store::local::file_lock::FileLock> {
     use anyhow::Context;
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
@@ -1356,9 +1450,9 @@ fn lock_in(
     }
     let file = options.open(path)?;
     if wait {
-        Ok(gents::store::local::file_lock::FileLock::exclusive(file)?)
+        Ok(gents_store::local::file_lock::FileLock::exclusive(file)?)
     } else {
-        gents::store::local::file_lock::FileLock::try_exclusive(file).context("Gents is running or a reset is in progress; quit Gents or wait for the reset to finish")
+        gents_store::local::file_lock::FileLock::try_exclusive(file).context("Gents is running or a reset is in progress; quit Gents or wait for the reset to finish")
     }
 }
 
@@ -1458,7 +1552,7 @@ mod tests {
             write(desktop.store_key_path(), "store key");
             write(desktop.peer_directory_path(), "{}");
             let upgrade =
-                gents::store::local::store_key::upgrade::journal_path(desktop.node_data_dir());
+                gents_store::local::store_key::upgrade::journal_path(desktop.node_data_dir());
             write(
                 &upgrade,
                 r#"{"version":1,"record":{"version":1,"custody":"file"},"phase":"copying"}"#,
@@ -1467,7 +1561,16 @@ mod tests {
             let plan = if full {
                 plan_full_reset(Some(&home), &desktop, &user, &service).unwrap()
             } else {
-                plan_home_reset(None, None, None, &desktop, &user, ClientBinding::Orphaned).unwrap()
+                plan_home_reset(
+                    None,
+                    None,
+                    None,
+                    &desktop,
+                    &user,
+                    ClientBinding::Orphaned,
+                    false,
+                )
+                .unwrap()
             };
             let binding = desktop.root().join(MANAGED_SERVER_CONFIG);
             let path = match case["asset"].as_str().unwrap() {
@@ -1503,6 +1606,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let user = temp.path().canonicalize().unwrap();
         let (home, desktop, service) = fixture(&user);
+        write(&desktop.retired_local_peers_path(), "[]");
         let plan = plan_full_reset(Some(&home), &desktop, &user, &service).unwrap();
         let preview = plan.preview();
         assert!(preview.delete_confirmation.is_some());
@@ -1519,6 +1623,7 @@ mod tests {
             "service definition"
         );
         assert!(backup.join("desktop/logs/client.log").is_file());
+        assert!(backup.join("desktop/local-peers.json").is_file());
         assert!(backup.join("home/init.json").is_file());
         assert!(home.join("other-node/init.json").is_file());
         assert!(home.join("keys/other.key").is_file());
@@ -1921,7 +2026,7 @@ mod tests {
 
     #[test]
     fn a_pending_upgrade_journal_alone_proves_desktop_ownership() {
-        use gents::store::local::store_key::{upgrade, StoreEncryption, StoreKeyCustodyChoice};
+        use gents_store::local::store_key::{upgrade, StoreEncryption, StoreKeyCustodyChoice};
         let temp = tempfile::tempdir().unwrap();
         let user = temp.path().canonicalize().unwrap();
         let (home, _, service) = fixture(&user);
@@ -1966,14 +2071,15 @@ mod tests {
             assert!(plan_full_reset(Some(&home), &desktop, &user, &service).is_err());
             assert!(plan_home_reset(
                 Some(&home),
-                Some(gents::store::local::storage_backend::IncompatibleStore {
-                    kind: gents::store::local::storage_backend::IncompatibleStoreKind::LegacyLark,
+                Some(gents_protocol::operations::install_repair::IncompatibleStore {
+                    kind: gents_protocol::operations::install_repair::IncompatibleStoreKind::LegacyLark,
                     data_path: home.join("data"),
                 }),
                 None,
                 &desktop,
                 &user,
                 ClientBinding::Unbound,
+                false,
             )
             .is_err());
             assert!(home.join("plugins/work/mine.txt").is_file());
@@ -2005,12 +2111,12 @@ mod tests {
         std::fs::create_dir_all(desktop.node_data_dir()).unwrap();
         // Bootstrap takes the store lock before the peer directory lease.
         let store =
-            gents::store::local::home::lock_store(desktop.root(), desktop.node_data_dir()).unwrap();
+            gents_store::local::home::lock_store(desktop.root(), desktop.node_data_dir()).unwrap();
         assert!(lock_client_state(&desktop).is_err());
         drop(store);
         let held = lock_client_state(&desktop).unwrap();
         assert!(
-            gents::store::local::home::lock_store(desktop.root(), desktop.node_data_dir()).is_err()
+            gents_store::local::home::lock_store(desktop.root(), desktop.node_data_dir()).is_err()
         );
         drop(held);
 
@@ -2019,9 +2125,7 @@ mod tests {
         let held = lock_client_state(&fresh).unwrap();
         assert!(!fresh.node_data_dir().exists());
         std::fs::create_dir_all(fresh.node_data_dir()).unwrap();
-        assert!(
-            gents::store::local::home::lock_store(fresh.root(), fresh.node_data_dir()).is_err()
-        );
+        assert!(gents_store::local::home::lock_store(fresh.root(), fresh.node_data_dir()).is_err());
         drop(held);
     }
 

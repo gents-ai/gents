@@ -5,13 +5,13 @@ use serde_json::json;
 
 use crate::cli::args::PackBuildArgs;
 
-pub(crate) use gents::pack::authoring::BuildReport;
+pub(crate) use gents_pack::pack::authoring::BuildReport;
 
 pub(crate) const BUILDER_ID: &str = concat!("gents-cli/", env!("CARGO_PKG_VERSION"));
 
 struct CliPluginCompiler;
 
-impl gents::pack::authoring::PluginCompiler for CliPluginCompiler {
+impl gents_pack::pack::authoring::PluginCompiler for CliPluginCompiler {
     fn builder_id(&self) -> &str {
         BUILDER_ID
     }
@@ -37,29 +37,29 @@ pub(crate) fn dispatch(args: PackBuildArgs) -> Result<()> {
 }
 
 pub(crate) fn build_all(root: &Path) -> Result<Vec<BuildReport>> {
-    gents::pack::authoring::build_all(root, &CliPluginCompiler, |_| Ok(None))
+    gents_pack::pack::authoring::build_all(root, &CliPluginCompiler, |_| Ok(None))
 }
 
 pub(crate) fn build_pack(dir: &Path, out: Option<&Path>) -> Result<BuildReport> {
-    gents::pack::authoring::build_pack(dir, &CliPluginCompiler, out)
+    gents_pack::pack::authoring::build_pack(dir, &CliPluginCompiler, out)
 }
 
 pub(crate) fn build_plugin(
     dir: &Path,
-    manifest: &gents::pack::PackManifest,
-    plugin: &gents::pack::PackPlugin,
+    manifest: &gents_pack::pack::PackManifest,
+    plugin: &gents_pack::pack::PackPlugin,
 ) -> Result<()> {
-    gents::pack::authoring::build_plugin(dir, manifest, plugin, &CliPluginCompiler)
+    gents_pack::pack::authoring::build_plugin(dir, manifest, plugin, &CliPluginCompiler)
 }
 
 pub(crate) fn plugin_entry(language: &str) -> Option<&'static str> {
-    gents::pack::authoring::plugin_entry(language)
+    gents_pack::pack::authoring::plugin_entry(language)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::pack::archive::PackArchive;
+    use gents_pack::pack::archive::PackArchive;
 
     fn write_plain_pack(root: &Path, name: &str) {
         std::fs::create_dir_all(root).unwrap();

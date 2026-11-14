@@ -8,9 +8,9 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
-use gents::plugin::authority::{declared_manifold, describe_manifold};
-use gents::plugin::executor::call_runner;
-use gents::plugin::{BoundDir, PluginBudget, PluginRunner, PluginVerdict};
+use gents_pack::plugin::authority::{declared_manifold, describe_manifold};
+use gents_pack::plugin::{BoundDir, PluginBudget, PluginRunner, PluginVerdict};
+use gents_toolcalls::plugin::executor::call_runner;
 
 use super::manifest::ScenarioManifest;
 
@@ -54,7 +54,7 @@ pub(super) fn validate_prepare_steps(manifest: &ScenarioManifest) -> Result<()> 
             ),
         }
         for (field, pointer) in &step.seed_fields {
-            gents::store::graphql::validate_graphql_name(field).with_context(|| {
+            gents_store::graphql::validate_graphql_name(field).with_context(|| {
                 format!(
                     "prepare step for plugin {} seed field {field:?}",
                     step.plugin
@@ -111,7 +111,7 @@ pub(super) fn prepare_seed_fields(
 
 pub(super) async fn run_prepare_steps(
     pack: PathBuf,
-    distribution: gents::pack::PackManifest,
+    distribution: gents_pack::pack::PackManifest,
     steps: Vec<ScenarioPrepareStep>,
     tool_root: Option<PathBuf>,
     grant_authority: bool,
@@ -177,7 +177,7 @@ pub(super) async fn run_prepare_steps(
 
 fn admit_prepare_step(
     pack: &Path,
-    distribution: &gents::pack::PackManifest,
+    distribution: &gents_pack::pack::PackManifest,
     step: &ScenarioPrepareStep,
     tool_root: Option<&Path>,
     grant_authority: bool,
@@ -238,7 +238,7 @@ mod tests {
     #[tokio::test]
     async fn a_prepare_step_binds_only_the_operator_directory() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
-        let distribution: gents::pack::PackManifest =
+        let distribution: gents_pack::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
                 .unwrap();
 
@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn a_missing_prepare_plugin_artifact_is_built_from_source_on_demand() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
-        let distribution: gents::pack::PackManifest =
+        let distribution: gents_pack::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
                 .unwrap();
         let artifact_path = fixture.path().join("plugins/list_files.afb");
@@ -338,7 +338,7 @@ mod tests {
     #[tokio::test]
     async fn a_prepare_step_runs_from_an_asset_only_pack_copy() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
-        let distribution: gents::pack::PackManifest =
+        let distribution: gents_pack::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
                 .unwrap();
 
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn a_missing_artifact_with_no_source_is_refused() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
-        let mut distribution: gents::pack::PackManifest =
+        let mut distribution: gents_pack::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
                 .unwrap();
         distribution.metadata.plugins[0].source = None;
@@ -411,7 +411,7 @@ mod tests {
     async fn a_prepare_step_fetches_through_the_host_from_a_granted_host() {
         let port = crate::commands::plugin::testing::hello_server().await;
         let dir = crate::commands::plugin::testing::http_plugin_pack(port);
-        let distribution: gents::pack::PackManifest =
+        let distribution: gents_pack::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(dir.path().join("manifest.json")).unwrap())
                 .unwrap();
         let step = ScenarioPrepareStep {
@@ -429,7 +429,7 @@ mod tests {
     #[tokio::test]
     async fn a_prepare_plugin_declaring_authority_requires_grant_authority() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
-        let mut distribution: gents::pack::PackManifest =
+        let mut distribution: gents_pack::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
                 .unwrap();
         distribution.metadata.plugins[0].manifold = Some(json!({

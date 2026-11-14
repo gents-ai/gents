@@ -4,10 +4,10 @@ import type {
   DesktopClientSnapshot,
   ManagedServerResetResult,
 } from "@source-inc/gents-desktop-client";
+import type { SavedPeerView } from "@source-inc/gents-desktop-client/generated/SavedPeerView";
 
 import type { DesktopStartupPhase } from "../lib/loadingStatus";
 import { createSelectors, type WithSelectors } from "./createSelectors";
-import type { ManagedServerStartupError } from "../lib/managedServerStartup";
 
 export type ClientState = {
   snapshot: DesktopClientSnapshot | null;
@@ -15,7 +15,9 @@ export type ClientState = {
   startupPhase: DesktopStartupPhase;
   starting: boolean;
   stopping: boolean;
-  managedServerFailure: ManagedServerStartupError | null;
+  repairNotes: string[];
+  repairPeers: SavedPeerView[];
+  localNodeLost: boolean;
   startupDiagnosticsHint: string | null;
   home: {
     report: ManagedServerResetResult | null;
@@ -43,7 +45,9 @@ export function createClientStore(
       startupPhase,
       starting: false,
       stopping: false,
-      managedServerFailure: null,
+      repairNotes: [],
+      repairPeers: [],
+      localNodeLost: false,
       startupDiagnosticsHint: null,
       home: { report: null, busy: false, generation: 0, fullReset: false },
     })),

@@ -3,66 +3,129 @@ use super::*;
 const GROUPED_PROFILE: gents_loop::provider_input::ProviderInputProfile =
     gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions;
 
-pub(super) fn generated_compaction_reducer_cases_pin_contract() {
-    let cases = lean_compaction_reducer_cases();
-    assert_eq!(cases.len(), 20);
-
-    let expected_names = [
-        "identity_reducer_is_no_op",
-        "identity_preserves_pair_atomicity",
-        "identity_preserves_message_order",
-        "strip_preserves_pair_atomicity",
-        "strip_preserves_message_order",
-        "strip_is_strictly_idempotent",
-        "reduction_blocked_when_header_loading",
-        "reduction_allowed_for_stable_published_prefix",
-        "no_orphaned_tool_results_after_strip",
-        "reapply_preserves_view_coherent",
-        "summarize_retains_straddling_turn",
-        "summarize_drops_whole_turns",
-        "summarize_oversized_complete_turn",
-        "summarize_blocked_when_header_loading",
-        "summarize_cannot_split_a_leading_turn",
-        "provider_view_is_idempotent",
-        "provider_view_drops_orphaned_result",
-        "closed_turn_allows_projection_after_unresolved_history",
-        "open_raw_tail_blocks_projected_prefix",
-        "unpublished_closed_turn_blocks_projected_prefix",
-    ]
-    .into_iter()
-    .collect::<BTreeSet<_>>();
-    assert_eq!(
-        cases
-            .iter()
-            .map(|case| case.name.as_str())
-            .collect::<BTreeSet<_>>(),
-        expected_names
-    );
-
-    for case in cases {
-        drive_compaction_reducer_case(case);
+pub(super) fn compaction_reducers_follow_the_lean_model() {
+    for case in gents_lean_vocab::families::contracts_compaction_reducer_gate::cases::<String>() {
+        let label = format!("{:?}", case.input);
+        let input = compaction_messages_for_rows(&case.input.input_rows);
+        let structurally_safe = gents_inference::compaction::safe_to_reduce(&input);
+        let native_order = with_leading_reasoning(&input);
+        assert_eq!(
+            gents_inference::compaction::history::normalize_assistant_content_order(
+                GROUPED_PROFILE,
+                native_order.clone()
+            ) == native_order,
+            native_order.iter().all(|message| !matches!(
+                message,
+                Message::Assistant { content, .. }
+                    if content.iter().any(|item| matches!(item, AssistantContent::Text(_)))
+            )),
+            "{label}: native-order fixture differs from its provider order exactly when it has assistant text"
+        );
+        assert_eq!(
+            gents_inference::compaction::safe_to_reduce(&native_order),
+            structurally_safe,
+            "{label}: gate on native-order rows"
+        );
+        if pair_closed(&input) {
+            for budget in 0usize.. {
+                let (old, recent) = gents_inference::compaction::split_for_summary(
+                    input.clone(),
+                    budget,
+                    gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible,
+                    gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
+                    "conformance-model",
+                )
+                .expect("provider-shaped split");
+                assert!(
+                    pair_closed(&recent),
+                    "{label}: split_for_summary orphaned a tool result at budget {budget}"
+                );
+                if old.is_empty() {
+                    break;
+                }
+            }
+        }
+        let turn_boundary = gents_inference::compaction::session_prefix_is_stable(&input);
+        let provider_fixpoint =
+            gents_inference::compaction::sanitize_association_with_sources(input.clone())
+                .into_iter()
+                .map(|sourced| sourced.message)
+                .eq(input.iter().cloned());
+        assert_eq!(
+            structurally_safe,
+            turn_boundary && provider_fixpoint,
+            "{label}: safe_to_reduce is the turn-boundary and sanitizer-fixpoint gate, \
+             published or not"
+        );
+        case.check(
+            gents_lean_vocab::families::contracts_compaction_reducer_gate::CompactionReducerGateOutput {
+                projected_prefix_ready: turn_boundary && case.input.publication_ready,
+                pre_message_count: input.len() as u64,
+                turn_boundary,
+                provider_fixpoint,
+                safe_to_reduce: structurally_safe && case.input.publication_ready,
+                safe_boundary: gents_inference::compaction::pair_safe_boundary(
+                    &input,
+                    usize::try_from(case.input.split_index).unwrap(),
+                ) as u64,
+            },
+        );
     }
-    generated_compaction_cursor_cases_pin_contract();
+    for case in
+        gents_lean_vocab::families::contracts_compaction_reducer_gate_open::cases::<String>()
+    {
+        let input = compaction_messages_for_rows(&gents_lean_vocab::family::recode::<
+            _,
+            Vec<gents_lean_vocab::families::contracts_compaction_reducer_gate::CompactionRowWire>,
+        >(&case.input.input_rows));
+        case.check(match case.input.reducer.as_str() {
+            "summarize" => Some(
+                gents_inference::compaction::pair_safe_boundary(
+                    &input,
+                    usize::try_from(case.input.split_index).unwrap(),
+                ) > 0,
+            ),
+            "strip" | "provider_view" => None,
+            other => panic!("no production compaction reducer {other:?}"),
+        });
+    }
+    for case in gents_lean_vocab::families::contracts_compaction_reducer_apply::cases::<String>() {
+        let label = format!("{:?}", case.input);
+        let input = compaction_messages_for_rows(&gents_lean_vocab::family::recode::<
+            _,
+            Vec<gents_lean_vocab::families::contracts_compaction_reducer_gate::CompactionRowWire>,
+        >(&case.input.input_rows));
+        let reduced = apply_compaction_reducer(&case.input.reducer, input.clone());
+        let reapplied = apply_compaction_reducer(&case.input.reducer, reduced.clone());
+        if case.input.name == "reapply_preserves_view_coherent" {
+            assert!(
+                pair_closed(&reapplied),
+                "{label}: reapply preserves pair closure"
+            );
+            assert_eq!(
+                abstract_prompt_view(&reduced),
+                abstract_prompt_view(&reapplied),
+                "{label}: reapply preserves ordering projection"
+            );
+        }
+        case.check(
+            gents_lean_vocab::families::contracts_compaction_reducer_apply::CompactionReducerApplyOutput {
+                post_message_count: reduced.len() as u64,
+                retained_count: reduced.len() as u64,
+                preserves_pairs: preserves_pair_closure(&input, &reduced),
+                preserves_order: is_subsequence(
+                    &abstract_prompt_view(&reduced),
+                    &abstract_prompt_view(&input),
+                ),
+                reducer_is_identity: reduced == input,
+                reducer_is_idempotent: reapplied == reduced,
+            },
+        );
+    }
+    compaction_cursor_follows_the_lean_model();
 }
 
-fn generated_compaction_cursor_cases_pin_contract() {
-    let cases = lean_compaction_cursor_cases();
-    assert_eq!(cases.len(), 3);
-    let expected_names = [
-        "cursor_skips_orphan_and_compacted_turn",
-        "cursor_rejects_split_inside_tool_pair",
-        "cursor_accepts_complete_tool_pair",
-    ]
-    .into_iter()
-    .collect::<BTreeSet<_>>();
-    assert_eq!(
-        cases
-            .iter()
-            .map(|case| case.name.as_str())
-            .collect::<BTreeSet<_>>(),
-        expected_names
-    );
-
+fn compaction_cursor_follows_the_lean_model() {
     let rows = vec![
         (10, compaction_tool_result_message("orphan", "discard me")),
         (20, compaction_text_message("user", "compacted")),
@@ -70,211 +133,55 @@ fn generated_compaction_cursor_cases_pin_contract() {
         (50, compaction_tool_result_message("call-1", "result")),
         (90, compaction_text_message("assistant", "active")),
     ];
-    for case in cases {
-        let expected_sequence = case.expected_cursor.map(|split| rows[split - 1].0);
-        let actual = gents::inference::compaction::compacted_through_sequence(
+    for case in gents_lean_vocab::families::contracts_compaction_cursor::cases() {
+        let compacted = usize::try_from(case.input.compacted).unwrap();
+        let actual = gents_inference::compaction::compacted_through_sequence(
             GROUPED_PROFILE,
             &rows,
-            case.compacted,
+            compacted,
         );
-        assert_eq!(actual, expected_sequence, "{}: canonical cursor", case.name);
-
         if let Some(cursor) = actual {
-            let (full, _) = gents::inference::compaction::provider_view(
+            let (full, _) = gents_inference::compaction::provider_view(
                 GROUPED_PROFILE,
                 rows.iter().map(|(_, message)| message.clone()).collect(),
             );
-            let (filtered, _) = gents::inference::compaction::provider_view(
+            let (filtered, _) = gents_inference::compaction::provider_view(
                 GROUPED_PROFILE,
                 rows.iter()
                     .filter(|(sequence, _)| *sequence > cursor)
                     .map(|(_, message)| message.clone())
                     .collect(),
             );
-            let (prefix, _) = gents::inference::compaction::provider_view(
+            let (prefix, _) = gents_inference::compaction::provider_view(
                 GROUPED_PROFILE,
                 rows.iter()
                     .filter(|(sequence, _)| *sequence <= cursor)
                     .map(|(_, message)| message.clone())
                     .collect(),
             );
-            assert_eq!(prefix.len(), case.compacted, "{}: cursor prefix", case.name);
+            assert_eq!(prefix.len(), compacted, "{:?}: cursor prefix", case.input);
             assert_eq!(
                 prefix.len() + filtered.len(),
                 full.len(),
-                "{}: cursor partitions the canonical view",
-                case.name
+                "{:?}: cursor partitions the canonical view",
+                case.input
             );
         }
+        case.check(actual.map(|sequence| {
+            rows.iter()
+                .position(|(row, _)| *row == sequence)
+                .expect("the cursor names a fixture row") as u64
+                + 1
+        }));
     }
 }
 
-fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCase) {
-    assert!(case.legal, "compaction case {} should be legal", case.name);
-
-    let input = compaction_messages_for_case(case);
-    assert_eq!(
-        gents::inference::compaction::session_prefix_is_stable(&input) && case.publication_ready,
-        case.projected_prefix_ready,
-        "{}: session compaction uses the modeled published provider-prefix boundary",
-        case.name,
-    );
-    assert_eq!(
-        input.len(),
-        case.pre_message_count,
-        "{}: pre_message_count",
-        case.name
-    );
-
-    if case.reducer == "summarize" {
-        check_summarize_gate_and_split(case, input);
-        return;
+fn apply_compaction_reducer(reducer: &str, input: Vec<Message>) -> Vec<Message> {
+    match reducer {
+        "strip" => gents_inference::compaction::strip_tool_results(input).0,
+        "provider_view" => gents_inference::compaction::provider_view(GROUPED_PROFILE, input).0,
+        other => panic!("unsupported compaction reducer {other:?}"),
     }
-
-    let reduced = apply_compaction_reducer(case, input.clone());
-    assert_eq!(
-        reduced.len(),
-        case.post_message_count,
-        "{}: post_message_count",
-        case.name
-    );
-    assert_eq!(
-        reduced.len(),
-        case.retained_count,
-        "{}: retained_count",
-        case.name
-    );
-    assert_eq!(
-        preserves_pair_closure(&input, &reduced),
-        case.preserves_pairs,
-        "{}: preserves_pairs",
-        case.name
-    );
-    assert_eq!(
-        is_subsequence(
-            &abstract_prompt_view(&reduced),
-            &abstract_prompt_view(&input)
-        ),
-        case.preserves_order,
-        "{}: preserves_order",
-        case.name
-    );
-
-    assert_eq!(
-        reduced == input,
-        case.reducer_is_identity,
-        "{}: identity must compare full runtime payloads",
-        case.name
-    );
-    let reapplied = apply_compaction_reducer(case, reduced.clone());
-    assert_eq!(
-        reapplied == reduced,
-        case.reducer_is_idempotent,
-        "{}: reapplication must compare full runtime payloads",
-        case.name
-    );
-
-    if case.name == "reapply_preserves_view_coherent" {
-        let reapplied = apply_compaction_reducer(case, reduced.clone());
-        assert!(
-            pair_closed(&reapplied),
-            "{}: reapply preserves pair closure",
-            case.name
-        );
-        assert_eq!(
-            abstract_prompt_view(&reduced),
-            abstract_prompt_view(&reapplied),
-            "{}: reapply preserves ordering projection",
-            case.name
-        );
-    }
-}
-
-fn apply_compaction_reducer(
-    case: &lean_vocab_test::LeanCompactionReducerCase,
-    input: Vec<Message>,
-) -> Vec<Message> {
-    match case.reducer.as_str() {
-        "identity" => input,
-        "strip" => gents::inference::compaction::strip_tool_results(input).0,
-        "provider_view" => gents::inference::compaction::provider_view(GROUPED_PROFILE, input).0,
-        other => panic!("unsupported compaction reducer {other:?} for {}", case.name),
-    }
-}
-
-fn check_summarize_gate_and_split(
-    case: &lean_vocab_test::LeanCompactionReducerCase,
-    input: Vec<Message>,
-) {
-    let production_gate_open = gents::inference::compaction::safe_to_reduce(&input);
-    assert_eq!(
-        production_gate_open,
-        case.turn_boundary && case.provider_fixpoint,
-        "{}: production safe_to_reduce must agree with the modelled \
-         turn-boundary and sanitizer-fixpoint gate components",
-        case.name
-    );
-    let native_order = with_leading_reasoning(&input);
-    assert_eq!(
-        gents::inference::compaction::history::normalize_assistant_content_order(
-            GROUPED_PROFILE,
-            native_order.clone()
-        ) == native_order,
-        native_order.iter().all(|message| !matches!(
-            message,
-            Message::Assistant { content, .. }
-                if content.iter().any(|item| matches!(item, AssistantContent::Text(_)))
-        )),
-        "{}: native-order fixture differs from its provider order exactly when it has assistant text",
-        case.name
-    );
-    assert_eq!(
-        gents::inference::compaction::safe_to_reduce(&native_order),
-        case.turn_boundary && case.provider_fixpoint,
-        "{}: gate on native-order rows",
-        case.name
-    );
-    assert_eq!(
-        production_gate_open && case.publication_ready,
-        case.safe_to_reduce,
-        "{}: structural checks plus modeled publication readiness",
-        case.name
-    );
-
-    let boundary = gents::inference::compaction::pair_safe_boundary(&input, case.split_index);
-    assert_eq!(
-        boundary, case.safe_boundary,
-        "{}: production pair_safe_boundary must match Compaction.pairSafeBoundary",
-        case.name
-    );
-    if pair_closed(&input) {
-        for budget in 0usize.. {
-            let (old, recent) = gents::inference::compaction::split_for_summary(
-                input.clone(),
-                budget,
-                gents::BackendProviderKind::OpenAiCompatible,
-                gents::OpenAiWireApi::ChatCompletions,
-                "conformance-model",
-            )
-            .expect("provider-shaped split");
-            assert!(
-                pair_closed(&recent),
-                "{}: split_for_summary orphaned a tool result at budget {budget}",
-                case.name
-            );
-            if old.is_empty() {
-                break;
-            }
-        }
-    }
-
-    assert_eq!(
-        case.gate_open
-            .expect("summarize cases carry a modelled gate"),
-        boundary > 0,
-        "{}: the modelled reducer gate must agree with the production boundary",
-        case.name
-    );
 }
 
 fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
@@ -284,19 +191,19 @@ fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
         .all(|item| cursor.any(|candidate| candidate == item))
 }
 
-fn compaction_messages_for_case(case: &lean_vocab_test::LeanCompactionReducerCase) -> Vec<Message> {
-    case.input_rows
-        .iter()
-        .map(|row| match row {
-            lean_vocab_test::LeanCompactionInputRow::Ordinary { role, text } => {
-                compaction_text_message(role, text)
-            }
-            lean_vocab_test::LeanCompactionInputRow::AssistantToolCalls { role, call_ids } => {
-                assert_eq!(role, "assistant");
+fn compaction_messages_for_rows(
+    rows: &[gents_lean_vocab::families::contracts_compaction_reducer_gate::CompactionRowWire],
+) -> Vec<Message> {
+    rows.iter()
+        .map(|row| match row.kind.as_str() {
+            "ordinary" => compaction_text_message(&row.role, row.text.as_deref().unwrap()),
+            "assistant_tool_calls" => {
+                assert_eq!(row.role, "assistant");
                 Message::Assistant {
                     request_id: None,
                     id: None,
-                    content: call_ids
+                    content: row
+                        .call_ids
                         .iter()
                         .flat_map(|call_id| match compaction_tool_call_message(call_id) {
                             Message::Assistant { content, .. } => content,
@@ -305,38 +212,16 @@ fn compaction_messages_for_case(case: &lean_vocab_test::LeanCompactionReducerCas
                         .collect(),
                 }
             }
-            lean_vocab_test::LeanCompactionInputRow::ToolResult { role, call_id } => {
-                assert_eq!(role, "user");
-                compaction_tool_result_message(call_id, "large tool payload")
+            "tool_result" => {
+                assert_eq!(row.role, "user");
+                compaction_tool_result_message(
+                    row.call_id.as_deref().unwrap(),
+                    "large tool payload",
+                )
             }
+            other => panic!("unsupported compaction row kind {other:?}"),
         })
         .collect()
-}
-
-pub(super) fn compaction_messages_for_count(count: usize) -> Vec<Message> {
-    match count {
-        0 => Vec::new(),
-        1 => vec![compaction_tool_result_message(
-            "call-1",
-            "large terminal payload",
-        )],
-        2 => vec![
-            compaction_tool_call_message("call-1"),
-            compaction_tool_result_message("call-1", "large tool payload"),
-        ],
-        3 => vec![
-            compaction_text_message("user", "first"),
-            compaction_tool_call_message("call-1"),
-            compaction_tool_result_message("call-1", "large tool payload"),
-        ],
-        4 => vec![
-            compaction_text_message("user", "first"),
-            compaction_tool_call_message("call-1"),
-            compaction_tool_result_message("call-1", "large tool payload"),
-            compaction_text_message("assistant", "reply"),
-        ],
-        other => panic!("unsupported compaction message_count {other}"),
-    }
 }
 
 fn with_leading_reasoning(messages: &[Message]) -> Vec<Message> {
@@ -352,7 +237,7 @@ fn with_leading_reasoning(messages: &[Message]) -> Vec<Message> {
             {
                 content.insert(
                     0,
-                    AssistantContent::Reasoning(gents::inference::llm::message::Reasoning::new(
+                    AssistantContent::Reasoning(gents_inference::llm::message::Reasoning::new(
                         "thinking",
                     )),
                 );

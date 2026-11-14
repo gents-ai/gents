@@ -1,0 +1,1011 @@
+pub mod client;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use client::stage_request_relationships_in_txn;
+pub use client::{
+    bind_client_targets_in_txn, complete_client_request_relationships,
+    ensure_request_session_in_txn, stage_admitted_request_in_txn, stage_client_request_in_txn,
+    stage_runtime_request_in_txn, StageOptions,
+};
+pub use client::{
+    build_signed_client_request, build_signed_client_request_in_txn, client_request_key,
+    held_client_request, reconcile_client_request, reconcile_client_retry, reserve_goal_session,
+    send_client_request, send_client_retry, submit_client_request, ClientRequestScope,
+    ClientSubmissionError, HeldClientRequest,
+};
+pub(crate) use client::{
+    recover_delegated_client_request_relationships_with_access, stage_pending_child_request_in_txn,
+};
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use defra_node::Node as EmbeddedNode;
+use gents_protocol::background_completion::is_background_completion_notification_message_key;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
+use crate::session;
+use gents_protocol::row::AgentRequest;
+use gents_store::graphql::{escape_graphql_string, response_has_documents};
+
+pub mod backend_wait;
+pub(crate) use backend_wait::{fresh_healthy, repark_expired_resume};
+mod background_wake_recovery;
+pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
+pub mod arrival_order;
+pub mod claim;
+pub(crate) use claim::supersede_pending_in_txn;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use claim::{claim_gate_in_txn, ClaimGate};
+pub mod execution_lease;
+mod execution_renewal;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use execution_renewal::renew_in_transaction;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use execution_renewal::renew_once_at_with_access as renew_execution_lease_once_at_with_access;
+#[cfg(test)]
+pub(crate) use execution_renewal::renew_with_recheck_at;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use execution_renewal::RenewalAttemptOutcome;
+mod terminal_binding;
+pub use terminal_binding::is_exact_invocation_reply;
+pub mod terminal_tools;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use execution_lease::revoke_execution_preserving_output_at_with_access;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use execution_lease::terminalize_owned_at_with_access;
+pub use execution_lease::{
+    stage_revoke_execution_preserving_output, stage_supersede_parked_execution,
+    terminalize_parked_request, ExecutionOwnershipLost, RequestExecutionLease,
+};
+pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
+pub(crate) use gents_loop::execution_policy;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use terminal_tools::ToolAccountingRejection;
+pub mod manual;
+pub mod materialize;
+mod session_message_presentation;
+pub use session_message_presentation::session_message_display_body;
+pub(crate) use session_message_presentation::session_message_display_body_with_content;
+pub mod query;
+pub mod queue;
+mod recovery;
+pub mod requested_create;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use recovery::{
+    recover_expired_generation_with_access_for_test, RecoveryResult, RecoverySelectionChoice,
+    RecoverySelectionRejected,
+};
+mod task_title;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod test_support;
+mod transition;
+
+pub use manual::{
+    write_manual_agent_request, write_manual_agent_request_with_conversation_title,
+    ManualRequestTarget,
+};
+pub use materialize::build_session_message_request;
+pub(crate) use materialize::write_pending_agent_request_with_lineage_workspace_and_conversation_title;
+pub use materialize::{
+    build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
+    build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
+};
+pub use queue::enqueue_local_steering_request;
+pub use queue::validate_position as validate_queue_position;
+pub use queue::{
+    pending_steer_edit, publish_edit_command, submit_pending_user_edit, submit_pending_user_steer,
+    PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
+};
+pub use queue::{
+    pending_user_queue, pending_user_queue_projection, PendingQueueEntry, PendingQueueProjection,
+    PendingQueueSnapshot,
+};
+pub use queue::{
+    prepare_pending_user_edit, prepare_user_message_input, queue_user_message_input,
+    UserMessageInputError,
+};
+pub use queue::{FOLDED_REASON, REMOVED_REASON, REPLACED_REASON};
+pub use task_title::task_goal_session_title;
+pub use task_title::task_session_title;
+
+/// Fresh normal requests start with this signed `AgentRequest.max_retries`;
+/// retry descendants retain their parent's budget. Provider transport retries
+/// are separately controlled by `InferenceRetryPolicy`.
+pub const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
+
+/// The claim path and the watcher's pre-claim scans must both fail closed on
+/// `Malformed` — a request whose TTL cannot be interpreted must not be silently
+/// claimed as if `valid_until` were unset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TtlOutcome {
+    NotSet,
+    Live(chrono::DateTime<chrono::Utc>),
+    Expired(chrono::DateTime<chrono::Utc>),
+    Malformed(chrono::ParseError),
+}
+
+pub(crate) fn parse_valid_until(
+    value: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> TtlOutcome {
+    let Some(value) = value else {
+        return TtlOutcome::NotSet;
+    };
+    match chrono::DateTime::parse_from_rfc3339(value) {
+        Ok(parsed) => {
+            let parsed = parsed.with_timezone(&chrono::Utc);
+            if now > parsed {
+                TtlOutcome::Expired(parsed)
+            } else {
+                TtlOutcome::Live(parsed)
+            }
+        }
+        Err(error) => TtlOutcome::Malformed(error),
+    }
+}
+
+pub fn is_background_completion_request(
+    input: &gents_protocol::request_input::RequestInput,
+) -> bool {
+    queue::is_automated_wakeup(input)
+}
+
+pub fn notification_receipt_keys(encoded: &str) -> Result<Vec<String>> {
+    let keys: Vec<String> =
+        serde_json::from_str(encoded).context("invalid wake notification receipt")?;
+    anyhow::ensure!(
+        keys.iter()
+            .all(|key| is_background_completion_notification_message_key(key)),
+        "wake receipt names a non-notification message"
+    );
+    anyhow::ensure!(
+        keys.iter().collect::<std::collections::BTreeSet<_>>().len() == keys.len(),
+        "wake receipt contains duplicate notification keys"
+    );
+    Ok(keys)
+}
+
+pub fn request_content_owns_user_projection(
+    input: &gents_protocol::request_input::RequestInput,
+) -> bool {
+    input.queue.as_ref().is_none_or(|hints| {
+        matches!(
+            hints.source,
+            queue::QueueSource::User | queue::QueueSource::Steering
+        )
+    })
+}
+
+pub fn folded_into(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
+    (row.lifecycle_state
+        == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Superseded)
+        && row.failure_reason.as_deref() == Some(queue::FOLDED_REASON))
+    .then_some(row.superseded_by_request.as_deref())
+    .flatten()
+    .filter(|head| !head.trim().is_empty())
+}
+
+pub fn replaced_by(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
+    (row.lifecycle_state
+        == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Superseded)
+        && row.failure_reason.as_deref() == Some(queue::REPLACED_REASON))
+    .then_some(row.superseded_by_request.as_deref())
+    .flatten()
+    .filter(|replacement| !replacement.trim().is_empty())
+}
+
+pub fn removed_by_author(row: &gents_protocol::row::AgentRequestRow) -> bool {
+    row.lifecycle_state
+        == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Interrupted)
+        && row.failure_reason.as_deref() == Some(queue::REMOVED_REASON)
+}
+
+pub fn retired_by_author(row: &gents_protocol::row::AgentRequestRow) -> bool {
+    replaced_by(row).is_some() || removed_by_author(row)
+}
+
+pub fn folded_message_key(claimed_request_doc_id: &str, folded_request_doc_id: &str) -> String {
+    gents_protocol::output::rows::authored_message_key(
+        claimed_request_doc_id,
+        &queue::folded_input_key(folded_request_doc_id),
+    )
+}
+
+pub fn input_message_owner(row: &gents_protocol::row::AgentRequestRow) -> Option<(String, String)> {
+    let doc = row
+        .doc_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|doc| !doc.is_empty())?;
+    if folded_into(row).is_some() {
+        let owner = row
+            .superseded_by_request_doc_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|owner| !owner.is_empty())?;
+        return Some((owner.to_owned(), folded_message_key(owner, doc)));
+    }
+    Some((
+        doc.to_owned(),
+        gents_protocol::output::rows::authored_message_key(doc, "prompt"),
+    ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestOrigin<'a> {
+    Person,
+    SessionMessage {
+        parent_request_doc_id: Option<&'a str>,
+    },
+    Trigger {
+        trigger_id: &'a str,
+        trigger_kind: Option<&'a str>,
+    },
+    GoalContinuation {
+        goal_id: Option<&'a str>,
+        sequence: Option<i64>,
+        wrapup: Option<bool>,
+    },
+    BackgroundCompletion,
+}
+
+pub fn request_origin(row: &gents_protocol::row::AgentRequestRow) -> RequestOrigin<'_> {
+    fn present(value: &Option<String>) -> Option<&str> {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+    let input = row.input.as_ref();
+    let source = input
+        .and_then(|input| input.queue.as_ref())
+        .map(|queue| queue.source);
+    let continuation = input.and_then(|input| input.goal_continuation.as_ref());
+    if continuation.is_some() || source == Some(queue::QueueSource::Goal) {
+        return RequestOrigin::GoalContinuation {
+            goal_id: present(&row.caused_by_trigger_id),
+            sequence: continuation.map(|continuation| continuation.sequence),
+            wrapup: continuation.map(|continuation| continuation.wrapup),
+        };
+    }
+    if source == Some(queue::QueueSource::BackgroundCompletion) {
+        return RequestOrigin::BackgroundCompletion;
+    }
+    if present(&row.caused_by_parent_tool_call_doc_id).is_some() {
+        return RequestOrigin::SessionMessage {
+            parent_request_doc_id: present(&row.caused_by_parent_request_doc_id),
+        };
+    }
+    if let Some(trigger_id) = present(&row.caused_by_trigger_id) {
+        return RequestOrigin::Trigger {
+            trigger_id,
+            trigger_kind: present(&row.caused_by_trigger_kind),
+        };
+    }
+    RequestOrigin::Person
+}
+
+#[cfg(test)]
+pub(crate) fn request_owns_user_turn(input: &gents_protocol::request_input::RequestInput) -> bool {
+    input.queue.as_ref().is_none_or(|hints| {
+        matches!(
+            hints.source,
+            queue::QueueSource::User | queue::QueueSource::Steering
+        )
+    })
+}
+
+pub fn is_runtime_control_message(
+    input: &gents_protocol::request_input::RequestInput,
+    message_key: &str,
+) -> bool {
+    if gents_protocol::background_completion::is_background_completion_notification_message_key(
+        message_key,
+    ) {
+        return true;
+    }
+    input
+        .queue
+        .as_ref()
+        .is_some_and(|hints| match hints.source {
+            queue::QueueSource::BackgroundCompletion | queue::QueueSource::Goal => true,
+            queue::QueueSource::Steering | queue::QueueSource::User => false,
+        })
+}
+
+pub fn extract_single_doc_id(response: &defra_node::QueryResponse, key: &str) -> Option<String> {
+    // DefraDB's GraphQL surface accepts `create_<Collection>` while the
+    // response data may expose the normalized `add_<Collection>` field.
+    let normalized_add_key = key
+        .strip_prefix("create_")
+        .map(|collection| format!("add_{collection}"));
+    response
+        .data
+        .as_ref()
+        .and_then(|data| {
+            data.get(key).or_else(|| {
+                normalized_add_key
+                    .as_deref()
+                    .and_then(|normalized| data.get(normalized))
+            })
+        })
+        .and_then(|value| {
+            value
+                .get("_docID")
+                .and_then(|doc_id| doc_id.as_str())
+                .or_else(|| {
+                    value
+                        .as_array()
+                        .and_then(|rows| rows.first())
+                        .and_then(|row| row.get("_docID"))
+                        .and_then(|doc_id| doc_id.as_str())
+                })
+                .map(ToOwned::to_owned)
+        })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalLifecycleState {
+    Pending,
+    Claimed,
+    Streaming,
+    Parked,
+    Completed,
+    Failed,
+    Interrupted,
+    Dead,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimOutcome {
+    Claimed,
+    Queued,
+    Interrupted,
+    Expired,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ClaimAdmissionError {
+    #[error("request authorization denied")]
+    AuthorizationDenied,
+    #[error("mailbox reply {item_id} rejected: {reason}")]
+    MailboxReplyRejected { item_id: String, reason: String },
+    #[error("session {session_id} requester scope mismatch: {reason}")]
+    SessionScopeMismatch { session_id: String, reason: String },
+    #[error(
+        "session {session_id} is pinned to agent {existing_agent_did} and cannot switch to {requested_agent_did}"
+    )]
+    SessionAgentMismatch {
+        session_id: String,
+        existing_agent_did: String,
+        requested_agent_did: String,
+    },
+}
+
+pub fn is_claim_admission_error(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<ClaimAdmissionError>().is_some()
+}
+
+pub use gents_loop::execution_origin::ExecutionOrigin;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TriggerLineage {
+    pub trigger_id: Option<String>,
+    pub trigger_kind: Option<String>,
+    pub source_doc_id: Option<String>,
+    pub correlation: Option<String>,
+    pub trigger_context: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct WorkspaceLineage {
+    pub workspace_id: Option<String>,
+    pub workspace_owner_node_did: Option<String>,
+    pub workspace_authority: Option<String>,
+    pub workspace_seal_hash: Option<String>,
+}
+
+pub fn snapshot_workspace_lineage_source_fields(
+    source_doc: &serde_json::Value,
+    source_fields: &mut std::collections::BTreeMap<String, String>,
+    trigger_authority: Option<&str>,
+) {
+    const SOURCE_KEYS: &[&str] = &[
+        "workspace_id",
+        "workspace_owner_node_did",
+        "workspace_authority",
+        "work_unit_id",
+        "workspace_seal_hash",
+        "seal_hash",
+        "caused_by_correlation",
+    ];
+    const BIND_KEYS: &[&str] = &[
+        "workspace_id",
+        "workspace_owner_node_did",
+        "workspace_authority",
+        "workspace_seal_hash",
+        "seal_hash",
+    ];
+    let trigger_authority = trigger_authority
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    for key in SOURCE_KEYS {
+        if trigger_authority.is_none() && BIND_KEYS.contains(key) {
+            continue;
+        }
+        if source_fields.contains_key(*key) {
+            continue;
+        }
+        let Some(value) = source_string_field(source_doc, key) else {
+            continue;
+        };
+        source_fields.insert((*key).to_string(), value);
+    }
+    if !source_fields.contains_key("workspace_seal_hash") {
+        if let Some(hash) = source_fields.get("seal_hash").cloned() {
+            source_fields.insert("workspace_seal_hash".to_string(), hash);
+        }
+    }
+    if let Some(authority) = trigger_authority {
+        source_fields.insert("workspace_authority".to_string(), authority.to_string());
+    }
+}
+
+fn source_string_field(source_doc: &serde_json::Value, name: &str) -> Option<String> {
+    match source_doc.get(name)? {
+        serde_json::Value::String(value) => {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        serde_json::Value::Number(value)
+            if value.as_i64().is_some() || value.as_u64().is_some() =>
+        {
+            Some(value.to_string())
+        }
+        _ => None,
+    }
+}
+
+impl WorkspaceLineage {
+    pub fn from_trigger_context(trigger_context: Option<&str>) -> Result<Self> {
+        let context = TriggerExecutionContext::parse(trigger_context)?;
+        let field = |name: &str| {
+            context
+                .source_fields
+                .get(name)
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
+        Ok(Self {
+            workspace_id: field("workspace_id"),
+            workspace_owner_node_did: field("workspace_owner_node_did"),
+            workspace_authority: field("workspace_authority"),
+            workspace_seal_hash: field("workspace_seal_hash").or_else(|| field("seal_hash")),
+        })
+    }
+
+    pub fn is_bound(&self) -> bool {
+        self.workspace_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+    }
+
+    pub fn require_authority_if_workspace_id(&self) -> Result<()> {
+        Ok(
+            gents_protocol::request_admission::validate_workspace_reference(
+                self.workspace_id.as_deref(),
+                self.workspace_owner_node_did.as_deref(),
+                self.workspace_authority.as_deref(),
+                self.workspace_seal_hash.as_deref(),
+            )?,
+        )
+    }
+
+    pub fn validate_source(&self, source: &Self, source_authenticated: bool) -> Result<()> {
+        anyhow::ensure!(
+            source_authenticated,
+            "workspace source is not authenticated"
+        );
+        self.require_authority_if_workspace_id()?;
+        source.require_authority_if_workspace_id()?;
+        anyhow::ensure!(
+            self.workspace_id == source.workspace_id
+                && self.workspace_owner_node_did == source.workspace_owner_node_did
+                && self.workspace_seal_hash == source.workspace_seal_hash,
+            "workspace reference differs from its authenticated source"
+        );
+        match (
+            self.workspace_authority.as_deref(),
+            source.workspace_authority.as_deref(),
+        ) {
+            (None, None) => Ok(()),
+            (Some(requested), Some(granted)) => {
+                let requested = gents_loop::tool_policy::WorkspaceAuthority::parse(requested)?;
+                let granted = gents_loop::tool_policy::WorkspaceAuthority::parse(granted)?;
+                anyhow::ensure!(
+                    requested.infimum(granted) == requested,
+                    "workspace authority exceeds its authenticated source"
+                );
+                Ok(())
+            }
+            _ => anyhow::bail!("workspace authority differs from its authenticated source"),
+        }
+    }
+}
+
+/// Bounds persisted event context before parsing and attaching it to a
+/// trigger request, keeping event delivery from creating unbounded requests.
+pub const MAX_TRIGGER_CONTEXT_BYTES: usize = 16 * 1024;
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct TriggerExecutionContext {
+    pub version: u8,
+    #[serde(default)]
+    pub source_fields: std::collections::BTreeMap<String, String>,
+}
+
+impl TriggerExecutionContext {
+    pub fn parse(value: Option<&str>) -> anyhow::Result<Self> {
+        let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Ok(Self::default());
+        };
+        if value.len() > MAX_TRIGGER_CONTEXT_BYTES {
+            anyhow::bail!("trigger execution context exceeds {MAX_TRIGGER_CONTEXT_BYTES} bytes");
+        }
+        let context: Self = serde_json::from_str(value)?;
+        if context.version != 1 {
+            anyhow::bail!(
+                "unsupported trigger execution context version {}",
+                context.version
+            );
+        }
+        Ok(context)
+    }
+}
+
+pub struct RequestLifecycle {
+    node: Arc<EmbeddedNode>,
+    agent_did: String,
+    agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
+    execution_origin: ExecutionOrigin,
+    backend_id: String,
+    failure_reason: Option<String>,
+    request: AgentRequest,
+    request_commit_cid: Option<String>,
+    deadline_duration_secs: u64,
+    configured_max_total_tokens: Option<u64>,
+    claimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
+    background_completion_input_through_sequence: Option<u32>,
+    pub state: LocalLifecycleState,
+    valid_until_at_claim: Option<chrono::DateTime<chrono::Utc>>,
+    execution_lease: Option<RequestExecutionLease>,
+    execution_lease_duration_secs: u64,
+    renewal_task: Option<execution_renewal::RenewalTask>,
+    client_claim_admission: Option<crate::request::admission::ClientClaimAdmission>,
+    steering_admission: Option<(
+        crate::request::admission::AgentRequestAdmissionVerifier,
+        Arc<dyn gents_store::identity::NodeIdentity>,
+    )>,
+    fold_admitted: Vec<String>,
+    folded_selection: Vec<queue::FoldedInput>,
+    natural_finish_allowed: bool,
+    resumed_from_backend: bool,
+    executed_inference: Option<gents_protocol::row::ExecutedInferenceSettings>,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl RequestLifecycle {
+    pub fn holds_execution_lease(&self) -> bool {
+        self.execution_lease.is_some()
+    }
+
+    pub fn holds_renewal_task(&self) -> bool {
+        self.renewal_task.is_some()
+    }
+
+    pub fn drop_renewal_task(&mut self) {
+        drop(self.renewal_task.take());
+    }
+}
+
+impl RequestLifecycle {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn managed_agent_signer(&self) -> Option<gents_store::identity::ManagedAgentSigner> {
+        self.agent_signer.clone()
+    }
+    pub fn bind_managed_agent(
+        &mut self,
+        identity: &dyn gents_store::identity::NodeIdentity,
+    ) -> Result<()> {
+        let signer = identity
+            .managed_agent_signer()
+            .ok_or(gents_store::config_client::ConfigClientError::ManagedAgentSignerRequired)?;
+        anyhow::ensure!(
+            self.agent_did == identity.did() && self.agent_did == signer.did(),
+            "request actor differs from managed Agent signer"
+        );
+        gents_store::config_client::ConfigAccess::local_managed_agent(
+            self.node.clone(),
+            ::identity::Did::new(&self.agent_did)?,
+            identity,
+        )?;
+        self.agent_signer = Some(signer);
+        Ok(())
+    }
+
+    pub fn access(&self) -> Result<gents_store::config_client::ConfigAccess> {
+        let actor = self.actor_did()?;
+        match &self.agent_signer {
+            Some(signer) => Ok(
+                gents_store::config_client::ConfigAccess::local_with_agent_signer(
+                    self.node.clone(),
+                    actor,
+                    signer.clone(),
+                )?,
+            ),
+            None => Ok(gents_store::config_client::ConfigAccess::local_as(
+                self.node.clone(),
+                actor,
+            )),
+        }
+    }
+    pub fn actor_did(&self) -> Result<identity::Did> {
+        identity::Did::new(self.agent_did.clone()).map_err(Into::into)
+    }
+    pub fn resumed_from_backend(&self) -> bool {
+        self.resumed_from_backend
+    }
+
+    pub fn allow_natural_finish(&mut self, allowed: bool) {
+        self.natural_finish_allowed = allowed;
+    }
+    pub fn natural_finish_allowed(&self) -> bool {
+        self.natural_finish_allowed
+    }
+    pub fn natural_finish_completed(&self) -> bool {
+        self.natural_finish_allowed && self.state == LocalLifecycleState::Completed
+    }
+
+    pub fn set_client_claim_admission(
+        &mut self,
+        admission: Option<crate::request::admission::ClientClaimAdmission>,
+    ) {
+        assert_eq!(self.state, LocalLifecycleState::Pending);
+        self.client_claim_admission = admission;
+    }
+
+    pub fn set_steering_admission(
+        &mut self,
+        verifier: crate::request::admission::AgentRequestAdmissionVerifier,
+        agent: Arc<dyn gents_store::identity::NodeIdentity>,
+    ) {
+        assert_eq!(self.state, LocalLifecycleState::Pending);
+        assert_eq!(self.agent_did, agent.did());
+        self.steering_admission = Some((verifier, agent));
+    }
+
+    pub(crate) fn steering_admission(
+        &self,
+    ) -> Option<(
+        &crate::request::admission::AgentRequestAdmissionVerifier,
+        &dyn gents_store::identity::NodeIdentity,
+    )> {
+        self.steering_admission
+            .as_ref()
+            .map(|(verifier, agent)| (verifier, agent.as_ref()))
+    }
+
+    /// Pending requests whose signed admission the caller verified for this
+    /// claim (Lean `SessionQueue.claimFolding`); empty claims only this request.
+    pub fn set_fold_admitted(&mut self, admitted: Vec<String>) {
+        assert_eq!(
+            self.state,
+            LocalLifecycleState::Pending,
+            "verify folded admissions before claim"
+        );
+        self.fold_admitted = admitted;
+    }
+
+    pub fn folded_selection(&self) -> &[queue::FoldedInput] {
+        &self.folded_selection
+    }
+
+    pub fn set_executed_inference(
+        &mut self,
+        executed: gents_protocol::row::ExecutedInferenceSettings,
+    ) {
+        assert_eq!(
+            self.state,
+            LocalLifecycleState::Pending,
+            "bind execution settings before claim"
+        );
+        self.executed_inference = Some(executed);
+    }
+
+    /// Configuration supplied by the runtime, never by request input; only
+    /// the first claim pins it.
+    pub fn set_configured_max_total_tokens(&mut self, limit: Option<u64>) {
+        assert_eq!(
+            self.state,
+            LocalLifecycleState::Pending,
+            "configure token limit before claim"
+        );
+        self.configured_max_total_tokens = limit;
+    }
+
+    pub fn input_publication_before_deadline(
+        now: chrono::DateTime<chrono::Utc>,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> bool {
+        deadline.is_none_or(|deadline| now < deadline)
+    }
+
+    pub fn claimed_deadline_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.claimed_deadline_at
+    }
+
+    pub fn request_commit_cid(&self) -> Option<&str> {
+        self.request_commit_cid.as_deref()
+    }
+
+    /// Last transcript sequence owned by this background-completion attempt
+    /// at its atomic claim boundary; messages appended for a successor epoch
+    /// must not enter this attempt's provider input.
+    pub fn background_completion_input_through_sequence(&self) -> Option<u32> {
+        self.background_completion_input_through_sequence
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct RecoveryReport {
+    pub requests_recovered: usize,
+    pub background_wakes_redriven: usize,
+    pub responses_recovered: usize,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TerminalRepairReport {
+    pub scanned: usize,
+    pub repaired: usize,
+    pub awaiting_outcome: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct BackgroundWakeRedriveReport {
+    pub scanned: usize,
+    pub redriven: usize,
+    pub deferred: usize,
+    pub already_redriven: usize,
+    pub coalesced: usize,
+    pub ineligible: usize,
+    pub failed: usize,
+}
+
+impl BackgroundWakeRedriveReport {
+    pub fn is_noop(&self) -> bool {
+        self.redriven == 0
+    }
+}
+
+impl TerminalRepairReport {
+    pub fn is_noop(&self) -> bool {
+        self.repaired == 0
+    }
+}
+
+#[async_trait::async_trait]
+impl gents_loop::request_lifecycle::RequestLifecycleControl for RequestLifecycle {
+    type Error = crate::request::seam_error::RuntimeSeamError;
+
+    async fn validate_owned_execution(&self) -> Result<(), Self::Error> {
+        Ok(RequestLifecycle::validate_owned_execution(self).await?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persisted_lifecycle_lists_and_execution_origins_parse() {
+        assert!(RequestLifecycleState::Interrupted.is_terminal());
+        assert_eq!(
+            RequestLifecycleState::active_runtime_graphql_list(),
+            r#"["pending", "claimed", "processing", "waitingForBackend", "resumingBackend"]"#
+        );
+        assert_eq!(
+            ExecutionOrigin::from_persisted(Some("scheduled")).unwrap(),
+            ExecutionOrigin::Scheduled
+        );
+        assert_eq!(
+            ExecutionOrigin::from_persisted(Some("interactive")).unwrap(),
+            ExecutionOrigin::Interactive
+        );
+        assert!(ExecutionOrigin::from_persisted(None).is_err());
+        assert!(ExecutionOrigin::from_persisted(Some("legacy")).is_err());
+    }
+
+    #[test]
+    fn workspace_lineage_maps_receipt_seal_hash() {
+        let context = serde_json::json!({
+            "version": 1,
+            "source_fields": {
+                "workspace_id": "ws-1",
+                "seal_hash": "tree-1"
+            }
+        })
+        .to_string();
+        let lineage = WorkspaceLineage::from_trigger_context(Some(&context)).unwrap();
+        assert_eq!(lineage.workspace_seal_hash.as_deref(), Some("tree-1"));
+    }
+
+    #[test]
+    fn snapshot_overlays_event_trigger_workspace_authority() {
+        let source = serde_json::json!({
+            "workspace_id": "ws-1",
+            "workspace_owner_node_did": "did:key:workspace-owner",
+            "seal_hash": "tree-1"
+        });
+        let mut fields = std::collections::BTreeMap::new();
+        snapshot_workspace_lineage_source_fields(&source, &mut fields, Some("readOnly"));
+        assert_eq!(fields.get("workspace_id").map(String::as_str), Some("ws-1"));
+        assert_eq!(
+            fields.get("workspace_owner_node_did").map(String::as_str),
+            Some("did:key:workspace-owner")
+        );
+        assert_eq!(
+            fields.get("workspace_authority").map(String::as_str),
+            Some("readOnly")
+        );
+        assert_eq!(
+            fields.get("workspace_seal_hash").map(String::as_str),
+            Some("tree-1")
+        );
+        let encoded = serde_json::to_string(&TriggerExecutionContext {
+            version: 1,
+            source_fields: fields,
+        })
+        .unwrap();
+        let lineage = WorkspaceLineage::from_trigger_context(Some(&encoded)).unwrap();
+        lineage.require_authority_if_workspace_id().unwrap();
+        assert_eq!(lineage.workspace_authority.as_deref(), Some("readOnly"));
+        assert_eq!(lineage.workspace_seal_hash.as_deref(), Some("tree-1"));
+    }
+
+    #[test]
+    fn snapshot_trigger_authority_wins_over_source_document() {
+        let source = serde_json::json!({
+            "workspace_id": "ws-1",
+            "workspace_authority": "readWrite"
+        });
+        let mut fields = std::collections::BTreeMap::new();
+        snapshot_workspace_lineage_source_fields(&source, &mut fields, Some("integrate"));
+        assert_eq!(
+            fields.get("workspace_authority").map(String::as_str),
+            Some("integrate")
+        );
+    }
+
+    #[test]
+    fn snapshot_without_trigger_authority_does_not_bind_workspace_id() {
+        let source = serde_json::json!({
+            "workspace_id": "ws-1",
+            "seal_hash": "tree-1",
+            "caused_by_correlation": "run-1"
+        });
+        let mut fields = std::collections::BTreeMap::new();
+        snapshot_workspace_lineage_source_fields(&source, &mut fields, None);
+        assert!(!fields.contains_key("workspace_id"));
+        assert!(!fields.contains_key("workspace_authority"));
+        assert!(!fields.contains_key("workspace_seal_hash"));
+        assert_eq!(
+            fields.get("caused_by_correlation").map(String::as_str),
+            Some("run-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn error_response_terminalizes_an_existing_streaming_response() {
+        let node_db = gents_inference::test_support::test_db(
+            "error-response-terminalizes-an-existing-",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let node = node_db.node.clone();
+        let root = node_db.node_identity.clone();
+        let root_did = escape_graphql_string(root.did());
+        gents_store::config_client::ConfigAccess::local(node.clone()).write("test.lifecycle.node", &format!(r#"mutation {{ create_Node(input: {{node_did: "{root_did}", display_name: "fixture", enabled: true}}) {{ _docID }} }}"#)).await.unwrap();
+        let binding = gents_store::identity::provision_agent_identity(root.as_ref()).unwrap();
+        gents_inference::test_support::install_test_agent_binding(
+            &node,
+            root.did(),
+            "default",
+            &binding,
+        )
+        .await;
+        let agent = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+        let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
+            node.clone(),
+            agent.did(),
+            root.clone(),
+            agent.clone(),
+            "hello",
+            60,
+            ExecutionOrigin::Interactive,
+            "backend",
+            TriggerLineage::default(),
+        )
+        .await
+        .unwrap();
+        let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+            node.clone(),
+            agent.as_ref(),
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        let request_doc_id = lifecycle.request().doc_id.clone();
+        lifecycle
+            .terminalize_owned(
+                RequestTerminalOutcome::Failed,
+                gents_protocol::output::TerminalOutput::NoMessage,
+                Some("setup failed"),
+            )
+            .await
+            .unwrap();
+
+        let request_doc_id = escape_graphql_string(&request_doc_id);
+        let persisted = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }}) {{ lifecycle_state terminal_output failure_reason }} }}"#
+            ))
+            .await;
+        assert!(!persisted.has_errors(), "{:?}", persisted.errors);
+        let request = &persisted.data.as_ref().unwrap()["AgentRequest"][0];
+        assert_eq!(request["lifecycle_state"], "failed");
+        assert_eq!(
+            request["terminal_output"],
+            serde_json::to_value(gents_protocol::output::TerminalOutput::NoMessage).unwrap()
+        );
+        assert_eq!(request["failure_reason"], "setup failed");
+    }
+
+    #[test]
+    fn lean_workspace_references_preserve_exact_owner_and_attenuate_authority() {
+        use gents_lean_vocab::lean_contract_snapshot;
+        fn lineage(value: &serde_json::Value) -> WorkspaceLineage {
+            let field = |name: &str| value[name].as_str().map(str::to_owned);
+            WorkspaceLineage {
+                workspace_id: field("workspace_id"),
+                workspace_owner_node_did: field("workspace_owner_node_did"),
+                workspace_authority: field("workspace_authority"),
+                workspace_seal_hash: field("workspace_seal_hash"),
+            }
+        }
+        let cases = &lean_contract_snapshot().request_input_cases;
+        assert!(cases
+            .iter()
+            .any(|case| case["name"] == "workspace-foreign-owner-same-label-denied"));
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let request = lineage(&case["workspace"]);
+            let source = lineage(&case["workspace_source"]);
+            assert_eq!(
+                request
+                    .validate_source(
+                        &source,
+                        case["workspace_source_authenticated"].as_bool().unwrap(),
+                    )
+                    .is_ok(),
+                case["expected_workspace_accepted"].as_bool().unwrap(),
+                "{name}: actual workspace source owner"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod pushdown_tests;

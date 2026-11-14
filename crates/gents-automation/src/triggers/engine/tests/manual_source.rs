@@ -1,0 +1,541 @@
+use super::*;
+
+fn resolved_task_for_test(task_id: &str, agent_did: &str, prompt_template: &str) -> ResolvedTask {
+    ResolvedTask {
+        emit_outcome: false,
+        task_id: task_id.to_string(),
+        name: None,
+        agent_did: agent_did.to_string(),
+        prompt_template: prompt_template.to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
+        output_schema_ref: None,
+        hooks: Vec::new(),
+    }
+}
+
+fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
+    let mut tasks = RapidHashMap::new();
+    tasks.insert(task.task_id.clone(), task);
+    let agent = spy_test_agent();
+    let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
+        agent.agent_did.clone(),
+        vec![with_default_tools(agent.clone())],
+        RapidHashMap::new(),
+        RapidHashMap::new(),
+        RapidHashMap::new(),
+    )
+    .with_automation(gents_documents::automation::ResolvedAutomation {
+        tasks,
+        ..Default::default()
+    })
+    .with_node(agent.node.clone())
+    .with_local_did(agent.node_did().to_string());
+    Arc::new(resolved.activate(1, RapidHashMap::new()))
+}
+
+#[tokio::test]
+async fn production_materializer_persists_event_source_document_lineage() {
+    let (db, _user, client, behavior) = signed_materializer_agent("event-source-lineage").await;
+    let node = db.node.clone();
+    let identity = behavior.node_identity().clone();
+    let owner = behavior.node_did();
+    let agent_did = behavior.agent_did.clone();
+    let config = serde_json::from_value(serde_json::json!({
+        "node":{"node_did":owner},
+        "default_agent_selection":{"node_did":owner,"default_agent_did":agent_did},
+        "tasks":[{"node_did":owner,"task_id":"task-event","agent_did":agent_did,"prompt_template":"event body"}],
+        "event_sources":[{"node_did":owner,"event_source_id":"source","source_collection":"AgentRequest","event_kind":"created"}],
+        "triggers":[{"node_did":owner,"trigger_id":"event-trigger","task_id":"task-event","source":{"kind":"event","event_source_id":"source"}}]
+    })).unwrap();
+    let trigger_doc_id = apply_user_config(&client, &config, "event-trigger").await;
+    let agent = agent_access(&node, &behavior);
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node.clone(), rx);
+    let task = resolved_task_for_test("task-event", &agent_did, "event body");
+
+    let request_id = materializer
+        .materialize(
+            &task,
+            Some("event-trigger"),
+            TriggerKind::Event,
+            Some(&trigger_doc_id),
+            Some("source-doc-exact"),
+            None,
+            None,
+            "event body",
+            None,
+            "event-test-fire",
+            None,
+            None,
+        )
+        .await
+        .expect("Event materialize should succeed");
+
+    let escaped_request_id = escape_graphql_string(&request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                limit: 1
+            ) {{ _docID caused_by_trigger_kind caused_by_trigger_doc_id caused_by_source_doc_id }}
+        }}"#
+    );
+    let response = agent.execute(&query).await.expect("AgentRequest query");
+    let row = response
+        .get("data")
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .expect("event AgentRequest row");
+    assert_eq!(
+        row.get("caused_by_trigger_kind")
+            .and_then(serde_json::Value::as_str),
+        Some("event")
+    );
+    assert_eq!(
+        row.get("caused_by_trigger_doc_id")
+            .and_then(serde_json::Value::as_str),
+        Some(trigger_doc_id.as_str())
+    );
+    assert_eq!(
+        row.get("caused_by_source_doc_id")
+            .and_then(serde_json::Value::as_str),
+        Some("source-doc-exact")
+    );
+    let request_doc_id = row["_docID"].as_str().unwrap();
+    let queued = gents_session::request::admission::load_request_for_admission_test_as(
+        &node,
+        request_doc_id,
+        &agent_did,
+    )
+    .await
+    .unwrap();
+    let (_authority_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+    let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        identity,
+        authority,
+    );
+    verifier.verify_fresh(&queued, &agent_did).await.unwrap();
+}
+
+#[tokio::test]
+async fn production_event_fire_into_a_paired_client_session_adopts_its_requester() {
+    use gents_store::identity::NodeIdentity;
+    let (db, _user, client, behavior) =
+        signed_materializer_agent("paired-client-session-fire").await;
+    let node = db.node.clone();
+    let identity = behavior.node_identity().clone();
+    let owner = behavior.node_did().to_owned();
+    let agent_did = behavior.agent_did.clone();
+    let agent = agent_access(&node, &behavior);
+    let config = serde_json::from_value(serde_json::json!({
+        "node":{"node_did":owner},
+        "default_agent_selection":{"node_did":owner,"default_agent_did":agent_did},
+        "tasks":[{"node_did":owner,"task_id":"task-lead","agent_did":agent_did,"prompt_template":"continue the lead"}],
+        "event_sources":[{"node_did":owner,"event_source_id":"outcomes","source_collection":"AgentRequest","event_kind":"created"}],
+        "triggers":[{"node_did":owner,"trigger_id":"lead-outcomes","task_id":"task-lead","source":{"kind":"event","event_source_id":"outcomes"},"session_id_template":"{{ doc.session_id }}"}]
+    })).unwrap();
+    let trigger_doc_id = apply_user_config(&client, &config, "lead-outcomes").await;
+    let desktop = KeyIdentity::load_or_create(
+        std::env::temp_dir().join(format!("paired-desktop-{}.key", uuid::Uuid::new_v4())),
+        None,
+    )
+    .unwrap();
+    let session_id = "paired-client-console";
+    // The paired client's session is the Agent's row, scoped to the client.
+    agent
+        .transact_write("test.paired_client_session", |txn| {
+            let owner = &owner;
+            let agent_did = &agent_did;
+            let desktop = desktop.did();
+            Box::pin(async move {
+                gents_session::session::ensure_session_in_txn(
+                    txn,
+                    session_id,
+                    owner,
+                    agent_did,
+                    Some(desktop),
+                    None,
+                    None,
+                    &chrono::Utc::now().to_rfc3339(),
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    let fire_identity = gents_protocol::trigger_delivery::FireIdentity {
+        owner_did: owner.clone(),
+        trigger_id: "lead-outcomes".into(),
+        source_collection: "AgentRequest".into(),
+        source_doc_id: "outcome-doc".into(),
+    };
+    let fire = gents_protocol::trigger_delivery::TriggerFire {
+        request_id: fire_identity.request_id(),
+        fire_key: fire_identity.fire_key(),
+        identity: fire_identity,
+        task_id: "task-lead".into(),
+        session_id: session_id.into(),
+        goal_id: None,
+        goal_objective: None,
+        goal_token_budget: None,
+        goal_assignment_applied: false,
+        emit_outcome: false,
+        queued_serial: false,
+        source_handoff_id: None,
+        reply_session_id: None,
+        shard_id: None,
+        attempt: None,
+        created_at: chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+    };
+    let config_docs = client.execute(
+        "{EventSource(filter:{event_source_id:{_eq:\"outcomes\"}}){_docID} Task(filter:{task_id:{_eq:\"task-lead\"}}){_docID}}"
+    ).await.unwrap();
+    let prepared = crate::triggers::engine::durable::PreparedFire {
+        replace_prior: false,
+        receipt: fire.clone(),
+        target_existing: true,
+        event_source_generation: Some(gents_documents::automation::event_admission_generation(
+            &serde_json::from_value(serde_json::json!({"node_did":owner,"event_source_id":"outcomes", "source_collection":"AgentRequest", "event_kind":"created"})).unwrap(),
+            &serde_json::from_value(serde_json::json!({"node_did":owner,"trigger_id":"lead-outcomes","task_id":"task-lead","source":{"kind":"event","event_source_id":"outcomes"},"session_id_template":"{{ doc.session_id }}"})).unwrap(),
+            &serde_json::from_value(serde_json::json!({"node_did":owner,"task_id":"task-lead","agent_did":agent_did,"prompt_template":"continue the lead"})).unwrap(),
+            &gents_documents::automation::EventConfigDocIds {
+                trigger:&trigger_doc_id,
+                source:config_docs["data"]["EventSource"][0]["_docID"].as_str().unwrap(),
+                task:config_docs["data"]["Task"][0]["_docID"].as_str().unwrap(),
+            },
+        ).unwrap()),
+        create_session: false,
+        max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
+    };
+    let snapshot = snapshot_with_agent_and_schedules(behavior.clone(), RapidHashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node.clone(), rx);
+    let task = resolved_task_for_test("task-lead", &agent_did, "continue the lead");
+    let request_id = materializer
+        .materialize(
+            &task,
+            Some("lead-outcomes"),
+            TriggerKind::Event,
+            Some(&trigger_doc_id),
+            Some("outcome-doc"),
+            None,
+            None,
+            "continue the lead",
+            None,
+            &fire.fire_key,
+            Some(&prepared),
+            None,
+        )
+        .await
+        .expect("a fire into the paired client's session is delivered");
+    assert_eq!(request_id, fire.request_id);
+    let response = agent
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID requester_did session_id }} }}"#,
+            escape_graphql_string(&request_id)
+        ))
+        .await
+        .unwrap();
+    let row = &response["data"]["AgentRequest"][0];
+    assert_eq!(row["requester_did"], desktop.did());
+    assert_eq!(row["session_id"], session_id);
+    let queued = gents_session::request::admission::load_request_for_admission_test_as(
+        &node,
+        row["_docID"].as_str().unwrap(),
+        &agent_did,
+    )
+    .await
+    .unwrap();
+    let (_authority_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+    let verified = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        identity,
+        authority,
+    )
+    .verify_fresh(&queued, &agent_did)
+    .await
+    .unwrap();
+    let mut lifecycle =
+        gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+            node.clone(),
+            verified.clone(),
+            60,
+            gents_session::request::lifecycle::ExecutionOrigin::Scheduled,
+            "backend-test",
+        );
+    lifecycle
+        .bind_managed_agent(behavior.agent_identity.as_ref())
+        .unwrap();
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        gents_session::request::lifecycle::ClaimOutcome::Claimed
+    );
+    gents_toolcalls::call::hook::DefraSessionHook::resume_with_actor_policy(
+        node.clone(),
+        session_id,
+        &owner,
+        verified.requester_did.as_deref(),
+        agent_did.parse().unwrap(),
+        gents_toolcalls::call::hook::FailurePolicy::FailClosed,
+    )
+    .await
+    .expect("the fire resumes the paired client's session");
+}
+
+#[tokio::test]
+async fn production_schedule_materialization_passes_final_exact_config_admission() {
+    let (db, _user, client, behavior) = signed_materializer_agent("schedule-exact-config").await;
+    let node = db.node.clone();
+    let identity = behavior.node_identity().clone();
+    let owner = behavior.node_did();
+    let agent_did = behavior.agent_did.clone();
+    let config = serde_json::from_value(serde_json::json!({
+        "node":{"node_did":owner},
+        "default_agent_selection":{"node_did":owner,"default_agent_did":agent_did},
+        "tasks":[{"node_did":owner,"task_id":"task-schedule","agent_did":agent_did,"prompt_template":"schedule body"}],
+        "schedules":[{"node_did":owner,"schedule_id":"source","cadence":{"kind":"interval","interval_secs":60}}],
+        "triggers":[{"node_did":owner,"trigger_id":"schedule-trigger","task_id":"task-schedule","source":{"kind":"schedule","schedule_id":"source"}}]
+    })).unwrap();
+    let trigger_doc_id = apply_user_config(&client, &config, "schedule-trigger").await;
+    let agent = agent_access(&node, &behavior);
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node.clone(), rx);
+    let task = resolved_task_for_test("task-schedule", &agent_did, "schedule body");
+    let request_id = materializer
+        .materialize(
+            &task,
+            Some("schedule-trigger"),
+            TriggerKind::Schedule,
+            Some(&trigger_doc_id),
+            None,
+            None,
+            None,
+            "schedule body",
+            None,
+            "schedule-test-fire",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let response = agent
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID caused_by_trigger_doc_id caused_by_source_doc_id }} }}"#,
+            escape_graphql_string(&request_id),
+        ))
+        .await
+        .expect("load schedule request");
+    let row = &response["data"]["AgentRequest"][0];
+    assert_eq!(row["caused_by_trigger_doc_id"], trigger_doc_id);
+    assert!(row["caused_by_source_doc_id"].is_null());
+    let queued = gents_session::request::admission::load_request_for_admission_test_as(
+        &node,
+        row["_docID"].as_str().unwrap(),
+        &agent_did,
+    )
+    .await
+    .unwrap();
+    let (_authority_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+    let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
+        node.clone(),
+        identity,
+        authority,
+    );
+    verifier.verify_fresh(&queued, &agent_did).await.unwrap();
+}
+
+#[tokio::test]
+async fn production_materializer_rejects_incoherent_source_document_lineage() {
+    let node_db = gents_inference::test_support::test_db(
+        "production-materializer-rejects-incohere",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
+    let agent = integration_test_agent("general");
+    let task = resolved_task_for_test("task-lineage-input", &agent.agent_did, "body");
+    let snapshot = snapshot_with_agent_and_schedules(agent, RapidHashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node, rx);
+
+    let missing = materializer
+        .materialize(
+            &task,
+            Some("event-trigger"),
+            TriggerKind::Event,
+            Some("event-trigger-config-doc"),
+            None,
+            None,
+            None,
+            "body",
+            None,
+            "invalid-event-test-fire",
+            None,
+            None,
+        )
+        .await
+        .expect_err("Event materialization without a source document must fail closed");
+    assert!(
+        missing.to_string().contains("requires source_doc_id"),
+        "{missing:#}"
+    );
+
+    let misplaced = materializer
+        .materialize(
+            &task,
+            Some("schedule-trigger"),
+            TriggerKind::Schedule,
+            Some("schedule-trigger-config-doc"),
+            Some("event-doc-on-schedule"),
+            None,
+            None,
+            "body",
+            None,
+            "invalid-schedule-test-fire",
+            None,
+            None,
+        )
+        .await
+        .expect_err("non-Event materialization must reject source document lineage");
+    assert!(
+        misplaced.to_string().contains("Only Event"),
+        "{misplaced:#}"
+    );
+}
+
+#[tokio::test]
+async fn production_materializer_rejects_manual_lineage_with_trigger_id() {
+    let node_db = gents_inference::test_support::test_db(
+        "production-materializer-rejects-manual-l",
+        crate::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
+    let snapshot = snapshot_with_schedules(RapidHashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node, rx);
+    let task = resolved_task_for_test("task-manual", "general", "manual body");
+
+    let err = materializer
+        .materialize(
+            &task,
+            Some("manual-must-not-have-id"),
+            TriggerKind::Manual,
+            None,
+            None,
+            None,
+            None,
+            "manual body",
+            None,
+            "invalid-manual-test-fire",
+            None,
+            None,
+        )
+        .await
+        .expect_err("Manual materialize with trigger_id must fail before persistence");
+
+    assert!(err.to_string().contains("must not carry trigger_id"));
+}
+
+#[tokio::test]
+async fn dispatch_manual_intent_renders_with_args_and_materializes() {
+    let task = resolved_task_for_test(
+        "greet-user",
+        &spy_test_agent().agent_did,
+        "hello {{ args.name }}",
+    );
+    let snapshot = snapshot_with_active_task(task.clone());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+    let intent = FireIntent {
+        trigger_id: None,
+        trigger_kind: TriggerKind::Manual,
+        task,
+        concurrency: ConcurrencyMode::Parallel,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
+        args_vars: Some(serde_json :: json ! ({ "name" : "Amy" })),
+        durable_fire_key: "manual-test-fire".to_string(),
+        pre_materialized_request_id: None,
+        event_source_generation: None,
+        on_result: Box::new(|_| {}),
+    };
+    let result = engine.dispatch(intent).await;
+    match result {
+        FireResult::Fired { request_id } => assert_eq!(
+            request_id, "req-0",
+            "spy materializer hands back sequentially-numbered ids starting at req-0"
+        ),
+        other => panic!("expected Fired for Manual intent (bypasses enabled-gate), got {other:?}"),
+    }
+    let calls = materializer.calls();
+    assert_eq!(
+        calls.len(),
+        1,
+        "exactly one materialize call expected for Manual dispatch"
+    );
+    let (trigger_id, kind, rendered) = &calls[0];
+    assert!(
+        trigger_id.is_none(),
+        "Manual intents carry trigger_id = None; got {trigger_id:?}"
+    );
+    assert_eq!(*kind, TriggerKind::Manual);
+    assert_eq!(
+        rendered, "hello Amy",
+        "dispatch must render the `args.name` template against args_vars"
+    );
+}
+
+#[tokio::test]
+async fn dispatch_rejects_manual_intent_with_trigger_id() {
+    let task = resolved_task_for_test("greet-user", &spy_test_agent().agent_did, "hello");
+    let snapshot = snapshot_with_active_task(task.clone());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = SpyMaterializer::new();
+    let engine = TriggerEngine::new(rx, materializer.clone());
+    let result_captured: Arc<Mutex<Option<FireResult>>> = Arc::new(Mutex::new(None));
+    let capture = result_captured.clone();
+    let intent = FireIntent {
+        trigger_id: Some("manual-must-not-have-id".to_string()),
+        trigger_kind: TriggerKind::Manual,
+        task,
+        concurrency: ConcurrencyMode::Parallel,
+        event_vars: serde_json::json!({}),
+        doc_vars: None,
+        correlation: None,
+        group_vars: None,
+        trigger_context: None,
+        args_vars: Some(serde_json::json!({})),
+        durable_fire_key: "manual-invalid-fire".to_string(),
+        pre_materialized_request_id: None,
+        event_source_generation: None,
+        on_result: Box::new(move |r| {
+            *capture.lock().unwrap() = Some(r);
+        }),
+    };
+    let result = engine.dispatch(intent).await;
+    match result {
+        FireResult::Rejected { error } => assert!(
+            error.contains("must not carry trigger_id"),
+            "unexpected manual well-formedness error: {error}"
+        ),
+        other => panic!("expected Rejected for malformed Manual intent, got {other:?}"),
+    }
+    assert!(
+        materializer.calls().is_empty(),
+        "malformed Manual intent must not reach the materializer"
+    );
+    assert!(
+        matches ! (result_captured . lock () . unwrap () . as_ref () , Some (FireResult :: Rejected { error }) if error . contains ("must not carry trigger_id")),
+        "on_result should receive the same malformed Manual error"
+    );
+}

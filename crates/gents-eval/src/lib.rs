@@ -1,3 +1,4 @@
+pub mod authoring;
 pub mod checks;
 pub mod optimization;
 pub mod report;
@@ -9,8 +10,5 @@ pub(crate) use gents::eval::*;
 use gents::support;
 #[cfg(test)]
 mod document_tests;
-#[cfg(test)]
-#[path = "../../gents/src/lean_vocab_test/support.rs"]
-mod lean_vocab_test;
 #[cfg(test)]
 mod test_support;

@@ -1,4 +1,5 @@
-import Proofs.GoalAutomation.ClientDelivery
+import Proofs.Automation.GoalAutomation.ClientDelivery
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.GoalClientDeliveryContracts
@@ -17,70 +18,132 @@ structure Case where
   initial : Journal := []
   actions : List Action
 
-def intentJson (intent : Intent) : Json := Json.mkObj
-  [("client", toJson intent.client), ("node", toJson intent.node),
-   ("command", toJson intent.command), ("session", toJson intent.session),
-   ("authored", toJson intent.authored)]
+structure IntentWire where
+  client : Nat
+  node : Nat
+  command : Nat
+  session : Nat
+  authored : Nat
+  deriving ToJson
 
-def preparedJson (prepared : Prepared) : Json := Json.mkObj
-  [("command", toJson prepared.command), ("digest", toJson prepared.digest),
-   ("initialRequest", toJson prepared.initialRequest)]
+structure PreparedWire where
+  command : Nat
+  digest : Nat
+  initialRequest : Option Nat
+  deriving ToJson, BEq
 
-def receiptJson (receipt : GoalAutomation.ClientMutation.Receipt) : Json := Json.mkObj
-  [("command", toJson receipt.commandId), ("digest", toJson receipt.digest),
-   ("outcome", toJson <| if receipt.outcome = .applied then "applied" else "rejected")]
+structure ReceiptWire where
+  command : Nat
+  digest : Nat
+  outcome : String
+  deriving ToJson
 
-def recordJson (record : Record) : Json := Json.mkObj
-  [("intent", intentJson record.intent), ("prepared", preparedJson record.prepared),
-   ("receipt", record.receipt.map receiptJson |>.getD Json.null),
-   ("retainedBytes", toJson record.retainedBytes), ("acknowledged", toJson record.acknowledged)]
+structure RecordWire where
+  intent : IntentWire
+  prepared : PreparedWire
+  receipt : Option ReceiptWire
+  retainedBytes : Bool
+  acknowledged : Bool
+  deriving ToJson
 
-def journalJson (journal : Journal) : Json := toJson (journal.map recordJson)
+structure ResultWire where
+  kind : String
+  prepared : Option PreparedWire
+  receipt : Option ReceiptWire
+  deriving ToJson
 
-def resultJson : Result → Json
-  | .refused => Json.mkObj [("kind", toJson "refused")]
-  | .unconfirmed => Json.mkObj [("kind", toJson "unconfirmed")]
-  | .pending prepared => Json.mkObj
-      [("kind", toJson "pending"), ("prepared", preparedJson prepared)]
-  | .confirmed prepared receipt => Json.mkObj
-      [("kind", toJson "confirmed"), ("prepared", preparedJson prepared),
-       ("receipt", receiptJson receipt)]
+structure OutputWire where
+  result : ResultWire
+  publish : Option PreparedWire
+  deriving ToJson
 
-def actionJson : Action → Json
-  | .reserve intent prepared durable => Json.mkObj
-      [("kind", toJson "reserve"), ("intent", intentJson intent),
-       ("prepared", preparedJson prepared), ("durable", toJson durable)]
-  | .query intent => Json.mkObj [("kind", toJson "query"), ("intent", intentJson intent)]
-  | .resume intent => Json.mkObj [("kind", toJson "resume"), ("intent", intentJson intent)]
-  | .observe intent receipt verified => Json.mkObj
-      [("kind", toJson "observe"), ("intent", intentJson intent),
-       ("receipt", receiptJson receipt), ("verified", toJson verified)]
-  | .acknowledge intent prepared => Json.mkObj
-      [("kind", toJson "acknowledge"), ("intent", intentJson intent),
-       ("prepared", preparedJson prepared)]
-  | .reconnect => Json.mkObj [("kind", toJson "reconnect")]
+structure ActionWire where
+  kind : String
+  intent : Option IntentWire
+  prepared : Option PreparedWire
+  durable : Option Bool
+  receipt : Option ReceiptWire
+  verified : Option Bool
+  deriving ToJson
 
-def output (result : Result) (effect : Option Prepared := none) : Json := Json.mkObj
-  [("result", resultJson result), ("publish", effect.map preparedJson |>.getD Json.null)]
+structure StepWire where
+  before : List RecordWire
+  after : List RecordWire
+  output : Option OutputWire
+  deriving ToJson
 
-def run (journal : Journal) : Action → Journal × Json
+structure TraceInput where
+  name : String
+  initial : List RecordWire
+  actions : List ActionWire
+  deriving ToJson
+
+def intentWire (intent : Intent) : IntentWire :=
+  { client := intent.client, node := intent.node, command := intent.command
+    session := intent.session, authored := intent.authored }
+
+def preparedWire (prepared : Prepared) : PreparedWire :=
+  { command := prepared.command, digest := prepared.digest
+    initialRequest := prepared.initialRequest }
+
+def receiptWire (receipt : GoalAutomation.ClientMutation.Receipt) : ReceiptWire :=
+  { command := receipt.commandId, digest := receipt.digest
+    outcome := if receipt.outcome = .applied then "applied" else "rejected" }
+
+def recordWire (record : Record) : RecordWire :=
+  { intent := intentWire record.intent, prepared := preparedWire record.prepared
+    receipt := record.receipt.map receiptWire, retainedBytes := record.retainedBytes
+    acknowledged := record.acknowledged }
+
+def resultWire : Result → ResultWire
+  | .refused => { kind := "refused", prepared := none, receipt := none }
+  | .unconfirmed => { kind := "unconfirmed", prepared := none, receipt := none }
+  | .pending prepared => { kind := "pending", prepared := some (preparedWire prepared), receipt := none }
+  | .confirmed prepared receipt =>
+      { kind := "confirmed", prepared := some (preparedWire prepared)
+        receipt := some (receiptWire receipt) }
+
+def actionWire : Action → ActionWire
+  | .reserve intent prepared durable =>
+      { kind := "reserve", intent := some (intentWire intent), prepared := some (preparedWire prepared)
+        durable := some durable, receipt := none, verified := none }
+  | .query intent =>
+      { kind := "query", intent := some (intentWire intent), prepared := none, durable := none
+        receipt := none, verified := none }
+  | .resume intent =>
+      { kind := "resume", intent := some (intentWire intent), prepared := none, durable := none
+        receipt := none, verified := none }
+  | .observe intent receipt verified =>
+      { kind := "observe", intent := some (intentWire intent), prepared := none, durable := none
+        receipt := some (receiptWire receipt), verified := some verified }
+  | .acknowledge intent prepared =>
+      { kind := "acknowledge", intent := some (intentWire intent)
+        prepared := some (preparedWire prepared), durable := none, receipt := none, verified := none }
+  | .reconnect =>
+      { kind := "reconnect", intent := none, prepared := none, durable := none, receipt := none
+        verified := none }
+
+def output (result : Result) (effect : Option Prepared := none) : OutputWire :=
+  { result := resultWire result, publish := effect.map preparedWire }
+
+def run (journal : Journal) : Action → Journal × Option OutputWire
   | .reserve intent prepared durable =>
       let (next, result) := reserve journal intent prepared durable
-      (next, output result)
-  | .query intent => (journal, output (query journal intent))
+      (next, some (output result))
+  | .query intent => (journal, some (output (query journal intent)))
   | .resume intent =>
       let (result, effect) := resume journal intent
-      (journal, output result effect)
-  | .observe intent receipt verified => (observe journal intent receipt verified, Json.null)
-  | .acknowledge intent prepared => (acknowledge journal intent prepared, Json.null)
-  | .reconnect => (journal, Json.null)
+      (journal, some (output result effect))
+  | .observe intent receipt verified => (observe journal intent receipt verified, none)
+  | .acknowledge intent prepared => (acknowledge journal intent prepared, none)
+  | .reconnect => (journal, none)
 
-def traces (journal : Journal) : List Action → List Json
+def traces (journal : Journal) : List Action → List StepWire
   | [] => []
   | action :: rest =>
       let (next, result) := run journal action
-      Json.mkObj [("input", actionJson action), ("before", journalJson journal),
-        ("after", journalJson next), ("output", result)] :: traces next rest
+      { before := journal.map recordWire, after := next.map recordWire, output := result }
+        :: traces next rest
 
 def cases : List Case :=
   let intent : Intent := ⟨1, 2, 10, 20, 30⟩
@@ -130,9 +193,62 @@ def cases : List Case :=
        .acknowledge control signed, .reconnect, .query control, .resume control]⟩
   ]
 
-def casesJson : Json := toJson <| cases.map fun c => Json.mkObj
-  [("name", toJson c.name), ("initial", journalJson c.initial),
-   ("trace", toJson (traces c.initial c.actions))]
+def traceInput (c : Case) : TraceInput :=
+  { name := c.name, initial := c.initial.map recordWire, actions := c.actions.map actionWire }
+
+def modeledSteps (i : TraceInput) : List StepWire :=
+  match cases.find? (·.name == i.name) with
+  | some c => traces c.initial c.actions
+  | none => []
+
+/-- The wire input names its case and carries its actions; the model executes
+the case's own journal and actions, whose intents and receipts it builds. -/
+@[conformance_family]
+def trace : Conformance.Family TraceInput (List StepWire) where
+  inputs := cases.map traceInput
+  model := modeledSteps
+
+/-- The durable journal starts empty and every reservation it receives is
+durable and every receipt verified: a persisted record cannot hold a failed
+preparation, an unverified receipt or a pre-existing corrupt journal. -/
+def durableCases : List Case :=
+  cases.filter fun c => c.initial.isEmpty && c.actions.all fun
+    | .reserve _ _ durable => durable
+    | .observe _ _ verified => verified
+    | _ => true
+
+@[conformance_family]
+def durableTrace : Conformance.Family TraceInput (List StepWire) where
+  inputs := durableCases.map traceInput
+  model := modeledSteps
+
+/-- The reopened journal reserves, settles and acknowledges one command,
+reopening its store between those steps: the journal after each of the
+first three actions of the acknowledgement-loss history. -/
+@[conformance_family]
+def reopenedAcknowledgement : Conformance.Family TraceInput (List (List RecordWire)) where
+  inputs := (cases.filter (·.name == "acknowledgement_loss")).map fun c =>
+    traceInput { c with actions := c.actions.take 3 }
+  model := fun i => ((modeledSteps i).take 3).map (·.after)
+
+structure RacingOutput where
+  sharedPreparation : Bool
+  records : Nat
+  deriving ToJson
+
+/-- Two signed first-request proposals for one intent race to reserve: both
+reservations decide the same preparation and the journal holds one record. -/
+@[conformance_family]
+def racingProposals : Conformance.Family TraceInput RacingOutput where
+  inputs := (cases.filter (·.name == "racing_first_request_proposal")).map fun c =>
+    traceInput { c with actions := c.actions.take 2 }
+  model := fun i =>
+    let steps := (modeledSteps i).take 2
+    { sharedPreparation := match steps with
+        | [first, second] =>
+            (first.output.map (·.result.prepared)) == (second.output.map (·.result.prepared))
+        | _ => false
+      records := ((steps.getLast?).map (·.after.length)).getD 0 }
 
 example : cases.length = 21 := by native_decide
 

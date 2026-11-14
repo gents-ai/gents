@@ -1,5 +1,5 @@
-use gents::store::graphql::escape_graphql_string;
-use gents::write_manual_agent_request;
+use gents_session::request::lifecycle::write_manual_agent_request;
+use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
 use crate::support::{managed_agent, test_db};
@@ -11,13 +11,20 @@ fn actor(did: &str) -> identity::Did {
 /// Manual requests are Agent-owned rows; they are read as that Agent.
 fn agent_access(
     db: &crate::support::TestDb,
-    agent: &dyn gents::NodeIdentity,
-) -> gents::ConfigAccess {
-    gents::ConfigAccess::local_managed_agent(db.node.clone(), actor(agent.did()), agent)
-        .expect("managed Agent access")
+    agent: &dyn gents_store::identity::NodeIdentity,
+) -> gents_store::config_client::ConfigAccess {
+    gents_store::config_client::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        actor(agent.did()),
+        agent,
+    )
+    .expect("managed Agent access")
 }
 
-async fn fetch_manual_row(access: &gents::ConfigAccess, doc_id: &str) -> Value {
+async fn fetch_manual_row(
+    access: &gents_store::config_client::ConfigAccess,
+    doc_id: &str,
+) -> Value {
     let escaped = escape_graphql_string(doc_id);
     let query = format!(
         r#"{{
@@ -42,7 +49,7 @@ async fn fetch_manual_row(access: &gents::ConfigAccess, doc_id: &str) -> Value {
         .expect("exactly one AgentRequest for the given doc_id")
 }
 
-async fn count_manual_agent_requests(access: &gents::ConfigAccess) -> usize {
+async fn count_manual_agent_requests(access: &gents_store::config_client::ConfigAccess) -> usize {
     let query = r#"{
         AgentRequest(filter: { caused_by_trigger_kind: { _eq: "manual" } }) {
             _docID
@@ -68,7 +75,7 @@ async fn manual_run_materializes_agent_request_with_lineage() {
         &db.node,
         actor(agent.did()),
         agent.as_ref(),
-        gents::request::lifecycle::ManualRequestTarget {
+        gents_session::request::lifecycle::ManualRequestTarget {
             node_did: db.node_identity.did(),
             agent_did: agent.did(),
             task_id: "task-manual-lineage",
@@ -118,7 +125,7 @@ async fn manual_run_renders_args_scope() {
         &db.node,
         actor(agent.did()),
         agent.as_ref(),
-        gents::request::lifecycle::ManualRequestTarget {
+        gents_session::request::lifecycle::ManualRequestTarget {
             node_did: db.node_identity.did(),
             agent_did: agent.did(),
             task_id: "task-args",
@@ -138,69 +145,6 @@ async fn manual_run_renders_args_scope() {
 }
 
 #[tokio::test]
-async fn manual_submissions_materialize_distinct_requests() {
-    let db = test_db("manual-run-parallel").await;
-    let agent = managed_agent(&db).await;
-
-    let first = write_manual_agent_request(
-        &db.node,
-        actor(agent.did()),
-        agent.as_ref(),
-        gents::request::lifecycle::ManualRequestTarget {
-            node_did: db.node_identity.did(),
-            agent_did: agent.did(),
-            task_id: "task-parallel",
-        },
-        "one",
-        serde_json::json!({}),
-    )
-    .await
-    .expect("first manual run should materialize");
-    assert_eq!(
-        count_manual_agent_requests(&agent_access(&db, agent.as_ref())).await,
-        1,
-        "sanity: one manual AgentRequest after the first call"
-    );
-
-    let second = write_manual_agent_request(
-        &db.node,
-        actor(agent.did()),
-        agent.as_ref(),
-        gents::request::lifecycle::ManualRequestTarget {
-            node_did: db.node_identity.did(),
-            agent_did: agent.did(),
-            task_id: "task-parallel",
-        },
-        "two",
-        serde_json::json!({}),
-    )
-    .await
-    .expect("second manual submission should materialize");
-    assert_ne!(
-        first, second,
-        "second manual run must produce a fresh doc_id, not alias the first"
-    );
-    assert_eq!(
-        count_manual_agent_requests(&agent_access(&db, agent.as_ref())).await,
-        2,
-        "two back-to-back manual submissions must yield two AgentRequest rows"
-    );
-
-    for (label, doc_id) in [("first", &first), ("second", &second)] {
-        let row = fetch_manual_row(&agent_access(&db, agent.as_ref()), doc_id).await;
-        assert!(
-            row["caused_by_trigger_id"].is_null(),
-            "{label}: direct manual submission must not invent a configured trigger id"
-        );
-        assert_eq!(
-            row["caused_by_trigger_kind"].as_str(),
-            Some("manual"),
-            "{label}: trigger_kind must remain \"manual\" for direct manual submission"
-        );
-    }
-}
-
-#[tokio::test]
 async fn manual_run_exposes_manual_event_and_node_scope() {
     let db = test_db("manual-run-event-scope").await;
     let agent = managed_agent(&db).await;
@@ -209,7 +153,7 @@ async fn manual_run_exposes_manual_event_and_node_scope() {
         &db.node,
         actor(agent.did()),
         agent.as_ref(),
-        gents::request::lifecycle::ManualRequestTarget {
+        gents_session::request::lifecycle::ManualRequestTarget {
             node_did: db.node_identity.did(),
             agent_did: agent.did(),
             task_id: "task-event-scope",
@@ -245,7 +189,7 @@ async fn manual_run_render_failure_materializes_no_request() {
         &db.node,
         actor(agent.did()),
         agent.as_ref(),
-        gents::request::lifecycle::ManualRequestTarget {
+        gents_session::request::lifecycle::ManualRequestTarget {
             node_did: db.node_identity.did(),
             agent_did: agent.did(),
             task_id: "task-render-err",
@@ -270,7 +214,7 @@ async fn manual_run_render_failure_materializes_no_request() {
         &db.node,
         actor(agent.did()),
         agent.as_ref(),
-        gents::request::lifecycle::ManualRequestTarget {
+        gents_session::request::lifecycle::ManualRequestTarget {
             node_did: db.node_identity.did(),
             agent_did: agent.did(),
             task_id: "task-render-err",

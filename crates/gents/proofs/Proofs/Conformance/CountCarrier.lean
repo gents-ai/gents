@@ -1,8 +1,8 @@
-import Proofs.CompletionRetry.CountCarrier
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Shared.CompletionRetry.CountCarrier
+import Proofs.Conformance.Family
 
 namespace Conformance.CountCarrier
-open CompletionRetry.CountCarrier Conformance.Contracts
+open Lean CompletionRetry.CountCarrier
 
 structure FieldCase where
   schema : String
@@ -20,28 +20,32 @@ def fieldCases : List FieldCase :=
    ⟨"LIST", .list⟩, ⟨"NON_NULL", .unsupported⟩,
    ⟨"Object", .relation⟩, ⟨"[Object]", .list⟩, ⟨"Unknown", .unsupported⟩]
 
-private def wireJson : WireValue → String
-  | .number raw | .other raw => raw
-  | .text text => jsonString text
+def fieldOf (schema : String) : Field :=
+  ((fieldCases.find? (·.schema == schema)).map (·.field)).getD .unsupported
 
+/-- A wire value as its kind and its JSON spelling: a `number` or `other`
+spelling is JSON text, a `text` spelling is the string itself. The family JSON
+type cannot carry `1e1` apart from `10`. -/
+structure WireInput where
+  kind : String
+  spelling : String
+  deriving ToJson
 
-private def witnessValue (field : Field) : WireValue :=
-  wireWitness (if admitsEncoding field .integer then .integer else .decimal)
+def WireInput.ofModel : WireValue → WireInput
+  | .number raw => ⟨"number", raw⟩
+  | .text text => ⟨"text", text⟩
+  | .other raw => ⟨"other", raw⟩
 
-private def probeValue (field : Field) : WireValue :=
-  if field == .dateTime then .text "2026-10-09T00:00:00Z" else witnessValue field
+def WireInput.toModel (wire : WireInput) : WireValue :=
+  match wire.kind with
+  | "number" => .number wire.spelling
+  | "text" => .text wire.spelling
+  | _ => .other wire.spelling
 
-private def schemaError (c : FieldCase) : Option String :=
-  if c.schema == "ID!" then some "NonNull variant for type ID is not supported" else none
-
-private def fieldCaseJson (c : FieldCase) : String :=
-  "{\"schema\":" ++ jsonString c.schema ++
-  ",\"accepted\":" ++ (if canCarry c.field then "true" else "false") ++
-  ",\"witness\":" ++ (if canCarry c.field then wireJson (witnessValue c.field) else "null") ++
-  ",\"storage\":" ++ (if (schemaError c).isNone && (canCarry c.field || c.field == .dateTime) then "true" else "false") ++
-  ",\"schema_error\":" ++ ((schemaError c).map jsonString).getD "null" ++
-  ",\"probe\":" ++ wireJson (probeValue c.field) ++
-  ",\"probe_expected\":" ++ ((parseWire (probeValue c.field) 256).map toString).getD "null" ++ "}"
+structure ValueInput where
+  value : WireInput
+  maximum : Nat
+  deriving ToJson
 
 structure ValueCase where
   value : WireValue
@@ -59,12 +63,73 @@ def valueCases : List ValueCase :=
   (["1.0", "1e1", "-1"].map (fun raw => ⟨.number raw, 1000⟩)) ++
   (["null", "true", "[]", "{}"].map (fun raw => ⟨.other raw, 1000⟩))
 
+@[conformance_family]
+def value : Family ValueInput (Option Nat) where
+  inputs := valueCases.map fun c => ⟨WireInput.ofModel c.value, c.maximum⟩
+  model := fun i => parseWire i.value.toModel i.maximum
 
-private def valueCaseJson (c : ValueCase) : String :=
-  "{\"value\":" ++ wireJson c.value ++ ",\"maximum\":" ++ toString c.maximum ++
-  ",\"expected\":" ++ ((parseWire c.value c.maximum).map toString).getD "null" ++ "}"
+structure FieldInput where
+  schema : String
+  deriving ToJson
 
-def casesJson : String :=
-  "{\"fields\":" ++ jsonArray (fieldCases.map fieldCaseJson) ++
-  ",\"values\":" ++ jsonArray (valueCases.map valueCaseJson) ++ "}"
+@[conformance_family]
+def admission : Family FieldInput Bool where
+  inputs := fieldCases.map fun c => ⟨c.schema⟩
+  model := fun i => canCarry (fieldOf i.schema)
+
+private def witnessValue (field : Field) : WireValue :=
+  wireWitness (if admitsEncoding field .integer then .integer else .decimal)
+
+private def probeValue (field : Field) : WireValue :=
+  if field == .dateTime then .text "2026-10-09T00:00:00Z" else witnessValue field
+
+/-- The event trigger group bound production reads counts against. -/
+def groupMaximum : Nat := 256
+
+structure StorageInput where
+  schema : String
+  probe : WireInput
+  deriving ToJson
+
+structure StorageOutput where
+  argument : Option Nat
+  stored : Option Nat
+  introspected : Bool
+  decimalAdmitted : Option Bool
+  deriving ToJson
+
+/-- A bounded write tool stores one scalar count field. Lists, relations and
+unsupported shapes declare no scalar field to write, and DefraDB refuses a
+non-null `ID` declaration, so only scalar carriers and `DateTime` are written.
+A field that cannot carry a count is also offered the decimal witness. -/
+@[conformance_family]
+def storage : Family StorageInput StorageOutput where
+  inputs := (fieldCases.filter fun c => canCarry c.field || c.field == .dateTime).map
+    fun c => ⟨c.schema, WireInput.ofModel (probeValue c.field)⟩
+  model := fun i =>
+    let field := fieldOf i.schema
+    let parsed := parseWire i.probe.toModel groupMaximum
+    { argument := parsed
+      stored := parsed
+      introspected := canCarry field
+      decimalAdmitted := if canCarry field then none else some (admitsEncoding field .decimal) }
+
+/-- The obligation fixture collection declares one field of each reported type
+that can never carry a count; a count-carrying field passes on to validation
+this scenario does not configure. -/
+@[conformance_family]
+def obligationField : Family FieldInput Bool where
+  inputs := ["Boolean", "LIST", "DateTime", "DateTime!", "ID"].map fun schema => ⟨schema⟩
+  model := fun i => !canCarry (fieldOf i.schema)
+
+/-- The event source fixture collection declares one field of each reported
+type that can never carry a count; a count-carrying field passes on to
+validation this scenario does not configure. -/
+@[conformance_family]
+def eventSourceField : Family FieldInput Bool where
+  inputs := ["Boolean", "LIST", "DateTime", "DateTime!", "ID"].map fun schema => ⟨schema⟩
+  model := fun i => !canCarry (fieldOf i.schema)
+
+example : fieldCases.all (fun c => fieldOf c.schema == c.field) = true := by native_decide
+
 end Conformance.CountCarrier

@@ -1,5 +1,5 @@
 import { toast } from "sonner";
-import type { UxNotifyCaller } from "@/contrib/plugin";
+import type { UxNotifyCaller, UxNotifyOutcome } from "@/contrib/plugin";
 import { flag, pluginNotifyOn, preferences } from "@/preferences";
 import {
   inNativeShell,
@@ -9,7 +9,7 @@ import {
 } from "../../../lib/nativeShell";
 import { isPluginSubpath, linkRoute } from "../links";
 import type { Route } from "../router";
-import type { Notice } from "./platform";
+import { SYSTEM_BLOCKED, systemBlocks, type Notice } from "./platform";
 import { createTeller, defaultTellerDeps } from "./watch";
 
 export const NOTIFY_TITLE_MAX = 80;
@@ -28,14 +28,20 @@ export type PluginNotifyDeps = {
   switchedOn: (key: string, kind: string) => boolean;
   /** the window is in front and shown */
   focused: () => boolean;
+
+  blocked: () => Promise<boolean>;
   now: () => number;
   /** through the system, opening `to` when clicked */
   tell: (notice: Notice & { to: Route }) => void;
   /** in the app, while its window is in front */
   show: (notice: Notice, open: () => void) => void;
   open: (to: Route) => void;
-  /** offers to turn on a kind the plugin tried while it was off */
-  offer: (caller: UxNotifyCaller, kind: { kind: string; label: string }) => void;
+
+  offer: (
+    caller: UxNotifyCaller,
+    kind: { kind: string; label: string },
+    blocked: boolean,
+  ) => void;
 };
 
 const defaults = (): PluginNotifyDeps => {
@@ -46,6 +52,8 @@ const defaults = (): PluginNotifyDeps => {
     speaks: ({ id }) => !inNativeShell() || speaksHere(id, windowLabel(), windowOpen),
     switchedOn: pluginNotifyOn,
     focused: base.focused,
+
+    blocked: () => systemBlocks(base.platform).catch(() => false),
     now: base.now,
     tell: teller.tell,
     show: (notice, open) =>
@@ -54,17 +62,31 @@ const defaults = (): PluginNotifyDeps => {
         action: { label: "Open", onClick: open },
       }),
     open: base.open,
-    offer: (caller, { kind, label }) =>
-      void toast(`${sender(caller)} wants to notify you about “${label}”`, {
-        id: `notify-offer:${caller.key}:${kind}`,
-        description: "These are off until you turn them on.",
+    offer: (caller, declared, blocked) => {
+      const { title, description } = turnOnOffer(caller, declared, blocked);
+      void toast(title, {
+        id: `notify-offer:${caller.key}:${declared.kind}`,
+        description,
         action: {
           label: "Turn on",
-          onClick: () => preferences.setPluginNotify(caller.key, kind, true),
+          onClick: () => preferences.setPluginNotify(caller.key, declared.kind, true),
         },
-      }),
+      });
+    },
   };
 };
+
+export function turnOnOffer(
+  caller: UxNotifyCaller,
+  { label }: { label: string },
+  blocked: boolean,
+): { title: string; description: string } {
+  const off = "These are off until you turn them on.";
+  return {
+    title: `${sender(caller)} wants to notify you about “${label}”`,
+    description: blocked ? `${off} ${SYSTEM_BLOCKED}` : off,
+  };
+}
 
 /** Whether the window labelled `here` speaks for plugin `pluginId`: its own
     window does while that's open, and the main window otherwise, so one
@@ -88,25 +110,11 @@ const oneLine = (value: string) =>
 
 const sender = (caller: UxNotifyCaller) => oneLine(caller.pack ?? caller.name);
 
-/** The owner of what plugins may tell the person. A plugin asks for one of
-    the kinds its module declared; it is told only while both experimental
-    features are on, in the one window that speaks for the plugin, for a kind the person turned on for
-    that plugin, at most `NOTIFY_RATE_COUNT` a minute. A click opens the
-    plugin's own page, or a place within it, through the route a `gents:`
-    link to it takes; no other target can be named.
-
-    A notice can show on a locked screen and stays in Notification Center,
-    beyond the app's own access checks, so it carries only its sender, a
-    one-line title and an optional one-line body, each length-limited, and
-    nothing else of the plugin's. The sender is the pack the plugin shipped
-    in, the unit the person installed and can remove; a plugin outside a pack
-    is named by its own name. While the window is in front, the same notice
-    shows in the app instead. */
 export function createPluginNotifier(deps: PluginNotifyDeps = defaults()) {
   const sent = new Map<string, number[]>();
   /* a kind that's off is offered once while the app runs, not on every try */
   const offered = new Set<string>();
-  return async (caller: UxNotifyCaller, request: unknown): Promise<void> => {
+  return async (caller: UxNotifyCaller, request: unknown): Promise<UxNotifyOutcome> => {
     const refuse = (why: string): never => {
       throw new Error(`${caller.id}: ctx.notify: ${why}`);
     };
@@ -130,7 +138,7 @@ export function createPluginNotifier(deps: PluginNotifyDeps = defaults()) {
       const once = `${caller.key} ${declared!.kind}`;
       if (!offered.has(once)) {
         offered.add(once);
-        deps.offer(caller, declared!);
+        deps.offer(caller, declared!, await deps.blocked());
       }
       refuse(
         `"${declared!.label}" notifications are off; the app has offered to turn them on`,
@@ -167,7 +175,12 @@ export function createPluginNotifier(deps: PluginNotifyDeps = defaults()) {
       title: `${sender(caller)}: ${line}`,
       ...(detail ? { body: detail } : {}),
     };
-    if (deps.focused()) deps.show(notice, () => deps.open(to));
-    else deps.tell({ ...notice, to });
+    if (deps.focused()) {
+      deps.show(notice, () => deps.open(to));
+      return { status: "sent", via: "app" };
+    }
+    if (await deps.blocked()) return { status: "blocked" };
+    deps.tell({ ...notice, to });
+    return { status: "sent", via: "system" };
   };
 }

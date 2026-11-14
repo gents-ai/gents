@@ -15,6 +15,7 @@ import { deployment } from "./config-panel-wiring/fixtures";
 import { shellStores } from "./shell-fixture";
 import { writeSession } from "../src/hooks/sessionStore";
 import { deferred } from "./deferred";
+import { memorySendAttachments } from "./send-attachments-fixture";
 
 const entry = (id: string, group: string | null = "same"): PendingQueueEntryView => ({
   requestDocId: `doc-${id}`,
@@ -187,6 +188,7 @@ describe("pending message failed mutations and async controls", () => {
       refreshSession,
       refreshSnapshot: vi.fn(),
       reportFailure,
+      sendAttachments: memorySendAttachments(),
     });
     await expect(
       actions.editPendingQueue({
@@ -222,6 +224,7 @@ describe("pending message failed mutations and async controls", () => {
       refreshSession,
       refreshSnapshot: vi.fn(),
       reportFailure,
+      sendAttachments: memorySendAttachments(),
     });
     await expect(
       actions.editPendingQueue({
@@ -271,6 +274,7 @@ describe("pending message failed mutations and async controls", () => {
       refreshSession,
       refreshSnapshot: vi.fn(),
       reportFailure,
+      sendAttachments: memorySendAttachments(),
     });
     const request = {
       nodeDid: deployment.nodeDid,

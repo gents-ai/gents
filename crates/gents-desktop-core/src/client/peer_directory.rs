@@ -17,7 +17,8 @@ use enrollment_endpoints::EnrollmentEndpoint;
 
 /// Why a saved route refuses a chat write: the Lean
 /// `ClientChatReadiness.Cause`, with its `causeToken` and `nextAction`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChatRouteCause {
     NoRoute,
     NoEndpoint,
@@ -26,7 +27,8 @@ pub enum ChatRouteCause {
 
 /// What a refused send tells the user to do: the Lean
 /// `ClientChatReadiness.NextAction`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChatNextAction {
     ConnectRuntime,
     AwaitEndpointAdvertisement,
@@ -113,6 +115,14 @@ pub struct PeerRecord {
 impl PeerRecord {
     pub fn is_enrollment(&self) -> bool {
         self.source.as_deref() == Some("enrollment")
+    }
+
+    /// A record of this desktop's managed node at `node_home` that is not the
+    /// node now there (`current_did`; `None` when the home holds none).
+    pub fn is_stale_local_peer(&self, node_home: &Path, current_did: Option<&str>) -> bool {
+        self.is_managed_runtime()
+            && self.local_node_home.as_deref().map(Path::new) == Some(node_home)
+            && current_did != Some(self.node_did.as_str())
     }
 
     pub fn is_managed_runtime(&self) -> bool {
@@ -878,10 +888,161 @@ pub async fn initialize_local_standard_peer(
         .await
 }
 
+/// Retires this desktop's pairing with a node whose own store is being
+/// retired. The node's identity and the desktop's client store go in the same
+/// locked operation, so there is no live route to tear down and no authority to
+/// withdraw: the record is dropped outright rather than queued for removal,
+/// which would retry forever against a node that cannot answer. If a reset ever
+/// stops retiring the desktop's node store, this must queue a removal instead.
+/// Records for other nodes are untouched.
+pub async fn retire_local_node_records(
+    path: &Path,
+    node_home: &Path,
+    node_did: Option<&str>,
+) -> Result<Vec<PeerRecord>> {
+    let home = std::fs::canonicalize(node_home).unwrap_or_else(|_| node_home.to_path_buf());
+    let node_did = node_did.map(str::trim).filter(|did| !did.is_empty());
+    let retires = |record: &PeerRecord| {
+        node_did.is_some_and(|did| record.node_did == did)
+            || record
+                .local_node_home
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .is_some_and(|value| {
+                    let value = Path::new(value);
+                    value == home || std::fs::canonicalize(value).is_ok_and(|value| value == home)
+                })
+    };
+    let mut directory = PeerDirectory::open_writer(path).await?;
+    let retired: Vec<PeerRecord> = directory
+        .peers
+        .iter()
+        .filter(|record| retires(record))
+        .cloned()
+        .collect();
+    if retired.is_empty() {
+        return Ok(retired);
+    }
+    let mut candidate = directory.clone();
+    candidate.peers.retain(|record| !retires(record));
+    candidate.pending_removals.retain(|record| !retires(record));
+    candidate.ended_access.retain(|ended| {
+        !retired
+            .iter()
+            .any(|record| record.node_did == ended.node_did)
+    });
+    candidate.enrollment_endpoints.retain(|endpoint| {
+        !retired
+            .iter()
+            .any(|record| endpoint.names_node(&record.node_did))
+    });
+    directory.commit(candidate).await?;
+    Ok(retired)
+}
+
 pub async fn load_peer_records(path: &Path) -> Result<Vec<PeerRecord>> {
     let mut records = read_stored_directory(path).await?.peers;
     sort_peer_records(&mut records);
     Ok(records)
+}
+
+/// Moves the saved records of the local node at `node_home` that are not the
+/// node now there (`current_did`; `None` when the home holds none) into
+/// `archive`, appending to records an earlier retirement left there. Left in
+/// place, a desktop reconnects to a node that is gone and counts it as a saved
+/// node, so setup never runs. Remote peers stay. The archive is written before
+/// `peers.json` changes, so an interrupted retirement loses no record.
+pub async fn retire_stale_local_peers(
+    path: &Path,
+    node_home: &Path,
+    current_did: Option<&str>,
+    archive: &Path,
+) -> Result<usize> {
+    let mut directory = PeerDirectory::open_writer(path).await?;
+    let mut candidate = directory.clone();
+    let (stale, kept): (Vec<_>, Vec<_>) = candidate
+        .peers
+        .drain(..)
+        .partition(|peer| peer.is_stale_local_peer(node_home, current_did));
+    if stale.is_empty() {
+        return Ok(0);
+    }
+    candidate.peers = kept;
+    let mut archived: Vec<PeerRecord> = match tokio::fs::read(archive).await {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(records) => records,
+            // A broken archive is kept aside rather than blocking every start.
+            Err(_) => {
+                set_aside_unreadable(archive).await?;
+                Vec::new()
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", archive.display())),
+    };
+    archived.extend(stale.iter().cloned());
+    let staged = archive.with_extension("json.staged");
+    let mut file = tokio::fs::File::create(&staged)
+        .await
+        .with_context(|| format!("creating {}", staged.display()))?;
+    tokio::io::AsyncWriteExt::write_all(&mut file, &serde_json::to_vec_pretty(&archived)?)
+        .await
+        .with_context(|| format!("writing {}", staged.display()))?;
+    file.sync_all()
+        .await
+        .with_context(|| format!("syncing {}", staged.display()))?;
+    drop(file);
+    tokio::fs::rename(&staged, archive)
+        .await
+        .with_context(|| format!("persisting {}", archive.display()))?;
+    directory.commit(candidate).await?;
+    Ok(stale.len())
+}
+
+/// Renames an unreadable `peers.json` aside so startup can continue without
+/// it. A running desktop holds the lease for its lifetime, so a held lease
+/// leaves the file alone.
+pub async fn set_aside_unreadable_peer_directory(path: &Path) -> Result<Option<PathBuf>> {
+    if read_stored_directory(path)
+        .await
+        .and_then(|stored| validate_fresh_directory(&stored))
+        .is_ok()
+    {
+        return Ok(None);
+    }
+    let lock_path = path.with_extension("lock");
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("opening peer-directory lock {}", lock_path.display()))?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => return Ok(None),
+        Err(TryLockError::Error(error)) => {
+            return Err(error).with_context(|| format!("locking peer directory {}", path.display()))
+        }
+    }
+    let _lease = PeerDirectoryLease(lock);
+    set_aside_unreadable(path).await.map(Some)
+}
+
+/// Renames `path` to a fresh `<name>.json.unreadable-<stamp>` sibling.
+pub async fn set_aside_unreadable(path: &Path) -> Result<PathBuf> {
+    let stamp = Utc::now().format("%Y-%m-%d-%H%M%S");
+    let mut target = path.with_extension(format!("json.unreadable-{stamp}"));
+    let mut attempt = 1;
+    while tokio::fs::try_exists(&target).await? {
+        attempt += 1;
+        target = path.with_extension(format!("json.unreadable-{stamp}-{attempt}"));
+    }
+    tokio::fs::rename(path, &target)
+        .await
+        .with_context(|| format!("setting aside {} as {}", path.display(), target.display()))?;
+    Ok(target)
 }
 
 fn normalize_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a str> {
@@ -936,6 +1097,149 @@ fn sort_peer_records(records: &mut [PeerRecord]) {
 pub(crate) mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn garbage_saved_connections_are_set_aside() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        std::fs::write(&path, "{").unwrap();
+        let moved = set_aside_unreadable_peer_directory(&path)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!path.exists());
+        assert!(moved
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("peers.json.unreadable-"));
+        assert_eq!(std::fs::read(&moved).unwrap(), b"{");
+        assert!(load_peer_records(&path).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn only_local_peers_of_another_node_at_the_home_are_retired() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let archive = tempdir.path().join("local-peers.json");
+        let peer = |peer_id: &str, node_did: &str, home: Option<&str>| {
+            serde_json::json!({
+                "peer_id": peer_id, "node_did": node_did, "label": peer_id, "addr": "iroh:peer",
+                "source": "enrollment", "graphql": "http://127.0.0.1:21919/api/v0/graphql",
+                "local_node_home": home,
+                "created_at": "2026-11-04T00:00:00Z", "updated_at": "2026-11-04T00:00:00Z"
+            })
+        };
+        let peers = [
+            peer("old", "did:test:old", Some("/home")),
+            peer("current", "did:test:new", Some("/home")),
+            peer("other-home", "did:test:other", Some("/elsewhere")),
+            peer("remote", "did:test:remote", None),
+        ];
+        std::fs::write(&path, serde_json::json!({ "peers": peers }).to_string()).unwrap();
+        let earlier = [peer("earlier", "did:test:older", Some("/home"))];
+        std::fs::write(&archive, serde_json::json!(earlier).to_string()).unwrap();
+
+        let retired =
+            retire_stale_local_peers(&path, Path::new("/home"), Some("did:test:new"), &archive)
+                .await
+                .unwrap();
+
+        assert_eq!(retired, 1);
+        let kept: Vec<_> = load_peer_records(&path)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|peer| peer.peer_id)
+            .collect();
+        assert_eq!(kept, ["current", "other-home", "remote"]);
+        let archived: Vec<PeerRecord> =
+            serde_json::from_slice(&std::fs::read(&archive).unwrap()).unwrap();
+        assert_eq!(
+            archived
+                .iter()
+                .map(|peer| peer.peer_id.as_str())
+                .collect::<Vec<_>>(),
+            ["earlier", "old"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_broken_archive_is_set_aside_and_the_stale_peer_still_retires() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let archive = tempdir.path().join("local-peers.json");
+        let peer = serde_json::json!({
+            "peer_id": "old", "node_did": "did:test:old", "label": "old", "addr": "iroh:peer",
+            "source": "enrollment", "graphql": "http://127.0.0.1:21919/api/v0/graphql",
+            "local_node_home": "/home",
+            "created_at": "2026-11-04T00:00:00Z", "updated_at": "2026-11-04T00:00:00Z"
+        });
+        std::fs::write(&path, serde_json::json!({ "peers": [peer] }).to_string()).unwrap();
+        std::fs::write(&archive, "{ not json").unwrap();
+
+        let retired = retire_stale_local_peers(&path, Path::new("/home"), None, &archive)
+            .await
+            .unwrap();
+
+        assert_eq!(retired, 1);
+        assert!(load_peer_records(&path).await.unwrap().is_empty());
+        let archived: Vec<PeerRecord> =
+            serde_json::from_slice(&std::fs::read(&archive).unwrap()).unwrap();
+        assert_eq!(archived[0].peer_id, "old");
+        let aside: Vec<_> = std::fs::read_dir(tempdir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("local-peers.json.unreadable-"))
+            .collect();
+        assert_eq!(aside.len(), 1, "{aside:?}");
+    }
+
+    #[tokio::test]
+    async fn an_old_source_is_set_aside() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let peer = serde_json::json!({
+            "peer_id": "peer", "node_did": "did:test:runtime", "label": "runtime", "addr": "iroh:peer",
+            "source": "manual",
+            "created_at": "2026-11-04T00:00:00Z", "updated_at": "2026-11-04T00:00:00Z"
+        });
+        std::fs::write(&path, serde_json::json!({ "peers": [peer] }).to_string()).unwrap();
+        assert!(set_aside_unreadable_peer_directory(&path)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn readable_connections_are_left_alone() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        assert!(set_aside_unreadable_peer_directory(&path)
+            .await
+            .unwrap()
+            .is_none());
+        std::fs::write(&path, r#"{"peers":[]}"#).unwrap();
+        assert!(set_aside_unreadable_peer_directory(&path)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(path.exists());
+    }
+
+    #[tokio::test]
+    async fn a_held_lease_leaves_the_file() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let _owner = PeerDirectory::open_writer(&path).await.unwrap();
+        std::fs::write(&path, "{").unwrap();
+        assert!(set_aside_unreadable_peer_directory(&path)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(path.exists());
+    }
+
     #[test]
     fn operator_endpoint_requires_the_canonical_runtime_suffix() {
         let mut record: PeerRecord = serde_json::from_value(serde_json::json!({
@@ -971,6 +1275,37 @@ pub(crate) mod tests {
             ended_access: Vec::new(),
         })
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn retiring_a_node_drops_only_its_own_pairing() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let home = tempdir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let mut directory = PeerDirectory::load(&path).await.unwrap();
+        let mut local = PeerRecord::new("Forge", "iroh://forge", "did:key:old");
+        local.source = Some("enrollment".to_string());
+        local.graphql = Some("http://127.0.0.1:9191/api/v0/graphql".to_string());
+        local.local_node_home = Some(home.to_string_lossy().into_owned());
+        directory.upsert(local.clone()).await.unwrap();
+        let remote = PeerRecord::new("Mandrake", "iroh://mandrake", "did:key:remote");
+        directory.upsert(remote.clone()).await.unwrap();
+        drop(directory);
+
+        let retired = retire_local_node_records(&path, &home, Some("did:key:old"))
+            .await
+            .unwrap();
+        assert_eq!(retired.len(), 1);
+        assert_eq!(retired[0].node_did, "did:key:old");
+        let left = load_peer_records(&path).await.unwrap();
+        assert_eq!(
+            left.iter().map(|r| r.node_did.clone()).collect::<Vec<_>>(),
+            vec!["did:key:remote".to_string()]
+        );
+        let reopened = PeerDirectory::load(&path).await.unwrap();
+        assert!(reopened.pending_removals().is_empty());
+        assert!(reopened.retired_enrollment_digests().is_empty());
     }
 
     #[tokio::test]
@@ -1051,58 +1386,49 @@ pub(crate) mod tests {
 
     #[test]
     fn generated_enrollment_route_readiness_matches_lean() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["enrollment_route_readiness_cases"]
-            .as_array()
-            .unwrap();
-        assert!(!cases.is_empty());
         let now = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        for case in cases {
-            let flag = |name: &str| case[name].as_bool().unwrap();
+        gents_lean_vocab::families::enrollment_pending_requests_route_readiness::replay(|case| {
             let mut peer = PeerRecord::base("runtime", "peer", "node");
-            peer.source = flag("enrollment").then(|| "enrollment".into());
-            peer.pairing_ready = flag("route_applied");
-            peer.pairing_network_id = flag("network").then(|| "network".into());
-            peer.enrollment_request_digest = flag("digest").then(|| "digest".into());
-            peer.enrollment_authorization_sequence = flag("sequence_fresh").then_some(1);
-            peer.enrollment_authorization_expires_at = Some(if flag("lease_fresh") {
+            peer.source = case.enrollment.then(|| "enrollment".into());
+            peer.pairing_ready = case.route_applied;
+            peer.pairing_network_id = case.network.then(|| "network".into());
+            peer.enrollment_request_digest = case.digest.then(|| "digest".into());
+            peer.enrollment_authorization_sequence = case.sequence_fresh.then_some(1);
+            peer.enrollment_authorization_expires_at = Some(if case.lease_fresh {
                 "2026-01-02T00:00:00Z".into()
             } else {
                 "2025-12-31T00:00:00Z".into()
             });
-            if flag("operator_endpoint") {
+            if case.operator_endpoint {
                 peer.graphql = Some("http://127.0.0.1:9191/api/v0/graphql".into());
                 peer.local_node_home = Some("/runtime".into());
             }
-            assert_eq!(
-                peer.is_enrollment_ready_at(now),
-                flag("expected_ready"),
-                "{}",
-                case["name"]
-            );
-        }
+            gents_lean_vocab::families::enrollment_pending_requests_route_readiness::RouteReadinessOutput {
+                ready: peer.is_enrollment_ready_at(now),
+            }
+        });
     }
 
     /// Materializes a Lean `ClientChatReadiness.Route` as the record the
-    /// native directory holds; `null` is no route.
-    pub(crate) fn chat_case_record(route: &serde_json::Value) -> Option<PeerRecord> {
-        if route.is_null() {
-            return None;
-        }
-        let flag = |name: &str| route[name].as_bool().unwrap();
+    /// native directory holds.
+    pub(crate) fn chat_case_record(
+        source: Option<&str>,
+        operator_endpoint: bool,
+        managed: bool,
+    ) -> PeerRecord {
         let mut peer = PeerRecord::base("runtime", "peer", "did:key:runtime");
-        peer.source = route["source"].as_str().map(str::to_owned);
-        peer.graphql = match (flag("operator_endpoint"), flag("managed")) {
+        peer.source = source.map(str::to_owned);
+        peer.graphql = match (operator_endpoint, managed) {
             (true, _) => Some("http://127.0.0.1:9191/api/v0/graphql".into()),
             (false, true) => Some("http://127.0.0.1:9191/graphql".into()),
             (false, false) => None,
         };
-        peer.local_node_home = flag("managed").then(|| "/runtime/home".into());
-        assert_eq!(peer.operator_graphql().is_some(), flag("operator_endpoint"));
-        assert_eq!(peer.is_managed_runtime(), flag("managed"));
-        Some(peer)
+        peer.local_node_home = managed.then(|| "/runtime/home".into());
+        assert_eq!(peer.operator_graphql().is_some(), operator_endpoint);
+        assert_eq!(peer.is_managed_runtime(), managed);
+        peer
     }
 
     /// The P2P route observations the Lean route does not carry. Each Lean
@@ -1129,62 +1455,47 @@ pub(crate) mod tests {
         observed
     }
 
-    /// Every Lean `ClientChatReadiness` fence case as (record, refusal), each
-    /// record under every route observation.
-    pub(crate) fn chat_readiness_cases() -> Vec<(Option<PeerRecord>, Option<String>)> {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        snapshot["client_chat_readiness_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .flat_map(|case| {
-                let refusal = case["refusal"].as_str().map(str::to_owned);
-                match chat_case_record(&case["route"]) {
-                    None => vec![(None, refusal)],
-                    Some(record) => with_route_observations(&record)
-                        .into_iter()
-                        .map(|peer| (Some(peer), refusal.clone()))
-                        .collect(),
-                }
-            })
-            .collect()
-    }
-
     #[test]
     fn chat_readiness_matches_lean() {
-        let cases = chat_readiness_cases();
-        assert!(cases.len() > 100, "{}", cases.len());
-        let mut sources = std::collections::BTreeSet::new();
-        for (record, refusal) in cases {
-            let Some(record) = record else {
-                assert_eq!(refusal.as_deref(), Some("no_route"));
-                continue;
-            };
-            sources.insert(record.source.clone());
-            assert_eq!(
-                record.chat_refusal().map(ChatRouteCause::token),
-                refusal.as_deref(),
-                "{record:?}"
+        for case in
+            gents_lean_vocab::families::chat_readiness_cases_saved_record::cases::<ChatRouteCause>()
+        {
+            let route = case.input.route.as_ref().expect("a saved record");
+            let record = chat_case_record(
+                route.source.as_deref(),
+                route.operator_endpoint,
+                route.managed,
             );
-            assert_eq!(record.is_chat_ready(), refusal.is_none(), "{record:?}");
+            let mut refusals = Vec::new();
+            for peer in with_route_observations(&record) {
+                let refusal = peer.chat_refusal();
+                assert_eq!(peer.is_chat_ready(), refusal.is_none(), "{peer:?}");
+                refusals.push(refusal);
+            }
+            assert!(
+                refusals.windows(2).all(|pair| pair[0] == pair[1]),
+                "{refusals:?}"
+            );
+            case.check(
+                gents_lean_vocab::families::chat_readiness_cases_saved_record::FenceOutput {
+                    refusal: refusals[0],
+                },
+            );
         }
-        assert_eq!(sources.len(), 4, "{sources:?}");
     }
 
     #[test]
-    fn chat_refusal_causes_match_lean() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let causes = snapshot["client_chat_readiness_causes"].as_array().unwrap();
-        let native = [
-            ChatRouteCause::NoRoute,
-            ChatRouteCause::NoEndpoint,
-            ChatRouteCause::EndpointNotAdvertised,
-        ];
-        assert_eq!(causes.len(), native.len());
-        for (case, cause) in causes.iter().zip(native) {
-            assert_eq!(case["cause"], cause.token());
-            assert_eq!(case["next_action"], cause.next_action().token());
-        }
+    fn chat_refusal_cause_tokens_match_lean() {
+        gents_lean_vocab::families::client_chat_readiness_cause_token::replay::<ChatRouteCause>(
+            |i| i.cause.token().to_owned(),
+        );
+    }
+
+    #[test]
+    fn chat_next_action_tokens_match_lean() {
+        gents_lean_vocab::families::client_chat_readiness_next_action_token::replay::<ChatNextAction>(
+            |i| i.next_action.token().to_owned(),
+        );
     }
 
     async fn joined(directory: &mut PeerDirectory, digest: &str, expires_at: &str) -> PeerRecord {
@@ -1728,5 +2039,17 @@ pub(crate) mod tests {
             reloaded[0].graphql.as_deref(),
             Some("http://127.0.0.1:9192/api/v0/graphql")
         );
+    }
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn chat_route_cause_next_action_matches_lean() {
+        gents_lean_vocab::families::client_chat_readiness_next_action::replay(|i| {
+            ChatRouteCause::next_action(i.cause)
+        });
     }
 }

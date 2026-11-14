@@ -1,4 +1,4 @@
-use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
@@ -8,11 +8,11 @@ use super::manifest::SourceEdgeExpectation;
 use super::results::graphql_rows;
 use super::stages::StageResult;
 use super::tool_calls::canonical_stage_tool_rows;
-use gents::store::graphql::{escape_graphql_string, validate_collection_identifier};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::transcript::present_message;
+use gents_store::graphql::{escape_graphql_string, validate_collection_identifier};
 
 #[derive(Debug, Clone)]
 pub(super) struct StageProvenance {
@@ -257,11 +257,12 @@ pub(super) async fn verify_stage_provenance(
     let terminal_output = match selection {
         TerminalOutput::Message { message_doc_id } => {
             let access = ConfigAccess::Graphql(graphql.clone());
-            let observation = gents::session::observe_request_output(&access, &request)
+            let observation = gents_session::session::observe_request_output(&access, &request)
                 .await
                 .context("resolving the selected canonical terminal output")?;
-            let gents::session::CanonicalRequestOutput::TerminalMessage {
-                message: native, ..
+            let gents_session::session::CanonicalRequestOutput::TerminalMessage {
+                message: native,
+                ..
             } = observation
             else {
                 bail!(

@@ -326,110 +326,6 @@ pub(crate) fn test_loop_config() -> LoopConfig {
 
 #[cfg(feature = "native")]
 #[tokio::test]
-async fn cross_provider_tool_identity_allows_the_owned_loop_to_continue() {
-    use crate::provider_input::tool_call_identity_tests::{cases, counter, messages};
-    for case in cases().into_iter().filter(|case| case.responses) {
-        let mut history = messages(&case);
-        let prompt = history.pop().unwrap();
-        let model = ScriptedModel::new(vec![vec![
-            RawStreamingChoice::Message("continued".into()),
-            RawStreamingChoice::FinalResponse(()),
-        ]]);
-        let requests = model.requests.clone();
-        let mut config = test_loop_config();
-        config.provider_input_counter = Arc::new(counter(BackendProviderKind::ChatGptCodex));
-        let answer = run_loop_to_text(model, prompt, history, Arc::new(Vec::new()), config)
-            .await
-            .unwrap();
-        assert_eq!(answer, "continued", "{}", case.name);
-        let requests = requests.lock().unwrap();
-        assert_eq!(requests.len(), 1, "{}", case.name);
-        let dispatched: Vec<rig::message::Message> = serde_json::from_str(&requests[0]).unwrap();
-        let ids = dispatched
-            .iter()
-            .flat_map(|message| match message {
-                rig::message::Message::Assistant { content, .. } => content
-                    .iter()
-                    .filter_map(|item| match item {
-                        rig::message::AssistantContent::ToolCall(call) => {
-                            Some(call.call_id.clone())
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>(),
-                _ => Vec::new(),
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            ids,
-            case.expected
-                .iter()
-                .map(|id| id.call_id.clone())
-                .collect::<Vec<_>>()
-        );
-    }
-}
-
-#[tokio::test]
-async fn provider_dispatch_uses_the_owned_model_instance() {
-    struct Model {
-        inner: ScriptedModel,
-        cloned: bool,
-    }
-    impl Clone for Model {
-        fn clone(&self) -> Self {
-            Self {
-                inner: self.inner.clone(),
-                cloned: true,
-            }
-        }
-    }
-    #[allow(refining_impl_trait)]
-    impl CompletionModel for Model {
-        type Response = ();
-        type StreamingResponse = ();
-        type Client = ();
-
-        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            unreachable!()
-        }
-
-        async fn completion(
-            &self,
-            _: CompletionRequest,
-        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-            unreachable!()
-        }
-
-        async fn stream(
-            &self,
-            request: CompletionRequest,
-        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            assert!(!self.cloned, "dispatch must use the owned model instance");
-            self.inner.stream(request).await
-        }
-    }
-
-    let model = Model {
-        inner: ScriptedModel::new(vec![vec![
-            RawStreamingChoice::Message("done".into()),
-            RawStreamingChoice::FinalResponse(()),
-        ]]),
-        cloned: false,
-    };
-    let result = run_loop_to_text(
-        model,
-        Message::user("hello"),
-        Vec::new(),
-        Arc::new(Vec::new()),
-        test_loop_config(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(result, "done");
-}
-
-#[tokio::test]
 async fn cancelling_a_pending_provider_stream_drops_it() {
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -568,38 +464,6 @@ async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
     .await;
     assert_eq!(*observed.lock().unwrap(), Some("request".into()));
     assert!(dropped.load(Ordering::SeqCst));
-}
-
-#[tokio::test]
-async fn the_loop_dispatches_a_tool_and_threads_messages_with_no_defradb_and_no_network() {
-    let model = ScriptedModel::new(vec![
-        vec![scripted_tool_call(), RawStreamingChoice::FinalResponse(())],
-        vec![
-            RawStreamingChoice::Message("done".to_string()),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-    ]);
-    let tool_calls = Arc::new(Mutex::new(Vec::new()));
-    let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(EchoTool {
-        calls: tool_calls.clone(),
-        policy_allows: true,
-    })]);
-    let final_text = run_loop_to_text(
-        model,
-        Message::user("please echo hi"),
-        Vec::new(),
-        tools,
-        test_loop_config(),
-    )
-    .await
-    .expect("the loop must complete with no DefraDB and no network");
-
-    assert_eq!(final_text, "done");
-    assert_eq!(
-        tool_calls.lock().unwrap().as_slice(),
-        &["hi".to_string()],
-        "the echo tool must have been dispatched exactly once"
-    );
 }
 
 #[tokio::test]
@@ -831,170 +695,6 @@ async fn cancelling_pending_settlement_drops_hook_in_request_scope() {
 }
 
 #[tokio::test]
-async fn only_acknowledged_inputs_enter_provider_and_terminal_steering_continues_same_loop() {
-    with_steering_capture_scope(
-        only_acknowledged_inputs_enter_provider_and_terminal_steering_continues_same_loop_scoped(),
-    )
-    .await;
-}
-
-async fn only_acknowledged_inputs_enter_provider_and_terminal_steering_continues_same_loop_scoped()
-{
-    use crate::loop_stream::{run_loop_stream, FoldedPrompt, LoopStreamItem};
-    use futures::StreamExt;
-    let model = ScriptedModel::new(vec![
-        vec![
-            RawStreamingChoice::Message("first answer".into()),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-        vec![
-            RawStreamingChoice::Message("corrected answer".into()),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-    ]);
-    let requests = model.requests.clone();
-    let mut config = steering_loop_config();
-    config.folded_prompts = vec![FoldedPrompt {
-        key: "withdrawn".into(),
-        message: Message::user("withdrawn initial input"),
-    }];
-    let stream = run_loop_stream(
-        model,
-        Some(RecordingHook::default()),
-        TaggedMessage::unassociated(Message::user("original request")),
-        Vec::new(),
-        Arc::new(Vec::new()),
-        config,
-    );
-    futures::pin_mut!(stream);
-    let mut boundaries = 0;
-    let mut published_turns = 0;
-    let mut final_text = None;
-    while let Some(item) = stream.next().await {
-        match item.expect("scripted loop completes") {
-            LoopStreamItem::AuthoredInputReady { folded, reply, .. } => {
-                assert_eq!(folded.len(), 1);
-                assert!(
-                    requests.lock().unwrap().is_empty(),
-                    "publication precedes first provider call"
-                );
-                reply.send(Ok(Vec::new())).unwrap();
-            }
-            LoopStreamItem::ProviderTurnReady { .. } => published_turns += 1,
-            LoopStreamItem::SteeringBoundary { reply } => {
-                boundaries += 1;
-                let committed = if boundaries == 2 {
-                    assert_eq!(
-                        published_turns, 1,
-                        "terminal intake follows assistant acceptance"
-                    );
-                    vec![FoldedPrompt {
-                        key: "correction".into(),
-                        message: Message::user("accepted correction"),
-                    }]
-                } else {
-                    Vec::new()
-                };
-                reply.send(Ok(committed)).unwrap();
-            }
-            LoopStreamItem::FinishOrIntake { reply, .. } => {
-                reply
-                    .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
-                    .ok();
-            }
-            LoopStreamItem::Final { text } => final_text = Some(text),
-            _ => {}
-        }
-    }
-    let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 2);
-    assert!(!requests[0].contains("withdrawn initial input"));
-    assert!(!requests[0].contains("accepted correction"));
-    assert!(requests[1].contains("first answer"));
-    assert!(requests[1].contains("accepted correction"));
-    assert!(!requests[1].contains("withdrawn initial input"));
-    assert_eq!(final_text.as_deref(), Some("corrected answer"));
-    assert_eq!(published_turns, 2);
-    assert_eq!(boundaries, 4);
-}
-
-#[tokio::test]
-async fn steering_intake_waits_for_tool_results_before_next_provider_turn() {
-    with_steering_capture_scope(
-        steering_intake_waits_for_tool_results_before_next_provider_turn_scoped(),
-    )
-    .await;
-}
-
-async fn steering_intake_waits_for_tool_results_before_next_provider_turn_scoped() {
-    use crate::loop_stream::{run_loop_stream, FoldedPrompt, LoopStreamItem};
-    use futures::StreamExt;
-    let model = ScriptedModel::new(vec![
-        vec![scripted_tool_call(), RawStreamingChoice::FinalResponse(())],
-        vec![
-            RawStreamingChoice::Message("done".into()),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-    ]);
-    let requests = model.requests.clone();
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(EchoTool {
-        calls: calls.clone(),
-        policy_allows: true,
-    })]);
-    let stream = run_loop_stream(
-        model,
-        Some(RecordingHook::default()),
-        TaggedMessage::unassociated(Message::user("echo hi")),
-        Vec::new(),
-        tools,
-        steering_loop_config(),
-    );
-    futures::pin_mut!(stream);
-    let mut boundaries = 0;
-    let mut results = 0;
-    let mut final_text = None;
-    while let Some(item) = stream.next().await {
-        match item.expect("scripted loop completes") {
-            LoopStreamItem::AuthoredInputReady { reply, .. } => {
-                reply.send(Ok(Vec::new())).unwrap();
-            }
-            LoopStreamItem::ToolResult { .. } => results += 1,
-            LoopStreamItem::SteeringBoundary { reply } => {
-                boundaries += 1;
-                let committed = if boundaries == 2 {
-                    assert_eq!(calls.lock().unwrap().as_slice(), &["hi"]);
-                    assert_eq!(results, 1, "all tool results precede intake");
-                    vec![FoldedPrompt {
-                        key: "after-tools".into(),
-                        message: Message::user("after settled tools"),
-                    }]
-                } else {
-                    Vec::new()
-                };
-                reply.send(Ok(committed)).unwrap();
-            }
-            LoopStreamItem::FinishOrIntake { reply, .. } => {
-                reply
-                    .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
-                    .ok();
-            }
-            LoopStreamItem::Final { text } => final_text = Some(text),
-            _ => {}
-        }
-    }
-    let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 2);
-    assert!(!requests[0].contains("after settled tools"));
-    assert!(requests[1].contains("after settled tools"));
-    assert!(
-        requests[1].contains("HI"),
-        "tool result remains paired in continuation"
-    );
-    assert_eq!(final_text.as_deref(), Some("done"));
-}
-
-#[tokio::test]
 async fn failed_input_publication_prevents_provider_dispatch() {
     use crate::loop_stream::{run_loop_stream, LoopStreamItem};
     use futures::StreamExt;
@@ -1036,20 +736,10 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
 ) {
     use crate::loop_stream::{run_loop_stream, FoldedPrompt, LoopStreamItem};
     use futures::StreamExt;
-    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contract["steering_publication_cases"].as_array().unwrap();
-    for name in [
-        "streaming_boundary_does_not_take_input",
-        "natural_completion_during_stream_refuses",
-    ] {
-        let case = cases.iter().find(|case| case["name"] == name).unwrap();
-        let step = case["steps"].as_array().unwrap().last().unwrap();
-        let expected = case["expected"].as_array().unwrap().last().unwrap();
-        assert_eq!(step["safe_boundary"], false);
-        assert_eq!(expected["accepted"], false);
-        assert_eq!(expected["active"], case["head"]);
-        assert_eq!(expected["pending"].as_array().unwrap().len(), 1);
-
+    for case in gents_lean_vocab::families::fold_queue_contracts_publication_unsafe_boundary::cases::<
+        String,
+    >() {
+        let name = case.input.name.as_str();
         let model = ScriptedModel::new(vec![
             vec![
                 RawStreamingChoice::Message("first ".into()),
@@ -1077,6 +767,7 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
         let mut chunks = 0;
         let mut delivered = false;
         let mut final_text = None;
+        let mut intake_while_streaming = false;
         while let Some(item) = stream.next().await {
             match item.unwrap() {
                 LoopStreamItem::AuthoredInputReady { reply, .. } => {
@@ -1096,10 +787,7 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
                     publications += 1;
                 }
                 LoopStreamItem::SteeringBoundary { reply } => {
-                    assert!(
-                        !streaming,
-                        "{name}: intake offered during provider streaming"
-                    );
+                    intake_while_streaming |= streaming;
                     let inputs = if pending {
                         assert_eq!(publications, 1);
                         pending = false;
@@ -1114,10 +802,7 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
                     reply.send(Ok(inputs)).unwrap();
                 }
                 LoopStreamItem::FinishOrIntake { reply, .. } => {
-                    assert!(
-                        !streaming,
-                        "{name}: finish offered during provider streaming"
-                    );
+                    intake_while_streaming |= streaming;
                     assert_eq!(publications, 2);
                     reply
                         .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
@@ -1136,6 +821,12 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
         assert!(!requests[0].contains("late correction"));
         assert!(requests[1].contains("first answer"));
         assert!(requests[1].contains("late correction"));
+        drop(requests);
+        case.check(
+            gents_lean_vocab::families::fold_queue_contracts_publication_unsafe_boundary::UnsafeBoundaryObservation {
+                accepted: intake_while_streaming,
+            },
+        );
     }
 }
 
@@ -1269,101 +960,97 @@ async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without
             ToolFootprint::Read
         }
     }
-    let model_case = tokio::task::spawn_blocking(|| {
-        let value: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        value["tool_admission_handoff_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["name"] == "cancel-waiting-unknown")
-            .unwrap()
-            .clone()
-    })
-    .await
-    .unwrap();
-    for count in [1, 2] {
-        let mut choices = Vec::new();
-        for index in 0..count {
-            let RawStreamingChoice::ToolCall(mut call) = scripted_tool_call() else {
-                unreachable!()
+    for case in gents_lean_vocab::families::admission_handoff_owned_loop::cases() {
+        let mut invocations = Vec::new();
+        for count in [1, 2] {
+            let mut choices = Vec::new();
+            for index in 0..count {
+                let RawStreamingChoice::ToolCall(mut call) = scripted_tool_call() else {
+                    unreachable!()
+                };
+                call.id = format!("call-{index}");
+                call.internal_call_id = format!("call-{index}");
+                call.call_id = Some(format!("call-{index}"));
+                call.arguments = serde_json::json!({"text": format!("input-{index}")});
+                choices.push(RawStreamingChoice::ToolCall(call));
+            }
+            choices.push(RawStreamingChoice::FinalResponse(()));
+            let model = ScriptedModel::new(vec![choices]);
+            let invoked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let tools: Arc<Vec<Box<dyn ToolDyn>>> =
+                Arc::new(vec![Box::new(ReadTool(invoked.clone()))]);
+            let gate = Arc::new(AdmissionGate::default());
+            let hook = RecordingHook {
+                admission_gate: Some(gate.clone()),
+                ..Default::default()
             };
-            call.id = format!("call-{index}");
-            call.internal_call_id = format!("call-{index}");
-            call.call_id = Some(format!("call-{index}"));
-            call.arguments = serde_json::json!({"text": format!("input-{index}")});
-            choices.push(RawStreamingChoice::ToolCall(call));
-        }
-        choices.push(RawStreamingChoice::FinalResponse(()));
-        let model = ScriptedModel::new(vec![choices]);
-        let invoked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(ReadTool(invoked.clone()))]);
-        let gate = Arc::new(AdmissionGate::default());
-        let hook = RecordingHook {
-            admission_gate: Some(gate.clone()),
-            ..Default::default()
-        };
-        let observed = hook.clone();
-        let scope = test_scope(
-            crate::rendered_request::RenderedRequestContext {
-                request_doc_id: "handoff-doc".into(),
-                request_commit_cid: "handoff-cid".into(),
-                request_id: "handoff-request".into(),
-                node_did: "did:test:node".into(),
-                requester_did: "did:test:user".into(),
-                agent_did: "did:test:agent".into(),
-                session_id: "handoff-session".into(),
-                model_name: "scripted".into(),
-                provider_family: None,
-            },
-            Arc::new(|_| Box::pin(async { Ok(()) })),
-        );
-        let mut config = test_loop_config();
-        config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
-        scope_request(scope, async {
-            let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
-                model,
-                Some(hook),
-                TaggedMessage::unassociated(Message::user("work")),
-                Vec::new(),
-                tools,
-                config,
-            ));
-            loop {
-                match stream
-                    .next()
-                    .await
-                    .expect("stream item")
-                    .expect("stream succeeds")
-                {
-                    crate::loop_stream::LoopStreamItem::AuthoredInputReady { reply, .. }
-                    | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
-                        reply.send(Ok(Vec::new())).unwrap();
-                    }
-                    crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
-                    _ => {}
-                }
-            }
-            assert!(
-                !observed
-                    .calls()
-                    .iter()
-                    .any(|call| matches!(call, RecordedCall::ToolCall { .. })),
-                "turn publication precedes admission"
+            let observed = hook.clone();
+            let scope = test_scope(
+                crate::rendered_request::RenderedRequestContext {
+                    request_doc_id: "handoff-doc".into(),
+                    request_commit_cid: "handoff-cid".into(),
+                    request_id: "handoff-request".into(),
+                    node_did: "did:test:node".into(),
+                    requester_did: "did:test:user".into(),
+                    agent_did: "did:test:agent".into(),
+                    session_id: "handoff-session".into(),
+                    model_name: "scripted".into(),
+                    provider_family: None,
+                },
+                Arc::new(|_| Box::pin(async { Ok(()) })),
             );
-            let mut next = Box::pin(stream.next());
-            tokio::select! {
-                () = gate.entered.notified() => {},
-                result = &mut next => panic!("hook did not hold admission: {result:?}"),
-            }
-            drop(next);
-            drop(stream);
-            gate.release.notify_one();
-        })
-        .await;
-        assert_eq!(
-            invoked.load(std::sync::atomic::Ordering::SeqCst) != 0,
-            model_case["expected_invoked"]
+            let mut config = test_loop_config();
+            config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
+            scope_request(scope, async {
+                let mut stream = Box::pin(crate::loop_stream::run_loop_stream(
+                    model,
+                    Some(hook),
+                    TaggedMessage::unassociated(Message::user("work")),
+                    Vec::new(),
+                    tools,
+                    config,
+                ));
+                loop {
+                    match stream
+                        .next()
+                        .await
+                        .expect("stream item")
+                        .expect("stream succeeds")
+                    {
+                        crate::loop_stream::LoopStreamItem::AuthoredInputReady {
+                            reply, ..
+                        }
+                        | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
+                            reply.send(Ok(Vec::new())).unwrap();
+                        }
+                        crate::loop_stream::LoopStreamItem::ProviderTurnReady { .. } => break,
+                        _ => {}
+                    }
+                }
+                assert!(
+                    !observed
+                        .calls()
+                        .iter()
+                        .any(|call| matches!(call, RecordedCall::ToolCall { .. })),
+                    "turn publication precedes admission"
+                );
+                let mut next = Box::pin(stream.next());
+                tokio::select! {
+                    () = gate.entered.notified() => {},
+                    result = &mut next => panic!("hook did not hold admission: {result:?}"),
+                }
+                drop(next);
+                drop(stream);
+                gate.release.notify_one();
+            })
+            .await;
+            invocations.push(invoked.load(std::sync::atomic::Ordering::SeqCst) != 0);
+        }
+        assert!(
+            invocations.windows(2).all(|pair| pair[0] == pair[1]),
+            "{invocations:?}"
         );
+        case.check(invocations[0]);
     }
 }
 

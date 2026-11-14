@@ -255,7 +255,7 @@ async fn terminating_an_editor_attachment_releases_its_unready_installation() {
     );
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            match gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
+            match gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
                 Ok(guard) => {
                     drop(guard);
                     break;
@@ -323,7 +323,7 @@ async fn closing_editor_input_releases_an_unready_installation() {
     );
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            match gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
+            match gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
                 Ok(guard) => {
                     drop(guard);
                     break;
@@ -346,9 +346,9 @@ async fn retained_history(root: PathBuf) -> DesktopPaths {
     paths.ensure_root_dirs().await.unwrap();
     {
         let _store =
-            gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
-        let record = gents::store::local::store_key::StoreEncryption::prepare(
-            gents::store::local::store_key::StoreKeyCustodyChoice::Keychain,
+            gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
+        let record = gents_store::local::store_key::StoreEncryption::prepare(
+            gents_store::local::store_key::StoreKeyCustodyChoice::Keychain,
             paths.store_key_path(),
             paths.node_data_dir(),
         )

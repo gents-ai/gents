@@ -70,7 +70,7 @@ async fn run_git_output(cwd: &Path, args: &[&str]) -> Result<std::process::Outpu
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let output = gents::tools::exec::native_spawn::output_tokio(&mut command);
+    let output = gents_session::exec::native_spawn::output_tokio(&mut command);
     tokio::time::timeout(GIT_COMMAND_TIMEOUT, output)
         .await
         .map_err(|_| format!("git {} timed out", args.join(" ")))?

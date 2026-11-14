@@ -25,7 +25,7 @@ Building Gents from source. To use Gents, install the desktop app from the
 
 ```bash
 make help                                    # curated build/test targets
-cargo test -p gents                          # runtime suite
+make test-agent                              # runtime crates (the CI runtime suite)
 make test-eval-drivers                       # eval and optimization drivers (gents-eval)
 cargo check --workspace --all-targets
 cargo test --workspace                       # everything

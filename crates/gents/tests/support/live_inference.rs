@@ -2,16 +2,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use gents::documents::{Agent, InferenceProfile, Node};
-use gents::store::config_client::DesiredStateApplyPlan;
-use gents::store::graphql::escape_graphql_string;
-use gents::{
-    default_inference_profile_id_for_agent, Collection, DocumentRuntimeOptions, Gents,
-    NodeIdentity, ToolCeiling,
-};
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::default_inference_profile_id_for_agent;
+use gents_documents::DesiredStateApplyPlan;
+use gents_documents::{Agent, InferenceProfile, Node};
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::{OutputSegment, TranscriptMessage};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::{collection::Collection, identity::NodeIdentity};
+use gents_tools::surface::ToolCeiling;
 use serde::Deserialize;
 
 use crate::support::agent_requests::RequestActors;
@@ -23,8 +23,27 @@ use crate::support::TestDb;
 pub mod inference_target;
 pub use inference_target::InferenceTarget;
 
-pub fn live_target() -> InferenceTarget {
-    InferenceTarget::selected().unwrap_or_else(|error| panic!("{error:#}"))
+pub async fn live_target() -> InferenceTarget {
+    let mut target = tokio::task::spawn_blocking(|| {
+        let selector = std::env::var("GENTS_LIVE_TARGET").map_err(|_| {
+            anyhow::anyhow!("GENTS_LIVE_TARGET is required: choose workstation-1 or workstation-2")
+        })?;
+        anyhow::ensure!(
+            matches!(selector.as_str(), "workstation-1" | "workstation-2"),
+            "GENTS_LIVE_TARGET must be workstation-1 or workstation-2"
+        );
+        InferenceTarget::load(&selector)
+    })
+    .await
+    .expect("load live inference target")
+    .unwrap_or_else(|error| {
+        panic!("{error:#}; run GENTS_LIVE_TARGET=workstation-1 make live-agent PROFILE=fast-dev")
+    });
+    target
+        .discover_model()
+        .await
+        .unwrap_or_else(|error| panic!("{error:#}"));
+    target
 }
 
 /// Binds the live target as the node's client key. The fixture User is the
@@ -47,8 +66,8 @@ pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors
     fixture
         .access
         .transact_write("test.bind_live_backend", |txn| {
-            use gents::documents::apply_desired_state_plan;
-            use gents::store::config_client::{
+            use gents_documents::apply_desired_state_plan;
+            use gents_documents::{
                 read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
             };
             let node_did = &node_did;
@@ -58,11 +77,9 @@ pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors
             let profile = &profile;
             let sampling = &sampling;
             Box::pin(async move {
-                let (_, node) = read(txn, Collection::Node, node_did, node_did)
+                read(txn, Collection::Node, node_did, node_did)
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("the fixture User's Node is missing"))?;
-                let mut node: Node = serde_json::from_value(node)?;
-                node.default_agent_did = Some(agent_did.clone());
                 let (_, agent) = read(txn, Collection::Agent, node_did, agent_did)
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("the fixture Agent is missing"))?;
@@ -71,7 +88,10 @@ pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors
                 agent.inference_profile_id = profile_id.clone();
                 let plan = DesiredStateApplyPlan::new(
                     [
-                        (Collection::Node, serde_json::to_value(node)?),
+                        (
+                            Collection::DefaultAgentSelection,
+                            serde_json::json!({"node_did": node_did, "default_agent_did": agent_did}),
+                        ),
                         (Collection::InferenceBackend, serde_json::to_value(backend)?),
                         (Collection::InferenceProfile, serde_json::to_value(profile)?),
                     ]
@@ -91,7 +111,13 @@ pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors
                     })
                     .collect(),
                 )?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await
@@ -180,6 +206,7 @@ where
     R: SnapshotReader + ?Sized,
 {
     let deadline = tokio::time::Instant::now() + timeout;
+    let mut changes = reader.subscribe_changes("AgentRequest").await;
     let mut last = String::from("<none>");
     loop {
         if let Some(state) = fetch_request_lifecycle(reader, request_id).await {
@@ -208,7 +235,36 @@ where
                 .await;
             panic!("timed out waiting for request {request_id} to terminalize; last={last}; evidence={evidence}");
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        if tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .is_err()
+        {
+            continue;
+        }
+    }
+}
+
+pub async fn wait_for_rows<R, F>(
+    reader: &R,
+    collection: &str,
+    query: &str,
+    timeout: Duration,
+    predicate: F,
+) -> serde_json::Value
+where
+    R: SnapshotReader + ?Sized,
+    F: Fn(&serde_json::Value) -> bool,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut changes = reader.subscribe_changes(collection).await;
+    loop {
+        let rows = reader.read_data(query).await;
+        if predicate(&rows) {
+            return rows;
+        }
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .unwrap_or_else(|_| panic!("deadline waiting for {collection}: {rows}"));
     }
 }
 
@@ -315,6 +371,7 @@ where
     R: SnapshotReader + ?Sized,
 {
     let deadline = tokio::time::Instant::now() + timeout;
+    let mut changes = reader.subscribe_changes("AgentMessage").await;
     loop {
         let answer = terminal_assistant_answer(reader, request_id).await;
         if !answer.trim().is_empty() {
@@ -323,7 +380,12 @@ where
         if tokio::time::Instant::now() >= deadline {
             return answer;
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        if tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .is_err()
+        {
+            return terminal_assistant_answer(reader, request_id).await;
+        }
     }
 }
 
@@ -334,8 +396,8 @@ where
 pub struct LiveUser {
     pub db_node: Arc<gents::defra_node::Node>,
     pub runtime: Arc<dyn NodeIdentity>,
-    pub user: gents::KeyIdentity,
-    pub access: gents::ConfigAccess,
+    pub user: gents_store::identity::KeyIdentity,
+    pub access: gents_store::config_client::ConfigAccess,
     pub node_did: String,
 }
 
@@ -391,8 +453,8 @@ impl LiveUser {
         operation: &'static str,
         documents: Vec<(Collection, serde_json::Value)>,
     ) {
-        use gents::documents::apply_desired_state_plan;
-        use gents::store::config_client::DesiredStateApplyDocument;
+        use gents_documents::apply_desired_state_plan;
+        use gents_documents::DesiredStateApplyDocument;
         let plan = DesiredStateApplyPlan::new(
             documents
                 .into_iter()
@@ -407,7 +469,15 @@ impl LiveUser {
         self.access
             .transact_write(operation, |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
             })
             .await
             .unwrap_or_else(|error| panic!("{operation} as the node's User: {error:#}"));
@@ -416,9 +486,9 @@ impl LiveUser {
     /// Provisions one managed Agent under the User and configures its
     /// high-effort live profile, sampling and context. Returns its DID.
     pub async fn agent(&self, target: &InferenceTarget, spec: LiveAgentSpec<'_>) -> String {
-        use gents::documents::AgentContext;
+        use gents_documents::AgentContext;
         let user_did = ::identity::Did::new(self.user.did()).expect("valid User DID");
-        let binding = gents::store::identity::provision_agent_identity_authorized(
+        let binding = gents_store::identity::provision_agent_identity_authorized(
             &self.db_node,
             self.runtime.as_ref(),
             &user_did,
@@ -430,7 +500,7 @@ impl LiveUser {
         let profile = InferenceProfile {
             profile_id: spec.inference_profile_id.to_string(),
             sampling_id: Some(sampling_id.clone()),
-            reasoning_effort: Some(gents::ReasoningEffort::High),
+            reasoning_effort: Some(gents_documents::inference_defaults::ReasoningEffort::High),
             ..target.profile(&self.node_did)
         };
         let context = AgentContext {
@@ -477,7 +547,7 @@ impl LiveUser {
         ];
         if spec.default_for_node {
             documents.push((
-                Collection::Node,
+                Collection::DefaultAgentSelection,
                 serde_json::json!({
                     "node_did": self.node_did,
                     "default_agent_did": binding.agent_did,
@@ -487,9 +557,9 @@ impl LiveUser {
         self.apply("test.live_user.agent", documents).await;
         // Production projects the baseline from the live Agent document;
         // fixtures with no projection pass grant the same set as the node admin.
-        gents::store::identity::GrantSet::AgentBaseline
+        gents_store::identity::GrantSet::AgentBaseline
             .grant(
-                &gents::ConfigAccess::local_as(
+                &gents_store::config_client::ConfigAccess::local_as(
                     self.db_node.clone(),
                     ::identity::Did::new(&self.node_did).expect("valid runtime DID"),
                 ),
@@ -529,7 +599,7 @@ impl LiveUser {
             .transact_readonly("test.live_user.read_node", |txn| {
                 let node_did = &node_did;
                 Box::pin(async move {
-                    let (_, node) = gents::store::config_client::read_desired_state_record_in_txn(
+                    let (_, node) = gents_documents::read_desired_state_record_in_txn(
                         txn,
                         Collection::Node,
                         node_did,
@@ -562,7 +632,7 @@ impl LiveUser {
             crate::support::agent_requests::canonical_now(),
             AgentRequestAdmissionRecord::client(self.user.did()),
         );
-        gents::request::lifecycle::reserve_goal_session(&self.access, &request)
+        gents_session::request::lifecycle::reserve_goal_session(&self.access, &request)
             .await
             .expect("reserve the User's session")
     }
@@ -582,6 +652,9 @@ impl LiveUser {
 }
 
 impl SnapshotReader for LiveUser {
+    async fn subscribe_changes(&self, collection: &str) -> super::snapshots::SnapshotChanges {
+        self.access.subscribe_changes(collection).await
+    }
     async fn read_data(&self, query: &str) -> serde_json::Value {
         self.access.read_data(query).await
     }

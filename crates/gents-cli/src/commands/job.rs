@@ -5,16 +5,16 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents::store::config_client::ConfigAccess;
-use gents::tools::background::job::dispatch::split_address;
-use gents::tools::background::job::view::{
+use gents_protocol::job::{
+    JobControlKind, JobControlOutcome, JobOrigin, JobPauseReason, JobPhaseState, JobReadError,
+    JobState, JobView,
+};
+use gents_store::config_client::ConfigAccess;
+use gents_toolcalls::background::job::dispatch::split_address;
+use gents_toolcalls::background::job::view::{
     list_jobs, load_job_view, JobFilter, JobKey, StateFilter,
 };
-use gents::tools::call::control::client::send::ControlSendError;
-use gents_protocol::job::{
-    JobChildState, JobControlKind, JobControlOutcome, JobOrigin, JobPauseReason, JobPhaseState,
-    JobReadError, JobState, JobView,
-};
+use gents_toolcalls::call::control::client::send::ControlSendError;
 
 use serde_json::{json, Value};
 
@@ -23,9 +23,10 @@ use crate::cli::args::{
 };
 use crate::cli::output_format::OutputFormat;
 use crate::commands::chat::streaming::sanitize_summary_text;
-use crate::home_state::resolve_node_did;
 use crate::request_helpers::print_ndjson;
+use crate::shared::wire;
 use crate::{print_json, resolve_config_access};
+use gents_service::home_state::resolve_node_did;
 
 pub(crate) mod promote;
 
@@ -180,7 +181,7 @@ fn terminal_line(view: &JobView) -> Value {
     let pause_reason = progress.and_then(|progress| progress.pause_reason);
     let next = next_calls(view.state, &view.address).into_iter().next();
     let mut line = json!({
-        "state": state_name(view.state),
+        "state": wire(&view.state),
         "address": view.address,
         "handle": view.handle,
         "outcome": view.outcome,
@@ -363,9 +364,9 @@ async fn control_job_remote(
     kind: JobControlKind,
 ) -> std::result::Result<JobControlOutcome, ControlSendError> {
     let actor = access.actor_did().ok_or(ControlSendError::NotAuthorized)?;
-    let signer = gents::store::identity::RegisteredIdentity::from_registered_did(&actor, None)
+    let signer = gents_store::identity::RegisteredIdentity::from_registered_did(&actor, None)
         .map_err(|error| ControlSendError::Unavailable(error.into()))?;
-    gents::tools::call::control::client::send::control_job(
+    gents_toolcalls::call::control::client::send::control_job(
         access,
         &signer,
         &view.scope.node_did,
@@ -398,7 +399,7 @@ pub(crate) fn control_lines(
         }) => {
             let mut lines = vec![format!(
                 "{}  {verb} applied  {killed_children} children interrupted",
-                state_name(state)
+                wire(&state)
             )];
             lines.push("next:".to_owned());
             for call in next_calls(state, &view.address) {
@@ -408,7 +409,7 @@ pub(crate) fn control_lines(
         }
         Ok(JobControlOutcome::AlreadyTerminal { state }) => Ok(vec![
             "workflow_control_not_applicable".to_owned(),
-            format!("state: {}", state_name(state)),
+            format!("state: {}", wire(&state)),
             "next:".to_owned(),
             format!("  gents automation job show {}", view.address),
         ]),
@@ -607,7 +608,7 @@ pub(crate) fn clean(text: &str) -> String {
 fn show_lines(view: &JobView) -> Vec<String> {
     let progress = view.progress.as_ref();
     let title = progress.map_or_else(|| clean(&view.handle), |progress| clean(&progress.title));
-    let mut lines = vec![format!("{}  {title}", state_name(view.state))];
+    let mut lines = vec![format!("{}  {title}", wire(&view.state))];
     if let Some(outcome) = &view.outcome {
         lines.push(format!(
             "outcome: {}  {}",
@@ -623,11 +624,7 @@ fn show_lines(view: &JobView) -> Vec<String> {
         if !progress.phases.is_empty() {
             lines.push("phases:".to_owned());
             for phase in &progress.phases {
-                lines.push(format!(
-                    "  {}  {}",
-                    phase_state_name(phase.state),
-                    clean(&phase.title)
-                ));
+                lines.push(format!("  {}  {}", wire(&phase.state), clean(&phase.title)));
             }
         }
     }
@@ -639,7 +636,7 @@ fn show_lines(view: &JobView) -> Vec<String> {
                 clean(&child.slot),
                 child.attempt,
                 clean(&child.title),
-                child_state_name(child.state),
+                wire(&child.state),
                 child.usage.total,
                 age(child.duration_ms)
             ));
@@ -680,25 +677,6 @@ fn pause_reason_name(reason: JobPauseReason) -> &'static str {
     }
 }
 
-fn phase_state_name(state: JobPhaseState) -> &'static str {
-    match state {
-        JobPhaseState::Pending => "pending",
-        JobPhaseState::Active => "active",
-        JobPhaseState::Done => "done",
-        JobPhaseState::Failed => "failed",
-    }
-}
-
-fn child_state_name(state: JobChildState) -> &'static str {
-    match state {
-        JobChildState::Live => "live",
-        JobChildState::Completed => "completed",
-        JobChildState::Failed => "failed",
-        JobChildState::Interrupted => "interrupted",
-        JobChildState::Other => "other",
-    }
-}
-
 fn origin_name(origin: JobOrigin) -> &'static str {
     match origin {
         JobOrigin::Installed => "installed",
@@ -724,7 +702,7 @@ fn row_cells(view: &JobView, now_ms: u64) -> [String; 9] {
     [
         clean(&view.handle),
         view.pin.plugin_ref.clone(),
-        state_name(view.state).to_owned(),
+        wire(&view.state),
         phase.unwrap_or_else(|| "-".to_owned()),
         progress.map_or_else(
             || "-".to_owned(),
@@ -738,18 +716,6 @@ fn row_cells(view: &JobView, now_ms: u64) -> [String; 9] {
         view.session_id.clone(),
         view.address.clone(),
     ]
-}
-
-pub(crate) fn state_name(state: JobState) -> &'static str {
-    match state {
-        JobState::Running => "running",
-        JobState::Paused => "paused",
-        JobState::AwaitingUser => "awaiting_user",
-        JobState::Completed => "completed",
-        JobState::Failed => "failed",
-        JobState::Cancelled => "cancelled",
-        JobState::TimedOut => "timed_out",
-    }
 }
 
 fn age(ms: u64) -> String {
@@ -785,12 +751,12 @@ fn print_table(views: &[JobView], now_ms: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::tools::background::job::admit::Refusal;
-    use gents::tools::background::job::dispatch::split_address;
     use gents_protocol::job::{
         JobBudget, JobChildRow, JobChildState, JobOutcome, JobPauseReason, JobPhase, JobPhaseState,
         JobPinSummary, JobProgress, JobScope, JobState, JobUsage, JobView,
     };
+    use gents_toolcalls::background::job::admit::Refusal;
+    use gents_toolcalls::background::job::dispatch::split_address;
 
     const ACTOR: &str = "did:key:actor";
 
