@@ -1,4 +1,4 @@
-use rapidhash::{HashMapExt, RapidHashMap};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -28,6 +28,10 @@ pub trait Watcher: Send + Sync {
         Ok(())
     }
 
+    /// Lean `EventDelivery.Watcher.skippedActors`: the scan actors whose
+    /// Agent is disabled.
+    fn set_disabled_agents(&mut self, _disabled: RapidHashSet<String>) {}
+
     fn retains_agent(&self, _agent_did: &str) -> bool {
         true
     }
@@ -43,6 +47,7 @@ pub struct DefraWatcher {
     subscription: events::DocumentChangeSubscription,
     processed_request_ids: cooldown::ProcessedRequests,
     agents: Vec<Arc<dyn gents_store::identity::NodeIdentity>>,
+    disabled: RapidHashSet<String>,
     scan_failed: bool,
     backend_health: Option<gents_inference::backends::health::BackendHealthMap>,
     backend_observations: Option<tokio::sync::watch::Receiver<()>>,
@@ -69,6 +74,7 @@ impl DefraWatcher {
             subscription,
             processed_request_ids: RapidHashMap::new(),
             agents: Vec::new(),
+            disabled: RapidHashSet::new(),
             scan_failed: false,
             backend_health: None,
             backend_observations: None,
@@ -153,6 +159,13 @@ impl Watcher for DefraWatcher {
         }
         self.agents = agents;
         Ok(())
+    }
+
+    fn set_disabled_agents(&mut self, disabled: RapidHashSet<String>) {
+        if self.disabled != disabled {
+            self.scan_failed = false;
+        }
+        self.disabled = disabled;
     }
 
     fn retains_agent(&self, agent_did: &str) -> bool {

@@ -104,22 +104,43 @@ theorem watcher_release_keeps_unrelated_marks
   simp [h_marked, h_other]
 
 /-- Availability governs dispatch, while configured agents with verified local
-signing identities remain scan actors so their requests can be rejected. -/
+signing identities remain scan actors so their requests can be rejected.
+`disabled` is the one unavailability the Agent's own configuration states
+(`enabled = false`); a disabled Agent is never available. -/
 structure ActorCandidate where
   did : String
   configured : Bool
   identityResolved : Bool
   available : Bool
+  disabled : Bool
   deriving BEq, DecidableEq, Repr
 
 def scanActors (candidates : List ActorCandidate) : List String :=
   (candidates.filter (fun c => c.configured && c.identityResolved)).map (·.did)
 
+/-- The scan actors whose scoped scan is skipped. Decision (maintainer,
+2026-11-13): disabling an Agent withdraws its node permissions, so its scoped
+query is denied for as long as it stays disabled. That denial is the configured
+state, not a watcher failure. The Agent keeps its scan identity and the scan
+passes over it; an Agent unavailable for any other reason is still scanned. -/
+def skippedActors (candidates : List ActorCandidate) : List String :=
+  (candidates.filter (fun c => c.configured && c.identityResolved && c.disabled)).map (·.did)
+
 theorem unavailable_resolved_agent_is_scanned :
-    scanActors [⟨"agent", true, true, false⟩] = ["agent"] := by decide
+    scanActors [⟨"agent", true, true, false, false⟩] = ["agent"] := by decide
 
 theorem unresolved_agent_is_not_scanned :
-    scanActors [⟨"agent", true, false, false⟩] = [] := by decide
+    scanActors [⟨"agent", true, false, false, false⟩] = [] := by decide
+
+theorem disabled_resolved_agent_is_skipped :
+    skippedActors [⟨"agent", true, true, false, true⟩] = ["agent"] ∧
+    skippedActors [⟨"agent", true, true, false, false⟩] = [] := by decide
+
+theorem skipped_actor_is_a_scan_actor (candidates : List ActorCandidate) (did : String)
+    (skipped : did ∈ skippedActors candidates) : did ∈ scanActors candidates := by
+  simp only [skippedActors, scanActors, List.mem_map, List.mem_filter, Bool.and_eq_true] at *
+  obtain ⟨c, ⟨member, ⟨held, _⟩⟩, same⟩ := skipped
+  exact ⟨c, ⟨member, held⟩, same⟩
 
 structure ScopedRow where
   docId : String
@@ -150,11 +171,15 @@ agent. A missing root or denied query is not an empty authorized result. Rows
 selected for a different agent do not become work for this actor even if it can
 read them. The caller supplies configured agents with verified resolved
 signing identities, including unavailable agents; an unresolved agent is not scanned. This does not fence a
-configuration change racing a previously started native scan. -/
-def collectScoped : List String → List ScopedScan → ScopedBatch
-  | [], _ => {}
-  | actor :: rest, scans =>
-      let tail := collectScoped rest scans
+configuration change racing a previously started native scan. A disabled actor
+(`skippedActors`) is passed over whatever its scan holds: it contributes no
+row and no failure, so its pending requests stay pending until it is enabled
+and scanned again. -/
+def collectScoped : List String → List String → List ScopedScan → ScopedBatch
+  | [], _, _ => {}
+  | actor :: rest, disabled, scans =>
+      let tail := collectScoped rest disabled scans
+      if disabled.contains actor then tail else
       match scans.find? (fun scan => scan.actor == actor) with
       | none => { tail with failures := ⟨actor, "missing_scan"⟩ :: tail.failures }
       | some scan =>
@@ -181,9 +206,9 @@ def orderScopedRows (rows : List ScopedRow) (legacyOrder arrivalOrder : List Str
   let journaled := arrivalOrder.eraseDups.filterMap (fun id => unique.find? (fun row => row.docId == id))
   beforeJournal ++ journaled
 
-def scopedCandidates (activeAgents : List String) (scans : List ScopedScan)
+def scopedCandidates (activeAgents disabledAgents : List String) (scans : List ScopedScan)
     (legacyOrder arrivalOrder : List String) : ScopedBatch :=
-  let collected := collectScoped activeAgents.eraseDups scans
+  let collected := collectScoped activeAgents.eraseDups disabledAgents scans
   { collected with rows := orderScopedRows collected.rows legacyOrder arrivalOrder }
 
 /-- Failures remain available to the existing watcher wake and fallback scan;
@@ -191,25 +216,89 @@ their presence does not prevent the successful actors from making progress. -/
 def scopedNeedsRescan (batch : ScopedBatch) : Bool := !batch.failures.isEmpty
 
 theorem missing_scoped_root_is_not_empty :
-    (scopedCandidates ["agent"] [⟨"agent", .missingRoot⟩] [] []).failures =
+    (scopedCandidates ["agent"] [] [⟨"agent", .missingRoot⟩] [] []).failures =
       [⟨"agent", "missing_root"⟩] := by decide
 
 theorem denied_scoped_root_is_not_empty :
-    (scopedCandidates ["agent"] [⟨"agent", .denied⟩] [] []).failures =
+    (scopedCandidates ["agent"] [] [⟨"agent", .denied⟩] [] []).failures =
       [⟨"agent", "denied"⟩] := by decide
 
 theorem inactive_agent_scan_is_not_used :
-    (scopedCandidates [] [⟨"old", .rows [⟨"old-doc", "old"⟩]⟩] [] ["old-doc"]).rows = [] := by decide
+    (scopedCandidates [] [] [⟨"old", .rows [⟨"old-doc", "old"⟩]⟩] [] ["old-doc"]).rows = [] := by decide
 
 theorem scoped_merge_preserves_native_global_arrival :
-    (scopedCandidates ["a", "b"]
+    (scopedCandidates ["a", "b"] []
       [⟨"a", .rows [⟨"late", "a"⟩]⟩, ⟨"b", .rows [⟨"early", "b"⟩]⟩] [] ["early", "late"]).rows =
       [⟨"early", "b"⟩, ⟨"late", "a"⟩] := by decide
 
 theorem denied_actor_does_not_block_healthy_actor :
-    let batch := scopedCandidates ["a", "b"]
+    let batch := scopedCandidates ["a", "b"] []
       [⟨"a", .denied⟩, ⟨"b", .rows [⟨"healthy", "b"⟩]⟩] [] ["healthy"]
     batch.rows = [⟨"healthy", "b"⟩] ∧ batch.failures = [⟨"a", "denied"⟩] ∧
       scopedNeedsRescan batch = true := by decide
+
+theorem collectScoped_failure_actor_is_scanned (actors disabled : List String)
+    (scans : List ScopedScan) (failure : ScopedFailure)
+    (reported : failure ∈ (collectScoped actors disabled scans).failures) :
+    failure.actor ∈ actors ∧ disabled.contains failure.actor = false := by
+  induction actors with
+  | nil => simp [collectScoped] at reported
+  | cons actor rest ih =>
+    simp only [collectScoped] at reported
+    by_cases skipped : disabled.contains actor = true
+    · rw [if_pos skipped] at reported
+      exact ⟨List.mem_cons_of_mem _ (ih reported).1, (ih reported).2⟩
+    · rw [if_neg skipped] at reported
+      have fromTail : failure ∈ (collectScoped rest disabled scans).failures →
+          failure.actor ∈ actor :: rest ∧ disabled.contains failure.actor = false :=
+        fun h => ⟨List.mem_cons_of_mem _ (ih h).1, (ih h).2⟩
+      have fromHead : ∀ reason, failure = ⟨actor, reason⟩ →
+          failure.actor ∈ actor :: rest ∧ disabled.contains failure.actor = false := by
+        rintro reason rfl
+        exact ⟨List.mem_cons_self _ _, by simpa using skipped⟩
+      split at reported
+      · rcases List.mem_cons.mp reported with h | h
+        · exact fromHead _ h
+        · exact fromTail h
+      · split at reported
+        · rcases List.mem_cons.mp reported with h | h
+          · exact fromHead _ h
+          · exact fromTail h
+        · rcases List.mem_cons.mp reported with h | h
+          · exact fromHead _ h
+          · exact fromTail h
+        · exact fromTail reported
+
+/-- No failure names a disabled actor, whatever its scan returned or whether
+it was scanned at all. -/
+theorem disabled_actor_reports_no_failure (activeAgents disabledAgents : List String)
+    (scans : List ScopedScan) (legacyOrder arrivalOrder : List String) (failure : ScopedFailure)
+    (reported : failure ∈
+      (scopedCandidates activeAgents disabledAgents scans legacyOrder arrivalOrder).failures) :
+    disabledAgents.contains failure.actor = false :=
+  (collectScoped_failure_actor_is_scanned _ _ _ _ reported).2
+
+/-- A node whose only failing scans belong to disabled Agents raises no rescan. -/
+theorem disabled_actor_beside_healthy_needs_no_rescan :
+    let batch := scopedCandidates ["a", "b"] ["a"]
+      [⟨"a", .denied⟩, ⟨"b", .rows [⟨"healthy", "b"⟩]⟩] [] ["healthy"]
+    batch.rows = [⟨"healthy", "b"⟩] ∧ batch.failures = [] ∧
+      scopedNeedsRescan batch = false := by decide
+
+/-- A disabled actor's readable rows are not dispatched either. -/
+theorem disabled_actor_rows_are_not_dispatched :
+    (scopedCandidates ["a"] ["a"] [⟨"a", .rows [⟨"held", "a"⟩]⟩] [] ["held"]).rows = [] := by
+  decide
+
+/-- Skipping a disabled actor does not hide another actor's failure. -/
+theorem failure_beside_disabled_actor_still_needs_rescan :
+    let batch := scopedCandidates ["a", "b"] ["a"] [⟨"a", .denied⟩, ⟨"b", .denied⟩] [] []
+    batch.failures = [⟨"b", "denied"⟩] ∧ scopedNeedsRescan batch = true := by decide
+
+/-- Once enabled again the actor is scanned as before and its request is
+observed. -/
+theorem reenabled_actor_is_scanned_again :
+    (scopedCandidates ["a"] [] [⟨"a", .rows [⟨"held", "a"⟩]⟩] [] ["held"]).rows =
+      [⟨"held", "a"⟩] := by decide
 
 end EventDelivery.Watcher

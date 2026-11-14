@@ -1314,6 +1314,10 @@ def caseCoverage : List CoverageEntry :=
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
+      "count_carrier_integer_text")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
       "count_carrier_obligation_field")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -2098,6 +2102,11 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "watcher_actors_scanned_unreached"
       "model-production-gap: the served runtime fixture provisions one Agent, so the mixed candidate set (an available, an unavailable, an unresolved and an unconfigured Agent in one view) is not built by any production test yet.")
+      "event-delivery" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "watcher_actors_skipped_unreached"
+      "model-production-gap: the served runtime fixture provisions one Agent, so the mixed candidate set that separates a disabled Agent from one unavailable for another reason is not built by any production test yet.")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "family"

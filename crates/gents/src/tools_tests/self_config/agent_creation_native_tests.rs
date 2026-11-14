@@ -431,15 +431,6 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             })
         })
         .await?;
-    user_access
-        .transact_write("test.agent_creator.catalog", |txn| {
-            let creator = &creator;
-            let runtime = &runtime;
-            Box::pin(async move {
-                gents_documents::grant_agent_catalog(txn, runtime.did(), &creator.agent_did).await
-            })
-        })
-        .await?;
     let tools_id = format!("{}:tools", creator.agent_did);
     tool.call(json!({"argv":["tools","update"],"set":{"display_name":"configured"}}).to_string())
         .await
@@ -473,6 +464,16 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         creator_access.execute("{ Node { _docID } }").await?["data"]["Node"],
         json!([])
     );
+    user_access
+        .transact_write("test.agent_creator.catalog", |txn| {
+            let creator = &creator;
+            let runtime = &runtime;
+            Box::pin(async move {
+                gents_documents::grant_node_administration(txn, runtime.did(), &creator.agent_did)
+                    .await
+            })
+        })
+        .await?;
     let listed: Value = serde_json::from_str(
         &tool
             .call(json!({"argv":["agent","list"]}).to_string())
@@ -605,6 +606,16 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{ _docID display_name }} }}"#,
         gents_store::graphql::escape_graphql_string(&sibling.agent_did)
     );
+    user_access
+        .transact_write("test.agent_creator.catalog_revoked", |txn| {
+            let creator = &creator;
+            let runtime = &runtime;
+            Box::pin(async move {
+                gents_documents::revoke_node_administration(txn, runtime.did(), &creator.agent_did)
+                    .await
+            })
+        })
+        .await?;
     let sibling_before = user_access.execute(&sibling_query).await?;
     assert!(tool
         .call(
@@ -1861,6 +1872,16 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             .len(),
         1
     );
+    user_access
+        .transact_write("test.agent_creator.catalog_restored", |txn| {
+            let creator = &creator;
+            let runtime = &runtime;
+            Box::pin(async move {
+                gents_documents::grant_node_administration(txn, runtime.did(), &creator.agent_did)
+                    .await
+            })
+        })
+        .await?;
     let creator_did = identity::Did::new(signer.did())?;
     // The creator holds `add-dac-relation` and `update-document` through its
     // projected baseline as well as any direct grant, so revoking the direct

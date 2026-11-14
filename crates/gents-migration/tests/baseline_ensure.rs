@@ -1051,3 +1051,42 @@ async fn unbound_mailbox_is_rejected_without_changing_data() {
     assert!(node.get_collection(schemas::NODE_NAME).unwrap().is_none());
     node.shutdown().await.unwrap();
 }
+
+/// Premise evidence for Lean `Identity.Household.catalog_restriction_keeps_policy_id`
+/// and `registerPolicy`: the earlier Household policy, which typed
+/// `agent_manager` as any actor, has the present policy's ID, and a store that
+/// holds it refuses the present policy at that ID.
+#[tokio::test]
+async fn a_store_holding_the_earlier_household_policy_refuses_the_restricted_one() {
+    let restricted = "      - name: agent_manager\n        types: [nodes->administrator]\n";
+    let earlier = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY.replacen(
+        restricted,
+        "      - name: agent_manager\n        types: [actor]\n",
+        1,
+    );
+    assert_ne!(earlier, gents_protocol::schemas::AGENT_OWNERSHIP_POLICY);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let node = defra_node::Node::builder()
+        .data_path(dir.path())
+        .with_node_identity_did(common::node_identity())
+        .build()
+        .await
+        .expect("build node");
+    let earlier_id = node
+        .add_dac_policy_with_counter_as(&common::node_context(&node), &earlier, 0)
+        .await
+        .expect("earlier policy");
+    assert_eq!(
+        earlier_id,
+        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
+    );
+    let error = ensure_migrations(&node)
+        .await
+        .expect_err("the restricted policy does not replace the earlier one");
+    let error = format!("{error:#}");
+    assert!(
+        error.contains(gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID),
+        "{error}"
+    );
+    std::mem::forget(dir);
+}

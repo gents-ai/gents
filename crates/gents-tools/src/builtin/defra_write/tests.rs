@@ -725,18 +725,13 @@ async fn count_carriers_store_as_the_count_carrier_model() {
             gents_store::config_client::schema_introspection::can_hold_canonical_count(
                 field.named_type(),
             );
-        let decimal_admitted = if introspected {
-            None
-        } else {
-            Some(
-                Tool::call(
-                    &tool,
-                    serde_json::from_value(json!({"count":"10"})).unwrap(),
-                )
-                .await
-                .is_ok(),
+        let decimal_admitted = input == json!("10")
+            || Tool::call(
+                &tool,
+                serde_json::from_value(json!({"count":"10"})).unwrap(),
             )
-        };
+            .await
+            .is_ok();
         case.check(
             gents_lean_vocab::families::count_carrier_storage::StorageOutput {
                 argument: gents_store::graphql::canonical_positive_count(&input, maximum)
@@ -747,6 +742,52 @@ async fn count_carriers_store_as_the_count_carrier_model() {
                 decimal_admitted,
             },
         );
+    }
+}
+
+#[tokio::test]
+async fn integer_fields_take_count_text_as_the_count_carrier_model() {
+    let node = Arc::new(
+        gents_store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
+    let mut tools = rapidhash::RapidHashMap::default();
+    for case in gents_lean_vocab::families::count_carrier_integer_text::cases() {
+        let schema = case.input.schema.clone();
+        if !tools.contains_key(&schema) {
+            let collection = format!("CountText{}", tools.len());
+            node.add_collection(&format!("type {collection} {{ count: {schema} }}"))
+                .await
+                .unwrap();
+            let tool = BoundedWriteTool::new(
+                ConfigAccess::local_as(
+                    node.clone(),
+                    identity::Did::new(node.node_identity_did().unwrap()).unwrap(),
+                ),
+                WriteToolDecl {
+                    notification: None,
+                    tool_name: format!("write_count_text_{}", tools.len()),
+                    collection,
+                    description: "Persist a count carrier".into(),
+                    fields: vec![WriteToolField {
+                        name: "count".into(),
+                        required: true,
+                        fill: None,
+                    }],
+                    output_obligation: None,
+                },
+            );
+            tools.insert(schema.clone(), tool);
+        }
+        let admitted = Tool::call(
+            &tools[&schema],
+            serde_json::from_value(json!({"count": case.input.text})).unwrap(),
+        )
+        .await
+        .is_ok();
+        case.check(admitted);
     }
 }
 

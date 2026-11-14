@@ -31,6 +31,7 @@ pub(super) fn needs_rescan<F>(failures: &[F]) -> bool {
 
 pub(super) fn merge_scoped_scans<'a, A, F>(
     actors: A,
+    disabled: &RapidHashSet<String>,
     scans: Vec<ActorScan<F>>,
     positions: &RapidHashMap<String, u64>,
 ) -> ScopedScanBatch<F>
@@ -46,7 +47,7 @@ where
     let mut rows = Vec::new();
     let mut failures = Vec::new();
     for actor in actors {
-        if !merged.insert(actor) {
+        if !merged.insert(actor) || disabled.contains(actor) {
             continue;
         }
         let cause = match outcomes.remove(actor) {
@@ -81,7 +82,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use rapidhash::{HashMapExt, RapidHashMap};
+    use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 
     use gents_lean_vocab::families::watcher_scoped_scan_batch::{
         BatchOutput, ScopedFailure, ScopedRow,
@@ -124,8 +125,14 @@ mod tests {
             for (position, doc) in input.arrival_order.iter().enumerate() {
                 positions.entry(doc.clone()).or_insert(position as u64);
             }
+            let disabled = input
+                .disabled_agents
+                .iter()
+                .cloned()
+                .collect::<RapidHashSet<_>>();
             let batch = merge_scoped_scans(
                 input.active_agents.iter().map(String::as_str),
+                &disabled,
                 scans,
                 &positions,
             );
