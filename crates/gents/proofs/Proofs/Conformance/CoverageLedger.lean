@@ -2111,6 +2111,27 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
+      "delegated_publication_claim_readiness")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "delegated_publication_recovery_receipt")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "delegated_publication_agent_new_publication")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "agent_creation_receipt_opening")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "delegated_publication_unreached"
+      "model-production-gap: commit, receipt observation, relation publication and claim are separate served owners, and no served fixture injects a failed native commit, a missing starter or creation receipt, a mis-signed or mis-targeted binding, an unconfirmed commit, a foreign receipt owner, a foreign or mismatched recovery actor, a partial grant set, a revocation after publication, a denied or revoked target invoke or a native marker conflict at claim.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
       "client_agent_journal_local_signer")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage

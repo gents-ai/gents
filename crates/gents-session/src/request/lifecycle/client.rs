@@ -2375,25 +2375,18 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
+        let [case] = <[_; 1]>::try_from(
+            gents_lean_vocab::families::delegated_publication_recovery_receipt::cases(),
+        )
+        .unwrap_or_else(|_| panic!("the forged recovery scenario builds one publication"));
+        let recovered =
             recover_delegated_client_request_relationships(&node, runtime.did(), &actor)
                 .await
-                .unwrap(),
-            0
-        );
+                .unwrap();
         let rows = access
             .execute("{ AgentRequest { request_id relationships_pending } }")
             .await
             .unwrap();
-        let model = &gents_lean_vocab::lean_contract_snapshot().delegated_publication_cases;
-        let wrong_receipt = model
-            .iter()
-            .find(|case| case["name"] == "wrong-receipt")
-            .unwrap();
-        assert_eq!(
-            rows["data"]["AgentRequest"][0]["relationships_pending"],
-            wrong_receipt["expected_request_pending"]
-        );
         let target_signer =
             gents_store::identity::resolve_agent_identity(runtime.as_ref(), &target).unwrap();
         let target_access = ConfigAccess::local_managed_agent(
@@ -2406,12 +2399,17 @@ mod tests {
             .execute("{ AgentRequest { request_id } }")
             .await
             .unwrap();
-        assert_eq!(
-            !visible["data"]["AgentRequest"]
-                .as_array()
-                .unwrap()
-                .is_empty(),
-            wrong_receipt["expected_target_read"].as_bool().unwrap()
+        case.check(
+            gents_lean_vocab::families::delegated_publication_recovery_receipt::RecoveryOutput {
+                observed: recovered == 1,
+                request_pending: rows["data"]["AgentRequest"][0]["relationships_pending"]
+                    .as_bool()
+                    .unwrap(),
+                target_read: !visible["data"]["AgentRequest"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty(),
+            },
         );
         node.shutdown().await.unwrap();
     }
