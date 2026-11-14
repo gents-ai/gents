@@ -576,6 +576,11 @@ describe("the install review", () => {
 });
 
 describe("the models a pack needs", () => {
+  // Property: the install review asks for one usable model per declared slot,
+  // previews every choice, and installs with exactly the chosen bindings in
+  // slot order. Single-threaded and CPU-bound (no interleaving to model):
+  // each select trip costs real jsdom work, so the test keeps the fewest trips
+  // that still cover slots declared out of name order.
   it("asks for a model for each slot, previews each choice, and installs with them", async () => {
     /* two slots, declared out of name order: a preview sends the choices by
        name and an install by slot, and each further slot is one more trip
