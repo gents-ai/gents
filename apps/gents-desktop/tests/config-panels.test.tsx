@@ -1681,7 +1681,7 @@ describe("configuration panels", () => {
     expect(api.saveAgentConfig).not.toHaveBeenCalled();
   });
 
-  it("opens a new behavior as an unsaved, disabled draft until the operator saves it", async () => {
+  it("opens a new behavior as an unsaved draft and saves it with the Agent document's enabled default", async () => {
     const { api, app } = harness();
     renderRouted(app, agentsRoute, (route) => (
       <AgentsPanel deployment={deployment} agentDid={itemOf(route)} />
@@ -1701,10 +1701,10 @@ describe("configuration panels", () => {
     expect(request.document.agents).toEqual([
       expect.objectContaining({
         display_name: "Reviewer",
-        enabled: false,
         context_id: request.document.contexts[0].context_id,
       }),
     ]);
+    expect(request.document.agents[0]).not.toHaveProperty("enabled");
     expect(api.saveAgentConfig).not.toHaveBeenCalled();
   });
 
