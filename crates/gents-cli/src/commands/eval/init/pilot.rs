@@ -7,7 +7,7 @@ use gents_documents::EvalSplit;
 use gents_eval::authoring::dossier::read_pack;
 use gents_eval::authoring::draft::parse_reply;
 use gents_eval::authoring::pilot::{digest_turn, failing_rows};
-use gents_eval::authoring::write::{commit, rewrite_readme, split_name, PilotNote};
+use gents_eval::authoring::write::{commit, rewrite_readme, split_name, PilotNote, StageError};
 use gents_eval::report::load_report;
 use gents_eval::runner;
 
@@ -283,7 +283,10 @@ async fn revise(
             print_written(init, &assembled, &written, out)?;
             Ok(true)
         }
-        Err(messages) => {
+        Err(StageError::Host(error)) => {
+            Err(error.context("the revised draft could not be checked; the pack stays as written"))
+        }
+        Err(StageError::Draft(messages)) => {
             writeln!(
                 out,
                 "the revised draft did not validate; the pack stays as written:\n- {}",
