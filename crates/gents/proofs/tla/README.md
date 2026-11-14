@@ -236,7 +236,9 @@ See `../README.md` for how this fits the broader formal-verification model.
   the reader's own owes (a spawned call's queued row). RED: `UntrackedSpawn`
   is the code before #3692; `UnawaitedFlush` is a graceful stop that does not
   await the tracker and discards a dropped permit's terminal and usage;
-  `NoRecovery` leaves a live row after an abrupt exit; `NoTerminalCas` writes
+  `UncountedFinalizer` awaits it but does not count a stream's finalizer,
+  which the stop aborts without joining, so the stop exits before that
+  permit is dropped; `NoRecovery` leaves a live row after an abrupt exit; `NoTerminalCas` writes
   a second terminal over a finish dropped after its commit; `SleepTerminal`
   and `SleepQueued` are the timer waits; `QueuedByFlush` awaits the tracker
   for a row it does not count; `PollBudget` polls within a budget;

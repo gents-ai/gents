@@ -7,24 +7,28 @@
 (* A call's row is created `running` (`persist_call_started`) or `queued`  *)
 (* (`persist_call_queued`) and then moved to `running`                     *)
 (* (`persist_existing_call_running`). The holder ends the call explicitly: *)
-(* `AdmissionPermit::finish` awaits the terminal write. A permit or a      *)
+(* `AdmissionPermit::finish` writes the terminal, and a stream's terminal  *)
+(* is finished by a task of its own (`finish_guard`) that owns the permit  *)
+(* and is aborted, not joined, when the stream is dropped. A permit or a   *)
 (* queued guard that is dropped instead (a cancelled or aborted task, a    *)
 (* finish cancelled mid-write) cannot await in `Drop`: it hands the        *)
 (* terminal write to `DropCleanup::spawn`, a detached task on the runtime  *)
-(* the guard was created on. `CleanupTracker` counts those tasks from the  *)
-(* `Drop` that spawns them until they finish or the runtime discards them, *)
-(* and `AdmissionRegistry::drop_cleanup_idle` resolves when the count is   *)
+(* the guard was created on. `CleanupTracker` counts a finalizer from the  *)
+(* moment it takes the permit, and a cleanup from the `Drop` that spawns   *)
+(* it, until each finishes or the runtime discards it;                     *)
+(* `AdmissionRegistry::drop_cleanup_idle` resolves when the count is       *)
 (* zero. Every terminal install is a compare-and-set on a live row         *)
 (* (`persist_existing_call_terminal`, Lean `InferenceCall.Persistence`), so *)
 (* a cleanup that finds the row already terminal installs nothing.         *)
 (*                                                                          *)
 (* The runtime stops gracefully (`shutdown_runtime`: cancel, join the      *)
-(* tasks that hold permits, flush, exit) or abruptly (a crash, a kill, or  *)
-(* the teardown deadline cutting the joins or the flush, which has no      *)
-(* deadline of its own). A runtime that exits discards the cleanup still   *)
-(* in flight. Recovery (`InferenceCall::recover_all_with_identities`, at the  *)
-(* next start and in the periodic sweep) terminalizes a live row whose     *)
-(* request has ended, with its own reason and no usage.                    *)
+(* tasks that wait for or hold a permit, flush, exit) or abruptly (a       *)
+(* crash, a kill, or the teardown deadline cutting the joins or the flush, *)
+(* which has no deadline of its own). A runtime that exits discards the    *)
+(* cleanup and the finalizers still in flight. Recovery                     *)
+(* (`InferenceCall::recover_all_with_identities`, at the next start and in *)
+(* the periodic sweep) terminalizes a live row whose request has ended,    *)
+(* with its own reason and no usage.                                       *)
 (*                                                                          *)
 (* The observer is a reader that wants the rows in a state: every row      *)
 (* persisted, or every row terminal. It may wait on the tracker's flush,   *)
@@ -43,6 +47,7 @@ EXTENDS Naturals
 CONSTANTS
   Calls,
   Tracked,              \* dropped guards count their cleanup in the tracker
+  FinalizerCounted,     \* a finalizer is counted while it owns the permit
   ShutdownAwaitsFlush,  \* a graceful stop awaits the tracker before it exits
   TerminalCas,          \* a terminal installs only over a live row
   Recovery,             \* recovery terminalizes a live row of an ended call
@@ -56,7 +61,8 @@ CONSTANTS
 VARIABLES
   row,        \* none | queued | running | terminal
   writes,     \* terminal installs the row has taken
-  permit,     \* none | waiting | held | finishing | finished | dropped | dead
+  permit,     \* none | waiting | held | finalizing | finishing | finished |
+              \* dropped | dead
   cleanup,    \* none | spawned | done | lost
   inflight,   \* the tracker's count
   rt,         \* up | stopping | down
@@ -70,7 +76,10 @@ VARIABLES
 vars == <<row, writes, permit, cleanup, inflight, rt, exit, obs, subscribed,
           pending, polls, saw>>
 
-Live == {"waiting", "held", "finishing"}
+Joined == {"waiting", "held"}          \* owned by a task the stop joins
+Finalizer == {"finalizing", "finishing"} \* owned by a finalizer task
+Live == Joined \cup Finalizer
+Counts(c) == Tracked /\ FinalizerCounted /\ permit[c] \in Finalizer
 Ended == {"finished", "dropped", "dead"}
 
 TypeOK ==
@@ -135,10 +144,17 @@ Admit(c) ==
   /\ permit' = [permit EXCEPT ![c] = "held"]
   /\ UNCHANGED <<writes, cleanup, inflight, rt, exit, obs, subscribed, polls, saw>>
 
-\* `finish` commits the terminal and then marks the permit finished; the
-\* future may be dropped between the two.
+\* The holder hands the permit to the finalizer, which commits the terminal
+\* and then marks the permit finished; it may be aborted at either point.
+BeginFinish(c) ==
+  /\ rt # "down" /\ permit[c] = "held"
+  /\ permit' = [permit EXCEPT ![c] = "finalizing"]
+  /\ inflight' = IF Tracked /\ FinalizerCounted THEN inflight + 1 ELSE inflight
+  /\ UNCHANGED <<row, writes, cleanup, rt, exit, obs, subscribed, pending,
+                 polls, saw>>
+
 FinishCommit(c) ==
-  /\ rt # "down" /\ permit[c] = "held" /\ row[c] = "running"
+  /\ rt # "down" /\ permit[c] = "finalizing" /\ row[c] = "running"
   /\ Install(c)
   /\ permit' = [permit EXCEPT ![c] = "finishing"]
   /\ UNCHANGED <<cleanup, inflight, rt, exit, obs, subscribed, polls, saw>>
@@ -146,16 +162,17 @@ FinishCommit(c) ==
 Finished(c) ==
   /\ rt # "down" /\ permit[c] = "finishing"
   /\ permit' = [permit EXCEPT ![c] = "finished"]
-  /\ UNCHANGED <<row, writes, cleanup, inflight, rt, exit, obs, subscribed,
-                 pending, polls, saw>>
+  /\ inflight' = IF Counts(c) THEN inflight - 1 ELSE inflight
+  /\ UNCHANGED <<row, writes, cleanup, rt, exit, obs, subscribed, pending,
+                 polls, saw>>
 
 \* `Drop` counts the cleanup in the tracker and spawns it in one synchronous
-\* step.
+\* step; an aborted finalizer gives up its own count only after that.
 Drop(c) ==
   /\ rt # "down" /\ permit[c] \in Live
   /\ permit' = [permit EXCEPT ![c] = "dropped"]
   /\ cleanup' = [cleanup EXCEPT ![c] = "spawned"]
-  /\ inflight' = IF Tracked THEN inflight + 1 ELSE inflight
+  /\ inflight' = IF Tracked /\ ~Counts(c) THEN inflight + 1 ELSE inflight
   /\ UNCHANGED <<row, writes, rt, exit, obs, subscribed, pending, polls, saw>>
 
 RunCleanup(c) ==
@@ -175,19 +192,23 @@ BeginShutdown ==
   /\ UNCHANGED <<row, writes, permit, cleanup, inflight, exit, obs, subscribed,
                  pending, polls, saw>>
 
+\* An exit discards the cleanup in flight and every task still holding a
+\* permit, whose `Drop` then has no runtime to hand its cleanup to.
 Discard ==
   /\ cleanup' = [c \in Calls |-> IF cleanup[c] = "spawned" THEN "lost" ELSE cleanup[c]]
+  /\ permit' = [c \in Calls |-> IF permit[c] \in Live THEN "dead" ELSE permit[c]]
   /\ inflight' = 0
   /\ rt' = "down"
 
-\* A graceful stop has joined every task that holds a permit.
+\* A graceful stop has joined every task that waits for or holds a permit;
+\* a finalizer is not one of them.
 Exit ==
   /\ rt = "stopping"
-  /\ \A c \in Calls : permit[c] \notin Live
+  /\ \A c \in Calls : permit[c] \notin Joined
   /\ ShutdownAwaitsFlush => inflight = 0
   /\ Discard
   /\ exit' = "graceful"
-  /\ UNCHANGED <<row, writes, permit, obs, subscribed, pending, polls, saw>>
+  /\ UNCHANGED <<row, writes, obs, subscribed, pending, polls, saw>>
 
 \* The teardown deadline cuts a stop that is still joining tasks or awaiting
 \* the flush; the process then exits as it would on a crash or a kill.
@@ -195,7 +216,6 @@ AbruptExit ==
   /\ CanExitAbruptly /\ rt # "down"
   /\ Discard
   /\ exit' = IF rt = "stopping" THEN "deadline" ELSE "abrupt"
-  /\ permit' = [c \in Calls |-> IF permit[c] \in Live THEN "dead" ELSE permit[c]]
   /\ UNCHANGED <<row, writes, obs, subscribed, pending, polls, saw>>
 
 \* Recovery acts on a live row whose request has ended: after the runtime
@@ -273,7 +293,8 @@ Next ==
   \/ BeginShutdown \/ Exit \/ AbruptExit
   \/ ObsWait \/ ObsFlushed \/ ObsSubscribe \/ ObsRead \/ ObsWake \/ ObsTimer \/ ObsPoll
   \/ \E c \in Calls :
-       \/ Start(c) \/ Enqueue(c) \/ Admit(c) \/ FinishCommit(c) \/ Finished(c)
+       \/ Start(c) \/ Enqueue(c) \/ Admit(c) \/ BeginFinish(c) \/ FinishCommit(c)
+       \/ Finished(c)
        \/ Drop(c) \/ RunCleanup(c) \/ Recover(c)
 
 Acquire(c) == Start(c) \/ Enqueue(c)
@@ -299,10 +320,11 @@ ObserverSawTarget == obs = "done" => saw
 \* out first.
 ObserverNeverTimesOut == obs # "timedOut"
 
-\* A graceful stop discards no cleanup: every permit that ended before the
-\* exit has the terminal, and the usage, its own `Drop` recorded.
+\* A graceful stop discards no cleanup and no finalizer: every call it ends
+\* has the terminal, and the usage, its own finish or `Drop` recorded.
 GracefulExitFlushed ==
-  exit = "graceful" => \A c \in Calls : cleanup[c] # "lost"
+  exit = "graceful" =>
+    \A c \in Calls : cleanup[c] # "lost" /\ permit[c] # "dead"
 
 \* Every call that ended has a terminal row eventually: by its own finish,
 \* by its cleanup, or by recovery after the runtime that owned it is gone.
