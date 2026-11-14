@@ -191,6 +191,8 @@ inductive StoreWrapper where
   | viewErrorExecute
   | packEvidenceErrorConfig
   | documentDecideErrorAuthorize
+  | documentSignerErrorRead
+  | documentSignerErrorDecode
   | deferredOperationErrorConfig
   | schemaInstallErrorConfigClient
   | agentSelfConfigPermissionErrorAccess

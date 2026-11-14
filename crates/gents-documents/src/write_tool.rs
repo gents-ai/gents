@@ -318,6 +318,12 @@ impl WriteToolDecl {
                     field.name
                 );
             }
+            if field.name.trim() == crate::SIGNER_FIELD {
+                anyhow::bail!(
+                    "field[{index}] {} is read from the document's signature and cannot be written",
+                    crate::SIGNER_FIELD
+                );
+            }
             if field.name == "requester_did" && field.fill.is_none() {
                 anyhow::bail!(
                     "field[{index}] requester_did is node identity and must be runtime-filled"

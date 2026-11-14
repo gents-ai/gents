@@ -13,8 +13,8 @@ use crate::config_client::node_deferred_operation::DeferredOperationError;
 use crate::config_client::{AgentSelfConfigPermissionError, PackEvidenceError, SchemaInstallError};
 use crate::graphql::GraphqlResponseError;
 use crate::identity::{
-    AgentAdmissionObservationError, AgentProvisionError, EnrollmentApprovalError,
-    EnrollmentGrantError, GrantSetError, RemoteAgentProvisionError,
+    AgentAdmissionObservationError, AgentProvisionError, DocumentSignerError,
+    EnrollmentApprovalError, EnrollmentGrantError, GrantSetError, RemoteAgentProvisionError,
 };
 use crate::schema::migration::RuntimeMigrationError;
 use crate::schema::LegacyBackendPreflightError;
@@ -30,6 +30,20 @@ fn wrapped(wrapper: &str, failure: AccessFailure, erasure: Erasure) -> AccessCla
         "document_decide_error_authorize" => {
             classify_erased(erasure, DocumentDecideError::Authorize(access))
         }
+        "document_signer_error_read" => classify_erased(
+            erasure,
+            DocumentSignerError::Read {
+                doc_ids: vec!["document".into()],
+                source: access,
+            },
+        ),
+        "document_signer_error_decode" => classify_erased(
+            erasure,
+            DocumentSignerError::Decode {
+                doc_id: "document".into(),
+                source: response(),
+            },
+        ),
         "deferred_operation_error_config" => {
             classify_erased(erasure, DeferredOperationError::Config(access))
         }
