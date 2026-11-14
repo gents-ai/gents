@@ -1,5 +1,3 @@
-#![cfg(all(target_os = "macos", feature = "native-e2e", debug_assertions))]
-
 #[test]
 fn native_reset_acknowledges_clearing_an_isolated_datastore() {
     let root = tempfile::tempdir().unwrap();
