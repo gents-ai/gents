@@ -65,6 +65,20 @@ See `../README.md` for how this fits the broader formal-verification model.
   retries under a new identity and duplicates the turn; `NoPayload` drops the
   payload of an unconfirmed message and leaves a failed message with no
   Retry.
+- `InterruptLatchContention` — a User's interrupt of a running turn
+  (`interrupt.latch_request`, the desktop's and CLI's request interrupt)
+  racing the turn's own writes to the `AgentRequest` document: the execution
+  lease renewal and any other interrupter. The latch reads the row and sends
+  a User-signed update stamping `interrupt_requested_at` unless it is already
+  set; its commit aborts when a write of the row lands after the read. It is a
+  signed-conflict rebuild (Lean `TransactionReplay.disposition`) whose every
+  attempt reads the row afresh. `NoConflictLoss`, `StampedOnce`,
+  `DoneIsLatched` and `InterruptSettles` hold while fewer writes land in one
+  attempt series than it has attempts (the renewal cadence premise).
+  `SingleAttempt` is the found race (`transact_write` never rebuilds a sent
+  signed write, so one renewal failed the interrupt with a DefraDB
+  transaction conflict); `StaleRebuild` keeps the first read and stamps a
+  latch another interrupter set; `Exhausted` drops the cadence premise.
 - `PackUxWatch` — a pack page's live data watch (`desktop_ux_data_watch`)
   racing runtime restarts, window node selection, unwatch, window
   destruction and four runtime hazards (stopped for good, credentials
@@ -506,6 +520,10 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCClientSubmissionContentionShortBudget.cfg` | `Publications = Attempts = 4` | `NoConflictLoss` intentionally VIOLATED: four AgentPublish/ReserveCommit rounds | 237 distinct states; 513 generated | 12 | <1s |
 | `MCClientSubmissionContentionRetryFreshId.cfg` | `Publications = 0`, `LostReply`, `MaxSends = 2`, `RetryFreshId` | `CreatedOnce` intentionally VIOLATED: Compose, Timeout, ReserveCommit, SubmitCommit (reply not yet received), Retry under a new identity, ReserveCommit, SubmitCommit | 48 distinct states before counterexample; 75 generated | 9 | <1s |
 | `MCClientSubmissionContentionNoPayload.cfg` | `Publications = 0`, `LostReply`, `MaxSends = 2`, `PayloadLost` | `FailedOffersRetry` intentionally VIOLATED: Compose, DropPayload, Timeout leaves a failed message with no Retry | 32 distinct states before counterexample; 47 generated | 4 | <1s |
+| `MCInterruptLatchContention.cfg` | `Writes = 2`, `OtherInterrupt`, `Attempts = 4`, `Redrive`, `Reread` | Passes `TypeOK`, `NoConflictLoss`, `StampedOnce`, `DoneIsLatched`, `InterruptSettles` | 78 distinct states; 100 generated | — | <1s (OpenJDK 17, 4 workers) |
+| `MCInterruptLatchContentionSingleAttempt.cfg` | `Writes = 1`, `Redrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: Open, Renew, Commit | 9 distinct states; 9 generated | 4 | <1s |
+| `MCInterruptLatchContentionStaleRebuild.cfg` | `Writes = 0`, `OtherInterrupt`, `Reread = FALSE` | `StampedOnce` intentionally VIOLATED: Open, OtherLatch, Commit (rebuild), Commit stamps again | — | 5 | <1s |
+| `MCInterruptLatchContentionExhausted.cfg` | `Writes = Attempts = 4` | `NoConflictLoss` intentionally VIOLATED: four Renew/Commit rounds | — | 9 | <1s |
 | `MCSessionHeadObservation.cfg` | `Order = "lean"`, `HeadSeed = TRUE`, `Refusals = TRUE` | Passes `TypeOK`, `HeadFollowsBoundary`, `ReplyObserved` | 838 distinct states; 1,406 generated | 11 | <1s |
 | `MCSessionHeadObservationRequestIdTie.cfg` | `Order = "requestId"`, `Refusals = FALSE` | `HeadFollowsBoundary` intentionally VIOLATED: ClaimA, CompleteA, AdmitB, ClaimB leaves the head on A | 77 distinct states before counterexample; 99 generated | 6 | <1s |
 | `MCSessionHeadObservationRequestIdTieLiveness.cfg` | `Order = "requestId"`, `Refusals = FALSE` | `ReplyObserved` intentionally VIOLATED: the #3604 schedule; after reopen B completes and every load omits it | 620 distinct states; 1,056 generated | 11 | <1s |
