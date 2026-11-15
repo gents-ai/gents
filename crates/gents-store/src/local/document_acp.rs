@@ -68,10 +68,10 @@ pub enum DocumentAcpError {
     )]
     Unavailable,
     #[error(
-        "node identity {did} cannot sign for an embedded Vera node, which needs an Ed25519 node \
-         key; initialize the home with a file or macos-keychain identity"
+        "{node} cannot sign for an embedded Vera node, which needs an Ed25519 node key; \
+         initialize the home with a file or macos-keychain identity"
     )]
-    NodeKeyCannotSign { did: String },
+    NodeKeyCannotSign { node: String },
     #[error(
         "this home's embedded Vera deployment was created under a different {what} than this \
          Gents build and node identity give it; open the home with the Gents version that \
@@ -245,8 +245,31 @@ fn signs_for_vera(node: &dyn NodeIdentity) -> bool {
     )
 }
 
-/// `DocumentAcpChoice.admit`. A fresh store has no record and takes the
-/// request; `available` is whether this build carries the Vera node.
+/// `DocumentAcpChoice.admit`; `available` is whether this build carries the
+/// Vera node.
+fn decide(
+    recorded: Option<DocumentAcp>,
+    requested: DocumentAcp,
+    available: bool,
+    node_key_signs: bool,
+    node: impl FnOnce() -> String,
+) -> Result<DocumentAcp> {
+    if let Some(recorded) = recorded.filter(|recorded| *recorded != requested) {
+        return Err(DocumentAcpError::Switch {
+            recorded,
+            requested,
+        });
+    }
+    match requested {
+        DocumentAcp::Local => Ok(DocumentAcp::Local),
+        DocumentAcp::EmbeddedVera if !available => Err(DocumentAcpError::Unavailable),
+        DocumentAcp::EmbeddedVera if !node_key_signs => {
+            Err(DocumentAcpError::NodeKeyCannotSign { node: node() })
+        }
+        DocumentAcp::EmbeddedVera => Ok(DocumentAcp::EmbeddedVera),
+    }
+}
+
 pub(crate) fn admit(
     data: &Path,
     fresh: bool,
@@ -254,41 +277,26 @@ pub(crate) fn admit(
     node: &dyn NodeIdentity,
     available: bool,
 ) -> Result<DocumentAcp> {
-    if !fresh {
-        let recorded = recorded(data)?;
-        if recorded != requested {
-            return Err(DocumentAcpError::Switch {
-                recorded,
-                requested,
-            });
-        }
-    }
-    match requested {
-        DocumentAcp::Local => Ok(DocumentAcp::Local),
-        DocumentAcp::EmbeddedVera if !available => Err(DocumentAcpError::Unavailable),
-        DocumentAcp::EmbeddedVera if !signs_for_vera(node) => {
-            Err(DocumentAcpError::NodeKeyCannotSign {
-                did: node.did().to_owned(),
-            })
-        }
-        DocumentAcp::EmbeddedVera => Ok(DocumentAcp::EmbeddedVera),
-    }
+    let recorded = if fresh { None } else { Some(recorded(data)?) };
+    decide(recorded, requested, available, signs_for_vera(node), || {
+        format!("node identity {}", node.did())
+    })
 }
 
-/// Refuses a choice this build or this node's key cannot serve, before a
-/// caller records it.
-pub fn ensure_admitted(
-    data: &Path,
-    fresh: bool,
+/// [`admit`] from what is known before a home is written: the choice its
+/// init config already records, if any, and whether its node key is, or will
+/// be, kept in the Secure Enclave.
+pub fn ensure_admissible(
+    recorded: Option<DocumentAcp>,
     requested: DocumentAcp,
-    node: &dyn NodeIdentity,
+    secure_enclave_node_key: bool,
 ) -> Result<()> {
-    admit(
-        data,
-        fresh,
+    decide(
+        recorded,
         requested,
-        node,
         cfg!(feature = "embedded-vera"),
+        !secure_enclave_node_key,
+        || "a Secure Enclave node identity".to_owned(),
     )
     .map(|_| ())
 }

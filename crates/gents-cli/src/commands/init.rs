@@ -202,6 +202,12 @@ pub(crate) async fn init_home_with_core_packs(
     let home_dir = resolve_home_dir(args.home.as_deref());
     let tool_package = resolve_initial_tool_package(&args)?;
     validate_init_tool_flags(&args, tool_package)?;
+    admit_document_acp(
+        &home_dir,
+        args.document_acp,
+        args.identity_backend,
+        !args.dangerously_overwrite,
+    )?;
     crate::interactive_backend::resolve_backend_interactively(&mut args, || {}).await?;
     if !args.identity_only {
         resolve_init_model_name(&args)?;
@@ -217,10 +223,8 @@ pub(crate) async fn init_home_with_core_packs(
         .await?
         .is_none();
     stage("store_locked");
-    let document_acp = match args.document_acp {
-        Some(requested) => requested.into(),
-        None => recorded_document_acp(&home_dir)?,
-    };
+    let document_acp =
+        admit_document_acp(&home_dir, args.document_acp, args.identity_backend, true)?;
 
     if args.identity_only {
         if args.identity_backend != IdentityBackendArg::File && args.key_path.is_some() {
@@ -321,12 +325,6 @@ pub(crate) async fn init_home_with_core_packs(
         .await
         .context("creating or loading node identity key")?;
     stage("identity_ready");
-    gents_store::local::document_acp::ensure_admitted(
-        &data_dir,
-        fresh_store,
-        document_acp,
-        initialized_identity.identity.as_ref(),
-    )?;
 
     gents_store::local::storage_backend::reject_legacy_store(&data_dir)?;
     let mut stored = StoredInitConfig {
@@ -922,6 +920,7 @@ pub(crate) struct IdentityOnlyHomeSummary {
 pub(crate) async fn write_identity_only_home_metadata(
     options: IdentityOnlyHomeOptions<'_>,
 ) -> Result<IdentityOnlyHomeSummary> {
+    let document_acp = admit_document_acp(options.home, None, options.identity_backend, true)?;
     let data_dir = default_data_dir(options.home);
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
@@ -957,7 +956,6 @@ pub(crate) async fn write_identity_only_home_metadata(
     let tool_root = resolve_tool_root_for_package(options.tool_package, options.tool_root)?
         .map(|path| path.to_string_lossy().to_string());
     gents_store::local::storage_backend::reject_legacy_store(&data_dir)?;
-    let document_acp = recorded_document_acp(options.home)?;
     let mut stored = StoredInitConfig {
         home: options.home.to_string_lossy().to_string(),
         node_name: options.node_name.to_string(),
@@ -1059,12 +1057,32 @@ async fn bootstrap_identity_only_owner(
     Ok(())
 }
 
-/// What an initialized home recorded; a home with no record yet decides
-/// document access in its node's own store.
-fn recorded_document_acp(home: &Path) -> Result<gents_store::local::document_acp::DocumentAcp> {
-    Ok(read_init_config(home)?
-        .map(|config| config.document_acp)
-        .unwrap_or_default())
+fn admit_document_acp(
+    home: &Path,
+    requested: Option<DocumentAcpArg>,
+    identity_backend: IdentityBackendArg,
+    recorded_applies: bool,
+) -> Result<gents_store::local::document_acp::DocumentAcp> {
+    let recorded = if recorded_applies {
+        read_init_config(home)?
+    } else {
+        None
+    };
+    let secure_enclave_node_key = match &recorded {
+        Some(config) => {
+            config.identity_backend.as_deref().map(str::trim)
+                == Some(gents_store::local::home::SECURE_ENCLAVE_IDENTITY_BACKEND)
+        }
+        None => identity_backend == IdentityBackendArg::MacosSecureEnclave,
+    };
+    let recorded = recorded.map(|config| config.document_acp);
+    let requested = requested.map(Into::into).or(recorded).unwrap_or_default();
+    gents_store::local::document_acp::ensure_admissible(
+        recorded,
+        requested,
+        secure_enclave_node_key,
+    )?;
+    Ok(requested)
 }
 
 /// Identity and key custody must survive an error or interruption before
@@ -3065,6 +3083,70 @@ mod tests {
         let retried = initialize_disposable_home(&home, false).await.unwrap();
         assert_eq!(retried["status"], "initialized");
         assert_eq!(fs::read_to_string(home.join("retained")).unwrap(), "keep");
+    }
+
+    fn refused_document_acp(
+        error: &anyhow::Error,
+    ) -> &gents_store::local::document_acp::DocumentAcpError {
+        error
+            .downcast_ref()
+            .unwrap_or_else(|| panic!("not a document access refusal: {error:#}"))
+    }
+
+    #[tokio::test]
+    async fn a_document_acp_choice_the_home_cannot_serve_is_refused_before_anything_is_written() {
+        use gents_store::local::document_acp::DocumentAcpError;
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let mut args = init_args();
+        args.home = Some(home.clone());
+        args.document_acp = Some(DocumentAcpArg::EmbeddedVera);
+        args.identity_backend = IdentityBackendArg::MacosSecureEnclave;
+        args.secure_enclave_label = Some("unused".into());
+        let error = init_home(args).await.unwrap_err();
+        assert!(matches!(
+            refused_document_acp(&error),
+            DocumentAcpError::Unavailable | DocumentAcpError::NodeKeyCannotSign { .. }
+        ));
+        assert!(!home.exists());
+    }
+
+    #[tokio::test]
+    async fn a_rerun_cannot_switch_the_choice_an_unfinished_init_recorded() {
+        use gents_store::local::document_acp::{DocumentAcp, DocumentAcpError};
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        write_init_config(
+            &home,
+            &StoredInitConfig {
+                home: home.to_string_lossy().into_owned(),
+                node_name: "test-agent".into(),
+                node_did: "did:key:unfinished".into(),
+                key_path: None,
+                identity_backend: None,
+                keychain_label: None,
+                secure_enclave_label: None,
+                tool_package: Some(ToolPackageArg::Readonly),
+                tool_ceiling: tool_ceiling_for_package(ToolPackageArg::Readonly),
+                tool_root: None,
+                store_encryption: None,
+                document_acp: DocumentAcp::Local,
+            },
+        )
+        .unwrap();
+        let mut args = init_args();
+        args.home = Some(home.clone());
+        args.document_acp = Some(DocumentAcpArg::EmbeddedVera);
+        let error = init_home(args).await.unwrap_err();
+        assert!(matches!(
+            refused_document_acp(&error),
+            DocumentAcpError::Switch {
+                recorded: DocumentAcp::Local,
+                requested: DocumentAcp::EmbeddedVera,
+            }
+        ));
+        assert!(!default_data_dir(&home).exists());
     }
 
     fn init_args() -> InitArgs {
