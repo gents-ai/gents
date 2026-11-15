@@ -11,23 +11,6 @@ use gents_store::collection::Collection;
 use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
-#[test]
-fn configuration_admission_and_deferral_match_lean() {
-    gents_lean_vocab::families::contract_cases_runtime_configuration_admission_deferral::replay::<
-        ConfigurationAdmission,
-    >(|i| {
-        let mut deferred = DeferredRequests::default();
-        deferred.defer(
-            i.deferred_at,
-            request(Some("did:key:agent"), i.name.as_str()),
-        );
-        gents_lean_vocab::families::contract_cases_runtime_configuration_admission_deferral::ConfigurationAdmissionOutput {
-            expected: configuration_admission(i.visible, i.versions_current),
-            retries: deferred.release(i.active).is_some(),
-        }
-    });
-}
-
 fn selection(configuration: &ResolvedConfiguration) -> &SelectedConfiguration {
     match configuration {
         ResolvedConfiguration::Documents(selection) => selection,
@@ -186,7 +169,7 @@ async fn client_rebinding_defers_the_superseded_generation_and_scopes_the_new_se
 }
 
 #[tokio::test]
-async fn in_place_tool_changes_defer_readable_but_superseded_configuration() {
+async fn configuration_admission_and_deferral_match_lean() {
     let (db, user, access, binding) =
         crate::test_support::root::signed_test_node("configuration-version-admission").await;
     let node = db.node.clone();
@@ -200,6 +183,20 @@ async fn in_place_tool_changes_defer_readable_but_superseded_configuration() {
     let cases = tokio::task::spawn_blocking(|| {
         gents_lean_vocab::families::contract_cases_runtime_configuration_admission_deferral::cases::<ConfigurationAdmission>()
     }).await.unwrap();
+    for case in &cases {
+        let input = &case.input;
+        let mut deferred = DeferredRequests::default();
+        deferred.defer(
+            input.deferred_at,
+            request(Some("did:key:agent"), input.name.as_str()),
+        );
+        case.check(
+            gents_lean_vocab::families::contract_cases_runtime_configuration_admission_deferral::ConfigurationAdmissionOutput {
+                expected: configuration_admission(input.visible, input.versions_current),
+                retries: deferred.release(input.active).is_some(),
+            },
+        );
+    }
     let mut previous: Option<std::sync::Arc<gents_inference::resolved::ResolvedAgent>> = None;
     for mode in ["ReadOnly", "Off", "ReadOnly"] {
         let tools = json!({
