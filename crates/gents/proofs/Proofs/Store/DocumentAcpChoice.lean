@@ -108,6 +108,76 @@ theorem an_existing_store_never_creates_a_deployment
   cases store <;> cases requested <;> cases available <;> cases nodeKeySigns
     <;> simp_all [admit, Admission.createsDeployment, Store.recorded]
 
+/-- Whether a home may be created or opened on a provider yet. External
+premises: a Vera node accepts a write only under a delegation, and clients do
+not mint one yet, so every write a User signs is rejected; and DefraDB stages a
+relationship write inside a row transaction for the node's own store alone,
+while the runtime stages them there. A home on an embedded Vera node would
+therefore stop partway through its initialization and could not be served.
+This definition is the only statement of that limit: when both premises are
+gone, `.embeddedVera` becomes usable here and `enter` is `admit`. -/
+def Provider.usable : Provider → Bool
+  | .nodeStore => true
+  | .embeddedVera => false
+
+inductive Entry where
+  | nodeStore
+  | embeddedVera
+  | switchRefused
+  | veraUnavailable
+  | nodeKeyCannotSign
+  /-- The home would be admitted on a provider that is not usable yet. -/
+  | notYetUsable
+  deriving DecidableEq, Repr
+
+/-- What `gents init`, a serving runtime and an offline client do about a
+home's choice, from its init config alone and before anything is written or a
+node is built. `store` is what the init config records: `.fresh` for a home
+that has none. Every refusal of `admit` is kept and comes first, so a build
+without the Vera node, a recorded choice and a key that cannot sign are named
+as they were; the limit refuses only what `admit` would have started. The
+owners of a store (`admit`, `reopen`) are not subject to it. -/
+def enter (store : Store) (requested : Provider) (available nodeKeySigns : Bool) : Entry :=
+  match admit store requested available nodeKeySigns with
+  | .nodeStore => if Provider.nodeStore.usable then .nodeStore else .notYetUsable
+  | .embeddedVera => if Provider.embeddedVera.usable then .embeddedVera else .notYetUsable
+  | .switchRefused => .switchRefused
+  | .veraUnavailable => .veraUnavailable
+  | .nodeKeyCannotSign => .nodeKeyCannotSign
+
+def Entry.started : Entry → Option Provider
+  | .nodeStore => some .nodeStore
+  | .embeddedVera => some .embeddedVera
+  | _ => none
+
+theorem a_home_is_entered_only_on_a_usable_provider
+    (store : Store) (requested provider : Provider) (available nodeKeySigns : Bool)
+    (h : (enter store requested available nodeKeySigns).started = some provider) :
+    provider.usable = true := by
+  cases store <;> cases requested <;> cases provider <;> cases available <;> cases nodeKeySigns
+    <;> simp_all [enter, admit, Entry.started, Store.recorded, Provider.usable]
+
+theorem an_entered_home_is_one_its_store_admits
+    (store : Store) (requested provider : Provider) (available nodeKeySigns : Bool)
+    (h : (enter store requested available nodeKeySigns).started = some provider) :
+    (admit store requested available nodeKeySigns).started = some provider := by
+  cases store <;> cases requested <;> cases provider <;> cases available <;> cases nodeKeySigns
+    <;> simp_all [enter, admit, Entry.started, Admission.started, Store.recorded, Provider.usable]
+
+theorem the_limit_refuses_only_what_the_store_would_start
+    (store : Store) (requested : Provider) (available nodeKeySigns : Bool)
+    (h : enter store requested available nodeKeySigns = .notYetUsable) :
+    ∃ provider, (admit store requested available nodeKeySigns).started = some provider
+      ∧ provider.usable = false := by
+  cases store <;> cases requested <;> cases available <;> cases nodeKeySigns
+    <;> simp_all [enter, admit, Admission.started, Store.recorded, Provider.usable]
+
+theorem a_home_on_the_node_store_is_entered_as_it_is_admitted
+    (store : Store) (available nodeKeySigns : Bool)
+    (h : admit store .nodeStore available nodeKeySigns = .nodeStore) :
+    enter store .nodeStore available nodeKeySigns = .nodeStore := by
+  simp [enter, h, Provider.usable]
+
 /-- What a node finds of an opted-in home's Vera deployment when it opens the
 store again. -/
 inductive Reopening where

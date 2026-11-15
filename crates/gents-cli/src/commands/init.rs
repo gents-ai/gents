@@ -3093,8 +3093,51 @@ mod tests {
             .unwrap_or_else(|| panic!("not a document access refusal: {error:#}"))
     }
 
+    fn unfinished_init(home: &Path, document_acp: gents_store::local::document_acp::DocumentAcp) {
+        fs::create_dir_all(home).unwrap();
+        write_init_config(
+            home,
+            &StoredInitConfig {
+                home: home.to_string_lossy().into_owned(),
+                node_name: "test-agent".into(),
+                node_did: "did:key:unfinished".into(),
+                key_path: None,
+                identity_backend: None,
+                keychain_label: None,
+                secure_enclave_label: None,
+                tool_package: Some(ToolPackageArg::Readonly),
+                tool_ceiling: tool_ceiling_for_package(ToolPackageArg::Readonly),
+                tool_root: None,
+                store_encryption: None,
+                document_acp,
+            },
+        )
+        .unwrap();
+    }
+
+    fn refuses_an_embedded_vera_home(error: &anyhow::Error) -> bool {
+        use gents_store::local::document_acp::DocumentAcpError;
+        match refused_document_acp(error) {
+            DocumentAcpError::NotYetUsable => cfg!(feature = "embedded-vera"),
+            DocumentAcpError::Unavailable => !cfg!(feature = "embedded-vera"),
+            _ => false,
+        }
+    }
+
     #[tokio::test]
-    async fn a_document_acp_choice_the_home_cannot_serve_is_refused_before_anything_is_written() {
+    async fn an_embedded_vera_home_is_refused_before_anything_is_written() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let mut args = init_args();
+        args.home = Some(home.clone());
+        args.document_acp = Some(DocumentAcpArg::EmbeddedVera);
+        let error = init_home(args).await.unwrap_err();
+        assert!(refuses_an_embedded_vera_home(&error), "{error:#}");
+        assert!(!home.exists());
+    }
+
+    #[tokio::test]
+    async fn a_node_key_that_cannot_sign_for_vera_is_refused_before_anything_is_written() {
         use gents_store::local::document_acp::DocumentAcpError;
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
@@ -3112,29 +3155,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_rerun_on_a_home_that_recorded_embedded_vera_is_refused_before_its_store_is_made() {
+        use gents_store::local::document_acp::DocumentAcp;
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        unfinished_init(&home, DocumentAcp::EmbeddedVera);
+        let mut args = init_args();
+        args.home = Some(home.clone());
+        let error = init_home(args).await.unwrap_err();
+        assert!(refuses_an_embedded_vera_home(&error), "{error:#}");
+        assert!(!default_data_dir(&home).exists());
+    }
+
+    #[tokio::test]
     async fn a_rerun_cannot_switch_the_choice_an_unfinished_init_recorded() {
         use gents_store::local::document_acp::{DocumentAcp, DocumentAcpError};
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
-        fs::create_dir_all(&home).unwrap();
-        write_init_config(
-            &home,
-            &StoredInitConfig {
-                home: home.to_string_lossy().into_owned(),
-                node_name: "test-agent".into(),
-                node_did: "did:key:unfinished".into(),
-                key_path: None,
-                identity_backend: None,
-                keychain_label: None,
-                secure_enclave_label: None,
-                tool_package: Some(ToolPackageArg::Readonly),
-                tool_ceiling: tool_ceiling_for_package(ToolPackageArg::Readonly),
-                tool_root: None,
-                store_encryption: None,
-                document_acp: DocumentAcp::Local,
-            },
-        )
-        .unwrap();
+        unfinished_init(&home, DocumentAcp::Local);
         let mut args = init_args();
         args.home = Some(home.clone());
         args.document_acp = Some(DocumentAcpArg::EmbeddedVera);

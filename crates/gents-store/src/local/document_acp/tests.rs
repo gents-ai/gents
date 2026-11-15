@@ -3,7 +3,7 @@ use std::sync::Arc;
 use identity::{Identity as _, RawIdentity};
 use serde::{Deserialize, Serialize};
 
-use super::{admit, record, Deployment, DocumentAcp, DocumentAcpError};
+use super::{admit, enter, record, Deployment, DocumentAcp, DocumentAcpError};
 use crate::identity::{KeyIdentity, NodeIdentity, RegisteredIdentity};
 use crate::local::home::StoredInitConfig;
 
@@ -30,6 +30,24 @@ enum Admission {
     SwitchRefused,
     VeraUnavailable,
     NodeKeyCannotSign,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Entry {
+    NodeStore,
+    EmbeddedVera,
+    SwitchRefused,
+    VeraUnavailable,
+    NodeKeyCannotSign,
+    NotYetUsable,
+}
+
+fn document_acp(provider: Provider) -> DocumentAcp {
+    match provider {
+        Provider::NodeStore => DocumentAcp::Local,
+        Provider::EmbeddedVera => DocumentAcp::EmbeddedVera,
+    }
 }
 
 fn enclave_like_identity() -> Arc<dyn NodeIdentity> {
@@ -78,10 +96,7 @@ fn admission_matches_the_lean_model() {
             let admitted = admit(
                 store.path(),
                 matches!(input.store, Record::Fresh),
-                match input.requested {
-                    Provider::NodeStore => DocumentAcp::Local,
-                    Provider::EmbeddedVera => DocumentAcp::EmbeddedVera,
-                },
+                document_acp(input.requested),
                 node.as_ref(),
                 input.available,
             );
@@ -91,6 +106,34 @@ fn admission_matches_the_lean_model() {
                 Err(DocumentAcpError::Switch { .. }) => Admission::SwitchRefused,
                 Err(DocumentAcpError::Unavailable) => Admission::VeraUnavailable,
                 Err(DocumentAcpError::NodeKeyCannotSign { .. }) => Admission::NodeKeyCannotSign,
+                Err(error) => panic!("{input:?}: {error}"),
+            }
+        },
+    );
+}
+
+#[test]
+fn entering_a_home_matches_the_lean_model() {
+    gents_lean_vocab::families::document_acp_choice_enter::replay::<Entry, Provider, Record>(
+        |input| {
+            let recorded = match input.store {
+                Record::Fresh => None,
+                Record::CreatedOnNodeStore => Some(DocumentAcp::Local),
+                Record::CreatedOnEmbeddedVera => Some(DocumentAcp::EmbeddedVera),
+            };
+            let entered = enter(
+                recorded,
+                document_acp(input.requested),
+                input.available,
+                input.node_key_signs,
+            );
+            match entered {
+                Ok(DocumentAcp::Local) => Entry::NodeStore,
+                Ok(DocumentAcp::EmbeddedVera) => Entry::EmbeddedVera,
+                Err(DocumentAcpError::Switch { .. }) => Entry::SwitchRefused,
+                Err(DocumentAcpError::Unavailable) => Entry::VeraUnavailable,
+                Err(DocumentAcpError::NodeKeyCannotSign { .. }) => Entry::NodeKeyCannotSign,
+                Err(DocumentAcpError::NotYetUsable) => Entry::NotYetUsable,
                 Err(error) => panic!("{input:?}: {error}"),
             }
         },

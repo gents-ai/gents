@@ -5,6 +5,7 @@ use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use serde::{Deserialize, Serialize};
 
 use crate::identity::NodeIdentity;
+use crate::local::home::{StoredInitConfig, SECURE_ENCLAVE_IDENTITY_BACKEND};
 use crate::local::store_key::StoreKey;
 
 #[cfg(feature = "embedded-vera")]
@@ -66,6 +67,12 @@ pub enum DocumentAcpError {
     )]
     NodeKeyCannotSign { node: String },
     #[error(
+        "a home that decides document access through an embedded Vera node cannot be created or \
+         opened yet, because client-signed writes and staged access-control writes are not \
+         supported on it; use a home initialized without `--document-acp embedded-vera`"
+    )]
+    NotYetUsable,
+    #[error(
         "this home's embedded Vera deployment was created under a different {what} than this \
          Gents build and node identity give it; open the home with the Gents version that \
          created it"
@@ -109,6 +116,7 @@ impl DocumentAcpError {
             Self::Switch { .. }
             | Self::Unavailable
             | Self::NodeKeyCannotSign { .. }
+            | Self::NotYetUsable
             | Self::Inspect { .. } => None,
         }
     }
@@ -269,19 +277,47 @@ pub(crate) fn admit(
     })
 }
 
+fn usable(provider: DocumentAcp) -> Result<DocumentAcp> {
+    match provider {
+        DocumentAcp::Local => Ok(provider),
+        DocumentAcp::EmbeddedVera => Err(DocumentAcpError::NotYetUsable),
+    }
+}
+
+fn enter(
+    recorded: Option<DocumentAcp>,
+    requested: DocumentAcp,
+    available: bool,
+    node_key_signs: bool,
+) -> Result<DocumentAcp> {
+    decide(recorded, requested, available, node_key_signs, || {
+        "a Secure Enclave node identity".to_owned()
+    })
+    .and_then(usable)
+}
+
 pub fn ensure_admissible(
     recorded: Option<DocumentAcp>,
     requested: DocumentAcp,
     secure_enclave_node_key: bool,
 ) -> Result<()> {
-    decide(
+    enter(
         recorded,
         requested,
         cfg!(feature = "embedded-vera"),
         !secure_enclave_node_key,
-        || "a Secure Enclave node identity".to_owned(),
     )
     .map(|_| ())
+}
+
+pub fn ensure_home_opens<ToolPackage, ToolCeiling>(
+    config: &StoredInitConfig<ToolPackage, ToolCeiling>,
+) -> Result<()> {
+    ensure_admissible(
+        Some(config.document_acp),
+        config.document_acp,
+        config.identity_backend.as_deref().map(str::trim) == Some(SECURE_ENCLAVE_IDENTITY_BACKEND),
+    )
 }
 
 pub fn configure(
