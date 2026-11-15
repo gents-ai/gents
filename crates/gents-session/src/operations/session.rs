@@ -39,7 +39,7 @@ async fn read_sessions(
         })
         .await
         .map(|rows| rows.into_iter().map(|row| row.session).collect())
-        .map_err(SessionOperationError::passthrough)
+        .map_err(SessionOperationError::passthrough_error)
 }
 
 async fn request_counts(
@@ -56,7 +56,7 @@ async fn request_counts(
     for row in access
         .read_view(&view)
         .await
-        .map_err(SessionOperationError::passthrough)?
+        .map_err(SessionOperationError::passthrough_error)?
     {
         *counts.entry(row.scope()).or_insert(0) += 1;
     }
@@ -303,7 +303,7 @@ fn control_failure(error: SessionControlError, found: &AgentSession) -> SessionO
                 source: source.into(),
             }
         }
-        SessionControlError::Access(source) => SessionOperationError::passthrough(source),
+        SessionControlError::Access(source) => SessionOperationError::passthrough_error(source),
         SessionControlError::Failed(source) => SessionOperationError::passthrough(source),
     }
 }

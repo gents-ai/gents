@@ -22,7 +22,6 @@ native = ["dep:reqwest"]
 typescript = ["dep:ts-rs"]
 
 [dependencies]
-anyhow.workspace = true
 regex = "1"
 rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "serde-json-impl", "no-serde-warnings"] }

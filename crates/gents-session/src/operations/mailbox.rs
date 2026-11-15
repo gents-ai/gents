@@ -331,7 +331,7 @@ enum ApplyError {
 impl From<MailboxOperationError> for ApplyError {
     fn from(error: MailboxOperationError) -> Self {
         match error {
-            MailboxOperationError::Passthrough(error) => Self::Other(error.into_inner()),
+            MailboxOperationError::Passthrough(error) => Self::Other(anyhow::Error::new(error)),
             error => Self::Operation(error),
         }
     }

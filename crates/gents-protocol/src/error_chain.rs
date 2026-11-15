@@ -19,28 +19,50 @@ impl fmt::Display for ErrorChain<'_> {
     }
 }
 
-/// An application error an operation owner passes through. anyhow's own
-/// conversion into `Box<dyn Error>` keeps the top error's message but forwards
-/// `source()` past it, so a classifier walking the chain never meets that
-/// error: a store conflict or refusal on top reads as unclassified (Lean
+/// What an operation owner can pass through: a value that lends the error it
+/// carries, as an application error or a boxed error does.
+pub trait PassedSource: fmt::Debug + fmt::Display + Send + Sync + 'static {
+    fn top(&self) -> &(dyn Error + Send + Sync + 'static);
+}
+
+impl<T> PassedSource for T
+where
+    T: AsRef<dyn Error + Send + Sync + 'static> + fmt::Debug + fmt::Display + Send + Sync + 'static,
+{
+    fn top(&self) -> &(dyn Error + Send + Sync + 'static) {
+        self.as_ref()
+    }
+}
+
+/// Another owner's failure an operation owner passes through. An application
+/// error converted into `Box<dyn Error>` keeps its top error's message but
+/// forwards `source()` past it, so a classifier walking the chain never meets
+/// that error: a store conflict or refusal on top reads as unclassified (Lean
 /// `AccessClassification.hidden_is_unclassified`). This holder returns the top
 /// error from `source()`, so the chain shows its message twice, the trade
 /// `AccessClassification.exposed` records for every sourced holder.
 #[derive(Debug)]
-pub struct PassedThrough(anyhow::Error);
+pub struct PassedThrough(Box<dyn PassedSource>);
 
 impl PassedThrough {
-    pub fn new(error: impl Into<anyhow::Error>) -> Self {
-        Self(error.into())
+    pub fn new<E>(error: E) -> Self
+    where
+        E: PassedSource,
+    {
+        Self(Box::new(error))
+    }
+
+    /// Passes a typed owner error through as itself.
+    pub fn error<E>(error: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        Self::new(Box::new(error) as Box<dyn Error + Send + Sync>)
     }
 
     /// The passed-through error itself, the first error on its chain.
     pub fn get(&self) -> &(dyn Error + Send + Sync + 'static) {
-        self.0.as_ref()
-    }
-
-    pub fn into_inner(self) -> anyhow::Error {
-        self.0
+        self.0.top()
     }
 }
 
@@ -52,7 +74,7 @@ impl fmt::Display for PassedThrough {
 
 impl Error for PassedThrough {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(self.0.as_ref())
+        Some(self.0.top())
     }
 }
 
