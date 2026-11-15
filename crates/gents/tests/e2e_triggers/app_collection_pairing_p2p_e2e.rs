@@ -1704,6 +1704,7 @@ async fn application_pairing_replicates_only_while_its_author_holds_the_grant() 
     let observer_tool = pairing_tool(&db_a, Some(observer.identity.clone()), false);
     pairer_a.configure(&db_a, false, true).await;
     wait_for_status(&db_a, &tool_a, &peer_b, Some("author_lacks_grant")).await;
+    wait_for_carry(&db_a.node, &peer_b, "ChangeProposed", false).await;
     let seen = p2p_call(&observer_tool, json!({"action":"pairings_list"}))
         .await
         .expect("observer pairings_list");
@@ -1720,6 +1721,7 @@ async fn application_pairing_replicates_only_while_its_author_holds_the_grant() 
     );
     pairer_a.configure(&db_a, true, true).await;
     wait_for_status(&db_a, &tool_a, &peer_b, None).await;
+    wait_for_carry(&db_a.node, &peer_b, "ChangeProposed", true).await;
 
     assert_eq!(
         operator

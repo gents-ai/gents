@@ -283,8 +283,9 @@ pub(super) async fn reconcile_prepared_peer(
         // An install pushes every document of its collections and the
         // transport checks no grant, so its scope is derived from authority
         // read after the operations before it, not at preparation
-        // (`tla/PairingGrantRevocation.tla`).
-        if matches!(op, DiffOp::InstallReplicator(_)) {
+        // (`tla/PairingGrantRevocation.tla`); a teardown is rechecked too so
+        // a route is not removed for a change that has since been undone.
+        if desired.is_some() {
             let fresh = store
                 .load_desired_with_authority(&peer_id)
                 .await
