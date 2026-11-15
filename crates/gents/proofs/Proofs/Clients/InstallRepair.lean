@@ -430,6 +430,70 @@ inductive ServedNode where
   | none | same | different
   deriving Repr, DecidableEq, Lean.ToJson
 
+/-- Which home the job the service manager holds under the per-user label serves, as the manager
+records it. The label is per user, not per home: launchd addresses `gui/<uid>/<label>` and systemd
+the `--user` manager whatever `HOME` the asking process has. On 2026-11-13 the CLI's test binaries
+ran `gents` with a temporary `HOME` on machines whose user's node was loaded; finding no definition
+under that `HOME`, the repair took the user's job for one whose definition had been deleted (#3737)
+and booted it out, thirteen times. So the home is read from the manager's record of the job itself:
+launchd's `launchctl print` names the plist it loaded the job from and the job's program arguments,
+`--home` among them; systemd's `systemctl --user show` names the unit's fragment path and its
+`ExecStart`. A record whose home cannot be read is `other`, with its home taken to exist. -/
+inductive RecordedHome where
+  | none | chosen | other
+  deriving Repr, DecidableEq, Lean.ToJson
+
+structure ManagerRecord where
+  recorded : RecordedHome
+  /-- The definition file the manager loaded the job from still exists. -/
+  definitionPresent : Bool
+  /-- That file is the definition path of the asking process, under its own `HOME`. -/
+  atExpectedPath : Bool
+  /-- The home the record names still exists. -/
+  homePresent : Bool
+  deriving Repr, DecidableEq, Lean.ToJson
+
+/-- Whose the held job is. `another` is another home's service: its definition lives under another
+`HOME`, or it serves another home that still exists. `stale` is this `HOME`'s definition serving a
+home that is gone; `orphan` is a job whose definition is gone and that serves no existing home, the
+#3737 case. -/
+inductive Holder where
+  | free | chosen | stale | orphan | another
+  deriving Repr, DecidableEq, Lean.ToJson
+
+def holder (r : ManagerRecord) : Holder :=
+  if r.recorded == .none then .free
+  else if r.definitionPresent && !r.atExpectedPath then .another
+  else if r.recorded == .chosen then .chosen
+  else if r.homePresent then .another
+  else if r.definitionPresent then .stale
+  else .orphan
+
+/-- The service manager is asked to change the label (stop, start, enable, disable, remove) only
+while the job it holds is not another home's: every such request from any client goes through this
+one observation. -/
+def mayChange (r : ManagerRecord) : Bool := holder r != .another
+
+theorem another_existing_home_is_never_orphaned (r : ManagerRecord)
+    (other : r.recorded = .other) (present : r.homePresent = true) :
+    holder r = .another := by
+  simp [holder, other, present]
+
+theorem a_definition_under_another_home_is_never_orphaned (r : ManagerRecord)
+    (held : r.recorded ≠ .none) (present : r.definitionPresent = true)
+    (elsewhere : r.atExpectedPath = false) : holder r = .another := by
+  simp [holder, held, present, elsewhere]
+
+theorem orphaned_only_without_definition_or_home (r : ManagerRecord) (h : holder r = .orphan) :
+    r.recorded = .other ∧ r.definitionPresent = false ∧ r.homePresent = false := by
+  unfold holder at h
+  cases hr : r.recorded <;> cases hd : r.definitionPresent <;> cases hh : r.homePresent <;>
+    cases he : r.atExpectedPath <;> simp_all
+
+theorem another_homes_job_is_never_changed (r : ManagerRecord) (h : holder r = .another) :
+    mayChange r = false := by
+  simp [mayChange, h]
+
 structure ServiceObservation where
   definitionPresent : Bool
   sameHome : Bool
@@ -448,7 +512,14 @@ structure ServiceObservation where
   /-- The home the definition names, when it is not the chosen home, still exists. -/
   servedHomePresent : Bool
   operation : Operation
+  /-- What the service manager records for the label; the fields above are read from the
+  definition path under the asking process's `HOME`. -/
+  record : ManagerRecord
   deriving Repr, DecidableEq, Lean.ToJson
+
+/-- Only the operation the user asks for by name moves the service off another home's job. -/
+def leavesService (s : ServiceObservation) : Bool :=
+  holder s.record == .another && s.operation != .repoint
 
 /-- `rewriteDefinition` writes back a deleted definition while its job still runs this home's
 node, which would otherwise be gone at the next login. A job the service manager still holds
@@ -467,6 +538,7 @@ structure ServiceStep where
   deriving Repr, DecidableEq, Lean.ToJson
 
 def servicePlan (s : ServiceObservation) : List ServiceStep := Id.run do
+  if leavesService s then return []
   if !s.definitionPresent then
     return if !s.loaded then []
       else if s.serving == .same then [⟨.rewriteDefinition, false, false, false⟩]
@@ -489,20 +561,41 @@ def servicePlan (s : ServiceObservation) : List ServiceStep := Id.run do
       [⟨.restart, false, false, false⟩] else [])
 
 theorem a_deleted_definition_of_a_running_node_is_written_back (s : ServiceObservation)
+    (ours : leavesService s = false)
     (absent : s.definitionPresent = false) (loaded : s.loaded = true) (same : s.serving = .same) :
     servicePlan s = [⟨.rewriteDefinition, false, false, false⟩] := by
-  simp [servicePlan, Id.run, absent, loaded, same]
+  simp [servicePlan, Id.run, ours, absent, loaded, same]
 
 theorem a_loaded_job_without_a_definition_is_stopped_before_setup (s : ServiceObservation)
+    (ours : leavesService s = false)
     (absent : s.definitionPresent = false) (loaded : s.loaded = true)
     (other : s.serving ≠ .same) : servicePlan s = [⟨.stop, false, false, false⟩] := by
-  simp [servicePlan, Id.run, absent, loaded, other]
+  simp [servicePlan, Id.run, ours, absent, loaded, other]
 
 theorem service_plan_keeps_served_home (s : ServiceObservation)
     (present : s.definitionPresent = true) (other : s.sameHome = false)
     (served : s.servedHomePresent = true) (asked : s.operation = .run) :
     servicePlan s = [] := by
-  simp [servicePlan, Id.run, present, other, served, asked]
+  by_cases h : leavesService s = true
+  · simp [servicePlan, Id.run, h]
+  · simp [servicePlan, Id.run, h, present, other, served, asked]
+
+/-- Whatever the definition path under the asking `HOME` holds, no plan but `repoint` changes a job
+the service manager holds for another home. -/
+theorem service_plan_leaves_another_homes_job (s : ServiceObservation)
+    (another : holder s.record = .another) (asked : s.operation = .run) :
+    servicePlan s = [] := by
+  simp [servicePlan, Id.run, leavesService, another, asked]
+
+/-- The 2026-11-13 stops: a process with a temporary `HOME` (no definition there) on a machine whose
+user's node is loaded from the user's own LaunchAgents and serves the user's home. -/
+def temporaryHomeBesideUsersNode (beforeSetup : Bool) : ServiceObservation :=
+  ⟨false, false, beforeSetup, false, true, true, true, true, false, false, .unknown, false, false,
+   .none, false, .run, ⟨.other, true, false, true⟩⟩
+
+theorem a_temporary_home_leaves_the_users_node (beforeSetup : Bool) :
+    servicePlan (temporaryHomeBesideUsersNode beforeSetup) = [] := by
+  cases beforeSetup <;> decide
 
 /-- What the repair does to the service before setup takes the chosen home (`takesHome`): it stops
 the job that could open that home's store, and nothing else. That is the job of a definition naming
@@ -511,9 +604,11 @@ naming another home never opens this one. Stopping it was asked of the service m
 chosen home's behalf, which the manager refuses for a home the definition does not name, so
 `gents --home X` answered "Start over" or "Continue setup" ended in that refusal and the answer
 never reached setup (#3670). Whether the service moves to the chosen home is `servicePlan`'s, once
-setup has made the home. -/
+setup has made the home. A job the service manager holds for another home never opens this one
+either, whatever the asking `HOME` holds, and setup never moves a service. -/
 def setupServicePlan (s : ServiceObservation) : List ServiceStep :=
-  if (s.loaded || s.running) && (!s.definitionPresent || s.sameHome) then
+  if holder s.record != .another && (s.loaded || s.running) &&
+      (!s.definitionPresent || s.sameHome) then
     [⟨.stop, false, false, false⟩]
   else []
 
@@ -521,6 +616,14 @@ theorem setup_leaves_another_homes_service (s : ServiceObservation)
     (present : s.definitionPresent = true) (other : s.sameHome = false) :
     setupServicePlan s = [] := by
   simp [setupServicePlan, present, other]
+
+theorem setup_leaves_another_homes_job (s : ServiceObservation)
+    (another : holder s.record = .another) : setupServicePlan s = [] := by
+  simp [setupServicePlan, another]
+
+theorem a_temporary_home_setup_leaves_the_users_node (beforeSetup : Bool) :
+    setupServicePlan (temporaryHomeBesideUsersNode beforeSetup) = [] := by
+  cases beforeSetup <;> decide
 
 theorem setup_only_stops (s : ServiceObservation) (x : ServiceStep)
     (h : x ∈ setupServicePlan s) : x = ⟨.stop, false, false, false⟩ := by
@@ -568,6 +671,18 @@ theorem settle_keeps_served_home (o : SettleObservation)
     · exact setup_leaves_another_homes_service _ (present.trans p) (same.trans n)
     · exact service_plan_keeps_served_home _ (present.trans p) (same.trans n) (served.trans e)
         (operation.trans r)
+
+/-- No step a repair applies, whatever the user answers and whatever the asking `HOME` holds,
+changes a job the service manager holds for another home, for every operation but `repoint`. -/
+theorem settle_leaves_another_homes_job (o : SettleObservation)
+    (another : holder o.service.record = .another) (asked : o.service.operation = .run) :
+    settleServicePlan o = [] := by
+  unfold settleServicePlan
+  split
+  · rfl
+  · split
+    · exact setup_leaves_another_homes_job _ another
+    · exact service_plan_leaves_another_homes_job _ another asked
 
 /-- The service definition: the home it serves and the program it runs. -/
 structure Definition where

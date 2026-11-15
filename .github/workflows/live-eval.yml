@@ -1,0 +1,170 @@
+name: Live Engineer eval
+
+# Engineer evals from the ladder against the fleet's local model (#3792, #3788).
+# Graders read stored documents, never reply wording; sampling is the target's
+# own. The pass rules live in scripts/evals/live_engineer_eval.py and are
+# recorded in each result.json.
+#
+# - Dispatch, scope `case` (default): L2 scout-grants-two-file-tools, 3 trials,
+#   at least 2 must pass. About 2 minutes of eval after the build.
+# - Nightly, scope `ladder`: L1-L5 and factory-setup, 3 trials per case, four
+#   launchers, a 100 minute deadline. Each case is recorded against 2 of 3; the
+#   job fails when a rung L1-L5 passes under half its finished trials or
+#   finishes fewer than 6.
+#
+# Not a pull request gate. When the endpoint is unreachable or not serving the
+# model, the job says so in its summary and ends green with a warning.
+#
+# The job runs on the inference host's own runner, on the host itself: the
+# model listens there on loopback, a job container cannot reach the host
+# (bridge-to-host traffic is dropped) and job containers cannot join the host
+# network, and the minisforum runners deny private addresses to jobs. That
+# runner also builds core-packs; one runner runs one job at a time, so the
+# two never overlap. The nightly start (07:17 UTC) sits in the runner's
+# quietest hours, and the concurrency group keeps eval runs from stacking.
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: case (one L2 case, minutes) or ladder (L1-L5 and factory-setup, up to 100 minutes)
+        required: true
+        type: choice
+        default: case
+        options: [case, ladder]
+      trials:
+        description: Trials per case
+        required: true
+        default: "3"
+      required:
+        description: Trials of a case that must pass the grader
+        required: true
+        default: "2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-engineer-eval
+  cancel-in-progress: false
+
+jobs:
+  live-engineer-eval:
+    name: Live Engineer eval (${{ inputs.scope || 'ladder' }})
+    runs-on: [self-hosted, Linux, X64, workstation-1]
+    timeout-minutes: 140
+    defaults:
+      run:
+        # core-packs runs on this runner in a root container and leaves
+        # root-owned files in the workspace root; this host job checks out
+        # beside them instead of cleaning them.
+        working-directory: live-eval-src
+    env:
+      CARGO_BUILD_JOBS: "16"
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      RUST_BACKTRACE: "1"
+      RUST_MIN_STACK: "16777216"
+      GENTS_CI_LIVE_MODEL_BASE_URL: ${{ secrets.GENTS_CI_LIVE_MODEL_BASE_URL || 'http://127.0.0.1:8000/v1' }}
+      GENTS_CI_LIVE_MODEL_NAME: ${{ vars.GENTS_CI_LIVE_MODEL_NAME || 'GLM-5.3-Flash-NVFP4' }}
+      LIVE_EVAL_SCOPE: ${{ inputs.scope || 'ladder' }}
+      LIVE_EVAL_TRIALS: ${{ inputs.trials || '3' }}
+      LIVE_EVAL_REQUIRED: ${{ inputs.required || '2' }}
+    steps:
+      - name: Prepare job directories
+        working-directory: ${{ runner.temp }}
+        run: |
+          # The runner empties RUNNER_TEMP around every job, so the build
+          # leaves nothing on the host's disk.
+          {
+            echo "JOB_STARTED=$(date +%s)"
+            echo "LIVE_EVAL_DIR=${RUNNER_TEMP}/live-eval"
+            echo "LIVE_EVAL_OUT=${RUNNER_TEMP}/live-eval/out"
+            echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/live-eval/target"
+          } >> "${GITHUB_ENV}"
+
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          path: live-eval-src
+
+      - name: Check the model endpoint
+        id: probe
+        run: |
+          set +e
+          python3 scripts/evals/live_engineer_eval.py probe --out "${LIVE_EVAL_OUT}" --scope "${LIVE_EVAL_SCOPE}" \
+            --trials "${LIVE_EVAL_TRIALS}" --required "${LIVE_EVAL_REQUIRED}"
+          status=$?
+          set -e
+          if [[ "${status}" == 0 ]]; then
+            echo "usable=true" >> "${GITHUB_OUTPUT}"
+          elif [[ "${status}" == 3 ]]; then
+            echo "usable=false" >> "${GITHUB_OUTPUT}"
+            reason="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["reason"])' "${LIVE_EVAL_OUT}/result.json")"
+            echo "::warning title=Live Engineer eval skipped::${reason}"
+          else
+            exit "${status}"
+          fi
+
+      - name: Select the Rust toolchain
+        if: steps.probe.outputs.usable == 'true'
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null && [[ -x "${HOME}/.cargo/bin/rustup" ]]; then
+            echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+            export PATH="${HOME}/.cargo/bin:${PATH}"
+          fi
+          rustup show active-toolchain || rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)" --profile minimal
+          # The CLI build compiles a WebAssembly fixture; adds it to the runner account's toolchain once.
+          rustup target add wasm32-unknown-unknown
+          cargo --version
+
+      - name: Build gents
+        if: steps.probe.outputs.usable == 'true'
+        run: cargo build --locked --profile fast-dev -p gents-cli --bin gents -p gents-fs-runner --bin gents-fs-runner
+
+      - name: Run the live Engineer eval
+        if: steps.probe.outputs.usable == 'true'
+        run: |
+          set +e
+          # The eval runs as the runner's host account: keep every default
+          # path and the user service manager out of its reach.
+          isolated="${LIVE_EVAL_DIR}/user"
+          mkdir -p "${isolated}/config" "${isolated}/data" "${isolated}/state" "${isolated}/cache" "${isolated}/run"
+          chmod 700 "${isolated}/run"
+          env HOME="${isolated}" XDG_CONFIG_HOME="${isolated}/config" XDG_DATA_HOME="${isolated}/data" \
+            XDG_STATE_HOME="${isolated}/state" XDG_CACHE_HOME="${isolated}/cache" XDG_RUNTIME_DIR="${isolated}/run" \
+            DBUS_SESSION_BUS_ADDRESS= \
+            python3 scripts/evals/live_engineer_eval.py run --scope "${LIVE_EVAL_SCOPE}" --out "${LIVE_EVAL_OUT}" \
+              --gents "${CARGO_TARGET_DIR}/fast-dev/gents" --home "${LIVE_EVAL_DIR}/home" \
+              --trials "${LIVE_EVAL_TRIALS}" --required "${LIVE_EVAL_REQUIRED}" --job-started "${JOB_STARTED}"
+          status=$?
+          set -e
+          reason="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["reason"])' "${LIVE_EVAL_OUT}/result.json" 2>/dev/null || echo "no result.json; see the step log")"
+          if [[ "${status}" == 3 ]]; then
+            echo "::warning title=Live Engineer eval skipped::${reason}"
+          elif [[ "${status}" != 0 ]]; then
+            echo "::error title=Live Engineer eval failed::${reason}"
+            exit 1
+          fi
+
+      - name: Write the job summary
+        if: always()
+        working-directory: ${{ runner.temp }}
+        run: |
+          if [[ -f "${LIVE_EVAL_OUT}/summary.md" ]]; then
+            cat "${LIVE_EVAL_OUT}/summary.md" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "## Live Engineer eval: no result (the job stopped before the eval reported; see the step logs)" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Upload the result and transcripts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: live-engineer-eval-${{ env.LIVE_EVAL_SCOPE }}
+          path: ${{ env.LIVE_EVAL_OUT }}
+          if-no-files-found: ignore
+          retention-days: 14

@@ -605,12 +605,24 @@ mod tests {
             ("coordinator".into(), "profile".into()),
             ("worker".into(), "glm:inference".into()),
         ]);
-        assert!(
+        let deferred =
             preview_pack_inference_bindings(&access, &two_slots(), owner, &disabled_binding)
                 .await
-                .unwrap_err()
-                .to_string()
-                .contains("disabled")
+                .unwrap();
+        assert_eq!(deferred.bindings, disabled_binding);
+        let glm = deferred
+            .profiles
+            .iter()
+            .find(|profile| profile.profile_id == "glm:inference")
+            .unwrap();
+        assert!(!glm.usable);
+        assert_eq!(
+            glm.unavailable_reason.as_deref(),
+            Some("referenced backend is disabled")
+        );
+        assert_eq!(
+            crate::pack::core_packs::slot_binding(crate::pack::core_packs::ProfileState::of(glm)),
+            crate::pack::core_packs::SlotBinding::Deferred
         );
         node.shutdown().await.expect("node shutdown");
     }

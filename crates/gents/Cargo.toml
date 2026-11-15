@@ -170,8 +170,9 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+gents-workspace-hack = { workspace = true }
 # Integration tests link the library with its fixtures.
-gents = { path = ".", features = ["test-fixtures"] }
+gents = { path = ".", features = ["test-fixtures", "typescript"] }
 gents-store = { workspace = true, features = ["test-fixtures"] }
 gents-documents = { workspace = true, features = ["test-fixtures"] }
 gents-inference = { workspace = true, features = ["test-fixtures"] }

@@ -12,6 +12,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+gents-workspace-hack = { workspace = true }
 acp.workspace = true
 chrono.workspace = true
 crypto.workspace = true

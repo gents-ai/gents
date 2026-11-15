@@ -1,6 +1,7 @@
 import { expect, test as base, type Page, type TestInfo } from "@playwright/test";
 
 import type { DesktopUiHarnessScenario } from "../ui-harness/desktopHarness";
+import { OWN_VIEWPORT, PROJECT_SIZE_SENTINEL } from "./ownViewport";
 
 export type HarnessScenario = DesktopUiHarnessScenario;
 
@@ -8,9 +9,64 @@ export const PEER_ID = "peer-bombadil-local";
 
 type DesktopFixtures = {
   browserLogs: string[];
+  ownViewportGuard: void;
 };
 
+/* a tag is read from the test's details or from its title */
+function ownViewport(testInfo: TestInfo) {
+  return (
+    testInfo.tags.includes(OWN_VIEWPORT) ||
+    testInfo.titlePath.some((title) => title.split(/\s+/).includes(OWN_VIEWPORT))
+  );
+}
+
+function isSentinel(size: { width: number; height: number } | null) {
+  return (
+    size?.width === PROJECT_SIZE_SENTINEL.width &&
+    size?.height === PROJECT_SIZE_SENTINEL.height
+  );
+}
+
 export const test = base.extend<DesktopFixtures>({
+  /* a spec's own test.use({ viewport }) replaces this fixture, so only a
+     tagged test that sets no size of its own starts at the sentinel */
+  viewport: async ({ viewport }, use, testInfo) => {
+    await use(ownViewport(testInfo) ? PROJECT_SIZE_SENTINEL : viewport);
+  },
+  ownViewportGuard: [
+    async ({ page }, use, testInfo) => {
+      if (!ownViewport(testInfo)) {
+        await use();
+        return;
+      }
+      const size = page.viewportSize.bind(page);
+      const unsized: string[] = [];
+      const onNavigation = (frame: ReturnType<Page["mainFrame"]>) => {
+        if (frame === page.mainFrame() && isSentinel(size())) {
+          unsized.push(frame.url());
+        }
+      };
+      page.on("framenavigated", onNavigation);
+      page.viewportSize = () => {
+        const current = size();
+        if (isSentinel(current)) {
+          throw new Error(
+            `${OWN_VIEWPORT} test read the window size before setting its own; untag it so it runs on every project`,
+          );
+        }
+        return current;
+      };
+
+      await use();
+
+      page.off("framenavigated", onNavigation);
+      expect(
+        unsized,
+        `${OWN_VIEWPORT} test navigated before setting its own window size; untag it so it runs on every project`,
+      ).toEqual([]);
+    },
+    { auto: true },
+  ],
   browserLogs: [
     async ({ page }, use, testInfo) => {
       const logs: string[] = [];
@@ -38,7 +94,7 @@ export const test = base.extend<DesktopFixtures>({
   ],
 });
 
-export { expect };
+export { expect, OWN_VIEWPORT };
 export type { Page, TestInfo };
 
 const KIT_SURFACE = [

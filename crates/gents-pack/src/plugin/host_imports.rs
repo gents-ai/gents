@@ -207,13 +207,8 @@ fn host_call(
     // The store's epoch deadline is reachable only here. Each host call renews
     // the guest's compute allowance; a stopped invocation leaves none.
     if let Some(allowance) = host.compute_allowance() {
-        let ticks = u64::try_from(
-            allowance
-                .as_millis()
-                .div_ceil(u128::from(EPOCH_TICK_PERIOD_MS)),
-        )
-        .unwrap_or(u64::MAX / 2);
-        wasmtime::AsContextMut::as_context_mut(caller).set_epoch_deadline(ticks);
+        wasmtime::AsContextMut::as_context_mut(caller)
+            .set_epoch_deadline(allowance_ticks(allowance, EPOCH_TICK_PERIOD_MS));
     }
     match answer {
         Ok(answer) => {
@@ -223,6 +218,13 @@ fn host_call(
         }
         Err(_) => ENGINE_FAILED,
     }
+}
+
+/// The Lean `allowanceTicks`: the allowance in whole epoch ticks, rounded up.
+/// Each tick is one wake of the VM's epoch ticker, not a fixed span of wall
+/// clock (the external premise on that definition).
+fn allowance_ticks(allowance: std::time::Duration, period_ms: u64) -> u64 {
+    u64::try_from(allowance.as_millis().div_ceil(u128::from(period_ms))).unwrap_or(u64::MAX / 2)
 }
 
 fn run_script(
@@ -386,3 +388,18 @@ fn finish(raw: BoundedCommandOutput) -> AfbRunOutput {
 
 #[cfg(test)]
 mod pushdown_tests;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn allowance_ticks_conform_to_lean() {
+        gents_lean_vocab::families::plugin_resources_allowance_tick_counts::replay(|i| {
+            gents_lean_vocab::families::plugin_resources_allowance_tick_counts::TicksOutput {
+                ticks: super::allowance_ticks(
+                    std::time::Duration::from_millis(i.allowance_ms),
+                    i.period_ms,
+                ),
+            }
+        });
+    }
+}

@@ -268,6 +268,10 @@ fn serving(
         previous_version: None,
         served_home_present: true,
         operation: RepairOperation::Run,
+        holder: crate::native_service::ServiceHolder::Another {
+            home: Some(served.to_path_buf()),
+            definition: None,
+        },
     }
 }
 
