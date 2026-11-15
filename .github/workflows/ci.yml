@@ -331,6 +331,9 @@ jobs:
 
       - uses: ./.github/actions/rust-runner
 
+      - name: Install cargo-hakari
+        run: .github/scripts/setup-hakari.sh
+
       - name: Check the product build and clippy
         run: make gate-run JOB=lint
 

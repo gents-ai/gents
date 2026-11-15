@@ -225,6 +225,27 @@ class Shards(unittest.TestCase):
                 else:
                     os.environ[name] = value
 
+    def test_slices_sharing_a_host_cap_their_test_threads(self):
+        captured = []
+        original = gate.nextest
+        gate.nextest = lambda arguments, **options: captured.append(arguments) or True
+        saved = os.environ.get("RUST_TEST_THREADS")
+        os.environ["RUST_TEST_THREADS"] = "12"
+        try:
+            for transfer in ("host", "artifact"):
+                os.environ["GATE_ARCHIVE_TRANSFER"] = transfer
+                gate.run_shard(sharded(3, everything=True), "portable", 1)
+        finally:
+            gate.nextest = original
+            del os.environ["GATE_ARCHIVE_TRANSFER"]
+            os.environ.pop("GENTS_TEST_BINARIES_PREBUILT", None)
+            if saved is None:
+                del os.environ["RUST_TEST_THREADS"]
+            else:
+                os.environ["RUST_TEST_THREADS"] = saved
+        threads = [arguments[arguments.index("--test-threads") + 1] for arguments in captured]
+        self.assertEqual(threads, [str(gate.HOST_SLICE_THREADS), "12"])
+
     def test_a_shard_job_names_its_slice(self):
         selection = sharded(3, everything=True)
         with self.assertRaises(SystemExit):

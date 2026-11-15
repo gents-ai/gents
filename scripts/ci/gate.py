@@ -532,6 +532,11 @@ def run_fmt(selection):
 def run_lint(selection):
     packages, affected = package_flags(selection), set(selection["built"])
     profile = profile_flags()
+    # gents-workspace-hack keeps per-crate and joint test builds on one feature
+    # set (the archive builds every portable crate in one invocation). `verify`
+    # and `manage-deps` do not fit its dev-dependency-only, unify-target-host =
+    # "none" setup, so the check is that the generated hack is current.
+    sh(["cargo", "hakari", "generate", "--diff"])
     # The product build: no test targets, so no dev-dependency features.
     sh(["cargo", "check", *packages, *profile])
     sh(["cargo", "clippy", *packages, "--all-targets", *profile, "--", "-D", "warnings"])
@@ -615,6 +620,7 @@ SUMMARY = re.compile(r"^\s*Summary \[\s*([\d.]+)s\] (\d+) tests? run: (.*)$")
 
 HOST_ARCHIVES = Path.home() / ".cache" / "gents-tests"
 HOST_ARCHIVE_DAYS = 1
+HOST_SLICE_THREADS = 8
 
 
 def archive_dir(transfer="artifact"):
@@ -791,6 +797,11 @@ def run_shard(selection, name, index=None):
         arguments += ["--partition", f"slice:{index}/{entry['count']}"]
         label = f"shard {name} {index}/{entry['count']}"
     threads = os.environ.get("RUST_TEST_THREADS")
+    if transfer == "host" and index is not None:
+        # Every slice shares the build's host, and each test process starts
+        # its own embedded node: 3 slices at 12 threads took a 32-core
+        # minisforum from load 20 to over 100.
+        threads = str(min(int(threads or HOST_SLICE_THREADS), HOST_SLICE_THREADS))
     if threads:
         arguments += ["--test-threads", threads]
     # Tests that would otherwise `cargo build` a helper binary use the archived one.
