@@ -407,7 +407,7 @@ pub fn session_operation_failure(
         error.next_call(),
     );
     match error {
-        E::Passthrough(cause) => anyhow::Error::new(OperationCause(cause)),
+        E::Passthrough(cause) => anyhow::Error::new(OperationCause(Box::new(cause))),
         error => anyhow::Error::new(error).context(bridge),
     }
 }
