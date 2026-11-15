@@ -13,28 +13,64 @@
     "portable": {
       "labels": ["self-hosted", "Linux", "X64", "ci-portable"],
       "fallback": "macos",
-      "target": {"max_gib": 65, "floor_gib": 50}
+      "target": {
+        "max_gib": 65,
+        "floor_gib": 50
+      },
+      "cache": {
+        "systemd_unit": "gents-sccache.service"
+      }
     },
     "macos": {
       "labels": ["self-hosted", "macOS", "ARM64", "ci-macos"],
       "hosted": "macos-latest",
-      "target": {"max_gib": 400, "floor_gib": 150}
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
     },
     "runtime": {
       "labels": ["self-hosted", "macOS", "ARM64", "ci-runtime"],
-      "target": {"max_gib": 400, "floor_gib": 150}
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
     },
     "runtime-isolated": {
       "labels": ["self-hosted", "macOS", "ARM64", "ci-runtime-isolated"],
-      "target": {"max_gib": 400, "floor_gib": 150}
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
     },
     "cli": {
       "labels": ["self-hosted", "macOS", "ARM64", "ci-cli"],
-      "target": {"max_gib": 400, "floor_gib": 150}
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
     },
     "desktop": {
       "labels": ["self-hosted", "macOS", "ARM64", "ci-desktop"],
-      "target": {"max_gib": 400, "floor_gib": 150}
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
     },
     "support": {
       "labels": ["self-hosted", "macOS", "ARM64", "ci-support"]

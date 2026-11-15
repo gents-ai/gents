@@ -202,6 +202,17 @@ class Runners(unittest.TestCase):
             if fallback:
                 self.assertTrue(fallback in ROLES or HOSTED.fullmatch(fallback), role)
 
+    def test_every_building_role_names_its_host_cache(self):
+        # A role whose jobs build Rust shares one host sccache server per
+        # host; the setup step reaches it through the supervisor named here.
+        for role, entry in ROLES.items():
+            if "target" not in entry:
+                continue
+            with self.subTest(role=role):
+                key = "systemd_unit" if entry["labels"][1] == "Linux" else "launchd_label"
+                self.assertEqual(set(entry.get("cache", {})), {key})
+                self.assertTrue(entry["cache"][key])
+
     def test_the_plan_routes_every_job_and_group(self):
         selection = select(everything=True)
         self.assertEqual(set(selection["runs_on"]), set(gate.WORKFLOW_ROLES))

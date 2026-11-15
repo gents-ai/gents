@@ -129,8 +129,20 @@ sccache --version
 # while the runner user has a GUI login session: a WindowServer crash or a
 # logout removes it (and the host's live Gents node with it), and the job must
 # say so rather than build uncached on a host that has lost its session. On
-# Linux it is the systemd unit GENTS_SCCACHE_UNIT when the host installs one;
+# Linux it is the role's systemd unit when the host installs one;
 # otherwise each runner gets its own server (below).
+# The job's runner role names its host cache supervisor in the inventory.
+role_cache() {
+  python3 - "$1" <<'PYTHON'
+import json, os, sys
+from pathlib import Path
+
+role = os.environ.get("GENTS_CI_RUNNER_ROLE", "")
+inventory = Path(os.environ.get("GITHUB_WORKSPACE", ".")) / ".github/ci-runners.json"
+roles = json.loads(inventory.read_text())["roles"] if role and inventory.is_file() else {}
+print(roles.get(role, {}).get("cache", {}).get(sys.argv[1], ""))
+PYTHON
+}
 cache_unavailable() {
   local message="$1 Builds here stop until this is fixed; rerun the failed jobs afterwards."
   echo "::error title=Runner compiler cache unavailable on $(hostname -s)::${message}"
@@ -141,17 +153,19 @@ cache_unavailable() {
 }
 if [[ "$(uname -s)" == "Darwin" ]]; then
   user_domain="gui/$(id -u)"
-  service_domain="${user_domain}/com.source.gents.sccache"
+  sccache_label="$(role_cache launchd_label)"
+  service_domain="${user_domain}/${sccache_label:-com.source.gents.sccache}"
   if ! launchctl print "${user_domain}" >/dev/null 2>&1; then
     cache_unavailable "$(id -un) has no GUI login session on $(hostname -s), so its LaunchAgents (the sccache service, the live Gents node) are gone. This usually follows a WindowServer crash. A person must log in as $(id -un) at the console or over Screen Sharing, or restart the host so it logs in automatically."
   elif ! service_print="$(launchctl print "${service_domain}" 2>/dev/null)"; then
-    cache_unavailable "The sccache LaunchAgent ${service_domain} is not loaded on $(hostname -s). A person must load it as $(id -un): launchctl bootstrap ${user_domain} ~/Library/LaunchAgents/com.source.gents.sccache.plist (installed from .github/runner/)."
+    cache_unavailable "The sccache LaunchAgent ${service_domain} is not loaded on $(hostname -s). A person must load it as $(id -un): launchctl bootstrap ${user_domain} ~/Library/LaunchAgents/${sccache_label:-com.source.gents.sccache}.plist (installed from .github/runner/)."
   elif ! grep -q 'state = running' <<<"${service_print}"; then
     cache_unavailable "The sccache LaunchAgent ${service_domain} is loaded but not running on $(hostname -s). A person must start it as $(id -un): launchctl kickstart ${service_domain}, then read ~/Library/Logs/gents-sccache.stderr.log if it stops again."
   fi
   repair="restart it as $(id -un): launchctl kickstart -k ${service_domain}, and read ~/Library/Logs/gents-sccache.log"
 else
-  sccache_unit="${GENTS_SCCACHE_UNIT:-gents-sccache.service}"
+  sccache_unit="$(role_cache systemd_unit)"
+  sccache_unit="${sccache_unit:-gents-sccache.service}"
   if command -v systemctl >/dev/null 2>&1 && systemctl cat "${sccache_unit}" >/dev/null 2>&1; then
     if ! systemctl is-active --quiet "${sccache_unit}"; then
       cache_unavailable "The sccache systemd unit ${sccache_unit} is not active on $(hostname -s). A person must start it: systemctl start ${sccache_unit}."
