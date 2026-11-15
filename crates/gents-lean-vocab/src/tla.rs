@@ -122,6 +122,44 @@ fn literal(value: &Value) -> Option<String> {
     }
 }
 
+/// `rows` joined by `@@` as a balanced tree, one row per line. TLC's parser
+/// and evaluator recurse once per operand of a left-nested `@@` chain, so a
+/// chain of a few hundred rows overflows a default Java thread stack; the
+/// tree's depth is logarithmic in its rows.
+fn balanced(rows: &[String]) -> Vec<String> {
+    if rows.len() <= 1 {
+        return rows.to_vec();
+    }
+    let (left, right) = rows.split_at(rows.len().div_ceil(2));
+    let mut lines: Vec<String> = balanced(left)
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 0 {
+                format!("({line}")
+            } else {
+                format!(" {line}")
+            }
+        })
+        .collect();
+    lines.extend(
+        balanced(right)
+            .into_iter()
+            .enumerate()
+            .map(|(index, line)| {
+                if index == 0 {
+                    format!(" @@ {line}")
+                } else {
+                    format!("    {line}")
+                }
+            }),
+    );
+    if let Some(last) = lines.last_mut() {
+        last.push(')');
+    }
+    lines
+}
+
 /// The decision's table and lookup, or `None` when it is not a function over
 /// a finite domain that TLA+ values can carry.
 fn render_decision(owner: &str, name: &str, family: &FamilyView<'_>) -> Option<String> {
@@ -155,10 +193,13 @@ fn render_decision(owner: &str, name: &str, family: &FamilyView<'_>) -> Option<S
     if parameters.is_empty() || rows.len() != size {
         return None;
     }
+    let rows: Vec<String> = rows
+        .iter()
+        .map(|(key, result)| format!("<<{key}>> :> {result}"))
+        .collect();
     let mut text = format!("\\* Lean `{owner}`.\n{name}_table ==\n");
-    for (index, (key, result)) in rows.iter().enumerate() {
-        let join = if index == 0 { "      " } else { "   @@ " };
-        text.push_str(&format!("{join}<<{key}>> :> {result}\n"));
+    for line in balanced(&rows) {
+        text.push_str(&format!("  {line}\n"));
     }
     let arguments = parameters.join(", ");
     text.push_str(&format!(
@@ -329,13 +370,73 @@ mod tests {
         let text = render_decision("Ns.decide", "decide", &view(&input, &output, &cases)).unwrap();
         assert_eq!(
             text,
-            "\\* Lean `Ns.decide`.\ndecide_table ==\n      <<\"a\", FALSE>> :> \"no\"\n   @@ <<\"a\", TRUE>> :> \"yes\"\n   @@ <<\"b\", FALSE>> :> \"no\"\n   @@ <<\"b\", TRUE>> :> \"no\"\n\ndecide(mode, flag) ==\n  decide_table[<<mode, flag>>]\n"
+            "\\* Lean `Ns.decide`.\ndecide_table ==\n  ((<<\"a\", FALSE>> :> \"no\"\n    @@ <<\"a\", TRUE>> :> \"yes\")\n   @@ (<<\"b\", FALSE>> :> \"no\"\n       @@ <<\"b\", TRUE>> :> \"no\"))\n\ndecide(mode, flag) ==\n  decide_table[<<mode, flag>>]\n"
         );
         assert!(
             render_decision("Ns.decide", "decide", &view(&input, &output, &cases[..3])).is_none()
         );
         let doubled: Vec<_> = cases.iter().chain(&cases[..1]).cloned().collect();
         assert!(render_decision("Ns.decide", "decide", &view(&input, &output, &doubled)).is_none());
+    }
+
+    /// The most `@@` operators any one parenthesized group joins, and the
+    /// deepest parenthesis nesting, of a rendered table.
+    fn chain_and_depth(text: &str) -> (usize, usize) {
+        let mut groups = vec![0usize];
+        let (mut longest, mut deepest) = (0, 0);
+        for (index, c) in text.char_indices() {
+            match c {
+                '(' => {
+                    groups.push(0);
+                    deepest = deepest.max(groups.len() - 1);
+                }
+                ')' => {
+                    groups.pop();
+                }
+                '@' if text[index..].starts_with("@@") && !text[..index].ends_with('@') => {
+                    let group = groups.last_mut().expect("the top level is a group");
+                    *group += 1;
+                    longest = longest.max(*group);
+                }
+                _ => {}
+            }
+        }
+        (longest, deepest)
+    }
+
+    #[test]
+    fn a_large_table_nests_logarithmically_not_as_one_chain() {
+        let values = |prefix: &str, count: usize| -> Value {
+            serde_json::json!((0..count)
+                .map(|i| format!("{prefix}{i}"))
+                .collect::<Vec<_>>())
+        };
+        let input = serde_json::json!({"struct": "Input", "fields": [
+            ["a", {"enum": "A", "values": values("a", 8)}],
+            ["b", {"enum": "B", "values": values("b", 8)}],
+            ["c", {"enum": "C", "values": values("c", 9)}]]});
+        let output = Value::from("bool");
+        let mut cases = Vec::new();
+        for a in 0..8 {
+            for b in 0..8 {
+                for c in 0..9 {
+                    cases.push((
+                        serde_json::json!({"a": format!("a{a}"), "b": format!("b{b}"), "c": format!("c{c}")}),
+                        Value::Bool((a + b + c) % 2 == 0),
+                    ));
+                }
+            }
+        }
+        let view = FamilyView {
+            input: &input,
+            output: &output,
+            cases: cases.iter().map(|(i, e)| (i, e)).collect(),
+        };
+        let text = render_decision("Ns.decide", "decide", &view).unwrap();
+        assert_eq!(text.matches(" :> ").count(), 576);
+        let (longest, deepest) = chain_and_depth(&text);
+        assert_eq!(longest, 1, "a group joins more than two operands");
+        assert!(deepest <= 11, "the table nests {deepest} deep");
     }
 
     #[test]

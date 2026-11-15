@@ -380,6 +380,16 @@ class TlaStructure(unittest.TestCase):
             with self.assertRaises(check.HeaderError):
                 check.expectation(cfg)
 
+    def test_tlc_runs_with_a_large_thread_stack(self):
+        """A default Java thread stack overflows on a large generated table."""
+        check = gate.tla_check
+        command = check.tlc_command("java", "tla2tools.jar", "4g", "/tmp/x", "MCX.cfg", "MCX")
+        self.assertIn("-Xss16m", command)
+        self.assertLess(command.index("-Xss16m"), command.index("tlc2.TLC"))
+        script = (check.TLA / "scripts/run-tlc.sh").read_text()
+        self.assertIn("s/^jvm: //p", script)
+        self.assertIn('"${JVM[@]}"', script)
+
     def test_expectations_and_isolated_properties(self):
         check = gate.tla_check
         with tempfile.TemporaryDirectory() as scratch:

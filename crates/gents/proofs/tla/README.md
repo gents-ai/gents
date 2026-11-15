@@ -289,7 +289,9 @@ prints its full output, counterexample included.
 `make lean-regen` writes `generated/LeanDecision_<Namespace>.tla` for every
 owner a spec names that Lean exports as a `conformance_function` over a finite
 domain: `<name>_table`, the decision over its whole domain keyed by the tuple
-of its arguments in Lean parameter order, and `<name>(...)`, its lookup. A
+of its arguments in Lean parameter order and written as a balanced tree of
+`@@` (a long left-nested chain overflows TLC's stack), and `<name>(...)`, its
+lookup. A
 spec `EXTENDS` that module instead of restating the decision, and must not
 define an operator of the same name. `generated_tla_modules_are_current` in
 `gents-lean-vocab` fails when a module is stale. The scripts put `generated/`

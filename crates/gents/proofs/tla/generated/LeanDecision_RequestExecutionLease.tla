@@ -4,8 +4,8 @@ EXTENDS TLC
 
 \* Lean `RequestExecutionLease.providerEofIsFailure`.
 providerEofIsFailure_table ==
-      <<FALSE>> :> TRUE
-   @@ <<TRUE>> :> FALSE
+  (<<FALSE>> :> TRUE
+   @@ <<TRUE>> :> FALSE)
 
 providerEofIsFailure(saw_explicit_final) ==
   providerEofIsFailure_table[<<saw_explicit_final>>]

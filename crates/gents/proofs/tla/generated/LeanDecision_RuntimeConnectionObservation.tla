@@ -4,31 +4,31 @@ EXTENDS TLC
 
 \* Lean `RuntimeConnectionObservation.failedSnapshot`.
 failedSnapshot_table ==
-      <<"unauthorized">> :> "refused"
-   @@ <<"forbidden">> :> "refused"
-   @@ <<"permission_denied_code">> :> "refused"
-   @@ <<"transaction_conflict">> :> "unreachable"
-   @@ <<"other">> :> "unreachable"
+  (((<<"unauthorized">> :> "refused"
+     @@ <<"forbidden">> :> "refused")
+    @@ <<"permission_denied_code">> :> "refused")
+   @@ (<<"transaction_conflict">> :> "unreachable"
+       @@ <<"other">> :> "unreachable"))
 
 failedSnapshot(failure) ==
   failedSnapshot_table[<<failure>>]
 
 \* Lean `RuntimeConnectionObservation.reconnects`.
 reconnects_table ==
-      <<"source", "source_started">> :> FALSE
-   @@ <<"source", "subscriptions_ready">> :> FALSE
-   @@ <<"source", "snapshot_succeeded">> :> FALSE
-   @@ <<"source", "transport_failed">> :> TRUE
-   @@ <<"source", "refused">> :> TRUE
-   @@ <<"source", "renewed">> :> FALSE
-   @@ <<"source", "endpoint_missing">> :> FALSE
-   @@ <<"snapshot", "source_started">> :> FALSE
-   @@ <<"snapshot", "subscriptions_ready">> :> FALSE
-   @@ <<"snapshot", "snapshot_succeeded">> :> FALSE
-   @@ <<"snapshot", "transport_failed">> :> FALSE
-   @@ <<"snapshot", "refused">> :> TRUE
-   @@ <<"snapshot", "renewed">> :> FALSE
-   @@ <<"snapshot", "endpoint_missing">> :> FALSE
+  ((((<<"source", "source_started">> :> FALSE
+      @@ <<"source", "subscriptions_ready">> :> FALSE)
+     @@ (<<"source", "snapshot_succeeded">> :> FALSE
+         @@ <<"source", "transport_failed">> :> TRUE))
+    @@ ((<<"source", "refused">> :> TRUE
+         @@ <<"source", "renewed">> :> FALSE)
+        @@ <<"source", "endpoint_missing">> :> FALSE))
+   @@ (((<<"snapshot", "source_started">> :> FALSE
+         @@ <<"snapshot", "subscriptions_ready">> :> FALSE)
+        @@ (<<"snapshot", "snapshot_succeeded">> :> FALSE
+            @@ <<"snapshot", "transport_failed">> :> FALSE))
+       @@ ((<<"snapshot", "refused">> :> TRUE
+            @@ <<"snapshot", "renewed">> :> FALSE)
+           @@ <<"snapshot", "endpoint_missing">> :> FALSE)))
 
 reconnects(origin, event) ==
   reconnects_table[<<origin, event>>]

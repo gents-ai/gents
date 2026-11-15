@@ -11,9 +11,10 @@ shift
 tools="$(python3 scripts/tla_check.py install)"
 JAVA="$(sed -n 's/^java: //p' <<<"$tools")"
 JAR="$(sed -n 's/^tla2tools: //p' <<<"$tools")"
+read -r -a JVM <<<"$(sed -n 's/^jvm: //p' <<<"$tools")"
 
 mkdir -p states
-exec "$JAVA" -XX:+UseParallelGC -DTLA-Library="$PWD/generated" -cp "$JAR" tlc2.TLC \
+exec "$JAVA" "${JVM[@]}" -DTLA-Library="$PWD/generated" -cp "$JAR" tlc2.TLC \
   -workers auto \
   -metadir states \
   "$@" \

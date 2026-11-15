@@ -4,14 +4,14 @@ EXTENDS TLC
 
 \* Lean `Identity.Configuration.clientSignedWriteMayRetry`.
 clientSignedWriteMayRetry_table ==
-      <<FALSE, FALSE, FALSE>> :> TRUE
-   @@ <<FALSE, FALSE, TRUE>> :> TRUE
-   @@ <<FALSE, TRUE, FALSE>> :> TRUE
-   @@ <<FALSE, TRUE, TRUE>> :> TRUE
-   @@ <<TRUE, FALSE, FALSE>> :> FALSE
-   @@ <<TRUE, FALSE, TRUE>> :> FALSE
-   @@ <<TRUE, TRUE, FALSE>> :> FALSE
-   @@ <<TRUE, TRUE, TRUE>> :> TRUE
+  (((<<FALSE, FALSE, FALSE>> :> TRUE
+     @@ <<FALSE, FALSE, TRUE>> :> TRUE)
+    @@ (<<FALSE, TRUE, FALSE>> :> TRUE
+        @@ <<FALSE, TRUE, TRUE>> :> TRUE))
+   @@ ((<<TRUE, FALSE, FALSE>> :> FALSE
+        @@ <<TRUE, FALSE, TRUE>> :> FALSE)
+       @@ (<<TRUE, TRUE, FALSE>> :> FALSE
+           @@ <<TRUE, TRUE, TRUE>> :> TRUE)))
 
 clientSignedWriteMayRetry(dispatched, confirmed_abort, replay_authorized) ==
   clientSignedWriteMayRetry_table[<<dispatched, confirmed_abort, replay_authorized>>]

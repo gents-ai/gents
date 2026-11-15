@@ -4,12 +4,12 @@ EXTENDS TLC
 
 \* Lean `ClientWindowScope.Bound.delivers`.
 delivers_table ==
-      <<"none", "n1">> :> FALSE
-   @@ <<"none", "n2">> :> FALSE
-   @@ <<"n1", "n1">> :> TRUE
-   @@ <<"n1", "n2">> :> FALSE
-   @@ <<"n2", "n1">> :> FALSE
-   @@ <<"n2", "n2">> :> TRUE
+  (((<<"none", "n1">> :> FALSE
+     @@ <<"none", "n2">> :> FALSE)
+    @@ <<"n1", "n1">> :> TRUE)
+   @@ ((<<"n1", "n2">> :> FALSE
+        @@ <<"n2", "n1">> :> FALSE)
+       @@ <<"n2", "n2">> :> TRUE))
 
 delivers(selected, node) ==
   delivers_table[<<selected, node>>]

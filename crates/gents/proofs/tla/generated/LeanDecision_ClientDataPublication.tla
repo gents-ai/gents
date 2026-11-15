@@ -4,10 +4,10 @@ EXTENDS TLC
 
 \* Lean `ClientDataPublication.reloadAcceptedSince`.
 reloadAcceptedSince_table ==
-      <<FALSE, FALSE>> :> TRUE
-   @@ <<FALSE, TRUE>> :> TRUE
-   @@ <<TRUE, FALSE>> :> FALSE
-   @@ <<TRUE, TRUE>> :> FALSE
+  ((<<FALSE, FALSE>> :> TRUE
+    @@ <<FALSE, TRUE>> :> TRUE)
+   @@ (<<TRUE, FALSE>> :> FALSE
+       @@ <<TRUE, TRUE>> :> FALSE))
 
 reloadAcceptedSince(publication, event) ==
   reloadAcceptedSince_table[<<publication, event>>]

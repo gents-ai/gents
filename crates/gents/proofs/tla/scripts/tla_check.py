@@ -53,6 +53,9 @@ TLA_TOOLS = {
     "url": "https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar",
     "sha256": "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88",
 }
+# TLC's parser and evaluator recurse per nested operand; Java's default thread
+# stack (512k on some platforms) is too small for the larger specs.
+JVM_OPTIONS = ["-Xss16m", "-XX:+UseParallelGC"]
 JDK_RELEASE = "jdk-17.0.21+9"
 JDK_BASE = "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/"
 JDKS = {
@@ -435,6 +438,13 @@ def without_checks(text, keep_property):
     return body.rstrip() + f"\nPROPERTY {keep_property}\n"
 
 
+def tlc_command(java, jar, heap, scratch, config, module):
+    """One TLC run: breadth-first, one worker, fixed fingerprint, machine-readable output."""
+    return [str(java), f"-Xmx{heap}", *JVM_OPTIONS, f"-Djava.io.tmpdir={scratch}",
+            f"-DTLA-Library={GENERATED}", "-cp", str(jar), "tlc2.TLC", "-tool", "-workers", "1",
+            "-fp", "1", "-metadir", str(Path(scratch) / "states"), "-config", str(config), module]
+
+
 class Tlc:
     def __init__(self, java, jar, timeout, heap):
         self.java, self.jar, self.timeout, self.heap = java, jar, timeout, heap
@@ -447,10 +457,7 @@ class Tlc:
             if text is not None:
                 config = scratch / cfg.name
                 config.write_text(text)
-            command = [str(self.java), f"-Xmx{self.heap}", "-XX:+UseParallelGC",
-                       f"-Djava.io.tmpdir={scratch}", f"-DTLA-Library={GENERATED}",
-                       "-cp", str(self.jar), "tlc2.TLC", "-tool", "-workers", "1", "-fp", "1",
-                       "-metadir", str(scratch / "states"), "-config", str(config), cfg.stem]
+            command = tlc_command(self.java, self.jar, self.heap, scratch, config, cfg.stem)
             started = time.time()
             try:
                 done = subprocess.run(command, cwd=TLA, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -594,7 +601,7 @@ def main():
         sys.exit(check_headers())
     elif arguments.command == "install":
         java, jar = install()
-        print(f"java: {java}\ntla2tools: {jar}")
+        print(f"java: {java}\ntla2tools: {jar}\njvm: {' '.join(JVM_OPTIONS)}")
 
 
 if __name__ == "__main__":
