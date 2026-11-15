@@ -133,9 +133,12 @@ async fn interrupt_rebuild_keeps_another_interrupters_latch() {
         Default::default(),
     )
     .await;
-    let (hook, commits) = racing_writes(&actors, &doc, 1, |_| {
-        serde_json::json!({ "interrupt_requested_at": OTHER_STAMP })
-    });
+    let (hook, commits) = racing_writes(
+        &actors,
+        &doc,
+        1,
+        |_| serde_json::json!({ "interrupt_requested_at": OTHER_STAMP }),
+    );
     let proxy = CommitRaceProxy::spawn(db.client_endpoint(), hook).await;
     let contended = operator_access(&proxy, &actors);
 
