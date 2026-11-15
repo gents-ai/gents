@@ -2088,6 +2088,7 @@ fn ambient_context_counts_statics_outside_test_items() {
 /// which failure occurred. They return module-owned `thiserror` enums and
 /// classifiers match those enums; application code may use `anyhow`.
 const OWNER_MODULES: &[&str] = &[
+    "crates/gents-tools/src/ux_data/create_schema.rs",
     "crates/gents-claude/src",
     "crates/gents-protocol/src",
     "crates/gents-loop/src",
