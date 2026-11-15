@@ -1,5 +1,5 @@
 ---- MODULE InterruptPartialOutput ----
-\* lean: none
+\* lean: RequestExecutionLease.providerEofIsFailure
 \* crates: gents, gents-loop, gents-session
 (***************************************************************************)
 (* Text a provider has already handed to the owned loop when its request   *)
@@ -39,7 +39,9 @@
 (*  - The terminal owner (`terminal.rs` `terminalize_request`): one CAS     *)
 (*    selecting the published partial message, if any.                     *)
 (* A provider end of stream reaches the same drain through the processor   *)
-(* and fails the request; it is modeled so the property covers both ends.  *)
+(* and, carrying no explicit final, fails the request as Lean              *)
+(* `RequestExecutionLease.providerEofIsFailure` decides; it is modeled so  *)
+(* the property covers both ends.                                          *)
 (*                                                                          *)
 (* Property: when the request reaches a terminal state, every chunk the    *)
 (* provider handed to the loop is durable, and the terminal state is        *)
@@ -51,7 +53,7 @@
 (* the interrupt drops a received chunk), `MCInterruptPartialOutputNoDrainFlush` *)
 (* (the drain closes without flushing the accumulator).                    *)
 (***************************************************************************)
-EXTENDS Naturals
+EXTENDS Naturals, LeanDecision_RequestExecutionLease
 
 CONSTANTS
   Chunks,         \* text chunks the provider streams in this attempt
@@ -175,7 +177,9 @@ Drain ==
 (* The terminal owner's CAS. *)
 Terminalize ==
   /\ drive = "drained" /\ lifecycle = "processing"
-  /\ lifecycle' = IF cause = "interrupt" THEN "interrupted" ELSE "failed"
+  /\ lifecycle' = CASE cause = "interrupt" -> "interrupted"
+                    [] providerEofIsFailure(FALSE) -> "failed"
+                    [] OTHER -> "completed"
   /\ terminalWrites' = terminalWrites + 1
   /\ UNCHANGED <<emitted, slot, acc, durable, drive, cause, latched, observed>>
 
