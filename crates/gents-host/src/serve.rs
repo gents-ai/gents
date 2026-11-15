@@ -533,6 +533,7 @@ async fn serve_foreground(
         "the initialized data directory {} is unavailable",
         data_dir.display()
     );
+    gents_store::local::backend_protection::refuse_earlier_lineage(&data_dir)?;
     let watched_home = home_dir.clone();
     let (_held_home, home_identity) =
         tokio::task::spawn_blocking(move || home_watch::hold_home(&watched_home)).await??;

@@ -9,9 +9,15 @@ use tokio::io::AsyncWriteExt;
 
 use super::{home::StoreLock, store_key::StoreKey};
 
-const MARKER: &str = ".gents-private-backend-v1";
+/// The store's lineage marker. Its version names the node grants a store was
+/// created under as well as its format: v2 began when the Agent baseline
+/// gained `get-collection` (gents#3747, Lean
+/// `Identity.GrantSets.widened_baseline_blocks_actorless_reconcile`). A store
+/// without this version's marker is reported as made by an older version and
+/// is never opened, so nothing in it changes; there is no conversion.
+const MARKER: &str = ".gents-private-backend-v2";
 pub(crate) const PROVENANCE_MARKER: &str = MARKER;
-const DOMAIN: &[u8] = b"gents private backend fresh store v1\0";
+const DOMAIN: &[u8] = b"gents private backend fresh store v2\0";
 type MarkerMac = Hmac<Sha256>;
 
 #[derive(Debug, thiserror::Error)]
@@ -22,11 +28,11 @@ pub enum BackendProtectionError {
     NotFresh,
     #[error("fresh backend protection provenance is absent or invalid")]
     InvalidProvenance,
-    /// An existing store carries no provenance marker at all: it was created
-    /// by a release from before backend protection (v1.0.0-rc1 and earlier),
-    /// which this release does not convert.
+    /// An existing store carries no marker of this version's lineage: it was
+    /// created by a release from before backend protection or under an
+    /// earlier lineage version, which this release does not convert.
     #[error(
-        "this home was created by an older Gents version (v1.0.0-rc1 or earlier), which this \
+        "this home was created by an older Gents version, which this \
          release cannot open or convert. Back the home up or delete it, then run `gents` to set \
          up a fresh one. To keep anything, export it first with the release that created it."
     )]
@@ -68,6 +74,29 @@ impl BackendProtectionError {
 }
 
 type Result<T> = std::result::Result<T, BackendProtectionError>;
+
+/// Refuses a store that carries an earlier lineage's marker and not this
+/// version's, by reading the directory's names only. It runs before the
+/// store lock is taken, because taking the lock rewrites the lock file and a
+/// refused older home is left byte-identical. Only a positively earlier
+/// marker is refused here: a store with no marker at all may be one another
+/// process is still initializing, which the lock decides.
+pub fn refuse_earlier_lineage(data: &Path) -> Result<()> {
+    let prefix = MARKER.rsplit_once('v').map_or(MARKER, |(prefix, _)| prefix);
+    let mut earlier = false;
+    for entry in std::fs::read_dir(data)? {
+        let name = entry?.file_name();
+        let name = name.to_string_lossy();
+        if name == MARKER {
+            return Ok(());
+        }
+        earlier |= name.starts_with(prefix);
+    }
+    if earlier {
+        return Err(BackendProtectionError::MissingProvenance);
+    }
+    Ok(())
+}
 
 async fn check_lock(data: &Path, lock: &StoreLock) -> Result<PathBuf> {
     let path = tokio::fs::canonicalize(data).await?;

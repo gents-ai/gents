@@ -90,7 +90,7 @@ opentelemetry.workspace = true
 p2p.workspace = true
 query.workspace = true
 rand.workspace = true
-regolith = "0.2.4"
+regolith = "0.2.5"
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error = "0.1"
@@ -109,7 +109,7 @@ toml.workspace = true
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
-tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 uuid.workspace = true
 rig-core.workspace = true
 reqwest = { workspace = true, features = ["stream"] }

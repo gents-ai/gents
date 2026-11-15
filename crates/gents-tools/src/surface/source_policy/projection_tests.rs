@@ -127,7 +127,7 @@ async fn observe_plugin_permission(
 }
 
 #[tokio::test]
-async fn selected_datastore_query_grants_collection_access_until_removed() -> anyhow::Result<()> {
+async fn live_agents_read_collections_whatever_their_datastore_tools() -> anyhow::Result<()> {
     let (_directory, runtime, node) = projection_node().await?;
     let binding = gents_store::identity::provision_agent_identity(&runtime)?;
     let sibling_binding = gents_store::identity::provision_agent_identity(&runtime)?;
@@ -185,11 +185,9 @@ async fn selected_datastore_query_grants_collection_access_until_removed() -> an
             .tool_operation_cases
             .iter()
             .find(|case| case["name"] == name)
-            .expect("modeled operation case")["sources"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|source| source["permission"] == "get-collection")
+            .expect("modeled operation case")["live_agent_reads_collections"]
+            .as_bool()
+            .expect("modeled effective permission")
     };
     assert_eq!(
         node.nac_manager()
@@ -219,7 +217,10 @@ async fn selected_datastore_query_grants_collection_access_until_removed() -> an
             .await?,
         expected("none"),
     );
-    assert!(access.collection_version("Node").await.is_err());
+    assert_eq!(
+        access.collection_version("Node").await.is_ok(),
+        expected("none")
+    );
     node.shutdown().await?;
     Ok(())
 }
