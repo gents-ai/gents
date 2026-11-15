@@ -272,9 +272,7 @@ mod tests {
                 .is_err()
         );
         release.send(()).unwrap();
-        tokio::time::timeout(STALL_CEILING, drained)
-            .await
-            .unwrap();
+        tokio::time::timeout(STALL_CEILING, drained).await.unwrap();
         assert!(!workers.contains("running"));
     }
 }

@@ -1701,8 +1701,9 @@ async fn park_with_assigned_permit(
     let woken = Arc::new(WakeNotify(tokio::sync::Notify::new()));
     let waker = futures::task::waker(woken.clone());
     let mut cx = std::task::Context::from_waker(&waker);
-    let mut changes = gents_store::subscription_source::subscribe_collections(node, ["InferenceCall"])
-        .expect("observe InferenceCall");
+    let mut changes =
+        gents_store::subscription_source::subscribe_collections(node, ["InferenceCall"])
+            .expect("observe InferenceCall");
     loop {
         assert!(parked.as_mut().poll(&mut cx).is_pending());
         let rows = call_rows(node, &registry.signer).await;

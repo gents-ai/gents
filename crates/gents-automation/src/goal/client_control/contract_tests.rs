@@ -65,20 +65,24 @@ client_control_shards!(
     generated_goal_client_controls_drive_signed_commands_shard_7 = 7,
 );
 
+type ControlCase = gents_lean_vocab::family::Case<
+    gents_lean_vocab::families::goal_client_control_contracts_control::ControlInput<String>,
+    Option<gents_lean_vocab::families::goal_client_control_contracts_control::GoalSnapshot<String>>,
+>;
+
+/// The family's one replay site; the shards and their coverage check share it.
+fn control_cases() -> Vec<ControlCase> {
+    gents_lean_vocab::families::goal_client_control_contracts_control::cases::<String>()
+}
+
 #[test]
 fn generated_goal_client_control_shards_replay_every_case_once() {
-    let cases =
-        gents_lean_vocab::families::goal_client_control_contracts_control::cases::<String>();
-    gents_lean_vocab::family::assert_shards_cover(cases.len(), SHARD_TESTS, SHARDS);
+    gents_lean_vocab::family::assert_shards_cover(control_cases().len(), SHARD_TESTS, SHARDS);
 }
 
 async fn drive_client_control_shard(shard: usize) {
     use futures::StreamExt;
-    let cases = gents_lean_vocab::family::shard(
-        gents_lean_vocab::families::goal_client_control_contracts_control::cases::<String>(),
-        shard,
-        SHARDS,
-    );
+    let cases = gents_lean_vocab::family::shard(control_cases(), shard, SHARDS);
     futures::stream::iter(cases.chunks(CASES_PER_NODE))
         .for_each_concurrent(NODES_AT_ONCE, |chunk| async move {
             let node = FixtureNode::start().await;
@@ -90,15 +94,7 @@ async fn drive_client_control_shard(shard: usize) {
         .await;
 }
 
-async fn drive_signed_command(
-    node: &FixtureNode,
-    modeled_case: &gents_lean_vocab::family::Case<
-        gents_lean_vocab::families::goal_client_control_contracts_control::ControlInput<String>,
-        Option<
-            gents_lean_vocab::families::goal_client_control_contracts_control::GoalSnapshot<String>,
-        >,
-    >,
-) {
+async fn drive_signed_command(node: &FixtureNode, modeled_case: &ControlCase) {
     let case = &modeled_case.input;
     let before_execution = serde_json::to_value(&case.before.execution).unwrap();
     let terminal_parent = !case.facts.unfinished_request;
