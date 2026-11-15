@@ -1,4 +1,4 @@
-use gents_lean_vocab::families::document_acp_choice_reopened::{replay, Reopened};
+use gents_lean_vocab::families::document_acp_choice_reopened as family;
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use serde::{Deserialize, Serialize};
 
@@ -38,7 +38,7 @@ fn deployment(consensus_key: &str) -> Deployment {
 
 #[test]
 fn reopening_matches_the_lean_model() {
-    replay::<Refusal, Reopening>(|input| {
+    family::replay::<Refusal, Reopening>(|input| {
         let store = tempfile::tempdir().unwrap();
         record(store.path(), &deployment("recorded")).unwrap();
         if input.present {
@@ -56,7 +56,7 @@ fn reopening_matches_the_lean_model() {
             })
             .and_then(|()| ensure_recorded(store.path(), Some(&started)));
         let Err(error) = reopened else {
-            return Reopened {
+            return family::Reopened {
                 reopening: Reopening::Served,
                 refusal: None,
             };
@@ -73,6 +73,6 @@ fn reopening_matches_the_lean_model() {
             IncompatibleStoreKind::UnsupportedOrCorrupt => Refusal::Damaged,
             kind => panic!("{input:?}: {kind:?}"),
         });
-        Reopened { reopening, refusal }
+        family::Reopened { reopening, refusal }
     });
 }
