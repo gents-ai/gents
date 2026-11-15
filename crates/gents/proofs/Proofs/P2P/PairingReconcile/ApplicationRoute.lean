@@ -72,7 +72,17 @@ theorem inactive_overlay_leaves_base (localDid peerDid : String) (base : Layer)
   simp [route, overlayLayer, inactive]
 
 /-- Withdrawing the author's P2P mutation grant stops replication of the named
-collections at the next sweep, without deleting the overlay. -/
+collections at the next sweep, without deleting the overlay.
+
+Premise (transport): a replicator checks no grant when it pushes, and an
+install pushes every document of its collections. The grant therefore holds
+only through the facts each install is decided on, so the reconciler evaluates
+`route` on facts read after the transport operations before that install, not
+once per sweep, and the author's Agent, context and tools wake it. A document
+written between the withdrawal and the sweep that removes the collection can
+still reach the peer; only a push-time grant check in the transport closes
+that window. A withdrawal is in effect for an observer once the base route
+stands without the collections (`tla/PairingGrantRevocation.tla`). -/
 theorem withdrawn_grant_stops_replication (localDid peerDid : String) (base : Layer)
     (facts : Facts) (named : Finset String) (withdrawn : facts.authorHoldsGrant = false) :
     route localDid peerDid base facts named = mergeLayered localDid peerDid (some base) none :=
