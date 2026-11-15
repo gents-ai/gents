@@ -41,7 +41,8 @@
 \* when the first send landed after its reply was lost; `PayloadLost` lets the
 \* client drop the payload of an unconfirmed message, which leaves a failed
 \* message with no Retry.
-EXTENDS Naturals, Sequences, FiniteSets, LeanDecision_TransactionReplay
+EXTENDS Naturals, Sequences, FiniteSets, LeanDecision_TransactionReplay,
+        LeanDecision_Identity_Configuration
 
 CONSTANTS
   Publications,  \* Agent session refreshes landing in one attempt series
@@ -119,6 +120,13 @@ Compose ==
 Rebuilds(rebuild, w) ==
   disposition(IF rebuild THEN "signed_conflict_rebuild" ELSE "conflict_retry",
               "commit", "conflict", TRUE, TRUE, w.tries < Attempts) = "retry"
+
+\* The two Lean owners this spec names agree on the aborts it rebuilds: the
+\* rebuild mode is the caller's replay authority.
+ASSUME \A rebuild, remain \in BOOLEAN :
+         (disposition(IF rebuild THEN "signed_conflict_rebuild" ELSE "conflict_retry",
+                      "commit", "conflict", TRUE, TRUE, remain) = "retry")
+           = (remain /\ clientSignedWriteMayRetry(TRUE, TRUE, rebuild))
 
 \* A reservation commit binds the targets when the read session is unchanged,
 \* and the submission then reads it; a confirmed abort is rebuilt while
