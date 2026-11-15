@@ -46,6 +46,7 @@ help:
 	@echo "  make fmt-check             Check Rust and desktop UI formatting"
 	@echo "  make lint                  Check the product build, then clippy all targets (-D warnings)"
 	@echo "  make proofs                Build Lean proofs"
+	@echo "  make lean-regen            Regenerate Lean decoders and family schema (FORCE=1 ignores the stamp)"
 	@echo
 	@echo "Tests:"
 	@echo "  make test                  Run core Rust and CLI tests"
@@ -205,7 +206,7 @@ dist-docs:
 	@rm -rf "$(DIST_DIR)/$(DOCS_ARTIFACT)"
 	@ls -lh "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz" "$(DIST_DIR)/SHA256SUMS-docs.txt"
 
-.PHONY: fmt fmt-check lint proofs
+.PHONY: fmt fmt-check lint proofs lean-regen
 fmt:
 	$(CARGO) fmt --all
 	$(NPM) --prefix $(DESKTOP_DIR) run format
@@ -220,6 +221,9 @@ lint:
 
 proofs:
 	cd $(PROOFS_DIR) && $(LAKE) build
+
+lean-regen:
+	$(CARGO) run -q -p gents-lean-vocab $(CARGO_PROFILE_FLAG) --example decoders_from_snapshot -- --regenerate $(if $(FORCE),--force,)
 
 .PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-eval-drivers test-evals live-configurator-eval
 test: test-agent test-cli test-eval-drivers
