@@ -296,31 +296,38 @@ theorem unpublished_session_never_routes (requested : AgentDid) :
   rfl
 
 /-- Before claiming, the router reads the routed generation's selected
-configuration as its Agent (`Identity.Configuration.providerConfigurationVisible`).
-A committed configuration change can revoke that selection before the control
+configuration as its Agent (`Identity.Configuration.providerConfigurationVisible`)
+and verifies that every selected document still has the resolved composite version.
+A committed configuration change can replace or revoke that selection before the control
 watcher activates the replacement generation; a claim would then fail the
 request at its first provider-input assembly although the replacement could run
 it. Invisibility may mean superseded or revoked, so, as with a missing session
 selection, the router does not claim and the request waits for a newer active
-generation. A revocation after the claim is refused by the assembly check; the
+generation. The debounce may delay reconciliation, never admission against a
+superseded version. Both widening and narrowing commits have this guarantee.
+An admitted request keeps its resolved configuration; a revocation after the claim is refused by the assembly check; the
 read and the claim are not atomic. -/
 inductive ConfigurationAdmission where
   | claim | awaitNewerGeneration
   deriving DecidableEq, Repr
 
-def configurationAdmission (visible : Bool) : ConfigurationAdmission :=
-  if visible then .claim else .awaitNewerGeneration
+def configurationAdmission (visible versionsCurrent : Bool) : ConfigurationAdmission :=
+  if visible && versionsCurrent then .claim else .awaitNewerGeneration
 
 /-- A request deferred under one generation is routed again only once a newer
 generation is active; the deferring generation retains the same selection. -/
 def retriesDeferred (deferredAt active : Generation) : Bool :=
   deferredAt < active
 
-theorem invisible_configuration_is_not_claimed :
-    configurationAdmission false = .awaitNewerGeneration := rfl
+theorem invisible_configuration_is_not_claimed (versionsCurrent : Bool) :
+    configurationAdmission false versionsCurrent = .awaitNewerGeneration := rfl
+
+theorem superseded_configuration_is_not_claimed (visible : Bool) :
+    configurationAdmission visible false = .awaitNewerGeneration := by
+  simp [configurationAdmission]
 
 theorem visible_configuration_is_claimed :
-    configurationAdmission true = .claim := rfl
+    configurationAdmission true true = .claim := rfl
 
 theorem deferred_request_waits_within_its_generation (generation : Generation) :
     retriesDeferred generation generation = false := by
