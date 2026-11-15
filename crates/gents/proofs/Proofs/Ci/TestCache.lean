@@ -168,7 +168,7 @@ def Execution.contradicts (policy : Policy) (e : Execution) (record : Record) : 
 record vouches against marks the key contradicted: the next run executes the
 test and the gate reports the contradiction as a premise violation to fix by
 excluding the test with an issue. A contradiction is never cleared by the
-gate (`TestCacheStore.tla`: an expiring one lets a slow writer's stale pass
+gate (`tla/TestCacheStore.tla`: an expiring one lets a slow writer's stale pass
 skip the test again). -/
 def observe (policy : Policy) (store : Store) (e : Execution) : Store :=
   if e.passed && e.vouched policy then

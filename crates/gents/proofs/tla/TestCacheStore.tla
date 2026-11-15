@@ -1,7 +1,9 @@
---------------------------- MODULE TestCacheStore ---------------------------
+---- MODULE TestCacheStore ----
+\* lean: none
+\* crates: none
 (***************************************************************************)
 (* The test-result store on one host, for one test and key (keys do not    *)
-(* interact). Model.lean proves a skip sound when every record came from a *)
+(* interact). Proofs/Ci/TestCache.lean proves a skip sound when every record came from a *)
 (* faithful execution; this spec covers what happens when that premise     *)
 (* fails, under concurrency: slices of several runs write passes, a full   *)
 (* run contradicts them, eviction removes records, and build jobs read the *)

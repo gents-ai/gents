@@ -1,5 +1,9 @@
 import Lean.Data.Json
-import TestCache
+import Proofs.Ci.TestCache
+
+/-! Reads test-cache scenarios as JSON on stdin and prints `Proofs.Ci.TestCache`'s
+decisions and stores (`lake env lean --run TestCacheConformance.lean`);
+`scripts/ci/test_test_cache.py` compares the gate's implementation to it. -/
 
 open Lean (Json FromJson ToJson fromJson? toJson)
 open TestCache

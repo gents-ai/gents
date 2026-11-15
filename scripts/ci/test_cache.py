@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The gate's test-result cache for archived test runs.
 
-scripts/ci/test-cache/TestCache/Model.lean specifies it: `decide` and `observe`
+crates/gents/proofs/Proofs/Ci/TestCache.lean specifies it: `decide` and `observe`
 here implement the model's functions of the same names, and
 test_test_cache.py checks them against the model's own execution. The premises
 the model's soundness theorem rests on are enforced here:
@@ -15,7 +15,7 @@ the model's soundness theorem rests on are enforced here:
   (d) trust: only runs with GATE_TEST_CACHE_TRUSTED=true record.
 
 A record is one file, published by rename; contradictions are never removed
-(TestCacheStore.tla). The store is a directory on the runner host; the record's
+(crates/gents/proofs/tla/TestCacheStore.tla). The store is a directory on the runner host; the record's
 fields are those a signed result document would carry.
 """
 
@@ -49,7 +49,7 @@ def vouches(answer, test, key, record):
 
 
 def decide(policy, store, test, key, answer):
-    """Model.lean `decide`: ("skip", record) or ("run", reason)."""
+    """TestCache.lean `decide`: ("skip", record) or ("run", reason)."""
     if policy["full"]:
         return ("run", "full")
     if test in policy["excluded"]:
@@ -73,7 +73,7 @@ def contradicts(policy, execution, record):
 
 
 def observe(policy, store, execution):
-    """Model.lean `observe`: the store after one executed test."""
+    """TestCache.lean `observe`: the store after one executed test."""
     if execution["passed"] and vouched(policy, execution):
         record = {"test": execution["test"], "key": execution["key"], "trace": execution["trace"],
                   "run": execution["run"]}
@@ -129,7 +129,7 @@ def keyed_environment(policy, environ):
 
 
 def static_key(policy, binary_id, binary_digest, runner):
-    """Model.lean `StaticKey`: every non-file input of one test binary.
+    """TestCache.lean `StaticKey`: every non-file input of one test binary.
 
     `runner` holds the nextest version, the digest of its configuration and the
     keyed environment, which are the same for every binary of a run.
@@ -897,7 +897,7 @@ def record_run(plan, outcomes, traces, written, answers, binary_ids, trusted, ro
     """Record a slice's passes and contradictions. Returns per-test notes for the
     report and the checkout paths the run changed.
 
-    A test's checkout is clean (Model.lean `checkoutClean`) when it changed no
+    A test's checkout is clean (TestCache.lean `checkoutClean`) when it changed no
     checkout path and read none that any process of the run changed."""
     policy = load_policy()
     root = root or store_root()

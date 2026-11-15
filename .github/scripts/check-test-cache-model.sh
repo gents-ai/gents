@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# Check the test-result cache's models (scripts/ci/test-cache): the Lean proofs
-# build without `sorry`, the gate's implementation matches the Lean model's
-# execution, and TLC finds the store protocol safe and its expiring variant not.
+# Check the test-result cache against its models: the Lean model
+# (crates/gents/proofs/Proofs/Ci/TestCache.lean) builds, the gate's
+# implementation matches its execution, and TLC checks the store protocol
+# (crates/gents/proofs/tla/TestCacheStore.tla) against each MC*.cfg's
+# `expect:` header until the repository's TLA+ runner checks every spec.
 set -euo pipefail
 
-model="scripts/ci/test-cache"
-if grep -rn -E '(^|[^[:alnum:]_])sorry([^[:alnum:]_]|$)' --include='*.lean' --exclude-dir=.lake "${model}"; then
+proofs="crates/gents/proofs"
+if grep -n -E '(^|[^[:alnum:]_])sorry([^[:alnum:]_]|$)' "${proofs}/Proofs/Ci/TestCache.lean" "${proofs}/TestCacheConformance.lean"; then
   echo "::error::the test cache model holds sorry"
   exit 1
 fi
-(cd "${model}" && lake build)
+(cd "${proofs}" && lake build Proofs.Ci.TestCache)
 python3 scripts/ci/test_test_cache.py
 
 version="1.7.4"
@@ -19,16 +21,23 @@ if [[ ! -f "${jar}" ]]; then
   curl -fsSL --retry 3 -o "${jar}" "https://github.com/tlaplus/tlaplus/releases/download/v${version}/tla2tools.jar"
 fi
 echo "${sha256}  ${jar}" | sha256sum -c -
-metadir="$(mktemp -d)"
-trap 'rm -rf "${metadir}"' EXIT
-tlc() {
-  (cd "${model}" && java -cp "${jar}" tlc2.TLC -workers auto -metadir "${metadir}/$1" -config "$1.cfg" TestCacheStore.tla)
-}
-tlc TestCacheStore | tee "${metadir}/safe.log" | tail -3
-grep -q "No error has been found" "${metadir}/safe.log"
-if tlc TestCacheStoreExpiring > "${metadir}/expiring.log" 2>&1 || ! grep -q "Invariant ContradictionHonoured is violated" "${metadir}/expiring.log"; then
-  echo "::error::TLC no longer finds the expiring-contradiction counterexample"
-  exit 1
-fi
-rm -f "${model}"/TestCacheStore_TTrace_*
-echo "TestCacheStoreExpiring: counterexample found, as intended"
+work="$(mktemp -d)"
+trap 'rm -rf "${work}"' EXIT
+cp "${proofs}"/tla/TestCacheStore.tla "${proofs}"/tla/MCTestCacheStore*.tla "${proofs}"/tla/MCTestCacheStore*.cfg "${work}/"
+for config in MCTestCacheStore MCTestCacheStoreExpiring; do
+  expected="$(head -1 "${work}/${config}.cfg" | sed 's/^\\\* expect: //')"
+  (cd "${work}" && java -cp "${jar}" tlc2.TLC -workers auto -metadir "${work}/meta-${config}" \
+    -config "${config}.cfg" "${config}.tla" > "${config}.log" 2>&1) || true
+  if grep -q "No error has been found" "${work}/${config}.log"; then
+    actual="holds"
+  elif violated="$(grep -o -E 'Invariant [A-Za-z_]+ is violated' "${work}/${config}.log" | head -1)" && [[ -n "${violated}" ]]; then
+    actual="violates $(echo "${violated}" | awk '{print $2}')"
+  else
+    actual="error"
+  fi
+  echo "${config}: expected ${expected}, TLC ${actual}"
+  if [[ "${actual}" != "${expected}" ]]; then
+    tail -30 "${work}/${config}.log"
+    exit 1
+  fi
+done

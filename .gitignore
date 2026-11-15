@@ -4,7 +4,6 @@
 /apps/gents-desktop/src-tauri/binaries/gents-*
 .DS_Store
 /crates/gents/proofs/.lake
-/scripts/ci/test-cache/.lake
 /crates/gents/proofs/build
 /vendor/
 

@@ -1,5 +1,5 @@
 # Read by scripts/ci/test_cache.py, the gate's test-result cache, whose
-# soundness premises are in scripts/ci/test-cache/TestCache/Model.lean.
+# soundness premises are in crates/gents/proofs/Proofs/Ci/TestCache.lean.
 # Raising `version` invalidates every recorded result.
 version = 1
 
@@ -429,4 +429,9 @@ reason = "failed on a loaded runner in dispatch 43762755620; passed in every oth
 test = "gents-shell::integration terminal::vim_quit_restores_the_terminal"
 issue = 3869
 reason = "failed on a loaded runner in dispatch 43762755620; passed in every other run"
+
+[[exclude]]
+test = "gents-store local::home::test_guard::tests::the_real_default_home_is_refused"
+issue = 3878
+reason = "resolves the operator's real ~/.gents/desktop; a test must not touch the real home"
 

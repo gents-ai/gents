@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_cache  # noqa: E402
 
-MODEL = Path(__file__).resolve().parent / "test-cache"
+PROOFS = Path(__file__).resolve().parents[2] / "crates/gents/proofs"
 TESTS = [["b1", "t1"], ["b1", "t2"], ["b2", "t1"]]
 KEYS = ["k1", "k2"]
 PATHS = ["ws:a", "ws:b", "host:/c", "tree:p"]
@@ -84,14 +84,14 @@ def implementation(scenario):
 
 
 class Conformance(unittest.TestCase):
-    """decide and observe agree with Model.lean's executable definitions."""
+    """decide and observe agree with TestCache.lean's executable definitions."""
 
     @unittest.skipUnless(shutil.which("lake"), "lake is not installed")
     def test_random_scenarios_match_the_model(self):
-        subprocess.run(["lake", "build"], cwd=MODEL, check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(["lake", "build", "Proofs.Ci.TestCache"], cwd=PROOFS, check=True, stdout=subprocess.DEVNULL)
         rng = random.Random(int(os.environ.get("TEST_CACHE_SEED", "3869")))
         scenarios = [random_scenario(rng) for _ in range(400)]
-        output = subprocess.run(["lake", "env", "lean", "--run", "Main.lean"], cwd=MODEL, check=True,
+        output = subprocess.run(["lake", "env", "lean", "--run", "TestCacheConformance.lean"], cwd=PROOFS, check=True,
                                 input=json.dumps([to_lean(scenario) for scenario in scenarios]),
                                 stdout=subprocess.PIPE, text=True).stdout
         expected = json.loads(output)
