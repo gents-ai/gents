@@ -37,11 +37,12 @@ on:
         type: string
         default: ""
 
-# A run in progress finishes; GitHub keeps only the newest waiting run per
-# group, so a branch that is pushed every few minutes still gets results.
+# A new push to a pull request cancels its run in progress. A run of main, a
+# merge queue entry or a dispatch finishes: main's post-merge run is the only
+# run of each merged commit. GitHub keeps the newest waiting run per group.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Each 32-core Studio runs at most two gents jobs concurrently. Keep eight
@@ -231,7 +232,7 @@ jobs:
         env:
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || 'a deleted repository' }}
         run: |
-          message="This pull request comes from ${HEAD_REPOSITORY}, so jobs that run on self-hosted runners (rust-and-cli, lean-proofs, desktop-ui-bombadil, core-packs, adapter-interop) are skipped; hosted jobs still run. A maintainer reruns the change from a branch of this repository to test it on the Studios."
+          message="This pull request comes from ${HEAD_REPOSITORY}, so jobs that run on self-hosted runners (lint, contract, test, desktop-ui-bombadil, core-packs build, adapter-interop) are skipped and gate fails if the plan selected one; hosted jobs still run. A maintainer reruns the change from a branch of this repository to test it on the self-hosted runners."
           echo "::notice title=Self-hosted jobs skipped for a fork::${message}"
           printf '### Self-hosted jobs skipped for a fork\n\n%s\n' "${message}" >> "${GITHUB_STEP_SUMMARY}"
 
@@ -294,7 +295,13 @@ jobs:
   # the changed crates and their dependents.
   lint:
     needs: [plan, repository-guard]
-    if: contains(fromJSON(needs.plan.outputs.jobs), 'lint')
+    # Fork pull requests never run on a self-hosted runner: its account shares
+    # the Cargo home, the compiler cache and the kept target trees with every
+    # other runner on the host (test-rust-build-space.py checks every job).
+    if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      contains(fromJSON(needs.plan.outputs.jobs), 'lint')
     runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.studio }}
     timeout-minutes: 90
     env:
@@ -349,7 +356,10 @@ jobs:
   # and, when the runtime group does not run them, the structure ratchets.
   contract:
     needs: [plan, repository-guard]
-    if: contains(fromJSON(needs.plan.outputs.jobs), 'contract')
+    if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      contains(fromJSON(needs.plan.outputs.jobs), 'contract')
     runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.studio }}
     timeout-minutes: 90
     env:
@@ -395,7 +405,10 @@ jobs:
   test:
     name: test (${{ matrix.group }})
     needs: [plan, repository-guard]
-    if: needs.plan.outputs.tests == 'true'
+    if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      needs.plan.outputs.tests == 'true'
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
@@ -553,7 +566,10 @@ jobs:
 
   desktop-ui-bombadil:
     needs: plan
-    if: contains(fromJSON(needs.plan.outputs.jobs), 'ts-fuzz')
+    if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      contains(fromJSON(needs.plan.outputs.jobs), 'ts-fuzz')
     # Bombadil's exact Linux failure trace passes on macOS, so this smoke
     # stays on a Studio while the portable UI suite runs on hosted Linux.
     runs-on: [self-hosted, macOS, ARM64, studio, studio-2, ci-cli]
@@ -671,4 +687,7 @@ jobs:
       - name: Require every selected job
         env:
           NEEDS: ${{ toJSON(needs) }}
+          GATE_FORK: >-
+            ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name != github.repository }}
         run: python3 scripts/ci/gate.py verdict

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -127,6 +128,18 @@ class Selection(unittest.TestCase):
             finally:
                 del os.environ["GATE_PORTABLE_RUNNER"]
 
+    def test_every_named_test_target_exists(self):
+        # Integration tests are folded into one `integration` binary per crate;
+        # a stale `--test <name>` would fail to build only on the runner.
+        metadata = json.loads(subprocess.run(
+            ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"],
+            cwd=gate.ROOT, check=True, stdout=subprocess.PIPE).stdout)
+        targets = {target["name"] for package in metadata["packages"] for target in package["targets"]
+                   if "test" in target["kind"]}
+        named = set(re.findall(r'"--test", "([\w-]+)"', Path(gate.__file__).read_text()))
+        self.assertEqual(named, {"integration", "write_owner_structure"})
+        self.assertLessEqual(named, targets)
+
     def test_only_narrows_a_plan(self):
         selection = select(everything=True, only={"lint", "test:cli"})
         self.assertEqual(selection["jobs"], ["lint", "test:cli"])
@@ -191,6 +204,14 @@ class Verdict(unittest.TestCase):
         for name in gate.ALWAYS[1:]:
             problems = gate.verdict(self.needs(selection, **{name.replace("-", "_"): "skipped"}))
             self.assertEqual(problems, [f"{name}: runs on every event but was skipped"])
+
+    def test_a_fork_is_told_why_its_selected_jobs_were_skipped(self):
+        selection = select("crates/gents-cli/src/lib.rs")
+        needs = self.needs(selection, lint="skipped", contract="skipped", test="skipped")
+        problems = gate.verdict(needs, fork=True)
+        self.assertEqual(len(problems), 3)
+        self.assertTrue(all("comes from a fork" in problem for problem in problems))
+        self.assertEqual(gate.verdict(self.needs(select("docs/upgrade-from-rc1.md")), fork=True), [])
 
     def test_no_plan_fails(self):
         needs = self.needs(select("docs/upgrade-from-rc1.md"), plan="failure")

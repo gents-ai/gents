@@ -3,6 +3,7 @@ import importlib.util
 import os
 from pathlib import Path
 from collections import namedtuple
+import json
 import re
 import subprocess
 import sys
@@ -274,8 +275,9 @@ def loosely_equal(left, right):
 
 
 def evaluate(expression, context):
-    """Evaluate the subset of GitHub expression syntax the trust condition uses."""
-    tokens = re.findall(r"\(|\)|&&|\|\||==|!=|'[^']*'|[A-Za-z_][A-Za-z0-9_.-]*", expression)
+    """Evaluate the subset of GitHub expression syntax the trust condition and
+    the gate's job conditions use: comparisons, &&, ||, contains and fromJSON."""
+    tokens = re.findall(r"\(|\)|,|&&|\|\||==|!=|'[^']*'|[A-Za-z_][A-Za-z0-9_.-]*", expression)
     if "".join(tokens) != re.sub(r"\s+", "", expression):
         raise ValueError(f"unsupported expression syntax: {expression}")
     position = 0
@@ -299,6 +301,15 @@ def evaluate(expression, context):
             return token[1:-1]
         if token in ("true", "false", "null"):
             return {"true": True, "false": False, "null": None}[token]
+        if token in FUNCTIONS and peek() == "(":
+            take()
+            arguments = [disjunction()]
+            while peek() == ",":
+                take()
+                arguments.append(disjunction())
+            if take() != ")":
+                raise ValueError(f"unbalanced call to {token}")
+            return FUNCTIONS[token](*arguments)
         value = context
         for part in token.split("."):
             value = value.get(part) if isinstance(value, dict) else None
@@ -331,6 +342,15 @@ def evaluate(expression, context):
     if position != len(tokens):
         raise ValueError(f"trailing tokens in {expression}")
     return value
+
+
+def contains(haystack, needle):
+    if isinstance(haystack, list):
+        return any(loosely_equal(item, needle) for item in haystack)
+    return str(needle).lower() in str(haystack or "").lower()
+
+
+FUNCTIONS = {"contains": contains, "fromJSON": json.loads}
 
 
 def keep_condition():
@@ -400,12 +420,15 @@ def job_runs(condition, context):
 
 def pull_request_context(head_repository, repository="gents-ai/gents"):
     head = {"repo": {"full_name": head_repository} if head_repository else None}
+    # A gate plan that selects every job, so only the trust rule can skip one.
+    plan = {"jobs": json.dumps(["contract", "fmt", "lint", "ts-browser", "ts-fuzz", "ts-packages",
+                                "ts-unit", "test:runtime"]), "tests": "true"}
     return {"github": {"event_name": "pull_request", "ref": "refs/pull/1/merge",
                        "repository": repository,
                        "event": {"label": {"name": "adapter-interop"},
                                  "pull_request": {"draft": False, "stack": None,
                                                   "head": head}}},
-            "inputs": {}, "vars": {}}
+            "inputs": {}, "vars": {}, "needs": {"plan": {"outputs": plan}}}
 
 
 class SelfHostedRoutingTests(unittest.TestCase):
@@ -415,7 +438,8 @@ class SelfHostedRoutingTests(unittest.TestCase):
     def self_hosted_jobs(self):
         jobs = [job for job in pull_request_jobs()
                 if "self-hosted" in job[2] or "${{" in job[2]]
-        self.assertTrue(any(job[:2] == ("ci.yml", "rust-and-cli") for job in jobs))
+        for job in ("lint", "contract", "test", "desktop-ui-bombadil"):
+            self.assertIn(("ci.yml", job), [entry[:2] for entry in jobs])
         return jobs
 
     def test_fork_pull_requests_never_reach_a_self_hosted_runner(self):

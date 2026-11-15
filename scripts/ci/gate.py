@@ -540,9 +540,12 @@ def run_test(selection, name):
         if os.environ.get("GITHUB_ACTIONS") and os.environ.get("CARGO_TARGET_DIR"):
             sh(["python3", ".github/scripts/ensure-rust-build-space.py", os.environ["CARGO_TARGET_DIR"]])
         if sh([".github/scripts/desktop-runtime-journey.sh", "build"]):
+            # The folded `runtime` suite; the CLI's integration binary is built
+            # too, and its cli_runtime:: suite also matches `runtime::`.
             cargo_test("native client runtime journey", [
                 "-p", "gents-cli", "-p", "gents-client-host", "-p", "gents-media-host",
-                "--features", "gents-client-host/runtime-e2e", "--test", "runtime"])
+                "--features", "gents-client-host/runtime-e2e", "--test", "integration"],
+                harness=("runtime::", "--skip", "cli_runtime::"))
 
 
 def run(selection, job):
@@ -575,7 +578,7 @@ def workflow_job(job):
     return "test" if job.startswith("test:") else WORKFLOW_JOBS[job]
 
 
-def verdict(needs):
+def verdict(needs, fork=False):
     """The `gate` job's decision from its `toJSON(needs)`: a list of problems, empty to pass.
 
     A job is skipped both when the plan did not select it and when a job it
@@ -602,7 +605,10 @@ def verdict(needs):
         owner = workflow_job(job)
         result = needs.get(owner, {}).get("result")
         if result != "success":
-            problems.setdefault(owner, f"the plan selected {job} but it was {result}")
+            reason = (" because this pull request comes from a fork: self-hosted jobs never run fork code. "
+                      "A maintainer pushes the change to a branch of this repository to test it"
+                      if fork and result == "skipped" else "")
+            problems.setdefault(owner, f"the plan selected {job} but it was {result}{reason}")
     return [f"{name}: {problem}" for name, problem in problems.items()]
 
 
@@ -641,7 +647,7 @@ def main():
     commands.add_parser("verdict", help="decide the gate job from NEEDS (its toJSON(needs))")
     arguments = parser.parse_args()
     if arguments.command == "verdict":
-        problems = verdict(json.loads(os.environ["NEEDS"]))
+        problems = verdict(json.loads(os.environ["NEEDS"]), os.environ.get("GATE_FORK") == "true")
         for problem in problems:
             print(f"::error::{problem}")
         sys.exit(1 if problems else 0)
