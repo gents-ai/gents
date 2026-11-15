@@ -44,7 +44,9 @@ async fn other_provider_loop_has_no_codex_affinity() {
 /// time: the eighth invalid result exhausts it (Lean
 /// `CompletionRetry.InvalidToolProgress`, `eight_invalids_exhaust`) after one
 /// provider request, which the assertions below check; the scripted model and
-/// `max_turns` bound every other path.
+/// `max_turns` bound every other path. The only clock left is the claimed
+/// request's own deadline (60 s in the fixture), which the product enforces:
+/// past it a tool call ends with "tool call deadline exceeded".
 #[tokio::test]
 async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
     for batched in [false, true] {
@@ -74,7 +76,7 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
             gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
         )
         .await;
-        assert_eq!(collected.tool_results.len(), 8);
+        assert_eq!(collected.tool_results.len(), 8, "{collected:?}");
         let error = collected
             .error
             .expect("budget exhaustion must fail the loop");
