@@ -73,24 +73,48 @@ async fn committed_output(
     .into_text()
 }
 
+/// The deadline is the property here, so the test drives the cut itself
+/// (TLA+ `WallClockBound` `"driven"`): it waits until the child's output is
+/// committed, then advances the runtime's paused clock past the request
+/// deadline, which the real clock never reaches. A wall-clock deadline instead
+/// raced the child's writes and cut a loaded host's child before it printed.
 #[tokio::test]
 async fn request_deadline_presents_output_committed_before_the_cut() {
     let (node, mut tool, _registry, writer) = committed_run("cli-request-deadline").await;
-    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(CliTool::new(config(30)))];
+    let unreached = gents_store::test_support::UNREACHED_DEADLINE;
+    // The tool's own timeout outlives the advance, so only the request
+    // deadline is due when the clock moves.
+    let tools: Vec<Box<dyn ToolDyn>> =
+        vec![Box::new(CliTool::new(config(2 * unreached.as_secs())))];
     let args = serde_json::json!({"argv": ["-c",
         "printf 'partial stdout'; printf 'partial stderr' >&2; sleep 30"]})
     .to_string();
-    let started = std::time::Instant::now();
-    let outcome =
+    let dispatch =
         gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
-            Some(chrono::Utc::now() + chrono::Duration::seconds(2)),
+            Some(gents_store::test_support::unreached_deadline_at()),
             tokio_util::sync::CancellationToken::new(),
             None,
             None,
             None,
             gents_loop::loop_stream::dispatch_tool(&tools, "sh", args, Some(writer), None),
-        )
-        .await;
+        );
+    tokio::pin!(dispatch);
+    let raw = tokio::select! {
+        outcome = &mut dispatch => panic!("the child ended before the cut: {outcome:?}"),
+        raw = gents_store::test_support::read_when_changed(
+            &node,
+            &["AgentOutputSegment"],
+            "the child's output is committed before the cut",
+            async || {
+                let raw = committed_output(&node, &tool).await;
+                (raw.contains("partial stdout") && raw.contains("partial stderr")).then_some(raw)
+            },
+        ) => raw,
+    };
+    tokio::time::pause();
+    tokio::time::advance(unreached + std::time::Duration::from_secs(1)).await;
+    tokio::time::resume();
+    let outcome = dispatch.await;
     assert!(
         matches!(
             outcome,
@@ -98,16 +122,14 @@ async fn request_deadline_presents_output_committed_before_the_cut() {
         ),
         "{outcome:?}"
     );
-    assert!(started.elapsed() < std::time::Duration::from_secs(20));
-
-    let raw = committed_output(&node, &tool).await;
+    let committed = committed_output(&node, &tool).await;
     assert!(
-        raw.contains("partial stdout") && raw.contains("partial stderr"),
-        "captured output must be committed before the deadline: {raw:?}"
+        committed.starts_with(&raw),
+        "the cut keeps the output committed before it: {committed:?}"
     );
     assert!(tool.timeout().await.unwrap());
     let presented = presented(&node, &tool).await;
-    assert!(presented.starts_with(&raw), "{presented:?}");
+    assert!(presented.starts_with(&committed), "{presented:?}");
     assert!(
         presented.contains("\ntool call deadline exceeded at "),
         "{presented:?}"

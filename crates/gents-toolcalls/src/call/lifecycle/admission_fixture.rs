@@ -9,6 +9,11 @@ use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use gents_session::request::streaming::DefraStreamWriter;
 use gents_store::identity::NodeIdentity;
 
+/// The fixture claim's request deadline. Every accepted fixture tool inherits
+/// it and the delivery owner refuses work past it; no test here exercises
+/// that cut, so it lies beyond any run (`WallClockBound` `"unreached"`).
+const FIXTURE_DEADLINE_SECS: u64 = gents_store::test_support::UNREACHED_DEADLINE.as_secs();
+
 pub struct PublishedAdmissionOptions {
     pub name: String,
     pub real_identity: bool,
@@ -315,7 +320,7 @@ async fn complete_child_managed_inner(
         .verify_fresh_for_claim_with_identity(&request, identity)
         .await
         .expect("verify the child request and its native claim admission");
-    let mut request = RequestLifecycle::new_with_node_did(node.clone(), request, 60);
+    let mut request = RequestLifecycle::new_with_node_did(node.clone(), request, FIXTURE_DEADLINE_SECS);
     request.bind_managed_agent(identity).unwrap();
     request.set_client_claim_admission(admission);
     assert_eq!(request.claim().await.unwrap(), ClaimOutcome::Claimed);
@@ -553,7 +558,7 @@ pub async fn claimed_signed_request_create_as_agent(
             .unwrap()
     };
     let mut lifecycle =
-        RequestLifecycle::new_with_node_did(node.clone(), row.try_into().unwrap(), 60);
+        RequestLifecycle::new_with_node_did(node.clone(), row.try_into().unwrap(), FIXTURE_DEADLINE_SECS);
     lifecycle.bind_managed_agent(agent_identity).unwrap();
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle
@@ -678,7 +683,7 @@ pub async fn published_admission_with_owner(
         admission.is_some(),
         "fixture client request lacks native claim admission"
     );
-    let mut request = RequestLifecycle::new_with_node_did(node.clone(), request, 60);
+    let mut request = RequestLifecycle::new_with_node_did(node.clone(), request, FIXTURE_DEADLINE_SECS);
     request.bind_managed_agent(agent.as_ref())?;
     request.set_client_claim_admission(admission);
     anyhow::ensure!(
@@ -838,7 +843,7 @@ pub async fn pending_client_fixture_request(
         admission.is_some(),
         "fixture client request lacks native claim admission"
     );
-    let mut lifecycle = RequestLifecycle::new_with_node_did(node.clone(), request, 60);
+    let mut lifecycle = RequestLifecycle::new_with_node_did(node.clone(), request, FIXTURE_DEADLINE_SECS);
     lifecycle.bind_managed_agent(agent)?;
     lifecycle.set_client_claim_admission(admission);
     Ok(lifecycle)

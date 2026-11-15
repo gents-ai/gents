@@ -1,6 +1,6 @@
 use super::*;
 use gents_loop::session_hook::ForegroundResult;
-use std::time::Duration;
+use gents_store::test_support::STALL_CEILING;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
@@ -107,7 +107,14 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         .status()
         .unwrap()
         .success());
+    // The child reports its pid through a FIFO, so the read waits on the
+    // child's write instead of polling for the file.
     let pid_file = dir.path().join("pid");
+    assert!(std::process::Command::new("mkfifo")
+        .arg(&pid_file)
+        .status()
+        .unwrap()
+        .success());
     let node_db = gents_inference::test_support::test_db(
         "foreground-background-handoff-keeps-the-",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -116,7 +123,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    let deadline = Utc::now() + chrono::Duration::seconds(30);
+    let deadline = gents_store::test_support::unreached_deadline_at();
     bind_interruptible_request(&hook, "handoff-parent", &session, deadline).await;
     let mut lifecycle = accepted_hook_tool_lifecycle(
         &hook,
@@ -159,18 +166,12 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
             }))),
         ).await
     });
-    let pid: i32 = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if let Ok(pid) = tokio::fs::read_to_string(&pid_file).await {
-                if let Ok(pid) = pid.parse() {
-                    break pid;
-                }
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    let pid: i32 = tokio::time::timeout(STALL_CEILING, tokio::fs::read_to_string(&pid_file))
+        .await
+        .expect("the child reports its pid")
+        .unwrap()
+        .parse()
+        .unwrap();
     let access = hook.actor_access().unwrap();
     assert!(crate::background::status::request_foreground_backgrounding(
         &access,
@@ -181,7 +182,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     )
     .await
     .unwrap());
-    let result = tokio::time::timeout(Duration::from_secs(5), running)
+    let result = tokio::time::timeout(STALL_CEILING, running)
         .await
         .unwrap()
         .unwrap();
@@ -317,7 +318,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         .any(|entry| entry.pid == pid));
     tokio::fs::write(&gate, "released\n").await.unwrap();
     tokio::time::timeout(
-        Duration::from_secs(5),
+        STALL_CEILING,
         hook.background_executions
             .wait_for_completion("handoff-command"),
     )
@@ -357,7 +358,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
     let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    let deadline = Utc::now() + chrono::Duration::seconds(30);
+    let deadline = gents_store::test_support::unreached_deadline_at();
     bind_interruptible_request(&hook, "handoff-cancel-parent", &session, deadline).await;
     let mut lifecycle = accepted_hook_tool_lifecycle(
         &hook,
@@ -410,7 +411,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
     .unwrap());
     token.cancel();
     drop(guard);
-    let outcome = tokio::time::timeout(Duration::from_secs(5), running)
+    let outcome = tokio::time::timeout(STALL_CEILING, running)
         .await
         .unwrap()
         .unwrap();
@@ -438,7 +439,7 @@ async fn refused_foreground_handoff_can_be_retried() {
     let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    let deadline = Utc::now() + chrono::Duration::seconds(30);
+    let deadline = gents_store::test_support::unreached_deadline_at();
     bind_interruptible_request(&hook, "retry-parent", &session, deadline).await;
     let mut lifecycle = accepted_hook_tool_lifecycle(
         &hook,
@@ -491,13 +492,16 @@ async fn refused_foreground_handoff_can_be_retried() {
     )
     .await
     .unwrap());
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
+    gents_store::test_support::read_when_changed(
+        &node,
+        &["AgentToolCall"],
+        "the refused handoff clears its request",
+        async || {
             let state = access.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ background_requested_at }} }}"#)).await.unwrap();
-            if state["data"]["AgentToolCall"][0]["background_requested_at"].is_null() { break; }
-            tokio::task::yield_now().await;
-        }
-    }).await.unwrap();
+            state["data"]["AgentToolCall"][0]["background_requested_at"].is_null().then_some(())
+        },
+    )
+    .await;
     assert!(!running.is_finished());
     hook.in_flight_lifecycles
         .lock()
@@ -513,7 +517,7 @@ async fn refused_foreground_handoff_can_be_retried() {
     .await
     .unwrap());
     assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(5), running)
+        tokio::time::timeout(STALL_CEILING, running)
             .await
             .unwrap()
             .unwrap(),
@@ -521,7 +525,7 @@ async fn refused_foreground_handoff_can_be_retried() {
     ));
     finish.send(()).unwrap();
     tokio::time::timeout(
-        Duration::from_secs(5),
+        STALL_CEILING,
         hook.background_executions
             .wait_for_completion("retry-command"),
     )
@@ -539,7 +543,7 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
     let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    let deadline = Utc::now() + chrono::Duration::seconds(30);
+    let deadline = gents_store::test_support::unreached_deadline_at();
     bind_interruptible_request(&hook, "concurrent-parent", &session, deadline).await;
     let capacity = gents_lean_vocab::lean_r6_backgrounding_case(
         "background_tool_budget_count_8_rejects_spawn",
@@ -629,7 +633,7 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
     let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    let deadline = Utc::now() + chrono::Duration::minutes(5);
+    let deadline = gents_store::test_support::unreached_deadline_at();
     bind_interruptible_request(&hook, "unverified-parent", &session, deadline).await;
     let recovery = gents_lean_vocab::lean_r6_backgrounding_case("recovery_transfer_at_capacity");
     for index in 0..recovery.pre_live_count {
@@ -756,7 +760,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     let mut hook =
         DefraSessionHook::with_identity(node.clone(), root.did(), FailurePolicy::default());
     let session = hook.session_id().await.unwrap();
-    let deadline = Utc::now() + chrono::Duration::minutes(5);
+    let deadline = gents_store::test_support::unreached_deadline_at();
     bind_managed_hook_request(&mut hook, "recovery-parent", &root, deadline).await;
     let signer = hook_managed_identity(&hook, "recovery-parent").await;
     let mut lifecycle = accepted_hook_tool_lifecycle(
@@ -878,7 +882,7 @@ async fn confirmation_before_worker_release_keeps_typed_stop_receipt() {
     let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    let deadline = Utc::now() + chrono::Duration::minutes(5);
+    let deadline = gents_store::test_support::unreached_deadline_at();
     bind_interruptible_request(&hook, "early-confirm-parent", &session, deadline).await;
     let mut lifecycle = accepted_hook_tool_lifecycle(
         &hook,
@@ -937,7 +941,7 @@ async fn interrupt_sweep_preserves_confirmed_timeout_intent() {
     let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    let deadline = Utc::now() + chrono::Duration::minutes(5);
+    let deadline = gents_store::test_support::unreached_deadline_at();
     bind_interruptible_request(&hook, "timeout-first-parent", &session, deadline).await;
     let mut lifecycle = accepted_hook_tool_lifecycle(
         &hook,
