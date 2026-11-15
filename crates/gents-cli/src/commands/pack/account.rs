@@ -5,8 +5,8 @@ use gents_pack::pack::registry::credentials;
 use serde_json::json;
 
 use super::registry::{
-    read_stdin_line, resolve_registry_token, resolve_registry_url, resolve_token_flag,
-    RegistryClient,
+    environment_registry_token, read_stdin_line, resolve_registry_token, resolve_registry_url,
+    resolve_token_flag, RegistryClient,
 };
 use crate::cli::{PackAccountArgs, PackInfoArgs, PackLoginArgs, PackOwnerArgs, PackYankArgs};
 
@@ -15,7 +15,16 @@ pub(crate) fn resolve_publish_token(
     registry: &str,
     home: &Path,
 ) -> Result<String> {
-    if let Some(token) = resolve_registry_token(explicit) {
+    select_publish_token(explicit, environment_registry_token(), registry, home)
+}
+
+pub(super) fn select_publish_token(
+    explicit: Option<&str>,
+    environment: Option<String>,
+    registry: &str,
+    home: &Path,
+) -> Result<String> {
+    if let Some(token) = resolve_registry_token(explicit, environment) {
         return Ok(token);
     }
     credentials::get(home, registry)?.with_context(|| {

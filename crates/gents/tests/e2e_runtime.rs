@@ -1,5 +1,3 @@
-mod support;
-
 #[path = "e2e_runtime/client_submission_contention.rs"]
 mod client_submission_contention;
 #[path = "e2e_runtime/completion_retry_tape.rs"]

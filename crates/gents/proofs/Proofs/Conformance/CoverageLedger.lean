@@ -2290,6 +2290,10 @@ def caseCoverage : List CoverageEntry :=
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
+      "plugin_resources_allowance_tick_counts")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
       "plugin_resources_sleeps")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -3580,6 +3584,8 @@ def externalPremiseCoverage : List CoverageEntry :=
       "One active runtime per node is an operating premise. Host-local job control and in-memory step coalescing do not enforce that premise across processes.") "tool-call" [Surface.runtimeInternal]
   , tagged (boundaryCoverage "premise" "boundary.count-carrier.non-null-id"
       "DefraDB refuses a non-null ID field declaration (NonNull variant for type ID is not supported), so no count carrier of that schema is ever stored.") "completion-retry" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.plugin-allowance.epoch-ticker"
+      "The WASM host's epoch advances once per ticker wake-up, so a guest's compute allowance is counted in wake-ups; late wakes stretch it without bound until the ticker advances the epoch by elapsed time.") "tool-policy" [Surface.runtimeInternal]
   , tagged (boundaryCoverage "premise" "boundary.plugin-data.transaction"
       "DefraDB provides transaction serializability and its unique index as a backstop for read-then-insert plugin data writes.") "tool-policy" [Surface.runtimeInternal]
   ]

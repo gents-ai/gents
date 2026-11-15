@@ -36,6 +36,20 @@ env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '12' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # A runner keeps its Cargo target tree between jobs only for pushes to main
+  # and pull requests from this repository's own branches. Fork pull requests
+  # and every other event build in a job-scoped tree, so build outputs,
+  # build-script outputs included, never cross into another trust domain's job.
+  # test-rust-build-space.py evaluates this condition per event.
+  GENTS_CI_KEEP_TARGET_TREE: >-
+    ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+    (github.event_name == 'pull_request' &&
+    github.event.pull_request.head.repo.full_name == github.repository) }}
+  # Per-runner kept-tree cap and host free-space floor in GiB: an integer, or a
+  # JSON object from runner name to integer with an optional "default" entry.
+  # Unset, ensure-rust-build-space.py applies its defaults.
+  GENTS_CI_TARGET_MAX_GIB: ${{ vars.GENTS_CI_TARGET_MAX_GIB }}
+  GENTS_CI_TARGET_FLOOR_GIB: ${{ vars.GENTS_CI_TARGET_FLOOR_GIB }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
   LEAN_CACHE_ROOT: ${{ vars.LEAN_CACHE_ROOT || '/Users/admin/.cache/gents-lean' }}
@@ -106,11 +120,29 @@ jobs:
       - name: Run build attribution parser self-test
         run: scripts/measure-gents-build-attribution.sh self-test
 
+      - name: Report jobs a fork pull request skips
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || 'a deleted repository' }}
+        run: |
+          message="This pull request comes from ${HEAD_REPOSITORY}, so jobs that run on self-hosted runners (rust-and-cli, lean-proofs, desktop-ui-bombadil, core-packs, adapter-interop) are skipped; hosted jobs still run. A maintainer reruns the change from a branch of this repository to test it on the Studios."
+          echo "::notice title=Self-hosted jobs skipped for a fork::${message}"
+          printf '### Self-hosted jobs skipped for a fork\n\n%s\n' "${message}" >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Check runner build-space reclamation
         run: python3 .github/scripts/test-rust-build-space.py
 
       - name: Run Harbor agent adapter tests
         run: python3 scripts/harbor/test_gents_agent.py
+
+      - name: Check the eval ladder and live Engineer eval drivers
+        run: |
+          bash -n scripts/evals/run-ladder.sh
+          python3 scripts/evals/test_ladder_batch.py
+          python3 scripts/evals/test_ladder_baseline.py
+          python3 scripts/evals/test_live_engineer_eval.py
 
       - name: Check compiler-tool download recovery
         run: |
@@ -140,11 +172,16 @@ jobs:
 
   rust-and-cli:
     name: rust-and-cli (${{ matrix.suite }})
+    # Fork pull requests never run on a self-hosted runner: its account shares
+    # the Cargo home, the compiler cache and the kept target trees with every
+    # other runner on the host (test-rust-build-space.py checks every job).
     if: >-
-      github.event_name != 'pull_request' ||
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      (github.event_name != 'pull_request' ||
       (github.event.pull_request.draft == false &&
       (github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size))
+      github.event.pull_request.stack.position == github.event.pull_request.stack.size)))
     needs: repository-guard
     runs-on:
       [
@@ -159,9 +196,10 @@ jobs:
       fail-fast: false
       matrix:
         suite: ${{ fromJSON(inputs.rust_suite != '' && inputs.rust_suite != 'all' && format('["{0}"]', inputs.rust_suite) || '["runtime","support","desktop","cli"]') }}
-    # Each job starts from an empty RUNNER_TEMP target tree; the size-capped
-    # host sccache service supplies cached rlibs. Binaries, test harnesses,
-    # proc macros, and build scripts are not cacheable and relink every run.
+    # A trusted run keeps each runner's capped Cargo target tree between jobs,
+    # so it relinks only what its change touched; other runs start from an
+    # empty RUNNER_TEMP tree. The size-capped host sccache service supplies
+    # rlibs either way (setup-rust-build-cache.sh).
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
@@ -316,7 +354,8 @@ jobs:
         # conformance gate representative and deterministic under parallelism.
         env:
           RUST_MIN_STACK: 16777216
-        run: cargo test -p gents --test conformance
+        run: |
+          cargo test -p gents --test integration conformance::
 
       - name: Compile and link CLI targets
         if: matrix.suite == 'cli'
@@ -386,13 +425,13 @@ jobs:
           # that breaks it, not the post-merge main run (#2686).
           cargo test -p gents-toolcalls --lib call::hook::tests::r4c_list_background_tools::
           cargo test -p gents-automation --lib triggers::callback::
-          cargo test -p gents-eval --test onboarding_evals
-          cargo test -p gents-eval --test eval_runner_canary
+          cargo test -p gents-eval --test integration onboarding_evals::
+          cargo test -p gents-eval --test integration eval_runner_canary::
           # Per-request store budgets: a capture, segment or write-drop
           # regression must fail the PR that grows the store, not a user's
           # node after release.
-          cargo test -p gents --test e2e_runtime storage_budget:: -- --nocapture
-          cargo test -p gents --test misc ordered_read_plans::
+          cargo test -p gents --test integration e2e_runtime::storage_budget:: -- --nocapture
+          cargo test -p gents --test integration misc::ordered_read_plans::
           # DefraDB-free; the extraction's wasm claim is otherwise unenforced
           # on PRs (full -p gents-loop is main-only below).
           cargo test -p gents-loop --lib
@@ -400,9 +439,9 @@ jobs:
       - name: Run PR CLI smoke tests
         if: matrix.suite == 'cli' && github.event_name == 'pull_request'
         run: |
-          cargo test -p gents-cli --test cli_server server_startup_with_iroh_p2p_reports_runtime_connectivity -- --nocapture --test-threads=1
-          cargo test -p gents-cli --test cli_runtime cli_status:: -- --nocapture --test-threads=1
-          cargo test -p gents-cli --test cli_runtime cli_reconciliation::reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
+          cargo test -p gents-cli --test integration cli_server::server_startup_with_iroh_p2p_reports_runtime_connectivity -- --nocapture --test-threads=1
+          cargo test -p gents-cli --test integration cli_runtime::cli_status:: -- --nocapture --test-threads=1
+          cargo test -p gents-cli --test integration cli_runtime::cli_reconciliation::reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
           # gents config pack check over the fixture packs: manifests, files,
           # configuration, graphs, filters, README and topology diagrams.
           env -u CARGO_TARGET_DIR cargo test --target-dir "$CARGO_TARGET_DIR" \
@@ -477,6 +516,8 @@ jobs:
 
   lean-proofs:
     if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
       (inputs.rust_suite == '' || inputs.rust_suite == 'all') &&
       (github.event_name != 'pull_request' ||
       (github.event.pull_request.draft == false &&
@@ -715,6 +756,8 @@ jobs:
 
   desktop-ui-bombadil:
     if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
       (inputs.rust_suite == '' || inputs.rust_suite == 'all') &&
       (github.event_name != 'pull_request' ||
       (github.event.pull_request.draft == false &&

@@ -25,7 +25,6 @@ pub mod live_inference;
 pub mod mock_endpoint;
 pub mod mock_subscription;
 
-pub mod pairing_conformance;
 pub mod signed_mailbox;
 pub mod snapshots;
 pub mod streaming_backend;

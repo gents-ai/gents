@@ -1,4 +1,4 @@
-use crate::support::live_inference::inference_target::{
+use super::support::live_inference::inference_target::{
     parse_selection, targets_dir, InferenceTarget,
 };
 

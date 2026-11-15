@@ -44,7 +44,8 @@ uuid.workspace = true
 tempfile = "3"
 
 [dev-dependencies]
-gents-observe = { path = ".", features = ["test-fixtures"] }
+gents-workspace-hack = { workspace = true }
+gents-observe = { path = ".", features = ["test-fixtures", "typescript"] }
 gents-store = { workspace = true, features = ["test-fixtures"] }
 gents-documents = { workspace = true, features = ["test-fixtures"] }
 gents-inference = { workspace = true, features = ["test-fixtures"] }

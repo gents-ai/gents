@@ -234,7 +234,7 @@ mod tests {
         command
             .args([
                 "--exact",
-                "initialization::tests::probe_child",
+                "runtime::initialization::tests::probe_child",
                 "--nocapture",
             ])
             .env(ROLE, role)

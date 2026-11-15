@@ -1,5 +1,3 @@
-mod support;
-
 #[path = "suites/cli_live.rs"]
 mod cli_live;
 #[path = "suites/cli_onboarding_live.rs"]
