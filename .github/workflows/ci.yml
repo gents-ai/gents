@@ -15,6 +15,10 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   merge_group:
     types: [checks_requested]
+  # A daily run of main's archived test groups that ignores the test-result
+  # cache, so a cache defect cannot hide a regression for longer than a day.
+  schedule:
+    - cron: "23 7 * * *"
   workflow_dispatch:
     inputs:
       full_candidate:
@@ -46,12 +50,18 @@ on:
         required: false
         type: string
         default: ""
+      test_cache:
+        description: Test-result cache for the archived slices on this run only (off, on, or full to run every test and record); empty uses GENTS_CI_TEST_CACHE.
+        required: false
+        type: string
+        default: ""
 
 # A new push to a pull request cancels its run in progress. A run of main, a
 # merge queue entry or a dispatch finishes: main's post-merge run is the only
 # run of each merged commit. GitHub keeps the newest waiting run per group.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # The scheduled run queues apart from main's pushes so neither replaces the other.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'schedule' && 'schedule' || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -73,6 +83,14 @@ env:
   # JSON object from runner name to integer with an optional "default" entry.
   # Unset, ensure-rust-build-space.py applies its defaults.
   GENTS_CI_TARGET_MAX_GIB: ${{ vars.GENTS_CI_TARGET_MAX_GIB }}
+  # Only runs of this repository's own code record test results: pushes to
+  # main, the scheduled run, merge queue entries, dispatches and pull requests
+  # from this repository's branches. Fork pull requests never record.
+  GATE_TEST_CACHE_TRUSTED: >-
+    ${{ github.event_name == 'push' || github.event_name == 'schedule' ||
+    github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' ||
+    (github.event_name == 'pull_request' &&
+    github.event.pull_request.head.repo.full_name == github.repository) }}
   GENTS_CI_TARGET_FLOOR_GIB: ${{ vars.GENTS_CI_TARGET_FLOOR_GIB }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
@@ -149,10 +167,17 @@ jobs:
           GATE_EVERYTHING: >-
             ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group')
             && 'true' || env.GATE_EVERYTHING }}
-          GATE_ONLY: ${{ inputs.only }}
+          # The scheduled run is the full test-cache run of the archived groups.
+          GATE_ONLY: ${{ github.event_name == 'schedule' && 'build:portable shard:portable' || inputs.only }}
           GATE_PORTABLE_RUNNER: ${{ inputs.portable_runner || vars.GENTS_CI_PORTABLE_RUNNER }}
           GATE_PORTABLE_SHARDS: ${{ inputs.portable_shards || vars.GENTS_CI_PORTABLE_SHARDS }}
           GATE_ARCHIVE_TRANSFER: ${{ inputs.archive_transfer || vars.GENTS_CI_ARCHIVE_TRANSFER }}
+          # scripts/ci/gate.py test_cache_mode reads these.
+          GATE_EVENT: ${{ github.event_name }}
+          GATE_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          GATE_TEST_CACHE_INPUT: ${{ inputs.test_cache }}
+          GATE_TEST_CACHE: ${{ vars.GENTS_CI_TEST_CACHE }}
+          GATE_TEST_CACHE_MAIN: ${{ vars.GENTS_CI_TEST_CACHE_MAIN }}
           GATE_RUNTIME_ISOLATED: ${{ vars.GENTS_CI_RUNTIME_ISOLATED }}
           # Inside a stack only the top is tested in full: lower layers may be
           # intentionally red. A pull request into the default branch always is.
@@ -208,6 +233,12 @@ jobs:
         run: |
           rustup toolchain install --no-self-update
           make gate-selftest
+
+      - name: Install elan for the test cache model
+        run: .github/scripts/setup-elan.sh
+
+      - name: Check the test-result cache against its Lean and TLA+ models
+        run: .github/scripts/check-test-cache-model.sh
 
       - name: Check the live node backstop
         run: |
@@ -581,7 +612,18 @@ jobs:
           path: ${{ runner.temp }}/gents-tests
 
       - name: Run slice ${{ matrix.index }} of ${{ matrix.count }}
+        env:
+          GATE_TEST_CACHE_REPORT: ${{ runner.temp }}/test-cache-report.json
         run: make gate-run JOB="shard:${{ matrix.archive }}:${{ matrix.index }}"
+
+      - name: Upload the slice's test cache report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-test-cache-${{ matrix.archive }}-${{ matrix.index }}-of-${{ matrix.count }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/test-cache-report.json
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Upload the slice's JUnit report
         if: always()
