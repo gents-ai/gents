@@ -251,10 +251,15 @@ Each model config's first line states the result TLC must report for it:
 \* expect: holds
 \* expect: deadlock
 \* expect: violates <Name>
+\* expect: violates <Name> initially
 ```
 
-`<Name>` is one `INVARIANT` or `PROPERTY` the config checks; `deadlock`
-requires deadlock checking on. Each spec follows its `---- MODULE X ----` line
+`<Name>` is one `INVARIANT` or `PROPERTY` the config checks; `initially`
+records that the initial state violates it, and a violation in the initial
+state matches no other header. `deadlock` requires deadlock checking on. TLC
+must also report at least two distinct states, or the number an optional
+second line `\* states: <N>` records, so a model whose initial predicate
+admits nothing, or that stops after its first state, does not pass. Each spec follows its `---- MODULE X ----` line
 with the Lean decisions it models and the crates that implement it:
 
 ```

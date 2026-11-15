@@ -271,6 +271,10 @@ class Guards(unittest.TestCase):
         self.assertNotIn("fine", verdict)
 
 
+def tlc_message(code, kind, body):
+    return f"@!@!@STARTMSG {code}:{kind} @!@!@\n{body}\n@!@!@ENDMSG {code} @!@!@\n"
+
+
 class TlaSelection(unittest.TestCase):
     """The planner picks TLA+ specs by the crates and Lean owners their headers name."""
 
@@ -333,24 +337,55 @@ class TlaStructure(unittest.TestCase):
         self.assertEqual(check.wire_name("MCPHealth"), "mcp_health")
 
     def test_tlc_results_parse(self):
-        def message(code, kind, body):
-            return f"@!@!@STARTMSG {code}:{kind} @!@!@\n{body}\n@!@!@ENDMSG {code} @!@!@\n"
         parse = gate.tla_check.parse
-        self.assertEqual(parse(message(2193, 0, "Model checking completed. No error has been found."), 0), "holds")
-        self.assertEqual(parse(message(2110, 1, "Invariant NoLostWrite is violated."), 12), "violates NoLostWrite")
-        self.assertEqual(parse(message(2116, 1, "Temporal property EventualResume was violated."), 13),
+        stats = tlc_message(2199, 0, "1,234 states generated, 1,045 distinct states found, 0 states left on queue.")
+        self.assertEqual(parse(tlc_message(2193, 0, "Model checking completed. No error has been found.") + stats, 0),
+                         ("holds", 1045))
+        self.assertEqual(parse(tlc_message(2110, 1, "Invariant NoLostWrite is violated.") + stats, 12),
+                         ("violates NoLostWrite", 1045))
+        self.assertEqual(parse(tlc_message(2116, 1, "Temporal property EventualResume was violated."), 13).verdict,
                          "violates EventualResume")
-        self.assertEqual(parse(message(2116, 1, "Temporal properties were violated."), 13), "violates ?")
-        self.assertEqual(parse(message(2114, 1, "Deadlock reached."), 11), "deadlock")
-        self.assertTrue(parse(message(1000, 1, "Unknown operator Foo"), 255).startswith("error: Unknown operator"))
-        self.assertTrue(parse("", 1).startswith("error:"))
+        self.assertEqual(parse(tlc_message(2116, 1, "Temporal properties were violated."), 13).verdict, "violates ?")
+        self.assertEqual(parse(tlc_message(2114, 1, "Deadlock reached."), 11).verdict, "deadlock")
+        self.assertTrue(parse(tlc_message(1000, 1, "Unknown operator Foo"), 255).verdict
+                        .startswith("error: Unknown operator"))
+        self.assertTrue(parse("", 1).verdict.startswith("error:"))
+
+    def test_a_model_without_states_or_violated_initially_does_not_match(self):
+        """TLC reports `Init == FALSE` as holding over zero states and an initial
+        state's violation like any other; neither is the recorded result."""
+        check = gate.tla_check
+        empty = (tlc_message(2190, 0, "Finished computing initial states: 0 distinct states generated at t.")
+                 + tlc_message(2193, 0, "Model checking completed. No error has been found.")
+                 + tlc_message(2199, 0, "0 states generated, 0 distinct states found, 0 states left on queue."))
+        self.assertEqual(check.parse(empty, 0), ("holds", 0))
+        self.assertEqual(check.judge(check.Expect("holds", 2), check.parse(empty, 0)), "FEW STATES")
+        self.assertEqual(check.judge(check.Expect("holds", 2), check.parse(
+            tlc_message(2193, 0, "Model checking completed. No error has been found."), 0)), "FEW STATES")
+        initial = tlc_message(2107, 1, "Invariant Inv is violated by the initial state:\nx = 0")
+        self.assertEqual(check.parse(initial, 12).verdict, "violates Inv initially")
+        self.assertEqual(check.judge(check.Expect("violates Inv", 2), check.parse(initial, 12)), "MISMATCH")
+        self.assertEqual(check.judge(check.Expect("violates Inv initially", 2), check.parse(initial, 12)), "ok")
+        early = tlc_message(2116, 1, "Temporal properties were violated.") + tlc_message(
+            2199, 0, "3 states generated, 3 distinct states found, 0 states left on queue.")
+        self.assertEqual(check.judge(check.Expect("violates ?", 2), check.parse(early, 13)), "ok")
+        self.assertEqual(check.judge(check.Expect("violates ?", 40), check.parse(early, 13)), "FEW STATES")
+        with tempfile.TemporaryDirectory() as scratch:
+            cfg = Path(scratch) / "MCX.cfg"
+            cfg.write_text("\\* expect: violates Live\n\\* states: 40\nSPECIFICATION Spec\nPROPERTY Live\n")
+            self.assertEqual(check.expectation(cfg), ("violates Live", 40))
+            cfg.write_text("\\* expect: violates Inv initially\nSPECIFICATION Spec\nINVARIANT Inv\n")
+            self.assertEqual(check.expectation(cfg), ("violates Inv initially", 2))
+            cfg.write_text("\\* expect: holds\n\\* states: many\nSPECIFICATION Spec\n")
+            with self.assertRaises(check.HeaderError):
+                check.expectation(cfg)
 
     def test_expectations_and_isolated_properties(self):
         check = gate.tla_check
         with tempfile.TemporaryDirectory() as scratch:
             cfg = Path(scratch) / "MCX.cfg"
             cfg.write_text("\\* expect: violates Live\nSPECIFICATION Spec\nINVARIANT TypeOK\nPROPERTY Live\n")
-            self.assertEqual(check.expectation(cfg), "violates Live")
+            self.assertEqual(check.expectation(cfg), ("violates Live", 2))
             cfg.write_text("\\* expect: violates Missing\nSPECIFICATION Spec\nINVARIANT TypeOK\n")
             with self.assertRaises(check.HeaderError):
                 check.expectation(cfg)

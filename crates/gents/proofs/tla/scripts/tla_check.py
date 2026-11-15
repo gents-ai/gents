@@ -12,8 +12,11 @@ exactly one of
   \\* expect: holds
   \\* expect: deadlock
   \\* expect: violates <Name>
+  \\* expect: violates <Name> initially
 
-and a spec `X.tla` follows its `---- MODULE X ----` line with
+optionally followed by `\\* states: <N>`, the fewest distinct states TLC must
+find (default 2, so a model whose initial predicate admits nothing or nothing
+past its first state does not pass). A spec `X.tla` follows its `---- MODULE X ----` line with
 
   \\* lean: none | <Lean.owner>[, <Lean.owner>]...
   \\* crates: none | <crate>[, <crate>]...
@@ -34,6 +37,7 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -65,7 +69,9 @@ JDKS = {
 IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
 LEAN_NAME = r"[A-Za-z_][A-Za-z0-9_'?!]*(?:\.[A-Za-z_][A-Za-z0-9_'?!]*)+"
 CRATE = r"[a-z][a-z0-9_-]*"
-EXPECT = re.compile(rf"\\\* expect: (holds|deadlock|violates ({IDENT}))")
+EXPECT = re.compile(rf"\\\* expect: (holds|deadlock|violates ({IDENT})( initially)?)")
+STATES = re.compile(r"\\\* states: ([1-9][0-9]*)")
+DEFAULT_FLOOR = 2
 MODULE = re.compile(rf"-{{4,}} MODULE ({IDENT}) -{{4,}}")
 LEAN = re.compile(rf"\\\* lean: (none|{LEAN_NAME}(?:, {LEAN_NAME})*)")
 CRATES = re.compile(rf"\\\* crates: (none|{CRATE}(?:, {CRATE})*)")
@@ -100,20 +106,30 @@ def cfg_sections(text):
     return sections
 
 
+class Expect(namedtuple("Expect", "verdict floor")):
+    """A config's recorded TLC result and the fewest distinct states it must reach."""
+
+
 def expectation(cfg):
     lines = cfg.read_text().splitlines()
     match = EXPECT.fullmatch(lines[0]) if lines else None
     if not match:
-        raise HeaderError(f"{cfg.name}: first line must be `\\* expect: holds|deadlock|violates <Name>`")
+        raise HeaderError(f"{cfg.name}: first line must be "
+                          "`\\* expect: holds|deadlock|violates <Name>[ initially]`")
+    floor = DEFAULT_FLOOR
+    if len(lines) > 1 and lines[1].startswith("\\* states:"):
+        states = STATES.fullmatch(lines[1])
+        if not states:
+            raise HeaderError(f"{cfg.name}: second line must be `\\* states: <N>` when it names states")
+        floor = int(states.group(1))
     sections = cfg_sections(cfg.read_text())
     if match.group(2):
         checked = sections.get("INVARIANT", []) + sections.get("PROPERTY", [])
         if match.group(2) not in checked:
             raise HeaderError(f"{cfg.name}: expects {match.group(2)} violated but does not check it")
-        return f"violates {match.group(2)}"
     if match.group(1) == "deadlock" and sections.get("CHECK_DEADLOCK") == ["FALSE"]:
         raise HeaderError(f"{cfg.name}: expects a deadlock but sets CHECK_DEADLOCK FALSE")
-    return match.group(1)
+    return Expect(match.group(1), floor)
 
 
 def spec_header(spec):
@@ -356,33 +372,59 @@ def install():
 # ---- running TLC ----
 
 MESSAGE = re.compile(r"@!@!@STARTMSG (\d+):(\d+) @!@!@\n(.*?)@!@!@ENDMSG \1 @!@!@", re.S)
+INITIAL = re.compile(rf"(?:Invariant|Property) ({IDENT}) is violated by the initial state")
 INVARIANT = re.compile(rf"Invariant ({IDENT}) is violated")
 ACTION = re.compile(rf"Action property ({IDENT}) is violated")
 TEMPORAL = re.compile(rf"Temporal property ({IDENT}) was violated")
 SUCCESS = 2193
 DEADLOCK = 2114
 TEMPORAL_UNNAMED = 2116
+STATS = 2199
 ERROR_CLASS = 1
+DISTINCT = re.compile(r"([\d,]+) distinct states? found")
+
+
+class Outcome(namedtuple("Outcome", "verdict distinct")):
+    """TLC's result and the distinct states it found (None when it printed no count)."""
 
 
 def parse(output, status):
-    """TLC's `-tool` output -> holds | deadlock | violates <Name> | violates ? | error: <text>."""
+    """TLC's `-tool` output -> its verdict (holds | deadlock | violates <Name>[ initially] |
+    violates ? | error: <text>) and the distinct states it reports."""
     messages = [(int(code), int(kind), body.strip()) for code, kind, body in MESSAGE.findall(output)]
+    counts = [DISTINCT.search(body) for code, _, body in messages if code == STATS]
+    distinct = int(counts[-1].group(1).replace(",", "")) if counts and counts[-1] else None
     for code, _, body in messages:
+        match = INITIAL.search(body)
+        if match:
+            return Outcome(f"violates {match.group(1)} initially", distinct)
         for pattern in (INVARIANT, ACTION, TEMPORAL):
             match = pattern.search(body)
             if match:
-                return f"violates {match.group(1)}"
+                return Outcome(f"violates {match.group(1)}", distinct)
         if code == TEMPORAL_UNNAMED:
-            return "violates ?"
+            return Outcome("violates ?", distinct)
         if code == DEADLOCK:
-            return "deadlock"
+            return Outcome("deadlock", distinct)
     if status == 0 and any(code == SUCCESS for code, _, _ in messages):
-        return "holds"
+        return Outcome("holds", distinct)
     errors = [body for _, kind, body in messages if kind == ERROR_CLASS and body]
     plain = [line for line in MESSAGE.sub("", output).splitlines() if line.strip()]
     detail = errors[-1] if errors else "\n".join(plain[-3:]) or f"TLC exited {status} with no output"
-    return "error: " + " ".join(detail.split())[:240]
+    return Outcome("error: " + " ".join(detail.split())[:240], distinct)
+
+
+def judge(expected, outcome):
+    """ok, MISMATCH, or FEW STATES when TLC gave the recorded result from fewer
+    distinct states than the floor. A violation in the initial state has no
+    count and matches only a header that records it."""
+    if outcome.verdict != expected.verdict:
+        return "MISMATCH"
+    if expected.verdict.endswith(" initially"):
+        return "ok"
+    if outcome.distinct is None or outcome.distinct < expected.floor:
+        return "FEW STATES"
+    return "ok"
 
 
 def without_checks(text, keep_property):
@@ -398,7 +440,7 @@ class Tlc:
         self.java, self.jar, self.timeout, self.heap = java, jar, timeout, heap
 
     def run(self, cfg, text=None):
-        """Model-check one config; `text` replaces its contents. Returns (result, seconds)."""
+        """Model-check one config; `text` replaces its contents. Returns (Outcome, seconds)."""
         with tempfile.TemporaryDirectory(prefix="tlc-") as scratch:
             scratch = Path(scratch)
             config = cfg
@@ -414,32 +456,36 @@ class Tlc:
                 done = subprocess.run(command, cwd=TLA, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                       text=True, timeout=self.timeout)
             except subprocess.TimeoutExpired:
-                return f"timeout after {self.timeout}s", time.time() - started
+                return Outcome(f"timeout after {self.timeout}s", None), time.time() - started
             return parse(done.stdout, done.returncode), time.time() - started
 
     def check(self, cfg):
-        result, seconds = self.run(cfg)
-        if result == "violates ?":
+        """The config's Outcome and seconds; a violated temporal property is named,
+        and the state count is the full run's."""
+        outcome, seconds = self.run(cfg)
+        if outcome.verdict == "violates ?":
             # TLC 1.7.4 does not name a violated temporal property: check each
             # alone, in config order, and report the first that fails.
             text = cfg.read_text()
             properties = cfg_sections(text).get("PROPERTY", [])
             if len(properties) == 1:
-                return f"violates {properties[0]}", seconds
-            result = "error: a temporal property was violated but none fails alone"
+                return Outcome(f"violates {properties[0]}", outcome.distinct), seconds
+            verdict = "error: a temporal property was violated but none fails alone"
             for name in properties:
                 alone, extra = self.run(cfg, without_checks(text, name))
                 seconds += extra
-                if alone.startswith("violates"):
-                    result = f"violates {name}"
+                if alone.verdict.startswith("violates"):
+                    verdict = f"violates {name}"
                     break
-        return result, seconds
+            outcome = Outcome(verdict, outcome.distinct)
+        return outcome, seconds
 
 
 def report(rows):
-    lines = ["| config | spec | expected | actual | seconds | verdict |", "|---|---|---|---|---|---|"]
-    lines += [f"| {cfg} | {spec} | {expected} | {actual} | {seconds:.0f} | {verdict} |"
-              for cfg, spec, expected, actual, seconds, verdict in rows]
+    lines = ["| config | spec | expected | actual | distinct states | seconds | verdict |",
+             "|---|---|---|---|---|---|---|"]
+    lines += [f"| {cfg} | {spec} | {expected} | {actual} | {states} | {seconds:.0f} | {verdict} |"
+              for cfg, spec, expected, actual, states, seconds, verdict in rows]
     table = "\n".join(lines)
     print(table, flush=True)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -480,19 +526,22 @@ def run(arguments):
         try:
             expected = expectation(cfg)
         except HeaderError as error:
-            return cfg.stem, spec_for[cfg], "missing", str(error), 0.0, "NO HEADER"
-        actual, seconds = tlc.check(cfg)
-        return cfg.stem, spec_for[cfg], expected, actual, seconds, "ok" if actual == expected else "MISMATCH"
+            return cfg.stem, spec_for[cfg], "missing", str(error), "", 0.0, "NO HEADER"
+        outcome, seconds = tlc.check(cfg)
+        floor = f" (>= {expected.floor} states)" if expected.floor != DEFAULT_FLOOR else ""
+        states = "" if outcome.distinct is None else outcome.distinct
+        return (cfg.stem, spec_for[cfg], expected.verdict + floor, outcome.verdict, states, seconds,
+                judge(expected, outcome))
 
     started = time.time()
     with ThreadPoolExecutor(max_workers=arguments.jobs) as pool:
         futures = [pool.submit(one, cfg) for cfg in targets]
         for future in as_completed(futures):
             row = future.result()
-            print(f"tla: {row[0]}: {row[3]} ({row[4]:.0f}s, {row[5]})", flush=True)
+            print(f"tla: {row[0]}: {row[3]}, {row[4]} distinct states ({row[5]:.0f}s, {row[6]})", flush=True)
         rows = [future.result() for future in futures]
     report(rows)
-    failed = [row for row in rows if row[5] != "ok"]
+    failed = [row for row in rows if row[6] != "ok"]
     print(f"tla: {len(rows) - len(failed)} of {len(rows)} configurations match their headers "
           f"in {time.time() - started:.0f}s", flush=True)
     return 1 if failed else 0
