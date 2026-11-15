@@ -13,6 +13,10 @@ on:
       - "core-packs/**"
       - "crates/gents-core-packs/**"
       - "crates/gents-pack/**"
+      - "crates/gents-toolcalls/src/plugin/**"
+      - "crates/gents-cli/src/commands/pack/**"
+      - "crates/gents-cli/src/commands/afterburner_build.rs"
+      - "Makefile"
       - ".github/workflows/core-packs.yml"
   workflow_dispatch:
   workflow_call:
