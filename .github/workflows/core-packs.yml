@@ -34,6 +34,10 @@ env:
 jobs:
   build:
     name: Build and test core packs
+    # Fork pull requests never run on a self-hosted runner (ci.yml rust-and-cli).
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 150
     runs-on: [self-hosted, Linux, X64, workstation-1]
     container: rust:1-bookworm
