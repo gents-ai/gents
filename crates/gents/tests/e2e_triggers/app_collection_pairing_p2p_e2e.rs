@@ -216,27 +216,44 @@ async fn fetch_pairing_applied(node: &Arc<EmbeddedNode>, peer_id: &str) -> Optio
 }
 
 async fn replicator_carries(node: &Arc<EmbeddedNode>, peer: &str, collection: &str) -> bool {
+    route_toward(node, peer, collection).await == Route::Carries
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Route {
+    Absent,
+    StandsWithout,
+    Carries,
+}
+
+async fn route_toward(node: &Arc<EmbeddedNode>, peer: &str, collection: &str) -> Route {
     let admin = EmbeddedRemoteP2pAdmin::new(node.clone());
-    let Some(id) = admin
+    let id = admin
         .resolve_collection_id(collection)
         .await
-        .expect("resolve collection id")
-    else {
-        return false;
-    };
-    admin
-        .list_replicators()
-        .await
-        .expect("list replicators")
+        .expect("resolve collection id");
+    let replicators = admin.list_replicators().await.expect("list replicators");
+    let toward = replicators
         .iter()
-        .any(|replicator| {
-            (replicator.id.as_deref() == Some(peer)
+        .filter(|replicator| {
+            replicator.id.as_deref() == Some(peer)
                 || replicator
                     .address
                     .as_deref()
-                    .is_some_and(|address| address.contains(peer)))
-                && replicator.collections.iter().any(|token| token == &id)
+                    .is_some_and(|address| address.contains(peer))
         })
+        .filter(|replicator| !replicator.collections.is_empty())
+        .collect::<Vec<_>>();
+    if toward.iter().any(|replicator| {
+        id.as_ref()
+            .is_some_and(|id| replicator.collections.iter().any(|token| token == id))
+    }) {
+        Route::Carries
+    } else if toward.is_empty() {
+        Route::Absent
+    } else {
+        Route::StandsWithout
+    }
 }
 
 async fn assert_never_carried(node: &Arc<EmbeddedNode>, peer_id: &str, collection: &str) {
@@ -618,12 +635,21 @@ async fn change_note_texts(node: &Arc<EmbeddedNode>) -> Vec<String> {
         .collect()
 }
 
+/// Waiting for the collection to stop requires the base route to stand
+/// without it: an absent route is the gap inside a reinstall whose install may
+/// still carry the collection (`tla/PairingGrantRevocation.tla`,
+/// `MCPairingGrantRevocationGapObserver`).
 async fn wait_for_carry(node: &Arc<EmbeddedNode>, peer: &str, collection: &str, carried: bool) {
+    let expected = if carried {
+        Route::Carries
+    } else {
+        Route::StandsWithout
+    };
     wait_until(
         node,
         &["PeerPairingApplied"],
-        &format!("the route toward {peer} to carry {collection}: {carried}"),
-        || async { replicator_carries(node, peer, collection).await == carried },
+        &format!("the route toward {peer} to reach {expected:?} for {collection}"),
+        || async { route_toward(node, peer, collection).await == expected },
     )
     .await;
 }

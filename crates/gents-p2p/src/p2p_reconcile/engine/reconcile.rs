@@ -206,7 +206,7 @@ pub(super) async fn reconcile_prepared_peer(
     };
     let ReadyPairing {
         mut desired,
-        enrollment_generation,
+        mut enrollment_generation,
         applied: mut applied_record,
         reconnected,
         force_replay,
@@ -231,6 +231,7 @@ pub(super) async fn reconcile_prepared_peer(
     ));
     let mut ops_applied = Vec::new();
     let mut ensured_replicators = Vec::new();
+    let mut rederived = 0;
 
     if (!ops.is_empty() || reconnected || force_replay)
         && applied_record.enrollment != Default::default()
@@ -278,6 +279,36 @@ pub(super) async fn reconcile_prepared_peer(
                 &applied_record.state,
             ));
             continue;
+        }
+        // An install pushes every document of its collections and the
+        // transport checks no grant, so its scope is derived from authority
+        // read after the operations before it, not at preparation
+        // (`tla/PairingGrantRevocation.tla`).
+        if matches!(op, DiffOp::InstallReplicator(_)) {
+            let fresh = store
+                .load_desired_with_authority(&peer_id)
+                .await
+                .context("recheck pairing authority before install")?;
+            if fresh.state != desired {
+                rederived += 1;
+                anyhow::ensure!(
+                    rederived <= MAX_REDERIVED_ROUTES,
+                    "pairing authority for {peer_id} kept changing during one reconcile; \
+                     installing nothing until the next sweep"
+                );
+                desired = fresh.state;
+                enrollment_generation = fresh.enrollment_generation;
+                desired_state = desired.clone().unwrap_or_default();
+                actual = read_actual(admin, &applied_record.state.replicator_addresses)
+                    .await
+                    .context("reload live pairing state after pairing authority changed")?;
+                ops = std::collections::VecDeque::from(compute_owned_pairing_diff(
+                    &desired_state,
+                    &actual.state,
+                    &applied_record.state,
+                ));
+                continue;
+            }
         }
         apply_op(admin, &op, &desired_state, &actual).await?;
         update_applied_after_success(&mut applied_record.state, &op, &desired_state);
@@ -327,6 +358,8 @@ pub(super) async fn reconcile_prepared_peer(
         live_route_matches,
     })
 }
+
+const MAX_REDERIVED_ROUTES: usize = 4;
 
 async fn fresh_enrollment_generation_or_close(
     store: &dyn PairingStateStore,
