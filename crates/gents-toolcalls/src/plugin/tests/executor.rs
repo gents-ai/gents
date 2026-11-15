@@ -1826,6 +1826,9 @@ mod job_calls {
             wall_clock_secs: Some(gents_protocol::plugin::MAX_DECLARED_WALL_CLOCK_SECS),
             ..Default::default()
         });
+        record.granted =
+            store::grant_on_install(home.path(), &record.namespace, &record.declaration, true)
+                .unwrap();
         store::write_record(home.path(), &record).unwrap();
         PluginExecutor::new(Some(home.path().to_owned()))
             .call_with_jobs(&record, json!({}), caller)
