@@ -113,9 +113,6 @@ fn node_did(node: &Arc<dyn NodeIdentity>) -> Result<String> {
     Ok(did.to_owned())
 }
 
-/// Builds a node [`document_acp::configure`] prepared. Every node opened on a
-/// home's store is built here, so a refused Vera deployment is reported as
-/// what it is.
 pub async fn build_configured(
     builder: defra_node::NodeBuilder,
     data: &Path,

@@ -137,7 +137,6 @@ pub(crate) struct InitArgs {
 
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
-    /// Fixed for the home's lifetime once its store exists.
     #[arg(long, value_enum, hide = true, conflicts_with = "identity_only")]
     pub(crate) document_acp: Option<DocumentAcpArg>,
     #[arg(

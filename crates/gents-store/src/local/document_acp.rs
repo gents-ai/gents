@@ -12,13 +12,8 @@ mod embedded_vera;
 #[cfg(test)]
 mod tests;
 
-/// Holds everything an embedded Vera node keeps, inside the store's data
-/// directory: the store's lock, lineage marker, retirement and backups cover
-/// it with the store.
 const VERA_DIR_NAME: &str = "vera";
 const NODE_DIR_NAME: &str = "node";
-/// Written once, before the store's lineage marker, so every store that
-/// carries the marker and was created on an embedded Vera node has it.
 const DEPLOYMENT_RECORD: &str = ".gents-embedded-vera-deployment";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,8 +22,6 @@ pub(crate) struct Deployment {
     consensus_key: String,
 }
 
-/// `DocumentAcpChoice.Provider`: chosen when a home is initialized, recorded
-/// in its init config and never changed afterwards.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DocumentAcp {
@@ -107,7 +100,6 @@ pub enum DocumentAcpError {
 }
 
 impl DocumentAcpError {
-    /// `DocumentAcpChoice.Reopening.refusal`.
     pub(crate) fn refusal(&self) -> Option<IncompatibleStoreKind> {
         match self {
             Self::DeploymentDiffers { .. } => Some(IncompatibleStoreKind::OtherVersionSchema),
@@ -124,7 +116,6 @@ impl DocumentAcpError {
 
 type Result<T> = std::result::Result<T, DocumentAcpError>;
 
-/// `DocumentAcpChoice.reopen`, read from what the node's start returned.
 pub(crate) fn refused(error: &defra_node::Error) -> Option<DocumentAcpError> {
     #[cfg(feature = "embedded-vera")]
     {
@@ -165,8 +156,6 @@ fn recorded(data: &Path) -> Result<DocumentAcp> {
     })
 }
 
-/// The deployment a fresh store's node created, for [`record`]. `None` for a
-/// store that decides document access itself.
 pub(crate) fn created(
     node: &defra_node::Node,
     requested: DocumentAcp,
@@ -225,7 +214,6 @@ fn ensure_recorded(data: &Path, started: Option<&Deployment>) -> Result<()> {
     })
 }
 
-/// `DocumentAcpChoice.reopen`, once a node [`configure`] prepared has started.
 /// The caller shuts a refused node down.
 pub(crate) fn check_started(
     node: &defra_node::Node,
@@ -245,8 +233,6 @@ fn signs_for_vera(node: &dyn NodeIdentity) -> bool {
     )
 }
 
-/// `DocumentAcpChoice.admit`; `available` is whether this build carries the
-/// Vera node.
 fn decide(
     recorded: Option<DocumentAcp>,
     requested: DocumentAcp,
@@ -283,9 +269,6 @@ pub(crate) fn admit(
     })
 }
 
-/// [`admit`] from what is known before a home is written: the choice its
-/// init config already records, if any, and whether its node key is, or will
-/// be, kept in the Secure Enclave.
 pub fn ensure_admissible(
     recorded: Option<DocumentAcp>,
     requested: DocumentAcp,
@@ -301,9 +284,6 @@ pub fn ensure_admissible(
     .map(|_| ())
 }
 
-/// Gives `builder` the document access control an existing store was created
-/// with. Every node opened on a home's store as its Node goes through here or
-/// through the backend protection owners, which call it.
 pub fn configure(
     builder: defra_node::NodeBuilder,
     data: &Path,

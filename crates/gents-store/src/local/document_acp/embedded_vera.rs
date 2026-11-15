@@ -39,8 +39,6 @@ fn chain_id(node_did: &str) -> u64 {
     (u64::from_be_bytes(bytes) & ((1 << 53) - 1)).max(1)
 }
 
-/// The deployment's seeded policies are part of its identity: Vera reopens a
-/// directory only with the list it was created with.
 fn deployment(node_did: &str) -> EmbeddedVeraDeployment {
     EmbeddedVeraDeployment {
         chain_id: chain_id(node_did),
