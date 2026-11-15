@@ -136,6 +136,10 @@ async fn request_deadline_presents_output_committed_before_the_cut() {
     );
 }
 
+/// The stopped case's CLI timeout: past any run, so only the test's clock
+/// advance stops the child.
+const STOPPED_TIMEOUT_SECS: u64 = gents_store::test_support::UNREACHED_DEADLINE.as_secs();
+
 #[tokio::test]
 async fn committed_output_reconstructs_completed_and_stopped_results() {
     use gents_loop::tool_call_lifecycle::ToolOutcome;
@@ -158,15 +162,14 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
         ),
         (
             "cli-stopped",
-            1,
+            STOPPED_TIMEOUT_SECS,
             "printf '%17000s' ' '; printf 'last out'; printf 'last err' >&2; sleep 30",
         ),
     ] {
         let (node, mut tool, registry, writer) = committed_run(name).await;
         let cli = CliTool::new(config(timeout_secs));
         let args = serde_json::json!({"argv": ["-c", script]}).to_string();
-        let outcome = ToolOutcome::from_dispatch(
-            "sh",
+        let call =
             gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
                 None,
                 tokio_util::sync::CancellationToken::new(),
@@ -174,9 +177,33 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
                 Some(writer),
                 None,
                 cli.call(args),
-            )
-            .await,
-        );
+            );
+        let dispatched = if name == "cli-stopped" {
+            // The stop is driven, not raced (TLA+ `WallClockBound`
+            // `"driven"`): once the child's last writes are committed, the
+            // paused clock moves past a CLI timeout the real clock never
+            // reaches.
+            tokio::pin!(call);
+            tokio::select! {
+                result = &mut call => panic!("{name}: the child ended before its stop: {result:?}"),
+                () = gents_store::test_support::read_when_changed(
+                    &node,
+                    &["AgentOutputSegment"],
+                    "the stopped child's output is committed",
+                    async || {
+                        let raw = committed_output(&node, &tool).await;
+                        (raw.contains("last out") && raw.contains("last err")).then_some(())
+                    },
+                ) => {}
+            }
+            tokio::time::pause();
+            tokio::time::advance(std::time::Duration::from_secs(STOPPED_TIMEOUT_SECS + 1)).await;
+            tokio::time::resume();
+            call.await
+        } else {
+            call.await
+        };
+        let outcome = ToolOutcome::from_dispatch("sh", dispatched);
         let text = outcome.model_facing_text().to_owned();
         let presentation = registry
             .take_prepared_presentation(tool.doc_id().unwrap(), &text)
@@ -194,7 +221,10 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
                     .unwrap();
             }
             ToolOutcome::Failed { class, .. } => {
-                assert!(text.starts_with("timed out after 1s\n"), "{text}");
+                assert!(
+                    text.starts_with(&format!("timed out after {STOPPED_TIMEOUT_SECS}s\n")),
+                    "{text}"
+                );
                 assert!(
                     text.contains("[Showing last 16000 of 17008 bytes]"),
                     "{text}"
