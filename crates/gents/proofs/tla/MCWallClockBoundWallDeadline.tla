@@ -1,0 +1,4 @@
+---- MODULE MCWallClockBoundWallDeadline ----
+EXTENDS WallClockBound
+
+====
