@@ -930,9 +930,19 @@ async fn run_generated_wait_observations() {
 }
 
 #[tokio::test]
-async fn generated_goal_claimed_publication_cases_drive_real_transactions() {
+async fn generated_goal_claimed_publication_historical_cases_drive_real_transactions() {
     run_historical_publication_cases().await;
+}
+
+#[tokio::test]
+async fn generated_goal_claimed_publication_running_wait_cases_drive_real_transactions() {
     run_generated_running_wait().await;
+}
+
+/// One test: the family asserts a count across its cases (exactly one case
+/// drives abandoned follow-up scans).
+#[tokio::test]
+async fn generated_goal_claimed_publication_wait_observation_cases_drive_real_transactions() {
     run_generated_wait_observations().await;
 }
 
