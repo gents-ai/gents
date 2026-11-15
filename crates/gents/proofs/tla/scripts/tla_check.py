@@ -21,13 +21,16 @@ past its first state does not pass). A spec `X.tla` follows its `---- MODULE X -
   \\* lean: none | <Lean.owner>[, <Lean.owner>]...
   \\* crates: none | <crate>[, <crate>]...
 
-and optionally
+and optionally, in this order,
 
   \\* models: <Lean.declaration>[, <Lean.declaration>]...
+  \\* paths: <repository path>[, <repository path>]...
 
 A `lean:` owner is a conformance function the spec reads from its generated
 `LeanDecision_<Namespace>` module; a `models:` declaration is Lean the spec
-restates by hand, named so that changing it selects the spec.
+restates by hand, named so that changing it selects the spec. A `paths:` entry
+is a file or directory outside any crate the spec models; a change to it, or
+under it, selects the spec.
 
 TLC runs in breadth-first model-checking mode with one worker and a fixed
 fingerprint polynomial, so the first violation it reports is reproducible.
@@ -86,7 +89,9 @@ DEFAULT_FLOOR = 2
 MODULE = re.compile(rf"-{{4,}} MODULE ({IDENT}) -{{4,}}")
 LEAN = re.compile(rf"\\\* lean: (none|{LEAN_NAME}(?:, {LEAN_NAME})*)")
 CRATES = re.compile(rf"\\\* crates: (none|{CRATE}(?:, {CRATE})*)")
-OPTIONAL = {"models": re.compile(rf"\\\* models: ({LEAN_NAME}(?:, {LEAN_NAME})*)")}
+REPO_PATH = r"[A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)*"
+OPTIONAL = {"models": re.compile(rf"\\\* models: ({LEAN_NAME}(?:, {LEAN_NAME})*)"),
+            "paths": re.compile(rf"\\\* paths: ({REPO_PATH}(?:, {REPO_PATH})*)")}
 MODULE_PREFIX = "LeanDecision_"
 
 CFG_KEYWORDS = ("CONSTANT", "CONSTANTS", "INIT", "NEXT", "SPECIFICATION", "INVARIANT", "INVARIANTS",
@@ -145,7 +150,7 @@ def expectation(cfg):
     return Expect(match.group(1), floor)
 
 
-class Header(namedtuple("Header", "lean crates models")):
+class Header(namedtuple("Header", "lean crates models paths")):
     """A spec's header lines; each field is a list of names."""
 
 
@@ -162,15 +167,18 @@ def spec_header(spec):
     def names(match):
         return [] if match.group(1) == "none" else match.group(1).split(", ")
     optional = {key: [] for key in OPTIONAL}
+    keys = list(OPTIONAL)
     for line in lines[3:]:
         key = next((key for key in OPTIONAL if line.startswith(f"\\* {key}:")), None)
         if key is None:
             break
         match = OPTIONAL[key].fullmatch(line)
-        if not match or optional[key]:
-            raise HeaderError(f"{spec.name}: `{line}` must be one `\\* {key}: <name>, ...` line")
+        if not match or keys.index(key) < max((keys.index(seen) for seen in optional if optional[seen]),
+                                              default=-1) or optional[key]:
+            raise HeaderError(f"{spec.name}: `{line}` must be one `\\* {key}: <name>, ...` line, "
+                              f"in the order {', '.join(keys)}")
         optional[key] = names(match)
-    return Header(names(lean), names(crates), optional["models"])
+    return Header(names(lean), names(crates), optional["models"], optional["paths"])
 
 
 def extends(module_file):
@@ -214,13 +222,13 @@ def generated_module(owner):
 
 
 def graph(tla=TLA):
-    """Spec name -> {path, lean, crates, models, configs, generated}."""
+    """Spec name -> {path, lean, crates, models, paths, configs, generated}."""
     known = specs(tla)
     nodes = {}
     for name, path in known.items():
         header = spec_header(path)
         nodes[name] = {"path": path, "lean": header.lean, "crates": header.crates, "models": header.models,
-                       "configs": [], "generated": generated_imports(path)}
+                       "paths": header.paths, "configs": [], "generated": generated_imports(path)}
     for cfg in configs(tla):
         nodes[spec_of(cfg, known)]["configs"].append(cfg)
     return nodes
@@ -278,6 +286,11 @@ def structure_problems(functions, members, tla=TLA, sources=None):
         for crate in node["crates"]:
             if crate not in members:
                 problems.append(f"{name}.tla: {crate} is not a workspace package")
+        for path in node.get("paths", []):
+            if not (ROOT / path).exists():
+                problems.append(f"{name}.tla: models {path}, which does not exist")
+            elif crate_of(f"{path}/-" if (ROOT / path).is_dir() else path):
+                problems.append(f"{name}.tla: {path} is in a crate; name the crate instead")
         named = {generated_module(owner) for owner in node["lean"]}
         for module in node["generated"]:
             path = generated / f"{module}.tla"
@@ -335,6 +348,12 @@ def lean_declares(text, owner):
     return False
 
 
+def within(path, modeled):
+    """Whether repository `path` is the modeled file or directory or under it."""
+    modeled = modeled.rstrip("/")
+    return path == modeled or path.startswith(modeled + "/")
+
+
 def select(files, nodes=None, crate_for=crate_of):
     """The specs a change to `files` selects, as a sorted list of names."""
     nodes = graph() if nodes is None else nodes
@@ -350,6 +369,8 @@ def select(files, nodes=None, crate_for=crate_of):
     for path in files:
         if path.startswith(tla + "scripts/"):
             return sorted(nodes)
+        chosen |= {name for name, node in nodes.items()
+                   if any(within(path, modeled) for modeled in node.get("paths", []))}
         if path.startswith(tla + "generated/"):
             module = Path(path).stem
             chosen |= {name for name, node in nodes.items() if module in node["generated"]}

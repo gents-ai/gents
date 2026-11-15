@@ -263,22 +263,25 @@ admits nothing, or that stops after its first state, does not pass.
 
 Each spec follows its `---- MODULE X ----` line with the Lean decisions it
 reads and the crates that implement it, then optionally the Lean it restates
-by hand:
+by hand and the code outside any crate that it models:
 
 ```
 \* lean: none | <Lean.owner>, <Lean.owner>
 \* crates: none | <crate>, <crate>
 \* models: <Lean.declaration>, <Lean.declaration>
+\* paths: <repository path>, <repository path>
 ```
 
 A `lean:` owner is a Lean `conformance_function` over a finite domain (its key
 in `crates/gents-lean-vocab/families.schema.json`); the spec `EXTENDS` the
 generated module that holds its table. A `models:` declaration is any Lean
 definition the spec restates without a table; naming it selects the spec when
-its source changes. A crate is a workspace package. These headers are the
+its source changes. A crate is a workspace package; a `paths:` entry is a file
+or directory outside every crate, and a change to it or under it selects the
+spec. These headers are the
 record of expected results; `scripts/tla_check.py check-headers` and
 `scripts/ci/test_gate.py` check them: every owner is in the snapshot, every
-`models:` declaration exists, every crate is a package, every config has a
+`models:` declaration and path exists, every crate is a package, every config has a
 header, and every `LeanDecision_*` module a spec extends exists and holds one
 of its `lean:` owners.
 
@@ -288,7 +291,7 @@ with its header and prints a table; a mismatch, too few states, a missing
 header, a TLC error or a timeout (`--timeout`, seconds per config) fails it.
 `--spec`, `--config`, `--crate`, `--lean` and `--files` narrow the run. The
 pull request gate runs the specs whose headers name a changed crate or Lean
-owner or declaration, or whose own files or generated imports changed; main
+owner, declaration or path, or whose own files or generated imports changed; main
 and the nightly `TLA+ nightly` workflow run every config.
 `scripts/tla_check.py install` installs the pinned JDK and `tla2tools.jar`
 (version and SHA-256 in the script) under `~/.cache/gents-tla`.

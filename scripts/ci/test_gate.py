@@ -330,6 +330,25 @@ class TlaSelection(unittest.TestCase):
                                              "PluginResources.computeAllowances"))
         self.assertTrue(check.lean_declares("attribute [conformance_function] A.B.decide\n", "A.B.decide"))
 
+    def test_code_outside_a_crate_selects_the_spec_whose_paths_name_it(self):
+        observation = "apps/gents-desktop/src/hooks/clientObservation.ts"
+        self.assertIn("DesktopUpdateListener", select(observation)["contract"]["tla"])
+        self.assertNotIn("DesktopUpdateListener", select("apps/gents-desktop/src/hooks/chatStore.ts")["contract"]["tla"])
+        check = gate.tla_check
+        nodes = {"A": {"path": Path("A.tla"), "lean": [], "crates": [], "paths": ["packages/ui/src"],
+                       "configs": [], "generated": []}}
+        self.assertEqual(check.select(["packages/ui/src/view.ts"], nodes, lambda path: None), ["A"])
+        self.assertEqual(check.select(["packages/ui/srcx/view.ts"], nodes, lambda path: None), [])
+        with tempfile.TemporaryDirectory() as scratch:
+            spec = Path(scratch) / "A.tla"
+            spec.write_text("---- MODULE A ----\n\\* lean: none\n\\* crates: none\n"
+                            "\\* paths: apps/x.ts, packages/y\n====\n")
+            self.assertEqual(check.spec_header(spec).paths, ["apps/x.ts", "packages/y"])
+            spec.write_text("---- MODULE A ----\n\\* lean: none\n\\* crates: none\n"
+                            "\\* paths: apps/x.ts\n\\* models: A.b\n====\n")
+            with self.assertRaises(check.HeaderError):
+                check.spec_header(spec)
+
     def test_prose_selects_no_spec(self):
         self.assertEqual(select("docs/guide.md")["contract"]["tla"], [])
 
