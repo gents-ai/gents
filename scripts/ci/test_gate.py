@@ -188,6 +188,14 @@ class Runners(unittest.TestCase):
     def test_fallback_moves_the_shared_roles_off_our_linux_pool(self):
         self.assertEqual(gate.runner("linux", fork=False, fallback=True), "ubuntu-latest")
         self.assertEqual(gate.runner("browser", fork=False, fallback=True), "ubuntu-latest")
+
+    def test_a_role_whose_pool_is_hosted_runs_hosted(self):
+        for role, entry in ROLES.items():
+            if entry.get("pool") == "hosted":
+                self.assertEqual(gate.runner(role, fork=False, fallback=False), entry["hosted"], role)
+            else:
+                self.assertNotIn("pool", entry, role)
+                self.assertEqual(gate.runner(role, fork=False, fallback=False), entry["labels"], role)
         self.assertEqual(gate.runner("portable", fork=False, fallback=True), ROLES["macos"]["labels"])
         self.assertEqual(gate.runner("cli", fork=False, fallback=True), ROLES["cli"]["labels"])
 

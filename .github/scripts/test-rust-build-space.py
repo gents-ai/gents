@@ -523,13 +523,18 @@ class SelfHostedRoutingTests(unittest.TestCase):
         context = pull_request_context("gents-ai/gents")
         routed = {(workflow, job): (condition, runners) for workflow, job, condition, runners in self.routed(context)}
         self.assertLessEqual(self.BUILDS, set(routed))
+        hosted_pool = {role for role, entry in GATE.inventory()["roles"].items()
+                       if entry.get("pool") == "hosted"}
+        # desktop-ui runs on the browser role, which may still be hosted.
+        browser_hosted = "browser" in hosted_pool
         for key in sorted(self.BUILDS | {("ci.yml", name) for name in (
                 "plan", "repository-guard", "fmt", "publish-control-tests", "desktop-packages",
                 "desktop-ui", "triage-hygiene", "notary-control-tests", "gate")}):
             condition, runners = routed[key]
             with self.subTest(job=key):
                 self.assertTrue(job_runs(condition, context))
-                self.assertTrue(self_hosted(runners), runners)
+                expected = not (key == ("ci.yml", "desktop-ui") and browser_hosted)
+                self.assertEqual(self_hosted(runners), expected, runners)
 
     def test_the_guard_reports_skipped_jobs_to_a_fork(self):
         guard = [job_field(block, "if") for workflow, job, block in pull_request_job_blocks()

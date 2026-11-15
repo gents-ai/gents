@@ -243,15 +243,18 @@ def inventory():
 
 def runner(role, roles=None, fork=None, fallback=None):
     """The runs-on value for a role: its labels, a hosted label for a fork pull
-    request (never a self-hosted runner), or the role's fallback while the
-    repository variable GENTS_CI_FALLBACK is `hosted`."""
+    request (never a self-hosted runner) or a role whose pool is still hosted,
+    or the role's fallback while the repository variable GENTS_CI_FALLBACK is
+    `hosted`."""
     roles = roles or inventory()["roles"]
     fork = os.environ.get("GATE_FORK") == "true" if fork is None else fork
     fallback = os.environ.get("GATE_FALLBACK") == "hosted" if fallback is None else fallback
     if role not in roles:
         fail(f"no runner role {role!r} in {INVENTORY.relative_to(ROOT)}")
     entry = roles[role]
-    if fork:
+    # `"pool": "hosted"` keeps a role on its hosted runner until runners with
+    # its labels exist (the browser role waits for its hosts' system libraries).
+    if fork or entry.get("pool") == "hosted":
         return entry.get("hosted", HOSTED_LINUX)
     overrides = os.environ.get("GATE_RUNNER_OVERRIDES", "").strip()
     if overrides:
