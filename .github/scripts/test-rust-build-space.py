@@ -422,7 +422,8 @@ def pull_request_context(head_repository, repository="gents-ai/gents"):
     head = {"repo": {"full_name": head_repository} if head_repository else None}
     # A gate plan that selects every job, so only the trust rule can skip one.
     plan = {"jobs": json.dumps(["contract", "fmt", "lint", "ts-browser", "ts-fuzz", "ts-packages",
-                                "ts-unit", "test:runtime"]), "tests": "true"}
+                                "ts-unit", "test:runtime", "build:portable",
+                                "shard:portable"]), "tests": "true"}
     return {"github": {"event_name": "pull_request", "ref": "refs/pull/1/merge",
                        "repository": repository,
                        "event": {"label": {"name": "adapter-interop"},

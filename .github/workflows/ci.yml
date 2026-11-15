@@ -246,7 +246,7 @@ jobs:
         env:
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || 'a deleted repository' }}
         run: |
-          message="This pull request comes from ${HEAD_REPOSITORY}, so jobs that run on self-hosted runners (lint, contract, test, desktop-ui-bombadil, core-packs build, adapter-interop) are skipped and gate fails if the plan selected one; hosted jobs still run. A maintainer reruns the change from a branch of this repository to test it on the self-hosted runners."
+          message="This pull request comes from ${HEAD_REPOSITORY}, so jobs that run on self-hosted runners (lint, contract, test, build, shard, desktop-ui-bombadil, core-packs build, adapter-interop) are skipped and gate fails if the plan selected one; hosted jobs still run. A maintainer reruns the change from a branch of this repository to test it on the self-hosted runners."
           echo "::notice title=Self-hosted jobs skipped for a fork::${message}"
           printf '### Self-hosted jobs skipped for a fork\n\n%s\n' "${message}" >> "${GITHUB_STEP_SUMMARY}"
 
@@ -490,7 +490,10 @@ jobs:
   build:
     name: build (${{ matrix.archive }})
     needs: [plan, repository-guard]
-    if: contains(fromJSON(needs.plan.outputs.jobs), 'build:portable')
+    if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      contains(fromJSON(needs.plan.outputs.jobs), 'build:portable')
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
@@ -543,7 +546,10 @@ jobs:
   shard:
     name: test (${{ matrix.archive }} ${{ matrix.index }}/${{ matrix.count }})
     needs: [plan, build]
-    if: contains(fromJSON(needs.plan.outputs.jobs), 'shard:portable')
+    if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      contains(fromJSON(needs.plan.outputs.jobs), 'shard:portable')
     runs-on: ${{ matrix.transfer == 'host' && fromJSON(needs.build.outputs.runs_on) || matrix.runs_on }}
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
