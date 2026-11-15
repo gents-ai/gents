@@ -268,11 +268,7 @@ pub async fn pairing_reader_targets(
 }
 
 fn application_passthrough(error: impl Into<anyhow::Error>) -> ApplicationPairingError {
-    ApplicationPairingError::Passthrough(
-        error
-            .into()
-            .reallocate_into_boxed_dyn_error_without_backtrace(),
-    )
+    ApplicationPairingError::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
 }
 
 pub async fn list_application_pairings(

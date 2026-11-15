@@ -247,7 +247,7 @@ pub enum AgentOperationError {
     /// Another owner's failure (root policy, the account and compaction
     /// fences, plan validation, the store), unchanged.
     #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    Passthrough(crate::error_chain::PassedThrough),
 }
 
 impl AgentOperationError {
@@ -353,7 +353,7 @@ impl AgentOperationError {
     /// it, so a boundary that classifies that owner's errors asks here.
     pub fn passthrough(&self) -> Option<&(dyn Error + Send + Sync + 'static)> {
         match self {
-            Self::Passthrough(error) => Some(error.as_ref()),
+            Self::Passthrough(error) => Some(error.get()),
             _ => None,
         }
     }
@@ -563,7 +563,9 @@ mod tests {
             refusal.recovery(AgentCreateOperation::Clone),
             NextCall::ResourceHelp { resource: "agent" }
         );
-        let other = AgentOperationError::Passthrough("root is not published".into());
+        let other = AgentOperationError::Passthrough(crate::error_chain::PassedThrough::new(
+            anyhow::anyhow!("root is not published"),
+        ));
         assert_eq!(other.to_string(), "root is not published");
         assert_eq!(
             other.passthrough().map(ToString::to_string),

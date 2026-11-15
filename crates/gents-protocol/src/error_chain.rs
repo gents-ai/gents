@@ -30,8 +30,17 @@ impl fmt::Display for ErrorChain<'_> {
 pub struct PassedThrough(anyhow::Error);
 
 impl PassedThrough {
-    pub fn boxed(error: impl Into<anyhow::Error>) -> Box<dyn Error + Send + Sync> {
-        Box::new(Self(error.into()))
+    pub fn new(error: impl Into<anyhow::Error>) -> Self {
+        Self(error.into())
+    }
+
+    /// The passed-through error itself, the first error on its chain.
+    pub fn get(&self) -> &(dyn Error + Send + Sync + 'static) {
+        self.0.as_ref()
+    }
+
+    pub fn into_inner(self) -> anyhow::Error {
+        self.0
     }
 }
 

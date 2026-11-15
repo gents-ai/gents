@@ -276,12 +276,12 @@ pub enum SessionOperationError {
         source: Box<dyn Error + Send + Sync>,
     },
     #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    Passthrough(crate::error_chain::PassedThrough),
 }
 
 impl SessionOperationError {
     pub fn passthrough(error: impl Into<anyhow::Error>) -> Self {
-        Self::Passthrough(crate::error_chain::PassedThrough::boxed(error))
+        Self::Passthrough(crate::error_chain::PassedThrough::new(error))
     }
 
     pub fn code(&self) -> &'static str {
@@ -347,7 +347,7 @@ impl SessionOperationError {
 
     pub fn source_passthrough(&self) -> Option<&(dyn Error + Send + Sync + 'static)> {
         match self {
-            Self::Passthrough(error) => Some(error.as_ref()),
+            Self::Passthrough(error) => Some(error.get()),
             Self::ForkRelationshipsIncomplete { source, .. }
             | Self::ProcessOwnershipUnverifiable { source, .. } => Some(source.as_ref()),
             _ => None,

@@ -764,11 +764,7 @@ fn passthrough<E>(error: E) -> GoalOperationError
 where
     E: Into<anyhow::Error>,
 {
-    GoalOperationError::Passthrough(
-        error
-            .into()
-            .reallocate_into_boxed_dyn_error_without_backtrace(),
-    )
+    GoalOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
 }
 
 #[cfg(test)]

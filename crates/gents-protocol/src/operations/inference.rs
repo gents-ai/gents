@@ -279,7 +279,7 @@ pub enum InferenceOperationError {
     Invalid(Box<dyn Error + Send + Sync>),
     /// Another owner's failure (plan validation, the store), unchanged.
     #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    Passthrough(crate::error_chain::PassedThrough),
 }
 
 impl BackendDecision {
@@ -367,7 +367,8 @@ impl InferenceOperationError {
     /// asks here.
     pub fn passthrough(&self) -> Option<&(dyn Error + Send + Sync + 'static)> {
         match self {
-            Self::Invalid(error) | Self::Passthrough(error) => Some(error.as_ref()),
+            Self::Invalid(error) => Some(error.as_ref()),
+            Self::Passthrough(error) => Some(error.get()),
             _ => None,
         }
     }

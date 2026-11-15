@@ -3212,3 +3212,110 @@ fn integration_test_layout_flags_extra_and_uncompiled_targets() {
         ["member/tests/stray.rs", "member/tests/suite/main.rs"]
     );
 }
+
+#[derive(Default)]
+struct BoxedPassthroughVisitor {
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for BoxedPassthroughVisitor {
+    fn visit_variant(&mut self, variant: &'ast syn::Variant) {
+        let boxed = variant
+            .fields
+            .iter()
+            .any(|field| boxes_a_trait_object(&field.ty));
+        if variant.ident == "Passthrough" && boxed {
+            self.sites += 1;
+        }
+        visit::visit_variant(self, variant);
+    }
+}
+
+fn boxes_a_trait_object(ty: &syn::Type) -> bool {
+    let syn::Type::Path(path) = ty else {
+        return false;
+    };
+    let Some(last) = path.path.segments.last() else {
+        return false;
+    };
+    let syn::PathArguments::AngleBracketed(arguments) = &last.arguments else {
+        return false;
+    };
+    last.ident == "Box"
+        && arguments.args.iter().any(|argument| {
+            matches!(
+                argument,
+                syn::GenericArgument::Type(syn::Type::TraitObject(_))
+            )
+        })
+}
+
+fn boxed_passthrough_sites(syntax: &syn::File) -> usize {
+    let mut visitor = BoxedPassthroughVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+/// An operation error's `Passthrough` variant holds
+/// `gents_protocol::error_chain::PassedThrough`, never `Box<dyn Error>`: an
+/// anyhow error converted into that box forwards `source()` past its top error,
+/// so a store conflict or refusal on top is invisible to every classifier
+/// (Lean `AccessClassification.hidden_is_unclassified`). The allowlist is
+/// empty and only shrinks.
+#[test]
+fn passthrough_variants_keep_their_source() {
+    let root = repo_root();
+    let mut sources = Vec::new();
+    for directory in ["crates", "apps"] {
+        all_rust_sources(&root.join(directory), &mut sources);
+    }
+    let violations = sources
+        .into_iter()
+        .filter_map(|path| {
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            let syntax = syn::parse_file(&source)
+                .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+            let sites = boxed_passthrough_sites(&syntax);
+            (sites > 0).then(|| {
+                let relative = path
+                    .strip_prefix(&root)
+                    .expect("source under repo root")
+                    .to_string_lossy()
+                    .into_owned();
+                format!("{relative}: {sites} Passthrough variants hold Box<dyn Error>; hold error_chain::PassedThrough")
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    assert!(
+        violations.is_empty(),
+        "passthrough ratchet failed:\n{}",
+        violations.into_iter().collect::<Vec<_>>().join("\n")
+    );
+}
+
+#[test]
+fn passthrough_fence_flags_boxed_variants_only() {
+    for (source, sites) in [
+        (
+            "enum E { #[error(transparent)] Passthrough(Box<dyn Error + Send + Sync>) }",
+            1,
+        ),
+        (
+            "enum E { Passthrough(Box<dyn std::error::Error + Send + Sync>) }",
+            1,
+        ),
+        (
+            "enum E { Passthrough(crate::error_chain::PassedThrough) }",
+            0,
+        ),
+        ("enum E { Other(Box<dyn Error + Send + Sync>) }", 0),
+        (
+            "mod m { enum E { Passthrough { source: Box<dyn Error> } } }",
+            1,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).unwrap();
+        assert_eq!(boxed_passthrough_sites(&syntax), sites, "{source}");
+    }
+}

@@ -21,11 +21,7 @@ use crate::p2p_reconcile::templates::resolve_template;
 use crate::p2p_reconcile::{heartbeat_is_fresh, REGISTRY_STALE_AFTER};
 
 fn passthrough(error: impl Into<anyhow::Error>) -> RegistryError {
-    RegistryError::Passthrough(
-        error
-            .into()
-            .reallocate_into_boxed_dyn_error_without_backtrace(),
-    )
+    RegistryError::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
 }
 
 /// Every registered peer this actor can read, ordered by peer ID, with

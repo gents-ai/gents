@@ -277,7 +277,7 @@ pub enum WorkspaceRootError {
     NodeActor,
     /// Another owner's failure (identity, the store, ACP), unchanged.
     #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    Passthrough(crate::error_chain::PassedThrough),
 }
 
 impl WorkspaceRootError {
@@ -305,7 +305,7 @@ impl WorkspaceRootError {
 
     pub fn passthrough(&self) -> Option<&(dyn Error + Send + Sync + 'static)> {
         match self {
-            Self::Passthrough(error) => Some(error.as_ref()),
+            Self::Passthrough(error) => Some(error.get()),
             _ => None,
         }
     }
