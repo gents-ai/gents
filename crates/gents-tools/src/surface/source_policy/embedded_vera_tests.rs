@@ -13,6 +13,7 @@ use gents_store::local::store_key::StoreKey;
 
 const RESOURCE: &str = "secret_configuration";
 const DOCUMENT: &str = "bae-embedded-vera-owner-only";
+const AGENT_DOCUMENT: &str = "bae-embedded-vera-agent-owned";
 
 struct Home {
     data: std::path::PathBuf,
@@ -61,6 +62,14 @@ async fn start(
 }
 
 async fn reads(node: &defra_node::Node, actor: &identity::Did) -> anyhow::Result<bool> {
+    reads_document(node, actor, DOCUMENT).await
+}
+
+async fn reads_document(
+    node: &defra_node::Node,
+    actor: &identity::Did,
+    document: &str,
+) -> anyhow::Result<bool> {
     Ok(node
         .document_acp()
         .check_doc_access(
@@ -68,7 +77,7 @@ async fn reads(node: &defra_node::Node, actor: &identity::Did) -> anyhow::Result
             acp::DocumentPermission::Read,
             AGENT_OWNERSHIP_POLICY_ID,
             RESOURCE,
-            DOCUMENT,
+            document,
         )
         .await?)
 }
@@ -118,6 +127,14 @@ async fn an_opted_in_home_decides_document_access_through_its_vera_node_across_a
         .await?;
     assert!(reads(&node, &owner).await?);
     assert!(!reads(&node, &stranger).await?);
+    let agent = identity::Did::new(
+        &gents_store::identity::provision_agent_identity(home.node.as_ref())?.agent_did,
+    )?;
+    node.document_acp()
+        .register_doc_object(&agent, AGENT_OWNERSHIP_POLICY_ID, RESOURCE, AGENT_DOCUMENT)
+        .await?;
+    assert!(reads_document(&node, &agent, AGENT_DOCUMENT).await?);
+    assert!(!reads_document(&node, &stranger, AGENT_DOCUMENT).await?);
     node.shutdown().await?;
     drop(node);
 
@@ -126,6 +143,8 @@ async fn an_opted_in_home_decides_document_access_through_its_vera_node_across_a
     holds_the_node_policies(&node, owner.as_str()).await?;
     assert!(reads(&node, &owner).await?);
     assert!(!reads(&node, &stranger).await?);
+    assert!(reads_document(&node, &agent, AGENT_DOCUMENT).await?);
+    assert!(!reads_document(&node, &stranger, AGENT_DOCUMENT).await?);
     node.shutdown().await?;
     drop(node);
 
