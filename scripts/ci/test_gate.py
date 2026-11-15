@@ -112,21 +112,22 @@ class Selection(unittest.TestCase):
             self.assertTrue((gate.ROOT / path).exists(), path)
             self.assertNotEqual(gate.classify(path, MEMBERS), {"inert"}, path)
 
-    def test_a_portable_runner_must_be_a_label_list(self):
-        for value, expected in (("", gate.STUDIO), ('["self-hosted","Linux","ci-portable"]',
-                                                    ["self-hosted", "Linux", "ci-portable"])):
-            os.environ["GATE_PORTABLE_RUNNER"] = value
-            try:
-                self.assertEqual(gate.runner("portable"), expected)
-            finally:
-                del os.environ["GATE_PORTABLE_RUNNER"]
-        for value in ("ci-portable", '"ci-portable"', "[]", '[""]', "[1]"):
-            os.environ["GATE_PORTABLE_RUNNER"] = value
+    def test_overrides_must_be_label_lists(self):
+        os.environ["GATE_RUNNER_OVERRIDES"] = '{"portable": ["self-hosted", "Linux", "X64", "ci-other"]}'
+        try:
+            self.assertEqual(gate.runner("portable", fork=False, fallback=False),
+                             ["self-hosted", "Linux", "X64", "ci-other"])
+            self.assertEqual(gate.runner("cli", fork=False, fallback=False), ROLES["cli"]["labels"])
+        finally:
+            del os.environ["GATE_RUNNER_OVERRIDES"]
+        for value in ("ci-portable", '{"portable": "ci-portable"}', '{"portable": []}', '{"portable": [""]}',
+                      '{"portable": [1]}', "[]"):
+            os.environ["GATE_RUNNER_OVERRIDES"] = value
             try:
                 with self.assertRaises(SystemExit, msg=value):
-                    gate.runner("portable")
+                    gate.runner("portable", fork=False, fallback=False)
             finally:
-                del os.environ["GATE_PORTABLE_RUNNER"]
+                del os.environ["GATE_RUNNER_OVERRIDES"]
 
     def test_every_named_test_target_exists(self):
         # Integration tests are folded into one `integration` binary per crate;
@@ -144,6 +145,101 @@ class Selection(unittest.TestCase):
         selection = select(everything=True, only={"lint", "test:cli"})
         self.assertEqual(selection["jobs"], ["lint", "test:cli"])
         self.assertEqual(list(groups(selection)), ["cli"])
+
+
+ROLES = gate.inventory()["roles"]
+HOSTED = re.compile(r"(ubuntu|macos|windows)-[\w.-]+")
+
+
+def runs_on_values(text):
+    """(job, runs-on as written) for every job of a workflow file."""
+    for job, body in workflow_jobs(text).items():
+        match = re.search(r"^    runs-on:[ \t]*(.*)\n((?:      .*\n)*)", body, flags=re.M)
+        if match:
+            yield job, " ".join([match.group(1).strip()] + [line.strip() for line in match.group(2).splitlines()])
+
+
+def labels_of(value):
+    """The literal labels a runs-on value can name: list items, `- item` lines
+    and the quoted strings inside expressions."""
+    value = value.strip()
+    # In an expression, a runner is a result of `&&`/`||` or a fromJSON list;
+    # other quoted strings are operands of comparisons.
+    literals = re.findall(r"(?:&&|\|\|)\s*'([^'\[]*)'", value)
+    for literal in re.findall(r"fromJSON\('(\[[^']*\])'\)", value):
+        literals += json.loads(literal)
+    plain = re.sub(r"\$\{\{.*?\}\}", "", value).strip()
+    if plain.startswith(">-"):
+        plain = ""
+    plain = plain.strip("[]")
+    items = [item.strip().strip('"') for item in re.split(r"[,\s-]+\s", " " + plain + " ") if item.strip()]
+    return {label for label in literals + items if label}
+
+
+class Runners(unittest.TestCase):
+    """Jobs choose runners by role labels from .github/ci-runners.json, never by host."""
+
+    def test_a_fork_never_resolves_to_a_self_hosted_runner(self):
+        for role in ROLES:
+            value = gate.runner(role, fork=True, fallback=False)
+            self.assertIsInstance(value, str, role)
+            self.assertRegex(value, HOSTED, role)
+
+    def test_fallback_moves_the_shared_roles_off_our_linux_pool(self):
+        self.assertEqual(gate.runner("linux", fork=False, fallback=True), "ubuntu-latest")
+        self.assertEqual(gate.runner("browser", fork=False, fallback=True), "ubuntu-latest")
+        self.assertEqual(gate.runner("portable", fork=False, fallback=True), ROLES["macos"]["labels"])
+        self.assertEqual(gate.runner("cli", fork=False, fallback=True), ROLES["cli"]["labels"])
+
+    def test_every_role_is_self_hosted_capability_labels(self):
+        for role, entry in ROLES.items():
+            labels = entry["labels"]
+            self.assertEqual(labels[0], "self-hosted", role)
+            self.assertIn(labels[1], ("Linux", "macOS"), role)
+            self.assertIn(labels[2], ("X64", "ARM64"), role)
+            self.assertTrue(all(label.startswith("ci-") for label in labels[3:]), role)
+            fallback = entry.get("fallback")
+            if fallback:
+                self.assertTrue(fallback in ROLES or HOSTED.fullmatch(fallback), role)
+
+    def test_the_plan_routes_every_job_and_group(self):
+        selection = select(everything=True)
+        self.assertEqual(set(selection["runs_on"]), set(gate.WORKFLOW_ROLES))
+        for entry in selection["matrix"]:
+            self.assertEqual(entry["runs_on"], gate.runner(entry["role"]), entry["group"])
+        jobs = workflow_jobs(CI)
+        for job, value in runs_on_values(CI):
+            with self.subTest(job=job):
+                routed = re.findall(r"fromJSON\(needs\.plan\.outputs\.plan\)\.runs_on\.([\w-]+)", value)
+                self.assertTrue(routed or "matrix.runs_on" in value or job == "plan", value)
+                self.assertLessEqual(set(routed), set(gate.WORKFLOW_ROLES))
+                if job not in ("plan", "gate"):
+                    self.assertRegex(jobs[job], r"needs: (plan|\[plan)")
+
+    def test_literal_linux_labels_are_the_linux_role(self):
+        for path in sorted((gate.ROOT / ".github/workflows").glob("*.yml")):
+            for job, value in runs_on_values(path.read_text()):
+                for literal in re.findall(r"fromJSON\('(\[[^']*\])'\)", value):
+                    self.assertEqual(json.loads(literal), ROLES["linux"]["labels"], f"{path.name} {job}")
+
+    def test_no_workflow_selects_a_runner_by_host(self):
+        vocabulary = {"self-hosted"} | {label for entry in ROLES.values() for label in entry["labels"]}
+        role_sets = [entry["labels"] for entry in ROLES.values()]
+        for path in sorted((gate.ROOT / ".github/workflows").glob("*.yml")):
+            text = path.read_text()
+            self.assertNotRegex(text, r"runner\.name\s*(==|!=)", path.name)
+            for job, value in runs_on_values(text):
+                with self.subTest(workflow=path.name, job=job):
+                    labels = labels_of(value)
+                    named = {label for label in labels if not HOSTED.fullmatch(label)}
+                    self.assertLessEqual(named, vocabulary | {"plan", "runs_on"}, value)
+                    if "${{" not in value and "self-hosted" in labels:
+                        self.assertIn(sorted(labels), [sorted(labels) for labels in role_sets], value)
+
+    def test_actionlint_knows_exactly_the_inventory_labels(self):
+        config = (gate.ROOT / ".github/actionlint.yaml").read_text()
+        listed = set(re.findall(r"^    - (\S+)$", config.split("paths:")[0], flags=re.M))
+        self.assertEqual(listed, {label for entry in ROLES.values() for label in entry["labels"]} - {"self-hosted"})
 
 
 class Verdict(unittest.TestCase):

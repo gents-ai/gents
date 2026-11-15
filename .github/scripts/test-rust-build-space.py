@@ -139,38 +139,45 @@ class BuildSpaceTests(unittest.TestCase):
         self.assertLess(build_space.tree_size(self.target), 2 * allocated)
         self.assertGreaterEqual(build_space.tree_size(self.target), allocated)
 
-    def limits(self, runner, maximum="", floor=""):
-        return build_space.target_limits({"RUNNER_NAME": runner,
-                                          "GENTS_CI_TARGET_MAX_GIB": maximum,
-                                          "GENTS_CI_TARGET_FLOOR_GIB": floor})
+    INVENTORY = {"roles": {"capped": {"labels": [], "target": {"max_gib": 70, "floor_gib": 50}},
+                           "floor-only": {"labels": [], "target": {"floor_gib": 120}},
+                           "uncapped": {"labels": []}}}
+
+    def limits(self, role, inventory=None, runner="runner-a"):
+        return build_space.target_limits({"RUNNER_NAME": runner, "GENTS_CI_RUNNER_ROLE": role},
+                                         self.INVENTORY if inventory is None else inventory)
 
     def test_unset_limits_use_safe_defaults(self):
-        self.assertEqual(self.limits("studio-1"), (60, 150))
+        self.assertEqual(self.limits(""), (60, 150))
+        self.assertEqual(self.limits("uncapped"), (60, 150))
 
-    def test_limits_are_chosen_per_runner(self):
-        caps = '{"studio-1": 70, "studio-2": 250, "default": 40}'
-        floors = '{"minisforum-1": 50}'
-        self.assertEqual(self.limits("studio-1", caps, floors), (70, 150))
-        self.assertEqual(self.limits("studio-2", caps, floors), (250, 150))
-        self.assertEqual(self.limits("minisforum-1", caps, floors), (40, 50))
-        self.assertEqual(self.limits("studio-1", "90", "120"), (90, 120))
-        self.assertEqual(self.limits("studio-1", '{"studio-2": 250}'), (60, 150))
+    def test_limits_are_chosen_per_role(self):
+        self.assertEqual(self.limits("capped"), (70, 50))
+        self.assertEqual(self.limits("floor-only"), (60, 120))
 
-    def test_rejects_malformed_or_non_positive_limits(self):
-        for setting in ("0", "-5", "1.5", "true", "big", '{"studio-1": 0}',
-                        '{"studio-1": "70"}', '{"default": null}', "[70]"):
-            with self.subTest(setting=setting), self.assertRaises(ValueError):
-                self.limits("studio-1", setting)
+    def test_rejects_unknown_roles_and_malformed_limits(self):
+        with self.assertRaisesRegex(ValueError, "not a role"):
+            self.limits("someone-else")
+        for value in (0, -5, 1.5, True, "70", None):
+            inventory = {"roles": {"bad": {"labels": [], "target": {"max_gib": value}}}}
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.limits("bad", inventory)
         with self.assertRaisesRegex(ValueError, "RUNNER_NAME"):
-            self.limits("")
+            self.limits("capped", runner="")
 
-    def test_limits_command_prints_cap_and_floor(self):
-        environ = {**os.environ, "RUNNER_NAME": "studio-2",
-                   "GENTS_CI_TARGET_MAX_GIB": '{"studio-2": 250}',
-                   "GENTS_CI_TARGET_FLOOR_GIB": ""}
+    def test_the_checked_in_inventory_gives_every_kept_role_valid_limits(self):
+        inventory = json.loads(build_space.INVENTORY.read_text())
+        for role in inventory["roles"]:
+            with self.subTest(role=role):
+                self.limits(role, inventory)
+
+    def test_limits_command_reads_the_role_from_the_inventory(self):
+        environ = {**os.environ, "RUNNER_NAME": "any-runner", "GENTS_CI_RUNNER_ROLE": "portable"}
         output = run_command([sys.executable, str(Path(build_space.__file__)), "--limits"],
                              env=environ, check=True, capture_output=True, text=True)
-        self.assertEqual(output.stdout.split(), ["250", "150"])
+        roles = json.loads(build_space.INVENTORY.read_text())["roles"]
+        target = roles["portable"]["target"]
+        self.assertEqual(output.stdout.split(), [str(target["max_gib"]), str(target["floor_gib"])])
 
     def test_insufficient_host_space_fails_before_compilation(self):
         with self.assertRaisesRegex(RuntimeError, "free additional space"):
@@ -277,7 +284,7 @@ def loosely_equal(left, right):
 def evaluate(expression, context):
     """Evaluate the subset of GitHub expression syntax the trust condition and
     the gate's job conditions use: comparisons, &&, ||, contains and fromJSON."""
-    tokens = re.findall(r"\(|\)|,|&&|\|\||==|!=|'[^']*'|[A-Za-z_][A-Za-z0-9_.-]*", expression)
+    tokens = re.findall(r"\(|\)|,|&&|\|\||==|!=|'[^']*'|\.?[A-Za-z_][A-Za-z0-9_.-]*", expression)
     if "".join(tokens) != re.sub(r"\s+", "", expression):
         raise ValueError(f"unsupported expression syntax: {expression}")
     position = 0
@@ -303,13 +310,17 @@ def evaluate(expression, context):
             return {"true": True, "false": False, "null": None}[token]
         if token in FUNCTIONS and peek() == "(":
             take()
-            arguments = [disjunction()]
+            arguments = [] if peek() == ")" else [disjunction()]
             while peek() == ",":
                 take()
                 arguments.append(disjunction())
             if take() != ")":
                 raise ValueError(f"unbalanced call to {token}")
-            return FUNCTIONS[token](*arguments)
+            value = FUNCTIONS[token](*arguments)
+            while peek() and peek().startswith("."):
+                for part in take()[1:].split("."):
+                    value = value.get(part) if isinstance(value, dict) else None
+            return value
         value = context
         for part in token.split("."):
             value = value.get(part) if isinstance(value, dict) else None
@@ -350,7 +361,7 @@ def contains(haystack, needle):
     return str(needle).lower() in str(haystack or "").lower()
 
 
-FUNCTIONS = {"contains": contains, "fromJSON": json.loads}
+FUNCTIONS = {"contains": contains, "fromJSON": json.loads, "always": lambda: True}
 
 
 def keep_condition():
@@ -399,16 +410,45 @@ HOSTED_LABEL = re.compile(r"(ubuntu|macos|windows)-[A-Za-z0-9.-]+")
 
 
 def runner_labels(block):
-    """The job's runs-on, with a matrix-selected runner resolved when every
-    matrix value is a GitHub-hosted label."""
-    runs_on = job_field(block, "runs-on") or ""
-    selected = re.fullmatch(r"\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}", runs_on)
-    if selected:
-        values = re.search(rf"^\s+{selected.group(1)}:\s*\[(.*)\]\s*$", block, re.MULTILINE)
-        labels = [label.strip(" '\"") for label in values.group(1).split(",")] if values else []
-        if labels and all(HOSTED_LABEL.fullmatch(label) for label in labels):
-            return ", ".join(labels)
-    return runs_on
+    """The job's runs-on as written."""
+    return job_field(block, "runs-on") or ""
+
+
+def resolve_runners(runs_on, block, context):
+    """Every runner a job's runs-on can select in this context: a label list or
+    a hosted label per alternative (matrix entries, evaluated expressions)."""
+    runs_on = runs_on.strip()
+    if runs_on.startswith(">-"):
+        runs_on = runs_on[2:].strip()
+    whole = re.fullmatch(r"\$\{\{(.*)\}\}", runs_on)
+    if whole and whole.group(1).strip() == "matrix.runs_on":
+        return [entry["runs_on"] for entry in context["matrix_entries"]]
+    if whole and re.fullmatch(r"\s*matrix\.([A-Za-z0-9_-]+)\s*", whole.group(1)):
+        key = whole.group(1).strip().split(".")[1]
+        values = re.search(rf"^\s+{key}:\s*\[(.*)\]\s*$", block, re.MULTILINE)
+        return [label.strip(" '\"") for label in values.group(1).split(",")] if values else [runs_on]
+    if whole:
+        return [evaluate(whole.group(1), context)]
+    items = [item.strip().strip('"') for item in runs_on.strip("[]").split(",")]
+    return [[str(evaluate(re.fullmatch(r"\$\{\{(.*)\}\}", item).group(1), context))
+             if item.startswith("${{") else item for item in items]]
+
+
+def self_hosted(runners):
+    return any(runner == "self-hosted" or (isinstance(runner, list) and "self-hosted" in runner)
+               for runner in runners)
+
+
+def pull_request_job_blocks():
+    for workflow in sorted(WORKFLOW.parent.glob("*.yml")):
+        text = workflow.read_text()
+        if not re.search(r"^  pull_request(_target)?:", top_level_block(text, "on"), re.MULTILINE):
+            continue
+        jobs = top_level_block(text, "jobs")
+        starts = list(re.finditer(r"^  ([A-Za-z0-9_-]+):\s*$", jobs, re.MULTILINE))
+        for index, start in enumerate(starts):
+            end = starts[index + 1].start() if index + 1 < len(starts) else len(jobs)
+            yield workflow.name, start.group(1), jobs[start.end():end]
 
 
 def job_runs(condition, context):
@@ -418,44 +458,81 @@ def job_runs(condition, context):
     return bool(evaluate(inner.group(1) if inner else condition, context))
 
 
+def gate_module():
+    path = Path(__file__).resolve().parents[2] / "scripts" / "ci" / "gate.py"
+    spec = importlib.util.spec_from_file_location("gate", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+GATE = gate_module()
+
+
 def pull_request_context(head_repository, repository="gents-ai/gents"):
     head = {"repo": {"full_name": head_repository} if head_repository else None}
-    # A gate plan that selects every job, so only the trust rule can skip one.
-    plan = {"jobs": json.dumps(["contract", "fmt", "lint", "ts-browser", "ts-fuzz", "ts-packages",
-                                "ts-unit", "test:runtime"]), "tests": "true"}
+    fork = (head_repository or "").lower() != repository.lower()
+    # A gate plan that selects every job, so only the trust rule can skip one,
+    # routed as the plan job routes this pull request.
+    plan = {"runs_on": {role: GATE.runner(role, fork=fork, fallback=False) for role in GATE.WORKFLOW_ROLES},
+            "jobs": ["contract", "fmt", "lint", "ts-browser", "ts-fuzz", "ts-packages", "ts-unit",
+                     "test:runtime"]}
+    matrix = [{"group": group.name, "runs_on": GATE.runner(group.runner, fork=fork, fallback=False)}
+              for group in GATE.GROUPS]
+    outputs = {"plan": json.dumps(plan), "jobs": json.dumps(plan["jobs"]), "tests": "true"}
     return {"github": {"event_name": "pull_request", "ref": "refs/pull/1/merge",
                        "repository": repository,
                        "event": {"label": {"name": "adapter-interop"},
                                  "pull_request": {"draft": False, "stack": None,
                                                   "head": head}}},
-            "inputs": {}, "vars": {}, "needs": {"plan": {"outputs": plan}}}
+            "inputs": {}, "vars": {}, "needs": {"plan": {"outputs": outputs}},
+            "matrix_entries": matrix}
 
 
 class SelfHostedRoutingTests(unittest.TestCase):
     """Self-hosted runner accounts share the Cargo home, the compiler cache and
     kept target trees across runners, so no fork's code may run on one."""
 
-    def self_hosted_jobs(self):
-        jobs = [job for job in pull_request_jobs()
-                if "self-hosted" in job[2] or "${{" in job[2]]
-        for job in ("lint", "contract", "test", "desktop-ui-bombadil"):
-            self.assertIn(("ci.yml", job), [entry[:2] for entry in jobs])
-        return jobs
+    HEADS = ("someone/gents", "gents-ai/gents-fork", None)
+    # Jobs that build or test the change on our runners: a fork skips them.
+    BUILDS = {("ci.yml", "lint"), ("ci.yml", "contract"), ("ci.yml", "test"),
+              ("ci.yml", "desktop-ui-bombadil"), ("core-packs.yml", "build"),
+              ("adapter-interop.yml", "adapter-interop")}
+
+    def routed(self, context):
+        for workflow, job, block in pull_request_job_blocks():
+            runners = resolve_runners(runner_labels(block), block, context)
+            yield workflow, job, job_field(block, "if"), runners
 
     def test_fork_pull_requests_never_reach_a_self_hosted_runner(self):
-        for head in ("someone/gents", "gents-ai/gents-fork", None):
-            for workflow, job, _, condition in self.self_hosted_jobs():
+        for head in self.HEADS:
+            context = pull_request_context(head)
+            for workflow, job, condition, runners in self.routed(context):
                 with self.subTest(workflow=workflow, job=job, head=head):
-                    self.assertFalse(job_runs(condition, pull_request_context(head)))
+                    if self_hosted(runners):
+                        self.assertFalse(job_runs(condition, context), runners)
 
-    def test_pull_requests_from_this_repository_still_run_the_studio_jobs(self):
+    def test_forks_skip_the_build_jobs(self):
+        for head in self.HEADS:
+            context = pull_request_context(head)
+            ran = {(workflow, job) for workflow, job, condition, _ in self.routed(context)
+                   if job_runs(condition, context)}
+            self.assertFalse(ran & self.BUILDS, head)
+
+    def test_pull_requests_from_this_repository_run_on_our_runners(self):
         context = pull_request_context("gents-ai/gents")
-        for workflow, job, _, condition in self.self_hosted_jobs():
-            with self.subTest(workflow=workflow, job=job):
+        routed = {(workflow, job): (condition, runners) for workflow, job, condition, runners in self.routed(context)}
+        self.assertLessEqual(self.BUILDS, set(routed))
+        for key in sorted(self.BUILDS | {("ci.yml", name) for name in (
+                "plan", "repository-guard", "fmt", "publish-control-tests", "desktop-packages",
+                "desktop-ui", "triage-hygiene", "notary-control-tests", "gate")}):
+            condition, runners = routed[key]
+            with self.subTest(job=key):
                 self.assertTrue(job_runs(condition, context))
+                self.assertTrue(self_hosted(runners), runners)
 
     def test_the_guard_reports_skipped_jobs_to_a_fork(self):
-        guard = [condition for workflow, job, _, condition in pull_request_jobs()
+        guard = [job_field(block, "if") for workflow, job, block in pull_request_job_blocks()
                  if (workflow, job) == ("ci.yml", "repository-guard")]
         self.assertEqual(guard, [None])
         text = WORKFLOW.read_text()
@@ -465,7 +542,7 @@ class SelfHostedRoutingTests(unittest.TestCase):
         condition = " ".join(line.strip() for line in step.group(1).splitlines())
         self.assertTrue(job_runs(condition, pull_request_context("someone/gents")))
         self.assertFalse(job_runs(condition, pull_request_context("gents-ai/gents")))
-        for _, job, _, _ in self.self_hosted_jobs():
+        for _, job in self.BUILDS:
             self.assertIn(job, text[step.end():step.end() + 2000])
 
 
