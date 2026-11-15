@@ -656,6 +656,7 @@ async fn resolve_config_access_inner(
     )
     .await?;
     let config = read_init_config(&home_dir)?.context("home is not initialized")?;
+    gents_store::local::document_acp::ensure_home_opens(&config)?;
     let runtime_identity = load_initialized_home_identity(&home_dir, &config)?;
     let protected = protected
         .preflight(&store_key, &runtime_identity, config.document_acp)

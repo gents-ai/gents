@@ -587,6 +587,9 @@ async fn serve_foreground(
         gents_p2p::p2p_reconcile::endpoint::validate_advertised_graphql_url(url)?;
     }
     let init_config = read_init_config(&home_dir)?;
+    if let Some(config) = init_config.as_ref() {
+        gents_store::local::document_acp::ensure_home_opens(config)?;
+    }
     if let (Some(explicit), Some(config)) = (args.node_name.as_deref(), init_config.as_ref()) {
         if explicit != config.node_name {
             anyhow::bail!(
