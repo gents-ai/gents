@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Selection and guard checks for gate.py against the real workspace graph; no builds."""
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -390,6 +392,25 @@ class TlaStructure(unittest.TestCase):
             "B.tla: extends LeanDecision_Here but names none of its owners on its lean line",
             "C.tla: names Here.keep but does not extend LeanDecision_Here",
         ])
+
+    def test_check_headers_reports_every_structure_problem(self):
+        """Not only the expect lines: owners, crates and imports too."""
+        check = gate.tla_check
+        with tempfile.TemporaryDirectory() as scratch:
+            tla = Path(scratch)
+            (tla / "A.tla").write_text("---- MODULE A ----\n\\* lean: Ns.decide\n\\* crates: no-such-crate\n"
+                                       "EXTENDS Naturals\n====\n")
+            (tla / "A.cfg").write_text("\\* expect: holds\nSPECIFICATION Spec\n")
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                status = check.check_headers(tla, functions=set(), members={"gents"})
+        self.assertEqual(status, 1)
+        self.assertIn("no-such-crate is not a workspace package", errors.getvalue())
+        self.assertIn("Ns.decide is not in the conformance snapshot", errors.getvalue())
+        self.assertIn("does not extend LeanDecision_Ns", errors.getvalue())
+        self.assertEqual(check.check_headers(functions=set(json.loads(
+            (gate.ROOT / "crates/gents-lean-vocab/families.schema.json").read_text())["functions"]),
+            members=set(MEMBERS)), 0)
 
     def test_lean_owner_keys_follow_lean_wire_names(self):
         check = gate.tla_check

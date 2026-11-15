@@ -543,6 +543,7 @@ def run_contract(selection):
         cargo_test("gents write_owner_structure", ["-p", "gents", "--test", "write_owner_structure"])
     tla = selection["contract"].get("tla", [])
     if tla:
+        sh(["python3", str(TLA_CHECK), "check-headers"])
         selected = ["--all"] if tla == ["*"] else [flag for spec in tla for flag in ("--spec", spec)]
         sh(["python3", str(TLA_CHECK), "run", *selected])
     if selection["contract"]["ts_lean"]:

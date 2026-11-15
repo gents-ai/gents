@@ -38,6 +38,7 @@ fingerprint polynomial, so the first violation it reports is reproducible.
 
 import argparse
 import hashlib
+import json
 import os
 import platform
 import re
@@ -630,19 +631,24 @@ def run(arguments):
     return 1 if failed else 0
 
 
-def check_headers():
-    problems = []
-    try:
-        nodes = graph()
-    except HeaderError as error:
-        print(f"tla: {error}", file=sys.stderr)
-        return 1
-    for node in nodes.values():
-        for cfg in node["configs"]:
-            try:
-                expectation(cfg)
-            except HeaderError as error:
-                problems.append(str(error))
+def snapshot_functions():
+    """The conformance snapshot's family keys, from the checked-in schema."""
+    schema = json.loads((ROOT / "crates/gents-lean-vocab/families.schema.json").read_text())
+    return set(schema["functions"])
+
+
+def workspace_members():
+    """The workspace's package names, from `cargo metadata`."""
+    raw = subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=ROOT,
+                         check=True, stdout=subprocess.PIPE).stdout
+    return {package["name"] for package in json.loads(raw)["packages"]}
+
+
+def check_headers(tla=TLA, functions=None, members=None):
+    """Every structure problem of the specs in `tla`; 1 when there is any."""
+    functions = snapshot_functions() if functions is None else functions
+    members = workspace_members() if members is None else members
+    problems = structure_problems(functions, members, tla)
     for problem in problems:
         print(f"tla: {problem}", file=sys.stderr)
     return 1 if problems else 0
