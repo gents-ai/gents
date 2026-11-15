@@ -24,6 +24,9 @@ CONSTANTS
   MaxSwitch,       \* selection changes in a behavior
   CancelOnSwitch   \* FALSE: a selection change keeps the old node's watch
 
+\* The generated `delivers` table covers the Lean bound's nodes only.
+ASSUME Nodes \subseteq {"n1", "n2"}
+
 None == "none"
 NoVer == MaxWrites + 1
 
