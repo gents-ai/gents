@@ -764,7 +764,11 @@ fn passthrough<E>(error: E) -> GoalOperationError
 where
     E: Into<anyhow::Error>,
 {
-    GoalOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
+    GoalOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(Into::<
+        anyhow::Error,
+    >::into(
+        error
+    )))
 }
 
 #[cfg(test)]

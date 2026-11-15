@@ -563,9 +563,12 @@ mod tests {
             refusal.recovery(AgentCreateOperation::Clone),
             NextCall::ResourceHelp { resource: "agent" }
         );
-        let other = AgentOperationError::Passthrough(crate::error_chain::PassedThrough::new(
-            anyhow::anyhow!("root is not published"),
-        ));
+        let other =
+            AgentOperationError::Passthrough(crate::error_chain::PassedThrough::new(Box::<
+                dyn Error + Send + Sync,
+            >::from(
+                "root is not published",
+            )));
         assert_eq!(other.to_string(), "root is not published");
         assert_eq!(
             other.passthrough().map(ToString::to_string),

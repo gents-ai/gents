@@ -320,7 +320,11 @@ fn passthrough<E>(error: E) -> MailboxOperationError
 where
     E: Into<anyhow::Error>,
 {
-    MailboxOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
+    MailboxOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(Into::<
+        anyhow::Error,
+    >::into(
+        error
+    )))
 }
 
 enum ApplyError {

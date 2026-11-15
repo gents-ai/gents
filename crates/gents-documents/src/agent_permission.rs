@@ -9,7 +9,9 @@ use gents_store::config_client::{
 use crate::desired_state::{find_node_doc_id, grant_agent_catalog, revoke_agent_catalog};
 
 fn passthrough(error: impl Into<anyhow::Error>) -> AgentPermissionError {
-    AgentPermissionError::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
+    AgentPermissionError::Passthrough(gents_protocol::error_chain::PassedThrough::new(
+        error.into(),
+    ))
 }
 
 /// Grants or revokes one named permission of an Agent as the caller. The

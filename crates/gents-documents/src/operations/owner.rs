@@ -23,7 +23,9 @@ async fn resolve_owner(
         return Ok(owner.to_owned());
     }
     let response = access.read(&owners_of).await.map_err(|error| {
-        DocumentOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
+        DocumentOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::error(
+            error,
+        ))
     })?;
     let mut owners = rows(&response, collection)
         .iter()

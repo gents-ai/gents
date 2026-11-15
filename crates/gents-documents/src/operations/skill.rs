@@ -272,7 +272,9 @@ pub async fn get(
         .limit(1)
         .render();
     let response = access.read(&rendered).await.map_err(|error| {
-        DocumentOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
+        DocumentOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::error(
+            error,
+        ))
     })?;
     response["data"]["Skill"]
         .as_array()

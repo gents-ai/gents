@@ -217,7 +217,11 @@ fn passthrough<E>(error: E) -> TaskOperationError
 where
     E: Into<anyhow::Error>,
 {
-    TaskOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
+    TaskOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(Into::<
+        anyhow::Error,
+    >::into(
+        error
+    )))
 }
 
 #[cfg(test)]
