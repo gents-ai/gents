@@ -55,6 +55,13 @@ model. For a transition, invariant, access rule or provider input:
    Rust mirror of its policy.
 3. **Rust.** Make the owner satisfy the contract.
 
+Lean and TLA+ divide the work: Lean owns every decision (a pure function from
+observed state to action, with its theorems); TLA+ owns the interleaving of the
+actors that call it. A spec names the Lean owner of each decision it uses and
+takes the decision's cases from that owner rather than restating the policy;
+each configuration records its expected result (holds, or fails with the
+property it names), so a spec that stops catching its bug is visible.
+
 Generated files (decoders, the family schema, the access policy YAML) are
 regenerated, never edited. Decisions and external premises are docstrings on
 the Lean definitions they justify. Semantics-preserving plumbing needs no model
