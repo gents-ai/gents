@@ -89,6 +89,7 @@ NO_TESTS = {
     "gents-core-packs",
     "gents-desktop",
     "gents-lens-fixture-add-label",
+    "gents-workspace-hack",
 }
 
 # A change here can alter any build or the gate itself, so it selects everything.
