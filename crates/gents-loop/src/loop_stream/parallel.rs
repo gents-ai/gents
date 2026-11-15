@@ -1,5 +1,5 @@
 /// Reserve invalid-call budget before dispatch and stop at any duplicate,
-/// because repeated-failure decisions depend on preceding results.
+/// because repetition decisions depend on preceding results.
 pub(super) fn read_prefix<'a>(
     calls: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
     limit: usize,
