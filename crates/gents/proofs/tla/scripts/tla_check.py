@@ -266,9 +266,14 @@ def crate_of(path):
 
 
 def lean_declares(text, owner):
-    """Whether Lean source `text` declares or exports `owner` (namespace then name)."""
+    """Whether Lean source `text` declares or exports `owner`: an attribute naming
+    it in full, or its namespace (or `Conformance.` and that namespace, where the
+    conformance exports live) and then its name."""
     parts = owner.split(".")
-    if not re.search(rf"^\s*namespace\s+{re.escape(parts[0])}(\.|\s|$)", text, re.M):
+    exported = rf"^\s*attribute\s+\[conformance_function\][^\n]*(?<![\w.]){{}}(?![\w.'?!])"
+    if re.search(exported.format(re.escape(owner)), text, re.M):
+        return True
+    if not re.search(rf"^\s*namespace\s+(?:Conformance\.)?{re.escape(parts[0])}(\.|\s|$)", text, re.M):
         return False
     tails = {".".join(parts[index:]) for index in range(1, len(parts))}
     for tail in tails:
@@ -276,7 +281,7 @@ def lean_declares(text, owner):
         if re.search(rf"^\s*(?:@\[[^\]]*\]\s*)?(?:private\s+|protected\s+|noncomputable\s+)*"
                      rf"(?:def|abbrev|theorem|lemma|inductive|structure)\s+{name}(?![\w.'?!])", text, re.M):
             return True
-        if re.search(rf"^\s*attribute\s+\[conformance_function\][^\n]*(?<![\w.]){name}(?![\w.'?!])", text, re.M):
+        if re.search(exported.format(name), text, re.M):
             return True
     return False
 

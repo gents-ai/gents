@@ -317,6 +317,19 @@ class TlaSelection(unittest.TestCase):
                          ["B"])
         self.assertEqual(check.select(["crates/gents-cli/src/lib.rs", "docs/a.md"], nodes, owner), [])
 
+    def test_a_conformance_export_selects_the_spec_that_names_its_owner(self):
+        """Lean exports live in `namespace Conformance.<Owner>` or name the owner in full."""
+        check = gate.tla_check
+        cases = "crates/gents/proofs/Proofs/Conformance/ClientDataPublicationCases.lean"
+        self.assertIn("ObserverResync", select(cases)["contract"]["tla"])
+        resources = "crates/gents/proofs/Proofs/Conformance/PluginResources.lean"
+        nodes = {"A": {"path": Path("A.tla"), "lean": ["PluginResources.computeAllowances"], "crates": [],
+                       "configs": [], "generated": []}}
+        self.assertEqual(check.select([resources], nodes, lambda path: None), ["A"])
+        self.assertFalse(check.lean_declares("namespace Conformance.Other\ndef computeAllowances := 1\n",
+                                             "PluginResources.computeAllowances"))
+        self.assertTrue(check.lean_declares("attribute [conformance_function] A.B.decide\n", "A.B.decide"))
+
     def test_prose_selects_no_spec(self):
         self.assertEqual(select("docs/guide.md")["contract"]["tla"], [])
 
