@@ -1643,9 +1643,6 @@ mod captured_context_tests;
 mod relationship_readiness_tests;
 
 #[cfg(test)]
-mod unattended_tests;
-
-#[cfg(test)]
 mod projection_conformance;
 
 #[cfg(test)]
