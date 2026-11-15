@@ -73,7 +73,7 @@ export async function writeAgentDraft({
     description: next.description.trim() || null,
     context_id: contextId || null,
     inference_profile_id: next.inferenceProfileId,
-    enabled: draftMode ? Boolean(draftMode.enabled) : agent.enabled,
+    ...(draftMode ? {} : { enabled: agent.enabled }),
     tags: next.tags.length ? next.tags : null,
     created_at: agent.createdAt,
   };

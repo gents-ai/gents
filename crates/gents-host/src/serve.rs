@@ -1032,7 +1032,7 @@ async fn serve_foreground(
                     })
                 })
                 .collect::<Vec<_>>();
-            let readiness_status = if unavailable_agents.is_empty() {
+            let readiness_status = if readiness.is_ready() {
                 "ready"
             } else {
                 "degraded"

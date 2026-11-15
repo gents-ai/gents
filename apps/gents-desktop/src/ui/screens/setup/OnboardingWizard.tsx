@@ -20,7 +20,6 @@ import {
   type DesktopStartupPhase,
 } from "../../../lib/loadingStatus";
 import { SETUP_COMPLETE_DWELL_MS, StartupProgress } from "./StartupProgress";
-import { engineerPatches } from "@/lib/engineer";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import { AvatarRoll } from "@/screens/AvatarRoll";
 import { saveNodeAvatar } from "@/screens/agent/AgentCard";
@@ -271,15 +270,7 @@ export function OnboardingWizard({
       throw new Error("The initialized node is not available in the client snapshot.");
     if (avatar)
       await saveNodeAvatar(changeConfig, nextDeployment, avatar).catch(() => undefined);
-    const engineer = engineerPatches(nextDeployment);
-    if (engineer.length) {
-      await changeConfig("patchConfigComponents", {
-        nodeDid: nextDeployment.nodeDid,
-        patches: engineer,
-      });
-    } else {
-      await refreshSnapshot();
-    }
+    await refreshSnapshot();
     dispatch({
       type: "provisioned",
       at: Date.now(),

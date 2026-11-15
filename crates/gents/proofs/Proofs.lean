@@ -154,3 +154,4 @@ import Proofs.Session.Request.PreclaimBoundary
 
 import Proofs.Clients.InstallRepair
 import Proofs.Clients.RepairBackups
+import Proofs.Clients.DesktopConnect

@@ -244,6 +244,26 @@ def selfConfigAgentMaterialization :
           toolNames := r.context.toolNames, backendId := r.inference.backendId
           model := r.inference.model, effort := r.inference.effort }
 
+deriving instance ToJson for SelfConfig.CandidateResolution
+
+structure AgentResolutionInput where
+  name : String
+  candidate : CandidateWire
+  target : String
+  enabled : Bool
+  deriving ToJson
+
+/-- The commit's resolution rule (`SelfConfig.candidateResolution`), replayed
+against the agent operation's own check. -/
+@[conformance_family]
+def selfConfigAgentResolution : Family AgentResolutionInput CandidateResolution where
+  inputs := agentResolutionScenarios.map fun r =>
+    { name := r.name, candidate := .ofFixture r.candidate, target := "worker"
+      enabled := r.enabled }
+  model := fun i =>
+    let fixture := i.candidate.fixture
+    candidateResolution fixture.registry fixture.nodeDid i.target i.enabled
+
 def siblingToolsOperations : List SiblingToolsOperation := Id.run do
   let mut rows : List SiblingToolsOperation := []
   for owner in [true, false] do

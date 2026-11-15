@@ -118,7 +118,18 @@ pub(super) async fn observe_port_readiness(
     node_home: &Path,
     user: Option<&ClientSigningCapability>,
 ) -> Result<PortReadiness, BridgeError> {
-    let config = gents_service::server_host::ServerConfig::standard(node_home.to_path_buf());
+    let mut config = gents_service::server_host::ServerConfig::standard(node_home.to_path_buf());
+    match gents_service::network_settings::NetworkSettings::read(node_home) {
+        Ok(settings) => {
+            config.http_addr = settings.http_addr.unwrap_or(config.http_addr);
+            config.http_port = settings.http_port.unwrap_or(config.http_port);
+        }
+        Err(error) => tracing::warn!(
+            target: "gents_desktop::managed_server",
+            error = %format!("{error:#}"),
+            "the home's network settings are unreadable; observing the standard port"
+        ),
+    }
     observe_port_readiness_at(&config, user).await
 }
 

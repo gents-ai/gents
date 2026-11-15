@@ -103,23 +103,31 @@ theorem watcher_release_keeps_unrelated_marks
   show x ∈ w.processedSet.filter (fun y => y ≠ d)
   simp [h_marked, h_other]
 
-/-- Availability governs dispatch, while configured agents with verified local
-signing identities remain scan actors so their requests can be rejected. -/
+/-- Availability governs dispatch, while configured enabled agents with
+verified local signing identities remain scan actors so their requests can be
+rejected. A disabled agent is not one: DefraDB answers its request scan
+without AgentRequest rows, so scanning as it fails on every pass and observes
+nothing (fresh-node smoke of #3670, 2026-11-13, where a not-enabled core pack
+leaves its agents disabled, `Pack.CorePacks.initWiring`). -/
 structure ActorCandidate where
   did : String
   configured : Bool
   identityResolved : Bool
+  enabled : Bool
   available : Bool
   deriving BEq, DecidableEq, Repr
 
 def scanActors (candidates : List ActorCandidate) : List String :=
-  (candidates.filter (fun c => c.configured && c.identityResolved)).map (·.did)
+  (candidates.filter (fun c => c.configured && c.identityResolved && c.enabled)).map (·.did)
 
 theorem unavailable_resolved_agent_is_scanned :
-    scanActors [⟨"agent", true, true, false⟩] = ["agent"] := by decide
+    scanActors [⟨"agent", true, true, true, false⟩] = ["agent"] := by decide
+
+theorem disabled_agent_is_not_scanned :
+    scanActors [⟨"agent", true, true, false, false⟩] = [] := by decide
 
 theorem unresolved_agent_is_not_scanned :
-    scanActors [⟨"agent", true, false, false⟩] = [] := by decide
+    scanActors [⟨"agent", true, false, true, false⟩] = [] := by decide
 
 structure ScopedRow where
   docId : String
@@ -149,7 +157,7 @@ structure ScopedBatch where
 agent. A missing root or denied query is not an empty authorized result. Rows
 selected for a different agent do not become work for this actor even if it can
 read them. The caller supplies configured agents with verified resolved
-signing identities, including unavailable agents; an unresolved agent is not scanned. This does not fence a
+signing identities, including unavailable enabled agents; an unresolved or disabled agent is not scanned. This does not fence a
 configuration change racing a previously started native scan. -/
 def collectScoped : List String → List ScopedScan → ScopedBatch
   | [], _ => {}

@@ -60,9 +60,7 @@ fn render_healthz_payload_at(
             );
             let runtime_ready = matches!(&readiness, ProjectedNodeReadinessSummary::Observed(_));
             let runtime_degraded = match &readiness {
-                ProjectedNodeReadinessSummary::Observed(summary) => {
-                    !summary.unavailable_agents.is_empty()
-                }
+                ProjectedNodeReadinessSummary::Observed(summary) => !summary.is_ready(),
                 ProjectedNodeReadinessSummary::Unknown(_) => true,
             };
             // Measured backend health is never persisted to `InferenceBackend`

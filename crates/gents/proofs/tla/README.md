@@ -105,6 +105,18 @@ See `../README.md` for how this fits the broader formal-verification model.
   without the head read) break each remaining guard. A refusal admitted while
   another turn is live deliberately leaves the live turn as the head, so
   neither property claims it.
+- `InterruptPartialOutput` — provider text the owned loop has received when
+  its request is interrupted (#3820). `NoReceivedOutputDropped` and
+  `TerminalOnce` hold when the loop yields a received chunk in the step that
+  receives it. `SuspendedHandoff` is the found race: the handoff
+  from the provider work to the loop's yield could return `Pending` on a
+  spent task budget, and the biased interrupt branch drops the stream with
+  the chunk in the reply. `NoDrainFlush` drops the drain's
+  flush; `Witness` shows an interrupt after output keeps it.
+- `GoalSourceObservation` — a test observing the goal owner, which runs only
+  inside `next_fire` (#3820). A fixed timeout (`FixedWindow`) fails a correct
+  owner; waiting for the transition passes it and still fails an owner that
+  fires (`FiringOwner`).
 - `RuntimeConnectionTransport` — the desktop observer's authenticated SSE
   connection to one runtime it reads as the User (`client/observe`). The
   source task arms `K` subscriptions one at a time and then sends a ready
@@ -237,6 +249,15 @@ See `../README.md` for how this fits the broader formal-verification model.
   `AckFollowsRelease`; `RefuseStopping` breaks `RefusalNamesLiveHolder`;
   `UnboundedWait` breaks `AcquirerSettles`; `PidFile` breaks
   `CrashedHolderNeverBlocks`.
+- `GuestAllowance` — a computing plugin guest that never calls the host and
+  is stopped only by its compute allowance (Lean `allowanceTicks`), an epoch
+  deadline advanced by the WASM host's ticker thread. `MCGuestAllowance`
+  (the ticker advances the epoch by elapsed periods) holds;
+  `MCGuestAllowanceWakeCounted` (the shipped ticker, one increment per wake,
+  every wake late) fails `StopsAtAllowance` and `WakeCountedNotLost` shows
+  that stop is late, not lost; `Punctual` holds with on-time wakes;
+  `Unchecked` (no epoch checks in loops) never stops the guest;
+  `CancelLate` shows a cancel can find the guest already stopped.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup

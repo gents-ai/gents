@@ -70,6 +70,7 @@ pub struct Wiring {
     pub tool_calls: bool,
     pub consent_dynamic: bool,
     pub root_readers: bool,
+    pub agents_active: bool,
 }
 
 /// Lean `Pack.CorePacks.initWiring`.
@@ -80,18 +81,21 @@ pub fn init_wiring(pack: CorePack) -> Wiring {
             tool_calls: false,
             consent_dynamic: false,
             root_readers: false,
+            agents_active: false,
         },
         CorePack::Script => Wiring {
             wired: true,
             tool_calls: true,
             consent_dynamic: false,
             root_readers: true,
+            agents_active: true,
         },
         _ => Wiring {
             wired: true,
             tool_calls: false,
             consent_dynamic: false,
             root_readers: true,
+            agents_active: true,
         },
     }
 }
@@ -105,8 +109,34 @@ pub fn enabled_wiring(pack: CorePack) -> Wiring {
             tool_calls: false,
             consent_dynamic: true,
             root_readers: true,
+            agents_active: true,
         },
         pack => init_wiring(pack),
+    }
+}
+
+/// Lean `Pack.CorePacks.EnableRoute`: where the enable operation writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnableRoute {
+    /// No runtime serves the home: written through its own store.
+    Home,
+    /// Written through the runtime serving the home.
+    Runtime,
+    /// A pack the home lacks is installed as the Engineer from the home's
+    /// own store, which a serving runtime holds: refused before anything is
+    /// written.
+    StopFirst,
+}
+
+/// Lean `Pack.CorePacks.enableRoute`.
+pub fn enable_route(served: bool, installed: bool) -> EnableRoute {
+    if !served {
+        EnableRoute::Home
+    } else if installed {
+        EnableRoute::Runtime
+    } else {
+        EnableRoute::StopFirst
     }
 }
 
@@ -256,6 +286,53 @@ pub fn check_plugin_interface(
     }
 }
 
+/// Lean `Pack.CorePacks.ProfileState`: what an install reads of the profile
+/// a pack's inference slot is bound to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileState {
+    Serving,
+    BackendDisabled,
+    BackendMissing,
+}
+
+impl ProfileState {
+    pub fn of(option: &crate::pack::inference::PackInferenceProfileOption) -> Self {
+        match (option.usable, option.backend_name.is_some()) {
+            (true, _) => Self::Serving,
+            (false, true) => Self::BackendDisabled,
+            (false, false) => Self::BackendMissing,
+        }
+    }
+}
+
+/// Lean `Pack.CorePacks.SlotBinding`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SlotBinding {
+    Bound,
+    /// Bound to a profile whose backend is disabled: the pack's agents on it
+    /// serve no request until that backend is enabled.
+    Deferred,
+    Refused,
+}
+
+impl SlotBinding {
+    pub fn installs(self) -> bool {
+        self != Self::Refused
+    }
+}
+
+/// Lean `Pack.CorePacks.slotBinding`: whether an install binds a slot to the
+/// profile named for it.
+pub fn slot_binding(state: ProfileState) -> SlotBinding {
+    match state {
+        ProfileState::Serving => SlotBinding::Bound,
+        ProfileState::BackendDisabled => SlotBinding::Deferred,
+        ProfileState::BackendMissing => SlotBinding::Refused,
+    }
+}
+
 #[cfg(test)]
 mod conformance {
     use gents_lean_vocab::families;
@@ -266,6 +343,18 @@ mod conformance {
     fn approval_required_matches_the_lean_model() {
         families::pack_core_packs_approval_required::replay(|input| {
             approval_required(input.origin, input.grants)
+        });
+    }
+
+    #[test]
+    fn slot_binding_matches_the_lean_model() {
+        families::pack_core_packs_slot_binding::replay(|input| slot_binding(input.profile_state));
+    }
+
+    #[test]
+    fn enable_route_matches_the_lean_model() {
+        families::pack_core_packs_enable_route::replay(|input| {
+            enable_route(input.served, input.installed)
         });
     }
 }

@@ -1,0 +1,4 @@
+---- MODULE MCGuestAllowanceUnchecked ----
+EXTENDS GuestAllowance
+
+====

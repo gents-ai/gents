@@ -17,33 +17,63 @@ use gents_pack::{
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod live {
-    //! Which guests still occupy a worker thread, by artifact digest.
-    static GUESTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    //! Which guests still occupy a worker thread, by artifact digest, with
+    //! the compute allowance each was given. Waiters subscribe to a watch,
+    //! which checks the current value first, so no start or release is missed.
+    use std::sync::LazyLock;
+    use std::time::Duration;
+
+    use tokio::sync::watch;
+
+    type Guests = Vec<(String, Duration)>;
+
+    static GUESTS: LazyLock<watch::Sender<Guests>> =
+        LazyLock::new(|| watch::Sender::new(Vec::new()));
 
     pub(super) struct Guard(String);
 
     impl Guard {
-        pub fn new(digest: String) -> Self {
-            GUESTS.lock().unwrap().push(digest.clone());
+        pub fn new(digest: String, allowance: Duration) -> Self {
+            GUESTS.send_modify(|guests| guests.push((digest.clone(), allowance)));
             Self(digest)
         }
     }
 
     impl Drop for Guard {
         fn drop(&mut self) {
-            let mut guests = GUESTS.lock().unwrap();
-            if let Some(index) = guests.iter().position(|digest| digest == &self.0) {
-                guests.swap_remove(index);
-            }
+            GUESTS.send_modify(|guests| {
+                if let Some(index) = guests.iter().position(|(digest, _)| digest == &self.0) {
+                    guests.swap_remove(index);
+                }
+            });
         }
     }
 
-    pub fn count(digest: &str) -> usize {
-        let guests = GUESTS.lock().unwrap();
+    fn allowances(guests: &Guests, digest: &str) -> Vec<Duration> {
         guests
             .iter()
-            .filter(|guest| guest.as_str() == digest)
-            .count()
+            .filter(|(guest, _)| guest == digest)
+            .map(|(_, allowance)| *allowance)
+            .collect()
+    }
+
+    /// The allowances of the guests of `digest`, once one occupies a worker.
+    pub async fn started(digest: &str) -> Vec<Duration> {
+        let mut guests = GUESTS.subscribe();
+        let guests = guests
+            .wait_for(|guests| !allowances(guests, digest).is_empty())
+            .await
+            .expect("the registry's sender is static");
+        allowances(&guests, digest)
+    }
+
+    /// Resolves once no guest of `digest` occupies a worker thread.
+    pub async fn released(digest: &str) {
+        GUESTS
+            .subscribe()
+            .wait_for(|guests| allowances(guests, digest).is_empty())
+            .await
+            .expect("the registry's sender is static");
     }
 }
 
@@ -151,7 +181,7 @@ pub async fn run(
     };
     let mut worker = tokio::task::spawn_blocking(move || {
         #[cfg(any(test, feature = "test-fixtures"))]
-        let _live = live::Guard::new(runner.artifact_digest());
+        let _live = live::Guard::new(runner.artifact_digest(), guest_budget.wall_clock);
         let (input, manifold) = match bound {
             Some(bound) => runner.prepare_bound(&input, &bound)?,
             None => (input, runner.manifold.clone()),

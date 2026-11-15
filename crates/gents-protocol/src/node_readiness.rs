@@ -76,6 +76,12 @@ impl AgentReadinessUnavailableReason {
         }
     }
 
+    /// Lean `Runtime.StartupDegraded.degradesNode`: a disabled Agent is off,
+    /// not lacking anything, so it leaves the node ready.
+    pub const fn degrades_node(self) -> bool {
+        !matches!(self, Self::AgentDisabled)
+    }
+
     pub const ALL: [Self; 11] = [
         Self::AgentDisabled,
         Self::RuntimeConfigurationInvalid,
@@ -326,6 +332,15 @@ pub struct NodeReadinessSummary {
     pub snapshot: NodeReadinessSnapshot,
     pub ready_count: usize,
     pub unavailable_agents: BTreeMap<String, AgentReadinessUnavailableReason>,
+}
+
+impl NodeReadinessSummary {
+    /// Lean `Runtime.StartupDegraded.nodeReady`.
+    pub fn is_ready(&self) -> bool {
+        self.unavailable_agents
+            .values()
+            .all(|reason| !reason.degrades_node())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

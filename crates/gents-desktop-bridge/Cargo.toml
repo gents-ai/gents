@@ -19,6 +19,10 @@ native-e2e = ["tauri-host", "gents-server/native-e2e", "gents-service/native-e2e
 name = "home_isolation"
 required-features = ["tauri-host"]
 
+[[test]]
+name = "connect_this_desktop"
+required-features = ["tauri-host"]
+
 [dependencies]
 anyhow.workspace = true
 async-trait = "0.1"
@@ -86,8 +90,13 @@ libc = "0.2"
 tauri-plugin = { version = "2", features = ["build"], optional = true }
 
 [dev-dependencies]
+gents-eval = { workspace = true, features = ["test-fixtures"] }
+gents-host = { workspace = true, features = ["test-fixtures"] }
+gents-service = { workspace = true, features = ["test-home-guard"] }
+gents-workspace-hack = { workspace = true }
 gents-automation = { workspace = true, features = ["test-fixtures"] }
-gents = { path = "../gents", features = ["test-fixtures"] }
+gents = { path = "../gents", features = ["test-fixtures", "typescript"] }
+clap.workspace = true
 crypto.workspace = true
 identity.workspace = true
 syn = { version = "2", features = ["full"] }
@@ -95,7 +104,7 @@ heck = "0.5"
 async-trait = "0.1"
 axum = "0.8"
 wiremock = "0.6"
-gents-desktop-core = { workspace = true, features = ["test-fixtures"] }
+gents-desktop-core = { workspace = true, features = ["test-fixtures", "typescript"] }
 gents-lean-contract.workspace = true
 gents-lean-vocab.workspace = true
 tauri = { version = "2", features = ["test"] }

@@ -13,9 +13,11 @@ end Pack.Operations
 
 namespace Pack.CorePacks
 
-deriving instance Lean.ToJson for CorePack, Origin, Wiring, InterfaceAdmission, UpdateDecision
+deriving instance Lean.ToJson for CorePack, Origin, Wiring, InterfaceAdmission, UpdateDecision,
+  ProfileState, SlotBinding, EnableRoute
 
 attribute [conformance_function] approvalRequired initWiring enabledWiring updateDecision
+  slotBinding enableRoute
 
 structure InterfaceInput where
   declared : Option Nat

@@ -5,9 +5,12 @@ use anyhow::{Context, Result};
 /// A documents pack that ships a plugin: install stores the plugin and
 /// records it. No Tools selects the plugin, so removing the pack retires it:
 /// the plugin is no longer installed or callable. Every pack here is
-/// scaffolded on the fly, so this needs no fixture at all.
+/// scaffolded on the fly, so this needs no fixture at all. Its plugin is
+/// compiled from source: the other tests here take theirs through
+/// `build_pack`'s cache.
 #[test]
-fn a_document_pack_with_a_plugin_installs_and_its_removal_retires_the_plugin() -> Result<()> {
+fn a_document_pack_with_a_plugin_compiled_from_source_installs_and_its_removal_retires_it(
+) -> Result<()> {
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("node");
     let home_arg = home.to_str().context("path")?;
@@ -125,6 +128,126 @@ const UNROUTABLE_REGISTRY: &str = "http://127.0.0.1:9";
 
 fn dir_arg(path: &std::path::Path) -> &str {
     path.to_str().expect("fixture path is not UTF-8")
+}
+
+/// Runs `gents config pack build` on `dir` after seeding each source plugin's
+/// artifact and build stamp from an earlier build of the same manifest and
+/// source in this target directory, and records what the build leaves.
+/// `pack build` still decides: it recompiles unless the seeded stamp matches
+/// the builder, the mirrored source and the artifact, so a stale or foreign
+/// cache entry costs a compile, never a wrong artifact.
+fn build_pack(scratch: &std::path::Path, dir: &std::path::Path) -> Result<()> {
+    let manifest = read_json_file(&dir.join("manifest.json"))?;
+    let cached = manifest["plugins"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|plugin| plugin["source"].is_string())
+        .map(|plugin| CachedPlugin::new(dir, &manifest, plugin))
+        .collect::<Result<Vec<_>>>()?;
+    for plugin in &cached {
+        plugin.seed()?;
+    }
+    run_cli_text(scratch, &["config", "pack", "build", dir_arg(dir)])?;
+    for plugin in &cached {
+        plugin.record()?;
+    }
+    Ok(())
+}
+
+/// One source plugin of a pack being built, and its entry in the build cache.
+struct CachedPlugin {
+    artifact: std::path::PathBuf,
+    stamp: std::path::PathBuf,
+    entry: std::path::PathBuf,
+}
+
+impl CachedPlugin {
+    fn new(
+        dir: &std::path::Path,
+        manifest: &serde_json::Value,
+        plugin: &serde_json::Value,
+    ) -> Result<Self> {
+        use sha2::Digest;
+        let name = plugin["name"].as_str().context("plugin has no name")?;
+        let artifact = plugin["artifact"]
+            .as_str()
+            .context("plugin has no artifact")?;
+        let source = plugin["source"].as_str().context("plugin has no source")?;
+        let mut files = Vec::new();
+        source_files(&dir.join(source), &mut files)?;
+        files.sort();
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(serde_json::to_vec(manifest)?);
+        hasher.update([0]);
+        hasher.update(name.as_bytes());
+        for file in files {
+            let bytes = std::fs::read(&file)?;
+            hasher.update([0]);
+            hasher.update(file.strip_prefix(dir)?.to_string_lossy().as_bytes());
+            hasher.update([0]);
+            hasher.update((bytes.len() as u64).to_be_bytes());
+            hasher.update(&bytes);
+        }
+        Ok(Self {
+            artifact: dir.join(artifact),
+            stamp: dir
+                .join("target/plugins")
+                .join(name)
+                .join("target/gents-build.stamp"),
+            entry: std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+                .join("cli_pack_plugin_builds")
+                .join(format!("{:x}", hasher.finalize())),
+        })
+    }
+
+    fn seed(&self) -> Result<()> {
+        let (Ok(artifact), Ok(stamp)) = (
+            std::fs::read(self.entry.join("artifact.afb")),
+            std::fs::read(self.entry.join("gents-build.stamp")),
+        ) else {
+            return Ok(());
+        };
+        for (path, bytes) in [(&self.artifact, artifact), (&self.stamp, stamp)] {
+            std::fs::create_dir_all(path.parent().context("seeded file has no parent")?)?;
+            std::fs::write(path, bytes)?;
+        }
+        Ok(())
+    }
+
+    /// Each file is renamed into place, so a concurrent reader sees a whole
+    /// file or none.
+    fn record(&self) -> Result<()> {
+        std::fs::create_dir_all(&self.entry)?;
+        for (from, name) in [
+            (&self.artifact, "artifact.afb"),
+            (&self.stamp, "gents-build.stamp"),
+        ] {
+            let staged = tempfile::NamedTempFile::new_in(&self.entry)?;
+            std::fs::copy(from, staged.path())
+                .with_context(|| format!("caching {}", from.display()))?;
+            staged.persist(self.entry.join(name))?;
+        }
+        Ok(())
+    }
+}
+
+/// The files `pack build` mirrors from a plugin source: everything but
+/// `target` directories and dot files.
+fn source_files(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == "target" || name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            source_files(&entry.path(), files)?;
+        } else {
+            files.push(entry.path());
+        }
+    }
+    Ok(())
 }
 
 /// An initialized offline home whose documents dependency is already in the
@@ -416,10 +539,7 @@ fn a_documents_dependency_plugin_is_retired_with_its_dependent() -> Result<()> {
             dir_arg(&dependee),
         ],
     )?;
-    run_cli_text(
-        scratch.path(),
-        &["config", "pack", "build", dir_arg(&dependee)],
-    )?;
+    build_pack(scratch.path(), &dependee)?;
 
     let setup = DependentHome::with_dependee("dep-plugin", &dependee)?;
     run_cli_json(setup.tempdir.path(), &setup.install_args())?;
@@ -521,7 +641,7 @@ fn wire_fixture_with(reviewed_job: bool, init_extra: &[&str]) -> Result<WireFixt
         config["agent_targets"] = serde_json::json!([wire_target("wf-content")]);
     })?;
 
-    run_cli_text(scratch, &["config", "pack", "build", dir_arg(&job_pack)])?;
+    build_pack(scratch, &job_pack)?;
     for (pack, slots) in [
         (&job_pack, Vec::new()),
         (
@@ -838,7 +958,7 @@ fn uninstalled_job_pack() -> Result<WireFixture> {
         .to_owned();
     let job_pack = scratch.join("job_plugin_fixture");
     copy_dir_all(&fixture_pack_dir("job_plugin_fixture"), &job_pack)?;
-    run_cli_text(scratch, &["config", "pack", "build", dir_arg(&job_pack)])?;
+    build_pack(scratch, &job_pack)?;
     Ok(WireFixture {
         tempdir,
         home,
@@ -1406,7 +1526,9 @@ fn starter_archives(scratch: &std::path::Path) -> std::path::PathBuf {
 
 /// A copy of the job fixture pack renamed to the core pack `gents/<name>`,
 /// shipping the plugin `gents/<plugin>` (which requests an environment
-/// variable) and one skill, written as a release archive.
+/// variable) and one skill, written as a release archive. A job plugin's
+/// pack also ships a worker agent whose rootless host Tools take the
+/// Engineer's root, as `gents/dynamic_workflows` does.
 fn release_starter_fixture(
     scratch: &std::path::Path,
     name: &str,
@@ -1437,6 +1559,10 @@ fn release_starter_fixture(
         format!("plugins/{plugin}.afb"),
     ]);
     manifest.as_object_mut().unwrap().remove("schemas");
+    if job {
+        manifest["inference_slots"] = serde_json::json!([{"name": "worker",
+            "description": "The worker.", "agents": ["wf-worker"]}]);
+    }
     let entry = &mut manifest["plugins"][0];
     entry["name"] = plugin.into();
     entry["artifact"] = format!("plugins/{plugin}.afb").into();
@@ -1465,10 +1591,20 @@ fn release_starter_fixture(
             "tools_id": format!("{name}-caller"),
             "display_name": "Starter fixture caller",
             "integrations": {"plugins": [selection]},
+        }, {
+            "tools_id": "${GENTS_PACK_NODE_DID}-wf-worker",
+            "display_name": "Read-only files",
+            "host": {"files": {"mode": "ReadOnly"}},
         }]);
+        config["agents"] = serde_json::json!([{"agent_slot": "wf-worker",
+            "context_id": "wf-worker-context", "display_name": "Starter workflow worker",
+            "description": "Does one read-only task.",
+            "inference_profile_id": "gents:inference-slot:worker"}]);
+        config["contexts"] = serde_json::json!([{"context_id": "wf-worker-context",
+            "system_prompt": "Work.", "tools_id": "${GENTS_PACK_NODE_DID}-wf-worker"}]);
     }
     edit_pack_config(&dir, |existing| *existing = config)?;
-    run_cli_text(scratch, &["config", "pack", "build", dir_arg(&dir)])?;
+    build_pack(scratch, &dir)?;
     let mut archive = Vec::new();
     gents_pack::pack::archive::write_pack(&dir, &mut archive)
         .with_context(|| format!("packing {name}"))?;
@@ -1503,15 +1639,50 @@ fn starter_step(fixture: &std::path::Path, home: &std::path::Path, step: &str) -
     Ok(())
 }
 
-/// What the desktop's starter packs card does, against a real runtime. The
-/// list is read while the runtime serves the home. Enabling installs through
-/// the home's own store, so it is refused, writing nothing, while the runtime
-/// runs, and the desktop restarts the node around it: here the runtime is
-/// stopped, the packs enabled (twice: enabling again changes nothing) and the
-/// runtime started again, where the Engineer's surface has the packs' plugin
-/// tools and its Context their skills.
+/// The runtime's readiness of `home` as `gents status` reports it, and the
+/// reason the node readiness snapshot gives `agent`, if any. The fixture's
+/// backend is unreachable, so a backend reason is the fixture's and not what
+/// a core pack leaves: it reads as none.
+fn readiness_of(
+    scratch: &std::path::Path,
+    home_arg: &str,
+    agent: &str,
+) -> Result<(serde_json::Value, Option<serde_json::Value>)> {
+    let status = run_cli_json(scratch, &["status", "--home", home_arg, "--output", "json"])?;
+    let reason = status["node_readiness"]["agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["agent_did"] == agent)
+        .map(|entry| entry["reason"].clone())
+        .filter(|reason| {
+            !reason.is_null()
+                && reason
+                    .as_str()
+                    .is_some_and(|reason| !reason.starts_with("backend_"))
+        });
+    anyhow::ensure!(
+        !status.to_string().contains("tool_surface_unavailable"),
+        "no agent of the node lacks its tool surface: {status}"
+    );
+    Ok((status, reason))
+}
+
+/// What the desktop's starter packs card and `gents config pack starter`
+/// do, against a real runtime, replaying Lean `Pack.CorePacks.enableRoute`
+/// and the readiness `Runtime.StartupDegraded` gives a core pack's agents.
+/// While the runtime serves the home, enabling a pack the home lacks is
+/// refused, writing nothing, and names how to stop the node. Stopped, the
+/// packs are installed as init leaves them; served again, the not-enabled
+/// pack's worker is the one agent off and no agent lacks its tool surface.
+/// Enabling that pack on the running node (twice: enabling again changes
+/// nothing) grants and enables its worker, which the running node then
+/// reports with no reason the pack leaves, and gives the Engineer's surface
+/// the pack's plugin tool.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
+    use gents_pack::pack::core_packs::CorePack;
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
     let tempdir = tempfile::tempdir()?;
     let scratch = tempdir.path();
     let home = scratch.join("agent-home");
@@ -1555,7 +1726,42 @@ async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(&graphql, &node_did, std::time::Duration::from_secs(60)).await?;
     wait_for_runtime_state_graphql(&home, &graphql, std::time::Duration::from_secs(30)).await?;
-    starter_step(scratch, &home, "restarted")?;
+    let status = run_cli_json(scratch, &["status", "--home", home_arg, "--output", "json"])?;
+    let worker = match status["off_agents"].as_array().map(Vec::as_slice) {
+        Some([worker]) => worker.as_str().context("an off agent is a DID")?.to_owned(),
+        _ => anyhow::bail!("the not-enabled pack's worker is the one agent off: {status}"),
+    };
+    let (_, reason) = readiness_of(scratch, home_arg, &worker)?;
+    for case in gents_lean_vocab::families::runtime_startup_degraded_init_agent_reason::cases::<
+        CorePack,
+        Reason,
+    >() {
+        if case.input.core_pack == CorePack::DynamicWorkflows && case.input.host_tools {
+            case.check(serde_json::from_value::<Option<Reason>>(
+                reason.clone().unwrap_or_default(),
+            )?);
+        }
+    }
+
+    starter_step(scratch, &home, "enable-running")?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let reason = loop {
+        let (_, reason) = readiness_of(scratch, home_arg, &worker)?;
+        if reason.is_none() || std::time::Instant::now() >= deadline {
+            break reason;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    };
+    for case in gents_lean_vocab::families::runtime_startup_degraded_enabled_agent_reason::cases::<
+        CorePack,
+        Reason,
+    >() {
+        if case.input.core_pack == CorePack::DynamicWorkflows && case.input.host_tools {
+            case.check(serde_json::from_value::<Option<Reason>>(
+                reason.clone().unwrap_or_default(),
+            )?);
+        }
+    }
     let explained = run_cli_json(
         scratch,
         &[
@@ -1611,7 +1817,12 @@ async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
     let script = selected("gents/script");
     anyhow::ensure!(
         script.len() == 1 && script[0]["tool_calls"] == true,
-        "enabling gents/script did not wire it with tool_calls, once: {tools}"
+        "init did not wire gents/script with tool_calls, once: {tools}"
+    );
+    let (_, stderr) = server.captured_output()?;
+    anyhow::ensure!(
+        !stderr.contains("tool surface unavailable"),
+        "the served node logged a tool surface error: {stderr}"
     );
     Ok(())
 }
@@ -1669,10 +1880,13 @@ async fn core_packs_in_fixture_home() -> Result<()> {
             let refused =
                 gents_server::packs::enable_core_packs_from(home.clone(), fixtures(), &archives)
                     .await
-                    .expect_err("enabling while the runtime serves the home");
+                    .expect_err("enabling a pack the home lacks while the runtime serves it");
+            let refused = format!("{refused:#}");
             anyhow::ensure!(
-                format!("{refused:#}").contains("a runtime is serving this home"),
-                "{refused:#}"
+                refused.contains("is not installed on this home")
+                    && refused.contains("gents runtime service stop --home")
+                    && refused.contains("gents runtime server --home"),
+                "{refused}"
             );
             anyhow::ensure!(
                 gents_pack::pack::read_home_install(&home, "gents/script")?.is_none()
@@ -1681,35 +1895,66 @@ async fn core_packs_in_fixture_home() -> Result<()> {
             );
         }
         "stopped" => {
+            let report =
+                gents_server::packs::install_core_packs_from(home.clone(), &archives).await?;
+            anyhow::ensure!(
+                report["installed"].as_array().map(Vec::len) == Some(2),
+                "init's install did not install both packs: {report}"
+            );
+            let listed = gents_server::packs::core_packs_from(home.clone(), &archives).await?;
+            let state = |pack: &str| {
+                listed["packs"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|listed| listed["pack"] == pack)
+                    .map(|listed| listed["state"].clone())
+            };
+            anyhow::ensure!(
+                state("gents/dynamic_workflows") == Some("not_enabled".into())
+                    && state("gents/script") == Some("installed".into()),
+                "init leaves dynamic workflows not enabled and script installed: {listed}"
+            );
+        }
+        "enable-running" => {
             for _ in 0..2 {
                 let report = gents_server::packs::enable_core_packs_from(
                     home.clone(),
-                    fixtures(),
+                    vec!["gents/dynamic_workflows".to_owned()],
                     &archives,
                 )
                 .await?;
                 anyhow::ensure!(
                     report["failed"] == serde_json::json!([])
-                        && report["enabled"].as_array().map(Vec::len) == Some(2),
-                    "enabling did not install both packs: {report}"
+                        && report["enabled"].as_array().map(Vec::len) == Some(1),
+                    "enabling on the running node failed: {report}"
                 );
+                let enabled = &report["enabled"][0];
                 anyhow::ensure!(
-                    report["enabled"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .all(|pack| pack["skills"].as_array().map(Vec::len) == Some(1)
-                            && pack["granted_permissions"].as_array().map(Vec::len) == Some(1)),
-                    "each pack's skill is attached and its permission granted: {report}"
+                    enabled["skills"].as_array().map(Vec::len) == Some(1)
+                        && enabled["granted_permissions"].as_array().map(Vec::len) == Some(1)
+                        && enabled["host_tool_roots"]
+                            .as_array()
+                            .is_some_and(|rows| rows.len() == 1 && rows[0]["reader_on"].is_string())
+                        && enabled["agents"]
+                            .as_array()
+                            .is_some_and(|rows| rows.len() == 1 && rows[0]["enabled"] == true),
+                    "enabling attaches the skill, grants the permission and the worker's reader and enables the worker: {report}"
                 );
             }
+            let listed = gents_server::packs::core_packs_from(home.clone(), &archives).await?;
+            anyhow::ensure!(
+                listed["packs"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|listed| fixtures()
+                        .iter()
+                        .any(|pack| listed["pack"] == pack.as_str()))
+                    .all(|listed| listed["state"] == "installed"),
+                "the running node lists the enabled packs as installed: {listed}"
+            );
         }
-        "restarted" => anyhow::ensure!(
-            fixtures()
-                .iter()
-                .all(|pack| state(pack) == Some("installed".into())),
-            "the restarted node lists the enabled packs as installed: {listed}"
-        ),
         other => anyhow::bail!("unknown step {other}"),
     }
     Ok(())

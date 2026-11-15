@@ -39,6 +39,7 @@ members = [
     "crates/gents-protocol",
     "crates/gents-schemas",
     "crates/gents-shell",
+    "crates/gents-workspace-hack",
 ]
 # Patched noq 1.4.0 (gents#634) is pulled only via [patch.crates-io].
 # Keep it out of the workspace so `cargo fmt --all` / workspace tests don't own
@@ -135,6 +136,7 @@ gents-host = { path = "crates/gents-host" }
 gents-desktop-bridge = { path = "crates/gents-desktop-bridge" }
 gents-lean-contract = { path = "crates/gents-lean-contract" }
 gents-lean-vocab = { path = "crates/gents-lean-vocab" }
+gents-workspace-hack = { path = "crates/gents-workspace-hack" }
 # Keep DefraDB defaults off: Gents selects Iroh P2P and Lens execution without
 # SourceHub ACP or the legacy libp2p transport (defradb.rs#1431-#1435).
 defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "199470622d01f4ee742ccdf62c0c72f20bc2b4a6", default-features = false }
