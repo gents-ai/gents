@@ -136,10 +136,6 @@ async fn request_deadline_presents_output_committed_before_the_cut() {
     );
 }
 
-/// The stopped case's CLI timeout: past any run, so only the test's clock
-/// advance stops the child.
-const STOPPED_TIMEOUT_SECS: u64 = gents_store::test_support::UNREACHED_DEADLINE.as_secs();
-
 #[tokio::test]
 async fn committed_output_reconstructs_completed_and_stopped_results() {
     use gents_loop::tool_call_lifecycle::ToolOutcome;
@@ -162,17 +158,19 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
         ),
         (
             "cli-stopped",
-            STOPPED_TIMEOUT_SECS,
+            // Past any run: the owning request's cancellation stops the child.
+            gents_store::test_support::UNREACHED_DEADLINE.as_secs(),
             "printf '%17000s' ' '; printf 'last out'; printf 'last err' >&2; sleep 30",
         ),
     ] {
         let (node, mut tool, registry, writer) = committed_run(name).await;
         let cli = CliTool::new(config(timeout_secs));
         let args = serde_json::json!({"argv": ["-c", script]}).to_string();
+        let stop = tokio_util::sync::CancellationToken::new();
         let call =
             gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
                 None,
-                tokio_util::sync::CancellationToken::new(),
+                stop.clone(),
                 None,
                 Some(writer),
                 None,
@@ -180,9 +178,10 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
             );
         let dispatched = if name == "cli-stopped" {
             // The stop is driven, not raced (TLA+ `WallClockBound`
-            // `"driven"`): once the child's last writes are committed, the
-            // paused clock moves past a CLI timeout the real clock never
-            // reaches.
+            // `"driven"`): the owning request cancels once the child's last
+            // writes are committed. A 1 s CLI timeout raced those writes; a
+            // paused clock cannot drive that timeout, because the stop's own
+            // reap and drain timers would then fire at once.
             tokio::pin!(call);
             tokio::select! {
                 result = &mut call => panic!("{name}: the child ended before its stop: {result:?}"),
@@ -196,9 +195,7 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
                     },
                 ) => {}
             }
-            tokio::time::pause();
-            tokio::time::advance(std::time::Duration::from_secs(STOPPED_TIMEOUT_SECS + 1)).await;
-            tokio::time::resume();
+            stop.cancel();
             call.await
         } else {
             call.await
@@ -222,7 +219,7 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
             }
             ToolOutcome::Failed { class, .. } => {
                 assert!(
-                    text.starts_with(&format!("timed out after {STOPPED_TIMEOUT_SECS}s\n")),
+                    text.starts_with("command cancelled by the owning request\n"),
                     "{text}"
                 );
                 assert!(

@@ -40,7 +40,7 @@ const NODES_AT_ONCE: usize = 4;
 
 /// The family replays as one test per shard, so each test stays far inside
 /// the suite's per-test hang ceiling on a loaded host.
-const SHARDS: usize = 8;
+const SHARDS: usize = 16;
 
 macro_rules! client_control_shards {
     ($($name:ident = $shard:literal),* $(,)?) => {
@@ -63,6 +63,14 @@ client_control_shards!(
     generated_goal_client_controls_drive_signed_commands_shard_5 = 5,
     generated_goal_client_controls_drive_signed_commands_shard_6 = 6,
     generated_goal_client_controls_drive_signed_commands_shard_7 = 7,
+    generated_goal_client_controls_drive_signed_commands_shard_8 = 8,
+    generated_goal_client_controls_drive_signed_commands_shard_9 = 9,
+    generated_goal_client_controls_drive_signed_commands_shard_10 = 10,
+    generated_goal_client_controls_drive_signed_commands_shard_11 = 11,
+    generated_goal_client_controls_drive_signed_commands_shard_12 = 12,
+    generated_goal_client_controls_drive_signed_commands_shard_13 = 13,
+    generated_goal_client_controls_drive_signed_commands_shard_14 = 14,
+    generated_goal_client_controls_drive_signed_commands_shard_15 = 15,
 );
 
 type ControlCase = gents_lean_vocab::family::Case<
