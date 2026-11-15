@@ -86,6 +86,7 @@ NO_TESTS = {
     "gents-core-packs",
     "gents-desktop",
     "gents-lens-fixture-add-label",
+    "gents-workspace-hack",
 }
 
 # With GATE_PORTABLE_SHARDS above zero the portable groups' crates build once
