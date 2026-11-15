@@ -1,5 +1,5 @@
 ---- MODULE ObserverResync ----
-\* lean: none
+\* lean: ClientDataPublication.reloadAcceptedSince
 \* crates: gents-desktop-core
 \* The desktop observer's delivery and resync loop for runtime documents
 \* (`observe.rs`, `observe/delivery.rs`, `observe/projection_store.rs`) and
@@ -24,17 +24,19 @@
 \*
 \* Fences. A publication (an accepted load or direct refresh) moves its node's
 \* store fence. A delivered event is a request event of its node's store.
-\* `EventsFenceReloads` TRUE puts request events on the fence a snapshot
-\* reload checks (before the fix); FALSE leaves them on the patch fence only,
-\* which this model does not exercise (Lean
-\* `ClientDataPublication.request_event_preserves_reload`). The reconnect
-\* request event fences like any other event of the node.
+\* Whether a publication or a request event since its capture rejects a
+\* reload is Lean `ClientDataPublication.reloadAcceptedSince`, read from the
+\* generated table: a publication does, a request event does not (it stays
+\* on the patch fence, which this model does not exercise).
+\* `EventsFenceReloads` TRUE also puts request events on the reload fence
+\* (before the fix); `PublicationsFenceReloads` FALSE takes publications off
+\* it. The reconnect request event fences like any other event of the node.
 \*
 \* Direct refresh. A user mutation refreshes its node once: capture, read,
 \* publish through the fence. A rejected refresh queues the observer.
 \*
 \* Each remaining constant breaks one guard of the fixed design.
-EXTENDS Naturals
+EXTENDS Naturals, LeanDecision_ClientDataPublication
 
 CONSTANTS
   Nodes,                    \* runtimes the desktop observes
@@ -44,8 +46,8 @@ CONSTANTS
   K,                        \* renewals per node per in-flight load
   MaxDrops,                 \* stream drops per node
   MaxRefreshes,             \* user mutations that refresh a node directly
-  EventsFenceReloads,       \* request events reject snapshot reloads
-  PublicationsFenceReloads, \* a publication rejects an older reload
+  EventsFenceReloads,       \* request events also reject snapshot reloads
+  PublicationsFenceReloads, \* FALSE: a publication no longer rejects a reload
   RejectDelay,              \* a rejected load waits the retry timer
   EventQueues,              \* a delivered event queues its node
   ArmFirst                  \* the reconnect snapshot waits for arming
@@ -106,10 +108,12 @@ Init ==
 
 \* Nodes whose captured reloads a request event from `n` rejects: only `n`,
 \* whose store the event belongs to.
-EventFenced(n) == IF EventsFenceReloads THEN {n} ELSE {}
+EventFenced(n) ==
+  IF EventsFenceReloads \/ ~reloadAcceptedSince(FALSE, TRUE) THEN {n} ELSE {}
 
 \* Nodes whose captured loads a publication into `n`'s store rejects.
-PublicationFenced(n) == IF PublicationsFenceReloads THEN {n} ELSE {}
+PublicationFenced(n) ==
+  IF PublicationsFenceReloads /\ ~reloadAcceptedSince(TRUE, FALSE) THEN {n} ELSE {}
 
 Moved(set, fenced) == [m \in Nodes |-> fenced[m] \/ m \in set]
 

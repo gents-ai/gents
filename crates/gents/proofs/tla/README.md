@@ -182,7 +182,8 @@ See `../README.md` for how this fits the broader formal-verification model.
   `NoReadWithoutReason`, `EventualPublication` and `Convergence` hold when
   request events stay off the reload fence, a rejected load requeues without
   back-off and a rejected refresh hands its node to the observer (Lean
-  `ClientDataPublication.acceptsReload`, `ObserverResync`).
+  `ClientDataPublication.acceptsReload`, `ObserverResync`). The reload fence
+  is the generated table of `ClientDataPublication.reloadAcceptedSince`.
   `NoReadWithoutReason` bounds hosted reads by batches of reasons to read, not
   below them: with a lease renewal during every load the node is read back to
   back. `RejectDelay` restores the 250 ms wait after a rejected load and still
