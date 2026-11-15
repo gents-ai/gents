@@ -47,9 +47,10 @@ VARIABLES
   released,
   parent,    \* polling | listed | read | released | waited | failed
   polls,
-  readBytes
+  readBytes,
+  killed     \* the tool timeout ended the child (status failed)
 
-vars == <<child, out, ticks, released, parent, polls, readBytes>>
+vars == <<child, out, ticks, released, parent, polls, readBytes, killed>>
 
 Init ==
   /\ child = "spawned"
@@ -59,23 +60,30 @@ Init ==
   /\ parent = "polling"
   /\ polls = 0
   /\ readBytes = 0
+  /\ killed = FALSE
 
 ChildPrint ==
   /\ child = "spawned"
   /\ child' = "gated" /\ out' = 4
-  /\ UNCHANGED <<ticks, released, parent, polls, readBytes>>
+  /\ UNCHANGED <<ticks, released, parent, polls, readBytes, killed>>
 
 \* Wall time passes while the child waits at its gate.
 Tick ==
   /\ SelfExpire /\ child = "gated" /\ ~released /\ ticks < K
   /\ ticks' = ticks + 1
-  /\ UNCHANGED <<child, out, released, parent, polls, readBytes>>
+  /\ UNCHANGED <<child, out, released, parent, polls, readBytes, killed>>
 
 ChildFinish ==
   /\ child = "gated"
   /\ released \/ (SelfExpire /\ ticks = K)
   /\ child' = "done" /\ out' = 8
-  /\ UNCHANGED <<ticks, released, parent, polls, readBytes>>
+  /\ UNCHANGED <<ticks, released, parent, polls, readBytes, killed>>
+
+\* The tool timeout kills the child at the gate: the row fails with "live".
+ChildKilled ==
+  /\ SelfExpire /\ child = "gated" /\ ~released /\ ticks = K
+  /\ child' = "done" /\ killed' = TRUE
+  /\ UNCHANGED <<out, ticks, released, parent, polls, readBytes>>
 
 \* `list_processes`: the row is running with its output so far, or terminal.
 Poll ==
@@ -88,25 +96,25 @@ Poll ==
        THEN /\ parent' = "failed" /\ polls' = polls + 1
        ELSE /\ polls' = IF PollCap THEN polls + 1 ELSE polls
             /\ UNCHANGED parent
-  /\ UNCHANGED <<child, out, ticks, released, readBytes>>
+  /\ UNCHANGED <<child, out, ticks, released, readBytes, killed>>
 
 \* `read_process` reports the output at the moment it runs.
 Read ==
   /\ parent = "listed"
   /\ parent' = "read" /\ readBytes' = out
-  /\ UNCHANGED <<child, out, ticks, released, polls>>
+  /\ UNCHANGED <<child, out, ticks, released, polls, killed>>
 
 Release ==
   /\ parent = "read"
   /\ parent' = "released" /\ released' = TRUE
-  /\ UNCHANGED <<child, out, ticks, polls, readBytes>>
+  /\ UNCHANGED <<child, out, ticks, polls, readBytes, killed>>
 
 Wait ==
   /\ parent = "released" /\ child = "done"
   /\ parent' = "waited"
-  /\ UNCHANGED <<child, out, ticks, released, polls, readBytes>>
+  /\ UNCHANGED <<child, out, ticks, released, polls, readBytes, killed>>
 
-Next == ChildPrint \/ Tick \/ ChildFinish \/ Poll \/ Read \/ Release \/ Wait
+Next == ChildPrint \/ Tick \/ ChildFinish \/ ChildKilled \/ Poll \/ Read \/ Release \/ Wait
 
 Spec == Init /\ [][Next]_vars
           /\ WF_vars(ChildPrint) /\ WF_vars(ChildFinish)
@@ -120,8 +128,11 @@ TypeOK ==
   /\ parent \in {"polling", "listed", "read", "released", "waited", "failed"}
   /\ polls \in Nat
   /\ readBytes \in {0, 4, 8}
+  /\ killed \in BOOLEAN
 
 ReadAgrees == parent \in {"read", "released", "waited"} => readBytes = 4
 NoWindowFailure == parent # "failed"
 Completes == <>(parent = "waited")
+\* `wait_process` reports the child completed, not failed (line 583).
+CompletedOk == parent = "waited" => ~killed
 ====
