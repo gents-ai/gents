@@ -130,7 +130,7 @@ sccache --version
 # logout removes it (and the host's live Gents node with it), and the job must
 # say so rather than build uncached on a host that has lost its session. On
 # Linux it is the systemd unit GENTS_SCCACHE_UNIT when the host installs one;
-# otherwise the server starts on demand under the runner account.
+# otherwise each runner gets its own server (below).
 cache_unavailable() {
   local message="$1 Builds here stop until this is fixed; rerun the failed jobs afterwards."
   echo "::error title=Runner compiler cache unavailable on $(hostname -s)::${message}"
@@ -156,15 +156,53 @@ else
     if ! systemctl is-active --quiet "${sccache_unit}"; then
       cache_unavailable "The sccache systemd unit ${sccache_unit} is not active on $(hostname -s). A person must start it: systemctl start ${sccache_unit}."
     fi
+    # Every runner on the host shares this one server, so a job must reach it
+    # exactly as the unit serves it: the unit's own binary over its socket.
+    # An older sccache on PATH ignores SCCACHE_SERVER_UDS, starts a private
+    # TCP server inside the job, and the runner kills that server when the
+    # job ends, under the other runners' compiles (2026-11-15).
+    sccache_bin="$(systemctl show -p ExecStart --value "${sccache_unit}" | sed -n 's/^{ path=\([^ ;]*\).*/\1/p')"
+    unit_socket=""
+    unit_dir=""
+    for assignment in $(systemctl show -p Environment --value "${sccache_unit}"); do
+      case "${assignment}" in
+        SCCACHE_SERVER_UDS=*) unit_socket="${assignment#*=}" ;;
+        SCCACHE_DIR=*) unit_dir="${assignment#*=}" ;;
+      esac
+    done
+    if [[ -z "${unit_socket}" || ! -x "${sccache_bin}" ]]; then
+      cache_unavailable "The sccache systemd unit ${sccache_unit} on $(hostname -s) must run an sccache binary this account can execute and set SCCACHE_SERVER_UDS; it has binary '${sccache_bin}' and socket '${unit_socket}'. A person must fix the unit."
+    fi
+    export SCCACHE_SERVER_UDS="${unit_socket}" SCCACHE_DIR="${unit_dir:-${SCCACHE_DIR}}"
     repair="restart it: systemctl restart ${sccache_unit}"
   else
-    if ! sccache --show-stats >/dev/null 2>&1; then
-      sccache --start-server
+    # No host server: this runner gets its own, on a port and in a cache
+    # directory derived from the runner's own directory. Only this runner's
+    # jobs, one at a time, use it, so the runner stopping it at a job's end
+    # never reaches another runner's compile.
+    sccache_bin="$(command -v sccache)"
+    runner_root="$(dirname "$(dirname "${RUNNER_WORKSPACE:?RUNNER_WORKSPACE must be set}")")"
+    runner_key="$(printf '%s' "${runner_root}" | cksum | cut -d' ' -f1)"
+    export SCCACHE_SERVER_PORT="$((20000 + runner_key % 20000))"
+    export SCCACHE_DIR="${HOME}/.cache/sccache-runner-${runner_key}"
+    unset SCCACHE_SERVER_UDS
+    echo "SCCACHE_SERVER_PORT=${SCCACHE_SERVER_PORT}" >> "${GITHUB_ENV}"
+    mkdir -p "${SCCACHE_DIR}"
+    if ! "${sccache_bin}" --show-stats >/dev/null 2>&1; then
+      "${sccache_bin}" --start-server
     fi
-    repair="check that $(id -un) can run sccache --start-server with SCCACHE_DIR=${SCCACHE_DIR}"
+    repair="check that $(id -un) can run ${sccache_bin} --start-server with SCCACHE_DIR=${SCCACHE_DIR} and port ${SCCACHE_SERVER_PORT}"
   fi
+  "${sccache_bin}" --version
+  {
+    echo "SCCACHE_DIR=${SCCACHE_DIR}"
+    echo "RUSTC_WRAPPER=${sccache_bin}"
+    if [[ -n "${SCCACHE_SERVER_UDS:-}" ]]; then
+      echo "SCCACHE_SERVER_UDS=${SCCACHE_SERVER_UDS}"
+    fi
+  } >> "${GITHUB_ENV}"
 fi
-if ! sccache --show-stats >/dev/null 2>&1; then
+if ! "${sccache_bin:-sccache}" --show-stats >/dev/null 2>&1; then
   cache_unavailable "The sccache server does not answer on $(hostname -s). A person must ${repair}."
 fi
-echo "Reusing the host sccache server."
+echo "Using the sccache server ${SCCACHE_SERVER_UDS:-on port ${SCCACHE_SERVER_PORT:-4226}} (${sccache_bin:-sccache})."
