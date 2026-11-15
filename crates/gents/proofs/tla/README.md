@@ -245,6 +245,44 @@ See `../README.md` for how this fits the broader formal-verification model.
   waits on the `pending_native` write-attempt event, a projection the attempt
   may skip once it holds a terminal outcome; `LostWakeup` drops permit
   semantics, the lost wakeup an enable-then-check wait avoids.
+- `DroppedPermitCleanup` — one admitted provider call's `InferenceCall` row
+  from its creation to its terminal, and what a reader may await before
+  reading it (#3659). The holder finishes explicitly (the terminal write is
+  awaited) or its permit or queued guard is dropped, and `Drop` hands the
+  terminal write to a detached cleanup the registry's tracker counts. Every
+  terminal is a compare-and-set on a live row. The runtime stops gracefully
+  (join the tasks that hold permits, await the tracker, exit), is cut by the
+  teardown deadline, or exits abruptly; an exit discards cleanup in flight,
+  and recovery terminalizes a live row whose call ended, with its own reason
+  and no usage. `ExactlyOneTerminal`, `ObserverSawTarget`,
+  `GracefulExitFlushed` and `EndedCallTerminal` hold in the green model, whose
+  reader awaits the flush after ending the permits; GREEN `Changes` and
+  `ChangesTerminal` add `ObserverSettles` for a reader on the store's change
+  subscription armed before its first read, the signal for a row no drop of
+  the reader's own owes (a spawned call's queued row). RED: `UntrackedSpawn`
+  is the code before #3692; `UnawaitedFlush` is a graceful stop that does not
+  await the tracker and discards a dropped permit's terminal and usage;
+  `UncountedFinalizer` awaits it but does not count a stream's finalizer,
+  which the stop aborts without joining, so the stop exits before that
+  permit is dropped; `NoRecovery` leaves a live row after an abrupt exit; `NoTerminalCas` writes
+  a second terminal over a finish dropped after its commit; `SleepTerminal`
+  and `SleepQueued` are the timer waits; `QueuedByFlush` awaits the tracker
+  for a row it does not count; `PollBudget` polls within a budget;
+  `LateSubscribe` subscribes after the first read. Lean
+  `InferenceCall.DroppedPermit` owns the terminal a drop records.
+- `ClientIdentityMetadata` — first-run writers of one home's client identity
+  metadata (#3659, the concurrent eval pilots). Each writer reads the
+  metadata, stages it beside the destination, renames it over the
+  destination and reads again; what it does with each read is Lean
+  `ClientIdentityMetadata.decide`. `NoMissingFileError`, `NoTornMetadata`,
+  `NeverUninstalled`, `OkSawOwnMetadata`, `AgreedInstall`, `WriterSettles`
+  and `SameKeyAccepts` hold with a staging name per writer, one rename, the
+  second read and a single-winner signing key, with writers dying at any
+  step. RED: `Before` is the code before #3692 (the loser's rename finds
+  `principal.tmp` gone); `SharedStaging` and `SharedStagingTorn` keep only
+  the fixed staging name; `RemoveThenRename` and `RemoveThenRenameReread`
+  keep only the removal; `NoReread` and `DivergentKey` drop the key premise,
+  which is what keeps writers of one home in agreement.
 - `GuestAllowance` — a computing plugin guest that never calls the host and
   is stopped only by its compute allowance (Lean `allowanceTicks`), an epoch
   deadline advanced by the WASM host's ticker thread. `MCGuestAllowance`
@@ -496,6 +534,16 @@ EXPECTED to report the violation named in their config:
 ./scripts/run-tlc.sh MCPackUxWatchUnbounded
 ```
 
+For DroppedPermitCleanup and ClientIdentityMetadata — the green models
+(`MCDroppedPermitCleanup`, `Changes`, `ChangesTerminal`;
+`MCClientIdentityMetadata`) check clean; every other config is a diagnostic
+EXPECTED to report the violation named in its file:
+```bash
+for m in MCDroppedPermitCleanup*.cfg MCClientIdentityMetadata*.cfg; do
+  ./scripts/run-tlc.sh "${m%.cfg}"
+done
+```
+
 Each run directly, from this directory, is:
 ```bash
 java -cp <tla2tools.jar> tlc2.TLC -workers 2 -metadir <scratch dir> \
@@ -638,6 +686,23 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCPackUxWatchSilentBackoff.cfg` | `NotifyStall = FALSE`, no hazards, `MaxSelects = 0` | `NotSilent` intentionally VIOLATED: Start, Restart, Connect backs off with nothing shown | 45 distinct states before counterexample; 67 generated | 5 | <1s |
 | `MCPackUxWatchResetOnAccept.cfg` | `KeepFailuresOnAccept = FALSE`, hazard `broken`, `MaxRestarts = MaxFaults = MaxSelects = 0` | `EventualResume` intentionally VIOLATED: Connect, SendAtomic, StreamBroken, Notify, Retry cycles forever | 297 distinct states; 749 generated | 13 | <1s |
 | `MCPackUxWatchUnbounded.cfg` | `BoundedRetry = FALSE`, hazard `stop`, `MaxRestarts = MaxFaults = MaxSelects = 0` | `EventualResume` intentionally VIOLATED: a stopped runtime is retried forever and never reported | 536 distinct states; 1,257 generated | 20 | <1s |
+| `MCDroppedPermitCleanup.cfg` | `Calls = {c1, c2}`, every guard on, graceful, deadline and abrupt exits, reader on the flush | Passes `TypeOK`, `ExactlyOneTerminal`, `ObserverSawTarget`, `GracefulExitFlushed`, `EndedCallTerminal` | 457 distinct states; 1,048 generated | 11 | 1s (Linux x86_64, OpenJDK 17, 4 workers) |
+| `MCDroppedPermitCleanupChanges.cfg` | as green without exits, reader on the change subscription for persisted rows | Passes `TypeOK`, `ExactlyOneTerminal`, `ObserverSawTarget`, `ObserverSettles` | 467 distinct states; 1,661 generated | 11 | 1s |
+| `MCDroppedPermitCleanupChangesTerminal.cfg` | as `Changes`, for terminal rows | Passes the same | 419 distinct states; 1,509 generated | 9 | 1s |
+| `MCDroppedPermitCleanupUntrackedSpawn.cfg` | `Tracked = FALSE` | `ObserverSawTarget` intentionally VIOLATED: Enqueue, Drop for both calls, ObsWait, ObsFlushed reads live rows | 102 distinct states before counterexample; 250 generated | 7 | <1s |
+| `MCDroppedPermitCleanupUnawaitedFlush.cfg` | `ShutdownAwaitsFlush = FALSE` | `GracefulExitFlushed` intentionally VIOLATED: Enqueue(c1), BeginShutdown, Drop(c1), Exit | 80 distinct states before counterexample; 132 generated | 6 | <1s |
+| `MCDroppedPermitCleanupNoRecovery.cfg` | `Recovery = FALSE` | `EndedCallTerminal` intentionally VIOLATED: a queued call's runtime exits abruptly and its row stays live | 457 distinct states; 808 generated | 11 | <1s |
+| `MCDroppedPermitCleanupNoTerminalCas.cfg` | `TerminalCas = FALSE` | `ExactlyOneTerminal` intentionally VIOLATED: Start, FinishCommit, Drop, RunCleanup | 165 distinct states before counterexample; 281 generated | 6 | <1s |
+| `MCDroppedPermitCleanupSleepTerminal.cfg`, `SleepQueued.cfg` | `Signal = "timer"` | `ObserverSawTarget` intentionally VIOLATED: the timer fires first | 2 distinct states | 2 | <1s |
+| `MCDroppedPermitCleanupQueuedByFlush.cfg` | flush awaited for persisted rows | `ObserverSawTarget` intentionally VIOLATED: ObsWait, ObsFlushed before any row exists | 46 distinct states before counterexample; 65 generated | 4 | <1s |
+| `MCDroppedPermitCleanupPollBudget.cfg` | `Signal = "poll"`, `PollBudget = 2` | `ObserverNeverTimesOut` intentionally VIOLATED: two polls before any write | 21 distinct states before counterexample; 24 generated | 4 | <1s |
+| `MCDroppedPermitCleanupLateSubscribe.cfg` | `SubscribeFirst = FALSE` | `ObserverSettles` intentionally VIOLATED: ObsRead, the last write, ObsSubscribe, then no wake | 671 distinct states; 2,303 generated | 11 | 1s |
+| `MCClientIdentityMetadata.cfg` | `Writers = {w1, w2, w3}`, every guard on, `CanCrash` | Passes `TypeOK`, `NoMissingFileError`, `NoTornMetadata`, `NeverUninstalled`, `OkSawOwnMetadata`, `AgreedInstall`, `WriterSettles`, `SameKeyAccepts` | 856 distinct states; 2,743 generated | 14 | 1s |
+| `MCClientIdentityMetadataBefore.cfg` | shared staging name, removal, no second read | `NoMissingFileError` intentionally VIOLATED: w1 stages and removes, w2 truncates the same staging file, w1 renames it away, w2's rename finds it gone | 70 distinct states before counterexample; 95 generated | 11 | <1s |
+| `MCClientIdentityMetadataSharedStaging.cfg`, `SharedStagingTorn.cfg` | as green, `UniqueStaging = FALSE` | `NoMissingFileError` and `NoTornMetadata` intentionally VIOLATED | 49 and 52 distinct states | 10 | <1s |
+| `MCClientIdentityMetadataRemoveThenRename.cfg`, `RemoveThenRenameReread.cfg` | as green, `RemoveBeforeRename = TRUE` | `NeverUninstalled` and `NoMissingFileError` intentionally VIOLATED: w2 removes the file w1 installed | 52 and 55 distinct states | 12 | <1s |
+| `MCClientIdentityMetadataNoReread.cfg` | `SingleWinnerKey = FALSE`, `Reread = FALSE` | `OkSawOwnMetadata` intentionally VIOLATED | 46 distinct states | 11 | <1s |
+| `MCClientIdentityMetadataDivergentKey.cfg` | `SingleWinnerKey = FALSE` | `AgreedInstall` intentionally VIOLATED: w1 accepts, w2 renames over it | 42 distinct states | 11 | <1s |
 
 The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
 (rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and

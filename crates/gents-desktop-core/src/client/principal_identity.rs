@@ -191,22 +191,74 @@ impl NodeIdentity for PrincipalIdentity {
     }
 }
 
-/// Requires the stored metadata to match `expected`, persisting it when absent.
-///
-/// Two first-run writers can share one home — a `gents` invocation beside the
-/// desktop app, or two CLI invocations — so both may observe the file missing
-/// and both persist. Their signing key is already single-winner, so the loser's
-/// own re-read finds equal metadata and succeeds; only genuinely divergent
-/// metadata is an error.
+/// Which read of the metadata a writer is at (Lean `ClientIdentityMetadata.Read`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum MetadataRead {
+    First,
+    /// After the writer renamed its own staging file over the destination.
+    AfterInstall,
+}
+
+/// Lean `ClientIdentityMetadata.Decision`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum MetadataDecision {
+    Accept,
+    Install,
+    Mismatch,
+    Missing,
+}
+
+/// One writer's choice at a read (Lean `ClientIdentityMetadata.decide`). Two
+/// first-run writers can share one home, a `gents` invocation beside the
+/// desktop app or two CLI invocations, so both may find the metadata absent
+/// and both install it. Their signing key is single-winner, so a writer that
+/// lost the race finds equal metadata on its second read and accepts it.
+fn decide_metadata(
+    read: MetadataRead,
+    stored: Option<&NodeIdentityMetadata>,
+    expected: &NodeIdentityMetadata,
+) -> MetadataDecision {
+    match (read, stored) {
+        (_, Some(stored)) if stored == expected => MetadataDecision::Accept,
+        (_, Some(_)) => MetadataDecision::Mismatch,
+        (MetadataRead::First, None) => MetadataDecision::Install,
+        (MetadataRead::AfterInstall, None) => MetadataDecision::Missing,
+    }
+}
+
+async fn read_and_decide(
+    path: &Path,
+    read: MetadataRead,
+    expected: &NodeIdentityMetadata,
+) -> Result<MetadataDecision> {
+    Ok(decide_metadata(
+        read,
+        read_metadata(path).await?.as_ref(),
+        expected,
+    ))
+}
+
+/// Requires the stored metadata to match `expected`, installing it when
+/// absent. The second read never installs again (Lean
+/// `the_second_read_never_installs`), so this installs at most once.
 async fn validate_or_persist_metadata(path: &Path, expected: &NodeIdentityMetadata) -> Result<()> {
-    match read_metadata(path).await? {
-        Some(stored) => ensure_metadata_matches(path, &stored, expected),
-        None => {
-            write_json_atomically(path, expected).await?;
-            match read_metadata(path).await? {
-                Some(stored) => ensure_metadata_matches(path, &stored, expected),
-                None => Ok(()),
+    let mut read = MetadataRead::First;
+    loop {
+        match read_and_decide(path, read, expected).await? {
+            MetadataDecision::Accept => return Ok(()),
+            MetadataDecision::Install => {
+                write_json_atomically(path, expected).await?;
+                read = MetadataRead::AfterInstall;
             }
+            MetadataDecision::Mismatch => {
+                anyhow::bail!("node identity metadata mismatch at {}", path.display())
+            }
+            MetadataDecision::Missing => anyhow::bail!(
+                "node identity metadata {} is missing after it was installed",
+                path.display()
+            ),
         }
     }
 }
@@ -221,19 +273,6 @@ async fn read_metadata(path: &Path) -> Result<Option<NodeIdentityMetadata>> {
             Err(anyhow::Error::from(error)).with_context(|| format!("reading {}", path.display()))
         }
     }
-}
-
-fn ensure_metadata_matches(
-    path: &Path,
-    stored: &NodeIdentityMetadata,
-    expected: &NodeIdentityMetadata,
-) -> Result<()> {
-    anyhow::ensure!(
-        stored == expected,
-        "node identity metadata mismatch at {}",
-        path.display()
-    );
-    Ok(())
 }
 
 /// Replaces `path` in one `rename`, staged under a name no other writer can
@@ -274,6 +313,47 @@ fn abbreviate_did(did: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, Clone, Copy, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Stored {
+        Absent,
+        Equal,
+        Different,
+    }
+
+    /// Replays Lean `ClientIdentityMetadata.decide` against a real metadata
+    /// file in each modelled state.
+    #[tokio::test]
+    async fn metadata_decisions_match_the_lean_model() {
+        let expected = NodeIdentityMetadata {
+            did: "did:key:expected".to_owned(),
+            public_key_bytes: vec![1, 2, 3],
+        };
+        let different = NodeIdentityMetadata {
+            did: "did:key:different".to_owned(),
+            public_key_bytes: vec![4, 5, 6],
+        };
+        let cases = gents_lean_vocab::families::client_identity_metadata_decisions::cases::<
+            MetadataDecision,
+            MetadataRead,
+            Stored,
+        >();
+        assert_eq!(cases.len(), 6);
+        for case in cases {
+            let tempdir = tempfile::tempdir().unwrap();
+            let path = tempdir.path().join("principal.json");
+            match case.input.stored {
+                Stored::Absent => {}
+                Stored::Equal => write_json_atomically(&path, &expected).await.unwrap(),
+                Stored::Different => write_json_atomically(&path, &different).await.unwrap(),
+            }
+            let decision = read_and_decide(&path, case.input.read, &expected)
+                .await
+                .unwrap();
+            case.check(decision);
+        }
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn concurrent_first_load_or_create_agrees_on_one_identity() {

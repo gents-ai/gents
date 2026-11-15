@@ -193,6 +193,7 @@ import Proofs.Session.Identity.SessionInputEdit
 import Proofs.Automation.EventDelivery.WatcherConformance
 import Proofs.Conformance.WatcherActors
 import Proofs.Conformance.ClientInstallation
+import Proofs.Conformance.ClientIdentityMetadata
 import Proofs.Conformance.RuntimeServiceReplacement
 import Proofs.Conformance.ClientSettings
 import Proofs.Conformance.ClientRequestClosureCases

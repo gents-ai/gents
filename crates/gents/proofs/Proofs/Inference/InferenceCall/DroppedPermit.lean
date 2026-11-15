@@ -74,4 +74,71 @@ theorem cancellation_is_recorded_as_cancelled (observed : Option String) :
       recordedReason (outcome true observed) = .cancelled := by
   simp [recordedState, recordedReason, outcome]
 
+/-! The runtime's exit. `Drop` cannot await, so the terminal above is written
+by a cleanup task detached onto the runtime the permit was created on, and a
+runtime that exits discards the cleanup still in flight. The interleaving is
+`tla/DroppedPermitCleanup.tla`. -/
+
+inductive Exit where
+  /-- An ordered stop: the tasks that hold permits are joined, then the
+  registry's cleanup tracker is awaited, then the runtime exits. -/
+  | graceful
+  /-- The teardown deadline cut the ordered stop. The flush has no deadline of
+  its own. -/
+  | deadline
+  /-- A crash or a kill. -/
+  | abrupt
+  deriving DecidableEq, Repr
+
+/-- Whether a dropped permit's cleanup runs, given the exit of its runtime and
+whether the cleanup was still in flight at that exit. A graceful stop awaits
+the tracker, so it never exits over cleanup in flight (`GracefulExitFlushed`).
+The tracker counts a stream's finalizer while it owns the permit, because the
+stop aborts that task without joining it. TLC's counterexample is Start,
+BeginShutdown, BeginFinish, Exit both for a stop that does not await the
+tracker (`UnawaitedFlush`) and for one that awaits it without counting the
+finalizer (`UncountedFinalizer`). -/
+def cleanupRuns (exit : Exit) (inFlightAtExit : Bool) : Bool :=
+  match exit with
+  | .graceful => true
+  | .deadline | .abrupt => !inFlightAtExit
+
+/-- Who installs the terminal of a call whose permit was dropped. -/
+inductive TerminalWriter where
+  /-- The permit's own cleanup: the terminal of `outcome`, or the terminal and
+  usage a finish dropped mid-write had already marked. -/
+  | cleanup
+  /-- Inference-call recovery, at the next start or in the periodic sweep,
+  once the call's request has ended: cancelled or failed, without usage. -/
+  | recovery
+  deriving DecidableEq, Repr
+
+def terminalWriter (exit : Exit) (inFlightAtExit : Bool) : TerminalWriter :=
+  if cleanupRuns exit inFlightAtExit then .cleanup else .recovery
+
+/-- Provider usage the dropped permit had observed reaches the row only
+through its own cleanup; recovery has no usage to record. -/
+def keepsObservedUsage : TerminalWriter → Bool
+  | .cleanup => true
+  | .recovery => false
+
+theorem a_graceful_stop_keeps_the_dropped_terminal (inFlightAtExit : Bool) :
+    terminalWriter .graceful inFlightAtExit = .cleanup := by
+  simp [terminalWriter, cleanupRuns]
+
+theorem a_graceful_stop_keeps_observed_usage (inFlightAtExit : Bool) :
+    keepsObservedUsage (terminalWriter .graceful inFlightAtExit) = true := by
+  simp [terminalWriter, cleanupRuns, keepsObservedUsage]
+
+/-- Recovery inherits a dropped permit's row only from an exit that was not
+graceful and that found the cleanup in flight. -/
+theorem recovery_owns_only_a_cut_or_abrupt_exit (exit : Exit) (inFlightAtExit : Bool)
+    (h : terminalWriter exit inFlightAtExit = .recovery) :
+    exit ≠ .graceful ∧ inFlightAtExit = true := by
+  cases exit <;> cases inFlightAtExit <;> simp_all [terminalWriter, cleanupRuns]
+
+theorem a_finished_cleanup_survives_any_exit (exit : Exit) :
+    terminalWriter exit false = .cleanup := by
+  cases exit <;> simp [terminalWriter, cleanupRuns]
+
 end InferenceCall.DroppedPermit
