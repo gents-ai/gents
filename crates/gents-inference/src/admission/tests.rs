@@ -460,21 +460,40 @@ fn assert_reconstructed_slot_count(rows: &[Value], backend_id: &str, expected: u
     );
 }
 
+/// Reads the InferenceCall rows until `ready` holds, re-reading on every
+/// change to the collection. A spawned call's row is no write of the reader's
+/// own, so nothing it awaited makes the row durable; the change subscription is
+/// armed before the first read so a write committed in between still wakes it
+/// (`tla/DroppedPermitCleanup.tla`: `Changes` holds, `SleepQueued`,
+/// `PollBudget` and `LateSubscribe` fail).
+async fn await_call_rows(
+    node: &Arc<EmbeddedNode>,
+    signer: &gents_store::identity::ManagedAgentSigner,
+    awaited: &str,
+    ready: impl Fn(&[Value]) -> bool,
+) -> Vec<Value> {
+    let mut changes =
+        gents_store::subscription_source::subscribe_collections(node, ["InferenceCall"]).unwrap();
+    loop {
+        let rows = call_rows(node, signer).await;
+        if ready(&rows) {
+            return rows;
+        }
+        if changes.recv().await.is_none() {
+            panic!("InferenceCall changes closed while awaiting {awaited}, last rows={rows:?}");
+        }
+    }
+}
+
 async fn wait_for_call_row_count(
     node: &Arc<EmbeddedNode>,
     signer: &gents_store::identity::ManagedAgentSigner,
     expected: usize,
 ) -> Vec<Value> {
-    let mut last = Vec::new();
-    for _ in 0..100 {
-        let rows = call_rows(node, signer).await;
-        if rows.len() >= expected {
-            return rows;
-        }
-        last = rows;
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("timed out waiting for at least {expected} InferenceCall rows, last rows={last:?}");
+    await_call_rows(node, signer, &format!("{expected} rows"), |rows| {
+        rows.len() >= expected
+    })
+    .await
 }
 
 async fn wait_for_request_call_state(
@@ -483,21 +502,27 @@ async fn wait_for_request_call_state(
     request_id: &str,
     expected_state: &str,
 ) -> Value {
-    let mut last = Vec::new();
-    for _ in 0..100 {
-        let rows = call_rows(node, signer).await;
-        if let Some(row) = rows.iter().find(|row| {
-            row.get("request_id").and_then(Value::as_str) == Some(request_id)
-                && row.get("call_state").and_then(Value::as_str) == Some(expected_state)
-        }) {
-            return row.clone();
-        }
-        last = rows;
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!(
-        "timed out waiting for request_id={request_id} InferenceCall state={expected_state}, last rows={last:?}"
-    );
+    let rows = await_call_rows(
+        node,
+        signer,
+        &format!("request_id={request_id} state={expected_state}"),
+        |rows| request_row_in_state(rows, request_id, expected_state).is_some(),
+    )
+    .await;
+    request_row_in_state(&rows, request_id, expected_state)
+        .cloned()
+        .unwrap()
+}
+
+fn request_row_in_state<'a>(
+    rows: &'a [Value],
+    request_id: &str,
+    expected_state: &str,
+) -> Option<&'a Value> {
+    rows.iter().find(|row| {
+        row.get("request_id").and_then(Value::as_str) == Some(request_id)
+            && row.get("call_state").and_then(Value::as_str) == Some(expected_state)
+    })
 }
 
 #[test]
@@ -725,7 +750,6 @@ async fn missing_backend_persists_backend_gone_cancelled_terminal() {
     })
     .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     let rows = call_rows(&node, &registry.signer).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["backend_id"], "missing");
@@ -764,7 +788,6 @@ async fn max_queue_depth_zero_allows_immediate_permit_and_rejects_saturated_back
     })
     .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     let rows = call_rows(&node, &registry.signer).await;
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["call_state"], "completed");
@@ -796,8 +819,7 @@ async fn queued_calls_start_in_tokio_registration_order_after_permit_release() {
             .await;
         });
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let rows = call_rows(&node, &registry.signer).await;
+        let rows = wait_for_call_row_count(&node, &registry.signer, 2).await;
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["call_state"], "running");
         assert_eq!(rows[1]["call_state"], "queued");
@@ -813,7 +835,6 @@ async fn queued_calls_start_in_tokio_registration_order_after_permit_release() {
     })
     .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     let rows = call_rows(&node, &registry.signer).await;
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["call_state"], "completed");
@@ -894,7 +915,6 @@ async fn explicit_failure_releases_reconstructed_slot() {
     })
     .await;
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
     let rows = call_rows(&node, &registry.signer).await;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["call_state"], "failed");
@@ -961,22 +981,20 @@ async fn backend_call_rows(
     backend_id: &str,
     expected: usize,
 ) -> Vec<Value> {
-    let mut last = Vec::new();
-    for _ in 0..100 {
-        let rows = call_rows(node, signer)
-            .await
-            .into_iter()
+    let backend_rows = |rows: &[Value]| {
+        rows.iter()
             .filter(|row| row.get("backend_id").and_then(Value::as_str) == Some(backend_id))
-            .collect::<Vec<_>>();
-        if rows.len() >= expected {
-            return rows;
-        }
-        last = rows;
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!(
-        "timed out waiting for {expected} InferenceCall rows of {backend_id}, last rows={last:?}"
-    );
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let rows = await_call_rows(
+        node,
+        signer,
+        &format!("{expected} rows of {backend_id}"),
+        |rows| backend_rows(rows).len() >= expected,
+    )
+    .await;
+    backend_rows(&rows)
 }
 
 fn row_text(row: &Value, field: &str) -> String {
@@ -1265,7 +1283,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
         None,
         None,
     ));
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_for_request_call_state(&node, &signer, "req-leak-c", "queued").await;
     drop(held);
     let permit = tokio::time::timeout(Duration::from_secs(30), queued)
         .await
