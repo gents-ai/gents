@@ -258,13 +258,13 @@ async fn run_contract_with_streaming_cadence(
 
         let records = core.peer_records().await;
         core.submit_request(&session, &node_did, OFFLINE_PROMPT, Some(&agent)).await?;
-        let (request, _, _) = timeout(TURN_BUDGET, wait_for_runtime_agent_request(
+        let (request, _, _) = wait_for_runtime_agent_request(
             &graphql, core.node(), &node_did, OFFLINE_PROMPT,
-        )).await.context("second request did not reach runtime in 20s")??;
+        ).await.context("second request did not reach the runtime")?;
         core.shutdown().await?;
         drop(core);
         offline_gate.add_permits(1);
-        wait_for_complete_agent_response(&graphql, &request, &session, TURN_BUDGET).await?;
+        wait_for_complete_agent_response(&graphql, &request, &session).await?;
 
         let reconnect_started = Instant::now();
         let core = Arc::new(ClientCore::start_with_paths_and_options(
@@ -347,7 +347,7 @@ async fn visible_turn(
 ) -> Result<()> {
     let started = Instant::now();
     let live_content_visible = std::sync::atomic::AtomicBool::new(false);
-    let result = timeout(TURN_BUDGET, async {
+    let result = async {
         core.submit_request(session, node_did, prompt, Some(agent_did))
             .await?;
         let local_submit_completed = started.elapsed();
@@ -360,7 +360,7 @@ async fn visible_turn(
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
             async {
-                wait_for_complete_agent_response(graphql, &request, session, TURN_BUDGET).await?;
+                wait_for_complete_agent_response(graphql, &request, session).await?;
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
             async {
@@ -422,14 +422,14 @@ async fn visible_turn(
         }}"#, escape_graphql_string(&request))).await?;
         tracing::info!(timestamps = ?lifecycle, "runtime lifecycle timing evidence");
         Ok::<_, anyhow::Error>(())
-    })
+    }
     .await;
-    if !matches!(result, Ok(Ok(()))) {
+    if result.is_err() {
         let diagnostics = pairing_diagnostics(core, graphql).await;
         core.shutdown().await?;
         let streamed =
             stream_gate.map(|_| live_content_visible.load(std::sync::atomic::Ordering::Relaxed));
-        bail!("client-visible turn exceeded 20s or failed: {result:?}; streamed content visible while provider completion was gated: {streamed:?}; {diagnostics}");
+        bail!("client-visible turn failed: {result:?}; streamed content visible while provider completion was gated: {streamed:?}; {diagnostics}");
     }
     tracing::info!(
         elapsed_ms = started.elapsed().as_millis(),
@@ -591,7 +591,12 @@ async fn wait_for_runtime_reply(
                     terminal_ready_at.expect("terminal selection timestamp"),
                 ));
             }
-            observe_change_until(&mut changes, visibility_started + TURN_BUDGET).await;
+            if !changed_before_stall(&mut changes).await {
+                bail!(
+                    "runtime reply for {request} made no progress for {:?}: stages_seen={stages_seen:?}; requests={requests:?}; body={body:?}",
+                    support::waits::STALL_CEILING
+                );
+            }
         }
     };
     let observer_visibility = async {
@@ -605,9 +610,14 @@ async fn wait_for_runtime_reply(
             }) {
                 return Ok::<_, anyhow::Error>(Instant::now());
             }
-            store_updates
-                .changed()
+            tokio::time::timeout(support::waits::STALL_CEILING, store_updates.changed())
                 .await
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "app store did not change for {:?} before showing {request} completed",
+                        support::waits::STALL_CEILING
+                    )
+                })?
                 .context("app projection update channel closed")?;
         }
     };
@@ -1137,7 +1147,7 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
         let denied = call(owner.node_identity(), cross_session).await?;
         anyhow::ensure!(denied.status() == reqwest::StatusCode::NOT_FOUND, "cross-session activity was visible");
         gate.add_permits(1);
-        wait_for_complete_agent_response(&graphql, &request, &session, TURN_BUDGET).await?;
+        wait_for_complete_agent_response(&graphql, &request, &session).await?;
         let terminal = call(owner.node_identity(), key.clone()).await?;
         anyhow::ensure!(terminal.status() == reqwest::StatusCode::NOT_FOUND, "terminal activity remained visible");
         let revocation = gents_service::server_host::decide_managed_enrollment(
@@ -1269,13 +1279,9 @@ async fn run_live_contract(readiness_revisions: usize) -> Result<()> {
                     Some(&agent),
                 )
                 .await?;
-            let first_reply = wait_for_complete_agent_response_with_access(
-                &access,
-                &first.request_id,
-                &session,
-                TURN_BUDGET,
-            )
-            .await?;
+            let first_reply =
+                wait_for_complete_agent_response_with_access(&access, &first.request_id, &session)
+                    .await?;
             wait_for_client_complete_response(
                 &core,
                 &session,
@@ -1299,7 +1305,6 @@ async fn run_live_contract(readiness_revisions: usize) -> Result<()> {
                 &access,
                 &offline.request_id,
                 &session,
-                TURN_BUDGET,
             )
             .await?;
             let core = Arc::new(
@@ -1346,7 +1351,6 @@ async fn run_live_contract(readiness_revisions: usize) -> Result<()> {
                 &access,
                 &followup.request_id,
                 &session,
-                TURN_BUDGET,
             )
             .await?;
             wait_for_client_complete_response(

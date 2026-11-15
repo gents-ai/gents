@@ -25,8 +25,8 @@ pub(super) fn latest_user_text(request: &Value) -> Option<String> {
 ///
 /// The projection joins the app's observed request row with the runtime's
 /// transcript, so either the app store or a runtime document may be the last
-/// input to arrive; the wait wakes on both. It has no deadline of its own: the
-/// caller's turn bound ends a turn whose content never becomes visible.
+/// input to arrive; the wait wakes on both. It has no deadline of its own and
+/// fails only when neither changes for the suite's stall ceiling.
 pub(super) async fn wait_for_visible_content(
     core: &ClientCore,
     graphql: &str,
@@ -45,14 +45,25 @@ pub(super) async fn wait_for_visible_content(
     loop {
         store_updates.borrow_and_update();
         let content = canonical_live_content(core, graphql, request).await?;
-        if content.is_some_and(|content| content.contains(expected)) {
+        if content
+            .as_deref()
+            .is_some_and(|content| content.contains(expected))
+        {
             break;
         }
-        tokio::select! {
-            changed = store_updates.changed() => {
-                changed.context("app projection update channel closed")?;
+        let progressed = tokio::time::timeout(support::waits::STALL_CEILING, async {
+            tokio::select! {
+                changed = store_updates.changed() => changed.context("app projection update channel closed"),
+                () = observe_change(&mut changes) => Ok(()),
             }
-            () = observe_change(&mut changes) => {}
+        })
+        .await;
+        match progressed {
+            Ok(changed) => changed?,
+            Err(_) => bail!(
+                "streamed content for {request} not visible and nothing changed for {:?}; last projection={content:?}",
+                support::waits::STALL_CEILING
+            ),
         }
     }
     let emitted = (*emission.borrow())
