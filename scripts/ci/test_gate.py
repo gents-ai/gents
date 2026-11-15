@@ -355,6 +355,18 @@ class TlaSelection(unittest.TestCase):
             with self.assertRaises(check.HeaderError):
                 check.spec_header(spec)
 
+    def test_lean_a_spec_restates_selects_it(self):
+        """Specs that copied Lean by hand name it, as a generated table or on `models:`."""
+        proofs = "crates/gents/proofs/Proofs/"
+        for source, spec in [("Session/AgentSession.lean", "SessionHeadObservation"),
+                             ("Clients/ClientShell/PackWatch.lean", "PackUxWatch"),
+                             ("Store/NativeCompletion.lean", "NativeCompletionHandshake"),
+                             ("Tools/ToolPolicy/PluginCalls.lean", "GuestAllowance")]:
+            self.assertIn(spec, select(proofs + source)["contract"]["tla"], source)
+        node = gate.tla_check.graph()["SessionHeadObservation"]
+        self.assertEqual(node["lean"], ["AgentSession.newerByKeys"])
+        self.assertEqual(node["generated"], ["LeanDecision_AgentSession"])
+
     def test_prose_selects_no_spec(self):
         self.assertEqual(select("docs/guide.md")["contract"]["tla"], [])
 
