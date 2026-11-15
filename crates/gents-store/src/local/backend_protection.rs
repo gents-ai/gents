@@ -116,7 +116,20 @@ fn node_did(node: &Arc<dyn NodeIdentity>) -> Result<String> {
 /// Builds a node [`document_acp::configure`] prepared. Every node opened on a
 /// home's store is built here, so a refused Vera deployment is reported as
 /// what it is.
-pub async fn build_configured(builder: defra_node::NodeBuilder) -> Result<defra_node::Node> {
+pub async fn build_configured(
+    builder: defra_node::NodeBuilder,
+    data: &Path,
+    document_acp: DocumentAcp,
+) -> Result<defra_node::Node> {
+    let node = start(builder).await?;
+    if let Err(refused) = document_acp::check_started(&node, data, document_acp) {
+        let _ = node.shutdown().await;
+        return Err(refused.into());
+    }
+    Ok(node)
+}
+
+async fn start(builder: defra_node::NodeBuilder) -> Result<defra_node::Node> {
     builder
         .build()
         .await
@@ -173,18 +186,23 @@ impl<'a> FreshBackendStore<'a> {
             .with_node_identity_did(did)
             .with_node_acp_enabled();
         let builder = document_acp::configure_fresh(builder, &self.data, key, document_acp, node)?;
-        let node = build_configured(builder).await?;
-        let result = async {
+        let node = start(builder).await?;
+        let result: Result<_> = async {
             crate::schema::ensure_runtime_schemas(&node)
                 .await
                 .map_err(BackendProtectionError::Schema)?;
-            validate_binding(&node).await
+            validate_binding(&node).await?;
+            Ok(document_acp::created(&node, document_acp)?)
         }
         .await;
         let shutdown = node.shutdown().await;
-        result?;
+        let deployment = result?;
         shutdown?;
         drop(node);
+        if let Some(deployment) = deployment {
+            let data = self.data.clone();
+            tokio::task::spawn_blocking(move || document_acp::record(&data, &deployment)).await??;
+        }
         let nonce = *uuid::Uuid::new_v4().as_bytes();
         let mut mac = key
             .with_secret(|secret| MarkerMac::new_from_slice(secret).expect("HMAC accepts any key"));
@@ -270,7 +288,7 @@ impl<'a> ProtectedBackendStore<'a> {
             .with_node_identity_did(did.clone())
             .with_node_acp_enabled();
         let builder = document_acp::configure(builder, &self.data, key, document_acp, node)?;
-        let node = build_configured(builder).await?;
+        let node = build_configured(builder, &self.data, document_acp).await?;
         let checked = validate_binding(&node).await;
         let shutdown = node.shutdown().await;
         checked.map_err(|error| match error {
@@ -356,7 +374,7 @@ impl PreflightProtectedBackendStore<'_> {
         if let Some(p2p) = p2p {
             builder = builder.with_p2p(p2p);
         }
-        let node = Arc::new(build_configured(builder).await?);
+        let node = Arc::new(build_configured(builder, &self.store.data, self.document_acp).await?);
         if let Err(error) = validate_binding(&node).await {
             let _ = node.shutdown().await;
             return Err(error);

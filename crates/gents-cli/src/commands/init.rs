@@ -387,9 +387,13 @@ pub(crate) async fn init_home_with_core_packs(
             .with_extra_routes(owner_staged.router()),
     );
     let node_arc = std::sync::Arc::new(
-        gents_store::local::backend_protection::build_configured(node_builder)
-            .await
-            .context("building embedded DefraDB node for init")?,
+        gents_store::local::backend_protection::build_configured(
+            node_builder,
+            &data_dir,
+            document_acp,
+        )
+        .await
+        .context("building embedded DefraDB node for init")?,
     );
     stage("embedded_node_built");
     let client_identity = if fresh_store {

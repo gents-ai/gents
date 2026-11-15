@@ -3,7 +3,7 @@ use std::sync::Arc;
 use identity::{Identity as _, RawIdentity};
 use serde::{Deserialize, Serialize};
 
-use super::{admit, vera_dir, DocumentAcp, DocumentAcpError};
+use super::{admit, record, Deployment, DocumentAcp, DocumentAcpError};
 use crate::identity::{KeyIdentity, NodeIdentity, RegisteredIdentity};
 use crate::local::home::StoredInitConfig;
 
@@ -62,7 +62,13 @@ fn admission_matches_the_lean_model() {
         |input| {
             let store = tempfile::tempdir().unwrap();
             if matches!(input.store, Record::CreatedOnEmbeddedVera) {
-                std::fs::create_dir(vera_dir(store.path())).unwrap();
+                record(
+                    store.path(),
+                    &Deployment {
+                        consensus_key: "recorded".into(),
+                    },
+                )
+                .unwrap();
             }
             let node = if input.node_key_signs {
                 &signing

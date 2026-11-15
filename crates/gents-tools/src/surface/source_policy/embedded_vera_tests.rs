@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use gents_store::local::backend_protection::{
@@ -163,22 +164,107 @@ async fn a_home_that_did_not_opt_in_starts_no_vera_node() -> anyhow::Result<()> 
     Ok(())
 }
 
-#[tokio::test]
-async fn a_vera_node_that_cannot_start_refuses_the_home() -> anyhow::Result<()> {
-    let directory = tempfile::tempdir()?;
-    let home = home(directory.path(), "broken").await?;
+async fn refused(home: &Home) -> anyhow::Result<BackendProtectionError> {
+    match start(home, DocumentAcp::EmbeddedVera).await {
+        Ok(_) => anyhow::bail!("the home opened"),
+        Err(refused) => Ok(refused),
+    }
+}
+
+fn damaged(refused: &BackendProtectionError, home: &Home) -> bool {
+    gents_store::local::storage_backend::incompatible_store(refused, &home.data)
+        .map(|store| store.kind)
+        == Some(IncompatibleStoreKind::UnsupportedOrCorrupt)
+}
+
+async fn opted_in_home_with_a_document(root: &Path, name: &str) -> anyhow::Result<Home> {
+    let home = home(root, name).await?;
+    let owner = identity::Did::new(home.node.did())?;
     FreshBackendStore::observe(&home.data, &home.lock)
         .await?
         .initialize(&home.key, &home.node, DocumentAcp::EmbeddedVera)
         .await?;
-    let deployment = home.data.join("vera").join("node");
-    tokio::fs::remove_dir_all(&deployment).await?;
-    tokio::fs::write(&deployment, b"not a deployment").await?;
+    let node = start(&home, DocumentAcp::EmbeddedVera).await?;
+    node.document_acp()
+        .register_doc_object(&owner, AGENT_OWNERSHIP_POLICY_ID, RESOURCE, DOCUMENT)
+        .await?;
+    assert!(reads(&node, &owner).await?);
+    node.shutdown().await?;
+    Ok(home)
+}
 
+#[tokio::test]
+async fn a_home_whose_vera_directory_is_lost_is_refused_and_nothing_is_created(
+) -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let home = opted_in_home_with_a_document(directory.path(), "lost").await?;
+    let vera = home.data.join("vera");
+    let kept = directory.path().join("kept");
+    tokio::fs::rename(&vera, &kept).await?;
+
+    for _ in 0..2 {
+        let refused = refused(&home).await?;
+        assert!(matches!(
+            refused,
+            BackendProtectionError::DocumentAcp(DocumentAcpError::DeploymentMissing { .. })
+        ));
+        assert!(damaged(&refused, &home));
+        assert!(!vera.exists());
+    }
+
+    tokio::fs::create_dir(&vera).await?;
     assert!(matches!(
-        start(&home, DocumentAcp::EmbeddedVera).await,
-        Err(BackendProtectionError::Node(_))
+        refused(&home).await?,
+        BackendProtectionError::DocumentAcp(DocumentAcpError::DeploymentMissing { .. })
     ));
+    assert!(!vera.join("node").exists());
+
+    tokio::fs::remove_dir(&vera).await?;
+    tokio::fs::rename(&kept, &vera).await?;
+    let node = start(&home, DocumentAcp::EmbeddedVera).await?;
+    assert!(reads(&node, &identity::Did::new(home.node.did())?).await?);
+    node.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_home_whose_vera_directory_is_swapped_for_another_deployment_is_refused(
+) -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let home = opted_in_home_with_a_document(directory.path(), "swapped").await?;
+    let twin_home = directory.path().join("twin");
+    tokio::fs::create_dir(&twin_home).await?;
+    tokio::fs::copy(
+        directory.path().join("swapped").join("node.key"),
+        twin_home.join("node.key"),
+    )
+    .await?;
+    let twin = self::home(directory.path(), "twin").await?;
+    assert_eq!(twin.node.did(), home.node.did());
+    FreshBackendStore::observe(&twin.data, &twin.lock)
+        .await?
+        .initialize(&twin.key, &twin.node, DocumentAcp::EmbeddedVera)
+        .await?;
+
+    let vera = home.data.join("vera");
+    let kept = directory.path().join("kept");
+    tokio::fs::rename(&vera, &kept).await?;
+    tokio::fs::rename(twin.data.join("vera"), &vera).await?;
+
+    for _ in 0..2 {
+        let refused = refused(&home).await?;
+        assert!(matches!(
+            refused,
+            BackendProtectionError::DocumentAcp(DocumentAcpError::DeploymentReplaced { .. })
+        ));
+        assert!(damaged(&refused, &home));
+    }
+
+    tokio::fs::remove_dir_all(&vera).await?;
+    tokio::fs::rename(&kept, &vera).await?;
+    let node = start(&home, DocumentAcp::EmbeddedVera).await?;
+    assert!(reads(&node, &identity::Did::new(home.node.did())?).await?);
+    node.shutdown().await?;
     Ok(())
 }
 
@@ -197,10 +283,7 @@ async fn an_opted_in_home_is_refused_under_another_deployment_identity() -> anyh
         )
     };
 
-    let refused = match start(&home, DocumentAcp::EmbeddedVera).await {
-        Ok(_) => anyhow::bail!("the home opened under another deployment identity"),
-        Err(refused) => refused,
-    };
+    let refused = refused(&home).await?;
     assert!(matches!(
         refused,
         BackendProtectionError::DocumentAcp(DocumentAcpError::DeploymentDiffers { .. })
@@ -208,7 +291,7 @@ async fn an_opted_in_home_is_refused_under_another_deployment_identity() -> anyh
     assert_eq!(
         gents_store::local::storage_backend::incompatible_store(&refused, &home.data)
             .map(|store| store.kind),
-        Some(gents_protocol::operations::install_repair::IncompatibleStoreKind::OtherVersionSchema)
+        Some(IncompatibleStoreKind::OtherVersionSchema)
     );
     Ok(())
 }

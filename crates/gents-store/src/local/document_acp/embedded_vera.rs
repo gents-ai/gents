@@ -12,14 +12,12 @@ use sha2::{Digest as _, Sha256};
 use vera::vera_rs::{DelegationAlgorithm, DelegationSigner, SignerError};
 use zeroize::Zeroizing;
 
-use super::vera_dir;
 use crate::identity::NodeIdentity;
 use crate::local::store_key::StoreKey;
 
 #[cfg(test)]
 mod tests;
 
-const NODE_DIR_NAME: &str = "node";
 const WORKER_DIR_NAME: &str = "worker";
 const KEYS_DIR_NAME: &str = "keys";
 const START_DEADLINE: Duration = Duration::from_secs(60);
@@ -149,15 +147,20 @@ pub(super) fn deployment_differs(error: &defra_node::Error) -> Option<&'static s
     }
 }
 
+pub(super) fn consensus_key(node: &defra_node::Node) -> Option<String> {
+    node.embedded_vera_trust()
+        .map(|deployment| deployment.consensus_key.clone())
+}
+
 pub(super) fn configure(
     builder: defra_node::NodeBuilder,
-    data: &Path,
+    node_dir: &Path,
+    root: &Path,
     key: &StoreKey,
     node: &Arc<dyn NodeIdentity>,
 ) -> defra_node::NodeBuilder {
-    let root = vera_dir(data);
     builder.with_embedded_vera(EmbeddedVeraConfig {
-        data_dir: root.join(NODE_DIR_NAME),
+        data_dir: node_dir.to_path_buf(),
         deployment: deployment(node.did()),
         listen: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
         start_deadline: START_DEADLINE,

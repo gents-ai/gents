@@ -14,8 +14,18 @@ mod tests;
 
 /// Holds everything an embedded Vera node keeps, inside the store's data
 /// directory: the store's lock, lineage marker, retirement and backups cover
-/// it with the store. Its presence is the store's record of the choice.
+/// it with the store.
 const VERA_DIR_NAME: &str = "vera";
+const NODE_DIR_NAME: &str = "node";
+/// Written once, before the store's lineage marker, so every store that
+/// carries the marker and was created on an embedded Vera node has it.
+const DEPLOYMENT_RECORD: &str = ".gents-embedded-vera-deployment";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Deployment {
+    consensus_key: String,
+}
 
 /// `DocumentAcpChoice.Provider`: chosen when a home is initialized, recorded
 /// in its init config and never changed afterwards.
@@ -68,6 +78,26 @@ pub enum DocumentAcpError {
          created it"
     )]
     DeploymentDiffers { what: &'static str },
+    #[error(
+        "this home decides document access through an embedded Vera node, whose directory {} is \
+         missing. It held the access records of the home's documents, so nothing was created in \
+         its place; restore it from a backup of this home",
+        path.display()
+    )]
+    DeploymentMissing { path: PathBuf },
+    #[error(
+        "the embedded Vera deployment in {} is not the one this home was created with, so it \
+         holds none of the access records of the home's documents; restore the directory from a \
+         backup of this home",
+        path.display()
+    )]
+    DeploymentReplaced { path: PathBuf },
+    #[error("reading the embedded Vera deployment record {}", path.display())]
+    Record {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("inspecting {}", path.display())]
     Inspect {
         path: PathBuf,
@@ -81,6 +111,9 @@ impl DocumentAcpError {
     pub(crate) fn refusal(&self) -> Option<IncompatibleStoreKind> {
         match self {
             Self::DeploymentDiffers { .. } => Some(IncompatibleStoreKind::OtherVersionSchema),
+            Self::DeploymentMissing { .. }
+            | Self::DeploymentReplaced { .. }
+            | Self::Record { .. } => Some(IncompatibleStoreKind::UnsupportedOrCorrupt),
             Self::Switch { .. }
             | Self::Unavailable
             | Self::NodeKeyCannotSign { .. }
@@ -109,12 +142,99 @@ pub(crate) fn vera_dir(data: &Path) -> PathBuf {
     data.join(VERA_DIR_NAME)
 }
 
+fn node_dir(data: &Path) -> PathBuf {
+    vera_dir(data).join(NODE_DIR_NAME)
+}
+
+fn recorded_deployment(data: &Path) -> Result<Option<Deployment>> {
+    let path = data.join(DEPLOYMENT_RECORD);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(DocumentAcpError::Inspect { path, source }),
+    };
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|source| DocumentAcpError::Record { path, source })
+}
+
 fn recorded(data: &Path) -> Result<DocumentAcp> {
-    let path = vera_dir(data);
+    Ok(match recorded_deployment(data)? {
+        Some(_) => DocumentAcp::EmbeddedVera,
+        None => DocumentAcp::Local,
+    })
+}
+
+/// The deployment a fresh store's node created, for [`record`]. `None` for a
+/// store that decides document access itself.
+pub(crate) fn created(
+    node: &defra_node::Node,
+    requested: DocumentAcp,
+) -> Result<Option<Deployment>> {
+    match requested {
+        DocumentAcp::Local => Ok(None),
+        DocumentAcp::EmbeddedVera => started(node).map(Some).ok_or(DocumentAcpError::Unavailable),
+    }
+}
+
+/// The caller writes the store's lineage marker only after this returns.
+pub(crate) fn record(data: &Path, deployment: &Deployment) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(data.join(DEPLOYMENT_RECORD))?;
+    file.write_all(&serde_json::to_vec(deployment)?)?;
+    file.sync_all()?;
+    #[cfg(unix)]
+    std::fs::File::open(data)?.sync_all()?;
+    Ok(())
+}
+
+fn started(node: &defra_node::Node) -> Option<Deployment> {
+    #[cfg(feature = "embedded-vera")]
+    {
+        embedded_vera::consensus_key(node).map(|consensus_key| Deployment { consensus_key })
+    }
+    #[cfg(not(feature = "embedded-vera"))]
+    {
+        let _ = node;
+        None
+    }
+}
+
+#[cfg(feature = "embedded-vera")]
+fn ensure_present(data: &Path) -> Result<()> {
+    let path = node_dir(data);
     match std::fs::symlink_metadata(&path) {
-        Ok(_) => Ok(DocumentAcp::EmbeddedVera),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(DocumentAcp::Local),
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(_) => Err(DocumentAcpError::DeploymentMissing { path }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Err(DocumentAcpError::DeploymentMissing { path })
+        }
         Err(source) => Err(DocumentAcpError::Inspect { path, source }),
+    }
+}
+
+fn ensure_recorded(data: &Path, started: Option<&Deployment>) -> Result<()> {
+    if recorded_deployment(data)?.as_ref() == started {
+        return Ok(());
+    }
+    Err(DocumentAcpError::DeploymentReplaced {
+        path: node_dir(data),
+    })
+}
+
+/// `DocumentAcpChoice.reopen`, once a node [`configure`] prepared has started.
+/// The caller shuts a refused node down.
+pub(crate) fn check_started(
+    node: &defra_node::Node,
+    data: &Path,
+    requested: DocumentAcp,
+) -> Result<()> {
+    match requested {
+        DocumentAcp::Local => Ok(()),
+        DocumentAcp::EmbeddedVera => ensure_recorded(data, started(node).as_ref()),
     }
 }
 
@@ -208,7 +328,18 @@ fn apply(
     match admit(data, fresh, requested, node.as_ref(), available)? {
         DocumentAcp::Local => Ok(builder),
         #[cfg(feature = "embedded-vera")]
-        DocumentAcp::EmbeddedVera => Ok(embedded_vera::configure(builder, data, key, node)),
+        DocumentAcp::EmbeddedVera => {
+            if !fresh {
+                ensure_present(data)?;
+            }
+            Ok(embedded_vera::configure(
+                builder,
+                &node_dir(data),
+                &vera_dir(data),
+                key,
+                node,
+            ))
+        }
         #[cfg(not(feature = "embedded-vera"))]
         DocumentAcp::EmbeddedVera => {
             let _ = key;
