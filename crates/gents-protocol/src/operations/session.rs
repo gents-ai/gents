@@ -280,8 +280,8 @@ pub enum SessionOperationError {
 }
 
 impl SessionOperationError {
-    pub fn passthrough(error: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
-        Self::Passthrough(error.into())
+    pub fn passthrough(error: impl Into<anyhow::Error>) -> Self {
+        Self::Passthrough(crate::error_chain::PassedThrough::boxed(error))
     }
 
     pub fn code(&self) -> &'static str {
