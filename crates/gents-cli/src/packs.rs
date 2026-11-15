@@ -597,6 +597,7 @@ mod tests {
                 tool_ceiling: gents_service::args::ToolCeilingArg::Readonly,
                 tool_root: None,
                 store_encryption: None,
+                document_acp: Default::default(),
             },
         )
         .unwrap();

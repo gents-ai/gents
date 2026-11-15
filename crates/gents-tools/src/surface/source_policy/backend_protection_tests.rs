@@ -18,11 +18,13 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
     let key = StoreKey::from_host(&[7; 32])?;
     let other_key = StoreKey::from_host(&[8; 32])?;
     let identity_path = home.join("node.key");
-    let runtime = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        Ok(std::sync::Arc::new(
-            gents_store::identity::KeyIdentity::load_or_create(identity_path, None)?,
-        ))
-    })
+    let runtime = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<std::sync::Arc<dyn NodeIdentity>> {
+            Ok(std::sync::Arc::new(
+                gents_store::identity::KeyIdentity::load_or_create(identity_path, None)?,
+            ))
+        },
+    )
     .await??;
     let did = runtime.did().to_owned();
     let cases = gents_lean_vocab::lean_identity_household_cases()
@@ -48,7 +50,11 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
     );
     FreshBackendStore::observe(&data, &lock)
         .await?
-        .initialize(&key, Some(&did))
+        .initialize(
+            &key,
+            &runtime,
+            gents_store::local::document_acp::DocumentAcp::Local,
+        )
         .await?;
     assert_eq!(
         ProtectedBackendStore::open(&data, &other_key, &lock)
@@ -65,7 +71,11 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
     assert!(FreshBackendStore::observe(&data, &lock).await.is_err());
     let protected = ProtectedBackendStore::open(&data, &key, &lock)
         .await?
-        .preflight(&key, Some(&did))
+        .preflight(
+            &key,
+            &runtime,
+            gents_store::local::document_acp::DocumentAcp::Local,
+        )
         .await?;
     let (node, admission) = protected
         .start_node_with_projection(
@@ -125,24 +135,34 @@ async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Re
         .await??;
         let key = StoreKey::from_host(&[9; 32])?;
         let identity_path = home.join("node.key");
-        let runtime = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            Ok(std::sync::Arc::new(
-                gents_store::identity::KeyIdentity::load_or_create(identity_path, None)?,
-            ))
-        })
+        let runtime = tokio::task::spawn_blocking(
+            move || -> anyhow::Result<std::sync::Arc<dyn NodeIdentity>> {
+                Ok(std::sync::Arc::new(
+                    gents_store::identity::KeyIdentity::load_or_create(identity_path, None)?,
+                ))
+            },
+        )
         .await??;
         let did = runtime.did().to_owned();
         FreshBackendStore::observe(&data, &lock)
             .await?
-            .initialize(&key, Some(&did))
+            .initialize(
+                &key,
+                &runtime,
+                gents_store::local::document_acp::DocumentAcp::Local,
+            )
             .await?;
         let (node, admission) = ProtectedBackendStore::open(&data, &key, &lock)
             .await?
-            .preflight(&key, Some(&did))
+            .preflight(
+                &key,
+                &runtime,
+                gents_store::local::document_acp::DocumentAcp::Local,
+            )
             .await?
             .start_node_with_projection(
                 &key,
-                runtime,
+                runtime.clone(),
                 None,
                 None,
                 std::sync::Arc::new(crate::surface::ToolCeiling::meta_only()),
@@ -171,7 +191,7 @@ async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Re
         drop(node);
         let restarted = match ProtectedBackendStore::open(&data, &key, &lock)
             .await?
-            .preflight(&key, Some(&did))
+            .preflight(&key, &runtime, gents_store::local::document_acp::DocumentAcp::Local)
             .await
         {
             Ok(_) => true,

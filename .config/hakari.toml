@@ -14,4 +14,14 @@ third-party = [
     { name = "tauri-macros" },
     { name = "tauri-utils" },
     { name = "objc2-app-kit" },
+    { name = "defra-node", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "62357761da54b2b92ed4d757b12e212f6de858c7" },
+]
+
+# The Vera crates behind the opt-in `embedded-vera` feature. Left in, their
+# feature sets would be unified into every test build. The revision is the
+# DefraDB pin in Cargo.toml.
+[traversal-excludes]
+third-party = [
+    { name = "vera-embedded", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "62357761da54b2b92ed4d757b12e212f6de858c7" },
+    { name = "vera", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "62357761da54b2b92ed4d757b12e212f6de858c7" },
 ]

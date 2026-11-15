@@ -217,6 +217,10 @@ pub(crate) async fn init_home_with_core_packs(
         .await?
         .is_none();
     stage("store_locked");
+    let document_acp = match args.document_acp {
+        Some(requested) => requested.into(),
+        None => recorded_document_acp(&home_dir)?,
+    };
 
     if args.identity_only {
         if args.identity_backend != IdentityBackendArg::File && args.key_path.is_some() {
@@ -291,7 +295,7 @@ pub(crate) async fn init_home_with_core_packs(
             read_init_config(&home_dir)?.context("existing home has no initialized identity")?;
         let identity =
             gents_service::home_state::load_initialized_home_identity(&home_dir, &existing)?;
-        provenance.preflight(&key, Some(identity.did())).await?;
+        provenance.preflight(&key, &identity, document_acp).await?;
         None
     };
 
@@ -317,6 +321,12 @@ pub(crate) async fn init_home_with_core_packs(
         .await
         .context("creating or loading node identity key")?;
     stage("identity_ready");
+    gents_store::local::document_acp::ensure_admitted(
+        &data_dir,
+        fresh_store,
+        document_acp,
+        initialized_identity.identity.as_ref(),
+    )?;
 
     gents_store::local::storage_backend::reject_legacy_store(&data_dir)?;
     let mut stored = StoredInitConfig {
@@ -332,6 +342,7 @@ pub(crate) async fn init_home_with_core_packs(
         tool_root: resolve_tool_root_for_package(tool_package, args.tool_root.as_deref())?
             .map(|path| path.to_string_lossy().to_string()),
         store_encryption: None,
+        document_acp,
     };
     let store_key = initialize_home_store(
         &home_dir,
@@ -342,10 +353,7 @@ pub(crate) async fn init_home_with_core_packs(
     .await?;
     if let Some(fresh_backend) = fresh_backend {
         fresh_backend
-            .initialize(
-                &store_key,
-                Some(initialized_identity.node_identity_did.as_str()),
-            )
+            .initialize(&store_key, &initialized_identity.identity, document_acp)
             .await?;
     }
     stage("store_key_initialized");
@@ -362,6 +370,13 @@ pub(crate) async fn init_home_with_core_packs(
         )?)
         .with_node_identity_did(initialized_identity.node_identity_did.clone())
         .with_node_acp_enabled();
+    node_builder = gents_store::local::document_acp::configure(
+        node_builder,
+        &data_dir,
+        &store_key,
+        document_acp,
+        &initialized_identity.identity,
+    )?;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let graphql_url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     // Init publishes through this loopback endpoint as the client, so its
@@ -939,6 +954,7 @@ pub(crate) async fn write_identity_only_home_metadata(
     let tool_root = resolve_tool_root_for_package(options.tool_package, options.tool_root)?
         .map(|path| path.to_string_lossy().to_string());
     gents_store::local::storage_backend::reject_legacy_store(&data_dir)?;
+    let document_acp = recorded_document_acp(options.home)?;
     let mut stored = StoredInitConfig {
         home: options.home.to_string_lossy().to_string(),
         node_name: options.node_name.to_string(),
@@ -951,6 +967,7 @@ pub(crate) async fn write_identity_only_home_metadata(
         tool_ceiling,
         tool_root: tool_root.clone(),
         store_encryption: None,
+        document_acp,
     };
     let store_key = initialize_home_store(
         options.home,
@@ -961,7 +978,7 @@ pub(crate) async fn write_identity_only_home_metadata(
     .await?;
     if let Some(fresh_backend) = fresh_backend {
         fresh_backend
-            .initialize(&store_key, Some(initialized_identity.identity.did()))
+            .initialize(&store_key, &initialized_identity.identity, document_acp)
             .await?;
         bootstrap_identity_only_owner(
             options.home,
@@ -969,6 +986,7 @@ pub(crate) async fn write_identity_only_home_metadata(
             &store_key,
             options.store_lock,
             initialized_identity.identity.clone(),
+            document_acp,
             options.owner,
         )
         .await?;
@@ -1005,6 +1023,7 @@ async fn bootstrap_identity_only_owner(
     store_key: &gents_store::local::store_key::StoreKey,
     store_lock: &gents_store::local::home::StoreLock,
     runtime: Arc<dyn NodeIdentity>,
+    document_acp: gents_store::local::document_acp::DocumentAcp,
     owner: &str,
 ) -> Result<()> {
     use gents_store::identity::GrantSet;
@@ -1013,7 +1032,7 @@ async fn bootstrap_identity_only_owner(
         data_dir, store_key, store_lock,
     )
     .await?
-    .preflight(store_key, Some(runtime_did.as_str()))
+    .preflight(store_key, &runtime, document_acp)
     .await?;
     let (node, _admission) = gents::runtime::node_start::start_node(
         preflight,
@@ -1035,6 +1054,14 @@ async fn bootstrap_identity_only_owner(
     granted.context("granting the init User native administration")?;
     shutdown.context("shutting down the bootstrap node")?;
     Ok(())
+}
+
+/// What an initialized home recorded; a home with no record yet decides
+/// document access in its node's own store.
+fn recorded_document_acp(home: &Path) -> Result<gents_store::local::document_acp::DocumentAcp> {
+    Ok(read_init_config(home)?
+        .map(|config| config.document_acp)
+        .unwrap_or_default())
 }
 
 /// Identity and key custody must survive an error or interruption before
@@ -1952,11 +1979,16 @@ mod tests {
         let config = read_init_config(&home).unwrap().unwrap();
         let runtime =
             gents_service::home_state::load_initialized_home_identity(&home, &config).unwrap();
+        assert_eq!(runtime.did(), summary.node_did);
         let preflight =
             gents_store::local::backend_protection::ProtectedBackendStore::open(&data, &key, &lock)
                 .await
                 .expect("the identity-only store carries fresh provenance")
-                .preflight(&key, Some(&summary.node_did))
+                .preflight(
+                    &key,
+                    &runtime,
+                    gents_store::local::document_acp::DocumentAcp::Local,
+                )
                 .await
                 .expect("the protected store is bound to the home's Node DID");
         let (node, _admission) = gents::runtime::node_start::start_node(
@@ -2595,14 +2627,21 @@ mod tests {
             .is_none());
         let key = gents_store::local::store_key::StoreKey::from_host(&[7; 32])?;
         let path = directory.path().join("node.key");
-        let did = tokio::task::spawn_blocking(move || -> Result<String> {
-            Ok(KeyIdentity::load_or_create(path, None)?.did().to_owned())
+        let runtime = tokio::task::spawn_blocking(move || -> Result<Arc<dyn NodeIdentity>> {
+            Ok(Arc::new(KeyIdentity::load_or_create(path, None)?))
         })
         .await??;
+        let did = runtime.did().to_owned();
         let fresh =
             gents_store::local::backend_protection::FreshBackendStore::observe(&data, &_lock)
                 .await?;
-        let result = fresh.initialize(&key, Some(&did)).await;
+        let result = fresh
+            .initialize(
+                &key,
+                &runtime,
+                gents_store::local::document_acp::DocumentAcp::Local,
+            )
+            .await;
         assert_eq!(result.is_ok(), case["origin"].as_bool().unwrap());
         result?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -3039,6 +3078,7 @@ mod tests {
             keychain_label: None,
             secure_enclave_label: None,
             store_key_custody: Some(gents_host::args::StoreKeyCustodyArg::File),
+            document_acp: None,
             inference_endpoint: None,
             backend_id: None,
             backend_name: None,

@@ -99,17 +99,17 @@ async fn a_store_with_the_previous_lineage_marker_is_refused_unopened() -> anyho
     .await??;
     let key = StoreKey::from_host(&[7; 32])?;
     let identity_path = home.join("node.key");
-    let did = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
-        Ok(
-            crate::identity::KeyIdentity::load_or_create(identity_path, None)?
-                .did()
-                .to_owned(),
-        )
-    })
+    let node = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<std::sync::Arc<dyn NodeIdentity>> {
+            Ok(std::sync::Arc::new(
+                crate::identity::KeyIdentity::load_or_create(identity_path, None)?,
+            ))
+        },
+    )
     .await??;
     FreshBackendStore::observe(&data, &lock)
         .await?
-        .initialize(&key, Some(&did))
+        .initialize(&key, &node, super::document_acp::DocumentAcp::Local)
         .await?;
     assert!(PROVENANCE_MARKER.ends_with("-v2"));
     std::fs::rename(

@@ -270,6 +270,7 @@ fn write_identity_config(home: &Path, custom_key: &Path) {
             tool_ceiling: "readwrite".into(),
             tool_root: None,
             store_encryption: None,
+            document_acp: Default::default(),
         },
     )
     .unwrap();

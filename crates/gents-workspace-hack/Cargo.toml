@@ -42,7 +42,6 @@ crypto-common = { version = "0.1", default-features = false, features = ["getran
 curve25519-dalek = { version = "5", features = ["rand_core", "serde"] }
 data-encoding = { version = "2" }
 db = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "62357761da54b2b92ed4d757b12e212f6de858c7", default-features = false, features = ["native", "wasmtime-runtime"] }
-defra-node = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "62357761da54b2b92ed4d757b12e212f6de858c7", default-features = false, features = ["http", "p2p", "wasmtime-runtime"] }
 defra-p2p-adapter = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "62357761da54b2b92ed4d757b12e212f6de858c7", default-features = false, features = ["iroh", "kms", "native", "wasmtime-runtime"] }
 der = { version = "0.7", default-features = false, features = ["oid", "pem", "std"] }
 deranged = { version = "0.5", features = ["powerfmt", "serde"] }
@@ -79,7 +78,7 @@ idna = { version = "1" }
 indexmap = { version = "2", features = ["serde"] }
 inout = { version = "0.1", default-features = false, features = ["std"] }
 ipnet = { version = "2", features = ["serde"] }
-itertools = { version = "0.14" }
+itertools-582f2526e08bb6a0 = { package = "itertools", version = "0.14" }
 lazy_static = { version = "1", default-features = false, features = ["spin_no_std"] }
 lens = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "62357761da54b2b92ed4d757b12e212f6de858c7", default-features = false, features = ["wasmtime-runtime"] }
 libc = { version = "0.2", features = ["extra_traits"] }
@@ -180,7 +179,7 @@ hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17", default-
 http = { version = "1" }
 idna = { version = "1", default-features = false, features = ["compiled_data", "std"] }
 indexmap = { version = "2", features = ["serde"] }
-itertools = { version = "0.14" }
+itertools-594e8ee84c453af0 = { package = "itertools", version = "0.13" }
 memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 object = { version = "0.40", default-features = false, features = ["elf", "read_core"] }
@@ -207,6 +206,7 @@ simd-adler32 = { version = "0.3" }
 smallvec = { version = "1", default-features = false, features = ["const_generics", "serde", "union"] }
 stable_deref_trait = { version = "1" }
 syn-7b89eefb6aaa9bf3 = { package = "syn", version = "3", features = ["extra-traits", "full", "visit-mut"] }
+syn-dff4ba8e3ae991db = { package = "syn", version = "1", features = ["extra-traits", "fold", "full"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2", features = ["extra-traits", "fold", "full", "visit", "visit-mut"] }
 thiserror = { version = "2" }
 time-macros = { version = "0.2", default-features = false, features = ["formatting", "parsing", "serde"] }
@@ -281,3 +281,11 @@ toml = { version = "0.8", default-features = false, features = ["parse"] }
 winnow-ca01ad9e24f5d932 = { package = "winnow", version = "0.7" }
 
 ### END HAKARI SECTION
+
+# cargo hakari unifies over every feature of every workspace crate, which
+# would give defra-node `embedded-vera` and build the Vera node into every
+# test. `.config/hakari.toml` keeps defra-node out of the section above; its
+# default feature set is unified here by hand.
+[dependencies.defra-node]
+workspace = true
+features = ["http", "p2p", "wasmtime-runtime"]

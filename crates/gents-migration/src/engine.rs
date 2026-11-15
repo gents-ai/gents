@@ -381,6 +381,17 @@ async fn register_client_journal_policy(
     Ok(())
 }
 
+/// Every access policy the node adds under counter 0 as its owner, in a fixed
+/// order. A deployment that holds policies from its first block, as an
+/// embedded Vera node does, is created with exactly these: the node adopts a
+/// policy that is there and cannot add one that is not.
+pub const NODE_POLICIES: [&str; 4] = [
+    gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
+    gents_protocol::schemas::MAILBOX_POLICY,
+    gents_protocol::schemas::CLIENT_JOURNAL_POLICY,
+    gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY,
+];
+
 fn node_context(node: &EmbeddedNode) -> RequestContext {
     RequestContext::default().with_identity(node.node_identity_did().map(str::to_owned))
 }

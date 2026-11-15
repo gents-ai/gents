@@ -658,7 +658,7 @@ async fn resolve_config_access_inner(
     let config = read_init_config(&home_dir)?.context("home is not initialized")?;
     let runtime_identity = load_initialized_home_identity(&home_dir, &config)?;
     let protected = protected
-        .preflight(&store_key, Some(runtime_identity.did()))
+        .preflight(&store_key, &runtime_identity, config.document_acp)
         .await?;
     // Offline client writes are signed by the client key and travel through
     // this owned node's loopback endpoint, as `gents init` publishes them.
@@ -883,6 +883,7 @@ mod tests {
                     )
                     .unwrap(),
                 ),
+                document_acp: Default::default(),
             },
         )
         .unwrap();
@@ -942,6 +943,7 @@ mod tests {
                     )
                     .unwrap(),
                 ),
+                document_acp: Default::default(),
             },
         )
         .unwrap();
@@ -973,7 +975,11 @@ mod tests {
         gents_store::local::backend_protection::FreshBackendStore::observe(&data, &lock)
             .await
             .unwrap()
-            .initialize(&key, Some(identity.did()))
+            .initialize(
+                &key,
+                &identity,
+                gents_store::local::document_acp::DocumentAcp::Local,
+            )
             .await
             .unwrap();
         drop(lock);

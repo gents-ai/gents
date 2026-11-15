@@ -178,7 +178,13 @@ impl EmbeddedHome {
         };
         let store_key = trial_store_key(&path, &data_path, fresh).await?;
         if let Some(fresh_store) = fresh_store {
-            fresh_store.initialize(&store_key, Some(&did)).await?;
+            fresh_store
+                .initialize(
+                    &store_key,
+                    &identity,
+                    gents_store::local::document_acp::DocumentAcp::Local,
+                )
+                .await?;
         }
         let protected = gents_store::local::backend_protection::ProtectedBackendStore::open(
             &data_path,
@@ -186,7 +192,11 @@ impl EmbeddedHome {
             &store_lock,
         )
         .await?
-        .preflight(&store_key, Some(&did))
+        .preflight(
+            &store_key,
+            &identity,
+            gents_store::local::document_acp::DocumentAcp::Local,
+        )
         .await?;
         let served = ServedNode::default();
         let (http, client_endpoint, owner_staged) = trial_http(served.clone()).await?;
@@ -330,7 +340,11 @@ impl EmbeddedHome {
                 .context("trial store lock was released")?,
         )
         .await?
-        .preflight(&self.store_key, Some(&self.did))
+        .preflight(
+            &self.store_key,
+            &self.identity,
+            gents_store::local::document_acp::DocumentAcp::Local,
+        )
         .await?;
         let served = ServedNode::default();
         let (http, client_endpoint, owner_staged) = trial_http(served.clone()).await?;

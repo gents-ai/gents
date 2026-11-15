@@ -2403,6 +2403,7 @@ pub(super) fn home_serving(
                     tool_ceiling: gents_service::args::ToolCeilingArg::MetaOnly,
                     tool_root: None,
                     store_encryption: None,
+                    document_acp: Default::default(),
                 },
             )
             .unwrap();

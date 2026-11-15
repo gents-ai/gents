@@ -614,7 +614,14 @@ async fn serve_foreground(
     let _post_open_keychain_prompt_guard =
         gents_service::process_resources::prevent_keychain_prompts(args.keychain_startup_approval)?;
     let protected_backend = protected_backend
-        .preflight(&backend_store_key, Some(identity.did()))
+        .preflight(
+            &backend_store_key,
+            &identity,
+            init_config
+                .as_ref()
+                .map(|config| config.document_acp)
+                .unwrap_or_default(),
+        )
         .await?;
     let effective_tool_ceiling = args
         .tool_ceiling
