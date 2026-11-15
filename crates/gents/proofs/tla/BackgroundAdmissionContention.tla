@@ -1,4 +1,6 @@
 ---- MODULE BackgroundAdmissionContention ----
+\* lean: TransactionReplay.disposition
+\* crates: gents-toolcalls, gents-session, gents-store
 \* Concurrent writers of one request's `AgentRequest` row and session
 \* documents during a turn (#3592).
 \*

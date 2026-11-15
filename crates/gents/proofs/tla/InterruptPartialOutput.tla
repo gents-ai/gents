@@ -1,4 +1,6 @@
 ---- MODULE InterruptPartialOutput ----
+\* lean: none
+\* crates: gents, gents-loop, gents-session
 (***************************************************************************)
 (* Text a provider has already handed to the owned loop when its request   *)
 (* is interrupted (#3820). One provider attempt streams `Chunks` text      *)

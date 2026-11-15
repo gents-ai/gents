@@ -1,4 +1,6 @@
 ---- MODULE WindowIndependence ----
+\* lean: none
+\* crates: gents-desktop-core
 (***************************************************************************)
 (* Several desktop windows, each on its own node (Lean `ClientWindowScope`). *)
 (* One client core serves them all: one observer source per runtime        *)

@@ -1,4 +1,6 @@
 ---- MODULE RuntimeConnectionTransport ----
+\* lean: RuntimeConnectionObservation.reconnects, RuntimeConnectionObservation.failedSnapshot
+\* crates: gents-desktop-core
 (***************************************************************************)
 (* The desktop observer's connection to one runtime it reads over           *)
 (* authenticated HTTP as the User (gents-desktop-core client/observe).      *)

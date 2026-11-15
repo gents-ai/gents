@@ -1,4 +1,6 @@
 ---- MODULE PackUxWatch ----
+\* lean: none
+\* crates: gents-desktop-core, gents-desktop-bridge
 \* A pack page's live data watch and the desktop state that races it.
 \*
 \* Writers. The watch task (`gents_desktop_core::pack_watch::run`, spawned by

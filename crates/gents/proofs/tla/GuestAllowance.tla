@@ -1,4 +1,6 @@
 ---- MODULE GuestAllowance ----
+\* lean: PluginResources.computeAllowances
+\* crates: gents-pack, gents-toolcalls
 (***************************************************************************)
 (* How long a computing plugin guest runs once it has its compute         *)
 (* allowance, and when the worker thread it occupies is released.         *)

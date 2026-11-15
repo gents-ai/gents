@@ -1,4 +1,6 @@
 ---- MODULE NativeCompletionHandshake ----
+\* lean: none
+\* crates: gents-store
 (***************************************************************************)
 (* The scheduling handshake a test driver runs against the embedded         *)
 (* transaction owner's caller-timeout step (Lean `NativeCompletion`         *)

@@ -1,4 +1,6 @@
 ---- MODULE ObserverResync ----
+\* lean: none
+\* crates: gents-desktop-core
 \* The desktop observer's delivery and resync loop for runtime documents
 \* (`observe.rs`, `observe/delivery.rs`, `observe/projection_store.rs`) and
 \* the direct refresh path beside it (`ClientCore::refresh_node`). Each node

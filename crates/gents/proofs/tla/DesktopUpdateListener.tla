@@ -1,4 +1,6 @@
 ---- MODULE DesktopUpdateListener ----
+\* lean: none
+\* crates: gents-desktop-bridge
 (***************************************************************************)
 (* The last leg of the desktop's event path: the bridge emitter, Tauri     *)
 (* delivery, the frontend's listener registration, its projection drain    *)

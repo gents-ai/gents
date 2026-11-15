@@ -1,4 +1,6 @@
 ---- MODULE SessionHeadObservation ----
+\* lean: none
+\* crates: gents-session
 \* A session's observed request head and the client that projects it on
 \* reopen (#3604).
 \*
