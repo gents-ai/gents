@@ -50,8 +50,8 @@ fn deployment(node_did: &str) -> EmbeddedVeraDeployment {
             .map_or(0, |elapsed| elapsed.as_secs()),
         policies: gents_migration::NODE_POLICIES
             .iter()
-            .map(|definition| EmbeddedVeraPolicy {
-                definition: (*definition).to_owned(),
+            .map(|policy| EmbeddedVeraPolicy {
+                definition: policy.definition.to_owned(),
                 counter: 0,
                 owner: node_did.to_owned(),
             })

@@ -1,11 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use gents_protocol::schemas::{
-    AGENT_OWNERSHIP_POLICY, AGENT_OWNERSHIP_POLICY_ID, CLIENT_JOURNAL_POLICY,
-    CLIENT_JOURNAL_POLICY_ID, MAILBOX_POLICY, MAILBOX_POLICY_ID, TOOL_FILE_CHANGE_POLICY,
-    TOOL_FILE_CHANGE_POLICY_ID,
-};
+use gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use gents_store::local::backend_protection::{
     BackendProtectionError, FreshBackendStore, ProtectedBackendStore,
@@ -78,16 +74,11 @@ async fn reads(node: &defra_node::Node, actor: &identity::Did) -> anyhow::Result
 
 async fn holds_the_node_policies(node: &defra_node::Node, owner: &str) -> anyhow::Result<()> {
     let context = defra_core::RequestContext::default().with_identity(Some(owner.to_owned()));
-    for (policy, id) in [
-        (AGENT_OWNERSHIP_POLICY, AGENT_OWNERSHIP_POLICY_ID),
-        (MAILBOX_POLICY, MAILBOX_POLICY_ID),
-        (CLIENT_JOURNAL_POLICY, CLIENT_JOURNAL_POLICY_ID),
-        (TOOL_FILE_CHANGE_POLICY, TOOL_FILE_CHANGE_POLICY_ID),
-    ] {
+    for policy in &gents_migration::NODE_POLICIES {
         assert_eq!(
-            node.add_dac_policy_with_counter_as(&context, policy, 0)
+            node.add_dac_policy_with_counter_as(&context, policy.definition, 0)
                 .await?,
-            id
+            policy.id
         );
     }
     Ok(())
