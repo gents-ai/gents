@@ -41,7 +41,7 @@
 \* when the first send landed after its reply was lost; `PayloadLost` lets the
 \* client drop the payload of an unconfirmed message, which leaves a failed
 \* message with no Retry.
-EXTENDS Naturals, Sequences, FiniteSets
+EXTENDS Naturals, Sequences, FiniteSets, LeanDecision_TransactionReplay
 
 CONSTANTS
   Publications,  \* Agent session refreshes landing in one attempt series
@@ -113,6 +113,13 @@ Compose ==
   /\ Send(cur)
   /\ UNCHANGED <<sessVer, agentLeft, cur, replies, rows, conflictLost>>
 
+\* A commit that aborted on the store's conflict, its signed write sent and
+\* the abort confirmed, is decided by Lean `TransactionReplay.disposition`;
+\* without the rebuild the entry is an ordinary conflict retry.
+Rebuilds(rebuild, w) ==
+  disposition(IF rebuild THEN "signed_conflict_rebuild" ELSE "conflict_retry",
+              "commit", "conflict", TRUE, TRUE, w.tries < Attempts) = "retry"
+
 \* A reservation commit binds the targets when the read session is unchanged,
 \* and the submission then reads it; a confirmed abort is rebuilt while
 \* attempts remain, and otherwise the send fails back to the client.
@@ -122,7 +129,7 @@ ReserveCommit(i) ==
   /\ IF w.snap = sessVer
        THEN /\ wire' = [wire EXCEPT ![i] = [w EXCEPT !.stage = "open", !.snap = sessVer, !.tries = 1]]
             /\ UNCHANGED <<replies, conflictLost>>
-       ELSE IF ReserveRedrive /\ w.tries < Attempts
+       ELSE IF Rebuilds(ReserveRedrive, w)
               THEN /\ wire' = [wire EXCEPT ![i] = [w EXCEPT !.snap = sessVer, !.tries = w.tries + 1]]
                    /\ UNCHANGED <<replies, conflictLost>>
               ELSE /\ wire' = Remove(wire, i)
@@ -140,7 +147,7 @@ SubmitCommit(i) ==
             /\ rows' = rows \cup {w.id}
             /\ replies' = Append(replies, [id |-> w.id, ok |-> TRUE])
             /\ UNCHANGED conflictLost
-       ELSE IF Redrive /\ w.tries < Attempts
+       ELSE IF Rebuilds(Redrive, w)
               THEN /\ wire' = [wire EXCEPT ![i] = [w EXCEPT !.snap = sessVer, !.tries = w.tries + 1]]
                    /\ UNCHANGED <<rows, replies, conflictLost>>
               ELSE /\ wire' = Remove(wire, i)
