@@ -120,8 +120,8 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
               ) : older ? (
                 <p className="text-sm">
                   This home was created by an older Gents version. This release
-                  can&apos;t open or convert it. Back it up or delete it to start
-                  fresh; nothing is carried over.
+                  can&apos;t open or convert it. Back it up or delete it to start fresh;
+                  nothing is carried over.
                 </p>
               ) : (
                 <p
