@@ -142,4 +142,61 @@ test.describe("the hover panel and what opens from it", () => {
     /* and the frame still covers the page beside it */
     expect(await onTop(box.x + box.width + 200, box.y + box.height / 2)).toBe(false);
   });
+
+  test("a click begun on the rail as its panel opens is not lost", async ({ page }) => {
+    /* React draws an update from a timer in a task posted on a message
+       channel, and a browser runs input ahead of such a task. Hold those
+       tasks to put the press between the open timer and the panel's draw,
+       as a busy page does */
+    await page.addInitScript(() => {
+      const Native = window.MessageChannel;
+      const held: (() => void)[] = [];
+      const hold = { on: false };
+      window.MessageChannel = class extends Native {
+        constructor() {
+          super();
+          const port = this.port2;
+          const post = port.postMessage.bind(port);
+          port.postMessage = ((message: unknown) =>
+            hold.on ? held.push(() => post(message)) : post(message)) as never;
+        }
+      };
+      Object.assign(window, {
+        __holdDraws: () => (hold.on = true),
+        __releaseDraws: () => {
+          hold.on = false;
+          held.splice(0).forEach((draw) => draw());
+        },
+      });
+    });
+    await page.clock.install();
+    await hoverMode(page);
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+    const panel = page.locator("[data-ground=raised]");
+    await expect(panel).toHaveAttribute("aria-hidden", "true");
+    const link = await centre(
+      page.locator("nav").first().getByRole("link", { name: "New session" }),
+    );
+    const fresh = page.getByText(/Start a new chat with/);
+    await expect(fresh).toHaveCount(0);
+    await page.mouse.move(link.x, link.y);
+    /* the open timer fires, and its draw waits */
+    await page.evaluate(() =>
+      (window as unknown as { __holdDraws: () => void }).__holdDraws(),
+    );
+    await page.clock.runFor(100);
+    await page.mouse.down();
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          (window as unknown as { __releaseDraws: () => void }).__releaseDraws();
+          const channel = new MessageChannel();
+          channel.port1.onmessage = () => resolve();
+          channel.port2.postMessage(null);
+        }),
+    );
+    await page.mouse.up();
+    await page.clock.resume();
+    await expect(fresh).toBeVisible();
+  });
 });
