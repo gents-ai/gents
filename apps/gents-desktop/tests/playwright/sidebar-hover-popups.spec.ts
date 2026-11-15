@@ -148,19 +148,20 @@ test.describe("the hover panel and what opens from it", () => {
        channel, and a browser runs input ahead of such a task. Hold those
        tasks to put the press between the open timer and the panel's draw,
        as a busy page does */
-    await page.addInitScript(() => {
-      const Native = window.MessageChannel;
+    await page.clock.install();
+    await hoverMode(page);
+    /* the page's own message ports, the scheduler's among them */
+    await page.evaluate(() => {
+      const post = MessagePort.prototype.postMessage;
       const held: (() => void)[] = [];
       const hold = { on: false };
-      window.MessageChannel = class extends Native {
-        constructor() {
-          super();
-          const port = this.port2;
-          const post = port.postMessage.bind(port);
-          port.postMessage = ((message: unknown) =>
-            hold.on ? held.push(() => post(message)) : post(message)) as never;
-        }
-      };
+      MessagePort.prototype.postMessage = function (
+        this: MessagePort,
+        ...args: Parameters<MessagePort["postMessage"]>
+      ) {
+        if (hold.on) held.push(() => post.apply(this, args));
+        else post.apply(this, args);
+      } as MessagePort["postMessage"];
       Object.assign(window, {
         __holdDraws: () => (hold.on = true),
         __releaseDraws: () => {
@@ -169,8 +170,6 @@ test.describe("the hover panel and what opens from it", () => {
         },
       });
     });
-    await page.clock.install();
-    await hoverMode(page);
     await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
     const panel = page.locator("[data-ground=raised]");
     await expect(panel).toHaveAttribute("aria-hidden", "true");
