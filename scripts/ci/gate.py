@@ -50,7 +50,7 @@ GROUPS = [
         "gents-lean-vocab", "gents-migration", "gents-lens-fixture-add-label",
         "gents-callback-fixture-create-workspace", "gents-claude", "gents-claude-login",
         "gents-chatgpt-login", "gents-login-ui", "gents-fs-runner", "gents-shell",
-        "gents-core-packs",
+        "gents-core-packs", "gents-workspace-hack",
     ], timeout=60),
     Group("store", "portable", [
         "gents-store", "gents-documents", "gents-inference", "gents-p2p", "gents-pack",
@@ -59,10 +59,10 @@ GROUPS = [
         "gents-session", "gents-tools", "gents-toolcalls", "gents-automation", "gents-observe",
     ], timeout=120),
     Group("runtime", "runtime", ["gents", "gents-eval"], timeout=150),
-    # CLI tests share fixed ports and spawn Cargo for plugin builds, which must
-    # not inherit the job's target directory.
+    # CLI tests spawn Cargo for plugin builds, which must not inherit the
+    # job's target directory. They run at the default thread count (#3778).
     Group("cli", "cli", ["gents-cli", "gents-service", "gents-host"],
-          threads=1, nocapture=True, isolate_target=True, timeout=180),
+          nocapture=True, isolate_target=True, timeout=180),
     Group("desktop", "desktop", [
         "gents-desktop-core", "gents-desktop", "gents-desktop-bridge", "gents-client-host",
         "gents-media-host", "fixture-domain-plugin", "gents-fixture-host", "gents-desktop-tauri",

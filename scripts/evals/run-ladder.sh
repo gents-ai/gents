@@ -10,16 +10,19 @@
 # Held-out cases run only with GENTS_EVAL_SPLITS=held_out.
 #
 # GENTS_EVAL_TARGET: target file name (default workstation-1).
+# GENTS_EVAL_TARGET_FILE: target JSON path; overrides scripts/evals/targets/TARGET.json.
 # GENTS_EVAL_SHARD: 1/2 or 2/2 splits the selected suites across two launchers.
 # GENTS_EVAL_HOME / GENTS_EVAL_PORT: isolated home / optional fixed port.
 # GENTS_EVAL_PER_TRIAL: concurrent calls per trial (default 1).
-# GENTS_EVAL_REASONING / GENTS_EVAL_TEMPERATURE / GENTS_EVAL_TOP_P: high / 1 / .95.
+# GENTS_EVAL_REASONING / GENTS_EVAL_TEMPERATURE / GENTS_EVAL_TOP_P: high / 1 / .95;
+#   an empty temperature or top_p leaves that parameter to the target.
 # GENTS_EVAL_WATCH: auto, 1/web, tui or 0. Auto opens the browser in a terminal.
 # GENTS_EVAL_WEB_PORT: local dashboard port (default 9495).
 # GENTS_BIN: existing gents binary; otherwise builds this checkout.
+# GENTS_EVAL_SHA: commit label for run ids when the tree has no .git.
 set -euo pipefail
 
-usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
 POSITIONAL=()
 TARGET=${GENTS_EVAL_TARGET:-workstation-1}
 NAMED_TRIALS=
@@ -41,7 +44,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 FIXTURES="$ROOT/crates/gents/tests/fixtures/configurator_evals"
 LADDER="$FIXTURES/ladder"
 MATRIX="$ROOT/scripts/evals/matrix.json"
-SHA=$(git -C "$ROOT" rev-parse --short HEAD)
+SHA=${GENTS_EVAL_SHA:-$(git -C "$ROOT" rev-parse --short HEAD)}
 TRIALS=${NAMED_TRIALS:-${POSITIONAL[1]:-3}}
 CONCURRENCY=${NAMED_CONCURRENCY:-${POSITIONAL[2]:-4}}
 PER_TRIAL=${GENTS_EVAL_PER_TRIAL:-1}
@@ -70,9 +73,9 @@ print(port)
 PYPORT
 )
 REASONING=${GENTS_EVAL_REASONING:-high}
-TEMPERATURE=${GENTS_EVAL_TEMPERATURE:-1.0}
-TOP_P=${GENTS_EVAL_TOP_P:-0.95}
-TARGET_FILE="$ROOT/scripts/evals/targets/$TARGET.json"
+TEMPERATURE=${GENTS_EVAL_TEMPERATURE-1.0}
+TOP_P=${GENTS_EVAL_TOP_P-0.95}
+TARGET_FILE=${GENTS_EVAL_TARGET_FILE:-$ROOT/scripts/evals/targets/$TARGET.json}
 
 if [ "$SELECTION" = list ]; then
   python3 - "$MATRIX" "$FIXTURES" "$TRIALS" <<'PYLIST'
@@ -220,15 +223,14 @@ apply_config() {
 
 PROFILE_ID="$DID:ladder-$TARGET"
 INFERENCE="$EVAL_HOME/inference-$TARGET"
-python3 - "$TARGET_FILE" "$DID" "$PER_TRIAL" "$INFERENCE" "$REASONING" "$TEMPERATURE" "$TOP_P" "$DEFAULT_AGENT_DID" <<'PY'
+python3 - "$TARGET_FILE" "$DID" "$PER_TRIAL" "$INFERENCE" "$REASONING" "$TEMPERATURE" "$TOP_P" "$DEFAULT_AGENT_DID" "$TARGET" <<'PY'
 import json, os, sys
-target, did, per_trial, root, reasoning, temperature, top_p, default_agent = sys.argv[1:9]
+target, did, per_trial, root, reasoning, temperature, top_p, default_agent, name = sys.argv[1:10]
 t = json.load(open(target))
-name = os.path.basename(target)[:-5]
 backend = dict(t["inference_backends"][0])
 backend.update(backend_id=f"{did}:ladder-{name}", node_did=did, max_concurrent=int(per_trial))
-sampling = {"sampling_id": f"{did}:ladder-{name}-sampling", "node_did": did,
-            "display_name": f"Ladder {name}", "temperature": float(temperature), "top_p": float(top_p)}
+sampling = {"sampling_id": f"{did}:ladder-{name}-sampling", "node_did": did, "display_name": f"Ladder {name}"}
+sampling.update({key: float(value) for key, value in [("temperature", temperature), ("top_p", top_p)] if value})
 profile = {"profile_id": f"{did}:ladder-{name}", "node_did": did, "display_name": f"Ladder {name}",
            "backend_id": backend["backend_id"], "model_name": t["inference_profiles"][0]["model_name"],
            "reasoning_effort": reasoning, "sampling_id": sampling["sampling_id"],
@@ -243,7 +245,7 @@ json.dump({"node": {"node_did": did}, "default_agent_selection": {"node_did": di
            "inference_execution": [execution], "inference_profiles": [profile]}, open(f"{root}/pack_config.json", "w"), indent=2)
 PY
 apply_config "$INFERENCE"
-echo "profile $PROFILE_ID: $MODEL, reasoning $REASONING, temperature $TEMPERATURE, top_p $TOP_P, $PER_TRIAL call(s) per trial" >&2
+echo "profile $PROFILE_ID: $MODEL, reasoning $REASONING, temperature ${TEMPERATURE:-target}, top_p ${TOP_P:-target}, $PER_TRIAL call(s) per trial" >&2
 
 SUBJECT="$EVAL_HOME/engineer_subject-$SHA"
 rm -rf "$SUBJECT" && cp -R "${GENTS_EVAL_SUBJECT:-$LADDER/engineer_subject}" "$SUBJECT"

@@ -34,6 +34,28 @@ describe("Playwright fixture guard", () => {
 
     expect(violations).toEqual([]);
   });
+
+  it("runs a test that sets its own window size once per engine, never at a project's size", async () => {
+    const { default: config } = await import("../playwright.config");
+    const { OWN_VIEWPORT, PROJECT_SIZE_SENTINEL } =
+      await import("./playwright/ownViewport");
+    const projects = config.projects ?? [];
+    const excludes = (project: (typeof projects)[number]) =>
+      [project.grepInvert ?? []].flat().some((pattern) => pattern.test(OWN_VIEWPORT));
+    const chromium = projects.filter((project) =>
+      project.name?.startsWith("chromium-"),
+    );
+
+    expect(chromium.filter((project) => !excludes(project)).map((p) => p.name)).toEqual(
+      ["chromium-desktop"],
+    );
+    expect(
+      projects.filter((project) => project.grep !== undefined).map((p) => p.name),
+    ).toEqual([]);
+    for (const project of projects) {
+      expect(project.use?.viewport, project.name).not.toEqual(PROJECT_SIZE_SENTINEL);
+    }
+  });
 });
 
 type SpecFile = {
