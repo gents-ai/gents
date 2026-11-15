@@ -16,6 +16,9 @@ use super::vera_dir;
 use crate::identity::NodeIdentity;
 use crate::local::store_key::StoreKey;
 
+#[cfg(test)]
+mod tests;
+
 const NODE_DIR_NAME: &str = "node";
 const WORKER_DIR_NAME: &str = "worker";
 const KEYS_DIR_NAME: &str = "keys";
@@ -134,6 +137,15 @@ impl Keyring for WorkerKeyring {
 
     fn list(&self) -> keyring::Result<Vec<String>> {
         self.opened()?.list()
+    }
+}
+
+pub(super) fn deployment_differs(error: &defra_node::Error) -> Option<&'static str> {
+    match error {
+        defra_node::Error::EmbeddedVera(vera_embedded::HostError::Start(
+            vera_node::EmbedError::Deployment(vera_node::SoloError::Mismatch(what)),
+        )) => Some(what),
+        _ => None,
     }
 }
 

@@ -113,6 +113,19 @@ fn node_did(node: &Arc<dyn NodeIdentity>) -> Result<String> {
     Ok(did.to_owned())
 }
 
+/// Builds a node [`document_acp::configure`] prepared. Every node opened on a
+/// home's store is built here, so a refused Vera deployment is reported as
+/// what it is.
+pub async fn build_configured(builder: defra_node::NodeBuilder) -> Result<defra_node::Node> {
+    builder
+        .build()
+        .await
+        .map_err(|error| match document_acp::refused(&error) {
+            Some(refused) => refused.into(),
+            None => error.into(),
+        })
+}
+
 async fn check_lock(data: &Path, lock: &StoreLock) -> Result<PathBuf> {
     let path = tokio::fs::canonicalize(data).await?;
     let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
@@ -160,7 +173,7 @@ impl<'a> FreshBackendStore<'a> {
             .with_node_identity_did(did)
             .with_node_acp_enabled();
         let builder = document_acp::configure_fresh(builder, &self.data, key, document_acp, node)?;
-        let node = builder.build().await?;
+        let node = build_configured(builder).await?;
         let result = async {
             crate::schema::ensure_runtime_schemas(&node)
                 .await
@@ -257,7 +270,7 @@ impl<'a> ProtectedBackendStore<'a> {
             .with_node_identity_did(did.clone())
             .with_node_acp_enabled();
         let builder = document_acp::configure(builder, &self.data, key, document_acp, node)?;
-        let node = builder.build().await?;
+        let node = build_configured(builder).await?;
         let checked = validate_binding(&node).await;
         let shutdown = node.shutdown().await;
         checked.map_err(|error| match error {
@@ -343,7 +356,7 @@ impl PreflightProtectedBackendStore<'_> {
         if let Some(p2p) = p2p {
             builder = builder.with_p2p(p2p);
         }
-        let node = Arc::new(builder.build().await?);
+        let node = Arc::new(build_configured(builder).await?);
         if let Err(error) = validate_binding(&node).await {
             let _ = node.shutdown().await;
             return Err(error);

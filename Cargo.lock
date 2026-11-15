@@ -7485,6 +7485,8 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "vera",
+ "vera-embedded",
+ "vera-node",
  "zeroize",
 ]
 

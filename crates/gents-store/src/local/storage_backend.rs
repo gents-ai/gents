@@ -173,6 +173,24 @@ pub fn incompatible_store(
             data_path: data_path.to_path_buf(),
         });
     }
+    if let Some(kind) = find_map_source(error, |cause| {
+        cause
+            .downcast_ref::<super::document_acp::DocumentAcpError>()
+            .or_else(|| {
+                match cause.downcast_ref::<super::backend_protection::BackendProtectionError>()? {
+                    super::backend_protection::BackendProtectionError::DocumentAcp(refused) => {
+                        Some(refused)
+                    }
+                    _ => None,
+                }
+            })?
+            .refusal()
+    }) {
+        return Some(IncompatibleStore {
+            kind,
+            data_path: data_path.to_path_buf(),
+        });
+    }
     find_source::<gents_migration::Error>(error)
         .and_then(|cause| {
             if cause.is_unknown_lineage() {

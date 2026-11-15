@@ -90,4 +90,47 @@ theorem the_node_store_needs_neither (store : Store) (a b c d : Bool) :
     admit store .nodeStore a b = admit store .nodeStore c d := by
   cases store <;> rfl
 
+/-- What a node finds of an opted-in home's Vera deployment when it opens the
+store again. -/
+inductive Reopening where
+  | served
+  /-- The directory's deployment was created under another chain identifier
+  or other seeded policies than this node and build give it. -/
+  | deploymentDiffers
+  deriving DecidableEq, Repr
+
+/-- How a refused home is reported: as one this build cannot take, never as a
+node failure worth another attempt. -/
+inductive Refusal where
+  /-- Another version's policies: the home is left to the version that made it. -/
+  | otherVersion
+  deriving DecidableEq, Repr
+
+/-- External premise: a Vera node reopens a directory only under the chain
+identifier and seeded policies it was created with. The chain identifier is a
+function of the Node's DID and the seeded policies are the build's. -/
+def reopen (sameIdentity : Bool) : Reopening :=
+  if !sameIdentity then .deploymentDiffers else .served
+
+def Reopening.refusal : Reopening → Option Refusal
+  | .served => none
+  | .deploymentDiffers => some .otherVersion
+
+structure Reopened where
+  reopening : Reopening
+  refusal : Option Refusal
+  deriving DecidableEq, Repr
+
+def reopened (sameIdentity : Bool) : Reopened :=
+  let reopening := reopen sameIdentity
+  { reopening, refusal := reopening.refusal }
+
+theorem an_opted_in_home_opens_only_under_the_deployment_it_was_created_with
+    (sameIdentity : Bool) (h : reopen sameIdentity = .served) : sameIdentity = true := by
+  cases sameIdentity <;> simp_all [reopen]
+
+theorem every_refused_reopening_is_an_incompatible_home (sameIdentity : Bool) :
+    (reopen sameIdentity).refusal.isSome = (reopen sameIdentity != .served) := by
+  cases sameIdentity <;> rfl
+
 end DocumentAcpChoice

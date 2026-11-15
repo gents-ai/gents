@@ -181,3 +181,34 @@ async fn a_vera_node_that_cannot_start_refuses_the_home() -> anyhow::Result<()> 
     ));
     Ok(())
 }
+
+#[tokio::test]
+async fn an_opted_in_home_is_refused_under_another_deployment_identity() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let mut home = home(directory.path(), "another-identity").await?;
+    FreshBackendStore::observe(&home.data, &home.lock)
+        .await?
+        .initialize(&home.key, &home.node, DocumentAcp::EmbeddedVera)
+        .await?;
+    home.node = {
+        let path = directory.path().join("another.key");
+        Arc::new(
+            tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(path, None)).await??,
+        )
+    };
+
+    let refused = match start(&home, DocumentAcp::EmbeddedVera).await {
+        Ok(_) => anyhow::bail!("the home opened under another deployment identity"),
+        Err(refused) => refused,
+    };
+    assert!(matches!(
+        refused,
+        BackendProtectionError::DocumentAcp(DocumentAcpError::DeploymentDiffers { .. })
+    ));
+    assert_eq!(
+        gents_store::local::storage_backend::incompatible_store(&refused, &home.data)
+            .map(|store| store.kind),
+        Some(gents_protocol::operations::install_repair::IncompatibleStoreKind::OtherVersionSchema)
+    );
+    Ok(())
+}

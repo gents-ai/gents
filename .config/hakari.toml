@@ -24,4 +24,5 @@ third-party = [
 third-party = [
     { name = "vera-embedded", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "bd972f5dfe88004502f05d5c2d1c5f020fdd5183" },
     { name = "vera", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "bd972f5dfe88004502f05d5c2d1c5f020fdd5183" },
+    { name = "vera-node", git = "https://github.com/sourcenetwork/vera.rs", rev = "bf4a4352cd620d6b498508e2dbf768edcbf3392b" },
 ]

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use serde::{Deserialize, Serialize};
 
 use crate::identity::NodeIdentity;
@@ -61,6 +62,12 @@ pub enum DocumentAcpError {
          key; initialize the home with a file or macos-keychain identity"
     )]
     NodeKeyCannotSign { did: String },
+    #[error(
+        "this home's embedded Vera deployment was created under a different {what} than this \
+         Gents build and node identity give it; open the home with the Gents version that \
+         created it"
+    )]
+    DeploymentDiffers { what: &'static str },
     #[error("inspecting {}", path.display())]
     Inspect {
         path: PathBuf,
@@ -69,7 +76,34 @@ pub enum DocumentAcpError {
     },
 }
 
+impl DocumentAcpError {
+    /// `DocumentAcpChoice.Reopening.refusal`.
+    pub(crate) fn refusal(&self) -> Option<IncompatibleStoreKind> {
+        match self {
+            Self::DeploymentDiffers { .. } => Some(IncompatibleStoreKind::OtherVersionSchema),
+            Self::Switch { .. }
+            | Self::Unavailable
+            | Self::NodeKeyCannotSign { .. }
+            | Self::Inspect { .. } => None,
+        }
+    }
+}
+
 type Result<T> = std::result::Result<T, DocumentAcpError>;
+
+/// `DocumentAcpChoice.reopen`, read from what the node's start returned.
+pub(crate) fn refused(error: &defra_node::Error) -> Option<DocumentAcpError> {
+    #[cfg(feature = "embedded-vera")]
+    {
+        embedded_vera::deployment_differs(error)
+            .map(|what| DocumentAcpError::DeploymentDiffers { what })
+    }
+    #[cfg(not(feature = "embedded-vera"))]
+    {
+        let _ = error;
+        None
+    }
+}
 
 pub(crate) fn vera_dir(data: &Path) -> PathBuf {
     data.join(VERA_DIR_NAME)
