@@ -416,8 +416,16 @@ def fetch(url, digest, destination):
     staged.replace(destination)
 
 
+JDK_STAMP = ".gents-archive-sha256"
+
+
 def install():
-    """The pinned java binary and tla2tools.jar, installed under the user cache when absent."""
+    """The pinned java binary and tla2tools.jar, installed under the user cache.
+
+    The jar is hashed on every call. An extracted JDK carries a stamp with the
+    SHA-256 of the archive it came from, written only after a verified
+    extraction; a JDK whose stamp is missing or names another archive (an
+    interrupted install, an older pin) is removed and installed again."""
     cache = cache_dir()
     jar = cache / f"tla2tools-{TLA_TOOLS['version']}.jar"
     if not jar.exists() or sha256(jar) != TLA_TOOLS["sha256"]:
@@ -428,7 +436,9 @@ def install():
     archive, digest = JDKS[key]
     home = cache / JDK_RELEASE
     java = home / ("Contents/Home/bin/java" if key[0] == "Darwin" else "bin/java")
-    if not java.exists():
+    stamp = home / JDK_STAMP
+    stamped = stamp.exists() and stamp.read_text().strip() == digest
+    if not (stamped and java.exists()):
         tarball = cache / archive
         if not tarball.exists() or sha256(tarball) != digest:
             fetch(JDK_BASE + archive, digest, tarball)
@@ -439,11 +449,14 @@ def install():
             else:
                 bundle.extractall(staging)
         unpacked = staging / JDK_RELEASE
+        (unpacked / JDK_STAMP).write_text(digest + "\n")
         if home.exists():
-            shutil.rmtree(staging)
-        else:
-            unpacked.rename(home)
-            shutil.rmtree(staging)
+            # Out of the way first, so a concurrent reader never sees half a JDK under `home`.
+            stale = Path(tempfile.mkdtemp(dir=cache, prefix="jdk-stale-"))
+            home.rename(stale / JDK_RELEASE)
+            shutil.rmtree(stale)
+        unpacked.rename(home)
+        shutil.rmtree(staging)
         tarball.unlink()
     return java, jar
 

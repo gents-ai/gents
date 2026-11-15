@@ -2,16 +2,20 @@
 """Selection and guard checks for gate.py against the real workspace graph; no builds."""
 
 import contextlib
+import hashlib
 import io
 import json
 import os
+import platform
 import re
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gate  # noqa: E402
@@ -472,6 +476,45 @@ class TlaStructure(unittest.TestCase):
         script = (check.TLA / "scripts/run-tlc.sh").read_text()
         self.assertIn("s/^jvm: //p", script)
         self.assertIn('"${JVM[@]}"', script)
+
+    def test_a_cached_jdk_is_reinstalled_unless_its_stamp_names_the_pinned_archive(self):
+        check = gate.tla_check
+        key = (platform.system(), platform.machine())
+        if key not in check.JDKS:
+            self.skipTest(f"no pinned JDK for {key}")
+        archive, digest = check.JDKS[key]
+        inside = "Contents/Home/bin/java" if key[0] == "Darwin" else "bin/java"
+        fetched = []
+
+        def fetch(url, expected, destination):
+            fetched.append(url.rsplit("/", 1)[1])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if url == check.TLA_TOOLS["url"]:
+                destination.write_bytes(b"jar")
+                return
+            with tarfile.open(destination, "w:gz") as bundle:
+                data = b"#!/bin/sh\n"
+                entry = tarfile.TarInfo(f"{check.JDK_RELEASE}/{inside}")
+                entry.size = len(data)
+                bundle.addfile(entry, io.BytesIO(data))
+
+        with tempfile.TemporaryDirectory() as scratch, \
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": scratch}), \
+                mock.patch.object(check, "fetch", fetch), \
+                mock.patch.dict(check.TLA_TOOLS, {"sha256": hashlib.sha256(b"jar").hexdigest()}):
+            home = Path(scratch) / "gents-tla" / check.JDK_RELEASE
+            (home / inside).parent.mkdir(parents=True)
+            (home / inside).write_text("left over by an interrupted install")
+            java, _ = check.install()
+            self.assertEqual(fetched, ["tla2tools.jar", archive])
+            self.assertEqual(java, home / inside)
+            self.assertEqual(java.read_text(), "#!/bin/sh\n")
+            self.assertEqual((home / check.JDK_STAMP).read_text().strip(), digest)
+            check.install()
+            self.assertEqual(fetched, ["tla2tools.jar", archive])
+            (home / check.JDK_STAMP).write_text("another archive\n")
+            check.install()
+            self.assertEqual(fetched, ["tla2tools.jar", archive, archive])
 
     def test_expectations_and_isolated_properties(self):
         check = gate.tla_check
