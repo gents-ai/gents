@@ -2,7 +2,7 @@ import { expect, gotoHarness, test } from "./desktopTest";
 import { chatDraftKey, chatDraftOf } from "../../src/hooks/chatDrafts";
 
 for (const colorScheme of ["light", "dark"] as const) {
-  test(`reviews disk-full recovery without replaying saved input in ${colorScheme}`, async ({
+  test(`reviews disk-full recovery without replaying saved input in ${colorScheme} @own-viewport`, async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({

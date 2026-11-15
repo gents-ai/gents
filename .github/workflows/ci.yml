@@ -112,6 +112,13 @@ jobs:
       - name: Run Harbor agent adapter tests
         run: python3 scripts/harbor/test_gents_agent.py
 
+      - name: Check the eval ladder and live Engineer eval drivers
+        run: |
+          bash -n scripts/evals/run-ladder.sh
+          python3 scripts/evals/test_ladder_batch.py
+          python3 scripts/evals/test_ladder_baseline.py
+          python3 scripts/evals/test_live_engineer_eval.py
+
       - name: Check compiler-tool download recovery
         run: |
           bash -n .github/scripts/setup-afterburner-toolchains.sh

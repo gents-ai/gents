@@ -140,7 +140,7 @@ async function runPhase(phase) {
     GENTS_NATIVE_E2E: "1",
     GENTS_DESKTOP_CONSOLE_LOG: "1",
     GENTS_E2E_NODE_HOME: nodeHome,
-    GENTS_E2E_DESKTOP_HOME: desktopHome,
+    GENTS_DESKTOP_HOME: desktopHome,
     GENTS_E2E_LOCAL_TOOL_ROOT: toolRoot,
     GENTS_E2E_AGENT_LABEL: "Native Acceptance Engineer",
     GENTS_E2E_SERVER_ADDRESS: providerGate.endpoint,

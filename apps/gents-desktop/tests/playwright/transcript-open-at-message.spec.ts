@@ -1,12 +1,8 @@
 import { expect, test } from "./desktopTest";
 
-test("the context meter opens a compaction where it happened, far before the newest page", async ({
+test("the context meter opens a compaction where it happened, far before the newest page @own-viewport", async ({
   page,
-}, testInfo) => {
-  test.skip(
-    testInfo.project.name === "chromium-narrow",
-    "the meter's list is in the header",
-  );
+}) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   await page.goto(
     "/tests/ui-harness/harness.html?scenario=mobile-performance&compactionAt=41",
@@ -41,13 +37,9 @@ test("the context meter opens a compaction where it happened, far before the new
   await expect(panel.getByText("User fixture row 2:", { exact: false })).toHaveCount(0);
 });
 
-test("a compaction whose marker isn't drawn lands on its message and settles", async ({
+test("a compaction whose marker isn't drawn lands on its message and settles @own-viewport", async ({
   page,
-}, testInfo) => {
-  test.skip(
-    testInfo.project.name === "chromium-narrow",
-    "the meter's list is in the header",
-  );
+}) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   await page.goto(
     "/tests/ui-harness/harness.html?scenario=mobile-performance&compactionAt=41&compactionUnmarked=1",

@@ -19,7 +19,7 @@ fn generated_decoders_are_current() {
     assert!(
         output.generated == checked_in && output.removals.is_empty(),
         "the Lean snapshot and src/generated.rs disagree: {:#}\nregenerate with \
-         cargo run -p gents-lean-vocab --example decoders_from_snapshot -- --write",
+         make lean-regen",
         serde_json::json!({
             "patches": output.report["patches"],
             "mismatches": output.report["mismatches"],

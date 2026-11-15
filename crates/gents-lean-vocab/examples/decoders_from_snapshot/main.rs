@@ -1,12 +1,13 @@
 #![expect(clippy::print_stdout, reason = "command-line report")]
 
 mod generator;
+mod regenerate;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use generator::{Source, GENERATED, ROOT};
+use generator::{Output, Source, GENERATED, ROOT};
 
 fn identifiers(text: &str) -> BTreeSet<&str> {
     text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
@@ -69,45 +70,26 @@ fn layer_keys(sources: &[Source], crates_dir: &Path, layer: &[&str]) -> BTreeSet
         .collect()
 }
 
-fn main() {
-    let started = std::time::Instant::now();
-    let mut args = std::env::args().skip(1);
-    let mut snapshot = None;
-    let mut src = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
-    let mut write = false;
-    let mut report = None;
-    let mut layer = None;
-    let mut type_keys = BTreeSet::new();
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--snapshot" => snapshot = args.next(),
-            "--src" => src = PathBuf::from(args.next().expect("--src DIR")),
-            "--report" => report = args.next(),
-            "--layer" => layer = args.next(),
-            "--write" => write = true,
-            "--type-keys" => type_keys.extend(
-                args.next()
-                    .expect("--type-keys key,key")
-                    .split(',')
-                    .map(str::to_owned),
-            ),
-            other => panic!(
-                "unknown argument {other}; usage: [--snapshot FILE] [--src DIR] [--layer crate,crate] [--type-keys key,key] [--report FILE] [--write]"
-            ),
-        }
+/// Rewrites a file only when its bytes change: an unchanged mtime keeps Cargo
+/// from rebuilding this crate and every crate that depends on it.
+pub(crate) fn write_if_changed(path: &Path, text: &str) -> bool {
+    if fs::read(path).is_ok_and(|current| current == text.as_bytes()) {
+        return false;
     }
-    let snapshot = match snapshot {
-        Some(path) => fs::read_to_string(path).expect("snapshot file"),
-        None => gents_lean_contract::load_contract_json().expect("Lean conformance snapshot"),
-    };
-    let snapshot = serde_json::from_str(&snapshot).expect("snapshot JSON");
-    let sources = generator::decoder_sources(&src);
-    let only = layer.map(|layer: String| {
-        let crates_dir = src.parent().unwrap().parent().unwrap().to_path_buf();
-        layer_keys(&sources, &crates_dir, &layer.split(',').collect::<Vec<_>>())
-    });
-    let output = generator::generate(&snapshot, &sources, only.as_ref(), &type_keys);
+    fs::write(path, text).unwrap();
+    true
+}
 
+struct Written {
+    deleted: usize,
+    emptied: Vec<String>,
+    generated_changed: bool,
+}
+
+/// Applies one generator pass to `src`: prunes the hand-written decoders the
+/// generated module replaces, writes `generated.rs` and keeps `lib.rs`
+/// declaring it.
+fn apply(src: &Path, sources: &[Source], output: &Output, write: bool) -> Written {
     let mut deleted = 0;
     let mut emptied = Vec::new();
     let none = BTreeSet::new();
@@ -130,15 +112,18 @@ fn main() {
             .unwrap()
             .text;
         match generator::prune(text, ranges, moved) {
-            Some(text) => fs::write(src.join(path), text).unwrap(),
+            Some(text) => {
+                write_if_changed(&src.join(path), &text);
+            }
             None => {
                 fs::remove_file(src.join(path)).unwrap();
                 emptied.push(path.trim_end_matches(".rs").to_owned());
             }
         }
     }
+    let mut generated_changed = false;
     if write {
-        fs::write(src.join(GENERATED), &output.generated).unwrap();
+        generated_changed = write_if_changed(&src.join(GENERATED), &output.generated);
         let lib = fs::read_to_string(src.join("lib.rs")).unwrap();
         let mut lines: Vec<String> = lib
             .lines()
@@ -170,8 +155,68 @@ fn main() {
                 .map(str::to_owned),
             );
         }
-        fs::write(src.join("lib.rs"), lines.join("\n") + "\n").unwrap();
+        write_if_changed(&src.join("lib.rs"), &(lines.join("\n") + "\n"));
     }
+    Written {
+        deleted,
+        emptied,
+        generated_changed,
+    }
+}
+
+fn main() {
+    let started = std::time::Instant::now();
+    let mut args = std::env::args().skip(1);
+    let mut snapshot = None;
+    let mut src = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+    let mut write = false;
+    let mut report = None;
+    let mut layer = None;
+    let mut type_keys = BTreeSet::new();
+    let mut regenerate = false;
+    let mut force = false;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--snapshot" => snapshot = args.next(),
+            "--src" => src = PathBuf::from(args.next().expect("--src DIR")),
+            "--report" => report = args.next(),
+            "--layer" => layer = args.next(),
+            "--write" => write = true,
+            "--regenerate" => regenerate = true,
+            "--force" => force = true,
+            "--type-keys" => type_keys.extend(
+                args.next()
+                    .expect("--type-keys key,key")
+                    .split(',')
+                    .map(str::to_owned),
+            ),
+            other => panic!(
+                "unknown argument {other}; usage: [--snapshot FILE] [--src DIR] [--layer crate,crate] [--type-keys key,key] [--report FILE] [--write] | --regenerate [--snapshot FILE] [--force]"
+            ),
+        }
+    }
+    if regenerate {
+        assert!(
+            layer.is_none() && type_keys.is_empty() && report.is_none() && !write,
+            "--regenerate writes the full decoders and schema; it takes only --snapshot and --force"
+        );
+        regenerate::run(&src, snapshot.as_deref(), force);
+        return;
+    }
+    let snapshot = match snapshot {
+        Some(path) => fs::read_to_string(path).expect("snapshot file"),
+        None => gents_lean_contract::load_contract_json().expect("Lean conformance snapshot"),
+    };
+    let snapshot = serde_json::from_str(&snapshot).expect("snapshot JSON");
+    let sources = generator::decoder_sources(&src);
+    let only = layer.map(|layer: String| {
+        let crates_dir = src.parent().unwrap().parent().unwrap().to_path_buf();
+        layer_keys(&sources, &crates_dir, &layer.split(',').collect::<Vec<_>>())
+    });
+    let output = generator::generate(&snapshot, &sources, only.as_ref(), &type_keys);
+    let Written {
+        deleted, emptied, ..
+    } = apply(&src, &sources, &output, write);
     let mut summary = output.report.clone();
     summary["hand_written_lines_removed"] = deleted.into();
     summary["generated_lines"] = output.generated.lines().count().into();
