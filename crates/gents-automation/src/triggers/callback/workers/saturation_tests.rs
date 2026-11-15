@@ -70,7 +70,11 @@ async fn wait_for_invocations(
         }
         tokio::time::timeout(STALL_CEILING, updates.recv())
             .await
-            .unwrap_or_else(|_| panic!("callback invocations stalled before the expected durable state: {current:?}"))
+            .unwrap_or_else(|_| {
+                panic!(
+                    "callback invocations stalled before the expected durable state: {current:?}"
+                )
+            })
             .expect("database update stream stays open");
     }
 }

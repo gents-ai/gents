@@ -4640,13 +4640,10 @@ async fn closed_goal_notifications_keep_durable_continuation_and_cancellation_li
     )
     .await
     .unwrap();
-    let _fire = tokio::time::timeout(
-        gents_store::test_support::STALL_CEILING,
-        source.next_fire(),
-    )
-    .await
-    .expect("durable rescan must find the active Goal")
-    .expect("closed notifications must not terminate the source");
+    let _fire = tokio::time::timeout(gents_store::test_support::STALL_CEILING, source.next_fire())
+        .await
+        .expect("durable rescan must find the active Goal")
+        .expect("closed notifications must not terminate the source");
     assert_eq!(goal_children_from_access(&access).await.len(), 1);
     let goal = load_goal_as(&access, db.node_identity.did()).await.unwrap();
     assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));

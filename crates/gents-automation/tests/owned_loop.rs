@@ -517,7 +517,10 @@ async fn a_script_that_stops_mid_child_settles_the_child_and_the_request_finishe
     let node = db.node.clone();
     let tools: Vec<Box<dyn ToolDyn>> = {
         let started = Arc::new(tokio::sync::Notify::new());
-        vec![Box::new(StoppingParent(started.clone())), Box::new(Stall(started))]
+        vec![
+            Box::new(StoppingParent(started.clone())),
+            Box::new(Stall(started)),
+        ]
     };
     let stream = run_loop_stream(
         ScriptedModel::new_turns(plugin_call_then_text_turns()),
