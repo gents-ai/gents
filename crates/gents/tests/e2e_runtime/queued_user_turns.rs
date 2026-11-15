@@ -19,7 +19,7 @@ use crate::support::test_db;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ordinary_queued_turns_follow_the_model_after_client_rediscovery() {
-    use gents_lean_vocab::families::fold_queue_contracts_fold_script as family;
+    use gents_lean_vocab::families::fold_queue_contracts_queued_turn_rediscovery as family;
     let case = family::cases::<String, String, String, String, String>()
         .into_iter()
         .find(|case| case.input.name == "ordinary_queued_inputs_arrive_during_busy_turn")

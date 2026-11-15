@@ -314,7 +314,8 @@ fn assert_generated_queue_row_metadata(
 
 #[tokio::test]
 async fn generated_interrupt_queue_events_bind_to_native_rows() {
-    for modeled in gents_lean_vocab::families::interrupt_queue_contracts_sequential::cases() {
+    let cases = gents_lean_vocab::families::interrupt_queue_contracts_sequential::cases();
+    for modeled in &cases {
         let case = &modeled.input;
         let mut observations = Vec::new();
         for use_http in [false, true] {
@@ -478,6 +479,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
         );
         modeled.check(Some(local));
     }
+    signed_interrupt_rebuilds_after_an_execution_renewal_conflict(&cases[0].input).await;
 }
 
 #[tokio::test]
@@ -873,13 +875,8 @@ async fn desktop_interrupt_observation(
         .expect("shut down test node");
 }
 
-#[tokio::test]
-async fn signed_interrupt_rebuilds_after_an_execution_renewal_conflict() {
-    let modeled = gents_lean_vocab::families::interrupt_queue_contracts_sequential::cases()
-        .into_iter()
-        .next()
-        .unwrap();
-    let fixture = fixture(&modeled.input).await;
+async fn signed_interrupt_rebuilds_after_an_execution_renewal_conflict(case: &ModeledCase) {
+    let fixture = fixture(case).await;
     let access = fixture.db.client_access(fixture.agent.as_ref());
     let parent = &fixture.parent;
     let reached = Arc::new(Notify::new());
