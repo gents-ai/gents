@@ -4707,3 +4707,6 @@ fn a_recorded_document_carries_the_installer_root_mark_only_when_set() {
         marked
     );
 }
+
+#[path = "tests/host_roots.rs"]
+mod root_preservation;
