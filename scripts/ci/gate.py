@@ -692,10 +692,12 @@ def hand_off_on_host(entry):
     print(f"gate: the {entry['archive']} slices run on {host}", flush=True)
 
 
-def nextest(arguments, cwd=ROOT, label=None, expect=None, prefix=()):
+def nextest(arguments, cwd=ROOT, label=None, expect=None, prefix=(), path_prefix=None):
     """`cargo nextest`, recording the summary's counts; `expect` checks the listed tests per package."""
     command = [*prefix, "cargo", "nextest", *arguments]
     env = dict(os.environ)
+    if path_prefix:
+        env["PATH"] = path_prefix + os.pathsep + env.get("PATH", "")
     env.setdefault("RUST_MIN_STACK", "16777216")
     print(f"\n$ {shlex.join(command)}", flush=True)
     started = time.time()
@@ -930,14 +932,22 @@ def run_cached_slice(plan, arguments, label, transfer, index):
           flush=True)
     junit = ROOT / "target" / "nextest" / "ci" / "junit.xml"
     junit.unlink(missing_ok=True)
-    nextest(arguments, label=f"{label} (cache {plan['mode']})", prefix=prefix)
+    broker, shims = None, None
+    if prefix and shutil.which("lake") and os.environ.get("GATE_TEST_CACHE_TRACE_LAKE") != "true":
+        broker, shims = start_lake_broker(extract)
+    try:
+        nextest(arguments, label=f"{label} (cache {plan['mode']})", prefix=prefix,
+                path_prefix=str(shims) if shims else None)
+    finally:
+        if broker:
+            broker.kill()
     os.environ["GATE_SLICE"] = str(index or 0)
     started = time.time()
     outcomes = test_cache.junit_outcomes(junit)
     binary_ids = {binary_id: os.path.realpath(extract / info["relative"]) for binary_id, info in plan["binaries"].items()}
     traces, written = {}, {}
     if prefix:
-        derived = lean_derived()
+        derived = lean_derived() + ([(str(shims), PROOFS)] if shims else [])
         context = test_cache.Context(ROOT, extract, derived=derived, refused=kept_target())
         # Lake reads tens of thousands of build files per test: the prefilter
         # drops them, and each process that touched them queries the proofs' sources.
@@ -961,6 +971,22 @@ def run_cached_slice(plan, arguments, label, transfer, index):
     if not os.environ.get("GATE_TEST_CACHE_KEEP_TRACE"):
         shutil.rmtree(trace_dir, ignore_errors=True)
     shutil.rmtree(extract, ignore_errors=True)
+
+
+def start_lake_broker(extract):
+    """Start scripts/ci/test_cache_broker.py outside the tracer and a `lake` shim for the slice's PATH."""
+    import tempfile
+    import test_cache_broker
+    socket_path = os.path.join(tempfile.mkdtemp(prefix="gate-lake-"), "socket")
+    broker = subprocess.Popen([sys.executable, str(ROOT / "scripts/ci/test_cache_broker.py"), "serve", socket_path,
+                               shutil.which("lake")], start_new_session=True)
+    for _ in range(100):
+        if os.path.exists(socket_path):
+            break
+        time.sleep(0.05)
+    shims = extract.parent / f"{extract.name}.bin"
+    test_cache_broker.shim(str(shims), socket_path)
+    return broker, shims
 
 
 def lean_derived():

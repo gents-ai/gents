@@ -339,6 +339,29 @@ class Recording(unittest.TestCase):
         self.assertIn("was absent during the test", notes["b t"])
 
 
+class Broker(unittest.TestCase):
+    def test_a_shim_runs_its_program_through_the_broker_with_its_descriptors_and_status(self):
+        import test_cache_broker
+        directory = Path(tempfile.mkdtemp(prefix="broker-", dir="/tmp"))
+        self.addCleanup(shutil.rmtree, directory)
+        socket_path = str(directory / "socket")
+        broker = subprocess.Popen([sys.executable, str(Path(test_cache.__file__).with_name("test_cache_broker.py")),
+                                   "serve", socket_path, "/bin/sh"])
+        self.addCleanup(broker.kill)
+        for _ in range(100):
+            if os.path.exists(socket_path):
+                break
+            import time
+            time.sleep(0.05)
+        shim = test_cache_broker.shim(str(directory / "bin"), socket_path, "sh-via-broker")
+        result = subprocess.run([shim, "-c", 'read line; echo "$line in $(pwd) $GATE_PROBE"; echo err >&2; exit 3'],
+                                input="hello\n", capture_output=True, text=True, cwd=str(directory),
+                                env={**os.environ, "GATE_PROBE": "env"})
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(result.stdout.strip(), f"hello in {os.path.realpath(directory)} env")
+        self.assertEqual(result.stderr.strip(), "err")
+
+
 class Policy(unittest.TestCase):
     def test_the_repository_policy_loads_and_names_issues(self):
         policy = test_cache.load_policy()
