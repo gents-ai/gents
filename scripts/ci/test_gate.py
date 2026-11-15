@@ -271,5 +271,101 @@ class Guards(unittest.TestCase):
         self.assertNotIn("fine", verdict)
 
 
+class TlaSelection(unittest.TestCase):
+    """The planner picks TLA+ specs by the crates and Lean owners their headers name."""
+
+    def test_a_crate_change_selects_the_specs_that_name_it(self):
+        tla = select("crates/gents-desktop-core/src/lib.rs")["contract"]["tla"]
+        self.assertIn("RuntimeConnectionTransport", tla)
+        self.assertNotIn("ClientSubmissionContention", tla)
+        for name in tla:
+            self.assertIn("gents-desktop-core", gate.tla_check.spec_header(gate.tla_check.specs()[name])[1])
+
+    def test_a_lean_change_selects_the_specs_that_name_its_owner(self):
+        selection = select("crates/gents/proofs/Proofs/Store/TransactionReplay.lean")
+        self.assertIn("ClientSubmissionContention", selection["contract"]["tla"])
+        self.assertNotIn("PackUxWatch", selection["contract"]["tla"])
+
+    def test_a_generated_decision_selects_the_specs_that_import_it(self):
+        importers = {name for name, node in gate.tla_check.graph().items()
+                     if "LeanDecision_TransactionReplay" in node["generated"]}
+        self.assertTrue(importers)
+        tla = select("crates/gents/proofs/tla/generated/LeanDecision_TransactionReplay.tla")["contract"]["tla"]
+        self.assertEqual(set(tla), importers)
+
+    def test_a_config_selects_its_spec_and_the_runner_selects_every_spec(self):
+        self.assertEqual(select("crates/gents/proofs/tla/MCPackUxWatchTransient.cfg")["contract"]["tla"],
+                         ["PackUxWatch"])
+        everything = sorted(gate.tla_check.specs())
+        self.assertEqual(select("crates/gents/proofs/tla/scripts/tla_check.py")["contract"]["tla"], everything)
+        self.assertEqual(select("Cargo.lock")["contract"]["tla"], everything)
+
+    def test_selection_follows_the_header_not_the_file_name(self):
+        nodes = {"A": {"path": Path("A.tla"), "lean": ["X.decide"], "crates": ["gents-p2p"], "configs": [],
+                       "generated": []},
+                 "B": {"path": Path("B.tla"), "lean": [], "crates": ["gents-store"], "configs": [],
+                       "generated": ["LeanDecision_X"]}}
+        owner = lambda path: gate.crate_of(path, MEMBERS)  # noqa: E731
+        check = gate.tla_check
+        self.assertEqual(check.select(["crates/gents-p2p/src/lib.rs"], nodes, owner), ["A"])
+        self.assertEqual(check.select(["crates/gents-store/src/lib.rs"], nodes, owner), ["B"])
+        self.assertEqual(check.select(["crates/gents/proofs/tla/generated/LeanDecision_X.tla"], nodes, owner),
+                         ["B"])
+        self.assertEqual(check.select(["crates/gents-cli/src/lib.rs", "docs/a.md"], nodes, owner), [])
+
+    def test_prose_selects_no_spec(self):
+        self.assertEqual(select("docs/guide.md")["contract"]["tla"], [])
+
+
+class TlaStructure(unittest.TestCase):
+    """Every spec names its Lean owners and crates, every config its TLC result."""
+
+    def test_headers_owners_crates_and_generated_imports(self):
+        schema = json.loads((gate.ROOT / "crates/gents-lean-vocab/families.schema.json").read_text())
+        problems = gate.tla_check.structure_problems(set(schema["functions"]), set(MEMBERS))
+        self.assertEqual(problems, [])
+
+    def test_lean_owner_keys_follow_lean_wire_names(self):
+        check = gate.tla_check
+        self.assertEqual(check.wire_key("TransactionReplay.disposition"), "transaction_replay_disposition")
+        self.assertEqual(check.wire_key("Conformance.PluginResources.computeAllowances"),
+                         "plugin_resources_compute_allowances")
+        self.assertEqual(check.wire_name("MCPHealth"), "mcp_health")
+
+    def test_tlc_results_parse(self):
+        def message(code, kind, body):
+            return f"@!@!@STARTMSG {code}:{kind} @!@!@\n{body}\n@!@!@ENDMSG {code} @!@!@\n"
+        parse = gate.tla_check.parse
+        self.assertEqual(parse(message(2193, 0, "Model checking completed. No error has been found."), 0), "holds")
+        self.assertEqual(parse(message(2110, 1, "Invariant NoLostWrite is violated."), 12), "violates NoLostWrite")
+        self.assertEqual(parse(message(2116, 1, "Temporal property EventualResume was violated."), 13),
+                         "violates EventualResume")
+        self.assertEqual(parse(message(2116, 1, "Temporal properties were violated."), 13), "violates ?")
+        self.assertEqual(parse(message(2114, 1, "Deadlock reached."), 11), "deadlock")
+        self.assertTrue(parse(message(1000, 1, "Unknown operator Foo"), 255).startswith("error: Unknown operator"))
+        self.assertTrue(parse("", 1).startswith("error:"))
+
+    def test_expectations_and_isolated_properties(self):
+        check = gate.tla_check
+        with tempfile.TemporaryDirectory() as scratch:
+            cfg = Path(scratch) / "MCX.cfg"
+            cfg.write_text("\\* expect: violates Live\nSPECIFICATION Spec\nINVARIANT TypeOK\nPROPERTY Live\n")
+            self.assertEqual(check.expectation(cfg), "violates Live")
+            cfg.write_text("\\* expect: violates Missing\nSPECIFICATION Spec\nINVARIANT TypeOK\n")
+            with self.assertRaises(check.HeaderError):
+                check.expectation(cfg)
+            cfg.write_text("\\* expect: deadlock\nSPECIFICATION Spec\nCHECK_DEADLOCK FALSE\n")
+            with self.assertRaises(check.HeaderError):
+                check.expectation(cfg)
+            cfg.write_text("SPECIFICATION Spec\n")
+            with self.assertRaises(check.HeaderError):
+                check.expectation(cfg)
+        text = "\\* note\nCONSTANTS\n  N = 2\nSPECIFICATION Spec\nINVARIANT TypeOK\nPROPERTY A\nPROPERTY B\n"
+        self.assertEqual(check.cfg_sections(text)["PROPERTY"], ["A", "B"])
+        alone = check.without_checks(text, "B")
+        self.assertEqual(check.cfg_sections(alone), {"CONSTANTS": ["N", "=", "2"], "SPECIFICATION": ["Spec"],
+                                                     "PROPERTY": ["B"]})
+
+
 if __name__ == "__main__":
     unittest.main()

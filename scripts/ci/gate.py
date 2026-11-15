@@ -12,6 +12,7 @@ computes it against --base.
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -25,6 +26,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PROOFS = "crates/gents/proofs"
+TLA_CHECK = ROOT / PROOFS / "tla/scripts/tla_check.py"
+
+
+def load_tla_check():
+    spec = importlib.util.spec_from_file_location("tla_check", TLA_CHECK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+tla_check = load_tla_check()
 
 STUDIO = ["self-hosted", "macOS", "ARM64", "studio"]
 
@@ -209,6 +221,12 @@ def under(path, prefixes):
     return any(path == prefix or path.startswith(prefix) for prefix in prefixes)
 
 
+def crate_of(path, members):
+    """The workspace member whose directory holds `path`, if any."""
+    return max((name for name, (directory, _) in members.items() if path.startswith(directory + "/")),
+               key=lambda name: len(members[name][0]), default=None)
+
+
 def classify(path, members):
     """One file -> the tags it selects."""
     tags = set()
@@ -220,8 +238,7 @@ def classify(path, members):
         return tags | {"proofs"}
     if under(path, CONTRACT_PATHS):
         return tags | {"contract"}
-    owner = max((name for name, (directory, _) in members.items() if path.startswith(directory + "/")),
-                key=lambda name: len(members[name][0]), default=None)
+    owner = crate_of(path, members)
     if owner:
         return tags | {f"crate:{owner}"}
     if under(path, TS_PATHS):
@@ -253,6 +270,18 @@ def runner(kind):
     return STUDIO
 
 
+def tla_specs(files, members, everything):
+    """The TLA+ specs a change selects by their headers: every spec when it
+    changes everything or a header does not parse (the runner then reports it)."""
+    try:
+        nodes = tla_check.graph()
+    except tla_check.HeaderError:
+        return ["*"]
+    if everything:
+        return sorted(nodes)
+    return tla_check.select(files, nodes, lambda path: crate_of(path, members))
+
+
 def plan(files, members, everything=False, only=None, tier="full"):
     check_groups(members)
     tags, reasons = set(), {}
@@ -271,10 +300,11 @@ def plan(files, members, everything=False, only=None, tier="full"):
     tested = affected if tier == "full" or "proofs" in tags else changed
     ts = everything or "ts" in tags
     proofs = everything or "proofs" in tags
+    tla = tla_specs(files, members, everything)
     jobs = {
         "fmt": rust,
         "lint": rust,
-        "contract": rust or ts or proofs or "contract" in tags,
+        "contract": rust or ts or proofs or "contract" in tags or bool(tla),
         "ts-packages": ts,
         "ts-unit": ts,
         "ts-browser": ts,
@@ -310,6 +340,9 @@ def plan(files, members, everything=False, only=None, tier="full"):
             # gents test target, which the runtime group runs when selected.
             "ratchets": rust and "gents" not in tested,
             "ts_lean": ts or proofs,
+            # TLA+ specs whose header names a changed crate or Lean owner, or
+            # whose own files or imported generated modules changed.
+            "tla": tla,
         },
         "core_packs": everything or "core-packs" in tags,
         "runs_on": {"studio": STUDIO},
@@ -508,6 +541,10 @@ def run_contract(selection):
         "regenerate_household_policy", "--", "--check"])
     if selection["contract"]["ratchets"]:
         cargo_test("gents write_owner_structure", ["-p", "gents", "--test", "write_owner_structure"])
+    tla = selection["contract"].get("tla", [])
+    if tla:
+        selected = ["--all"] if tla == ["*"] else [flag for spec in tla for flag in ("--spec", spec)]
+        sh(["python3", str(TLA_CHECK), "run", *selected])
     if selection["contract"]["ts_lean"]:
         for command in TS_LEAN:
             sh(command)
