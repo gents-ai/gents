@@ -339,6 +339,17 @@ See `../README.md` for how this fits the broader formal-verification model.
   the product is the green one in both. TLC2 `2026.11.06.222357` on Linux
   amd64, Temurin 17, `-workers 4`: green 214 and 72 distinct states, each red
   configuration violates its named property.
+- `BackgroundLiveOutputObservation` — a background process observed mid-run
+  (`list_background_tools_reports_running_live_output_bytes`): a gated child
+  prints "live" and waits; the test polls `list_processes` until the row is
+  running with 4 bytes, reads the same output with `read_process`, releases
+  the gate and waits. List and read report the output at the moment they run,
+  so `ReadAgrees` depends only on the gate still being closed when the read
+  runs. `Timed` is the code before the fix: the child's own bounded wait (or
+  its tool timeout) opens the gate after some ticks and the read returns 8
+  bytes, the observed failure; `TimeoutKill` is the tool timeout killing it
+  at the gate, which the wait reports as failed; `PollBudget` is the test's poll budget failing
+  before the child prints. Green has neither clock.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -687,6 +698,10 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCObserverResyncStaleCommit.cfg` | `NoPublicationFence` checking only `TypeOK` and `NoStaleCommit` | `NoStaleCommit` intentionally VIOLATED: the same older refresh replaces the newer published version | 114 distinct states before counterexample; 201 generated | 9 | <1s |
 | `MCObserverResyncNoEventQueue.cfg` | 1 node, a delivered event does not queue its node | `NoLostWrite` intentionally VIOLATED: a write after the snapshot read is delivered and never loaded | 21 distinct states before counterexample; 25 generated | 7 | <1s |
 | `MCObserverResyncSnapshotBeforeArm.cfg` | 1 node, the snapshot is queued before the streams arm | `NoLostWrite` intentionally VIOLATED: a write between the read and the arm has no event and no later load | 65 distinct states before counterexample; 102 generated | 7 | <1s |
+| `MCBackgroundLiveOutputObservation.cfg` | no child self-expiry, no poll budget | Passes `TypeOK`, `ReadAgrees`, `NoWindowFailure`, `CompletedOk`, `Completes` | 7 distinct states; 8 generated | — | <1s (Linux, OpenJDK 17) |
+| `MCBackgroundLiveOutputObservationTimed.cfg` | `SelfExpire`, `K = 2` | `ReadAgrees` intentionally VIOLATED: ChildPrint, Tick, Tick, Poll (running, 4 bytes), ChildFinish, Read returns 8 | 20 distinct states; 25 generated | 7 | <1s |
+| `MCBackgroundLiveOutputObservationTimeoutKill.cfg` | `SelfExpire`, `K = 2` | `CompletedOk` intentionally VIOLATED: the tool timeout kills the child at its gate after the running/4 listing; the wait reports failed | 31 distinct states; 39 generated | 9 | <1s |
+| `MCBackgroundLiveOutputObservationPollBudget.cfg` | `PollCap`, `Cap = 2` | `NoWindowFailure` intentionally VIOLATED: two polls before the child prints | 6 distinct states; 6 generated | 3 | <1s |
 | `MCDesktopUpdateListener.cfg` | `MaxVersion = 2`, `ListenFailures = 1`, `Mismatches = 1`, `Selections = 1`, `RereadBudget = 2`, every guard on | Passes `TypeOK`, `MovedReadQueued`, `ViewConverges`, `NoStuckPending` | 10,819 distinct states; 46,787 generated | 18 | <1s |
 | `MCDesktopUpdateListenerNoRegistration.cfg` | as green, `SpecListenerUnfair` (registration may never resolve) | Passes `TypeOK`, `MovedReadQueued`, `NoStuckPending`: the read without a listener settles the selection with no event at all | 10,819 distinct states; 46,787 generated | 18 | <1s |
 | `MCDesktopUpdateListenerNoInitialRead.cfg` | as NoRegistration, `InitialRead = FALSE` | `NoStuckPending` intentionally VIOLATED: ListenRejects, Relistens, then the listener never resolves; 'Opening session' stays with no read and no action | 5,856 distinct states; 22,536 generated | 18 | <1s |
