@@ -178,7 +178,7 @@ another identity.
 - One Tokio runtime per process, built at its entry point. Never block a
   runtime thread: waits are `.await`, synchronous work goes to
   `spawn_blocking`. The one exception is the embedded Vera node of a home that
-  opted into it (`embedded-vera`): DefraDB starts it on a dedicated thread with
+  opted into it (`vera`): DefraDB starts it on a dedicated thread with
   a runtime of its own, because the consensus library it runs on always builds
   its runtime and takes none from outside. Gents reaches it only through
   DefraDB and starts nothing on it.

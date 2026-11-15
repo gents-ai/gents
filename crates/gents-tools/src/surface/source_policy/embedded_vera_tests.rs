@@ -109,10 +109,10 @@ async fn an_opted_in_home_decides_document_access_through_its_vera_node_across_a
 
     FreshBackendStore::observe(&home.data, &home.lock)
         .await?
-        .initialize(&home.key, &home.node, DocumentAcp::EmbeddedVera)
+        .initialize(&home.key, &home.node, DocumentAcp::Vera)
         .await?;
 
-    let node = start(&home, DocumentAcp::EmbeddedVera).await?;
+    let node = start(&home, DocumentAcp::Vera).await?;
     let deployment = node
         .embedded_vera_trust()
         .expect("the node runs its Vera deployment")
@@ -138,7 +138,7 @@ async fn an_opted_in_home_decides_document_access_through_its_vera_node_across_a
     node.shutdown().await?;
     drop(node);
 
-    let node = start(&home, DocumentAcp::EmbeddedVera).await?;
+    let node = start(&home, DocumentAcp::Vera).await?;
     assert_eq!(node.embedded_vera_trust(), Some(&deployment));
     holds_the_node_policies(&node, owner.as_str()).await?;
     assert!(reads(&node, &owner).await?);
@@ -174,7 +174,7 @@ async fn a_home_that_did_not_opt_in_starts_no_vera_node() -> anyhow::Result<()> 
     assert!(!home.data.join("vera").exists());
 
     assert!(matches!(
-        start(&home, DocumentAcp::EmbeddedVera).await,
+        start(&home, DocumentAcp::Vera).await,
         Err(BackendProtectionError::DocumentAcp(
             DocumentAcpError::Switch { .. }
         ))
@@ -184,7 +184,7 @@ async fn a_home_that_did_not_opt_in_starts_no_vera_node() -> anyhow::Result<()> 
 }
 
 async fn refused(home: &Home) -> anyhow::Result<BackendProtectionError> {
-    match start(home, DocumentAcp::EmbeddedVera).await {
+    match start(home, DocumentAcp::Vera).await {
         Ok(_) => anyhow::bail!("the home opened"),
         Err(refused) => Ok(refused),
     }
@@ -201,9 +201,9 @@ async fn opted_in_home_with_a_document(root: &Path, name: &str) -> anyhow::Resul
     let owner = identity::Did::new(home.node.did())?;
     FreshBackendStore::observe(&home.data, &home.lock)
         .await?
-        .initialize(&home.key, &home.node, DocumentAcp::EmbeddedVera)
+        .initialize(&home.key, &home.node, DocumentAcp::Vera)
         .await?;
-    let node = start(&home, DocumentAcp::EmbeddedVera).await?;
+    let node = start(&home, DocumentAcp::Vera).await?;
     node.document_acp()
         .register_doc_object(&owner, AGENT_OWNERSHIP_POLICY_ID, RESOURCE, DOCUMENT)
         .await?;
@@ -240,7 +240,7 @@ async fn a_home_whose_vera_directory_is_lost_is_refused_and_nothing_is_created(
 
     tokio::fs::remove_dir(&vera).await?;
     tokio::fs::rename(&kept, &vera).await?;
-    let node = start(&home, DocumentAcp::EmbeddedVera).await?;
+    let node = start(&home, DocumentAcp::Vera).await?;
     assert!(reads(&node, &identity::Did::new(home.node.did())?).await?);
     node.shutdown().await?;
     Ok(())
@@ -262,7 +262,7 @@ async fn a_home_whose_vera_directory_is_swapped_for_another_deployment_is_refuse
     assert_eq!(twin.node.did(), home.node.did());
     FreshBackendStore::observe(&twin.data, &twin.lock)
         .await?
-        .initialize(&twin.key, &twin.node, DocumentAcp::EmbeddedVera)
+        .initialize(&twin.key, &twin.node, DocumentAcp::Vera)
         .await?;
 
     let vera = home.data.join("vera");
@@ -281,7 +281,7 @@ async fn a_home_whose_vera_directory_is_swapped_for_another_deployment_is_refuse
 
     tokio::fs::remove_dir_all(&vera).await?;
     tokio::fs::rename(&kept, &vera).await?;
-    let node = start(&home, DocumentAcp::EmbeddedVera).await?;
+    let node = start(&home, DocumentAcp::Vera).await?;
     assert!(reads(&node, &identity::Did::new(home.node.did())?).await?);
     node.shutdown().await?;
     Ok(())
@@ -293,7 +293,7 @@ async fn an_opted_in_home_is_refused_under_another_deployment_identity() -> anyh
     let mut home = home(directory.path(), "another-identity").await?;
     FreshBackendStore::observe(&home.data, &home.lock)
         .await?
-        .initialize(&home.key, &home.node, DocumentAcp::EmbeddedVera)
+        .initialize(&home.key, &home.node, DocumentAcp::Vera)
         .await?;
     home.node = {
         let path = directory.path().join("another.key");

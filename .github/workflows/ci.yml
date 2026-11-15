@@ -431,14 +431,14 @@ jobs:
       # No default build carries the embedded Vera node: the feature adds its
       # consensus library to the graph. Main and candidate runs compile it and
       # run the tests it gates, next to the full suites.
-      - name: Check and test the embedded Vera feature
+      - name: Check and test the Vera feature
         if: matrix.suite == 'runtime' && github.event_name != 'pull_request'
         env:
           RUST_MIN_STACK: 16777216
         run: |
-          cargo check -p gents-cli --tests --features embedded-vera
-          cargo test -p gents-store --lib --features embedded-vera local::document_acp::
-          cargo test -p gents-tools --lib --features embedded-vera surface::source_policy::embedded_vera_tests::
+          cargo check -p gents-cli --tests --features vera
+          cargo test -p gents-store --lib --features vera local::document_acp::
+          cargo test -p gents-tools --lib --features vera surface::source_policy::embedded_vera_tests::
 
       - name: Run desktop Rust package tests
         if: matrix.suite == 'desktop'

@@ -3118,8 +3118,8 @@ mod tests {
     fn refuses_an_embedded_vera_home(error: &anyhow::Error) -> bool {
         use gents_store::local::document_acp::DocumentAcpError;
         match refused_document_acp(error) {
-            DocumentAcpError::NotYetUsable => cfg!(feature = "embedded-vera"),
-            DocumentAcpError::Unavailable => !cfg!(feature = "embedded-vera"),
+            DocumentAcpError::NotYetUsable => cfg!(feature = "vera"),
+            DocumentAcpError::Unavailable => !cfg!(feature = "vera"),
             _ => false,
         }
     }
@@ -3130,7 +3130,7 @@ mod tests {
         let home = temp.path().join("home");
         let mut args = init_args();
         args.home = Some(home.clone());
-        args.document_acp = Some(DocumentAcpArg::EmbeddedVera);
+        args.document_acp = Some(DocumentAcpArg::Vera);
         let error = init_home(args).await.unwrap_err();
         assert!(refuses_an_embedded_vera_home(&error), "{error:#}");
         assert!(!home.exists());
@@ -3143,7 +3143,7 @@ mod tests {
         let home = temp.path().join("home");
         let mut args = init_args();
         args.home = Some(home.clone());
-        args.document_acp = Some(DocumentAcpArg::EmbeddedVera);
+        args.document_acp = Some(DocumentAcpArg::Vera);
         args.identity_backend = IdentityBackendArg::MacosSecureEnclave;
         args.secure_enclave_label = Some("unused".into());
         let error = init_home(args).await.unwrap_err();
@@ -3159,7 +3159,7 @@ mod tests {
         use gents_store::local::document_acp::DocumentAcp;
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
-        unfinished_init(&home, DocumentAcp::EmbeddedVera);
+        unfinished_init(&home, DocumentAcp::Vera);
         let mut args = init_args();
         args.home = Some(home.clone());
         let error = init_home(args).await.unwrap_err();
@@ -3175,13 +3175,13 @@ mod tests {
         unfinished_init(&home, DocumentAcp::Local);
         let mut args = init_args();
         args.home = Some(home.clone());
-        args.document_acp = Some(DocumentAcpArg::EmbeddedVera);
+        args.document_acp = Some(DocumentAcpArg::Vera);
         let error = init_home(args).await.unwrap_err();
         assert!(matches!(
             refused_document_acp(&error),
             DocumentAcpError::Switch {
                 recorded: DocumentAcp::Local,
-                requested: DocumentAcp::EmbeddedVera,
+                requested: DocumentAcp::Vera,
             }
         ));
         assert!(!default_data_dir(&home).exists());

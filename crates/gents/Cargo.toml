@@ -14,7 +14,7 @@ default = [
     "defra-node/p2p",
     "defra-node/wasmtime-runtime",
 ]
-embedded-vera = ["gents-store/embedded-vera"]
+vera = ["gents-store/vera"]
 typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript", "gents-inference/typescript", "gents-p2p/typescript", "gents-pack/typescript", "gents-session/typescript", "gents-tools/typescript", "gents-toolcalls/typescript", "gents-automation/typescript", "gents-observe/typescript"]
 # Gates the optional live-inference collection out of default builds.
 live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e", "gents-inference/live-e2e", "gents-p2p/live-e2e", "gents-pack/live-e2e", "gents-session/live-e2e", "gents-tools/live-e2e", "gents-toolcalls/live-e2e", "gents-automation/live-e2e", "gents-observe/live-e2e"]

@@ -8,7 +8,7 @@ use crate::identity::NodeIdentity;
 use crate::local::home::{StoredInitConfig, SECURE_ENCLAVE_IDENTITY_BACKEND};
 use crate::local::store_key::StoreKey;
 
-#[cfg(feature = "embedded-vera")]
+#[cfg(feature = "vera")]
 mod embedded_vera;
 #[cfg(test)]
 mod tests;
@@ -28,7 +28,7 @@ pub(crate) struct Deployment {
 pub enum DocumentAcp {
     #[default]
     Local,
-    EmbeddedVera,
+    Vera,
 }
 
 impl DocumentAcp {
@@ -41,7 +41,7 @@ impl std::fmt::Display for DocumentAcp {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Local => "the node's own store",
-            Self::EmbeddedVera => "an embedded Vera node",
+            Self::Vera => "Vera",
         })
     }
 }
@@ -58,7 +58,7 @@ pub enum DocumentAcpError {
     },
     #[error(
         "this home decides document access through an embedded Vera node, which this build does \
-         not include; use a build with the `embedded-vera` feature"
+         not include; use a build with the `vera` feature"
     )]
     Unavailable,
     #[error(
@@ -69,7 +69,7 @@ pub enum DocumentAcpError {
     #[error(
         "a home that decides document access through an embedded Vera node cannot be created or \
          opened yet, because client-signed writes and staged access-control writes are not \
-         supported on it; use a home initialized without `--document-acp embedded-vera`"
+         supported on it; use a home initialized without `--document-acp vera`"
     )]
     NotYetUsable,
     #[error(
@@ -125,12 +125,12 @@ impl DocumentAcpError {
 type Result<T> = std::result::Result<T, DocumentAcpError>;
 
 pub(crate) fn refused(error: &defra_node::Error) -> Option<DocumentAcpError> {
-    #[cfg(feature = "embedded-vera")]
+    #[cfg(feature = "vera")]
     {
         embedded_vera::deployment_differs(error)
             .map(|what| DocumentAcpError::DeploymentDiffers { what })
     }
-    #[cfg(not(feature = "embedded-vera"))]
+    #[cfg(not(feature = "vera"))]
     {
         let _ = error;
         None
@@ -159,7 +159,7 @@ fn recorded_deployment(data: &Path) -> Result<Option<Deployment>> {
 
 fn recorded(data: &Path) -> Result<DocumentAcp> {
     Ok(match recorded_deployment(data)? {
-        Some(_) => DocumentAcp::EmbeddedVera,
+        Some(_) => DocumentAcp::Vera,
         None => DocumentAcp::Local,
     })
 }
@@ -170,7 +170,7 @@ pub(crate) fn created(
 ) -> Result<Option<Deployment>> {
     match requested {
         DocumentAcp::Local => Ok(None),
-        DocumentAcp::EmbeddedVera => started(node).map(Some).ok_or(DocumentAcpError::Unavailable),
+        DocumentAcp::Vera => started(node).map(Some).ok_or(DocumentAcpError::Unavailable),
     }
 }
 
@@ -189,18 +189,18 @@ pub(crate) fn record(data: &Path, deployment: &Deployment) -> std::io::Result<()
 }
 
 fn started(node: &defra_node::Node) -> Option<Deployment> {
-    #[cfg(feature = "embedded-vera")]
+    #[cfg(feature = "vera")]
     {
         embedded_vera::consensus_key(node).map(|consensus_key| Deployment { consensus_key })
     }
-    #[cfg(not(feature = "embedded-vera"))]
+    #[cfg(not(feature = "vera"))]
     {
         let _ = node;
         None
     }
 }
 
-#[cfg(feature = "embedded-vera")]
+#[cfg(feature = "vera")]
 fn ensure_present(data: &Path) -> Result<()> {
     let path = node_dir(data);
     match std::fs::symlink_metadata(&path) {
@@ -230,7 +230,7 @@ pub(crate) fn check_started(
 ) -> Result<()> {
     match requested {
         DocumentAcp::Local => Ok(()),
-        DocumentAcp::EmbeddedVera => ensure_recorded(data, started(node).as_ref()),
+        DocumentAcp::Vera => ensure_recorded(data, started(node).as_ref()),
     }
 }
 
@@ -256,11 +256,11 @@ fn decide(
     }
     match requested {
         DocumentAcp::Local => Ok(DocumentAcp::Local),
-        DocumentAcp::EmbeddedVera if !available => Err(DocumentAcpError::Unavailable),
-        DocumentAcp::EmbeddedVera if !node_key_signs => {
+        DocumentAcp::Vera if !available => Err(DocumentAcpError::Unavailable),
+        DocumentAcp::Vera if !node_key_signs => {
             Err(DocumentAcpError::NodeKeyCannotSign { node: node() })
         }
-        DocumentAcp::EmbeddedVera => Ok(DocumentAcp::EmbeddedVera),
+        DocumentAcp::Vera => Ok(DocumentAcp::Vera),
     }
 }
 
@@ -280,7 +280,7 @@ pub(crate) fn admit(
 fn usable(provider: DocumentAcp) -> Result<DocumentAcp> {
     match provider {
         DocumentAcp::Local => Ok(provider),
-        DocumentAcp::EmbeddedVera => Err(DocumentAcpError::NotYetUsable),
+        DocumentAcp::Vera => Err(DocumentAcpError::NotYetUsable),
     }
 }
 
@@ -304,7 +304,7 @@ pub fn ensure_admissible(
     enter(
         recorded,
         requested,
-        cfg!(feature = "embedded-vera"),
+        cfg!(feature = "vera"),
         !secure_enclave_node_key,
     )
     .map(|_| ())
@@ -348,11 +348,11 @@ fn apply(
     requested: DocumentAcp,
     node: &Arc<dyn NodeIdentity>,
 ) -> Result<defra_node::NodeBuilder> {
-    let available = cfg!(feature = "embedded-vera");
+    let available = cfg!(feature = "vera");
     match admit(data, fresh, requested, node.as_ref(), available)? {
         DocumentAcp::Local => Ok(builder),
-        #[cfg(feature = "embedded-vera")]
-        DocumentAcp::EmbeddedVera => {
+        #[cfg(feature = "vera")]
+        DocumentAcp::Vera => {
             if !fresh {
                 ensure_present(data)?;
             }
@@ -364,8 +364,8 @@ fn apply(
                 node,
             ))
         }
-        #[cfg(not(feature = "embedded-vera"))]
-        DocumentAcp::EmbeddedVera => {
+        #[cfg(not(feature = "vera"))]
+        DocumentAcp::Vera => {
             let _ = key;
             Err(DocumentAcpError::Unavailable)
         }

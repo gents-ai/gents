@@ -11,7 +11,7 @@ default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
 typescript = ["gents-loop/typescript", "gents-protocol/typescript"]
 # Carries the single-validator Vera node a home may decide document access
 # through. It runs on a runtime of its own; see AGENTS.md.
-embedded-vera = ["defra-node/embedded-vera", "dep:vera", "dep:vera-embedded", "dep:vera-node"]
+vera = ["defra-node/embedded-vera", "dep:vera", "dep:vera-embedded", "dep:vera-node"]
 live-e2e = []
 test-home-guard = []
 test-fixtures = ["test-home-guard", "axum/ws"]

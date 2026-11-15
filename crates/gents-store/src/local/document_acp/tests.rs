@@ -46,7 +46,7 @@ enum Entry {
 fn document_acp(provider: Provider) -> DocumentAcp {
     match provider {
         Provider::NodeStore => DocumentAcp::Local,
-        Provider::EmbeddedVera => DocumentAcp::EmbeddedVera,
+        Provider::EmbeddedVera => DocumentAcp::Vera,
     }
 }
 
@@ -102,7 +102,7 @@ fn admission_matches_the_lean_model() {
             );
             match admitted {
                 Ok(DocumentAcp::Local) => Admission::NodeStore,
-                Ok(DocumentAcp::EmbeddedVera) => Admission::EmbeddedVera,
+                Ok(DocumentAcp::Vera) => Admission::EmbeddedVera,
                 Err(DocumentAcpError::Switch { .. }) => Admission::SwitchRefused,
                 Err(DocumentAcpError::Unavailable) => Admission::VeraUnavailable,
                 Err(DocumentAcpError::NodeKeyCannotSign { .. }) => Admission::NodeKeyCannotSign,
@@ -119,7 +119,7 @@ fn entering_a_home_matches_the_lean_model() {
             let recorded = match input.store {
                 Record::Fresh => None,
                 Record::CreatedOnNodeStore => Some(DocumentAcp::Local),
-                Record::CreatedOnEmbeddedVera => Some(DocumentAcp::EmbeddedVera),
+                Record::CreatedOnEmbeddedVera => Some(DocumentAcp::Vera),
             };
             let entered = enter(
                 recorded,
@@ -129,7 +129,7 @@ fn entering_a_home_matches_the_lean_model() {
             );
             match entered {
                 Ok(DocumentAcp::Local) => Entry::NodeStore,
-                Ok(DocumentAcp::EmbeddedVera) => Entry::EmbeddedVera,
+                Ok(DocumentAcp::Vera) => Entry::EmbeddedVera,
                 Err(DocumentAcpError::Switch { .. }) => Entry::SwitchRefused,
                 Err(DocumentAcpError::Unavailable) => Entry::VeraUnavailable,
                 Err(DocumentAcpError::NodeKeyCannotSign { .. }) => Entry::NodeKeyCannotSign,
@@ -155,8 +155,8 @@ fn the_choice_round_trips_through_the_init_config() {
     assert_eq!(serde_json::to_value(&config).unwrap(), unrecorded);
 
     let mut recorded = unrecorded;
-    recorded["document_acp"] = "embedded-vera".into();
+    recorded["document_acp"] = "vera".into();
     let config: StoredInitConfig = serde_json::from_value(recorded.clone()).unwrap();
-    assert_eq!(config.document_acp, DocumentAcp::EmbeddedVera);
+    assert_eq!(config.document_acp, DocumentAcp::Vera);
     assert_eq!(serde_json::to_value(&config).unwrap(), recorded);
 }

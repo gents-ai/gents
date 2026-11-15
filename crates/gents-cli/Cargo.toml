@@ -24,9 +24,9 @@ live-e2e = []
 native-e2e = ["gents-service/native-e2e"]
 heap-profiling = ["dep:tikv-jemallocator"]
 # Lets a home decide document access through a Vera node the runtime hosts
-# (`gents init --document-acp embedded-vera`). Off by default: it adds the
+# (`gents init --document-acp vera`). Off by default: it adds the
 # Vera node and its consensus library to the build.
-embedded-vera = ["gents-host/embedded-vera"]
+vera = ["gents-host/vera"]
 typescript = ["dep:ts-rs"]
 
 # All other test binaries are auto-discovered; this explicit target overrides

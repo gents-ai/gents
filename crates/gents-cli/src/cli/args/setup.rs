@@ -63,14 +63,14 @@ pub(crate) struct ProvisionArgs {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum DocumentAcpArg {
     Local,
-    EmbeddedVera,
+    Vera,
 }
 
 impl From<DocumentAcpArg> for gents_store::local::document_acp::DocumentAcp {
     fn from(arg: DocumentAcpArg) -> Self {
         match arg {
             DocumentAcpArg::Local => Self::Local,
-            DocumentAcpArg::EmbeddedVera => Self::EmbeddedVera,
+            DocumentAcpArg::Vera => Self::Vera,
         }
     }
 }
