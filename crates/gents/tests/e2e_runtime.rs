@@ -10,6 +10,8 @@ mod document_config_bootstrap;
 mod effective_model_binding;
 #[path = "e2e_runtime/fork_invariants.rs"]
 mod fork_invariants;
+#[path = "e2e_runtime/interrupt_latch_contention.rs"]
+mod interrupt_latch_contention;
 #[path = "e2e_runtime/provider_fixture_redaction.rs"]
 mod provider_fixture_redaction;
 #[path = "e2e_runtime/rendered_request_capture.rs"]
