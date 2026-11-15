@@ -26,8 +26,8 @@ owns everything it uses.
 | Root | `gents` | The runtime and its composition |
 | Host, clients | `gents-host`, `gents-service`, `gents-cli`, `gents-eval`, `gents-desktop-*`, `gents-client-host`, `apps/`, `packages/` | Serving, service supervision, adapters, presentation |
 
-Lean models live in `crates/gents/proofs/Proofs/<Layer>/` and import only
-downward; TLA+ specs live in `crates/gents/proofs/tla/`. The
+Lean models live in `crates/gents/proofs/Proofs/`, one directory per layer,
+and import only downward; TLA+ specs live in `crates/gents/proofs/tla/`. The
 [proof map](crates/gents/proofs/README.md) names the modelled surfaces. Read
 versions from `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml`.
 
