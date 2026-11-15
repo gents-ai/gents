@@ -186,6 +186,7 @@ pub(super) fn trusted_delete_schema(collection: &str) -> Option<&'static str> {
         gents_protocol::schemas::INFERENCE_BACKEND_OBSERVATION_NAME,
         gents_protocol::schemas::GOAL_NAME,
         gents_protocol::schemas::GOAL_CREATION_CLAIM_NAME,
+        gents_protocol::schemas::EVENT_SOURCE_CURSOR_NAME,
     ]
     .contains(&collection)
         && !crate::collection::Collection::ALL
@@ -572,5 +573,20 @@ mod conformance {
         gents_lean_vocab::families::identity_configuration_ordinary_mutation_allowed::replay(|i| {
             ordinary_mutation_allowed(i.client_intent, i.mutation)
         });
+    }
+}
+
+#[cfg(test)]
+mod trusted_schemas {
+    use super::trusted_delete_schema;
+
+    /// A pack with an event source creates its cursor during install, and the install
+    /// signs that create against this schema, so a missing entry fails every such pack.
+    #[test]
+    fn event_source_cursor_is_trusted() {
+        assert_eq!(
+            trusted_delete_schema(gents_protocol::schemas::EVENT_SOURCE_CURSOR_NAME),
+            Some(gents_protocol::schemas::EVENT_SOURCE_CURSOR)
+        );
     }
 }

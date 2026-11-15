@@ -147,8 +147,8 @@ pub(super) enum VerifiedPackEvidence {
 pub enum PackEvidenceError {
     #[error("{0}")]
     Config(#[source] Box<ConfigClientError>),
-    #[error("pack mutation does not use a trusted configuration schema")]
-    UnsupportedCollection,
+    #[error("pack mutation on {0} does not use a trusted configuration schema")]
+    UnsupportedCollection(String),
     #[error("pack mutation evidence does not match its operation or actor")]
     Mismatch,
     #[error("building or verifying client create evidence")]
@@ -290,7 +290,8 @@ fn collection(mutation: &PackMutation) -> &str {
 
 fn trusted_schema(mutation: &PackMutation) -> Result<schema::CollectionVersion, PackEvidenceError> {
     let name = collection(mutation);
-    let sdl = trusted_delete_schema(name).ok_or(PackEvidenceError::UnsupportedCollection)?;
+    let sdl = trusted_delete_schema(name)
+        .ok_or_else(|| PackEvidenceError::UnsupportedCollection(name.to_owned()))?;
     Ok(signing_schema(sdl, name)?)
 }
 
