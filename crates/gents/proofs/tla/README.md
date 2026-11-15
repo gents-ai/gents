@@ -259,39 +259,49 @@ records that the initial state violates it, and a violation in the initial
 state matches no other header. `deadlock` requires deadlock checking on. TLC
 must also report at least two distinct states, or the number an optional
 second line `\* states: <N>` records, so a model whose initial predicate
-admits nothing, or that stops after its first state, does not pass. Each spec follows its `---- MODULE X ----` line
-with the Lean decisions it models and the crates that implement it:
+admits nothing, or that stops after its first state, does not pass.
+
+Each spec follows its `---- MODULE X ----` line with the Lean decisions it
+reads and the crates that implement it, then optionally the Lean it restates
+by hand:
 
 ```
 \* lean: none | <Lean.owner>, <Lean.owner>
 \* crates: none | <crate>, <crate>
+\* models: <Lean.declaration>, <Lean.declaration>
 ```
 
-An owner is a Lean declaration exported to the conformance snapshot (its key
-in `crates/gents-lean-vocab/families.schema.json`); `none` states that the
-spec models no Lean decision. A crate is a workspace package. These headers
-are the record of expected results; `scripts/ci/test_gate.py` checks them.
+A `lean:` owner is a Lean `conformance_function` over a finite domain (its key
+in `crates/gents-lean-vocab/families.schema.json`); the spec `EXTENDS` the
+generated module that holds its table. A `models:` declaration is any Lean
+definition the spec restates without a table; naming it selects the spec when
+its source changes. A crate is a workspace package. These headers are the
+record of expected results; `scripts/tla_check.py check-headers` and
+`scripts/ci/test_gate.py` check them: every owner is in the snapshot, every
+`models:` declaration exists, every crate is a package, every config has a
+header, and every `LeanDecision_*` module a spec extends exists and holds one
+of its `lean:` owners.
 
 `scripts/tla_check.py run --all` model-checks every config in breadth-first
 mode with one worker per config and a fixed fingerprint, compares each result
-with its header and prints a table; a mismatch, a missing header, a TLC error
-or a timeout (`--timeout`, seconds per config) fails it. `--spec`, `--config`,
-`--crate`, `--lean` and `--files` narrow the run. The pull request gate runs
-the specs whose headers name a changed crate or Lean owner, or whose own files
-or generated imports changed; main and the nightly `TLA+ nightly` workflow run
-every config. `scripts/tla_check.py install` installs the pinned JDK and
-`tla2tools.jar` (version and SHA-256 in the script) under
-`~/.cache/gents-tla`. `scripts/run-tlc.sh <MC config>` runs TLC with them and
-prints its full output, counterexample included.
+with its header and prints a table; a mismatch, too few states, a missing
+header, a TLC error or a timeout (`--timeout`, seconds per config) fails it.
+`--spec`, `--config`, `--crate`, `--lean` and `--files` narrow the run. The
+pull request gate runs the specs whose headers name a changed crate or Lean
+owner or declaration, or whose own files or generated imports changed; main
+and the nightly `TLA+ nightly` workflow run every config.
+`scripts/tla_check.py install` installs the pinned JDK and `tla2tools.jar`
+(version and SHA-256 in the script) under `~/.cache/gents-tla`.
+`scripts/run-tlc.sh <MC config>` runs TLC with them and prints its full
+output, counterexample included.
 
 ## Generated Lean decisions
 
 `make lean-regen` writes `generated/LeanDecision_<Namespace>.tla` for every
-owner a spec names that Lean exports as a `conformance_function` over a finite
-domain: `<name>_table`, the decision over its whole domain keyed by the tuple
-of its arguments in Lean parameter order and written as a balanced tree of
-`@@` (a long left-nested chain overflows TLC's stack), and `<name>(...)`, its
-lookup. A
+`lean:` owner: `<name>_table`, the decision over its whole domain keyed by the
+tuple of its arguments in Lean parameter order and written as a balanced tree
+of `@@` (a long left-nested chain overflows TLC's stack), and `<name>(...)`,
+its lookup. Regeneration fails for an owner that is not such a function. A
 spec `EXTENDS` that module instead of restating the decision, and must not
 define an operator of the same name. `generated_tla_modules_are_current` in
 `gents-lean-vocab` fails when a module is stale. The scripts put `generated/`

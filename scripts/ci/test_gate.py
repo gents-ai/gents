@@ -342,6 +342,36 @@ class TlaStructure(unittest.TestCase):
         problems = gate.tla_check.structure_problems(set(schema["functions"]), set(MEMBERS))
         self.assertEqual(problems, [])
 
+    def test_a_missing_or_unnamed_generated_module_is_a_problem_and_still_selects(self):
+        """Imports come from the EXTENDS text, so a deleted module neither hides
+        its importers from selection nor passes the structure check."""
+        check = gate.tla_check
+        with tempfile.TemporaryDirectory() as scratch:
+            tla = Path(scratch)
+            (tla / "generated").mkdir()
+            (tla / "generated/LeanDecision_Here.tla").write_text(
+                "---- MODULE LeanDecision_Here ----\nEXTENDS TLC\nkeep(a) == a\n====\n")
+            (tla / "A.tla").write_text("---- MODULE A ----\n\\* lean: Gone.decide\n\\* crates: none\n"
+                                       "EXTENDS Naturals, LeanDecision_Gone\n====\n")
+            (tla / "B.tla").write_text("---- MODULE B ----\n\\* lean: none\n\\* crates: none\n"
+                                       "\\* models: Nowhere.decide\nEXTENDS LeanDecision_Here\n====\n")
+            (tla / "C.tla").write_text("---- MODULE C ----\n\\* lean: Here.keep\n\\* crates: none\n"
+                                       "EXTENDS Naturals\n====\n")
+            for spec in "ABC":
+                (tla / f"{spec}.cfg").write_text("\\* expect: holds\nSPECIFICATION Spec\n")
+            nodes = check.graph(tla)
+            self.assertEqual(nodes["A"]["generated"], ["LeanDecision_Gone"])
+            self.assertEqual(nodes["B"]["models"], ["Nowhere.decide"])
+            self.assertEqual(check.select(["crates/gents/proofs/tla/generated/LeanDecision_Gone.tla"], nodes,
+                                          lambda path: None), ["A"])
+            problems = check.structure_problems({"gone_decide", "here_keep"}, set(), tla, sources={})
+        self.assertEqual(problems, [
+            "A.tla: extends LeanDecision_Gone, which is not generated",
+            "B.tla: models Nowhere.decide, which no Lean source declares",
+            "B.tla: extends LeanDecision_Here but names none of its owners on its lean line",
+            "C.tla: names Here.keep but does not extend LeanDecision_Here",
+        ])
+
     def test_lean_owner_keys_follow_lean_wire_names(self):
         check = gate.tla_check
         self.assertEqual(check.wire_key("TransactionReplay.disposition"), "transaction_replay_disposition")

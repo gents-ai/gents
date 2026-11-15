@@ -1,11 +1,13 @@
 //! TLA+ function tables of the Lean decisions that TLA+ specifications name.
 //!
-//! A spec names its Lean owners on its second line (`\* lean: A.b, C.d`). An
-//! owner exported as a conformance function over a finite domain (every
+//! A spec names its Lean owners on its second line (`\* lean: A.b, C.d`). Each
+//! must be exported as a conformance function over a finite domain (every
 //! argument a `Bool` or a field-less enum, every result a `Bool`, `Nat` or
-//! enum) becomes `<name>_table`, the decision over its whole domain keyed by
-//! the tuple of its arguments in Lean parameter order, and `<name>(...)`, its
-//! lookup, in `generated/LeanDecision_<Namespace>.tla`.
+//! enum); it becomes `<name>_table`, the decision over its whole domain keyed
+//! by the tuple of its arguments in Lean parameter order, and `<name>(...)`,
+//! its lookup, in `generated/LeanDecision_<Namespace>.tla`. Lean a spec
+//! restates without a table goes on its `\* models:` line, which this
+//! generator does not read.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -208,7 +210,9 @@ fn render_decision(owner: &str, name: &str, family: &FamilyView<'_>) -> Option<S
     Some(text)
 }
 
-/// Module file name -> text, for every named owner that is a finite function.
+/// Module file name -> text for the named owners; an owner that is not a
+/// finite function TLA+ values can carry is an error, so a spec never loses
+/// the table it extends.
 pub fn render_modules<'a>(
     owners: &BTreeSet<String>,
     family: impl Fn(&str) -> Option<FamilyView<'a>>,
@@ -220,15 +224,18 @@ pub fn render_modules<'a>(
             .ok_or_else(|| format!("Lean owner {owner} has no conformance family {key}"))?;
         let parts = components(owner);
         let (name, namespace) = parts.split_last().expect("an owner has a name");
-        if namespace.is_empty() || !is_identifier(name) {
-            continue;
-        }
-        if let Some(text) = render_decision(owner, name, &view) {
-            modules
-                .entry(format!("{MODULE_PREFIX}{}", namespace.join("_")))
-                .or_default()
-                .push(text);
-        }
+        let text = (!namespace.is_empty() && is_identifier(name))
+            .then(|| render_decision(owner, name, &view))
+            .flatten()
+            .ok_or_else(|| {
+                format!(
+                    "Lean owner {owner} is not a namespaced function over a finite domain, so it has no TLA+ table; name it on the spec's `\\* models:` line instead"
+                )
+            })?;
+        modules
+            .entry(format!("{MODULE_PREFIX}{}", namespace.join("_")))
+            .or_default()
+            .push(text);
     }
     Ok(modules
         .into_iter()
@@ -437,6 +444,24 @@ mod tests {
         let (longest, deepest) = chain_and_depth(&text);
         assert_eq!(longest, 1, "a group joins more than two operands");
         assert!(deepest <= 11, "the table nests {deepest} deep");
+    }
+
+    #[test]
+    fn a_named_owner_without_a_finite_table_is_an_error() {
+        let input = serde_json::json!({"struct": "Input", "fields": [["count", "nat"]]});
+        let output = Value::from("bool");
+        let case = (serde_json::json!({"count": 0}), Value::Bool(true));
+        let owners = BTreeSet::from(["Ns.decide".to_owned()]);
+        let error = render_modules(&owners, |_| {
+            Some(FamilyView {
+                input: &input,
+                output: &output,
+                cases: vec![(&case.0, &case.1)],
+            })
+        })
+        .unwrap_err();
+        assert!(error.contains("Ns.decide"), "{error}");
+        assert!(error.contains("models:"), "{error}");
     }
 
     #[test]

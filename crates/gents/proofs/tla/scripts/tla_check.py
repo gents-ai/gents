@@ -21,6 +21,14 @@ past its first state does not pass). A spec `X.tla` follows its `---- MODULE X -
   \\* lean: none | <Lean.owner>[, <Lean.owner>]...
   \\* crates: none | <crate>[, <crate>]...
 
+and optionally
+
+  \\* models: <Lean.declaration>[, <Lean.declaration>]...
+
+A `lean:` owner is a conformance function the spec reads from its generated
+`LeanDecision_<Namespace>` module; a `models:` declaration is Lean the spec
+restates by hand, named so that changing it selects the spec.
+
 TLC runs in breadth-first model-checking mode with one worker and a fixed
 fingerprint polynomial, so the first violation it reports is reproducible.
 """
@@ -78,6 +86,8 @@ DEFAULT_FLOOR = 2
 MODULE = re.compile(rf"-{{4,}} MODULE ({IDENT}) -{{4,}}")
 LEAN = re.compile(rf"\\\* lean: (none|{LEAN_NAME}(?:, {LEAN_NAME})*)")
 CRATES = re.compile(rf"\\\* crates: (none|{CRATE}(?:, {CRATE})*)")
+OPTIONAL = {"models": re.compile(rf"\\\* models: ({LEAN_NAME}(?:, {LEAN_NAME})*)")}
+MODULE_PREFIX = "LeanDecision_"
 
 CFG_KEYWORDS = ("CONSTANT", "CONSTANTS", "INIT", "NEXT", "SPECIFICATION", "INVARIANT", "INVARIANTS",
                 "PROPERTY", "PROPERTIES", "CHECK_DEADLOCK", "SYMMETRY", "VIEW", "CONSTRAINT",
@@ -135,6 +145,10 @@ def expectation(cfg):
     return Expect(match.group(1), floor)
 
 
+class Header(namedtuple("Header", "lean crates models")):
+    """A spec's header lines; each field is a list of names."""
+
+
 def spec_header(spec):
     lines = spec.read_text().splitlines()
     if len(lines) < 3 or not MODULE.fullmatch(lines[0]):
@@ -147,7 +161,16 @@ def spec_header(spec):
 
     def names(match):
         return [] if match.group(1) == "none" else match.group(1).split(", ")
-    return names(lean), names(crates)
+    optional = {key: [] for key in OPTIONAL}
+    for line in lines[3:]:
+        key = next((key for key in OPTIONAL if line.startswith(f"\\* {key}:")), None)
+        if key is None:
+            break
+        match = OPTIONAL[key].fullmatch(line)
+        if not match or optional[key]:
+            raise HeaderError(f"{spec.name}: `{line}` must be one `\\* {key}: <name>, ...` line")
+        optional[key] = names(match)
+    return Header(names(lean), names(crates), optional["models"])
 
 
 def extends(module_file):
@@ -159,13 +182,13 @@ def extends(module_file):
     return names + re.findall(rf"\bINSTANCE\s+({IDENT})", text)
 
 
-def specs():
+def specs(tla=TLA):
     """Spec name -> path: every module that is not a model config's wrapper."""
-    return {path.stem: path for path in sorted(TLA.glob("*.tla")) if not path.stem.startswith("MC")}
+    return {path.stem: path for path in sorted(tla.glob("*.tla")) if not path.stem.startswith("MC")}
 
 
-def configs():
-    return sorted(TLA.glob("*.cfg"))
+def configs(tla=TLA):
+    return sorted(tla.glob("*.cfg"))
 
 
 def spec_of(cfg, known):
@@ -181,18 +204,24 @@ def spec_of(cfg, known):
 
 
 def generated_imports(spec):
-    return [name for name in extends(spec) if (GENERATED / f"{name}.tla").exists()]
+    """The generated modules `spec` extends, by name, whether or not they exist."""
+    return [name for name in extends(spec) if name.startswith(MODULE_PREFIX)]
 
 
-def graph():
-    """Spec name -> {path, lean, crates, configs, generated}."""
-    known = specs()
+def generated_module(owner):
+    """The generated module that holds a `lean:` owner's table."""
+    return MODULE_PREFIX + "_".join(owner.removeprefix("Conformance.").split(".")[:-1])
+
+
+def graph(tla=TLA):
+    """Spec name -> {path, lean, crates, models, configs, generated}."""
+    known = specs(tla)
     nodes = {}
     for name, path in known.items():
-        lean, crates = spec_header(path)
-        nodes[name] = {"path": path, "lean": lean, "crates": crates, "configs": [],
-                       "generated": generated_imports(path)}
-    for cfg in configs():
+        header = spec_header(path)
+        nodes[name] = {"path": path, "lean": header.lean, "crates": header.crates, "models": header.models,
+                       "configs": [], "generated": generated_imports(path)}
+    for cfg in configs(tla):
         nodes[spec_of(cfg, known)]["configs"].append(cfg)
     return nodes
 
@@ -221,23 +250,43 @@ def definitions(module_file):
     return set(re.findall(rf"^({IDENT})\s*(?:\([^)]*\)|\[[^\]]*\])?\s*==", text, re.M))
 
 
-def structure_problems(functions, members):
-    """Header and import problems; `functions` are the snapshot's family keys."""
+def lean_sources():
+    """Path -> text of every Lean source under the proofs."""
+    return {path: path.read_text() for path in sorted(PROOFS_LEAN.rglob("*.lean"))}
+
+
+def structure_problems(functions, members, tla=TLA, sources=None):
+    """Header and import problems; `functions` are the snapshot's family keys,
+    `members` the workspace packages and `sources` the Lean sources by path."""
     try:
-        nodes = graph()
+        nodes = graph(tla)
     except HeaderError as error:
         return [str(error)]
+    sources = lean_sources() if sources is None else sources
+    generated = tla / "generated"
     problems = []
     for name, node in sorted(nodes.items()):
         for owner in node["lean"]:
             if wire_key(owner) not in functions:
                 problems.append(f"{name}.tla: Lean owner {owner} is not in the conformance snapshot "
                                 f"(no family {wire_key(owner)})")
+            if generated_module(owner) not in node["generated"]:
+                problems.append(f"{name}.tla: names {owner} but does not extend {generated_module(owner)}")
+        for owner in node.get("models", []):
+            if not any(lean_declares(text, owner) for text in sources.values()):
+                problems.append(f"{name}.tla: models {owner}, which no Lean source declares")
         for crate in node["crates"]:
             if crate not in members:
                 problems.append(f"{name}.tla: {crate} is not a workspace package")
+        named = {generated_module(owner) for owner in node["lean"]}
         for module in node["generated"]:
-            clash = definitions(node["path"]) & definitions(GENERATED / f"{module}.tla")
+            path = generated / f"{module}.tla"
+            if not path.exists():
+                problems.append(f"{name}.tla: extends {module}, which is not generated")
+                continue
+            if module not in named:
+                problems.append(f"{name}.tla: extends {module} but names none of its owners on its lean line")
+            clash = definitions(node["path"]) & definitions(path)
             if clash:
                 problems.append(f"{name}.tla: redefines {sorted(clash)} from generated {module}")
         if not node["configs"]:
@@ -310,7 +359,7 @@ def select(files, nodes=None, crate_for=crate_of):
             source = ROOT / path
             text = source.read_text() if source.exists() else ""
             chosen |= {name for name, node in nodes.items()
-                       if any(lean_declares(text, owner) for owner in node["lean"])}
+                       if any(lean_declares(text, owner) for owner in node["lean"] + node.get("models", []))}
         else:
             owner = crate_for(path)
             if owner:
@@ -513,7 +562,8 @@ def run(arguments):
         chosen = set(nodes)
     chosen |= set(arguments.spec or [])
     chosen |= {name for name, node in nodes.items() if set(arguments.crate or []) & set(node["crates"])}
-    chosen |= {name for name, node in nodes.items() if set(arguments.lean or []) & set(node["lean"])}
+    chosen |= {name for name, node in nodes.items()
+               if set(arguments.lean or []) & set(node["lean"] + node["models"])}
     if arguments.files:
         files = [line.strip() for line in Path(arguments.files).read_text().splitlines() if line.strip()]
         chosen |= set(select(files, nodes))
@@ -585,7 +635,7 @@ def main():
     runner.add_argument("--spec", action="append", help="every configuration of this spec")
     runner.add_argument("--config", action="append", help="one configuration, by its file stem")
     runner.add_argument("--crate", action="append", help="specs whose header names this crate")
-    runner.add_argument("--lean", action="append", help="specs whose header names this Lean owner")
+    runner.add_argument("--lean", action="append", help="specs whose lean or models line names this Lean owner")
     runner.add_argument("--files", help="specs a change to the listed repository paths selects")
     runner.add_argument("--timeout", type=int, default=int(os.environ.get("TLA_TIMEOUT", "1800")),
                         help="seconds per configuration; a timeout fails it")
