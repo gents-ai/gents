@@ -19,6 +19,34 @@ impl fmt::Display for ErrorChain<'_> {
     }
 }
 
+/// An application error an operation owner passes through. anyhow's own
+/// conversion into `Box<dyn Error>` keeps the top error's message but forwards
+/// `source()` past it, so a classifier walking the chain never meets that
+/// error: a store conflict or refusal on top reads as unclassified (Lean
+/// `AccessClassification.hidden_is_unclassified`). This holder returns the top
+/// error from `source()`, so the chain shows its message twice, the trade
+/// `AccessClassification.exposed` records for every sourced holder.
+#[derive(Debug)]
+pub struct PassedThrough(anyhow::Error);
+
+impl PassedThrough {
+    pub fn boxed(error: impl Into<anyhow::Error>) -> Box<dyn Error + Send + Sync> {
+        Box::new(Self(error.into()))
+    }
+}
+
+impl fmt::Display for PassedThrough {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+impl Error for PassedThrough {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
 /// Finds the first error of type `T` in `error`'s `source()` chain, starting
 /// with `error` itself. A `#[error(transparent)]` wrapper forwards `source()`
 /// past the error it wraps, so a type found this way must be wrapped by a
