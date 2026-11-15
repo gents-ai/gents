@@ -1459,15 +1459,11 @@ async fn peer_without_an_endpoint_shows_no_endpoint_until_it_has_one() {
     stalled_task.abort();
 }
 
-/// External premise for `RuntimeConnectionObservation.SnapshotOutcome`: the
-/// pinned served runtime does not refuse a User whose household grant was
-/// revoked. The SSE handshake is accepted and the open and new streams stay
-/// silent, and a read answers without errors and without the selected roots,
-/// so neither surface the access owner classifies (HTTP 401/403, a
-/// `PERMISSION_DENIED` envelope) is produced. That is native ACP hiding what
-/// the User may not read: the snapshot owner reads it as an empty snapshot.
+/// Revoking the User's native admin relation removes GraphQL transport
+/// authority. The served runtime refuses new reads and subscriptions; an
+/// already-open stream remains silent until renewal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn revoked_user_is_answered_with_omitted_roots() {
+async fn revoked_user_is_refused_by_the_authenticated_transport() {
     let home = crate::test_fixtures::ServedRuntimeHome::start().await;
     let access = home.user_graphql_access();
     let before = crate::client::load_node_snapshot_on(&access, home.node_did())
@@ -1484,36 +1480,31 @@ async fn revoked_user_is_answered_with_omitted_roots() {
         )
         .await
         .unwrap();
-    let read = access.execute("{ Node { _docID } }").await.unwrap();
-    assert!(read.get("errors").is_none(), "{read}");
-    assert!(read["data"].get("Node").is_none(), "{read}");
-    let mut resubscribed = access.subscribe(subscription).await.unwrap();
-    for stream in [&mut open, &mut resubscribed] {
-        assert!(
-            tokio::time::timeout(Duration::from_secs(2), stream.recv())
-                .await
-                .is_err(),
-            "the stream stays silent after revocation"
-        );
-    }
+    let read = access.execute("{ Node { _docID } }").await.unwrap_err();
+    assert!(anyhow::Error::new(read).permission_denied());
+    let error = match access.subscribe(subscription).await {
+        Ok(_) => panic!("a revoked User must not open a subscription"),
+        Err(error) => error,
+    };
+    assert!(anyhow::Error::new(error).permission_denied());
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), open.recv())
+            .await
+            .is_err(),
+        "the already-open stream stays silent after revocation"
+    );
     let hidden = crate::client::load_node_snapshot_on(&access, home.node_did())
         .await
-        .expect("an omitted root is an empty read, not a failure");
-    assert_eq!(
-        hidden.row_count(),
-        0,
-        "nothing is visible to the revoked User"
-    );
+        .expect_err("transport revocation must refuse the snapshot read");
+    assert!(hidden.refused());
     home.shutdown().await;
 }
 
-/// Regression for the revoked-User retry storm: the served runtime shows a
-/// revoked User an empty view at the resnapshot after its next renewal. The
-/// observer reads it as connected with nothing visible, never shows an
-/// outage or a denial, and never reconnects; a restored grant is read at the
-/// next renewal.
+/// A native transport refusal clears the retained view and follows the
+/// observation owner's refusal/backoff path, not its empty-snapshot path.
+/// Restoring the grant and explicitly retrying reconnects the same observer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn revoked_user_sees_connected_with_nothing_and_never_reconnects() {
+async fn revoked_user_reports_refusal_and_recovers_after_regrant() {
     let home = crate::test_fixtures::ServedRuntimeHome::start().await;
     let (_directory, store, handle) = served_observer(&home).await;
     wait_for_connection(&store, home.node_did(), RuntimeConnectionStatus::Connected).await;
@@ -1524,52 +1515,30 @@ async fn revoked_user_sees_connected_with_nothing_and_never_reconnects() {
         .revoke(&home.runtime_access(), &user)
         .await
         .unwrap();
-    let mut shown = vec![RuntimeConnectionStatus::Connected];
     let mut changes = store.subscribe();
     let renewal = gents_store::config_client::SUBSCRIPTION_RENEWAL_PERIOD;
     tokio::time::timeout(renewal + Duration::from_secs(15), async {
         loop {
-            if let Some(status) = store.runtime_connection(home.node_did()) {
-                if shown.last() != Some(&status) {
-                    shown.push(status);
-                }
-            }
-            if store.snapshot(home.node_did()).nodes.is_empty() {
+            if store.runtime_connection(home.node_did()) == Some(RuntimeConnectionStatus::Refused) {
                 break;
             }
             changes.changed().await.unwrap();
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("the renewal resnapshot shows the empty view; shown {shown:?}"));
+    .expect("the renewal observes the native transport refusal");
+    assert!(store.snapshot(home.node_did()).nodes.is_empty());
     let after = handle.metrics_snapshot();
-    assert_eq!(shown, vec![RuntimeConnectionStatus::Connected], "{shown:?}");
-    assert_eq!(
-        store.runtime_connection(home.node_did()),
-        Some(RuntimeConnectionStatus::Connected)
-    );
-    assert_eq!(
-        after.reconnects, before.reconnects,
-        "an empty view never reconnects"
-    );
+    assert!(after.reconnects > before.reconnects);
     assert_eq!(after.transport_failures, before.transport_failures);
 
     gents_store::identity::GrantSet::HouseholdOwner
         .grant(&home.runtime_access(), &user)
         .await
         .unwrap();
-    tokio::time::timeout(renewal + Duration::from_secs(15), async {
-        while store.snapshot(home.node_did()).nodes.is_empty() {
-            changes.changed().await.unwrap();
-        }
-    })
-    .await
-    .expect("the next renewal resnapshot shows the restored grant");
-    assert_eq!(
-        store.runtime_connection(home.node_did()),
-        Some(RuntimeConnectionStatus::Connected)
-    );
-    assert_eq!(handle.metrics_snapshot().reconnects, before.reconnects);
+    handle.retry_now(home.node_did()).await;
+    wait_for_connection(&store, home.node_did(), RuntimeConnectionStatus::Connected).await;
+    assert!(!store.snapshot(home.node_did()).nodes.is_empty());
     handle.shutdown().await;
     home.shutdown().await;
 }
