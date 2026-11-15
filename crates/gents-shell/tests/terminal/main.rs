@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 mod flows;
 mod pty;
 
@@ -170,7 +168,7 @@ fn panic_restores_the_terminal() {
             "-c",
             WITH_STTY,
             exe.to_str().unwrap(),
-            "panic_child_process",
+            "terminal::panic_child_process",
             "--exact",
             "--nocapture",
         ],

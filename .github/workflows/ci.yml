@@ -44,6 +44,20 @@ env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '12' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # A runner keeps its Cargo target tree between jobs only for pushes to main
+  # and pull requests from this repository's own branches. Fork pull requests
+  # and every other event build in a job-scoped tree, so build outputs,
+  # build-script outputs included, never cross into another trust domain's job.
+  # test-rust-build-space.py evaluates this condition per event.
+  GENTS_CI_KEEP_TARGET_TREE: >-
+    ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+    (github.event_name == 'pull_request' &&
+    github.event.pull_request.head.repo.full_name == github.repository) }}
+  # Per-runner kept-tree cap and host free-space floor in GiB: an integer, or a
+  # JSON object from runner name to integer with an optional "default" entry.
+  # Unset, ensure-rust-build-space.py applies its defaults.
+  GENTS_CI_TARGET_MAX_GIB: ${{ vars.GENTS_CI_TARGET_MAX_GIB }}
+  GENTS_CI_TARGET_FLOOR_GIB: ${{ vars.GENTS_CI_TARGET_FLOOR_GIB }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
   LEAN_CACHE_ROOT: ${{ vars.LEAN_CACHE_ROOT || '/Users/admin/.cache/gents-lean' }}
@@ -204,6 +218,17 @@ jobs:
 
       - name: Run build attribution parser self-test
         run: scripts/measure-gents-build-attribution.sh self-test
+
+      - name: Report jobs a fork pull request skips
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || 'a deleted repository' }}
+        run: |
+          message="This pull request comes from ${HEAD_REPOSITORY}, so jobs that run on self-hosted runners (rust-and-cli, lean-proofs, desktop-ui-bombadil, core-packs, adapter-interop) are skipped; hosted jobs still run. A maintainer reruns the change from a branch of this repository to test it on the Studios."
+          echo "::notice title=Self-hosted jobs skipped for a fork::${message}"
+          printf '### Self-hosted jobs skipped for a fork\n\n%s\n' "${message}" >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Check runner build-space reclamation
         run: python3 .github/scripts/test-rust-build-space.py

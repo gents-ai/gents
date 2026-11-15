@@ -1,5 +1,3 @@
-#![cfg(any(unix, windows))]
-
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -75,7 +73,7 @@ mod ports;
 mod retained_schema_upgrade;
 #[path = "support/runtime_replacement.rs"]
 mod runtime_replacement;
-mod support;
+use crate::support;
 
 use fake_llm::{ChatAction, FakeLlm};
 use support::Attachment;
