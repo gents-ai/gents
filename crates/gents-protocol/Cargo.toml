@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Shared schemas, client turn-observation protocol, and collection row mirrors for Gents"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 # `native` gates the reqwest-based GraphQL transport (`graphql::execute_graphql_async`,
 # `graphql_endpoint_available`): reqwest has no

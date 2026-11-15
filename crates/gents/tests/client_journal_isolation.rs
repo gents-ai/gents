@@ -1,5 +1,3 @@
-mod support;
-
 use gents::defra_node;
 use gents_p2p::p2p_reconcile::{EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin};
 use gents_store::config_client::{ConfigAccess, NodePermission};

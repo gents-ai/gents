@@ -1,5 +1,3 @@
-mod support;
-
 #[path = "misc/backend_auth_startup.rs"]
 mod backend_auth_startup;
 #[path = "misc/goal_controller.rs"]
