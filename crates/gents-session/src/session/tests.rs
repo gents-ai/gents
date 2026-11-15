@@ -2083,3 +2083,118 @@ async fn unsigned_starter_cannot_populate_the_index() {
         .is_empty());
     db.node.shutdown().await.expect("shut down test node");
 }
+
+/// A write of the source session (its observation refresh, here its tags)
+/// landing between the fork's first signed create and its commit aborts that
+/// commit with DefraDB's own conflict. `session.fork` and `session.edit_fork`
+/// re-read the source and copy it again under the same child identity
+/// (signed-conflict rebuild), so each creates its child exactly once.
+#[tokio::test]
+async fn forks_rebuild_after_a_concurrent_source_session_write() {
+    use gents_store::config_client::ConfigApplyTxn;
+    use gents_store::identity::NodeIdentity;
+    const SOURCE: &str = "fork-source-race";
+    const EDIT_CHILD: &str = "fork-source-race-edit";
+    let (db, user, client, binding) = fork_reader_node("fork-source-race").await;
+    let node_did = db.node_identity.did();
+    let messages = (1..=3)
+        .map(|sequence| format!("turn {sequence}"))
+        .collect::<Vec<_>>();
+    publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
+    let source_doc = session_doc_id(&client, SOURCE).await;
+    let refresh = |tag: &'static str| {
+        let (client, source_doc) = (&client, &source_doc);
+        async move {
+            client
+                .transact_write("test.fork_source_race.refresh", |txn| {
+                    Box::pin(async move {
+                        txn.execute_client_signed_update(
+                            "mutation($id: ID!, $input: AgentSessionMutationInputArg!) { update_AgentSession(filter: { _docID: { _eq: $id } }, input: $input) { _docID } }",
+                            &serde_json::json!({"id": source_doc, "input": {"tags": [tag]}}),
+                            gents_protocol::schemas::AGENT_SESSION,
+                        )
+                        .await
+                    })
+                })
+                .await
+                .expect("the source session is refreshed between the fork's read and commit");
+        }
+    };
+    let children = |session: String| {
+        let client = &client;
+        async move {
+            let session = escape_graphql_string(&session);
+            let response = client
+                .execute(&format!(
+                    r#"{{ AgentSession(filter: {{session_id: {{_eq: "{session}"}}}}) {{ _docID }} AgentMessage(filter: {{session_id: {{_eq: "{session}"}}}}) {{ _docID }} }}"#
+                ))
+                .await
+                .unwrap();
+            (
+                response["data"]["AgentSession"].as_array().unwrap().len(),
+                response["data"]["AgentMessage"].as_array().unwrap().len(),
+            )
+        }
+    };
+
+    let (forked, paused) = ConfigApplyTxn::with_concurrent_write_before_commit(
+        super::fork::commit_fork(
+            &client,
+            ForkParams {
+                source_session_id: SOURCE,
+                boundary: ForkBoundary::UserTurn(3),
+                caller_node_did: node_did,
+                caller_requester_did: Some(user.did()),
+                target_agent_did: None,
+            },
+        ),
+        refresh("fork-race"),
+    )
+    .await;
+    assert!(paused, "the fork paused after its first signed create");
+    let forked = forked.expect("the fork settles despite the concurrent source write");
+    assert_eq!(
+        children(forked.outcome.session_id.clone()).await,
+        (1, forked.outcome.copied_messages as usize),
+        "the rebuilt fork created its child once"
+    );
+
+    let keys = client
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{session_id: {{_eq: "{}"}}, role: {{_eq: "user"}}}}, order: {{sequence: ASC}}) {{ message_key }} }}"#,
+            escape_graphql_string(SOURCE)
+        ))
+        .await
+        .unwrap();
+    let anchor = keys["data"]["AgentMessage"][2]["message_key"]
+        .as_str()
+        .expect("the source's third user turn")
+        .to_owned();
+    let (edited, paused) = ConfigApplyTxn::with_concurrent_write_before_commit(
+        fork_edit_on(
+            &client,
+            ForkParams {
+                source_session_id: SOURCE,
+                boundary: ForkBoundary::BeforeMessageKey(&anchor),
+                caller_node_did: node_did,
+                caller_requester_did: Some(user.did()),
+                target_agent_did: None,
+            },
+            EDIT_CHILD,
+            user.did(),
+        ),
+        refresh("edit-race"),
+    )
+    .await;
+    assert!(paused, "the edit fork paused after its first signed create");
+    assert_eq!(
+        edited.expect("the edit fork settles despite the concurrent source write"),
+        EDIT_CHILD
+    );
+    assert_eq!(
+        children(EDIT_CHILD.to_owned()).await.0,
+        1,
+        "the rebuilt edit fork created its child once"
+    );
+    db.node.shutdown().await.expect("shut down test node");
+}
