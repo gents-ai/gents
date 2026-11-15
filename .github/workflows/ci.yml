@@ -31,18 +31,13 @@ on:
         required: false
         type: string
         default: ""
-      portable_runner:
-        description: JSON runner label list for the portable test groups on this run only; empty uses GENTS_CI_PORTABLE_RUNNER.
+      runner_overrides:
+        description: JSON object from runner role to label list for this run only (roles in .github/ci-runners.json); empty uses the inventory.
         required: false
         type: string
         default: ""
       portable_shards:
         description: Build the portable groups once and run their tests as this many slices on this run only; empty uses GENTS_CI_PORTABLE_SHARDS, 0 keeps one job per group.
-        required: false
-        type: string
-        default: ""
-      archive_transfer:
-        description: How slices receive the test archive on this run only (artifact or host); empty uses GENTS_CI_ARCHIVE_TRANSFER.
         required: false
         type: string
         default: ""
@@ -69,11 +64,6 @@ env:
     ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
     (github.event_name == 'pull_request' &&
     github.event.pull_request.head.repo.full_name == github.repository) }}
-  # Per-runner kept-tree cap and host free-space floor in GiB: an integer, or a
-  # JSON object from runner name to integer with an optional "default" entry.
-  # Unset, ensure-rust-build-space.py applies its defaults.
-  GENTS_CI_TARGET_MAX_GIB: ${{ vars.GENTS_CI_TARGET_MAX_GIB }}
-  GENTS_CI_TARGET_FLOOR_GIB: ${{ vars.GENTS_CI_TARGET_FLOOR_GIB }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
   LEAN_CACHE_ROOT: ${{ vars.LEAN_CACHE_ROOT || '/Users/admin/.cache/gents-lean' }}
@@ -88,8 +78,17 @@ env:
   SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
 
 jobs:
+  # Every job runs where the plan's runs_on says: the runner roles in
+  # .github/ci-runners.json, a hosted runner for a fork pull request, or a
+  # role's fallback while GENTS_CI_FALLBACK is `hosted`. The plan itself
+  # cannot read the plan, so its labels are the inventory's `linux` role
+  # (test_gate.py keeps them equal).
   plan:
-    runs-on: ubuntu-latest
+    runs-on: >-
+      ${{ ((github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name != github.repository) ||
+      vars.GENTS_CI_FALLBACK == 'hosted') && 'ubuntu-latest' ||
+      fromJSON('["self-hosted","Linux","X64","ci-linux"]') }}
     timeout-minutes: 10
     env:
       RUSTC_WRAPPER: ""
@@ -141,7 +140,7 @@ jobs:
           fi
 
       - name: Install the pinned Rust toolchain
-        run: rustup toolchain install --no-self-update
+        run: .github/scripts/setup-rust.sh
 
       - name: Select gate jobs
         id: plan
@@ -150,9 +149,12 @@ jobs:
             ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group')
             && 'true' || env.GATE_EVERYTHING }}
           GATE_ONLY: ${{ inputs.only }}
-          GATE_PORTABLE_RUNNER: ${{ inputs.portable_runner || vars.GENTS_CI_PORTABLE_RUNNER }}
+          GATE_RUNNER_OVERRIDES: ${{ inputs.runner_overrides }}
+          GATE_FALLBACK: ${{ vars.GENTS_CI_FALLBACK }}
+          GATE_FORK: >-
+            ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name != github.repository }}
           GATE_PORTABLE_SHARDS: ${{ inputs.portable_shards || vars.GENTS_CI_PORTABLE_SHARDS }}
-          GATE_ARCHIVE_TRANSFER: ${{ inputs.archive_transfer || vars.GENTS_CI_ARCHIVE_TRANSFER }}
           GATE_RUNTIME_ISOLATED: ${{ vars.GENTS_CI_RUNTIME_ISOLATED }}
           # Inside a stack only the top is tested in full: lower layers may be
           # intentionally red. A pull request into the default branch always is.
@@ -166,7 +168,8 @@ jobs:
         run: python3 scripts/ci/gate.py plan --files "${RUNNER_TEMP}/changed-files.txt"
 
   repository-guard:
-    runs-on: ubuntu-latest
+    needs: plan
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.linux }}
     timeout-minutes: 10
     env:
       RUSTC_WRAPPER: ""
@@ -204,14 +207,18 @@ jobs:
             | tar -xz -C "${RUNNER_TEMP}" actionlint
           "${RUNNER_TEMP}/actionlint" -color
 
-      - name: Check gate selection and test guards
+      - name: Install the pinned Rust toolchain and shellcheck
         run: |
-          rustup toolchain install --no-self-update
-          make gate-selftest
+          .github/scripts/setup-rust.sh
+          .github/scripts/setup-shellcheck.sh
+
+      - name: Check gate selection and test guards
+        run: make gate-selftest
 
       - name: Check the live node backstop
         run: |
-          shellcheck .github/scripts/host-runtime-service.sh .github/scripts/setup-rust-build-cache.sh
+          shellcheck .github/scripts/host-runtime-service.sh .github/scripts/setup-rust-build-cache.sh \
+            .github/scripts/setup-shellcheck.sh
           python3 .github/scripts/test-host-runtime-service.py
 
       - name: Check Harbor runner syntax
@@ -246,7 +253,7 @@ jobs:
         env:
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || 'a deleted repository' }}
         run: |
-          message="This pull request comes from ${HEAD_REPOSITORY}, so jobs that run on self-hosted runners (lint, contract, test, build, shard, desktop-ui-bombadil, core-packs build, adapter-interop) are skipped and gate fails if the plan selected one; hosted jobs still run. A maintainer reruns the change from a branch of this repository to test it on the self-hosted runners."
+          message="This pull request comes from ${HEAD_REPOSITORY}, so jobs that run on self-hosted runners (lint, contract, test, build, shard, desktop-ui-bombadil, core-packs build, adapter-interop) are skipped and gate fails if the plan selected one; the other jobs run on GitHub-hosted runners. A maintainer reruns the change from a branch of this repository to test it on the self-hosted runners."
           echo "::notice title=Self-hosted jobs skipped for a fork::${message}"
           printf '### Self-hosted jobs skipped for a fork\n\n%s\n' "${message}" >> "${GITHUB_STEP_SUMMARY}"
 
@@ -272,7 +279,8 @@ jobs:
   publish-control-tests:
     # Focused, network-free tests for the staged-prerelease publication
     # control script (fake gh). No secrets; read-only token.
-    runs-on: ubuntu-latest
+    needs: plan
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.linux }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -284,14 +292,19 @@ jobs:
       - name: Run publication control tests
         run: |
           set -euo pipefail
-          python3 -m venv "${RUNNER_TEMP}/publish-venv"
-          "${RUNNER_TEMP}/publish-venv/bin/pip" install --quiet pyyaml==6.0.2
-          "${RUNNER_TEMP}/publish-venv/bin/python" .github/scripts/test-publish-staged-prerelease.py
+          if python3 -c 'import yaml' 2>/dev/null; then
+            python=python3
+          else
+            python3 -m venv "${RUNNER_TEMP}/yaml-venv"
+            "${RUNNER_TEMP}/yaml-venv/bin/pip" install --quiet pyyaml==6.0.2
+            python="${RUNNER_TEMP}/yaml-venv/bin/python"
+          fi
+          "${python}" .github/scripts/test-publish-staged-prerelease.py
 
   fmt:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.jobs), 'fmt')
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.linux }}
     timeout-minutes: 10
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
@@ -301,7 +314,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install the pinned Rust toolchain
-        run: rustup toolchain install --no-self-update
+        run: .github/scripts/setup-rust.sh
       - name: Check formatting
         run: make gate-run JOB=fmt
 
@@ -316,7 +329,7 @@ jobs:
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository) &&
       contains(fromJSON(needs.plan.outputs.jobs), 'lint')
-    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.studio }}
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.macos }}
     timeout-minutes: 90
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
@@ -330,6 +343,8 @@ jobs:
         run: .github/scripts/host-runtime-service.sh record
 
       - uses: ./.github/actions/rust-runner
+        with:
+          role: macos
 
       - name: Install cargo-hakari
         run: .github/scripts/setup-hakari.sh
@@ -377,7 +392,7 @@ jobs:
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository) &&
       contains(fromJSON(needs.plan.outputs.jobs), 'contract')
-    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.studio }}
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.macos }}
     timeout-minutes: 90
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
@@ -393,6 +408,7 @@ jobs:
       - uses: ./.github/actions/rust-runner
         with:
           lean: "true"
+          role: macos
 
       - uses: actions/setup-node@v7
         if: fromJSON(needs.plan.outputs.plan).contract.ts_lean
@@ -458,6 +474,7 @@ jobs:
         with:
           lean: "true"
           afterburner: ${{ matrix.go }}
+          role: ${{ matrix.role }}
 
       - name: Run tests for ${{ matrix.packages }}
         run: make gate-run JOB="test:${{ matrix.group }}"
@@ -501,9 +518,6 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.archives) }}
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
-    # With `host` transfer, the slices run where the archive was written.
-    outputs:
-      runs_on: ${{ steps.archive.outputs.runs_on }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -519,11 +533,9 @@ jobs:
         run: .github/scripts/setup-nextest.sh
 
       - name: Build the ${{ matrix.archive }} test archive
-        id: archive
         run: make gate-run JOB="build:${{ matrix.archive }}"
 
       - name: Upload the ${{ matrix.archive }} test archive
-        if: matrix.transfer != 'host'
         uses: actions/upload-artifact@v7
         with:
           name: gents-tests-${{ matrix.archive }}
@@ -550,7 +562,7 @@ jobs:
       (github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository) &&
       contains(fromJSON(needs.plan.outputs.jobs), 'shard:portable')
-    runs-on: ${{ matrix.transfer == 'host' && fromJSON(needs.build.outputs.runs_on) || matrix.runs_on }}
+    runs-on: ${{ matrix.runs_on }}
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
@@ -574,7 +586,6 @@ jobs:
         run: .github/scripts/setup-nextest.sh
 
       - name: Download the ${{ matrix.archive }} test archive
-        if: matrix.transfer != 'host'
         uses: actions/download-artifact@v7
         with:
           name: gents-tests-${{ matrix.archive }}
@@ -614,7 +625,7 @@ jobs:
   desktop-packages:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.jobs), 'ts-packages')
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.linux }}
     timeout-minutes: 15
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
@@ -641,7 +652,7 @@ jobs:
     # This job exercises browser-only code. Keep scarce macOS capacity for the
     # Rust/Lean work that benefits from persistent host caches.
     name: desktop-ui (${{ matrix.suite }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.browser }}
     # The browser journeys take 44 to 58 minutes on one Playwright worker on a
     # hosted runner (#3786); 60 cut a run whose journeys had passed.
     timeout-minutes: 75
@@ -665,8 +676,12 @@ jobs:
       - name: Install workspace frontend dependencies
         run: npm ci
 
+      # A hosted runner is a fresh machine: install the browsers' system
+      # libraries as root. A self-hosted browser runner has them installed
+      # once by its operator (`npx playwright install-deps chromium webkit`)
+      # and keeps the browsers in its account's cache.
       - name: Use the Ubuntu archive for browser system dependencies
-        if: matrix.suite == 'browser'
+        if: matrix.suite == 'browser' && runner.environment == 'github-hosted'
         run: |
           sudo python3 - <<'PYTHON'
           from pathlib import Path
@@ -691,7 +706,14 @@ jobs:
       - name: Install Playwright browsers
         if: matrix.suite == 'browser'
         working-directory: apps/gents-desktop
-        run: npx playwright install --with-deps chromium webkit
+        env:
+          HOSTED: ${{ runner.environment == 'github-hosted' }}
+        run: |
+          if [[ "${HOSTED}" == true ]]; then
+            npx playwright install --with-deps chromium webkit
+          else
+            npx playwright install chromium webkit
+          fi
 
       - name: Run the desktop ${{ matrix.suite }} suite
         run: make gate-run JOB="ts-${{ matrix.suite }}"
@@ -714,8 +736,8 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository) &&
       contains(fromJSON(needs.plan.outputs.jobs), 'ts-fuzz')
     # Bombadil's exact Linux failure trace passes on macOS, so this smoke
-    # stays on a Studio while the portable UI suite runs on hosted Linux.
-    runs-on: [self-hosted, macOS, ARM64, studio, studio-2, ci-cli]
+    # stays on macOS while the portable UI suite runs on Linux.
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.macos }}
     timeout-minutes: 10
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
@@ -764,7 +786,8 @@ jobs:
     # The issue-triage bot holds `issues: write` and runs on a daily cron. These
     # tests are the only fence on its decision function, so every pull request
     # must run them.
-    runs-on: ubuntu-latest
+    needs: plan
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.linux }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
@@ -782,9 +805,10 @@ jobs:
 
   notary-control-tests:
     # Focused, network-free tests for the staged-artifact notarization control
-    # scripts. They need real macOS ditto/shasum, so they run on a hosted
-    # macOS runner with no secrets. Draft PRs run them too.
-    runs-on: macos-latest
+    # scripts. They need real macOS ditto/shasum and no secrets. Draft PRs run
+    # them too.
+    needs: plan
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.macos }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -794,12 +818,17 @@ jobs:
       - name: Run notarization control tests
         run: |
           set -euo pipefail
-          python3 -m venv "${RUNNER_TEMP}/notary-venv"
-          "${RUNNER_TEMP}/notary-venv/bin/pip" install --quiet pyyaml==6.0.2
+          if python3 -c 'import yaml' 2>/dev/null; then
+            python=python3
+          else
+            python3 -m venv "${RUNNER_TEMP}/yaml-venv"
+            "${RUNNER_TEMP}/yaml-venv/bin/pip" install --quiet pyyaml==6.0.2
+            python="${RUNNER_TEMP}/yaml-venv/bin/python"
+          fi
           bash -n .github/scripts/notarize-staged-artifact.sh
-          "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-notarize-staged-artifact.py
-          "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-rc1-notary-auth.py
-          "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-release-signing-mode.py
+          "${python}" .github/scripts/test-notarize-staged-artifact.py
+          "${python}" .github/scripts/test-rc1-notary-auth.py
+          "${python}" .github/scripts/test-release-signing-mode.py
 
   # The one check to require: every job that runs on every event, and every
   # job the plan selected, succeeded. A skip passes only for a job the plan
@@ -821,7 +850,10 @@ jobs:
       - publish-control-tests
       - triage-hygiene
       - notary-control-tests
-    runs-on: ubuntu-latest
+    # A failed plan has no runs_on; the verdict still reports it.
+    runs-on: >-
+      ${{ needs.plan.outputs.plan && fromJSON(needs.plan.outputs.plan).runs_on.linux ||
+      'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7

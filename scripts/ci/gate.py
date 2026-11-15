@@ -17,9 +17,7 @@ import json
 import os
 import re
 import shlex
-import shutil
 import signal
-import socket
 import subprocess
 import sys
 import threading
@@ -29,7 +27,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PROOFS = "crates/gents/proofs"
 
-STUDIO = ["self-hosted", "macOS", "ARM64", "studio"]
+# Roles -> runner labels: the one inventory of CI runners. Jobs select runners
+# by these capability labels only, never by host name, so new machines join by
+# registering a runner with a role's labels.
+INVENTORY = ROOT / ".github/ci-runners.json"
+# Roles the CI workflow's non-matrix jobs run on.
+WORKFLOW_ROLES = ("linux", "browser", "macos")
+HOSTED_LINUX = "ubuntu-latest"
 
 
 class Group:
@@ -45,8 +49,8 @@ class Group:
 
 
 # Every workspace member belongs to exactly one group; `plan` fails otherwise.
-# "portable" groups have no platform-specific code and move to Linux runners
-# through GATE_PORTABLE_RUNNER; the others need macOS.
+# "portable" groups have no platform-specific code and run on Linux; the
+# others need macOS.
 GROUPS = [
     Group("foundation", "portable", [
         "gents-protocol", "gents-schemas", "gents-loop", "gents-lean-contract",
@@ -243,41 +247,40 @@ def classify(path, members):
     return {"all"}
 
 
-def runner(kind):
-    if kind == "portable":
-        override = os.environ.get("GATE_PORTABLE_RUNNER", "").strip()
-        if not override:
-            return STUDIO
+def inventory():
+    return json.loads(INVENTORY.read_text())
+
+
+def runner(role, roles=None, fork=None, fallback=None):
+    """The runs-on value for a role: its labels, a hosted label for a fork pull
+    request (never a self-hosted runner) or a role whose pool is still hosted,
+    or the role's fallback while the repository variable GENTS_CI_FALLBACK is
+    `hosted`."""
+    roles = roles or inventory()["roles"]
+    fork = os.environ.get("GATE_FORK") == "true" if fork is None else fork
+    fallback = os.environ.get("GATE_FALLBACK") == "hosted" if fallback is None else fallback
+    if role not in roles:
+        fail(f"no runner role {role!r} in {INVENTORY.relative_to(ROOT)}")
+    entry = roles[role]
+    # `"pool": "hosted"` keeps a role on its hosted runner until runners with
+    # its labels exist (the browser role waits for its hosts' system libraries).
+    if fork or entry.get("pool") == "hosted":
+        return entry.get("hosted", HOSTED_LINUX)
+    overrides = os.environ.get("GATE_RUNNER_OVERRIDES", "").strip()
+    if overrides:
         try:
-            labels = json.loads(override)
-        except json.JSONDecodeError:
-            labels = None
-        if not (isinstance(labels, list) and labels and all(isinstance(label, str) and label for label in labels)):
-            fail(f"GATE_PORTABLE_RUNNER must be a JSON list of runner labels, got {override!r}")
-        return labels
-    if kind == "runtime":
-        isolated = os.environ.get("GATE_RUNTIME_ISOLATED") == "true"
-        return STUDIO + ["studio-1", "ci-runtime-isolated" if isolated else "ci-runtime"]
-    if kind == "cli":
-        return STUDIO + ["studio-2", "ci-cli"]
-    if kind == "desktop":
-        return STUDIO + ["studio-2", "ci-desktop"]
-    return STUDIO
-
-
-def archive_transfer():
-    """GATE_ARCHIVE_TRANSFER: how slices receive the archive.
-
-    `artifact` (the default) uploads it to GitHub and every slice downloads it,
-    which works on any runner. `host` keeps it in the build runner's
-    ~/.cache/gents-tests and runs every slice on that host, through a runner
-    label equal to the host's short hostname (each minisforum runner carries
-    one); the minisforums moved 3.2 GB to and from GitHub at about 7 MB/s.
-    """
-    value = os.environ.get("GATE_ARCHIVE_TRANSFER", "").strip() or "artifact"
-    if value not in ("artifact", "host"):
-        fail(f"GATE_ARCHIVE_TRANSFER must be artifact or host, got {value!r}")
-    return value
+            override = json.loads(overrides).get(role)
+        except (json.JSONDecodeError, AttributeError):
+            override = None
+            fail(f"GATE_RUNNER_OVERRIDES must be a JSON object of role to label list, got {overrides!r}")
+        if override is not None:
+            if not (isinstance(override, list) and override and all(isinstance(label, str) and label for label in override)):
+                fail(f"GATE_RUNNER_OVERRIDES[{role!r}] must be a non-empty JSON list of labels")
+            return override
+    if fallback and "fallback" in entry:
+        target = entry["fallback"]
+        return runner(target, roles, fork, False) if target in roles else target
+    return entry["labels"]
 
 
 def portable_shards():
@@ -323,9 +326,13 @@ def plan(files, members, everything=False, only=None, tier="full"):
         if not selected:
             continue
         jobs[f"test:{group.name}"] = True
+        role = group.runner
+        if role == "runtime" and os.environ.get("GATE_RUNTIME_ISOLATED") == "true":
+            role = "runtime-isolated"
         matrix.append({
             "group": group.name,
-            "runs_on": runner(group.runner),
+            "role": role,
+            "runs_on": runner(role),
             "packages": " ".join(selected),
             "timeout": group.timeout,
             "go": group.name == "cli",
@@ -345,11 +352,10 @@ def plan(files, members, everything=False, only=None, tier="full"):
         if archived:
             # At most one slice per crate with tests, so every slice runs some.
             count = min(count, len([package for package in archived if package not in NO_TESTS]))
-            transfer = archive_transfer()
-            archives.append({"archive": ARCHIVE, "runs_on": runner("portable"), "transfer": transfer,
+            archives.append({"archive": ARCHIVE, "runs_on": runner("portable"),
                              "packages": " ".join(archived), "timeout": 60})
             shards = [{"archive": ARCHIVE, "index": index, "count": count, "runs_on": runner("portable"),
-                       "transfer": transfer, "timeout": 60} for index in range(1, count + 1)]
+                       "timeout": 60} for index in range(1, count + 1)]
     if only:
         jobs = {job: wanted and job in only for job, wanted in jobs.items()}
         matrix = [entry for entry in matrix if f"test:{entry['group']}" in only]
@@ -374,7 +380,7 @@ def plan(files, members, everything=False, only=None, tier="full"):
             "ts_lean": ts or proofs,
         },
         "core_packs": everything or "core-packs" in tags,
-        "runs_on": {"studio": STUDIO},
+        "runs_on": {role: runner(role) for role in WORKFLOW_ROLES},
     }
 
 
@@ -619,38 +625,19 @@ def run_test(selection, name):
 SUMMARY = re.compile(r"^\s*Summary \[\s*([\d.]+)s\] (\d+) tests? run: (.*)$")
 
 
-HOST_ARCHIVES = Path.home() / ".cache" / "gents-tests"
-HOST_ARCHIVE_DAYS = 1
-HOST_SLICE_THREADS = 8
+# Slices of one run can share a host, and each test process starts its own
+# embedded node: 3 slices at 12 threads took a 32-core minisforum from load
+# 20 to over 100, where 8 threads each kept it under 80 (dispatch 43739322437).
+SLICE_THREADS = 8
 
 
-def archive_dir(transfer="artifact"):
-    """Where `build:` writes the archive and `shard:` reads it: the workflow's
-    artifact directory, or with `host` transfer a directory per run that the
-    host's runners (one account) share."""
+def archive_dir():
+    """Where `build:` writes the archive and `shard:` reads it (the workflow's artifact directory)."""
     if os.environ.get("GATE_ARCHIVE_DIR"):
         return Path(os.environ["GATE_ARCHIVE_DIR"])
     if os.environ.get("GITHUB_ACTIONS") and os.environ.get("RUNNER_TEMP"):
-        if transfer == "host":
-            # Per run, not attempt: re-running failed slices reuses the build.
-            return HOST_ARCHIVES / os.environ["GITHUB_RUN_ID"]
         return Path(os.environ["RUNNER_TEMP"]) / "gents-tests"
     return ROOT / "target" / "gents-tests"
-
-
-def hand_off_on_host(entry):
-    """Remove other runs' archives older than HOST_ARCHIVE_DAYS and pin the
-    slices to this host (`runs_on` output of the build job)."""
-    cutoff = time.time() - HOST_ARCHIVE_DAYS * 86400
-    for stale in HOST_ARCHIVES.glob("*"):
-        if stale.is_dir() and stale.stat().st_mtime < cutoff:
-            shutil.rmtree(stale, ignore_errors=True)
-    host = socket.gethostname().split(".")[0]
-    output = os.environ.get("GITHUB_OUTPUT")
-    if output:
-        with open(output, "a") as handle:
-            handle.write(f"runs_on={json.dumps(entry['runs_on'] + [host])}\n")
-    print(f"gate: the {entry['archive']} slices run on {host}", flush=True)
 
 
 def nextest(arguments, cwd=ROOT, label=None, expect=None):
@@ -739,7 +726,7 @@ def run_build(selection, name):
         subprocess.run(["git", "worktree", "prune"], cwd=ROOT, check=False)
         if not sh(["git", "worktree", "add", "--detach", str(source), "HEAD"]):
             return
-    output = archive_dir(entry.get("transfer", "artifact"))
+    output = archive_dir()
     output.mkdir(parents=True, exist_ok=True)
     archive = output / f"{name}.tar.zst"
     features = [PACKAGE_FEATURES[package] for package in packages
@@ -779,15 +766,11 @@ def run_build(selection, name):
         print(f"::error::{problem}", flush=True)
     results.append((f"check {name} archive", "ok" if not problems else "; ".join(problems),
                     f"{total} tests listed, {ignored} ignored", time.time() - started))
-    if not problems and entry.get("transfer") == "host":
-        hand_off_on_host(entry)
 
 
 def run_shard(selection, name, index=None):
     """Run one slice of an archive against this checkout; without an index, all of it."""
-    transfer = next((entry.get("transfer", "artifact") for entry in selection["shards"]
-                     if entry["archive"] == name), "artifact")
-    archive = archive_dir(transfer) / f"{name}.tar.zst"
+    archive = archive_dir() / f"{name}.tar.zst"
     arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci"]
     label = f"shard {name}"
     if index is not None:
@@ -798,11 +781,8 @@ def run_shard(selection, name, index=None):
         arguments += ["--partition", f"slice:{index}/{entry['count']}"]
         label = f"shard {name} {index}/{entry['count']}"
     threads = os.environ.get("RUST_TEST_THREADS")
-    if transfer == "host" and index is not None:
-        # Every slice shares the build's host, and each test process starts
-        # its own embedded node: 3 slices at 12 threads took a 32-core
-        # minisforum from load 20 to over 100.
-        threads = str(min(int(threads or HOST_SLICE_THREADS), HOST_SLICE_THREADS))
+    if index is not None:
+        threads = str(min(int(threads or SLICE_THREADS), SLICE_THREADS))
     if threads:
         arguments += ["--test-threads", threads]
     # Tests that would otherwise `cargo build` a helper binary use the archived one.

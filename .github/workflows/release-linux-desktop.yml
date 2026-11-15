@@ -19,7 +19,7 @@ jobs:
 
   package:
     needs: core-packs
-    runs-on: [self-hosted, Linux, X64, workstation-1]
+    runs-on: [self-hosted, Linux, X64, ci-release]
     container: rust:1-bookworm
     timeout-minutes: 120
     defaults:

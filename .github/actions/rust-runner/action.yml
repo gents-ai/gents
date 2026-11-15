@@ -8,6 +8,9 @@ inputs:
   afterburner:
     description: Install the Afterburner compiler test prerequisites (the gents-cli suite).
     default: "false"
+  role:
+    description: The runner role from .github/ci-runners.json the job was routed to; it sets the kept Cargo tree's cap and floor.
+    default: ""
 
 runs:
   using: composite
@@ -62,6 +65,8 @@ runs:
 
     - name: Prepare disk-backed Rust build cache
       shell: bash
+      env:
+        GENTS_CI_RUNNER_ROLE: ${{ inputs.role }}
       run: .github/scripts/setup-rust-build-cache.sh
 
     - name: Install Go for Afterburner compiler tests

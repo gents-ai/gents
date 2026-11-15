@@ -36,7 +36,7 @@ env:
 
 jobs:
   live-cli-smoke:
-    runs-on: [self-hosted, macOS, ARM64, studio]
+    runs-on: [self-hosted, macOS, ARM64, ci-macos]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
@@ -62,7 +62,7 @@ jobs:
         run: .github/scripts/show-sccache-stats.sh
 
   desktop-live-smoke:
-    runs-on: [self-hosted, macOS, ARM64, studio]
+    runs-on: [self-hosted, macOS, ARM64, ci-macos]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
@@ -126,7 +126,7 @@ jobs:
         run: .github/scripts/show-sccache-stats.sh
 
   desktop-live-browser-smoke:
-    runs-on: [self-hosted, macOS, ARM64, studio]
+    runs-on: [self-hosted, macOS, ARM64, ci-macos]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
