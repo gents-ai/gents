@@ -37,7 +37,7 @@ def select(*files, **options):
 
 
 def groups(selection):
-    return {entry["group"]: entry["packages"].split() for entry in selection["matrix"]}
+    return {entry["job"][len("test:"):]: entry["packages"].split() for entry in selection["matrix"]}
 
 
 class TestCacheMode(unittest.TestCase):
@@ -71,15 +71,34 @@ class TestCacheMode(unittest.TestCase):
         self.assertEqual(self.mode(GATE_TEST_CACHE="on", GATE_EVENT="workflow_dispatch",
                                    GATE_TEST_CACHE_INPUT="off"), "off")
 
-    def test_the_scheduled_run_selects_nothing_while_the_cache_is_off(self):
-        saved = {name: os.environ.pop(name, None) for name in ("GATE_EVENT", "GATE_TEST_CACHE", "GATE_PLAN")}
-        os.environ["GATE_EVENT"] = "schedule"
+    def scheduled(self, **environment):
+        names = ("GATE_EVENT", "GATE_TEST_CACHE", "GATE_PLAN", "GATE_PORTABLE_SHARDS")
+        saved = {name: os.environ.pop(name, None) for name in names}
+        os.environ.update(GATE_EVENT="schedule", **environment)
         try:
             arguments = type("Arguments", (), {"everything": True, "files": None, "base": "HEAD"})()
-            self.assertEqual(gate.resolve_plan(arguments)["jobs"], [])
+            return gate.resolve_plan(arguments)
         finally:
-            os.environ.pop("GATE_EVENT")
+            for name in names:
+                os.environ.pop(name, None)
             os.environ.update({name: value for name, value in saved.items() if value is not None})
+
+    def test_the_scheduled_run_runs_the_moved_groups_on_macos_uncached(self):
+        mirrored = {f"test:{group.name}@macos" for group in gate.GROUPS if group.macos}
+        self.assertEqual(mirrored, {"test:runtime@macos", "test:cli@macos", "test:desktop@macos"})
+        selection = self.scheduled()
+        self.assertEqual(set(selection["jobs"]), mirrored)
+        for entry in selection["matrix"]:
+            group = next(group for group in gate.GROUPS if group.name == entry["group"])
+            self.assertEqual(entry["role"], group.macos)
+            self.assertEqual(entry["runs_on"], gate.runner(group.macos))
+            self.assertEqual(entry["packages"].split(), group.packages)
+        self.assertEqual(selection["archives"], [])
+        cached = self.scheduled(GATE_TEST_CACHE="on", GATE_PORTABLE_SHARDS="1")
+        self.assertEqual(set(cached["jobs"]), mirrored | {"build:portable"})
+        self.assertEqual(cached["archives"][0]["test_cache"], "full")
+        # Pull requests and pushes never run the macOS copies.
+        self.assertFalse(any("@" in job for job in select(everything=True)["jobs"]))
 
     def test_it_needs_the_single_slice_in_the_build_job(self):
         self.assertEqual(self.mode(False, GATE_TEST_CACHE="on", GATE_EVENT="pull_request"), "off")
@@ -93,9 +112,13 @@ class Selection(unittest.TestCase):
         selection = select("crates/gents-cli/src/lib.rs")
         selected = groups(selection)
         self.assertEqual(selected["cli"], ["gents-cli"])
-        self.assertEqual(set(selected), {"cli", "desktop"})
-        self.assertEqual(selected["desktop"], ["gents-desktop-bridge", "gents-client-host", "gents-fixture-host",
-                                               "gents-desktop-tauri"])
+        self.assertEqual(set(selected), {"cli", "desktop", "native"})
+        self.assertEqual(selected["desktop"], ["gents-client-host"])
+        self.assertEqual(selected["native"], ["gents-desktop-bridge", "gents-fixture-host", "gents-desktop-tauri"])
+        native = next(entry for entry in selection["matrix"] if entry["group"] == "native")
+        self.assertEqual(native["macos_tests"], ["gents-cli", "gents-client-host"])
+        self.assertTrue(native["journey"])
+        self.assertTrue(native["go"])
         self.assertNotIn("gents", selection["built"])
         self.assertTrue(selection["contract"]["ratchets"])
         self.assertFalse(any(job.startswith("ts-") for job in selection["jobs"]))
@@ -103,7 +126,7 @@ class Selection(unittest.TestCase):
     def test_a_store_change_tests_everything_above_it(self):
         selection = select("crates/gents-store/src/graphql.rs")
         selected = groups(selection)
-        self.assertEqual(set(selected), {"store", "session", "runtime", "cli", "desktop"})
+        self.assertEqual(set(selected), {"store", "session", "runtime", "cli", "desktop", "native"})
         self.assertEqual(selected["store"], gate.GROUPS[1].packages)
         self.assertNotIn("gents-protocol", selection["affected"])
         self.assertFalse(selection["contract"]["ratchets"])
@@ -216,8 +239,9 @@ class Shards(unittest.TestCase):
 
     def test_the_portable_groups_build_once_and_run_as_slices(self):
         selection = sharded(4, everything=True)
-        self.assertEqual(set(groups(selection)), {"runtime", "cli", "desktop"})
+        self.assertEqual(set(groups(selection)), {"native"})
         self.assertEqual(archived(selection), self.PORTABLE)
+        self.assertTrue(selection["archives"][0]["go"])
         self.assertEqual([(entry["index"], entry["count"]) for entry in selection["shards"]],
                          [(1, 4), (2, 4), (3, 4), (4, 4)])
         self.assertIn("build:portable", selection["jobs"])
@@ -252,9 +276,9 @@ class Shards(unittest.TestCase):
         session = sharded(4, everything=True, only={"test:session"})
         self.assertEqual(archived(session), gate.GROUPS[2].packages)
         self.assertEqual(session["jobs"], ["build:portable", "shard:portable"])
-        whole = sharded(4, everything=True, only={"shard:portable", "test:cli"})
+        whole = sharded(4, everything=True, only={"shard:portable", "test:native"})
         self.assertEqual(archived(whole), self.PORTABLE)
-        self.assertEqual(list(groups(whole)), ["cli"])
+        self.assertEqual(list(groups(whole)), ["native"])
 
     def test_the_slice_count_must_be_a_small_whole_number(self):
         for value in ("-1", "four", "1.5", "33"):
@@ -392,7 +416,8 @@ class Runners(unittest.TestCase):
         selection = select(everything=True)
         self.assertEqual(set(selection["runs_on"]), set(gate.WORKFLOW_ROLES))
         for entry in selection["matrix"]:
-            self.assertEqual(entry["runs_on"], gate.runner(entry["role"]), entry["group"])
+            self.assertEqual(entry["runs_on"][:len(gate.runner(entry["role"]))], gate.runner(entry["role"]),
+                             entry["job"])
         jobs = workflow_jobs(CI)
         for job, value in runs_on_values(CI):
             with self.subTest(job=job):
@@ -426,6 +451,105 @@ class Runners(unittest.TestCase):
         config = (gate.ROOT / ".github/actionlint.yaml").read_text()
         listed = set(re.findall(r"^    - (\S+)$", config.split("paths:")[0], flags=re.M))
         self.assertEqual(listed, {label for entry in ROLES.values() for label in entry["labels"]} - {"self-hosted"})
+
+
+class HostGroups(unittest.TestCase):
+    GROUPS = ROLES["portable"]["host_groups"]
+
+    def test_portable_jobs_split_across_the_host_groups(self):
+        selection = select(everything=True)
+        portable = [entry for entry in selection["matrix"] if entry["role"] == "portable"]
+        placed = {entry["runs_on"][-1] for entry in portable}
+        self.assertEqual(placed, set(self.GROUPS))
+        load = {group: sum(entry["timeout"] for entry in portable if entry["runs_on"][-1] == group)
+                for group in self.GROUPS}
+        self.assertLessEqual(max(load.values()) - min(load.values()), max(entry["timeout"] for entry in portable))
+        for entry in portable:
+            self.assertEqual(entry["runs_on"], [*ROLES["portable"]["labels"], entry["runs_on"][-1]])
+
+    def test_slices_alternate_and_the_cached_slice_keeps_to_its_store(self):
+        selection = sharded(4, everything=True)
+        self.assertEqual([entry["runs_on"][-1] for entry in selection["shards"]],
+                         [self.GROUPS[index % len(self.GROUPS)] for index in range(4)])
+        os.environ["GATE_TEST_CACHE"] = "on"
+        try:
+            cached = sharded(1, everything=True)
+        finally:
+            del os.environ["GATE_TEST_CACHE"]
+        self.assertEqual(cached["archives"][0]["runs_on"][-1], self.GROUPS[0])
+
+    def test_a_runner_takes_its_roles_compile_and_test_parallelism(self):
+        jobs = ROLES["portable"]["jobs"]
+        here = gate.placement("portable", fork=False, fallback=False, host_group=self.GROUPS[1])
+        self.assertEqual((here["build_jobs"], here["test_threads"]), (str(jobs["build"]), str(jobs["test"])))
+        self.assertEqual(gate.placement("macos", fork=False, fallback=False)["build_jobs"], "")
+        with self.assertRaises(SystemExit):
+            gate.placement("macos", fork=False, fallback=False, host_group=self.GROUPS[0])
+
+    def test_forks_and_fallbacks_never_take_a_host_group(self):
+        fork = gate.placement("portable", fork=True, fallback=False, host_group=self.GROUPS[0])
+        self.assertEqual(fork["runs_on"], ROLES["portable"].get("hosted", gate.HOSTED_LINUX))
+        self.assertEqual(fork["build_jobs"], "")
+        self.assertEqual(gate.host_groups("portable", fork=True, fallback=False), [])
+        fallback = gate.placement("portable", fork=False, fallback=True, host_group=self.GROUPS[0])
+        self.assertNotIn(self.GROUPS[0], fallback["runs_on"])
+
+    def test_host_groups_are_labels_only_their_role_uses(self):
+        for role, entry in ROLES.items():
+            for group in entry.get("host_groups", []):
+                self.assertTrue(group.startswith(entry["labels"][-1] + "-"), (role, group))
+                self.assertFalse(any(group in other["labels"] for other in ROLES.values()), group)
+
+
+class MacosOnlyTests(unittest.TestCase):
+    def test_cfg_predicates_evaluate_per_platform(self):
+        cases = {
+            'target_os = "macos"': (True, False),
+            'any(target_os = "linux", target_os = "macos")': (True, True),
+            'all(unix, not(target_os = "macos"))': (False, True),
+            'all(target_os = "macos", feature = "editor-e2e")': (False, False),
+            'target_vendor = "apple"': (True, False),
+            "test": (True, True),
+            "windows": (False, False),
+        }
+        for expression, expected in cases.items():
+            with self.subTest(expression=expression):
+                self.assertEqual((gate.cfg_holds(expression, "macos", set()), gate.cfg_holds(expression, "linux", set())),
+                                 expected)
+        self.assertTrue(gate.cfg_holds('feature = "x"', "linux", {"x"}))
+
+    def test_the_walk_finds_gated_tests_modules_and_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "src/nested").mkdir(parents=True)
+            (root / "src/lib.rs").write_text(
+                '#[cfg(target_os = "macos")]\nmod sandbox;\nmod nested;\n'
+                '#[cfg(all(target_os = "macos", feature = "off"))]\nmod featured;\n'
+                '#[cfg(test)]\nmod tests {\n    #[test]\n    #[cfg(target_os = "macos")]\n'
+                '    fn only_here() {}\n    #[cfg(any(target_os = "linux", target_os = "macos"))]\n'
+                '    #[test]\n    fn both() {}\n}\n')
+            (root / "src/nested/mod.rs").write_text('#[cfg(\n    target_os = "macos"\n)]\n#[tokio::test]\n'
+                                                     'async fn multi_line() {}\nmod deeper;\n')
+            (root / "src/nested/deeper.rs").write_text('#![cfg(target_os = "macos")]\n#[test]\nfn inside() {}\n')
+            filters = set()
+            gate.walk_module(root / "src/lib.rs", True, set(), filters, set())
+            self.assertEqual(filters, {"sandbox::", "only_here", "multi_line", "deeper::"})
+            (root / "tests").mkdir()
+            (root / "tests/sandbox.rs").write_text('#![cfg(target_os = "macos")]\n#[test]\nfn a() {}\n')
+            whole = set()
+            gate.walk_module(root / "tests/sandbox.rs", True, set(), whole, set())
+            self.assertEqual(whole, {""})
+
+    def test_the_repository_gated_tests_are_found(self):
+        self.assertEqual(gate.macos_only_tests("gents-cli"), {("--test", "plugin_build_sandbox"): []})
+        self.assertIn("a_skipped_gate_releases_the_bound_workspace", gate.macos_only_tests("gents")[("--lib",)])
+        # Compiled on both platforms, or on neither with the gate's features: not macOS-only.
+        self.assertEqual(gate.macos_only_tests("gents-host"), {})
+        self.assertNotIn("editor_store_installed::",
+                         gate.macos_only_tests("gents-client-host")[("--test", "integration")])
+        native = next(entry for entry in select(everything=True)["matrix"] if entry["group"] == gate.NATIVE)
+        portable = {package for group in gate.GROUPS if group.runner == "portable" for package in group.packages}
+        self.assertEqual(set(native["macos_tests"]), {package for package in portable if gate.macos_only_tests(package)})
 
 
 class Verdict(unittest.TestCase):

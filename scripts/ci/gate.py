@@ -13,11 +13,13 @@ computes it against --base.
 """
 
 import argparse
+import functools
 import importlib.util
 import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -54,7 +56,7 @@ HOSTED_LINUX = "ubuntu-latest"
 
 class Group:
     def __init__(self, name, runner, packages, threads=None, nocapture=False,
-                 isolate_target=False, timeout=120):
+                 isolate_target=False, timeout=120, macos=None):
         self.name = name
         self.runner = runner
         self.packages = packages
@@ -62,11 +64,18 @@ class Group:
         self.nocapture = nocapture
         self.isolate_target = isolate_target
         self.timeout = timeout
+        # The macOS role the scheduled run also runs this portable group on, uncached.
+        self.macos = macos
 
 
 # Every workspace member belongs to exactly one group; `plan` fails otherwise.
-# "portable" groups have no platform-specific code and run on Linux; the
-# others need macOS.
+# "portable" groups run on Linux, where the archived run joins the test-result
+# cache. A portable crate's tests that compile only on macOS run in the
+# `native` group (`macos_only_tests`), and the scheduled run also runs the
+# groups that have `macos` there, uncached, so filesystem and path differences
+# between the platforms still surface daily. `native` holds the crates that need
+# macOS: the service manager owner, whose tests drive the real one, and the
+# Tauri crates, which need WebKitGTK on Linux.
 GROUPS = [
     Group("foundation", "portable", [
         "gents-protocol", "gents-schemas", "gents-loop", "gents-lean-contract",
@@ -81,16 +90,23 @@ GROUPS = [
     Group("session", "portable", [
         "gents-session", "gents-tools", "gents-toolcalls", "gents-automation", "gents-observe",
     ], timeout=120),
-    Group("runtime", "runtime", ["gents", "gents-eval"], timeout=150),
+    Group("runtime", "portable", ["gents", "gents-eval"], timeout=150, macos="runtime"),
     # CLI tests spawn Cargo for plugin builds, which must not inherit the
     # job's target directory. They run at the default thread count (#3778).
-    Group("cli", "cli", ["gents-cli", "gents-service", "gents-host"],
-          nocapture=True, isolate_target=True, timeout=180),
-    Group("desktop", "desktop", [
-        "gents-desktop-core", "gents-desktop", "gents-desktop-bridge", "gents-client-host",
-        "gents-media-host", "fixture-domain-plugin", "gents-fixture-host", "gents-desktop-tauri",
-    ], timeout=150),
+    Group("cli", "portable", ["gents-cli", "gents-host"],
+          nocapture=True, isolate_target=True, timeout=180, macos="cli"),
+    Group("desktop", "portable", [
+        "gents-desktop-core", "gents-desktop", "gents-client-host", "gents-media-host", "fixture-domain-plugin",
+    ], timeout=150, macos="desktop"),
+    Group("native", "desktop", [
+        "gents-service", "gents-desktop-bridge", "gents-fixture-host", "gents-desktop-tauri",
+    ], nocapture=True, isolate_target=True, timeout=150),
 ]
+NATIVE = "native"
+# Crates whose change selects the native client journey, which runs in `native`.
+JOURNEY = {"gents-cli", "gents-client-host", "gents-media-host"}
+# Portable crates whose tests need the Afterburner compilers (Go, Javy, Binaryen).
+AFTERBURNER = {"gents-cli"}
 
 PACKAGE_FEATURES = {
     "gents-claude": "gents-claude/transport",
@@ -195,10 +211,14 @@ def fail(message):
 
 def workspace():
     """Member name -> (directory, workspace dependencies of every kind)."""
-    raw = subprocess.run(
-        ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"],
-        cwd=ROOT, check=True, stdout=subprocess.PIPE).stdout
-    return parse_workspace(json.loads(raw))
+    return parse_workspace(workspace_metadata())
+
+
+@functools.cache
+def workspace_metadata():
+    raw = subprocess.run(["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"],
+                         cwd=ROOT, check=True, stdout=subprocess.PIPE).stdout
+    return json.loads(raw)
 
 
 def parse_workspace(metadata):
@@ -275,12 +295,45 @@ def inventory():
     return json.loads(INVENTORY.read_text())
 
 
-def runner(role, roles=None, fork=None, fallback=None):
+def runner(role, roles=None, fork=None, fallback=None, host_group=None):
     """The runs-on value for a role: its labels, a hosted label for a fork pull
     request (never a self-hosted runner) or a role whose pool is still hosted,
     or the role's fallback while the repository variable GENTS_CI_FALLBACK is
-    `hosted`."""
+    `hosted`. `host_group` adds one of the role's `host_groups` labels to its
+    own labels, pinning the job to that group's hosts."""
+    return placement(role, roles, fork, fallback, host_group)["runs_on"]
+
+
+def placement(role, roles=None, fork=None, fallback=None, host_group=None):
+    """Where a job of `role` runs (`runs_on`) and the Cargo build jobs and test
+    threads its runner may use (empty: the workflow's defaults). The role's
+    `jobs` divide a host's cores between the runners it registers, so its
+    concurrent jobs cannot oversubscribe it."""
     roles = roles or inventory()["roles"]
+    labels = route(role, roles, fork, fallback)
+    entry = roles.get(role, {})
+    if labels == entry.get("labels"):
+        groups = entry.get("host_groups", [])
+        if host_group is not None:
+            if host_group not in groups:
+                fail(f"role {role!r} has no host group {host_group!r} in {INVENTORY.relative_to(ROOT)}")
+            labels = [*labels, host_group]
+        jobs = entry.get("jobs", {})
+    else:
+        target = entry.get("fallback")
+        jobs = roles[target].get("jobs", {}) if labels == roles.get(target, {}).get("labels") else {}
+    return {"runs_on": labels, "build_jobs": str(jobs.get("build", "")), "test_threads": str(jobs.get("test", ""))}
+
+
+def host_groups(role, roles=None, fork=None, fallback=None):
+    """The role's host groups when its jobs run on its own runners, else none."""
+    roles = roles or inventory()["roles"]
+    entry = roles[role]
+    return entry.get("host_groups", []) if route(role, roles, fork, fallback) == entry["labels"] else []
+
+
+def route(role, roles, fork=None, fallback=None):
+    """The labels a role's job runs on, before any host group."""
     fork = os.environ.get("GATE_FORK") == "true" if fork is None else fork
     fallback = os.environ.get("GATE_FALLBACK") == "hosted" if fallback is None else fallback
     if role not in roles:
@@ -303,7 +356,7 @@ def runner(role, roles=None, fork=None, fallback=None):
             return override
     if fallback and "fallback" in entry:
         target = entry["fallback"]
-        return runner(target, roles, fork, False) if target in roles else target
+        return route(target, roles, fork, False) if target in roles else target
     return entry["labels"]
 
 
@@ -340,6 +393,139 @@ def test_cache_mode(single):
     return configured
 
 
+# ---- tests that compile only on macOS ----
+
+CFG_TOKEN = re.compile(r'\s*(?:([A-Za-z_]\w*)\s*(?:=\s*"([^"]*)")?|([(),]))')
+
+
+def cfg_holds(expression, platform, features):
+    """Evaluate a `cfg(...)` predicate for `linux` (the portable runners) or
+    `macos` (the Studios). Features are on only when the gate enables them."""
+    tokens, position = [], 0
+    while position < len(expression):
+        match = CFG_TOKEN.match(expression, position)
+        if not match or match.end() == position:
+            break
+        tokens.append(match.groups())
+        position = match.end()
+    tokens.reverse()
+
+    def value():
+        name, literal, punctuation = tokens.pop()
+        if name in ("any", "all", "not") and tokens and tokens[-1][2] == "(":
+            tokens.pop()
+            items = []
+            while tokens and tokens[-1][2] != ")":
+                items.append(value())
+                if tokens and tokens[-1][2] == ",":
+                    tokens.pop()
+            if tokens:
+                tokens.pop()
+            return any(items) if name == "any" else all(items) if name == "all" else not items[0]
+        if literal is not None:
+            if name == "target_os":
+                return literal == platform
+            if name == "target_vendor":
+                return (literal == "apple") == (platform == "macos")
+            if name == "target_arch":
+                return literal == ("aarch64" if platform == "macos" else "x86_64")
+            if name == "target_family":
+                return literal == "unix"
+            if name == "feature":
+                return literal in features
+            return False
+        return name not in ("windows", "miri")
+
+    return value() if tokens else True
+
+
+CFG_ATTRIBUTE = re.compile(r"#!?\[cfg\((.*)\)\]\s*$", re.S)
+PATH_ATTRIBUTE = re.compile(r'#\[path\s*=\s*"([^"]+)"\]')
+TEST_ATTRIBUTE = re.compile(r"#\[(?:\w+::)*test\b")
+ITEM = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:(?:async|unsafe|const)\s+)*(fn|mod)\s+(\w+)\s*([;{(<])?")
+
+
+def cfg_of(attribute):
+    match = CFG_ATTRIBUTE.match(" ".join(attribute.split()))
+    return match.group(1) if match else None
+
+
+def compiled(attributes, platform, features):
+    return all(cfg_holds(condition, platform, features)
+               for condition in map(cfg_of, attributes) if condition is not None)
+
+
+@functools.cache
+def macos_only_tests(package):
+    """The tests of a crate that compile only on macOS: cargo test target
+    arguments -> libtest name filters (an empty list runs the whole target).
+
+    Each test target's module tree is walked from its root, as rustc would on
+    macOS with the gate's features: a test function, a module or a file under
+    `cfg` that holds on macOS and not on Linux is selected. A filter is a name
+    substring, so it may also select a same-named test elsewhere in the target.
+    """
+    package_info = next(entry for entry in workspace_metadata()["packages"] if entry["name"] == package)
+    features = {feature.split("/", 1)[1] for feature in PACKAGE_FEATURES.get(package, "").split(",")
+                if feature.startswith(package + "/")}
+    found = {}
+    for target in package_info["targets"]:
+        kinds = set(target["kind"])
+        if not kinds & {"lib", "bin", "test"} or not set(target.get("required-features") or []) <= features:
+            continue
+        arguments = ("--lib",) if "lib" in kinds else ("--bin", target["name"]) if "bin" in kinds \
+            else ("--test", target["name"])
+        filters = set()
+        walk_module(Path(target["src_path"]), True, features, filters, set())
+        if filters:
+            found[arguments] = [] if "" in filters else sorted(filters)
+    return found
+
+
+def walk_module(path, owns_directory, features, filters, seen):
+    """Collect the macOS-only tests of one module file and the modules it declares."""
+    if path in seen or not path.is_file():
+        return
+    seen.add(path)
+    lines = path.read_text(errors="replace").splitlines()
+    inner = [line.strip() for line in lines[:40] if line.strip().startswith("#![cfg(")]
+    if not compiled(inner, "macos", features):
+        return
+    if not compiled(inner, "linux", features):
+        filters.add("" if owns_directory and path.name != "mod.rs" and path.parent.name in ("tests", "src")
+                    else (path.parent.name if path.name == "mod.rs" else path.stem) + "::")
+        return
+    directory = path.parent if owns_directory or path.name == "mod.rs" else path.parent / path.stem
+    attributes, pending = [], ""
+    for line in lines:
+        text = line.strip()
+        if pending or (text.startswith("#[") and not text.startswith("#![")):
+            pending += " " + text
+            if pending.count("[") <= pending.count("]"):
+                attributes.append(pending.strip())
+                pending = ""
+            continue
+        if not text or text.startswith("//"):
+            continue
+        item = ITEM.match(line)
+        if item and compiled(attributes, "macos", features):
+            kind, name, end = item.groups()
+            only = not compiled(attributes, "linux", features)
+            if kind == "mod" and only:
+                filters.add(name + "::")
+            elif kind == "mod" and end == ";":
+                explicit = next((match.group(1) for match in map(PATH_ATTRIBUTE.match, attributes) if match), None)
+                if explicit:
+                    walk_module(path.parent / explicit, False, features, filters, seen)
+                else:
+                    child = directory / f"{name}.rs"
+                    walk_module(child if child.is_file() else directory / name / "mod.rs", False, features,
+                                filters, seen)
+            elif kind == "fn" and only and any(TEST_ATTRIBUTE.match(attribute) for attribute in attributes):
+                filters.add(name)
+        attributes = []
+
+
 def tla_specs(files, members, everything):
     """The TLA+ specs a change selects by their headers: every spec when it
     changes everything or a header does not parse (the runner then reports it)."""
@@ -362,7 +548,30 @@ def portable_shards():
     return int(raw)
 
 
-def plan(files, members, everything=False, only=None, tier="full"):
+def test_entry(group, job, role, packages, go, **extra):
+    """One `test` matrix job: `job` is the group, or `<group>@macos` for a portable
+    group's scheduled macOS run."""
+    if role == "runtime" and os.environ.get("GATE_RUNTIME_ISOLATED") == "true":
+        role = "runtime-isolated"
+    return {"job": f"test:{job}", "group": group.name, "role": role, **placement(role),
+            "packages": " ".join(packages), "timeout": group.timeout, "go": go, **extra}
+
+
+def balance(entries):
+    """Spread portable test jobs over the role's host groups, longest first onto
+    the group with the least work (by timeout): GitHub hands queued jobs to any
+    matching runner, which can put a whole run on one host while another idles."""
+    groups = host_groups("portable")
+    if not groups:
+        return
+    load = {group: 0 for group in groups}
+    for entry in sorted(entries, key=lambda entry: (-entry["timeout"], entry["job"])):
+        group = min(groups, key=lambda name: (load[name], groups.index(name)))
+        load[group] += entry["timeout"]
+        entry.update(placement("portable", host_group=group))
+
+
+def plan(files, members, everything=False, only=None, tier="full", mirrors=False):
     check_groups(members)
     tags, reasons = set(), {}
     for path in files:
@@ -390,35 +599,40 @@ def plan(files, members, everything=False, only=None, tier="full"):
         "ts-browser": ts,
         "ts-fuzz": ts,
     }
+    portable = [group for group in GROUPS if group.runner == "portable"]
+    portable_tested = [package for group in portable for package in group.packages if package in tested]
     matrix = []
     for group in GROUPS:
         selected = [package for package in group.packages if package in tested]
-        if not selected:
+        native = {}
+        if group.name == NATIVE:
+            native = {"macos_tests": [package for package in portable_tested if macos_only_tests(package)],
+                      "journey": bool(JOURNEY & set(tested))}
+        if not (selected or native.get("macos_tests") or native.get("journey")):
             continue
-        jobs[f"test:{group.name}"] = True
-        role = group.runner
-        if role == "runtime" and os.environ.get("GATE_RUNTIME_ISOLATED") == "true":
-            role = "runtime-isolated"
-        matrix.append({
-            "group": group.name,
-            "role": role,
-            "runs_on": runner(role),
-            "packages": " ".join(selected),
-            "timeout": group.timeout,
-            "go": group.name == "cli",
-        })
+        go = bool(AFTERBURNER & set(selected + native.get("macos_tests", [])))
+        matrix.append(test_entry(group, group.name, group.runner, selected, go, **native))
+    for group in portable:
+        selected = [package for package in group.packages if package in tested]
+        if mirrors and group.macos and selected:
+            matrix.append(test_entry(group, f"{group.name}@macos", group.macos, selected,
+                                     bool(AFTERBURNER & set(selected))))
+    for entry in matrix:
+        jobs[entry["job"]] = True
     archives, shards = [], []
     count = portable_shards()
+    portable_names = {group.name for group in portable}
     if count:
         # `only` names a portable group as test:<group> or the whole archive.
-        portable = {group.name for group in GROUPS if group.runner == "portable"}
         whole = only and {f"build:{ARCHIVE}", f"shard:{ARCHIVE}"} & only
-        archived = [package for entry in matrix if entry["group"] in portable
-                    and (not only or whole or f"test:{entry['group']}" in only)
+        archived = [package for entry in matrix if entry["job"] == f"test:{entry['group']}"
+                    and entry["group"] in portable_names
+                    and (not only or whole or entry["job"] in only)
                     for package in entry["packages"].split()]
-        matrix = [entry for entry in matrix if entry["group"] not in portable]
-        for group in portable:
-            jobs.pop(f"test:{group}", None)
+        for entry in matrix:
+            if entry["job"] == f"test:{entry['group']}" and entry["group"] in portable_names:
+                jobs.pop(entry["job"], None)
+        matrix = [entry for entry in matrix if entry["job"] in jobs]
         if archived:
             # At most one slice per crate with tests, so every slice runs some.
             count = min(count, len([package for package in archived if package not in NO_TESTS]))
@@ -426,15 +640,24 @@ def plan(files, members, everything=False, only=None, tier="full"):
             # from the minisforums costs more than the tests (1.24 GB: 3.5 min
             # up, 14 min down in dispatch 43775099812).
             single = count == 1
-            archives.append({"archive": ARCHIVE, "runs_on": runner("portable"), "run": single,
-                             "packages": " ".join(archived), "timeout": 90 if single else 60,
-                             "test_cache": test_cache_mode(single)})
+            mode = test_cache_mode(single)
+            groups = host_groups("portable")
+            # The test-result store is a directory on the host that runs the
+            # cached slice, so that slice keeps to the first host group.
+            build_group = groups[0] if groups and mode != "off" else None
+            go = bool(AFTERBURNER & set(archived))
+            archives.append({"archive": ARCHIVE, **placement("portable", host_group=build_group), "run": single,
+                             "packages": " ".join(archived), "timeout": 150 if single else 90,
+                             "test_cache": mode, "go": go})
+            # Slices alternate between host groups, so one run's slices split across hosts.
             shards = [] if single else [
-                {"archive": ARCHIVE, "index": index, "count": count, "runs_on": runner("portable"),
-                 "timeout": 60} for index in range(1, count + 1)]
+                {"archive": ARCHIVE, "index": index, "count": count, "timeout": 90, "go": go,
+                 **placement("portable", host_group=groups[(index - 1) % len(groups)] if groups else None)}
+                for index in range(1, count + 1)]
+    balance([entry for entry in matrix if entry["role"] == "portable"])
     if only:
         jobs = {job: wanted and job in only for job, wanted in jobs.items()}
-        matrix = [entry for entry in matrix if f"test:{entry['group']}" in only]
+        matrix = [entry for entry in matrix if entry["job"] in only]
     if archives:
         jobs[f"build:{ARCHIVE}"] = True
         jobs[f"shard:{ARCHIVE}"] = bool(shards)
@@ -485,10 +708,15 @@ def resolve_plan(arguments):
     else:
         files = changed_files(arguments.base)
     tier = "draft" if os.environ.get("GATE_TIER") == "draft" else "full"
-    if os.environ.get("GATE_EVENT") == "schedule" and test_cache_mode(True) == "off":
-        # The scheduled run exists for the test cache; without it there is nothing to do.
-        only = {"none"}
-    return plan(files, workspace(), everything, only, tier)
+    mirrors = os.environ.get("GATE_EVENT") == "schedule"
+    if mirrors:
+        # The scheduled run is the cache's full run of the archive, when the
+        # cache is on, and the portable groups that have a macOS role, uncached
+        # on macOS: platform differences the Linux runs cannot see surface daily.
+        only = {f"test:{group.name}@macos" for group in GROUPS if group.macos}
+        if test_cache_mode(True) != "off":
+            only.add(f"build:{ARCHIVE}")
+    return plan(files, workspace(), everything, only, tier, mirrors)
 
 
 # ---- running ----
@@ -678,26 +906,45 @@ def run_ts(job):
         sh(command)
 
 
-def run_test(selection, name):
-    group = next((group for group in GROUPS if group.name == name), None)
-    entry = next((entry for entry in selection["matrix"] if entry["group"] == name), None)
-    if group is None or entry is None:
-        fail(f"test group {name} is not selected by this plan")
-    packages = entry["packages"].split()
+def group_options(group):
     harness = []
     if group.threads:
         harness.append(f"--test-threads={group.threads}")
     if group.nocapture:
         harness.append("--nocapture")
-    options = {"harness": harness, "capture": not group.nocapture, "isolate_target": group.isolate_target}
+    return {"harness": harness, "capture": not group.nocapture, "isolate_target": group.isolate_target}
+
+
+def feature_flags(package):
+    if package in PACKAGE_FEATURES and (package != "gents-desktop-bridge" or sys.platform == "darwin"):
+        return ["--features", PACKAGE_FEATURES[package]]
+    return []
+
+
+def run_test(selection, name):
+    entry = next((entry for entry in selection["matrix"] if entry["job"] == f"test:{name}"), None)
+    group = next((group for group in GROUPS if entry and group.name == entry["group"]), None)
+    if group is None or entry is None:
+        fail(f"test group {name} is not selected by this plan")
+    packages = entry["packages"].split()
+    options = group_options(group)
     # One crate per build: a crate that compiles only through the features
     # another selected crate turns on must fail here.
     for package in packages:
-        arguments = ["-p", package]
-        if package in PACKAGE_FEATURES and (package != "gents-desktop-bridge" or sys.platform == "darwin"):
-            arguments += ["--features", PACKAGE_FEATURES[package]]
-        cargo_test(package, arguments, expect_tests=package not in NO_TESTS, **options)
-    if name == "desktop" and {"gents-client-host", "gents-media-host"} & set(packages):
+        cargo_test(package, ["-p", package, *feature_flags(package)], expect_tests=package not in NO_TESTS,
+                   **options)
+    if group.name != NATIVE:
+        return
+    if sys.platform != "darwin":
+        fail(f"test:{NATIVE} runs the tests that compile only on macOS; this host is {sys.platform}")
+    for package in entry.get("macos_tests", []):
+        owner = next(group for group in GROUPS if package in group.packages)
+        for target, filters in sorted(macos_only_tests(package).items()):
+            options = group_options(owner)
+            options["harness"] = [*filters, *options["harness"]]
+            cargo_test(f"{package} {' '.join(target)} (macOS only)", ["-p", package, *feature_flags(package), *target],
+                       **options)
+    if entry.get("journey"):
         if os.environ.get("GITHUB_ACTIONS") and os.environ.get("CARGO_TARGET_DIR"):
             sh(["python3", ".github/scripts/ensure-rust-build-space.py", os.environ["CARGO_TARGET_DIR"]])
         if sh([".github/scripts/desktop-runtime-journey.sh", "build"]):
@@ -1158,7 +1405,9 @@ def emit(selection):
                 scope += "; draft: tests cover the changed crates, dependents are tested when ready for review"
             handle.write(f"### Gate plan\n\nScope: {scope}\n\nJobs: {', '.join(selection['jobs']) or 'none'}\n\n")
             for entry in selection["matrix"]:
-                handle.write(f"- `test:{entry['group']}`: {entry['packages']}\n")
+                extra = f"; macOS-only tests of {' '.join(entry['macos_tests'])}" if entry.get("macos_tests") else ""
+                extra += "; the native client journey" if entry.get("journey") else ""
+                handle.write(f"- `{entry['job']}`: {entry['packages'] or 'no crates of its own'}{extra}\n")
             for entry in selection["archives"]:
                 handle.write(f"- `build:{entry['archive']}`, then {len(selection['shards'])} "
                              f"`shard:{entry['archive']}` slices: {entry['packages']}\n")
