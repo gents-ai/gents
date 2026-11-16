@@ -47,6 +47,7 @@ impl Eq for ResolvedWatcherIdentity {}
 pub struct UnavailableAgent {
     pub public_reason: AgentReadinessUnavailableReason,
     pub diagnostic: String,
+    pub awaiting_first_probe: bool,
     pub watcher_identity: Option<ResolvedWatcherIdentity>,
 }
 
@@ -58,8 +59,14 @@ impl UnavailableAgent {
         Self {
             public_reason,
             diagnostic: diagnostic.into(),
+            awaiting_first_probe: false,
             watcher_identity: None,
         }
+    }
+
+    pub fn with_awaiting_first_probe(mut self, awaiting_first_probe: bool) -> Self {
+        self.awaiting_first_probe = awaiting_first_probe;
+        self
     }
 
     pub fn with_watcher_identity(
@@ -78,6 +85,7 @@ impl UnavailableAgent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffectiveAgentAdmission<'a> {
     Ready,
+    AwaitFirstProbe,
     Unavailable {
         public_reason: AgentReadinessUnavailableReason,
         diagnostic: &'a str,
@@ -90,6 +98,9 @@ pub fn effective_agent_admission<'a>(
     unavailable: Option<&'a UnavailableAgent>,
     startup_diagnostic: Option<&'a str>,
 ) -> EffectiveAgentAdmission<'a> {
+    if startup_diagnostic.is_none() && unavailable.is_some_and(|agent| agent.awaiting_first_probe) {
+        return EffectiveAgentAdmission::AwaitFirstProbe;
+    }
     match effective_agent_readiness_admission(
         dispatcher_present,
         unavailable.map(|unavailable| unavailable.public_reason),
@@ -622,7 +633,10 @@ fn configuration_fingerprint(
         fingerprint.push('=');
         fingerprint.push_str(&reason.diagnostic);
         fingerprint.push(':');
-        fingerprint.push_str(&format!("{:?}", reason.public_reason));
+        fingerprint.push_str(&format!(
+            "{:?}:{}",
+            reason.public_reason, reason.awaiting_first_probe
+        ));
         fingerprint.push(':');
         if let Some(identity) = &reason.watcher_identity {
             fingerprint.push_str(identity.0.did());

@@ -304,6 +304,9 @@ where
                 .get(&resolution.agent_did),
             startup_diagnostic,
         ) {
+            EffectiveAgentAdmission::AwaitFirstProbe => {
+                deferred.defer(routed_snapshot.generation, request);
+            }
             EffectiveAgentAdmission::Ready => {
                 let configuration = routed_snapshot
                     .agents

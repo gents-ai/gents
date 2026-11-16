@@ -68,11 +68,16 @@ struct UnselectedDisabledBackend {
 struct AgentResolutionError {
     code: AgentReadinessUnavailableReason,
     detail: anyhow::Error,
+    awaiting_first_probe: bool,
 }
 
 impl AgentResolutionError {
     fn new(code: AgentReadinessUnavailableReason, detail: anyhow::Error) -> Self {
-        Self { code, detail }
+        Self {
+            code,
+            detail,
+            awaiting_first_probe: false,
+        }
     }
 }
 
@@ -273,7 +278,8 @@ fn resolve_agent_factories(
             Err(error) => {
                 unavailable_agents.insert(
                     agent_config.agent_did.clone(),
-                    UnavailableAgent::new(error.code, error.detail.to_string()),
+                    UnavailableAgent::new(error.code, error.detail.to_string())
+                        .with_awaiting_first_probe(error.awaiting_first_probe),
                 );
             }
         }
@@ -341,14 +347,17 @@ fn ensure_inference_available(
         }
     }
     if let Some(code) = unavailable {
-        return Err(AgentResolutionError::new(
+        let mut error = AgentResolutionError::new(
             code,
             anyhow!(
                 "backend {} is unavailable: {:?}",
                 backend.backend_id,
                 admission.availability()
             ),
-        ));
+        );
+        error.awaiting_first_probe = admission.awaiting_first_probe()
+            && code == AgentReadinessUnavailableReason::BackendTemporarilyUnavailable;
+        return Err(error);
     }
     Ok(())
 }

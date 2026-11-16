@@ -123,6 +123,20 @@ async fn client_rebinding_defers_the_superseded_generation_and_scopes_the_new_se
         })
         .await
         .unwrap();
+    let awaiting = resolve_document_runtime_snapshot(&node, &context)
+        .await
+        .unwrap();
+    let unavailable = awaiting.unavailable_agents.get(&binding.agent_did).unwrap();
+    assert!(unavailable.awaiting_first_probe);
+    assert!(!awaiting.agents.contains_key(&binding.agent_did));
+    assert_eq!(
+        gents_automation::triggers::runtime_snapshot::effective_agent_admission(
+            false,
+            Some(unavailable),
+            None,
+        ),
+        gents_automation::triggers::runtime_snapshot::EffectiveAgentAdmission::AwaitFirstProbe,
+    );
     gents_inference::backends::registry::set_backend_probe_status_as(
         &access,
         &owner,
