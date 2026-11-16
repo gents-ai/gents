@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
 mod command;
@@ -14,10 +14,10 @@ mod file;
 mod review_task;
 pub(crate) use command::guard_home as command_guard_home;
 pub use command::{authorize_command, writable_root as command_writable_root};
-pub(crate) use context::carry;
 #[cfg(target_os = "macos")]
 pub(crate) use context::current_home as command_context_home;
-pub use context::{for_request, scope, ReviewInvocation, Reviewer};
+pub(crate) use context::{carry, current};
+pub use context::{for_request, scope, Context, ReviewInvocation, Reviewer};
 pub(crate) use file::authorize_file_mutation;
 pub use review_task::{
     default_review_task, review_task_is_eligible, review_task_matches_selection,

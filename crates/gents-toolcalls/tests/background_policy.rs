@@ -28,7 +28,11 @@ impl ToolDyn for NamedPendingTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(std::future::pending())
     }
 }
@@ -50,7 +54,11 @@ impl ToolDyn for NoisyTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async { Ok("x".repeat(100)) })
     }
 }
@@ -394,8 +402,14 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
         r#"{"service_id":"metrics-prod","tool_name":"query_metrics","arguments":{"window":"5m"}}"#;
     accept_hook_tool_call(&hook, "call-selected", "call_tool", args, None).await;
     assert!(matches!(
-        hook.on_tool_call("call_tool", None, "call-selected", args)
-            .await,
+        hook.on_tool_call(
+            "call_tool",
+            None,
+            "call-selected",
+            args,
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let selected = selected_row(&access, &session_id, "call-selected").await;
@@ -414,8 +428,14 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
 
     accept_hook_tool_call(&hook, "call-native", "read_file", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("read_file", None, "call-native", "{}")
-            .await,
+        hook.on_tool_call(
+            "read_file",
+            None,
+            "call-native",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let native = selected_row(&access, &session_id, "call-native").await;

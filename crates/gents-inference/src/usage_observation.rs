@@ -808,7 +808,11 @@ impl gents_loop::tool::Tool for ProviderLimitsTool {
         }
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<String, Self::Error> {
+    async fn call(
+        &self,
+        _args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<String, Self::Error> {
         let reads = read_node_usage(
             &self.cache,
             self.node.clone(),

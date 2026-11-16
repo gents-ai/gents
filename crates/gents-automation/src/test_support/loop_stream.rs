@@ -209,7 +209,11 @@ impl ToolDyn for EchoTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move { Ok(self.output.clone()) })
     }
 }
@@ -235,7 +239,11 @@ impl ToolDyn for CountingTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         let calls = self.calls.clone();
         let output = self.output.clone();
         Box::pin(async move {
@@ -265,7 +273,11 @@ impl ToolDyn for FixedTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move { Ok(self.output.clone()) })
     }
 }
@@ -330,6 +342,7 @@ pub fn config(max_turns: usize) -> LoopConfig {
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
+        tool_context: gents_loop::tool::ToolCallEnvelope::ambient(),
     }
 }
 

@@ -67,9 +67,13 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
     accept_hook_tool_call(&harness.hook, "approval-stop", "spawn_process", &args, None).await;
     let action = workspace::scope(
         Some(context),
-        harness
-            .hook
-            .on_tool_call("spawn_process", None, "approval-stop", &args),
+        harness.hook.on_tool_call(
+            "spawn_process",
+            None,
+            "approval-stop",
+            &args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        ),
     )
     .await;
     let ToolCallHookAction::Skip { reason } = action else {
@@ -243,9 +247,13 @@ async fn background_command_consent(
     accept_hook_tool_call(&harness.hook, "spawn-command", "spawn_process", &args, None).await;
     let action = workspace::scope(
         Some(context),
-        harness
-            .hook
-            .on_tool_call("spawn_process", None, "spawn-command", &args),
+        harness.hook.on_tool_call(
+            "spawn_process",
+            None,
+            "spawn-command",
+            &args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        ),
     )
     .await;
     let ToolCallHookAction::Skip { reason } = action else {
@@ -497,7 +505,13 @@ async fn spawned_target_rejection_case(
     let args = target.spawn_arguments();
     accept_hook_tool_call(&hook, "spawn-denied", &case.parent_tool, args, None).await;
     let action = hook
-        .on_tool_call(&case.parent_tool, None, "spawn-denied", args)
+        .on_tool_call(
+            &case.parent_tool,
+            None,
+            "spawn-denied",
+            args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await;
     assert!(
         matches!(action, ToolCallHookAction::Skip { .. }),

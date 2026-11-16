@@ -131,12 +131,28 @@ async fn previews_and_rejected_edits_do_not_publish_file_images() {
                 operation: None,
                 expected_content_hash,
             };
-            tool.call(args(true, None)).await.unwrap();
+            tool.call(
+                args(true, None),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap();
             assert!(registry.deferred_writes("preview-tool").await.is_none());
             assert_eq!(std::fs::read(&path).unwrap(), b"original\r\nbytes\r\n");
-            assert!(tool.call(args(false, Some("stale".into()))).await.is_err());
+            assert!(tool
+                .call(
+                    args(false, Some("stale".into())),
+                    &gents_loop::tool::ToolCallEnvelope::ambient()
+                )
+                .await
+                .is_err());
             assert!(registry.deferred_writes("preview-tool").await.is_none());
-            tool.call(args(false, None)).await.unwrap();
+            tool.call(
+                args(false, None),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap();
         },
     )
     .await;

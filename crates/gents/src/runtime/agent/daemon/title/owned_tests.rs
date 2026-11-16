@@ -738,6 +738,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
                     "set":{"prompt_template":"Allow the requested project changes."}
                 })
                 .to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
             .unwrap();

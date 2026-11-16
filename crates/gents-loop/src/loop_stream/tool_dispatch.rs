@@ -1,4 +1,8 @@
 use super::*;
+use crate::tool::ToolCallEnvelope;
+use crate::tool_call_lifecycle::runtime::{
+    CurrentToolRuntimeContext, ToolRequestIdentity, ToolScopeEntry,
+};
 
 pub fn tool_effect_dispatcher<H>(
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
@@ -62,6 +66,7 @@ where
 {
     fn call<'a>(
         &'a self,
+        parent: &'a ToolCallEnvelope,
         ordinal: u32,
         name: &'a str,
         arguments: &'a str,
@@ -74,6 +79,10 @@ where
                 let scope = current_tool_runtime_context().ok_or_else(|| {
                     Unavailable("tool effects require a request execution scope".to_owned())
                 })?;
+                parent.debug_assert_ambient_runtime();
+                let child =
+                    child_envelope(parent).unwrap_or_else(|| parent.clone().with_effects(None));
+                let child = &child;
                 scope_request_tool_execution_with_session(
                     None,
                     scope.deadline_at,
@@ -84,7 +93,13 @@ where
                     async {
                         let internal_id = self
                             .hook
-                            .admit_tool_effect(&self.parent_internal_id, ordinal, name, arguments)
+                            .admit_tool_effect(
+                                &self.parent_internal_id,
+                                ordinal,
+                                name,
+                                arguments,
+                                child,
+                            )
                             .await
                             .map_err(Unavailable)?;
                         if let Some(outcome) =
@@ -116,7 +131,7 @@ where
                         }
                         let result = match self
                             .hook
-                            .on_tool_call(name, None, &internal_id, arguments)
+                            .on_tool_call(name, None, &internal_id, arguments, child)
                             .await
                         {
                             ToolCallHookAction::Terminate { reason } => Err(Fatal(reason)),
@@ -134,6 +149,7 @@ where
                                     arguments.to_owned(),
                                     Some(writer),
                                     session,
+                                    child,
                                 )
                                 .await;
                                 match self
@@ -241,25 +257,129 @@ pub(super) fn settle_ready(
     }
 }
 
+/// The envelope a plugin's child call runs under: the parent's deadline,
+/// cancellation and working directory, the parent's identity and extensions,
+/// no live output, and no dispatcher of its own (Lean
+/// `CallEnvelope.child_has_no_dispatcher`). `None` when the parent has no
+/// request execution scope.
+pub fn child_envelope(parent: &ToolCallEnvelope) -> Option<ToolCallEnvelope> {
+    let scope = parent.runtime_unchecked()?;
+    let runtime = CurrentToolRuntimeContext::entered_with_session(
+        Some(&scope),
+        None,
+        scope.deadline_at,
+        scope.cancellation_token.clone(),
+        scope.workspace_cwd.clone(),
+        None,
+        scope.session_id.clone(),
+    );
+    Some(
+        parent
+            .clone()
+            .with_runtime(Some(runtime))
+            .with_effects(None),
+    )
+}
+
+/// The envelope one dispatched tool runs under inside `context`'s scope.
+pub(super) fn dispatch_envelope(
+    context: &ToolCallEnvelope,
+    scope: &CurrentToolRuntimeContext,
+    live_output: Option<crate::live_output::LiveToolOutputWriter>,
+    session_id: Option<String>,
+) -> ToolCallEnvelope {
+    context
+        .clone()
+        .with_runtime(Some(CurrentToolRuntimeContext::entered_with_session(
+            Some(scope),
+            None,
+            scope.deadline_at,
+            scope.cancellation_token.clone(),
+            scope.workspace_cwd.clone(),
+            live_output,
+            session_id.or(scope.session_id.clone()),
+        )))
+}
+
+/// The envelope a foreground call runs under inside the envelope `hook` gives
+/// it, and the call's own cancellation: a child of the hook's. The admitted
+/// request `scope` is re-entered under that token, and the loop's dispatcher
+/// serves the call's children. Without a scope the call sees the hook's.
+pub fn foreground_envelope(
+    hook: &ToolCallEnvelope,
+    scope: Option<CurrentToolRuntimeContext>,
+    effects: Option<Arc<dyn crate::tool_effects::ToolEffectDispatcher>>,
+) -> (ToolCallEnvelope, tokio_util::sync::CancellationToken) {
+    let hook_token = hook
+        .runtime_unchecked()
+        .map(|scope| scope.cancellation_token)
+        .unwrap_or_default();
+    let token = hook_token.child_token();
+    let call = match scope {
+        Some(scope) => hook
+            .clone()
+            .with_runtime(Some(CurrentToolRuntimeContext::entered(
+                hook.runtime_unchecked().as_ref(),
+                ToolScopeEntry {
+                    identity: Some(ToolRequestIdentity::new(
+                        scope.requester_did,
+                        scope.node_did,
+                        scope.agent_did,
+                        scope.request_id,
+                    )),
+                    deadline_at: scope.deadline_at,
+                    cancellation_token: token.clone(),
+                    workspace_cwd: scope.workspace_cwd,
+                    live_output: scope.live_output,
+                    session_id: scope.session_id,
+                    correlation: scope.correlation,
+                    source_fields: scope.source_fields,
+                    background: scope.background,
+                },
+            ))),
+        None => hook.clone(),
+    };
+    (call.with_effects(effects), token)
+}
+
 pub async fn dispatch_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,
     args: String,
     live_output: Option<crate::live_output::LiveToolOutputWriter>,
     session_id: Option<String>,
+    context: &ToolCallEnvelope,
 ) -> ToolOutcome {
-    dispatch_provider_tool(tools, name, args, live_output, session_id, false, None).await
+    let dispatch = ProviderDispatch {
+        live_output,
+        session_id,
+        token_limit: false,
+        cleanup: None,
+    };
+    dispatch_provider_tool(tools, name, args, dispatch, context).await
+}
+
+/// What the loop supplies for one provider call besides its envelope.
+pub(super) struct ProviderDispatch {
+    pub(super) live_output: Option<crate::live_output::LiveToolOutputWriter>,
+    pub(super) session_id: Option<String>,
+    pub(super) token_limit: bool,
+    pub(super) cleanup: Option<crate::session_hook::NativeCleanupCheck>,
 }
 
 pub(super) async fn dispatch_provider_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,
     args: String,
-    live_output: Option<crate::live_output::LiveToolOutputWriter>,
-    session_id: Option<String>,
-    token_limit: bool,
-    cleanup: Option<crate::session_hook::NativeCleanupCheck>,
+    dispatch: ProviderDispatch,
+    context: &ToolCallEnvelope,
 ) -> ToolOutcome {
+    let ProviderDispatch {
+        live_output,
+        session_id,
+        token_limit,
+        cleanup,
+    } = dispatch;
     let Some(tool) = tools.iter().find(|tool| tool.name() == name) else {
         return ToolOutcome::from_dispatch(
             name,
@@ -283,9 +403,16 @@ pub(super) async fn dispatch_provider_tool(
                 tool.as_ref(),
                 args,
                 live_output,
+                context,
             )
             .await,
         );
+    };
+    let tool_call = match context.runtime() {
+        Some(explicit) => {
+            dispatch_envelope(context, &explicit, live_output.clone(), session_id.clone())
+        }
+        None => context.clone(),
     };
 
     if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
@@ -314,7 +441,10 @@ pub(super) async fn dispatch_provider_tool(
         scope.workspace_cwd.clone(),
         live_output,
         session_id.or(scope.session_id.clone()),
-        tool.call_with_receipt(args),
+        async {
+            tool_call.debug_assert_ambient();
+            tool.call_with_receipt(args, &tool_call).await
+        },
     ));
     tokio::select! {
         biased;
@@ -376,25 +506,39 @@ pub(super) fn foreground_call<H>(
 where
     H: SessionHook + 'static,
 {
-    Box::new(move |hook_token, cleanup| {
+    Box::new(move |hook, cleanup| {
         Box::pin(async move {
-            let token = hook_token.child_token();
-            let execute = crate::tool_effects::scope(
-                input
-                    .effects
-                    .map(|value| value as Arc<dyn crate::tool_effects::ToolEffectDispatcher>),
+            let ForegroundExecution {
+                tools,
+                name,
+                args,
+                live_output,
+                session_id,
+                effects,
+                scope,
+                token_limit,
+                batch_token,
+            } = input;
+            let effects =
+                effects.map(|value| value as Arc<dyn crate::tool_effects::ToolEffectDispatcher>);
+            let (call, token) = foreground_envelope(&hook, scope.clone(), effects.clone());
+            let execute = crate::tool_effects::scope(effects, async move {
                 dispatch_provider_tool(
-                    input.tools.as_slice(),
-                    &input.name,
-                    input.args,
-                    input.live_output,
-                    input.session_id,
-                    input.token_limit,
-                    cleanup,
-                ),
-            );
+                    tools.as_slice(),
+                    &name,
+                    args,
+                    ProviderDispatch {
+                        live_output,
+                        session_id,
+                        token_limit,
+                        cleanup,
+                    },
+                    &call,
+                )
+                .await
+            });
             let scoped = async {
-                match input.scope {
+                match scope {
                 Some(scope) => crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
                         Some(crate::tool_call_lifecycle::runtime::ToolRequestIdentity::new(scope.requester_did, scope.node_did, scope.agent_did, scope.request_id)),
                         scope.deadline_at, token.clone(), scope.workspace_cwd, scope.live_output,
@@ -407,7 +551,7 @@ where
                 },
             }
             };
-            match input.batch_token {
+            match batch_token {
                 Some(batch) => {
                     tokio::pin!(scoped);
                     tokio::select! {
@@ -487,7 +631,11 @@ mod tests {
             }
         }
 
-        async fn call(&self, _: Self::Args) -> Result<String, Self::Error> {
+        async fn call(
+            &self,
+            _: Self::Args,
+            _context: &crate::tool::ToolCallEnvelope,
+        ) -> Result<String, Self::Error> {
             panic!("invalid arguments must never execute")
         }
     }
@@ -541,14 +689,18 @@ mod tests {
                 let actual: Vec<u8> = chunks.into_iter().flat_map(Result::unwrap).collect();
                 assert_eq!(actual, payload.as_bytes());
                 for scoped in [false, true] {
+                    let context = crate::tool::ToolCallEnvelope::ambient();
                     let call = dispatch_provider_tool(
                         &tools,
                         "parse",
                         case.arguments.clone(),
-                        None,
-                        None,
-                        activity.token_limit_reached(),
-                        None,
+                        ProviderDispatch {
+                            live_output: None,
+                            session_id: None,
+                            token_limit: activity.token_limit_reached(),
+                            cleanup: None,
+                        },
+                        &context,
                     );
                     let outcome = if scoped {
                         scope_request_tool_execution(
@@ -597,6 +749,7 @@ mod tests {
             _: u32,
             _: &str,
             _: &str,
+            _: &crate::tool::ToolCallEnvelope,
         ) -> Result<String, String> {
             Ok("derived-call".into())
         }
@@ -627,6 +780,7 @@ mod tests {
             _: Option<String>,
             _: &str,
             _: &str,
+            _: &crate::tool::ToolCallEnvelope,
         ) -> ToolCallHookAction {
             self.invoked.store(true, Ordering::SeqCst);
             if self.terminate_before {
@@ -701,7 +855,12 @@ mod tests {
         let outcome = scope_request_tool_execution(
             None,
             tokio_util::sync::CancellationToken::new(),
-            dispatcher.call(1, "agent_interrupt", "{}"),
+            dispatcher.call(
+                &crate::tool::ToolCallEnvelope::ambient(),
+                1,
+                "agent_interrupt",
+                "{}",
+            ),
         )
         .await
         .unwrap();
@@ -736,7 +895,12 @@ mod tests {
         let outcome = scope_request_tool_execution(
             Some(Utc::now() + chrono::Duration::milliseconds(10)),
             tokio_util::sync::CancellationToken::new(),
-            dispatcher.call(1, "ready_after_wall_deadline", "{}"),
+            dispatcher.call(
+                &crate::tool::ToolCallEnvelope::ambient(),
+                1,
+                "ready_after_wall_deadline",
+                "{}",
+            ),
         )
         .await
         .unwrap();
@@ -775,7 +939,14 @@ mod tests {
                 None,
                 tokio_util::sync::CancellationToken::new(),
                 crate::tool_effects::scope(Some(dispatcher.clone()), async {
-                    let result = dispatcher.call(1, "ready_after_wall_deadline", "{}").await;
+                    let result = dispatcher
+                        .call(
+                            &crate::tool::ToolCallEnvelope::ambient(),
+                            1,
+                            "ready_after_wall_deadline",
+                            "{}",
+                        )
+                        .await;
                     assert!(matches!(
                         result,
                         Err(crate::tool_effects::ToolEffectError::Fatal(_))
@@ -827,7 +998,11 @@ mod tests {
             clippy::disallowed_methods,
             reason = "the tool must become ready past the wall deadline within one poll"
         )]
-        fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        fn call<'a>(
+            &'a self,
+            _args: String,
+            _context: &'a crate::tool::ToolCallEnvelope,
+        ) -> BoxFuture<'a, Result<String, ToolError>> {
             Box::pin(async move {
                 self.called.store(true, Ordering::SeqCst);
                 let remaining = (self.deadline_at - Utc::now()).to_std().unwrap_or_default();
@@ -864,7 +1039,11 @@ mod tests {
             })
         }
 
-        fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        fn call<'a>(
+            &'a self,
+            _args: String,
+            _context: &'a crate::tool::ToolCallEnvelope,
+        ) -> BoxFuture<'a, Result<String, ToolError>> {
             Box::pin(async { Ok(String::new()) })
         }
 
@@ -930,7 +1109,14 @@ mod tests {
             let outcome = scope_request_tool_execution(
                 Some(deadline_at),
                 tokio_util::sync::CancellationToken::new(),
-                dispatch_tool(&tools, "ready_after_wall_deadline", "{}".into(), None, None),
+                dispatch_tool(
+                    &tools,
+                    "ready_after_wall_deadline",
+                    "{}".into(),
+                    None,
+                    None,
+                    &crate::tool::ToolCallEnvelope::ambient(),
+                ),
             )
             .await;
             let settlement = match outcome {
@@ -979,7 +1165,11 @@ mod tests {
                     parameters: serde_json::json!({"type": "object"}),
                 }
             }
-            async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+            async fn call(
+                &self,
+                _args: Self::Args,
+                _context: &crate::tool::ToolCallEnvelope,
+            ) -> Result<Self::Output, Self::Error> {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 Ok("ran".to_string())
             }
@@ -1005,7 +1195,15 @@ mod tests {
             calls: calls.clone(),
         })];
         for case in cases {
-            let result = super::dispatch_tool(&tools, "strict", case.arguments, None, None).await;
+            let result = super::dispatch_tool(
+                &tools,
+                "strict",
+                case.arguments,
+                None,
+                None,
+                &crate::tool::ToolCallEnvelope::ambient(),
+            )
+            .await;
             match &result {
                 crate::tool_call_lifecycle::ToolOutcome::Failed {
                     class,

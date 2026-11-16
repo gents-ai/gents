@@ -158,6 +158,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
                         .unwrap()
                         .clone(),
                 ),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
             .unwrap();

@@ -547,7 +547,11 @@ async fn timeout_decision_is_owned_before_cleanup_and_later_cancel() {
                 }
             })
         }
-        fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        fn call<'a>(
+            &'a self,
+            _: String,
+            _context: &'a gents_loop::tool::ToolCallEnvelope,
+        ) -> BoxFuture<'a, Result<String, ToolError>> {
             Box::pin(std::future::pending())
         }
     }
@@ -578,6 +582,7 @@ async fn timeout_decision_is_owned_before_cleanup_and_later_cancel() {
             gents_loop::tool_call_lifecycle::runtime::call_tool_managed_with_cleanup(
                 &PendingNative,
                 "{}".into(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
                 move |outcome| {
                     if let Some(gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. }) =
                         outcome

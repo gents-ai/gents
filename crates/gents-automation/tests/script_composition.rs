@@ -24,7 +24,14 @@ async fn goal_tool_uses_its_owner_when_composed() {
         ));
     accept_hook_tool_call(&hook, "script", "plugin", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("plugin", None, "script", "{}").await,
+        hook.on_tool_call(
+            "plugin",
+            None,
+            "script",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let child = hook
@@ -33,6 +40,7 @@ async fn goal_tool_uses_its_owner_when_composed() {
             1,
             gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
             "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .unwrap();
@@ -41,7 +49,8 @@ async fn goal_tool_uses_its_owner_when_composed() {
             gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
             None,
             &child,
-            "{}"
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await,
         ToolCallHookAction::Skip { .. }
@@ -63,19 +72,45 @@ async fn a_stopped_invocation_times_out_the_child_it_left_running() {
     let hook = &fixture.hook;
     accept_hook_tool_call(hook, "script", "plugin", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("plugin", None, "script", "{}").await,
+        hook.on_tool_call(
+            "plugin",
+            None,
+            "script",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let pending = hook
-        .admit_tool_effect("script", 1, "stall", "{}")
+        .admit_tool_effect(
+            "script",
+            1,
+            "stall",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     let running = hook
-        .admit_tool_effect("script", 2, "stall", "{}")
+        .admit_tool_effect(
+            "script",
+            2,
+            "stall",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert!(matches!(
-        hook.on_tool_call("stall", None, &running, "{}").await,
+        hook.on_tool_call(
+            "stall",
+            None,
+            &running,
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     hook.settle_tool_effects(

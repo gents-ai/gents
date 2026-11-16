@@ -346,6 +346,29 @@ where
     hook.set_request_deadline_at(config.deadline).await;
     let provider_profile = config.provider_input_counter.profile();
     let deadline = config.deadline;
+    let request_token = tokio_util::sync::CancellationToken::new();
+    let identity = gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
+        request.requester_did.clone(),
+        Some(request.node_did.clone()),
+        Some(request.agent_did.clone()),
+        Some(request.request_id.clone()),
+    );
+    config.tool_context = gents_loop::tool::ToolCallEnvelope::new(Some(
+        gents_loop::tool_call_lifecycle::runtime::CurrentToolRuntimeContext::entered(
+            None,
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+                identity: Some(identity.clone()),
+                deadline_at: deadline,
+                cancellation_token: request_token.clone(),
+                workspace_cwd: None,
+                live_output: None,
+                session_id: Some(request.session_id.clone()),
+                correlation: None,
+                source_fields: Default::default(),
+                background: false,
+            },
+        ),
+    ));
     let inference = async {
         let mut stream = Box::pin(crate::runtime::agent::loop_stream::run_loop_stream(
             model,
@@ -399,16 +422,9 @@ where
     };
     let scoped_inference =
         gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-            Some(
-                gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
-                    request.requester_did.clone(),
-                    Some(request.node_did.clone()),
-                    Some(request.agent_did.clone()),
-                    Some(request.request_id.clone()),
-                ),
-            ),
+            Some(identity),
             deadline,
-            tokio_util::sync::CancellationToken::new(),
+            request_token,
             None,
             None,
             Some(request.session_id.clone()),

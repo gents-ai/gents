@@ -612,12 +612,21 @@ async fn cached_operator_tools_recheck_current_source_and_roll_back() {
     let write = BoundedWriteTool::new(fixture.access.clone(), write)
         .declared_by(Some("board".into()))
         .with_visible_surface_owner(fixture.node_did.clone());
-    let initial = query.call(BoundedQueryParams(Map::new())).await.unwrap();
+    let initial = query
+        .call(
+            BoundedQueryParams(Map::new()),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap();
     assert!(initial.contains("BoardTask"));
     let successful = write
-        .call(BoundedWriteParams(
-            serde_json::from_value(json!({"title":"kept", "lane":"doing"})).unwrap(),
-        ))
+        .call(
+            BoundedWriteParams(
+                serde_json::from_value(json!({"title":"kept", "lane":"doing"})).unwrap(),
+            ),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert!(successful.contains("kept"));
@@ -629,9 +638,12 @@ async fn cached_operator_tools_recheck_current_source_and_roll_back() {
     let (failed, mutations) =
         gents_store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
             Some(1),
-            write.call(BoundedWriteParams(
-                serde_json::from_value(json!({"title":"rolled-back", "lane":"doing"})).unwrap(),
-            )),
+            write.call(
+                BoundedWriteParams(
+                    serde_json::from_value(json!({"title":"rolled-back", "lane":"doing"})).unwrap(),
+                ),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            ),
         )
         .await;
     assert!(failed.is_err());
@@ -647,11 +659,20 @@ async fn cached_operator_tools_recheck_current_source_and_roll_back() {
     fixture
         .write_surface(board_surface(&fixture.node_did, "board", false))
         .await;
-    assert!(query.call(BoundedQueryParams(Map::new())).await.is_err());
+    assert!(query
+        .call(
+            BoundedQueryParams(Map::new()),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await
+        .is_err());
     assert!(write
-        .call(BoundedWriteParams(
-            serde_json::from_value(json!({"title":"denied", "lane":"doing"})).unwrap()
-        ))
+        .call(
+            BoundedWriteParams(
+                serde_json::from_value(json!({"title":"denied", "lane":"doing"})).unwrap()
+            ),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
         .await
         .is_err());
     assert_eq!(

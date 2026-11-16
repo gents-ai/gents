@@ -14,7 +14,13 @@ impl Transcript {
     }
 
     async fn record(&mut self, tool: &dyn ToolDyn, label: &str, args: Value) -> Option<Value> {
-        let (outcome, raw) = match tool.call(args.to_string()).await {
+        let (outcome, raw) = match tool
+            .call(
+                args.to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+        {
             Ok(text) => ("ok", text),
             Err(error) => ("refused", error.to_string()),
         };

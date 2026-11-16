@@ -609,7 +609,11 @@ impl Tool for SchemaTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> std::result::Result<String, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> std::result::Result<String, Self::Error> {
         if serde_json::to_vec(&args).map_or(true, |v| v.len() > 32 * 1024 * 1024) {
             return Err(SchemaError(
                 "schema call exceeds 32 MiB; submit smaller schemas or modules".into(),

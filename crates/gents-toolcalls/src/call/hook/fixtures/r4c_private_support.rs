@@ -164,8 +164,14 @@ pub async fn accepted_call(
         provider_call_id.as_deref(),
     )
     .await;
-    hook.on_tool_call(name, provider_call_id, internal_call_id, args)
-        .await
+    hook.on_tool_call(
+        name,
+        provider_call_id,
+        internal_call_id,
+        args,
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
 }
 
 pub async fn assert_accepted_control_rows(

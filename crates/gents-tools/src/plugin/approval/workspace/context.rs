@@ -37,6 +37,11 @@ impl Context {
         self
     }
 
+    /// Whether `other` is this request's context: the same review history.
+    pub(crate) fn same_request(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.review_history, &other.review_history)
+    }
+
     fn governs(&self, key: &WorkspaceKey) -> bool {
         key.base() == self.workspace
             && (key.session_id.is_none() || key.session_id == self.session_id)
@@ -156,6 +161,10 @@ where
     F: Future,
 {
     CURRENT.scope(context, future).await
+}
+
+pub(crate) fn current() -> Option<Context> {
+    CURRENT.try_with(Clone::clone).ok().flatten()
 }
 
 pub(crate) fn carry<F>(future: F) -> impl Future<Output = F::Output>

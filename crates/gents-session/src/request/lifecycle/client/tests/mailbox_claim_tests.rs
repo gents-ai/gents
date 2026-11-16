@@ -159,7 +159,10 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     )]);
     let tools = bind_request_tools(tools, context);
     let args = serde_json::json!({"title":"delegated notice"}).to_string();
-    let receipt = tools[0].call_with_receipt(args.clone()).await.result?;
+    let receipt = tools[0]
+        .call_with_receipt(args.clone(), &gents_loop::tool::ToolCallEnvelope::ambient())
+        .await
+        .result?;
     let receipt: serde_json::Value = serde_json::from_str(&receipt)?;
     assert_eq!(
         receipt["outcome"],
@@ -195,8 +198,12 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     agent_access
         .delete_actor_relationship("MailboxItem", doc, "recipient", &user.did().parse()?)
         .await?;
-    let reused: serde_json::Value =
-        serde_json::from_str(&tools[0].call_with_receipt(args).await.result?)?;
+    let reused: serde_json::Value = serde_json::from_str(
+        &tools[0]
+            .call_with_receipt(args, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .result?,
+    )?;
     assert_eq!(
         reused["outcome"],
         serde_json::to_value(MailboxWriteOutcome::Reused)?

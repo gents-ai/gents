@@ -68,6 +68,7 @@ impl Fixture {
                 expected_content_hash: None,
                 overwrite: false,
             },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         ))
         .await
     }
@@ -92,6 +93,7 @@ impl Fixture {
                 operation: None,
                 expected_content_hash: hash,
             },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         ))
         .await
     }
@@ -446,6 +448,7 @@ async fn operator_file_aliases_cannot_be_read_or_changed_with_full_access() {
                 max_chars: None,
                 raw_json: true,
             },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         ))
         .await;
     assert!(read.unwrap_err().to_string().contains("operator"));
@@ -459,6 +462,7 @@ async fn operator_file_aliases_cannot_be_read_or_changed_with_full_access() {
                 overwrite: true,
                 raw_json: true,
             },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         ))
         .await;
     assert!(write.unwrap_err().to_string().contains("operator"));
@@ -476,6 +480,7 @@ async fn operator_file_aliases_cannot_be_read_or_changed_with_full_access() {
                 operation: None,
                 expected_content_hash: None,
             },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         ))
         .await;
     assert!(edit.unwrap_err().to_string().contains("operator"));
@@ -504,6 +509,7 @@ async fn ordinary_project_hard_links_remain_readable_and_editable() {
                 max_chars: None,
                 raw_json: true,
             },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         ))
         .await
         .unwrap();
@@ -520,6 +526,7 @@ async fn ordinary_project_hard_links_remain_readable_and_editable() {
                 overwrite: true,
                 raw_json: true,
             },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         ))
         .await
         .unwrap();
@@ -549,6 +556,7 @@ async fn write_only_project_files_remain_overwritable() {
                 overwrite: true,
                 raw_json: true,
             },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         ))
         .await;
     assert_eq!(

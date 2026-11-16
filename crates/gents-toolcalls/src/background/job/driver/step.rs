@@ -147,6 +147,7 @@ pub(super) async fn step_on(
                 agent_identity.did(),
             )?),
             jobs,
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await;
     let call = match call {

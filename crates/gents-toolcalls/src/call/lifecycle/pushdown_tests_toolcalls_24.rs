@@ -89,7 +89,14 @@ async fn request_deadline_presents_output_committed_before_the_cut() {
             None,
             None,
             None,
-            gents_loop::loop_stream::dispatch_tool(&tools, "sh", args, Some(writer), None),
+            gents_loop::loop_stream::dispatch_tool(
+                &tools,
+                "sh",
+                args,
+                Some(writer),
+                None,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            ),
         )
         .await;
     assert!(
@@ -153,7 +160,7 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
                 None,
                 Some(writer),
                 None,
-                cli.call(args),
+                cli.call(args, &gents_loop::tool::ToolCallEnvelope::ambient()),
             )
             .await,
         );

@@ -259,6 +259,34 @@ where
                 generation: lifecycle.execution_generation()?.to_owned(),
             })
             .map(Arc::new);
+        let tool_context = gents_tools::runtime_context::entered_with_workspace_overlay(
+            &gents_loop::tool::ToolCallEnvelope::default().with_extension(
+                gents_tools::runtime_context::ToolHostContext {
+                    workspace: Default::default(),
+                    interactive: request.execution_origin.as_deref() == Some("interactive"),
+                    approval: approval_context.clone(),
+                },
+            ),
+            workspace.clone(),
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+                identity: Some(
+                    gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
+                        request.requester_did.clone(),
+                        Some(request.node_did.clone()),
+                        Some(agent_did.to_string()),
+                        Some(request.request_id.clone()),
+                    ),
+                ),
+                deadline_at: request_deadline,
+                cancellation_token: request_token.clone(),
+                workspace_cwd: None,
+                live_output: None,
+                session_id: Some(session_id.clone()),
+                correlation: trigger_correlation.clone(),
+                source_fields: trigger_context.source_fields.clone(),
+                background: false,
+            },
+        );
         let inference = Box::pin(async {
                 let prepared = Box::pin(self.prepare_inference(
                     prepare::InferencePreparation {
@@ -293,6 +321,8 @@ where
                     loop_prompt,
                     max_turns_provenance,
                 } = prepared?;
+                let mut loop_config = loop_config;
+                loop_config.tool_context = tool_context.clone();
                 let loop_tools = gents_loop::tool::bind_request_tools(
                     self.loop_tools.clone(),
                     lifecycle.claimed_tool_context()?,

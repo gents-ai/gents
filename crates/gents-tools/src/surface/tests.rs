@@ -2510,9 +2510,10 @@ async fn configured_command_output_caps_bound_bash_and_cli_results() {
         ]
     );
     let built = config.host_tools().build_native_tools().unwrap();
+    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
     let call = |name: &str, args: serde_json::Value| {
         let tool = built.iter().find(|tool| tool.name() == name).unwrap();
-        tool.call(args.to_string())
+        tool.call(args.to_string(), &envelope)
     };
 
     let bash = call(
@@ -2789,7 +2790,13 @@ async fn configured_file_limits_reach_file_tools_as_default_and_maximum() {
         serde_json::json!({"path": "big.txt", "raw_json": true}),
         serde_json::json!({"path": "big.txt", "max_chars": 1000, "raw_json": true}),
     ] {
-        let raw = tool("read_file").call(args.to_string()).await.unwrap();
+        let raw = tool("read_file")
+            .call(
+                args.to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap();
         let raw = serde_json::from_str::<String>(&raw).unwrap_or(raw);
         let output: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert!(

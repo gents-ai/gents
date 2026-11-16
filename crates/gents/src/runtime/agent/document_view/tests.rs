@@ -341,9 +341,12 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     let load_skill =
         gents_tools::native::skills::LoadSkillTool::new(agent_config.skills.clone(), ceiling);
     let loaded = load_skill
-        .call(gents_tools::native::skills::LoadSkillArgs {
-            name: "Research".to_string(),
-        })
+        .call(
+            gents_tools::native::skills::LoadSkillArgs {
+                name: "Research".to_string(),
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("load_skill");
     assert!(

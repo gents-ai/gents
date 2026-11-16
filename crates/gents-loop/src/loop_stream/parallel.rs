@@ -81,6 +81,7 @@ pub(super) async fn run_batch<H>(
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     hook: Option<Arc<H>>,
     scope: Option<CurrentToolRuntimeContext>,
+    context: crate::tool::ToolCallEnvelope,
     token_limit: bool,
     handoff: Option<tokio::sync::mpsc::UnboundedSender<super::AdmissionWork>>,
 ) -> (Vec<BatchResult>, Option<String>)
@@ -99,6 +100,7 @@ where
                         call.call_id.clone(),
                         internal_id.clone(),
                         args.clone(),
+                        context.clone(),
                     );
                     if handoff.send(work).is_err() {
                         ToolCallHookAction::Terminate {
@@ -118,6 +120,7 @@ where
                         call.call_id.clone(),
                         &internal_id,
                         &args,
+                        &context,
                     )
                     .await
                 }
@@ -175,6 +178,7 @@ where
         let hook = hook.clone();
         let token = batch_token.clone();
         let scope = scope.clone();
+        let context = context.clone();
         pending.push(Box::pin(async move {
             let Admitted {
                 call,
@@ -222,10 +226,17 @@ where
             });
             let execution = match hook.as_ref() {
                 Some(hook) => {
-                    hook.run_foreground_tool(&call.function.name, &internal_id, call_fn)
+                    hook.run_foreground_tool(&call.function.name, &internal_id, call_fn, &context)
                         .await
                 }
-                None => ForegroundResult::Settled(call_fn(Default::default(), None).await),
+                None => ForegroundResult::Settled(
+                    call_fn(
+                        crate::tool::ToolCallEnvelope::default()
+                            .with_extensions(context.extensions().clone()),
+                        None,
+                    )
+                    .await,
+                ),
             };
             let (outcome, already_persisted) = match execution {
                 ForegroundResult::Settled(outcome) => (outcome, false),
@@ -411,7 +422,11 @@ mod control_tests {
                 }
             })
         }
-        fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        fn call<'a>(
+            &'a self,
+            args: String,
+            _context: &'a crate::tool::ToolCallEnvelope,
+        ) -> BoxFuture<'a, Result<String, ToolError>> {
             Box::pin(async move {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 if self.pending_second && args.contains('1') {
@@ -440,13 +455,43 @@ mod control_tests {
             _: &str,
             _: &str,
             call: crate::session_hook::ForegroundCall,
+            context: &crate::tool::ToolCallEnvelope,
         ) -> ForegroundResult {
             let token = tokio_util::sync::CancellationToken::new();
             if self.cancel_token {
                 token.cancel();
             }
             self.request_tokens.lock().await.push(token.clone());
-            ForegroundResult::Settled(call(token, None).await)
+            let runtime = context.runtime_unchecked().map(|mut runtime| {
+                runtime.cancellation_token = token.clone();
+                runtime
+            });
+            let hook = context
+                .clone()
+                .with_runtime(Some(runtime.unwrap_or_else(|| {
+                    crate::tool_call_lifecycle::runtime::CurrentToolRuntimeContext::entered(
+                        None,
+                        crate::tool_call_lifecycle::runtime::ToolScopeEntry {
+                            identity: None,
+                            deadline_at: None,
+                            cancellation_token: token,
+                            workspace_cwd: None,
+                            live_output: None,
+                            session_id: None,
+                            correlation: None,
+                            source_fields: Default::default(),
+                            background: false,
+                        },
+                    )
+                })));
+            let runtime = hook.runtime_unchecked();
+            ForegroundResult::Settled(
+                crate::tool_call_lifecycle::runtime::enter_ambient_runtime(
+                    runtime.as_ref(),
+                    call(hook, None),
+                )
+                .await,
+            )
         }
         async fn on_completion_call_with_context(
             &self,
@@ -462,6 +507,7 @@ mod control_tests {
             _: Option<String>,
             id: &str,
             _: &str,
+            _: &crate::tool::ToolCallEnvelope,
         ) -> ToolCallHookAction {
             match self.actions[id.parse::<usize>().unwrap()] {
                 "skip" => ToolCallHookAction::Skip {
@@ -582,6 +628,7 @@ mod control_tests {
                     tools,
                     Some(hook.clone()),
                     None,
+                    crate::tool::ToolCallEnvelope::ambient(),
                     false,
                     None,
                 ),
@@ -626,6 +673,7 @@ mod control_tests {
             tools,
             Some(hook.clone()),
             None,
+            crate::tool::ToolCallEnvelope::ambient(),
             false,
             Some(admission_tx),
         );
@@ -674,7 +722,11 @@ mod control_tests {
                 }
             })
         }
-        fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        fn call<'a>(
+            &'a self,
+            args: String,
+            _context: &'a crate::tool::ToolCallEnvelope,
+        ) -> BoxFuture<'a, Result<String, ToolError>> {
             Box::pin(async move {
                 if args.contains('0') {
                     self.entered.notify_one();
@@ -717,7 +769,15 @@ mod control_tests {
         })]);
         let (results, termination) = tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            run_batch(calls(2), tools, Some(hook.clone()), None, false, None),
+            run_batch(
+                calls(2),
+                tools,
+                Some(hook.clone()),
+                None,
+                crate::tool::ToolCallEnvelope::ambient(),
+                false,
+                None,
+            ),
         )
         .await
         .expect("later termination cancels the held first call");
@@ -786,6 +846,7 @@ mod control_tests {
                 tools,
                 Some(hook.clone()),
                 None,
+                crate::tool::ToolCallEnvelope::ambient(),
                 false,
                 None,
             )

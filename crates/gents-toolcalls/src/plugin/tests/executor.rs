@@ -59,7 +59,14 @@ async fn installed_filesystem_grants_cannot_expose_operator_aliases() {
         record.granted = Some(granted);
         store::write_record(home.path(), &record).unwrap();
         let executor = PluginExecutor::new(Some(home.path().to_owned()));
-        let first = executor.call(&record, serde_json::json!({})).await.unwrap();
+        let first = executor
+            .call(
+                &record,
+                serde_json::json!({}),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap();
         assert_eq!(
             first.outcome.verdict,
             gents_pack::plugin::PluginVerdict::Success
@@ -79,7 +86,11 @@ async fn installed_filesystem_grants_cannot_expose_operator_aliases() {
         std::fs::write(&permissions, "operator state").unwrap();
         std::fs::hard_link(&permissions, root.join("operator-alias")).unwrap();
         let error = executor
-            .call(&record, serde_json::json!({}))
+            .call(
+                &record,
+                serde_json::json!({}),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap_err();
         assert!(
@@ -107,7 +118,13 @@ async fn a_model_tool_runs_the_installed_plugin_with_its_declared_schema() {
     assert_eq!(definition.parameters, record.declaration.input_schema);
 
     for n in 0..2 {
-        let output = tool.call(format!(r#"{{"n":{n}}}"#)).await.unwrap();
+        let output = tool
+            .call(
+                format!(r#"{{"n":{n}}}"#),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap();
         assert_eq!(output, format!(r#"{{"n":{n}}}"#));
     }
     assert_eq!(
@@ -155,7 +172,11 @@ async fn changed_resource_declaration_invalidates_admission_without_new_artifact
     let input = serde_json::json!({});
     assert_eq!(
         executor
-            .call(&record, input.clone())
+            .call(
+                &record,
+                input.clone(),
+                &gents_loop::tool::ToolCallEnvelope::ambient()
+            )
             .await
             .unwrap()
             .outcome
@@ -165,7 +186,16 @@ async fn changed_resource_declaration_invalidates_admission_without_new_artifact
     record.declaration.limits = None;
     store::write_record(home.path(), &record).unwrap();
     assert_eq!(
-        executor.call(&record, input).await.unwrap().outcome.verdict,
+        executor
+            .call(
+                &record,
+                input,
+                &gents_loop::tool::ToolCallEnvelope::ambient()
+            )
+            .await
+            .unwrap()
+            .outcome
+            .verdict,
         gents_pack::plugin::PluginVerdict::BadOutput
     );
 }
@@ -191,7 +221,12 @@ mod bound {
     }
 
     async fn refusal(tool: &PluginTool, path: &std::path::Path) -> String {
-        format!("{:#}", tool.call(args(path)).await.unwrap_err())
+        format!(
+            "{:#}",
+            tool.call(args(path), &gents_loop::tool::ToolCallEnvelope::ambient())
+                .await
+                .unwrap_err()
+        )
     }
 
     async fn in_session(
@@ -210,7 +245,10 @@ mod bound {
             None,
             Default::default(),
             false,
-            approval::scope_interactive(interactive, tool.call(args(path))),
+            approval::scope_interactive(
+                interactive,
+                tool.call(args(path), &gents_loop::tool::ToolCallEnvelope::ambient()),
+            ),
         )
         .await
         .map_err(|error| format!("{error:#}"))
@@ -329,14 +367,24 @@ mod bound {
         let input = serde_json::json!({"path": docs});
         let bound = workspace::scope(
             context,
-            executor.bind_input(&fx.record, &input, &BindContext::headless(Some(&work))),
+            executor.bind_input(
+                &fx.record,
+                &input,
+                &BindContext::headless(Some(&work)),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            ),
         )
         .await
         .unwrap()
         .unwrap();
         let changed = serde_json::json!({"path": docs, "operation": "different"});
         let error = executor
-            .call_bound(&fx.record, changed, bound.clone())
+            .call_bound(
+                &fx.record,
+                changed,
+                bound.clone(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap_err();
         assert!(
@@ -346,7 +394,12 @@ mod bound {
         assert!(!docs.join("out.json").exists());
 
         executor
-            .call_bound(&fx.record, input.clone(), bound.clone())
+            .call_bound(
+                &fx.record,
+                input.clone(),
+                bound.clone(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -363,7 +416,12 @@ mod bound {
         )
         .unwrap();
         let error = executor
-            .call_bound(&fx.record, input, bound)
+            .call_bound(
+                &fx.record,
+                input,
+                bound,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap_err();
         assert!(
@@ -401,7 +459,12 @@ mod bound {
                 Some(
                     workspace::scope(
                         context.clone(),
-                        executor.bind_input(&fx.record, &input, &bind),
+                        executor.bind_input(
+                            &fx.record,
+                            &input,
+                            &bind,
+                            &gents_loop::tool::ToolCallEnvelope::ambient(),
+                        ),
                     )
                     .await
                     .unwrap()
@@ -417,23 +480,40 @@ mod bound {
                 Some(bound) => format!(
                     "{:#}",
                     executor
-                        .call_bound(&fx.record, input, bound)
+                        .call_bound(
+                            &fx.record,
+                            input,
+                            bound,
+                            &gents_loop::tool::ToolCallEnvelope::ambient()
+                        )
                         .await
                         .unwrap_err()
                 ),
                 None => workspace::scope(
                     context.clone(),
-                    executor.bind_input(&fx.record, &input, &bind),
+                    executor.bind_input(
+                        &fx.record,
+                        &input,
+                        &bind,
+                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    ),
                 )
                 .await
                 .unwrap_err(),
             };
             assert!(error.contains("protected runtime permissions"), "{error}");
             let file_input = serde_json::json!({"path": alias});
-            let error =
-                workspace::scope(context, executor.bind_input(&fx.record, &file_input, &bind))
-                    .await
-                    .unwrap_err();
+            let error = workspace::scope(
+                context,
+                executor.bind_input(
+                    &fx.record,
+                    &file_input,
+                    &bind,
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                ),
+            )
+            .await
+            .unwrap_err();
             assert!(
                 error.contains("permission files cannot be shared"),
                 "{error}"
@@ -583,7 +663,10 @@ mod bound {
         let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
         allowed::add(fx.home.path(), &fx.root.join("docs"), BindAccess::Read).unwrap();
         let output = tool_for(&fx.home, &fx.record)
-            .call(args(&fx.root.join("docs/in.json")))
+            .call(
+                args(&fx.root.join("docs/in.json")),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap();
         assert_eq!(output, r#"{"read":true}"#);
@@ -600,7 +683,10 @@ mod bound {
             "the sibling is invisible: {error}"
         );
         let output = tool
-            .call(args(&fx.root.join("docs/sibling.json")))
+            .call(
+                args(&fx.root.join("docs/sibling.json")),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap();
         assert_eq!(output, "{}");
@@ -641,7 +727,12 @@ mod bound {
         assert!(error.contains("--access read_write"), "{error}");
         assert!(!reader.join("out.json").exists());
 
-        tool.call(args(&writer)).await.unwrap();
+        tool.call(
+            args(&writer),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             std::fs::read_to_string(writer.join("out.json")).unwrap(),
             "{}"
@@ -663,12 +754,13 @@ mod bound {
         let writer = fx.root.join("work");
         allowed::add(fx.home.path(), &reader, BindAccess::Read).unwrap();
         allowed::add(fx.home.path(), &writer, BindAccess::ReadWrite).unwrap();
+        let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
         let call = |path: &std::path::Path, output: bool| {
             let mut input = serde_json::json!({ "path": path });
             if output {
                 input["output"] = serde_json::json!("out.json");
             }
-            tool.call(input.to_string())
+            tool.call(input.to_string(), &envelope)
         };
 
         let read = format!("{:#}", call(&reader, false).await.unwrap_err());
@@ -690,7 +782,8 @@ mod bound {
             "{:#}",
             tool.call(
                 serde_json::json!({ "path": reader, "output": "out.json", "delete": true })
-                    .to_string()
+                    .to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient()
             )
             .await
             .unwrap_err()
@@ -840,7 +933,14 @@ mod bound {
                 session_id: None,
                 interactive: case.input.interactive,
             };
-            let result = executor.bind_input(&fx.record, &input, &context).await;
+            let result = executor
+                .bind_input(
+                    &fx.record,
+                    &input,
+                    &context,
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
+                .await;
             let prompt = match operator {
                 Some(operator) => {
                     tokio::time::timeout(std::time::Duration::from_secs(10), operator)
@@ -894,6 +994,7 @@ mod bound {
                             gents_loop::tool_call_lifecycle::runtime::call_tool_managed(
                                 tool.as_ref(),
                                 args(&target),
+                                &gents_loop::tool::ToolCallEnvelope::ambient(),
                             )
                             .await
                         },
@@ -928,12 +1029,28 @@ mod bound {
         let input = serde_json::json!({ "path": fx.root.join("work/in.json") });
         let work = fx.root.join("work");
         let call = executor
-            .call_data_bound(&fx.record, input.clone(), Some(&work), false)
+            .call_data_bound(
+                &fx.record,
+                input.clone(),
+                crate::plugin::executor::ToolInvocation {
+                    tool_root: Some(&work),
+                    tool_calls: false,
+                    context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                },
+            )
             .await
             .unwrap();
         assert_eq!(call.outcome.output, serde_json::json!({ "read": true }));
         let error = executor
-            .call_data_bound(&fx.record, input, None, false)
+            .call_data_bound(
+                &fx.record,
+                input,
+                crate::plugin::executor::ToolInvocation {
+                    tool_root: None,
+                    tool_calls: false,
+                    context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                },
+            )
             .await
             .unwrap_err();
         assert!(
@@ -956,7 +1073,15 @@ mod bound {
             "path_original": "/spoofed",
         });
         let call = executor
-            .call_data_bound(&record, input, Some(&root), false)
+            .call_data_bound(
+                &record,
+                input,
+                crate::plugin::executor::ToolInvocation {
+                    tool_root: Some(&root),
+                    tool_calls: false,
+                    context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                },
+            )
             .await
             .unwrap();
         let seen = &call.outcome.output;
@@ -969,7 +1094,15 @@ mod bound {
 
         let folder = serde_json::json!({ "path": root });
         let call = executor
-            .call_data_bound(&record, folder, Some(&root), false)
+            .call_data_bound(
+                &record,
+                folder,
+                crate::plugin::executor::ToolInvocation {
+                    tool_root: Some(&root),
+                    tool_calls: false,
+                    context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                },
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -985,7 +1118,11 @@ async fn generated_plugin_invocation_retry_revalidates_current_installation() {
         let (home, original) = installed_plugin(ECHO_WAT, Some(gents_pack::pack::BindAccess::Read));
         let mut executor = PluginExecutor::new(Some(home.path().to_owned()));
         executor
-            .call(&original, serde_json::json!({"attempt":"first"}))
+            .call(
+                &original,
+                serde_json::json!({"attempt":"first"}),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap();
         if case.input.restart {
@@ -1025,9 +1162,22 @@ async fn generated_plugin_invocation_retry_revalidates_current_installation() {
         let result = if case.input.bound {
             let directory = tempfile::tempdir().unwrap();
             let bound = gents_pack::plugin::BoundDir::new(directory.path(), None).unwrap();
-            executor.call_bound(&original, input.clone(), bound).await
+            executor
+                .call_bound(
+                    &original,
+                    input.clone(),
+                    bound,
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
+                .await
         } else {
-            executor.call(&original, input.clone()).await
+            executor
+                .call(
+                    &original,
+                    input.clone(),
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
+                .await
         };
         if let Ok(call) = &result {
             assert_eq!(call.outcome.output["attempt"], input["attempt"]);
@@ -1049,7 +1199,15 @@ async fn execution_receipt_hashes_canonical_values_and_keeps_tool_output_native(
     let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
     let input = serde_json::json!({"z":2,"a":1});
     let (call, receipt) = executor
-        .call_data_bound_with_receipt(&record, input.clone(), None, false)
+        .call_data_bound_with_receipt(
+            &record,
+            input.clone(),
+            crate::plugin::executor::ToolInvocation {
+                tool_root: None,
+                tool_calls: false,
+                context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+            },
+        )
         .await;
     assert_eq!(call.unwrap().outcome.output, input);
     let digest = format!("sha256:{:x}", Sha256::digest(br#"{"a":1,"z":2}"#));
@@ -1065,7 +1223,12 @@ async fn execution_receipt_hashes_canonical_values_and_keeps_tool_output_native(
     assert!(receipt.limits.unwrap().memory_bytes > 0);
 
     let tool = PluginTool::resolve(executor, &tool_ref(None), None).unwrap();
-    let dispatched = tool.call_with_receipt(input.to_string()).await;
+    let dispatched = tool
+        .call_with_receipt(
+            input.to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await;
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&dispatched.result.unwrap()).unwrap(),
         input
@@ -1092,7 +1255,15 @@ async fn execution_receipts_distinguish_refusal_bad_output_and_guest_trap() {
         let (home, record) = installed_plugin(&wat, None);
         let executor = PluginExecutor::new(Some(home.path().to_owned()));
         let (_, receipt) = executor
-            .call_data_bound_with_receipt(&record, serde_json::json!({}), None, false)
+            .call_data_bound_with_receipt(
+                &record,
+                serde_json::json!({}),
+                crate::plugin::executor::ToolInvocation {
+                    tool_root: None,
+                    tool_calls: false,
+                    context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                },
+            )
             .await;
         assert_eq!(receipt.verdict, verdict);
         assert!(receipt.authority.is_some());
@@ -1100,7 +1271,15 @@ async fn execution_receipts_distinguish_refusal_bad_output_and_guest_trap() {
         assert_eq!(receipt.output_digest, None);
         store::remove_record(home.path(), &record.namespace, &record.name).unwrap();
         let (result, receipt) = executor
-            .call_data_bound_with_receipt(&record, serde_json::json!({}), None, false)
+            .call_data_bound_with_receipt(
+                &record,
+                serde_json::json!({}),
+                crate::plugin::executor::ToolInvocation {
+                    tool_root: None,
+                    tool_calls: false,
+                    context: &gents_loop::tool::ToolCallEnvelope::ambient(),
+                },
+            )
             .await;
         assert!(result.is_err());
         assert_eq!(receipt.verdict, PluginExecutionVerdict::AdmissionRefused);
@@ -1125,7 +1304,11 @@ async fn corrupted_store_bytes_are_refused_and_never_cached() {
     std::fs::write(&path, &bytes).unwrap();
     let executor = PluginExecutor::new(Some(home.path().to_owned()));
     let error = executor
-        .call(&record, serde_json::json!({}))
+        .call(
+            &record,
+            serde_json::json!({}),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -1142,7 +1325,12 @@ async fn bound_receipt_names_the_declared_field_not_the_host_path() {
     let directory = tempfile::tempdir().unwrap();
     let bound = gents_pack::plugin::BoundDir::new(directory.path(), None).unwrap();
     let call = PluginExecutor::new(Some(home.path().to_owned()))
-        .call_bound(&record, serde_json::json!({}), bound)
+        .call_bound(
+            &record,
+            serde_json::json!({}),
+            bound,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     let authority = call.receipt.authority.unwrap();
@@ -1224,6 +1412,7 @@ mod data_calls {
                 &record,
                 json!({}),
                 DataCaller::for_agent(node.clone(), NODE, AGENT).unwrap(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
             .unwrap()
@@ -1295,7 +1484,12 @@ mod data_calls {
         )
         .unwrap();
         let call = PluginExecutor::new(Some(home.path().to_owned()))
-            .call_with_data(&record, json!({}), caller)
+            .call_with_data(
+                &record,
+                json!({}),
+                caller,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap();
         assert_eq!(bodies(&results_of(&call)["q"]), ["mine"]);
@@ -1406,10 +1600,21 @@ mod data_calls {
             let call = if i.data_caller {
                 let caller = DataCaller::for_agent(node.clone(), NODE, AGENT).unwrap();
                 executor
-                    .call_with_data(&record, caller_input.clone(), caller)
+                    .call_with_data(
+                        &record,
+                        caller_input.clone(),
+                        caller,
+                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    )
                     .await
             } else {
-                executor.call(&record, caller_input.clone()).await
+                executor
+                    .call(
+                        &record,
+                        caller_input.clone(),
+                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    )
+                    .await
             }
             .unwrap();
             let canonical =
@@ -1603,7 +1808,7 @@ mod tool_writes {
                 None,
                 BTreeMap::new(),
                 false,
-                tool.call_with_receipt(output.to_string()),
+                tool.call_with_receipt(output.to_string(), &gents_loop::tool::ToolCallEnvelope::ambient()),
             )
         .await;
         if let Some(writes) = dispatched.deferred_writes {
@@ -1818,7 +2023,12 @@ mod job_calls {
         record.declaration.job = PluginJobDeclaration(declared);
         store::write_record(home.path(), &record).unwrap();
         PluginExecutor::new(Some(home.path().to_owned()))
-            .call_with_jobs(&record, json!({}), caller)
+            .call_with_jobs(
+                &record,
+                json!({}),
+                caller,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap()
     }

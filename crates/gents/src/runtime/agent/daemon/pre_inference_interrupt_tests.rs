@@ -109,7 +109,7 @@ impl gents_loop::tool::ToolDyn for PreInferenceBlockingTool {
     fn call<'a>(
         &'a self,
         _: String,
-    ) -> gents_loop::tool::BoxFuture<
+        _context: &'a gents_loop::tool::ToolCallEnvelope) -> gents_loop::tool::BoxFuture<
         'a,
         Result<String, gents_loop::tool::ToolError>,
     > {

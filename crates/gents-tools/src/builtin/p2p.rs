@@ -1060,7 +1060,11 @@ impl Tool for P2pTool {
         }
     }
 
-    async fn call(&self, args: P2pParams) -> std::result::Result<String, P2pError> {
+    async fn call(
+        &self,
+        args: P2pParams,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> std::result::Result<String, P2pError> {
         let (argv, options) = args
             .command()
             .map_err(|error| P2pError(format!("{error:#}")))?;

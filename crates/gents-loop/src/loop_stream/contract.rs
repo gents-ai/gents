@@ -392,6 +392,9 @@ pub struct LoopConfig {
     pub output_obligation_gate: Option<Arc<dyn OutputObligationCheck>>,
     pub folded_prompts: Vec<FoldedPrompt>,
     pub authored_input: Option<AuthoredInput>,
+    /// The envelope of the request this loop runs for: the context its
+    /// foreground tool calls are derived from.
+    pub tool_context: crate::tool::ToolCallEnvelope,
 }
 
 #[derive(Clone, Debug)]

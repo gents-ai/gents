@@ -130,7 +130,11 @@ impl Tool for DefraQueryTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {name:Self::NAME.into(),description:"Read application and runtime documents. argv: [fields], [find], [count], [search], [explain], or [help,COMMAND]. Count aggregates every matching row; find returns a bounded ordered page. Explain inspects a native plan; executing it requires options.mode:execute. Configuration uses config, definitions use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string","description":"GraphQL collection name. Discover with schema collection list. Surface IDs belong to config datastore get."},"options":{"type":"object"}}})}
     }
-    async fn call(&self, args: Self::Args) -> Result<String, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<String, Self::Error> {
         if let Some(verb) = command::write_verb(&args) {
             return Err(anyhow!("{}", json!({
                 "error": format!("query only reads; it has no {verb} command. Writes go through the write tool"),
