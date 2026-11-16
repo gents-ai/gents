@@ -191,6 +191,55 @@ impl ClientRuntime {
                 .context("the acknowledged Goal has no verified receipt");
         }
         self.require_reachable(&queued)?;
+        if let Some(reference) = resume_reference {
+            let retained =
+                records::goal::lookup(&self.node, self.node_identity.did(), node_did, command_id)
+                    .await?
+                    .context(
+                        "Goal caller preparation is unavailable; its delivery remains unconfirmed",
+                    )?;
+            anyhow::ensure!(
+                retained.reference == *reference,
+                "Goal caller reference changed"
+            );
+        }
+        let _delivery = self.delivery_lock.lock().await;
+        while let Some(next) = gents_store::client_journal::outbox::next(
+            &self.node,
+            self.node_identity.did(),
+            node_did,
+            None,
+        )
+        .await?
+        {
+            self.deliver_authored_record(&next).await?;
+            if next.submission_id == command_id {
+                break;
+            }
+        }
+        self.recover_goal_submission(node_did, command_id)
+            .await?
+            .and_then(|retained| retained.receipt)
+            .context("the acknowledged Goal has no verified receipt")
+    }
+
+    pub(in crate::client_runtime) async fn publish_authored_goal(
+        &self,
+        queued: &gents_store::client_journal::outbox::Record,
+    ) -> Result<SessionGoalControlReceipt> {
+        let gents_protocol::authored_submission::AuthoredSubmission::Goal(input) =
+            queued.authored()?
+        else {
+            anyhow::bail!("the authored record is not a Goal");
+        };
+        let node_did = input.node_did.as_str();
+        let command_id = input.command_id.as_str();
+        let session_id = input.session_id.as_str();
+        let agent_did = input.agent_did.as_deref();
+        let session_doc_id = input.session_doc_id.clone();
+        let expected = input.expected.clone();
+        let operation = input.operation.clone();
+        let input = input.input.clone();
         let authored =
             serde_json::to_vec(&(&session_doc_id, &expected, &operation, agent_did, &input))?;
         let intent = goal_delivery::Intent::new(
@@ -209,10 +258,6 @@ impl ClientRuntime {
             );
             record
         } else {
-            anyhow::ensure!(
-                resume_reference.is_none(),
-                "Goal caller preparation is unavailable; its delivery remains unconfirmed"
-            );
             let (_, command) = self
                 .prepare_session_goal_command(
                     node_did,
@@ -228,14 +273,9 @@ impl ClientRuntime {
             let proposal = goal_delivery::Record::proposal(intent, command)?;
             records::goal::reserve(&self.node_arc(), &proposal).await?
         };
-        anyhow::ensure!(
-            resume_reference.is_none_or(|reference| reference == &record.reference),
-            "Goal caller reference changed"
-        );
         let receipt = self
             .resume_goal_submission(node_did, &record.reference)
             .await?;
-        gents_store::client_journal::outbox::acknowledge(&self.node, &queued, true).await?;
         Ok(receipt)
     }
 

@@ -131,9 +131,13 @@ async fn submit_while_runtime_answers(
     let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
     let (receipt, processed) = tokio::join!(submission, async {
         if requester.did() == fixture.user.did() {
-            let authorization = gents_store::config_client::client_authentication::ClientAuthorization::from_authenticated_bearer(
-                    requester.did().parse()?, "Bearer live-client-request",
-                )?;
+            let ConfigAccess::Graphql(endpoint) = access else {
+                anyhow::bail!("the User submits through its client-held endpoint");
+            };
+            let authorization = endpoint
+                .client_authorization()
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("the client has no request credential"))?;
             crate::goal::client_application::apply(
                 &fixture.node,
                 &identity,

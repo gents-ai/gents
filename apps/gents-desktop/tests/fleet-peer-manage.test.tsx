@@ -6,16 +6,15 @@ import type { DeploymentView } from "@source-inc/gents-desktop-client";
 
 function makeDeployment(overrides: Partial<DeploymentView> = {}): DeploymentView {
   return {
-    peerId: "peer-1",
     label: "Remote Node",
     nodeDid: "did:key:z6MkRemote",
-    addr: "/ip4/10.0.0.2/tcp/9292",
+
     graphql: null,
-    source: "enrollment",
-    dialSucceeded: true,
+    local: false,
+
     runtimeConnection: "connected",
     chatSafe: true,
-    lastError: null,
+
     node: { nodeDid: "did:key:z6MkRemote" },
     nodeConfig: null,
     nodeReadiness: {
@@ -59,8 +58,8 @@ function renderRow(deployment: DeploymentView, handlers: Record<string, unknown>
           deployment={deployment}
           onOpenChat={vi.fn()}
           onOpenConfig={vi.fn()}
-          onRemovePeer={vi.fn()}
-          onRenamePeer={vi.fn()}
+          onRemoveRuntime={vi.fn()}
+          onRenameRuntime={vi.fn()}
           {...handlers}
         />
       </tbody>
@@ -70,34 +69,34 @@ function renderRow(deployment: DeploymentView, handlers: Record<string, unknown>
 
 describe("fleet peer management", () => {
   it("removes a saved peer only after confirmation", async () => {
-    const onRemovePeer = vi.fn().mockResolvedValue(undefined);
-    renderRow(makeDeployment(), { onRemovePeer });
+    const onRemoveRuntime = vi.fn().mockResolvedValue(undefined);
+    renderRow(makeDeployment(), { onRemoveRuntime });
 
     fireEvent.click(screen.getByTestId("fleet-remove-peer-1"));
-    expect(onRemovePeer).not.toHaveBeenCalled();
+    expect(onRemoveRuntime).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(onRemovePeer).toHaveBeenCalledWith("peer-1"));
+    await waitFor(() => expect(onRemoveRuntime).toHaveBeenCalledWith("peer-1"));
   });
 
   it("offers no remove action for the local runtime", () => {
-    renderRow(makeDeployment({ source: "local-standard" }));
+    renderRow(makeDeployment({ local: true }));
     expect(screen.queryByTestId("fleet-remove-peer-1")).not.toBeInTheDocument();
   });
 
   it("renames via the inline editor and skips no-op commits", () => {
-    const onRenamePeer = vi.fn().mockResolvedValue(undefined);
-    renderRow(makeDeployment(), { onRenamePeer });
+    const onRenameRuntime = vi.fn().mockResolvedValue(undefined);
+    renderRow(makeDeployment(), { onRenameRuntime });
 
     fireEvent.click(screen.getByTestId("fleet-rename-peer-1"));
     const input = screen.getByTestId("fleet-rename-input-peer-1");
     fireEvent.change(input, { target: { value: "Edge Rack 2" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(onRenamePeer).toHaveBeenCalledWith("peer-1", "Edge Rack 2");
+    expect(onRenameRuntime).toHaveBeenCalledWith("peer-1", "Edge Rack 2");
 
     fireEvent.click(screen.getByTestId("fleet-rename-peer-1"));
     const again = screen.getByTestId("fleet-rename-input-peer-1");
     fireEvent.keyDown(again, { key: "Escape" });
-    expect(onRenamePeer).toHaveBeenCalledTimes(1);
+    expect(onRenameRuntime).toHaveBeenCalledTimes(1);
   });
 });

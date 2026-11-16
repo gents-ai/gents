@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use gents_desktop_bridge::{BridgeError, BridgeErrorCode};
-use gents_desktop_core::client::{ClientStoreKeyProvider, DesktopPaths};
+use gents_desktop_core::client::{journal::ClientStoreKeyProvider, DesktopPaths};
 use gents_store::local::store_key::{StoreEncryption, StoreKey, StoreKeyCustody};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};

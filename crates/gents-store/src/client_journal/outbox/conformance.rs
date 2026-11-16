@@ -1,6 +1,6 @@
 use super::*;
 use gents_lean_vocab::families::{
-    client_delegation_outbox_acknowledgement as acknowledgement,
+    client_authored_outbox_acknowledge as acknowledgement,
     client_delegation_outbox_preparation as preparation,
     client_delegation_outbox_reservation as reservation,
     client_delegation_outbox_selection as selection,

@@ -639,7 +639,7 @@ pub struct LeanIdentityHouseholdCase {
     pub enrolled: Vec<String>,
     pub policy_registrations: Vec<LeanIdentityPolicyRegistration>,
     #[serde(rename = "managed_client_handoff_cases")]
-    pub _managed_client_handoff_cases: Vec<serde_json::Value>,
+    pub _managed_client_handoff_cases: Option<Vec<serde_json::Value>>,
     #[serde(rename = "desktop_reset_cases")]
     pub _desktop_reset_cases: Vec<serde_json::Value>,
     #[serde(default)]

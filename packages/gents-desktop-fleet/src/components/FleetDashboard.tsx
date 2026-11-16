@@ -60,8 +60,9 @@ export function FleetDashboard({
   const deploymentNeedingInference =
     deployments.find(needsInferenceSetup) ?? null;
   const activeWizardDeployment = wizardDeployment
-    ? (deployments.find((entry) => entry.nodeDid === wizardDeployment.nodeDid) ??
-      wizardDeployment)
+    ? (deployments.find(
+        (entry) => entry.nodeDid === wizardDeployment.nodeDid,
+      ) ?? wizardDeployment)
     : null;
   useEffect(() => {
     if (
@@ -82,14 +83,27 @@ export function FleetDashboard({
     return request;
   }
 
-  const enrollmentNotice = accessRequests?.filter((r) => r.state !== "approved").map((request) => (
-    <section key={request.requestId} aria-live="polite" className="fleet-enrollment-pending">
-      <strong>{request.state === "pending" ? "Waiting for administrator approval" : `Access ${request.state}`}</strong>
-      <p className="muted">{request.nodeDid}</p>
-      <p className="muted">{request.state === "pending" ? "Ask the node administrator to approve this device." : "Request access again from the node’s address."}</p>
-    </section>
-  ));
-  const enrollmentBlocked = false;
+  const enrollmentNotice = accessRequests
+    ?.filter((r) => r.state !== "approved")
+    .map((request) => (
+      <section
+        key={request.requestId}
+        aria-live="polite"
+        className="fleet-enrollment-pending"
+      >
+        <strong>
+          {request.state === "pending"
+            ? "Waiting for administrator approval"
+            : `Access ${request.state}`}
+        </strong>
+        <p className="muted">{request.nodeDid}</p>
+        <p className="muted">
+          {request.state === "pending"
+            ? "Ask the node administrator to approve this device."
+            : "Request access again from the node’s address."}
+        </p>
+      </section>
+    ));
   if (!hasDeployments) {
     return (
       <section className="fleet-empty" data-testid="fleet-empty">
@@ -100,7 +114,7 @@ export function FleetDashboard({
             <p className="muted">
               {localRuntimeSetup
                 ? "Optionally create a node on this machine, or skip local setup and connect a remote node."
-                : "Enroll with a remote node using its authenticated server offer."}
+                : "Enter a runtime server address and request administrator approval."}
             </p>
           </div>
           {localRuntimeSetup}
@@ -136,7 +150,7 @@ export function FleetDashboard({
           {headerLeadingActions}
           <button
             className="primary-button"
-            disabled={enrollmentBlocked}
+            disabled={false}
             onClick={() => {
               setShowAddPeer((value) => !value);
             }}
@@ -149,7 +163,7 @@ export function FleetDashboard({
 
       {enrollmentNotice}
 
-      {showAddPeer && !enrollmentBlocked ? (
+      {showAddPeer ? (
         <section className="panel fleet-add-panel">
           {localRuntimeSetup}
           <AddPeerForm

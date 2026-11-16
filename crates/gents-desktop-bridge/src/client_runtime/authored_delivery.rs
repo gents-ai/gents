@@ -153,19 +153,7 @@ impl ClientRuntime {
                 Ok(receipt)
             }
             AuthoredSubmission::Goal(input) => {
-                let receipt = self
-                    .control_session_goal_correlated(
-                        &input.command_id,
-                        &input.node_did,
-                        &input.session_id,
-                        input.session_doc_id,
-                        input.expected,
-                        input.operation,
-                        input.agent_did.as_deref(),
-                        input.input,
-                        None,
-                    )
-                    .await?;
+                let receipt = self.publish_authored_goal(record).await?;
                 anyhow::ensure!(
                     receipt.command_id == record.submission_id,
                     "Goal receipt crossed the authored binding"

@@ -20,13 +20,12 @@ function deployment(
     ...deploymentOverrides
   } = overrides;
   return {
-    peerId: "peer-1",
     label: "Mandrake",
     nodeDid: "did:key:node",
-    addr: "endpoint",
-    source: "enrollment",
+
+    local: false,
     graphql: null,
-    dialSucceeded: true,
+
     runtimeConnection: "connected",
     chatSafe: true,
     chatRefusal: null,
@@ -96,9 +95,7 @@ function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
 
 describe("deployment operational state", () => {
   it("keeps P2P recovery separate from a connected runtime", () => {
-    const state = projectDeploymentOperationalState(
-      deployment({ dialSucceeded: false }),
-    );
+    const state = projectDeploymentOperationalState(deployment({}));
 
     expect(state.admissionBlocker).toBeNull();
     expect(state.summary.kind).toBe("ready");
@@ -127,7 +124,8 @@ describe("deployment operational state", () => {
         chatRefusal: {
           cause: "endpoint_not_advertised",
           nextAction: "await_endpoint_advertisement",
-          detail: "waiting for the enrolled runtime to advertise its signed HTTP endpoint",
+          detail:
+            "waiting for the enrolled runtime to advertise its signed HTTP endpoint",
         },
       }),
     );
@@ -136,7 +134,8 @@ describe("deployment operational state", () => {
       layer: "route",
       kind: "waiting",
       reason: "endpoint_not_advertised",
-      detail: "waiting for the enrolled runtime to advertise its signed HTTP endpoint",
+      detail:
+        "waiting for the enrolled runtime to advertise its signed HTTP endpoint",
     });
     expect(state.summary).toBe(state.admissionBlocker);
     expect(state.route).toEqual(state.admissionBlocker);
@@ -193,7 +192,7 @@ describe("deployment operational state", () => {
   it("keeps a local node waiting when its readiness source is missing", () => {
     const state = projectDeploymentOperationalState(
       deployment({
-        source: "local-standard",
+        local: true,
         readinessSource: { state: "unknown", reason: "readiness_missing" },
       }),
     );
@@ -209,12 +208,15 @@ describe("deployment operational state", () => {
 
   it("blocks a disconnected runtime despite retained Ready state", () => {
     const state = projectDeploymentOperationalState(
-      deployment({ source: "local-standard", runtimeConnection: "disconnected" }),
+      deployment({ local: true, runtimeConnection: "disconnected" }),
     );
     expect(state.agent.kind).toBe("ready");
     expect(state.admissionBlocker).toBe(state.connection);
     expect(state.summary).toBe(state.connection);
-    expect(state.summary).toMatchObject({ reason: "disconnected", shortLabel: "Reconnecting" });
+    expect(state.summary).toMatchObject({
+      reason: "disconnected",
+      shortLabel: "Reconnecting",
+    });
     expect(state.summary.label).not.toBe("Connecting to runtime");
   });
 
@@ -233,7 +235,11 @@ describe("deployment operational state", () => {
 
   it("names a node without a runtime endpoint instead of connecting forever", () => {
     const state = projectDeploymentOperationalState(
-      deployment({ source: "enrollment", graphql: null, runtimeConnection: "noEndpoint" }),
+      deployment({
+        local: false,
+        graphql: null,
+        runtimeConnection: "noEndpoint",
+      }),
     );
     expect(state.admissionBlocker).toBe(state.connection);
     expect(state.connection).toMatchObject({
@@ -250,7 +256,11 @@ describe("deployment operational state", () => {
         readinessSource: { state: "current" },
       }),
       null,
-      syncHealth({ state: "waiting", cause: "discovery_degraded", nextAction: "wait" }),
+      syncHealth({
+        state: "waiting",
+        cause: "discovery_degraded",
+        nextAction: "wait",
+      }),
     );
 
     expect(state.admissionBlocker).toBeNull();
@@ -317,7 +327,7 @@ describe("deployment operational state", () => {
       deployment({ readinessStatus }),
     );
     const local = projectDeploymentOperationalState(
-      deployment({ source: "local-standard", readinessStatus }),
+      deployment({ local: true, readinessStatus }),
     );
 
     expect(remote.agent.action).toBeNull();

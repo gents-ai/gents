@@ -168,11 +168,11 @@ impl ConfigAccess {
         crate::graphql::validate_collection_identifier(collection)?;
         match self.write_route() {
             WriteRoute::Local(local) => {
-                local.require_mutation_signer()?;
-                let actor = local
+                local.require_actor_signer()?;
+                local
                     .identity()
-                    .cloned()
                     .ok_or(ConfigClientError::RelationshipActorRequired)?;
+                let context = local.request_context();
                 let (collection, doc_id, relation, target) = (
                     collection.to_owned(),
                     doc_id.to_owned(),
@@ -182,8 +182,8 @@ impl ConfigAccess {
                 local
                     .run_owned(move |node| async move {
                         if delete {
-                            node.delete_dac_actor_relationship(
-                                actor.as_str(),
+                            node.delete_dac_actor_relationship_as(
+                                &context,
                                 &collection,
                                 &doc_id,
                                 &relation,
@@ -191,8 +191,8 @@ impl ConfigAccess {
                             )
                             .await?;
                         } else {
-                            node.add_dac_actor_relationship(
-                                actor.as_str(),
+                            node.add_dac_actor_relationship_as(
+                                &context,
                                 &collection,
                                 &doc_id,
                                 &relation,

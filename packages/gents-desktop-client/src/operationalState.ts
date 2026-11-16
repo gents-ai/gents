@@ -299,13 +299,17 @@ export function projectChatRefusalStatus(
     kind: waiting ? "waiting" : "blocked",
     layer: "route",
     reason: refusal.cause,
-    label: waiting ? "Waiting for the runtime endpoint" : "Runtime is not connected",
+    label: waiting
+      ? "Waiting for the runtime endpoint"
+      : "Runtime is not connected",
     shortLabel: waiting ? "Waiting for endpoint" : "Not connected",
     detail: refusal.detail,
   });
 }
 
-export function runtimeConnectionBlocksAdmission(connection: string | null | undefined): boolean {
+export function runtimeConnectionBlocksAdmission(
+  connection: string | null | undefined,
+): boolean {
   return connection !== "connected";
 }
 
@@ -320,25 +324,51 @@ export function projectRuntimeConnectionStatus(
 ): OperationalStatus {
   switch (connection) {
     case "connected":
-      return status({ kind: "ready", layer: "runtime", reason: "connected",
-        label: "Runtime is connected", shortLabel: "Connected",
-        detail: "The authenticated runtime connection is ready." });
+      return status({
+        kind: "ready",
+        layer: "runtime",
+        reason: "connected",
+        label: "Runtime is connected",
+        shortLabel: "Connected",
+        detail: "The authenticated runtime connection is ready.",
+      });
     case "noEndpoint":
-      return status({ kind: "blocked", layer: "runtime", reason: "no_endpoint",
-        label: "Runtime has no address", shortLabel: "No address",
-        detail: "This node has no runtime endpoint this app can connect to." });
+      return status({
+        kind: "blocked",
+        layer: "runtime",
+        reason: "no_endpoint",
+        label: "Runtime has no address",
+        shortLabel: "No address",
+        detail: "This node has no runtime endpoint this app can connect to.",
+      });
     case "refused":
-      return status({ kind: "blocked", layer: "runtime", reason: "refused",
-        label: "Runtime refused this app", shortLabel: "Refused",
-        detail: "The runtime does not accept this app's credentials. Ask its owner to restore this device's access; it reconnects by itself once they do." });
+      return status({
+        kind: "blocked",
+        layer: "runtime",
+        reason: "refused",
+        label: "Runtime refused this app",
+        shortLabel: "Refused",
+        detail:
+          "The runtime does not accept this app's credentials. Ask its owner to restore this device's access; it reconnects by itself once they do.",
+      });
     case "disconnected":
-      return status({ kind: "waiting", layer: "runtime", reason: "disconnected",
-        label: "Runtime unreachable", shortLabel: "Reconnecting",
-        detail: "The runtime connection was lost; reconnecting." });
+      return status({
+        kind: "waiting",
+        layer: "runtime",
+        reason: "disconnected",
+        label: "Runtime unreachable",
+        shortLabel: "Reconnecting",
+        detail: "The runtime connection was lost; reconnecting.",
+      });
     default:
-      return status({ kind: "waiting", layer: "runtime", reason: "connecting",
-        label: "Connecting to runtime", shortLabel: "Connecting",
-        detail: "Waiting for the authenticated runtime connection." });
+      return status({
+        kind: "waiting",
+        layer: "runtime",
+        reason: "connecting",
+        label: "Connecting to runtime",
+        shortLabel: "Connecting",
+        detail: "Waiting for the authenticated runtime connection.",
+      });
   }
 }
 
@@ -347,7 +377,9 @@ export function projectDeploymentOperationalState(
   selectedAgentDid: string | null = null,
   syncHealth: SyncHealthView | null = null,
 ): DeploymentOperationalState {
-  const connection = projectRuntimeConnectionStatus(deployment.runtimeConnection);
+  const connection = projectRuntimeConnectionStatus(
+    deployment.runtimeConnection,
+  );
 
   const localRuntime = deployment.local;
   const route = projectRouteOperationalStatus(deployment.chatRefusal);
@@ -379,16 +411,18 @@ export function projectDeploymentOperationalState(
         });
 
   const agentBlocker = agent.kind === "ready" ? null : agent;
-  const retainedOffline = deployment.chatSafe &&
-    (deployment.runtimeConnection === "disconnected" || deployment.runtimeConnection === "connecting");
-  const admissionBlocker = retainedOffline ? null :
-    projectChatRefusalStatus(deployment.chatRefusal) ??
-    (runtimeConnectionBlocksAdmission(deployment.runtimeConnection)
-      ? connection
-      : agentBlocker);
+  const retainedOffline =
+    deployment.chatSafe &&
+    (deployment.runtimeConnection === "disconnected" ||
+      deployment.runtimeConnection === "connecting");
+  const admissionBlocker = retainedOffline
+    ? null
+    : (projectChatRefusalStatus(deployment.chatRefusal) ??
+      (runtimeConnectionBlocksAdmission(deployment.runtimeConnection)
+        ? connection
+        : agentBlocker));
 
-  const error =
-    deployment.runtime?.lastReconcileError ?? null;
+  const error = deployment.runtime?.lastReconcileError ?? null;
   const summary = error
     ? status({
         kind: "blocked",
@@ -399,17 +433,18 @@ export function projectDeploymentOperationalState(
         detail: error,
       })
     : (admissionBlocker ??
-      (reconcile.kind !== "ready"
-        ? reconcile
-        : status({
-            kind: "ready",
-            layer: "runtime",
-            reason: "online",
-            label: "Agent is online",
-            shortLabel: "Online",
-            detail:
-              "The runtime connection and agent readiness are current.",
-          })));
+      (connection.kind !== "ready"
+        ? connection
+        : reconcile.kind !== "ready"
+          ? reconcile
+          : status({
+              kind: "ready",
+              layer: "runtime",
+              reason: "online",
+              label: "Agent is online",
+              shortLabel: "Online",
+              detail: "The runtime connection and agent readiness are current.",
+            })));
 
   return {
     connection,

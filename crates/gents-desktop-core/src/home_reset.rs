@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
 use crate::preference::{StoredManagedServer, MANAGED_SERVER_CONFIG};
-const ARCHIVE_CONSEQUENCE: &str = "The selected local state is moved into a timestamped backup. The desktop User identity, key custody, and saved peers other than the pairing with this node are retained.";
+const ARCHIVE_CONSEQUENCE: &str = "The selected local state is moved into a timestamped backup. The desktop User identity, key custody, and saved runtime connections other than this node are retained.";
 const DELETE_CONSEQUENCE: &str =
-    "The selected local state is permanently deleted. The desktop User identity, key custody, and saved peers other than the pairing with this node are retained.";
+    "The selected local state is permanently deleted. The desktop User identity, key custody, and saved runtime connections other than this node are retained.";
 const FULL_ARCHIVE_CONSEQUENCE: &str = "The managed home, client state and service definition are backed up. Browser storage and caches are permanently cleared and are not included in the backup.";
 const FULL_DELETE_CONSEQUENCE: &str = "The managed home, client state and service definition are permanently deleted. Browser storage and caches are permanently cleared.";
 
@@ -1373,7 +1373,7 @@ pub fn lock_client_state(
     let store = gents_store::local::home::lock_store_at(paths.root(), paths.node_data_dir())
         .context("Quit Gents before resetting its desktop state")?;
     let peers = paths.runtime_directory_path().with_extension("lock");
-    reject_symlink_if_present(&peers, "peer directory lock")?;
+    reject_symlink_if_present(&peers, "runtime directory lock")?;
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -1576,7 +1576,7 @@ mod tests {
                 "user_key" => desktop.identity_key_path(),
                 "user_metadata" => desktop.principal_metadata_path(),
                 "custody" => desktop.store_encryption_path(),
-                "peers" => desktop.runtime_directory_path(),
+                "connections" => desktop.runtime_directory_path(),
                 _ => panic!("unknown modeled desktop asset"),
             };
             assert_eq!(
@@ -1886,7 +1886,7 @@ mod tests {
             "principal.json",
             "store-encryption.json",
             MANAGED_SERVER_CONFIG,
-            "peers.json",
+            "connections.json",
             "store.key",
         ];
         for name in names {

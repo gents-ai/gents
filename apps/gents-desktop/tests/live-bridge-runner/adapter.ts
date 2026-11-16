@@ -69,9 +69,10 @@ export function createBridgeHttpAdapter(
         agentDid,
         path,
       }),
-    removePeer: unsupported("removePeer"),
-    renamePeer: unsupported("renamePeer"),
-    dismissEndedAccess: unsupported("dismissEndedAccess"),
+    listRuntimeAccess: unsupported("listRuntimeAccess"),
+    decideRuntimeAccess: unsupported("decideRuntimeAccess"),
+    removeRuntime: unsupported("removeRuntime"),
+    renameRuntime: unsupported("renameRuntime"),
     listWorkspace: unsupported("listWorkspace"),
     fetchRequestTimeline: unsupported("fetchRequestTimeline"),
     fetchSessionGoal: unsupported("fetchSessionGoal"),
@@ -145,7 +146,7 @@ export function createBridgeHttpAdapter(
     setSelectedNode: async (nodeDid) => {
       await client.postJson("/desktop/selected-node", { nodeDid });
     },
-    requestStatusEnrollment: async (serverAddress) =>
+    requestRuntimeAccess: async (serverAddress) =>
       client.postJson("/desktop/peer/enroll-status", { serverAddress }),
     fetchSessionSnapshot: async (sessionId, nodeDid, requestId, timelinePage) =>
       client.postJson<DesktopSessionSnapshot | null>("/desktop/session/snapshot", {

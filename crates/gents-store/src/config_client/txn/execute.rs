@@ -863,6 +863,7 @@ impl ConfigApplyTxn<'_> {
                 let node = Arc::clone(node);
                 let request = QueryRequest::new(document)
                     .with_variables(variables.clone())
+                    .with_identity(identity.clone())
                     .with_context(self.request_context(identity.clone()));
                 let handle = handle.clone();
                 let agent_signer = agent_signer.as_deref().cloned();
@@ -1242,7 +1243,9 @@ impl ConfigApplyTxn<'_> {
         };
         let started = Instant::now();
         let node = Arc::clone(node);
-        let mut request = QueryRequest::new(document).with_context(self.request_context(identity));
+        let mut request = QueryRequest::new(document)
+            .with_identity(identity.clone())
+            .with_context(self.request_context(identity));
         if let Some(variables) = variables {
             request = request.with_variables(variables);
         }

@@ -20,6 +20,8 @@ pub enum OutboxError {
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
+    Response(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
     Identity(#[from] identity::Error),
     #[error("the authored submission is bound to different input, client or runtime")]
     Binding,
@@ -159,7 +161,7 @@ async fn retained(
 }
 
 fn written(response: &serde_json::Value, field: &str) -> Result<(), OutboxError> {
-    if gents_protocol::graphql::graphql_rows_from_response(response, field).len() != 1 {
+    if !crate::graphql::mutation_documents(response, field)?.is_some_and(|rows| rows.len() == 1) {
         return Err(OutboxError::Record);
     }
     Ok(())

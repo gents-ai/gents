@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use gents_desktop_core::client::{
-    client_store_from_other_version, client_store_key_missing,
+    journal::keys::{client_store_from_other_version, client_store_key_missing},
     runtime_directory::{load_runtime_connections, RuntimeDirectory},
     DesktopPaths,
 };

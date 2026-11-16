@@ -59,7 +59,7 @@ describe("FleetRow", () => {
       {},
       {
         ...deployment,
-        source: "enrollment",
+        local: false,
         chatSafe: false,
       },
     );
@@ -73,7 +73,7 @@ describe("FleetRow", () => {
   it("keeps chat disabled until the runtime connection is ready", () => {
     const props = renderRow(
       {},
-      { ...deployment, source: "enrollment", runtimeConnection: "connecting" },
+      { ...deployment, local: false, runtimeConnection: "connecting" },
     );
 
     expect(screen.getByTestId("fleet-status-peer-1")).toHaveTextContent("Connecting");
@@ -90,8 +90,8 @@ describe("FleetRow", () => {
   });
 
   it("exposes and commits an explicit saved-label rename", () => {
-    const onRenamePeer = vi.fn();
-    renderRow({ onRenamePeer });
+    const onRenameRuntime = vi.fn();
+    renderRow({ onRenameRuntime });
 
     const rename = screen.getByTestId("fleet-rename-peer-1");
     expect(rename).toHaveAccessibleName("Rename Local Agent");
@@ -101,7 +101,7 @@ describe("FleetRow", () => {
     fireEvent.change(input, { target: { value: "Amy" } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(onRenamePeer).toHaveBeenCalledWith("peer-1", "Amy");
+    expect(onRenameRuntime).toHaveBeenCalledWith("peer-1", "Amy");
   });
 
   it("shows the deployment's own runtime heartbeat as Last update", () => {
@@ -149,7 +149,7 @@ describe("FleetRow", () => {
     const onSetupInference = vi.fn();
     const hostManagedMissingCredentials: DeploymentView = {
       ...deployment,
-      source: "enrollment",
+      local: false,
       inferenceBackends: [],
       nodeReadiness: {
         ...deployment.nodeReadiness,
@@ -174,7 +174,7 @@ describe("FleetRow", () => {
     const bootstrap = { initToolCeiling: "readonly" };
     renderRow(
       { bootstrap: bootstrap as FleetRowProps["bootstrap"] },
-      { ...deployment, source: "local-standard" },
+      { ...deployment, local: true },
     );
     expect(document.querySelector('[title*="Server ceiling"]')).not.toBeNull();
   });
@@ -183,7 +183,7 @@ describe("FleetRow", () => {
     const bootstrap = { initToolCeiling: "readonly" };
     renderRow(
       { bootstrap: bootstrap as FleetRowProps["bootstrap"] },
-      { ...deployment, source: "enrollment" },
+      { ...deployment, local: false },
     );
     expect(document.querySelector('[title*="Server ceiling"]')).toBeNull();
   });

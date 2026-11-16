@@ -9,12 +9,17 @@ use gents_store::client_journal::outbox;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() -> Result<()> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("gents_desktop_bridge::client_runtime::authored_delivery=debug")
+        .with_test_writer()
+        .try_init();
     let directory = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(directory.path());
     let options = crate::client_test_support::file_journal_options();
     let core = Arc::new(
         ClientRuntime::start_with_paths_and_options(paths.clone(), options.clone()).await?,
     );
+    assert!(core.node().p2p().is_none());
     core.stop_observer_for_test().await;
     let runtime = gents::client_test_support::ServedRuntimeHome::start_unpublished_for(Arc::new(
         core.node_identity().clone(),
@@ -40,7 +45,10 @@ async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() ->
         ..Default::default()
     };
     let retained = core.send_message(message.clone()).await.unwrap_err();
-    assert!(retained.downcast_ref::<SavedForDelivery>().is_some());
+    assert!(
+        retained.downcast_ref::<SavedForDelivery>().is_some(),
+        "{retained:#}"
+    );
     let goal = GoalOperation::Create {
         objective: "Retain this offline Goal".into(),
         token_budget: None,
@@ -59,7 +67,10 @@ async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() ->
         )
         .await
         .unwrap_err();
-    assert!(retained.downcast_ref::<SavedForDelivery>().is_some());
+    assert!(
+        retained.downcast_ref::<SavedForDelivery>().is_some(),
+        "{retained:#}"
+    );
     assert_eq!(
         outbox::pending(
             &core.node_arc(),

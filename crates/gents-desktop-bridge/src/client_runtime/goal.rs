@@ -458,7 +458,7 @@ mod tests {
             .await;
         let core = ClientRuntime::start_with_paths_and_options(
             DesktopPaths::from_root(root.path().join("client")),
-            ClientRuntimeOptions {
+            crate::client_runtime::ClientRuntimeOptions {
                 ..crate::client_test_support::file_journal_options()
             },
         )

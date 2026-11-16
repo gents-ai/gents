@@ -159,7 +159,14 @@ impl ConfigAccess {
         context: defra_core::RequestContext,
     ) -> Result<defra_node::QueryResponse> {
         let started = Instant::now();
-        let mut request = query::QueryRequest::new(document).with_context(context);
+        let actor = context
+            .identity()
+            .map(identity::Did::new)
+            .transpose()
+            .map_err(ConfigClientError::RelationshipTargetIdentity)?;
+        let mut request = query::QueryRequest::new(document)
+            .with_identity(actor)
+            .with_context(context);
         if let Some(variables) = variables {
             request = request.with_variables(variables);
         }
@@ -434,6 +441,11 @@ impl ConfigAccess {
         context: defra_core::RequestContext,
         signer: Option<crate::identity::ManagedAgentSigner>,
     ) -> Result<defra_node::QueryResponse> {
+        let actor = context
+            .identity()
+            .map(identity::Did::new)
+            .transpose()
+            .map_err(ConfigClientError::RelationshipTargetIdentity)?;
         let write_guard = match mutation_write_gate(node).acquire(operation).await {
             Ok(guard) => guard,
             Err(error) => {
@@ -475,7 +487,9 @@ impl ConfigAccess {
                 }
                 let started = Instant::now();
                 native_completion.started = true;
-                let mut request = query::QueryRequest::new(&mutation).with_context(context);
+                let mut request = query::QueryRequest::new(&mutation)
+                    .with_identity(actor)
+                    .with_context(context);
                 if let Some(variables) = variables {
                     request = request.with_variables(variables);
                 }

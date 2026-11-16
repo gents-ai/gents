@@ -1,8 +1,8 @@
 ---- MODULE ClientRequestCredentials ----
-\* lean: none
+\* lean: Identity.ClientDelegation.credentialForActor
 \* crates: gents-store
 \* models: Identity.ClientDelegation.credentialForActor
-EXTENDS Naturals
+EXTENDS Naturals, LeanDecision_Identity_ClientDelegation
 
 CONSTANTS ScopePerRequest, ExplicitEmpty
 Requests == {"first", "second"}
@@ -32,9 +32,9 @@ BeginAnonymous(r) ==
   /\ UNCHANGED <<ambient, observed>>
 
 Credential(r) ==
-  IF supplied[r] = "none"
-    THEN IF ExplicitEmpty THEN "none" ELSE ambient
-    ELSE IF ScopePerRequest THEN bound[r] ELSE ambient
+  LET candidate == IF ScopePerRequest THEN bound[r] ELSE ambient
+  IN IF supplied[r] = "none" /\ ~ExplicitEmpty THEN ambient
+     ELSE IF credentialForActor(supplied[r] # "none", candidate = r) THEN candidate ELSE "none"
 
 Read(r) ==
   /\ r \in active

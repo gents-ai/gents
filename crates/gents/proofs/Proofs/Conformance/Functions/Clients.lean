@@ -1,3 +1,4 @@
+import Proofs.Clients.AuthoredOutbox
 import Proofs.Clients.RuntimeAccess
 import Proofs.Clients.ClientShell.ChatReadiness
 import Proofs.Clients.ClientShell.ObservationOrdering
@@ -44,3 +45,5 @@ deriving instance Lean.ToJson for Action, Decision, StartDisposition
 attribute [conformance_function] Action.disrupts Action.contendsWithUpdate admission startDisposition
 
 end ServiceLifecycle
+
+attribute [conformance_function] ClientAuthoredOutbox.acknowledge

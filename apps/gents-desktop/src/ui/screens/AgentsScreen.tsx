@@ -118,7 +118,18 @@ export function AgentsScreen() {
     },
     [selected, openOn],
   );
-  const shown = nodes.filter((d) => !hidden.node(d.nodeDid));
+  const waiting = (pending ?? []).filter(
+    (request) =>
+      !nodes.some(
+        (node) =>
+          node.nodeDid === request.nodeDid && node.runtimeConnection === "connected",
+      ),
+  );
+  const shown = nodes.filter(
+    (node) =>
+      !hidden.node(node.nodeDid) &&
+      !waiting.some((request) => request.nodeDid === node.nodeDid),
+  );
   const groupChoices = usePackGroups("nodes");
   const hiddenOpen = groupChoices.isOpen("hidden", false);
   if (addingLocal) {
@@ -132,9 +143,7 @@ export function AgentsScreen() {
   }
   /* a request waits among the remote nodes until its node is listed; the
      node's own row then takes its place */
-  const waiting = (pending ?? []).filter(
-    (r) => !nodes.some((node) => node.nodeDid === r.nodeDid),
-  );
+
   const groups = [
     {
       key: "local",
@@ -177,8 +186,8 @@ export function AgentsScreen() {
         </div>
         {pending === null && (
           <p className="mt-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 text-sm text-muted-foreground">
-            Waiting for the signed enrolment state. New enrolment is disabled until the
-            database can be read.
+            Device access status is unavailable. You can still request access using a
+            node’s server address.
           </p>
         )}
         {groups.map((g) => (
@@ -211,28 +220,27 @@ export function AgentsScreen() {
                 )}
               </h2>
             )}
-            {g.nodes.length === 0 &&
-              !(g.key === "remote" && (waiting.length > 0)) && (
-                <div className="mt-3 rounded-2xl border border-dashed border-border px-5 py-4 text-sm text-muted-foreground">
-                  <p>
-                    {g.key === "local"
-                      ? "No node runs on this machine; work happens on the remote nodes."
-                      : "No remote nodes paired."}
-                  </p>
-                  {g.key === "local" &&
-                    bootstrap?.initConfigStatus === "absent" &&
-                    supportsLocalManagedServer() && (
-                      <Button
-                        className="mt-3"
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => setAddingLocal(true)}
-                      >
-                        Set up local node
-                      </Button>
-                    )}
-                </div>
-              )}
+            {g.nodes.length === 0 && !(g.key === "remote" && waiting.length > 0) && (
+              <div className="mt-3 rounded-2xl border border-dashed border-border px-5 py-4 text-sm text-muted-foreground">
+                <p>
+                  {g.key === "local"
+                    ? "No node runs on this machine; work happens on the remote nodes."
+                    : "No remote connections."}
+                </p>
+                {g.key === "local" &&
+                  bootstrap?.initConfigStatus === "absent" &&
+                  supportsLocalManagedServer() && (
+                    <Button
+                      className="mt-3"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setAddingLocal(true)}
+                    >
+                      Set up local node
+                    </Button>
+                  )}
+              </div>
+            )}
             {(g.key !== "hidden" || hiddenOpen) && (
               <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3">
                 {g.key === "remote" &&
@@ -300,12 +308,14 @@ export function AgentsScreen() {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {removing?.label}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This forgets the peer and its synchronization route on this desktop. It
-              does not delete the remote node.
+              This removes the saved connection from this desktop. It does not delete
+              the remote node or change its access grants.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={removingBusy}>Keep peer</AlertDialogCancel>
+            <AlertDialogCancel disabled={removingBusy}>
+              Keep connection
+            </AlertDialogCancel>
             <AlertDialogAction
               disabled={removingBusy}
               onClick={async (event) => {
@@ -314,16 +324,16 @@ export function AgentsScreen() {
                 setRemovingBusy(true);
                 try {
                   await removeRuntime(removing.nodeDid);
-                  toast("Peer removed");
+                  toast("Connection removed");
                   setRemoving(null);
                 } catch (error) {
-                  toastFailure("remove the peer", error);
+                  toastFailure("remove the connection", error);
                 } finally {
                   setRemovingBusy(false);
                 }
               }}
             >
-              {removingBusy ? "Removing…" : "Remove peer"}
+              {removingBusy ? "Removing…" : "Remove connection"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -501,7 +511,7 @@ const AgentRow = memo(function AgentRow({
   );
   const name = d.node.displayName ?? d.label;
   const connection = projectRuntimeConnectionStatus(d.runtimeConnection);
-  
+
   /* the node the app is working with, ringed as the rail's avatar is */
   const active = useSelectedNode()?.nodeDid === d.nodeDid;
   const config = href({
@@ -672,7 +682,7 @@ const AgentRow = memo(function AgentRow({
                     })
                   }
                 >
-                  Remove peer
+                  Remove connection
                 </DropdownMenuItem>
               </DropdownMenuGroup>
             </>
@@ -687,28 +697,46 @@ const AgentRow = memo(function AgentRow({
     dashed outline where the node's portrait goes, its name, and where the
     request stands. */
 function PendingNodeRow({ request: r }: { request: ClientAccessRequestView }) {
-  const { actions: { requestRuntimeAccess } } = useApp();
+  const {
+    actions: { requestRuntimeAccess },
+  } = useApp();
   const bootstrap = useBootstrap();
-  const address = bootstrap?.savedRuntimes.find((runtime) => runtime.nodeDid === r.nodeDid)?.graphql;
+  const saved = bootstrap?.savedRuntimes.find(
+    (runtime) => runtime.nodeDid === r.nodeDid,
+  );
+  const address = saved?.graphql;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const failure = ["rejected", "revoked"].includes(r.state) ? `Access ${r.state}` : null;
+  const connection = useFleet((state) => state.nodes[r.nodeDid]?.runtimeConnection);
+  const failure = ["rejected", "revoked"].includes(r.state)
+    ? `Access ${r.state}`
+    : r.state === "approved" && connection === "refused"
+      ? "Access refused"
+      : null;
   const askAgain = async () => {
     if (!address) return;
     setBusy(true);
     setError(null);
-    try { await requestRuntimeAccess(address); }
-    catch (cause) { setError(errorText(cause)); }
-    finally { setBusy(false); }
+    try {
+      await requestRuntimeAccess(address);
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setBusy(false);
+    }
   };
-  const name = r.nodeDid;
+  const name = saved?.label || r.nodeDid;
   return (
     <li
       data-testid="pending-node"
       className="flex items-center gap-4 rounded-2xl border border-dashed border-border px-5 py-4"
     >
       <span className="grid size-8 shrink-0 place-items-center rounded-full ring-1 ring-border ring-dashed">
-        {failure ? <Inbox className="size-3.5 text-muted-foreground" /> : <Spinner className="size-3.5 text-muted-foreground" />}
+        {failure ? (
+          <Inbox className="size-3.5 text-muted-foreground" />
+        ) : (
+          <Spinner className="size-3.5 text-muted-foreground" />
+        )}
       </span>
       <div className="min-w-0 flex-1">
         <p className="flex min-w-0 items-baseline gap-3">
@@ -723,8 +751,21 @@ function PendingNodeRow({ request: r }: { request: ClientAccessRequestView }) {
                 : `Waiting for ${name} to accept`}
           </span>
         </p>
-        {error && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
-        {failure && address && <Button variant="outline" size="sm" disabled={busy} onClick={() => void askAgain()}>{busy ? "Requesting…" : "Request access again"}</Button>}
+        {error && (
+          <p role="alert" className="break-words text-sm text-destructive">
+            {error}
+          </p>
+        )}
+        {failure && address && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void askAgain()}
+          >
+            {busy ? "Requesting…" : "Request access again"}
+          </Button>
+        )}
         <p className="truncate font-mono text-[11px] text-muted-foreground">
           {r.requestId}
         </p>
@@ -732,4 +773,3 @@ function PendingNodeRow({ request: r }: { request: ClientAccessRequestView }) {
     </li>
   );
 }
-

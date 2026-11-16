@@ -22,7 +22,10 @@ impl ClientAuthorization {
         &self.actor
     }
 
-    pub fn from_authenticated_bearer(actor: identity::Did, authorization: &str) -> Result<Self> {
+    pub(crate) fn from_authenticated_bearer(
+        actor: identity::Did,
+        authorization: &str,
+    ) -> Result<Self> {
         let token = authorization
             .strip_prefix("Bearer ")
             .filter(|token| !token.is_empty())

@@ -12,8 +12,6 @@ anyhow.workspace = true
 thiserror.workspace = true
 async-trait = "0.1"
 blake3 = "1"
-bs58 = "0.5"
-chrono.workspace = true
 crypto.workspace = true
 gents-store = { workspace = true }
 gents-protocol.workspace = true
@@ -24,18 +22,13 @@ identity.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
-rapidhash = { workspace = true }
 tempfile = "3"
 tokio.workspace = true
-tokio-util.workspace = true
 tracing.workspace = true
 ts-rs = { version = "10.1", default-features = false, features = [
     "serde-compat",
-    "chrono-impl",
     "no-serde-warnings",
 ] }
-uuid.workspace = true
 
 [features]
 typescript = ["gents-protocol/typescript"]

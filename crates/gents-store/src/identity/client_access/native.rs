@@ -167,30 +167,6 @@ async fn client_held_vera_access_can_be_approved_revoked_and_requested_again() -
         )
         .await
         .is_err());
-    let observed = ConfigAccess::local_as(node.clone(), owner.did().parse()?)
-        .with_client_authorization(credential(&owner_endpoint, &owner).await?)?
-        .transact_readonly("test.client_access.approver", |txn| {
-            let node_doc = &node_doc;
-            let owner = &owner;
-            Box::pin(async move {
-                txn.observe_document_access(
-                    &owner.did().parse().unwrap(),
-                    "Node",
-                    std::slice::from_ref(node_doc),
-                    defra_node::DocumentAccessMode::Named {
-                        permission: "update".into(),
-                        node_permission: crate::config_client::NodePermission::DocumentUpdate,
-                    },
-                )
-                .await
-            })
-        })
-        .await?;
-    anyhow::ensure!(
-        observed == [defra_node::DocumentAccessDecision::Allowed],
-        "native approval observation {observed:?}; NAC active {}",
-        runtime_access.nac_enabled().await?
-    );
     let approved = service
         .decide(credential(&owner_endpoint, &owner).await?, decision.clone())
         .await

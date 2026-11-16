@@ -30,19 +30,6 @@ def authentication : Family Input Bool where
       expires := if i.fresh then 20 else 10
       verified := i.verified }
 
-structure CredentialInput where
-  presented : Bool
-  actorMatches : Bool
-  ambient : Bool
-  deriving ToJson
-
-@[conformance_family]
-def requestCredential : Family CredentialInput Bool where
-  inputs := [false, true].flatMap fun presented =>
-    [false, true].flatMap fun actorMatches =>
-      [false, true].map fun ambient => { presented, actorMatches, ambient }
-  model := fun i => credentialForActor i.presented i.actorMatches
-
 structure GraphInput where
   remote : Bool
   presented : Bool
@@ -134,18 +121,6 @@ def outboxPreparation : Family OutboxPreparationInput String where
                 { bindingMatches, pending, retainedExists, same }
   model := fun i => ClientAuthoredOutbox.reservationToken <|
     ClientAuthoredOutbox.prepare i.bindingMatches i.pending i.retainedExists i.same
-
-structure OutboxAcknowledgementInput where
-  bindingMatches : Bool
-  runtimeConfirmed : Bool
-  deriving ToJson
-
-@[conformance_family]
-def outboxAcknowledgement : Family OutboxAcknowledgementInput Bool where
-  inputs := [false, true].flatMap fun bindingMatches =>
-    [false, true].map fun runtimeConfirmed =>
-        { bindingMatches, runtimeConfirmed }
-  model := fun i => ClientAuthoredOutbox.acknowledge i.bindingMatches i.runtimeConfirmed
 
 structure OutboxSelectionInput where
   pending : List String

@@ -12,10 +12,10 @@ function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
     state: "healthy",
     cause: null,
     nextAction: null,
-    lastError: null,
+
     runtimeCount: 1,
     connectedRuntimeCount: 1,
-    activationErrorCount: 0,
+
     ...overrides,
   };
 }
@@ -34,7 +34,6 @@ describe("projectSyncOperationalStatus", () => {
         state: "waiting",
         cause: "discovery_offline",
         nextAction: "wait",
-        lastError: "probe failed",
       }),
     );
     expect(offline.kind).toBe("waiting");
@@ -53,17 +52,15 @@ describe("syncHealthDiagnostics", () => {
         cause: "enrollment_authentication",
         nextAction: "enroll_again",
         connectedRuntimeCount: 0,
-        activationErrorCount: 1,
       }),
     );
     expect(diagnostics).toEqual({
       state: "blocked",
       cause: "enrollment_authentication",
       nextAction: "enroll_again",
-      lastError: null,
+
       runtimeCount: 1,
       connectedRuntimeCount: 0,
-      activationErrorCount: 1,
     });
   });
 });

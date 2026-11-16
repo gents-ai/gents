@@ -1,3 +1,4 @@
+import Proofs.Store.Identity.ClientDelegation
 import Proofs.Store.Identity.GrantSets
 import Proofs.Store.Identity.EnrollmentGrant
 import Proofs.Store.SchemaInstall
@@ -37,3 +38,5 @@ deriving instance Lean.ToJson for Classification, Failure, Erasure, StoreWrapper
 attribute [conformance_function] storeWrapped viewWrapped
 
 end AccessClassification
+
+attribute [conformance_function] Identity.ClientDelegation.credentialForActor

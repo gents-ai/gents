@@ -200,35 +200,37 @@ async fn client_held_delegations_match_the_native_verifier() -> anyhow::Result<(
 #[test]
 fn request_credentials_never_inherit_another_callers_token() -> anyhow::Result<()> {
     use super::ClientAuthorization;
-    use gents_lean_vocab::families::client_delegation_request_credential as credentials;
+    use gents_lean_vocab::families::identity_client_delegation_credential_for_actor as credentials;
 
     let client = ClientSigningCapability::from_ed25519_key(&signing_key()?)?;
     let other = ClientSigningCapability::from_ed25519_key(&signing_key()?)?;
     for case in credentials::cases() {
-        let input = &case.input;
-        let actor = if input.actor_matches {
-            client.did()
-        } else {
-            other.did()
-        };
-        if input.ambient {
-            defra_core::signing::set_request_bearer_token(actor, "ambient");
+        for ambient in [false, true] {
+            let input = &case.input;
+            let actor = if input.actor_matches {
+                client.did()
+            } else {
+                other.did()
+            };
+            if ambient {
+                defra_core::signing::set_request_bearer_token(actor, "ambient");
+            }
+            let authorization = input
+                .presented
+                .then(|| {
+                    ClientAuthorization::from_authenticated_bearer(
+                        client.did().parse().expect("client DID"),
+                        "Bearer request",
+                    )
+                })
+                .transpose()?;
+            let context =
+                ClientAuthorization::request_context(authorization.as_ref(), Some(actor.parse()?));
+            let observed = context.bearer_token_for(actor);
+            defra_core::signing::clear_request_bearer_token(actor);
+            case.check(observed.as_deref() == Some("request"));
+            assert!(observed.as_deref() != Some("ambient"));
         }
-        let authorization = input
-            .presented
-            .then(|| {
-                ClientAuthorization::from_authenticated_bearer(
-                    client.did().parse().expect("client DID"),
-                    "Bearer request",
-                )
-            })
-            .transpose()?;
-        let context =
-            ClientAuthorization::request_context(authorization.as_ref(), Some(actor.parse()?));
-        let observed = context.bearer_token_for(actor);
-        defra_core::signing::clear_request_bearer_token(actor);
-        case.check(observed.as_deref() == Some("request"));
-        assert!(observed.as_deref() != Some("ambient"));
     }
     Ok(())
 }

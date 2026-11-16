@@ -463,8 +463,8 @@ impl ConfigApplyTxn<'_> {
                 requester,
                 &collection,
                 &[doc_id],
-                defra_node::DocumentAccessMode::Named {
-                    permission: "update".into(),
+                defra_node::DocumentAccessMode::Document {
+                    permission: acp::DocumentPermission::Update,
                     node_permission: acp::nac::NodePermission::DocumentUpdate,
                 },
             )

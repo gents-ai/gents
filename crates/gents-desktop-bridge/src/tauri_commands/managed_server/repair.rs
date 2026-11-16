@@ -5,7 +5,7 @@ use crate::config::ManagedServerPolicy;
 use crate::error::BridgeError;
 use crate::state::DesktopAppState;
 use crate::types::{ManagedServerRepairOutcome, ManagedServerRepairResult};
-use gents_desktop_core::client::client_store_from_other_version;
+use gents_desktop_core::client::journal::keys::client_store_from_other_version;
 use gents_desktop_core::home_reset::resolve_user_home;
 use gents_desktop_core::preference::MANAGED_SERVER_CONFIG;
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;

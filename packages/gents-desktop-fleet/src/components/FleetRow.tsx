@@ -1,6 +1,5 @@
 import { useState, type KeyboardEvent, type MouseEvent } from "react";
 
-import { formatPeerConnectionError } from "../peerConnectionErrors.js";
 import type {
   BootstrapSummary,
   DeploymentView,
@@ -169,7 +168,7 @@ export function FleetRow({
                 className="fleet-agent-error"
                 data-testid={`fleet-error-${deployment.nodeDid}`}
               >
-                {formatPeerConnectionError(status.lastError, "repair-p2p")}
+                {status.lastError}
               </span>
             ) : null}
           </div>
@@ -243,7 +242,7 @@ export function FleetRow({
             title={
               chatReady
                 ? "Open chat"
-                : "Chat unlocks after signed enrollment and node readiness complete"
+                : "Chat becomes available after runtime access and agent readiness are confirmed"
             }
             type="button"
           >

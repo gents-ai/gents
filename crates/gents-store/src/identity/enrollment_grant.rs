@@ -194,6 +194,8 @@ pub enum EnrollmentGrantError {
     Read(#[source] ConfigClientError),
     #[error("observing what the enrollment member already holds failed; nothing was granted")]
     Observe(#[source] ConfigClientError),
+    #[error("observing native Node administration failed; nothing was granted")]
+    NativeObservation(#[source] acp::Error),
     #[error("recording the enrollment grant receipt failed; nothing was granted")]
     Record(#[source] ConfigClientError),
     #[error("the enrollment grant receipt create returned no document")]
@@ -270,16 +272,23 @@ pub async fn grant_enrollment_authority(
         });
     }
     let mut held = Vec::new();
-    if owner
-        .list_document_relationships("Node", node_doc_id)
-        .await
-        .map_err(EnrollmentGrantError::Observe)?
-        .iter()
-        .any(|relationship| {
-            relationship.relation == NODE_ADMINISTRATOR_RELATION
-                && relationship.subject == member.as_str()
+    let member_actor = member.clone();
+    let node_document = node_doc_id.to_owned();
+    let administration = runtime
+        .run_local_owned(move |node| async move {
+            node.document_acp()
+                .check_named_permission(
+                    &member_actor,
+                    NODE_ADMINISTRATOR_RELATION,
+                    gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                    "nodes",
+                    &node_document,
+                )
+                .await
+                .map_err(EnrollmentGrantError::NativeObservation)
         })
-    {
+        .await?;
+    if administration {
         held.push(EnrollmentGrantTuple::NodeAdministrator);
     }
     for provenance in runtime
@@ -339,17 +348,12 @@ async fn issue(
         let result = match tuple {
             EnrollmentGrantTuple::NodeAdministrator => {
                 owner
-                    .transact_write("enrollment_grant.issue_administrator", |txn| {
-                        Box::pin(async move {
-                            txn.add_actor_relationship(
-                                "Node",
-                                node_doc_id,
-                                NODE_ADMINISTRATOR_RELATION,
-                                member,
-                            )
-                            .await
-                        })
-                    })
+                    .add_actor_relationship(
+                        "Node",
+                        node_doc_id,
+                        NODE_ADMINISTRATOR_RELATION,
+                        member,
+                    )
                     .await
             }
             EnrollmentGrantTuple::Permission(permission) => {
@@ -454,14 +458,23 @@ impl EnrollmentGrantWithdrawal {
         runtime: &ConfigAccess,
         node_doc_id: &str,
     ) -> Result<(), EnrollmentGrantError> {
-        approver
-            .transact_write("client_access.withdraw_administration", |txn| {
-                Box::pin(async move {
-                    self.remove_node_administration_in_txn(txn, node_doc_id)
-                        .await
-                })
-            })
-            .await?;
+        if self
+            .tuples
+            .contains(&EnrollmentGrantTuple::NodeAdministrator)
+        {
+            approver
+                .delete_actor_relationship(
+                    "Node",
+                    node_doc_id,
+                    NODE_ADMINISTRATOR_RELATION,
+                    &self.member,
+                )
+                .await
+                .map_err(|source| EnrollmentGrantError::Revoke {
+                    tuple: "node-administrator",
+                    source,
+                })?;
+        }
         self.revoke_node_permissions(runtime).await?;
         runtime
             .transact_write("client_access.retire_grant", |txn| {

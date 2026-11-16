@@ -47,6 +47,8 @@ export function createGoalDelivery(api: DesktopApiAdapter, stores: ShellStores) 
     return draft;
   }
   async function query(draft: GoalDraft) {
+    if (clientDid() !== draft.clientDid)
+      throw new Error("The original Goal change is unavailable for this client.");
     const recovered = await api.recoverGoalSubmission({
       clientDid: draft.clientDid,
       nodeDid: draft.nodeDid,

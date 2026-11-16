@@ -82,11 +82,28 @@ function SavedGoal({
   const lastChecked = useRef<typeof snapshot | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    if (!draft.locallyRetained || disabled || busy || snapshot?.client?.deployments.find((node) => node.nodeDid === draft.nodeDid)?.runtimeConnection !== "connected") return;
+    if (
+      !draft.locallyRetained ||
+      disabled ||
+      busy ||
+      snapshot?.client?.deployments.find((node) => node.nodeDid === draft.nodeDid)
+        ?.runtimeConnection !== "connected"
+    )
+      return;
     if (lastChecked.current === snapshot) return;
     lastChecked.current = snapshot;
-    void actions.recoverGoalChange(draft.commandId, false, () => mounted.current).catch(() => {});
-  }, [actions, snapshot, draft.commandId, draft.nodeDid, draft.locallyRetained, disabled, busy]);
+    void actions
+      .recoverGoalChange(draft.commandId, false, () => mounted.current)
+      .catch(() => {});
+  }, [
+    actions,
+    snapshot,
+    draft.commandId,
+    draft.nodeDid,
+    draft.locallyRetained,
+    disabled,
+    busy,
+  ]);
   const [error, setError] = useState("");
   async function recover(resume: boolean) {
     if (busy || disabled) return;
@@ -105,6 +122,7 @@ function SavedGoal({
           "This change is not confirmed yet. Check again or resume the saved change.",
         );
       else if (
+        result &&
         actions.acceptsComposeIntent(intent) &&
         stores.selection.getState().sessionId === result.sessionId &&
         draft.selectedSessionId === null
@@ -147,7 +165,9 @@ function SavedGoal({
               ? "Checking the saved goal change…"
               : submitting
                 ? "Saving the goal change…"
-                : draft.locallyRetained ? "Goal saved on this device; waiting for the runtime" : "Goal change awaiting confirmation"
+                : draft.locallyRetained
+                  ? "Goal saved on this device; waiting for the runtime"
+                  : "Goal change awaiting confirmation"
       }
       details={description(draft)}
       detailsText
@@ -172,7 +192,8 @@ function SavedGoal({
               Dismiss saved change
             </Button>
           ) : (
-            !draft.result && !draft.locallyRetained && (
+            !draft.result &&
+            !draft.locallyRetained && (
               <Button
                 variant="ghost"
                 size="sm"

@@ -60,7 +60,7 @@ export function testApp({
   selection?: Partial<SelectionState>;
 } = {}): DesktopApp {
   const app = createDesktopApp({
-    api: api as DesktopApiAdapter,
+    api: { listRuntimeAccess: async () => [], ...api } as unknown as DesktopApiAdapter,
     reportFailure,
     supportsManagedServer,
     sharing,

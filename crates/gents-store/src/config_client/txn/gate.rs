@@ -134,9 +134,17 @@ impl LocalConfigAccess {
         self.agent_signer.clone()
     }
 
-    /// The node's own identity acts unsigned; any other local actor acts
-    /// only under its validated managed signer.
+    /// Native actor operations preserve the verified User delegation or the
+    /// Node/Agent's own signer. This does not authorize a document write.
     pub(crate) fn require_actor_signer(&self) -> Result<()> {
+        if self
+            .client_authorization
+            .as_ref()
+            .is_some_and(|caller| self.identity.as_ref() == Some(caller.actor()))
+        {
+            return Ok(());
+        }
+
         require_mutation_signer(
             &self.node,
             self.identity.as_ref(),

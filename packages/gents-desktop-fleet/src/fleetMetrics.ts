@@ -9,7 +9,6 @@ import {
   selectedNodeReadinessDecision,
 } from "@source-inc/gents-desktop-client";
 
-
 export type StatusTone = "green" | "yellow" | "red";
 
 export type ToolIconKind = "file" | "bash" | "meta" | "cli";
@@ -35,8 +34,7 @@ export function deploymentStatus(
     null,
     syncHealth,
   );
-  const lastError =
-    deployment.runtime?.lastReconcileError ?? deployment.runtime?.lastReconcileError ?? null;
+  const lastError = deployment.runtime?.lastReconcileError ?? null;
   const title = [
     operational.connection.detail,
     operational.route.detail,

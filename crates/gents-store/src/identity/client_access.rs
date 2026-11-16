@@ -256,8 +256,8 @@ impl ClientAccessOwner {
                             actor,
                             "Node",
                             std::slice::from_ref(doc_id),
-                            defra_node::DocumentAccessMode::Named {
-                                permission: "update".into(),
+                            defra_node::DocumentAccessMode::Document {
+                                permission: acp::DocumentPermission::Update,
                                 node_permission: NodePermission::DocumentUpdate,
                             }
                         )
@@ -329,12 +329,6 @@ impl ClientAccessOwner {
     }
 }
 
-#[cfg(test)]
-mod conformance;
-
-#[cfg(test)]
-mod native;
-
 pub async fn list_requests(
     access: &ConfigAccess,
     node_did: &str,
@@ -368,3 +362,9 @@ pub async fn list_requests(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod conformance;
+
+#[cfg(test)]
+mod native;

@@ -273,7 +273,12 @@ pub async fn resolve_graphql_endpoint(
                 && url.fragment().is_none(),
             "GraphQL endpoint must be an HTTP URL without credentials, query or fragment"
         );
-        return client_signed_endpoint(graphql, &identity);
+        let status = gents::client_runtime::fetch_runtime_connection_payload(graphql).await?;
+        let node_did = status["node_did"]
+            .as_str()
+            .filter(|did| !did.is_empty())
+            .context("the runtime did not identify its Node")?;
+        return client_signed_endpoint(graphql, &identity, node_did);
     }
 
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
@@ -322,19 +327,21 @@ fn home_endpoint_as(
         endpoint_serves_home(home_dir, &url),
         "endpoint is not this home's runtime"
     );
-    client_signed_endpoint(url, identity)
+    let node_did = resolve_node_did(Some(home_dir), None)?;
+    client_signed_endpoint(url, identity, &node_did)
 }
 
 fn client_signed_endpoint(
     url: impl Into<String>,
     identity: &gents_desktop_core::client::PrincipalIdentity,
+    node_did: &str,
 ) -> Result<GraphqlEndpoint> {
     let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         identity.private_key_bytes(),
     )?;
     Ok(gents::runtime::lifecycle_hooks::compose_endpoint(
-        GraphqlEndpoint::as_principal(url, identity.did())
-            .with_client_signing_capability(capability)?
+        gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(capability)
+            .endpoint(node_did, &url.into())?
             .with_client_signed_agent_creates(),
     )?)
 }
