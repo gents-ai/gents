@@ -433,3 +433,80 @@ async fn a_conflict_on_a_typed_view_read_reruns_an_application_callback() {
     assert_eq!(served.reads.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert_eq!(served.begins.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
+
+/// `AccessClassification.passthroughWrapped`: an access failure an operation
+/// owner passes through as an application error is classified as the access
+/// owner classified it, however the operation error reaches the classifier.
+#[test]
+fn every_operation_passthrough_keeps_the_access_classification() {
+    use gents_protocol::error_chain::PassedThrough;
+    use gents_protocol::operations::{
+        agent, document, goal, inference, mailbox, p2p, pack, permission, request, session, task,
+        workspace_root,
+    };
+    gents_lean_vocab::families::access_classification_passthrough_wrapped::replay::<
+        AccessClassification,
+        Erasure,
+        AccessFailure,
+        String,
+    >(|input| {
+        let passed = || PassedThrough::new(anyhow::Error::new(input.failure.error()));
+        let erasure = input.erasure;
+        match input.passthrough_wrapper.as_str() {
+            "agent_operation_error_passthrough" => {
+                classify_erased(erasure, agent::AgentOperationError::Passthrough(passed()))
+            }
+            "document_operation_error_passthrough" => classify_erased(
+                erasure,
+                document::DocumentOperationError::Passthrough(passed()),
+            ),
+            "document_delete_error_passthrough" => classify_erased(
+                erasure,
+                document::DocumentDeleteError::Passthrough(passed()),
+            ),
+            "goal_operation_error_passthrough" => {
+                classify_erased(erasure, goal::GoalOperationError::Passthrough(passed()))
+            }
+            "inference_operation_error_passthrough" => classify_erased(
+                erasure,
+                inference::InferenceOperationError::Passthrough(passed()),
+            ),
+            "mailbox_operation_error_passthrough" => classify_erased(
+                erasure,
+                mailbox::MailboxOperationError::Passthrough(passed()),
+            ),
+            "registry_error_passthrough" => {
+                classify_erased(erasure, p2p::RegistryError::Passthrough(passed()))
+            }
+            "application_pairing_error_passthrough" => {
+                classify_erased(erasure, p2p::ApplicationPairingError::Passthrough(passed()))
+            }
+            "pack_operation_error_passthrough" => {
+                classify_erased(erasure, pack::PackOperationError::Passthrough(passed()))
+            }
+            "agent_permission_error_passthrough" => classify_erased(
+                erasure,
+                permission::AgentPermissionError::Passthrough(passed()),
+            ),
+            "request_operation_error_passthrough" => classify_erased(
+                erasure,
+                request::RequestOperationError::Passthrough(passed()),
+            ),
+            "session_operation_error_passthrough" => classify_erased(
+                erasure,
+                session::SessionOperationError::Passthrough(passed()),
+            ),
+            "task_operation_error_passthrough" => {
+                classify_erased(erasure, task::TaskOperationError::Passthrough(passed()))
+            }
+            "workspace_root_error_passthrough" => classify_erased(
+                erasure,
+                workspace_root::WorkspaceRootError::Passthrough(passed()),
+            ),
+            other => panic!(
+                "operation owner {other} has no constructor here; add it with its \
+                 `AccessClassification.PassthroughWrapper` constructor"
+            ),
+        }
+    });
+}

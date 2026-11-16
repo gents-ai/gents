@@ -3228,11 +3228,15 @@ fn holder_wire_name(owner: &str, variant: &str) -> String {
 }
 
 fn modeled_wrappers(families: &serde_json::Value, key: &str) -> BTreeSet<String> {
+    modeled_field(families, key, "wrapper")
+}
+
+fn modeled_field(families: &serde_json::Value, key: &str, name: &str) -> BTreeSet<String> {
     families["functions"][key]["input"]["fields"]
         .as_array()
         .unwrap_or_else(|| panic!("family {key} is generated"))
         .iter()
-        .find(|field| field[0] == "wrapper")
+        .find(|field| field[0] == name)
         .and_then(|field| field[1]["values"].as_array())
         .unwrap_or_else(|| panic!("family {key} has a wrapper enum"))
         .iter()
@@ -3553,9 +3557,25 @@ fn integration_test_layout_flags_extra_and_uncompiled_targets() {
 #[derive(Default)]
 struct BoxedPassthroughVisitor {
     sites: usize,
+    /// `<owner>Passthrough` wire names of the variants holding `PassedThrough`.
+    passed: BTreeSet<String>,
 }
 
 impl<'ast> Visit<'ast> for BoxedPassthroughVisitor {
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        for variant in &item.variants {
+            let passed = variant.fields.iter().any(|field| {
+                matches!(&field.ty, syn::Type::Path(path)
+                    if path.path.segments.last().is_some_and(|segment| segment.ident == "PassedThrough"))
+            });
+            if variant.ident == "Passthrough" && passed {
+                self.passed
+                    .insert(holder_wire_name(&item.ident.to_string(), "Passthrough"));
+            }
+        }
+        visit::visit_item_enum(self, item);
+    }
+
     fn visit_variant(&mut self, variant: &'ast syn::Variant) {
         let boxed = variant
             .fields
@@ -3593,12 +3613,19 @@ fn boxed_passthrough_sites(syntax: &syn::File) -> usize {
     visitor.sites
 }
 
+fn passed_through_owners(syntax: &syn::File) -> BTreeSet<String> {
+    let mut visitor = BoxedPassthroughVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.passed
+}
+
 /// An operation error's `Passthrough` variant holds
 /// `gents_protocol::error_chain::PassedThrough`, never `Box<dyn Error>`: an
 /// anyhow error converted into that box forwards `source()` past its top error,
 /// so a store conflict or refusal on top is invisible to every classifier
-/// (Lean `AccessClassification.hidden_is_unclassified`). The allowlist is
-/// empty and only shrinks.
+/// (Lean `AccessClassification.Chain.hidden_passthrough_is_not_found`). The
+/// owners holding `PassedThrough` are `AccessClassification.PassthroughWrapper`,
+/// whose families replay them. The allowlist is empty and only shrinks.
 #[test]
 fn passthrough_variants_keep_their_source() {
     let root = repo_root();
@@ -3606,13 +3633,15 @@ fn passthrough_variants_keep_their_source() {
     for directory in ["crates", "apps"] {
         all_rust_sources(&root.join(directory), &mut sources);
     }
-    let violations = sources
+    let mut passed = BTreeSet::new();
+    let mut violations = sources
         .into_iter()
         .filter_map(|path| {
             let source = std::fs::read_to_string(&path)
                 .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
             let syntax = syn::parse_file(&source)
                 .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+            passed.extend(passed_through_owners(&syntax));
             let sites = boxed_passthrough_sites(&syntax);
             (sites > 0).then(|| {
                 let relative = path
@@ -3624,6 +3653,23 @@ fn passthrough_variants_keep_their_source() {
             })
         })
         .collect::<BTreeSet<_>>();
+    let families: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("crates/gents-lean-vocab/families.schema.json"))
+            .expect("family schema"),
+    )
+    .expect("family schema JSON");
+    for key in [
+        "access_classification_passthrough_wrapped",
+        "access_classification_passthrough_printed",
+    ] {
+        let modeled = modeled_field(&families, key, "passthrough_wrapper");
+        if passed != modeled {
+            violations.insert(format!(
+                "Passthrough variants holding PassedThrough {passed:?} differ from family {key} \
+                 {modeled:?}"
+            ));
+        }
+    }
     assert!(
         violations.is_empty(),
         "passthrough ratchet failed:\n{}",
