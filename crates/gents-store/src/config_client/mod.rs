@@ -950,8 +950,12 @@ fn is_probably_local_graphql_endpoint(graphql: &str) -> bool {
 }
 
 /// Operator guidance appended to HTTP GraphQL errors; CLI-flavored and stripped by non-CLI consumers.
-pub fn graphql_diagnostic_hint(graphql: &str) -> String {
-    if is_probably_local_graphql_endpoint(graphql) {
+pub fn graphql_diagnostic_hint(graphql: &str, refused: bool) -> String {
+    if refused {
+        format!(
+            "Next:\n  1. The runtime at {graphql} does not admit this identity; run the command from the home that runtime serves\n  2. Or have that home's owner admit this identity"
+        )
+    } else if is_probably_local_graphql_endpoint(graphql) {
         "Next:\n  1. If this home is not initialized, run `gents init`\n  2. Start the runtime with `gents runtime server`\n  3. Inspect it with `gents status`".to_string()
     } else {
         format!(
