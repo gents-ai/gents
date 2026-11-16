@@ -85,12 +85,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "inside the operator's real Gents state")]
     fn the_real_default_home_is_refused() {
-        let real = real_gents_homes()
-            .find(|path| !canonical(path).starts_with(canonical(&std::env::temp_dir())))
-            .expect("an operator home outside the temporary directory");
-        refuse_real_gents_home(&real.join("desktop"), "GENTS_DESKTOP_HOME");
+        let root = tempfile::tempdir().unwrap();
+        let temp = root.path().join("temp");
+        std::fs::create_dir(&temp).unwrap();
+        let real = root.path().join("operator").join(".gents");
+        assert_eq!(
+            real_home_containing(&real.join("desktop"), &temp, std::iter::once(real.clone())),
+            Some(real)
+        );
     }
 
     /// A temporary `HOME` spelled through a symlink (macOS's `/var` to
