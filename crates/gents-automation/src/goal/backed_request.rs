@@ -307,6 +307,7 @@ pub(crate) async fn submit_goal_backed_request(
                 session_id,
                 objective,
                 token_budget,
+                GoalLimits::default(),
                 request,
             )
             .await;
@@ -518,6 +519,7 @@ pub async fn submit_goal_backed_request_with_identity(
                 session_id,
                 objective,
                 token_budget,
+                limits,
                 recovery_request,
             )
             .await?
@@ -535,6 +537,7 @@ pub async fn submit_goal_backed_request_with_identity(
         session_id,
         objective,
         token_budget,
+        limits,
         recovery_request,
     )
     .await?

@@ -153,6 +153,10 @@ fn generated_goal_create_cases_fence_authority_and_idempotency() {
             objective: case.objective.clone(),
             objective_nonempty: case.objective_nonempty,
             token_budget: family_budget(case.token_budget.as_ref()),
+            limits: gents_protocol::goal::GoalLimits {
+                blocked_audit_threshold: case.blocked_audit_threshold,
+                max_infrastructure_retries: case.max_infrastructure_retries,
+            },
             goal_tools: case.goal_tools,
             goal_create: case.goal_create,
         };
@@ -164,6 +168,10 @@ fn generated_goal_create_cases_fence_authority_and_idempotency() {
                 session: existing.session.clone(),
                 objective: existing.objective.clone(),
                 token_budget: family_budget(existing.token_budget.as_ref()),
+                limits: gents_protocol::goal::GoalLimits {
+                    blocked_audit_threshold: existing.blocked_audit_threshold,
+                    max_infrastructure_retries: existing.max_infrastructure_retries,
+                },
             });
         decide_model_goal_create(&request, existing.as_ref())
     });

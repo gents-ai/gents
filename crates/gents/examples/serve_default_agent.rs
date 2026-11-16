@@ -10,10 +10,24 @@ fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
 
+/// The value of `--home`, in either `--home DIR` or `--home=DIR` form.
+fn home_flag() -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--home" {
+            return args.next();
+        }
+        if let Some(value) = arg.strip_prefix("--home=") {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_target(false).init();
-    let home_dir = PathBuf::from(env_or("GENTS_HOME", "./var/gents-home"));
+    let home_dir = PathBuf::from(home_flag().unwrap_or_else(|| "./var/gents-home".to_string()));
     let node_name = env_or("GENTS_NAME", "demo");
     let home = if home_dir.join("node.key").exists() {
         EmbeddedHome::open_retained(&home_dir).await?

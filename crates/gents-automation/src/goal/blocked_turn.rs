@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
+use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit, UsageLimit};
 use gents_protocol::node_readiness::is_behavior_unavailable_rejection;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -23,6 +23,24 @@ pub(crate) struct FailedCall {
     pub(crate) failure_reason: Option<String>,
     pub(crate) queued_at: Option<String>,
     pub(crate) started_at: Option<String>,
+}
+
+impl FailedCall {
+    /// The provider usage limit that stopped this call. The recorded failure
+    /// carries no retry policy, so a throttle beyond `LONG_RATE_LIMIT_WAIT`
+    /// reads as exhaustion here even where the agent's
+    /// `max_rate_limit_wait_ms` differs.
+    pub(crate) fn usage_limit(&self, now: DateTime<Utc>) -> Option<UsageLimit> {
+        let text = self
+            .failure_reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())?;
+        match classify_provider_limit(text, now)? {
+            ProviderLimit::UsageExhausted(limit) => Some(limit),
+            ProviderLimit::Throttled { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -71,11 +89,9 @@ pub(crate) fn blocked_turn_from(
     let profiles = references.agent_profiles(agent_did);
     let stopped_by_call = call.and_then(|call| {
         let text = call.failure_reason.as_deref()?;
-        let (reason, resets_at) = match classify_provider_limit(text, now) {
-            Some(ProviderLimit::UsageExhausted(limit)) => {
-                (BlockedReason::UsageLimit, limit.resets_at)
-            }
-            _ => match account_failure_state(text)? {
+        let (reason, resets_at) = match call.usage_limit(now) {
+            Some(limit) => (BlockedReason::UsageLimit, limit.resets_at),
+            None => match account_failure_state(text)? {
                 "disabled" => (BlockedReason::AccountDisabled, None),
                 "removed from this node" => (BlockedReason::AccountRemoved, None),
                 "signed out (expired or revoked)" => (BlockedReason::AccountSignedOut, None),

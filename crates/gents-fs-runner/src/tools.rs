@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use globset::GlobBuilder;
 
+#[cfg(feature = "test-seams")]
 use crate::blocker::TraversalBlocker;
 use crate::context::RunnerContext;
 use crate::output::{
@@ -79,9 +80,11 @@ pub fn execute_request_with_base(
     base: Option<PathBuf>,
     request: NativeFsRunnerRequest,
 ) -> Result<String> {
-    execute_request_with_blocker(root, base, request, None)
+    let context = RunnerContext::new_with_base(root, base)?;
+    execute_in_context(&context, request)
 }
 
+#[cfg(feature = "test-seams")]
 pub fn execute_request_with_blocker(
     root: PathBuf,
     base: Option<PathBuf>,
@@ -89,10 +92,14 @@ pub fn execute_request_with_blocker(
     blocker: Option<TraversalBlocker>,
 ) -> Result<String> {
     let context = RunnerContext::new_with_base(root, base)?.with_blocker(blocker);
+    execute_in_context(&context, request)
+}
+
+fn execute_in_context(context: &RunnerContext, request: NativeFsRunnerRequest) -> Result<String> {
     match request {
-        NativeFsRunnerRequest::ListFiles(args) => list_files(&context, args),
-        NativeFsRunnerRequest::Glob(args) => glob(&context, args),
-        NativeFsRunnerRequest::Grep(args) => grep(&context, args),
+        NativeFsRunnerRequest::ListFiles(args) => list_files(context, args),
+        NativeFsRunnerRequest::Glob(args) => glob(context, args),
+        NativeFsRunnerRequest::Grep(args) => grep(context, args),
     }
 }
 

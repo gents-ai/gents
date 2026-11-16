@@ -575,6 +575,11 @@ pub(super) struct CallbackAccess<'a> {
     pub access: &'a gents_store::config_client::ConfigAccess,
 }
 
+/// A workspace this callback creates freezes its instructions with the writer
+/// Agent's `max_instruction_chars` from `snapshot`. A writer absent from
+/// `ActiveRuntimeSnapshot::tool_configs` (an unavailable Agent) has no resolved
+/// configuration, so its workspace takes the unset default
+/// `INSTRUCTION_TEXT_BUDGET`.
 #[expect(
     clippy::too_many_arguments,
     reason = "the writer's tool configuration bounds the workspace it freezes"
@@ -800,8 +805,6 @@ async fn execute_running_invocation(
 
     persist_journal(node, access, invocation, &journal, LIFECYCLE_RUNNING, None).await?;
 
-    // A writer without an active tool configuration on this node freezes with
-    // the documented unset default.
     let max_instruction_chars = snapshot
         .and_then(|snapshot| snapshot.tool_config(writer_agent))
         .map_or(gents_session::workspace::INSTRUCTION_TEXT_BUDGET, |tools| {

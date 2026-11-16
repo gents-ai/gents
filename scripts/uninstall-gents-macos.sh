@@ -3,10 +3,11 @@
 #   ./uninstall-gents-macos.sh           # interactive (asks for confirmation)
 #   ./uninstall-gents-macos.sh --yes     # no prompt
 #   ./uninstall-gents-macos.sh --dry-run # show what would be removed, change nothing
+#   ./uninstall-gents-macos.sh --home DIR # remove the Gents home at DIR (default ~/.gents)
 
 set -euo pipefail
 
-GENTS_HOME_DEFAULT="${GENTS_HOME:-$HOME/.gents}"
+AGENT_HOME="$HOME/.gents"
 SERVICE_LABEL="ai.gents.runtime"
 LAUNCH_AGENT_PLIST="$HOME/Library/LaunchAgents/${SERVICE_LABEL}.plist"
 KEYCHAIN_SERVICE="com.source-inc.gents.identity"
@@ -44,16 +45,22 @@ LIBRARY_NAME_PATTERNS=(
 
 ASSUME_YES=0
 DRY_RUN=0
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --yes|-y) ASSUME_YES=1 ;;
     --dry-run|-n) DRY_RUN=1 ;;
+    --home)
+      [[ $# -ge 2 ]] || { echo "--home needs a folder" >&2; exit 2; }
+      AGENT_HOME="$2"
+      shift
+      ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
-    *) echo "Unknown argument: $arg" >&2; exit 2 ;;
+    *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
+  shift
 done
 
 log()  { printf '  %s\n' "$*"; }
@@ -102,7 +109,7 @@ sudo_remove_path() {
 cat <<EOF
 This will remove Gents and its local data from this Mac:
 
-  Agent home        : $GENTS_HOME_DEFAULT
+  Agent home        : $AGENT_HOME
   LaunchAgent       : $LAUNCH_AGENT_PLIST  (job: $SERVICE_LABEL)
   Keychain identity : service "$KEYCHAIN_SERVICE"
   CLI binary        : $CLI_BINARY
@@ -152,10 +159,10 @@ info "Removing the CLI binary"
 sudo_remove_path "$CLI_BINARY"
 
 info "Removing the agent home"
-if [[ -z "$GENTS_HOME_DEFAULT" || "$GENTS_HOME_DEFAULT" == "/" || "$GENTS_HOME_DEFAULT" == "$HOME" ]]; then
-  echo "Refusing to remove suspicious GENTS_HOME: '$GENTS_HOME_DEFAULT'" >&2
+if [[ -z "$AGENT_HOME" || "$AGENT_HOME" == "/" || "$AGENT_HOME" == "$HOME" ]]; then
+  echo "Refusing to remove suspicious home: '$AGENT_HOME'" >&2
 else
-  remove_path "$GENTS_HOME_DEFAULT"
+  remove_path "$AGENT_HOME"
 fi
 
 info "Removing the macOS keychain identity ($KEYCHAIN_SERVICE)"

@@ -1733,6 +1733,8 @@ export function createDesktopUiHarness(
             objective: "Make the import job resumable after a crash",
             status: "usage_limited",
             tokenBudget: "400000",
+            blockedAuditThreshold: "3",
+            maxInfrastructureRetries: "2",
             tokensUsed: "312400",
             activeTimeSeconds: "2460",
             continuationSequence: "4",
