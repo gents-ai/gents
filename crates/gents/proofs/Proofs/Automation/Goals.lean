@@ -69,12 +69,26 @@ inductive Action where
   | cleanTurn
   deriving DecidableEq, Repr
 
+/-- Consecutive same-condition blocked audits that block an active Goal when its
+Task declares no threshold. A Goal pins the threshold it was created with, so a
+later Task edit never changes the limit of a running Goal. -/
+def blockedAuditThreshold : Nat := 3
+
+/-- Automatic re-prompt requests after a Failed or Dead terminal when the Goal's
+Task declares no limit. Goal infrastructure retries create new requests and have
+a separate budget from provider transport retries; the limit prevents an
+unattended Goal from repeatedly consuming resources when the underlying failure
+persists. A Goal pins the limit it was created with. -/
+def maxInfrastructureRetries : Nat := 2
+
 def nextBlockedAudits (current : Nat) : AuditObservation → Nat
   | .sameRequest => current
   | .sameCondition => current + 1
   | .newCondition => 1
 
-def step? (state : State) : Action → Option State
+def step? (state : State) (action : Action)
+    (threshold : Nat := blockedAuditThreshold) : Option State :=
+  match action with
   | .pause =>
       if state.status = .active ∨ state.status = .budgetLimited then
         some { state with status := .paused }
@@ -97,7 +111,7 @@ def step? (state : State) : Action → Option State
       if state.status = .active then
         let audits := nextBlockedAudits state.blockedAudits observation
         some { state with
-          status := if audits ≥ 3 then .blocked else .active
+          status := if audits ≥ threshold then .blocked else .active
           blockedAudits := audits }
       else none
   | .operatorBlock =>
@@ -157,11 +171,11 @@ theorem pause_resume_preserves_pending_wrapup (state paused resumed : State)
     simp [h_requested, h_incomplete]
   · simp at h_pause
 
-theorem blocked_requires_three_audits
-    (state post : State) (observation : AuditObservation)
-    (h : step? state (.blockedAudit observation) = some post)
+theorem blocked_requires_threshold_audits
+    (state post : State) (observation : AuditObservation) (threshold : Nat)
+    (h : step? state (.blockedAudit observation) threshold = some post)
     (hblocked : post.status = .blocked) :
-    post.blockedAudits ≥ 3 := by
+    post.blockedAudits ≥ threshold := by
   simp only [step?] at h
   split at h
   · cases h
@@ -171,15 +185,22 @@ theorem blocked_requires_three_audits
     · simp at hblocked
   · simp at h
 
-theorem blocked_audit_below_threshold_stays_active
+theorem blocked_requires_three_audits
     (state post : State) (observation : AuditObservation)
     (h : step? state (.blockedAudit observation) = some post)
-    (hbelow : post.blockedAudits < 3) :
+    (hblocked : post.status = .blocked) :
+    post.blockedAudits ≥ 3 :=
+  blocked_requires_threshold_audits state post observation blockedAuditThreshold h hblocked
+
+theorem blocked_audit_below_threshold_stays_active
+    (state post : State) (observation : AuditObservation) (threshold : Nat)
+    (h : step? state (.blockedAudit observation) threshold = some post)
+    (hbelow : post.blockedAudits < threshold) :
     post.status = .active := by
   simp only [step?] at h
   split at h
   · cases h
-    change nextBlockedAudits state.blockedAudits observation < 3 at hbelow
+    change nextBlockedAudits state.blockedAudits observation < threshold at hbelow
     simp only
     split <;> rename_i hthreshold
     · exact False.elim ((Nat.not_lt_of_ge hthreshold) hbelow)
@@ -245,15 +266,15 @@ inductive Decision where
   | abandonWrapup
   deriving DecidableEq, Repr
 
-/-- Goal infrastructure retries create new requests and have a separate budget
-from provider transport retries. The fixed limit prevents an unattended Goal
-from repeatedly consuming resources when the underlying failure persists. -/
+/-- `maxRetries` is the Goal's pinned infrastructure retry limit
+(`maxInfrastructureRetries` when its Task declared none). -/
 def decide
     (status : Status)
     (terminal : RequestTerminal)
     (sessionIdle childExists budgetReached hasActivity requestIsWrapup : Bool)
     (infrastructureRetries : Nat)
-    (wrapupRequested wrapupCompleted : Bool) : Decision :=
+    (wrapupRequested wrapupCompleted : Bool)
+    (maxRetries : Nat := maxInfrastructureRetries) : Decision :=
   if !sessionIdle ∨ childExists then .none
   else match status with
   | .active =>
@@ -261,7 +282,7 @@ def decide
       | .interrupted | .superseded => .pause
       | .failed | .dead =>
           if budgetReached then .wrapup
-          else if infrastructureRetries < 2 then .retry else .pause
+          else if infrastructureRetries < maxRetries then .retry else .pause
       | .completed =>
           if !hasActivity then .pause
           else if budgetReached then .wrapup else .continue
@@ -272,51 +293,51 @@ def decide
       | .completed => .none
       | .interrupted | .superseded => .pause
       | .failed | .dead =>
-          if infrastructureRetries < 2 then .retry else .abandonWrapup
+          if infrastructureRetries < maxRetries then .retry else .abandonWrapup
   | .paused | .blocked | .usageLimited | .complete | .stopped => .none
 
 theorem stopped_never_continues
     (terminal : RequestTerminal) (idle child budget activity wrapup : Bool)
-    (retries : Nat) (requested completed : Bool) :
-    decide .stopped terminal idle child budget activity wrapup retries requested completed = .none := by
+    (retries maxRetries : Nat) (requested completed : Bool) :
+    decide .stopped terminal idle child budget activity wrapup retries requested completed maxRetries = .none := by
   cases idle <;> cases child <;> simp [decide]
 
 theorem exhausted_active_never_retries
     (terminal : RequestTerminal) (idle child activity wrapup : Bool)
-    (retries : Nat) (requested completed : Bool) :
-    decide .active terminal idle child true activity wrapup retries requested completed ≠ .retry := by
+    (retries maxRetries : Nat) (requested completed : Bool) :
+    decide .active terminal idle child true activity wrapup retries requested completed maxRetries ≠ .retry := by
   cases terminal <;> cases idle <;> cases child <;> cases activity <;> simp [decide]
 
 theorem exhausted_failure_requests_wrapup
     (terminal : RequestTerminal) (activity wrapup : Bool)
-    (retries : Nat) (requested completed : Bool)
+    (retries maxRetries : Nat) (requested completed : Bool)
     (hfailure : terminal = .failed ∨ terminal = .dead) :
-    decide .active terminal true false true activity wrapup retries requested completed = .wrapup := by
+    decide .active terminal true false true activity wrapup retries requested completed maxRetries = .wrapup := by
   rcases hfailure with rfl | rfl <;> simp [decide]
 
 theorem busy_session_never_continues
     (status : Status) (terminal : RequestTerminal) (child budget activity wrapup : Bool)
-    (retries : Nat) (requested completed : Bool) :
-    decide status terminal false child budget activity wrapup retries requested completed = .none := by
+    (retries maxRetries : Nat) (requested completed : Bool) :
+    decide status terminal false child budget activity wrapup retries requested completed maxRetries = .none := by
   simp [decide]
 
 theorem existing_child_never_duplicates
     (status : Status) (terminal : RequestTerminal) (idle budget activity wrapup : Bool)
-    (retries : Nat) (requested completed : Bool) :
-    decide status terminal idle true budget activity wrapup retries requested completed = .none := by
+    (retries maxRetries : Nat) (requested completed : Bool) :
+    decide status terminal idle true budget activity wrapup retries requested completed maxRetries = .none := by
   cases idle <;> simp [decide]
 
 theorem inactive_goal_never_continues
     (status : Status) (terminal : RequestTerminal) (idle child budget activity wrapup : Bool)
-    (retries : Nat) (requested completed : Bool)
+    (retries maxRetries : Nat) (requested completed : Bool)
     (hinactive : status ≠ .active ∧ status ≠ .budgetLimited) :
-    decide status terminal idle child budget activity wrapup retries requested completed = .none := by
+    decide status terminal idle child budget activity wrapup retries requested completed maxRetries = .none := by
   rcases hinactive with ⟨ha, hb⟩
   cases status <;> simp_all [decide]
 
 theorem completed_wrapup_is_one_shot
-    (terminal : RequestTerminal) (activity : Bool) (retries : Nat) :
-    decide .budgetLimited terminal true false true activity true retries true true = .none := by
+    (terminal : RequestTerminal) (activity : Bool) (retries maxRetries : Nat) :
+    decide .budgetLimited terminal true false true activity true retries true true maxRetries = .none := by
   simp [decide]
 
 /-- A completed wrap-up turn ends the wrap-up before its `wrapupCompleted`
@@ -326,9 +347,9 @@ reconciler that reads the Goal in between still sees `wrapupCompleted = false`;
 the decision must not depend on that write. `tla/GoalWrapup.tla`
 (`MCGoalWrapupNoWrapupGuard`) shows the second wrap-up when it does (#3810). -/
 theorem completed_wrapup_child_never_repeats
-    (budget activity : Bool) (retries : Nat) (requested completed : Bool) :
+    (budget activity : Bool) (retries maxRetries : Nat) (requested completed : Bool) :
     decide .budgetLimited .completed true false budget activity true retries
-      requested completed = .none := by
+      requested completed maxRetries = .none := by
   cases requested <;> cases completed <;> simp [decide]
 
 /-- One exhaustion yields at most one wrap-up decision: either the over-budget
@@ -339,10 +360,10 @@ the keyed child of `GoalAutomation.ClaimedPublication`, this is the
 `tla/GoalWrapup.tla`. -/
 theorem wrapup_requires_owed_exhaustion
     (status : Status) (terminal : RequestTerminal)
-    (idle child budget activity requestWrapup : Bool) (retries : Nat)
+    (idle child budget activity requestWrapup : Bool) (retries maxRetries : Nat)
     (requested completed : Bool)
     (h : decide status terminal idle child budget activity requestWrapup retries
-      requested completed = .wrapup) :
+      requested completed maxRetries = .wrapup) :
     idle = true ∧ child = false ∧
       ((status = .active ∧ budget = true) ∨
         (status = .budgetLimited ∧ requested = true ∧ completed = false ∧
@@ -402,9 +423,9 @@ theorem reassignment_rejects_old_root (old next : String) (different : old ≠ n
   simp [assignmentAllows, different]
 
 theorem interrupted_wrapup_does_not_retry
-    (activity requestWrapup : Bool) (retries : Nat) :
+    (activity requestWrapup : Bool) (retries maxRetries : Nat) :
     (decide Status.budgetLimited RequestTerminal.interrupted true false true activity
-      requestWrapup retries true false) ≠ Decision.retry := by
+      requestWrapup retries true false maxRetries) ≠ Decision.retry := by
   cases requestWrapup <;> simp [Goals.decide]
 
 end Goals

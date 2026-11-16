@@ -22,6 +22,7 @@ structure GoalDecisionCase where
   infrastructureRetries : Nat
   wrapupRequested : Bool
   wrapupCompleted : Bool
+  maxInfrastructureRetries : Nat := Goals.maxInfrastructureRetries
 
 def terminalName : Goals.RequestTerminal → String
   | .completed => "completed"
@@ -123,6 +124,22 @@ def goalDecisionCases : List GoalDecisionCase :=
       sessionIdle := true, childExists := false, budgetReached := true, hasActivity := true,
       requestIsWrapup := true, infrastructureRetries := 2,
       wrapupRequested := true, wrapupCompleted := false }
+  , { name := "configured_retry_limit_retries_past_default", status := .active, terminal := .failed,
+      sessionIdle := true, childExists := false, budgetReached := false, hasActivity := true,
+      requestIsWrapup := false, infrastructureRetries := 2,
+      wrapupRequested := false, wrapupCompleted := false, maxInfrastructureRetries := 3 }
+  , { name := "configured_retry_limit_pauses_at_bound", status := .active, terminal := .dead,
+      sessionIdle := true, childExists := false, budgetReached := false, hasActivity := true,
+      requestIsWrapup := false, infrastructureRetries := 3,
+      wrapupRequested := false, wrapupCompleted := false, maxInfrastructureRetries := 3 }
+  , { name := "zero_retry_limit_pauses_first_failure", status := .active, terminal := .failed,
+      sessionIdle := true, childExists := false, budgetReached := false, hasActivity := true,
+      requestIsWrapup := false, infrastructureRetries := 0,
+      wrapupRequested := false, wrapupCompleted := false, maxInfrastructureRetries := 0 }
+  , { name := "zero_retry_limit_abandons_failed_wrapup", status := .budgetLimited, terminal := .failed,
+      sessionIdle := true, childExists := false, budgetReached := true, hasActivity := true,
+      requestIsWrapup := true, infrastructureRetries := 0,
+      wrapupRequested := true, wrapupCompleted := false, maxInfrastructureRetries := 0 }
   , { name := "paused_is_inactive", status := .paused, terminal := .completed,
       sessionIdle := true, childExists := false, budgetReached := false, hasActivity := true,
       requestIsWrapup := false, infrastructureRetries := 0,
@@ -154,12 +171,13 @@ def goalDecision : Family GoalDecisionCase Goals.Decision where
   inputs := goalDecisionCases
   model := fun w => Goals.decide w.status w.terminal w.sessionIdle w.childExists
     w.budgetReached w.hasActivity w.requestIsWrapup w.infrastructureRetries
-    w.wrapupRequested w.wrapupCompleted
+    w.wrapupRequested w.wrapupCompleted w.maxInfrastructureRetries
 
 structure GoalTransitionCase where
   name : String
   pre : Goals.State
   action : Goals.Action
+  blockedAuditThreshold : Nat := Goals.blockedAuditThreshold
 
 def goalCaseState (status : Goals.Status) (audits : Nat := 0)
     (requested : Bool := false) (completed : Bool := false) : Goals.State :=
@@ -221,6 +239,12 @@ def goalTransitionCases : List GoalTransitionCase :=
       action := .cleanTurn }
   , { name := "clean_turn_rejected_while_blocked", pre := goalCaseState .blocked 3,
       action := .cleanTurn }
+  , { name := "configured_threshold_keeps_third_audit_active", pre := goalCaseState .active 2,
+      action := .blockedAudit .sameCondition, blockedAuditThreshold := 4 }
+  , { name := "configured_threshold_blocks_at_bound", pre := goalCaseState .active 3,
+      action := .blockedAudit .sameCondition, blockedAuditThreshold := 4 }
+  , { name := "threshold_one_blocks_first_audit", pre := goalCaseState .active,
+      action := .blockedAudit .newCondition, blockedAuditThreshold := 1 }
   ]
 
 inductive GoalActionWire where
@@ -276,6 +300,7 @@ structure GoalTransitionInput where
   preWrapupRequested : Bool
   preWrapupCompleted : Bool
   action : GoalActionWire
+  blockedAuditThreshold : Nat
   deriving Lean.ToJson
 
 /-- A rejected step leaves the goal as it was, so the observed state after a
@@ -293,12 +318,12 @@ def goalTransition : Family GoalTransitionInput GoalTransitionOutput where
   inputs := goalTransitionCases.map fun w =>
     { name := w.name, preStatus := w.pre.status, preBlockedAudits := w.pre.blockedAudits
     , preWrapupRequested := w.pre.wrapupRequested, preWrapupCompleted := w.pre.wrapupCompleted
-    , action := GoalActionWire.ofModel w.action }
+    , action := GoalActionWire.ofModel w.action, blockedAuditThreshold := w.blockedAuditThreshold }
   model := fun i =>
     let pre : Goals.State :=
       { status := i.preStatus, blockedAudits := i.preBlockedAudits
       , wrapupRequested := i.preWrapupRequested, wrapupCompleted := i.preWrapupCompleted }
-    let result := Goals.step? pre i.action.toModel
+    let result := Goals.step? pre i.action.toModel i.blockedAuditThreshold
     let post := result.getD pre
     { accepted := result.isSome, status := post.status, blockedAudits := post.blockedAudits
     , wrapupRequested := post.wrapupRequested, wrapupCompleted := post.wrapupCompleted }
@@ -799,10 +824,11 @@ structure GoalReadinessGateCase where
   input : Input
 
 private def activeInput (terminal : Goals.RequestTerminal) (retries : Nat := 0)
-    (budget : Bool := false) (child : Bool := false) (idle : Bool := true) : Input :=
+    (budget : Bool := false) (child : Bool := false) (idle : Bool := true)
+    (maxRetries : Nat := Goals.maxInfrastructureRetries) : Input :=
   { status := .active, terminal, sessionIdle := idle, childExists := child,
     budgetReached := budget, hasActivity := true, requestIsWrapup := false, retries,
-    wrapupRequested := false, wrapupCompleted := false }
+    wrapupRequested := false, wrapupCompleted := false, maxRetries }
 
 private def pendingWrapupInput (terminal : Goals.RequestTerminal) (retries : Nat) : Input :=
   { status := .budgetLimited, terminal, sessionIdle := true, childExists := false,
@@ -861,6 +887,11 @@ def goalReadinessGateCases : List GoalReadinessGateCase :=
       settled := true, cause := .goalControlUnavailable, input := activeInput .completed 0 (child := true) }
   , { name := "busy_session_never_continues", observation := .unavailable,
       settled := true, cause := .attempt, input := activeInput .completed (idle := false) }
+  , { name := "configured_retry_limit_charges_past_default", observation := .ready true,
+      settled := true, cause := .attempt, input := activeInput .failed 2 (maxRetries := 3) }
+  , { name := "zero_retry_limit_pauses_goal_control_failure", observation := .ready true,
+      settled := true, cause := .goalControlUnavailable,
+      input := activeInput .completed 0 (maxRetries := 0) }
   ]
 
 inductive GoalObservationWire where
@@ -924,6 +955,7 @@ structure ReadinessGateInput where
   infrastructureRetries : Nat
   wrapupRequested : Bool
   wrapupCompleted : Bool
+  maxInfrastructureRetries : Nat
   deriving Lean.ToJson
 
 def ReadinessGateInput.ofCase (w : GoalReadinessGateCase) : ReadinessGateInput :=
@@ -933,7 +965,8 @@ def ReadinessGateInput.ofCase (w : GoalReadinessGateCase) : ReadinessGateInput :
   , childExists := w.input.childExists, budgetReached := w.input.budgetReached
   , hasActivity := w.input.hasActivity, requestIsWrapup := w.input.requestIsWrapup
   , infrastructureRetries := w.input.retries, wrapupRequested := w.input.wrapupRequested
-  , wrapupCompleted := w.input.wrapupCompleted }
+  , wrapupCompleted := w.input.wrapupCompleted
+  , maxInfrastructureRetries := w.input.maxRetries }
 
 def ReadinessGateInput.toObservation (i : ReadinessGateInput) : Observation :=
   i.observation.toModel i.newerThanTerminal
@@ -942,7 +975,8 @@ def ReadinessGateInput.toInput (i : ReadinessGateInput) : Input :=
   { status := i.status, terminal := i.terminal, sessionIdle := i.sessionIdle
   , childExists := i.childExists, budgetReached := i.budgetReached, hasActivity := i.hasActivity
   , requestIsWrapup := i.requestIsWrapup, retries := i.infrastructureRetries
-  , wrapupRequested := i.wrapupRequested, wrapupCompleted := i.wrapupCompleted }
+  , wrapupRequested := i.wrapupRequested, wrapupCompleted := i.wrapupCompleted
+  , maxRetries := i.maxInfrastructureRetries }
 
 structure ReadinessGateOutput where
   readiness : Readiness

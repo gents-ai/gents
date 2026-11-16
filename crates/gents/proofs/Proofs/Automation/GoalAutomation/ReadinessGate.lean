@@ -79,6 +79,8 @@ structure Input where
   retries : Nat
   wrapupRequested : Bool
   wrapupCompleted : Bool
+  /-- The Goal's pinned infrastructure retry limit. -/
+  maxRetries : Nat := maxInfrastructureRetries
   deriving DecidableEq, Repr
 
 
@@ -89,12 +91,13 @@ def baseDecision (cause : Cause) (i : Input) : Decision :=
   | .attempt =>
       Goals.decide i.status i.terminal i.sessionIdle i.childExists i.budgetReached
         i.hasActivity i.requestIsWrapup i.retries i.wrapupRequested i.wrapupCompleted
+        i.maxRetries
   | .goalControlUnavailable =>
       Goals.decide i.status .failed i.sessionIdle i.childExists i.budgetReached
-        false i.requestIsWrapup i.retries i.wrapupRequested i.wrapupCompleted
+        false i.requestIsWrapup i.retries i.wrapupRequested i.wrapupCompleted i.maxRetries
   | .agentUnavailable =>
       Goals.decide i.status .completed i.sessionIdle i.childExists i.budgetReached
-        true false i.retries i.wrapupRequested i.wrapupCompleted
+        true false i.retries i.wrapupRequested i.wrapupCompleted i.maxRetries
 
 def publishes : Decision → Bool
   | .continue | .retry | .wrapup => true
@@ -121,8 +124,6 @@ def gate (observation : Observation) (settled : Bool) (cause : Cause) (i : Input
     | .waiting => .awaitReadiness
     | .unavailable => .agentUnavailable
   else .decided base
-
-def maxInfrastructureRetries : Nat := 2
 
 
 
@@ -229,13 +230,12 @@ theorem claimed_stop_has_legal_goal_transition
 
 theorem decide_retry_within_budget
     (status : Status) (terminal : RequestTerminal)
-    (idle child budget activity wrapup : Bool) (retries : Nat)
+    (idle child budget activity wrapup : Bool) (retries maxRetries : Nat)
     (requested completed : Bool)
     (h : Goals.decide status terminal idle child budget activity wrapup retries requested completed
-      = .retry) :
-    retries < maxInfrastructureRetries := by
+      maxRetries = .retry) :
+    retries < maxRetries := by
   unfold Goals.decide at h
-  unfold maxInfrastructureRetries
   split at h
   · cases h
   · cases status <;> cases terminal <;> (try simp only at h) <;> (repeat' split at h) <;>
@@ -243,10 +243,11 @@ theorem decide_retry_within_budget
 
 theorem decide_publishes_only_for_open_goals
     (status : Status) (terminal : RequestTerminal)
-    (idle child budget activity wrapup : Bool) (retries : Nat)
+    (idle child budget activity wrapup : Bool) (retries maxRetries : Nat)
     (requested completed : Bool)
     (h : publishes
-      (Goals.decide status terminal idle child budget activity wrapup retries requested completed)
+      (Goals.decide status terminal idle child budget activity wrapup retries requested completed
+        maxRetries)
       = true) :
     status = .active ∨
       (status = .budgetLimited ∧ requested = true ∧ completed = false) := by
@@ -259,7 +260,7 @@ theorem unavailable_agent_never_retries (i : Input) :
     baseDecision .agentUnavailable i ≠ .retry := by
   intro h
   obtain ⟨status, terminal, idle, child, budget, activity, wrapup, retries, requested,
-    completed⟩ := i
+    completed, maxRetries⟩ := i
   simp only [baseDecision] at h
   cases status <;> cases idle <;> cases child <;> cases budget <;> cases requested <;>
     cases completed <;> simp [Goals.decide] at h
@@ -286,7 +287,8 @@ theorem ready_attempt_refines_existing_decision
     (newer settled : Bool) (i : Input) :
     gate (.ready newer) settled .attempt i =
       .decided (Goals.decide i.status i.terminal i.sessionIdle i.childExists i.budgetReached
-        i.hasActivity i.requestIsWrapup i.retries i.wrapupRequested i.wrapupCompleted) := by
+        i.hasActivity i.requestIsWrapup i.retries i.wrapupRequested i.wrapupCompleted
+        i.maxRetries) := by
   simp [gate, observe, baseDecision]
 
 
@@ -359,8 +361,8 @@ theorem charge_requires_ready_failure
 
 theorem retry_budget_is_bounded
     (observation : Observation) (settled : Bool) (cause : Cause) (i : Input)
-    (hbound : i.retries ≤ maxInfrastructureRetries) :
-    nextRetries cause i (gate observation settled cause i) ≤ maxInfrastructureRetries := by
+    (hbound : i.retries ≤ i.maxRetries) :
+    nextRetries cause i (gate observation settled cause i) ≤ i.maxRetries := by
   cases hg : gate observation settled cause i with
   | decided decision =>
       have hbase := gate_decided_is_base _ _ _ _ _ hg
@@ -368,11 +370,11 @@ theorem retry_budget_is_bounded
       | retry =>
           simp only [nextRetries]
           cases cause
-          · have := decide_retry_within_budget _ _ _ _ _ _ _ _ _ _ hbase
+          · have := decide_retry_within_budget _ _ _ _ _ _ _ _ _ _ _ hbase
             omega
           · exact absurd hbase (unavailable_agent_never_retries i)
           · have := decide_retry_within_budget i.status .failed i.sessionIdle i.childExists
-              i.budgetReached false i.requestIsWrapup i.retries i.wrapupRequested
+              i.budgetReached false i.requestIsWrapup i.retries i.maxRetries i.wrapupRequested
               i.wrapupCompleted hbase
             omega
       | «continue» =>
@@ -402,7 +404,7 @@ theorem settled_unavailable_resolution_is_legal
     have hopen : i.status = .active ∨
         (i.status = .budgetLimited ∧ i.wrapupRequested = true ∧ i.wrapupCompleted = false) := by
       cases cause <;> simp only [baseDecision] at hpublish <;>
-        exact decide_publishes_only_for_open_goals _ _ _ _ _ _ _ _ _ _ hpublish
+        exact decide_publishes_only_for_open_goals _ _ _ _ _ _ _ _ _ _ _ hpublish
     rcases hopen with hactive | ⟨hlimited, hreq, hcomp⟩
     · simp [resolveUnavailable, step?, hstatus, hactive]
     · simp [resolveUnavailable, step?, hstatus, hlimited, hrequested, hcompleted, hreq, hcomp]
@@ -454,15 +456,20 @@ theorem readiness_trace_preserves_budget (retries : Nat) (scans : List Scan)
       exact ih retries (fun s hs => h s (List.mem_cons_of_mem _ hs))
 
 
-theorem trace_retry_budget_is_bounded (retries : Nat) (scans : List Scan)
-    (hbound : retries ≤ maxInfrastructureRetries) :
-    scans.foldl applyScan retries ≤ maxInfrastructureRetries := by
+/-- Every scan of one Goal reads the same pinned limit. -/
+theorem trace_retry_budget_is_bounded (retries maxRetries : Nat) (scans : List Scan)
+    (hlimit : ∀ scan ∈ scans, scan.input.maxRetries = maxRetries)
+    (hbound : retries ≤ maxRetries) :
+    scans.foldl applyScan retries ≤ maxRetries := by
   induction scans generalizing retries with
   | nil => exact hbound
   | cons scan rest ih =>
       simp only [List.foldl]
-      apply ih
-      exact retry_budget_is_bounded _ _ _ _ hbound
+      apply ih _ (fun s hs => hlimit s (List.mem_cons_of_mem _ hs))
+      have hscan := hlimit scan (List.mem_cons_self _ _)
+      have := retry_budget_is_bounded scan.observation scan.settled scan.cause
+        { scan.input with retries } (by simpa [hscan] using hbound)
+      simpa [applyScan, hscan] using this
 
 
 

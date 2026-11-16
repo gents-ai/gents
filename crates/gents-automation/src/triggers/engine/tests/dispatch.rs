@@ -128,6 +128,8 @@ async fn goal_fire_retry_recovers_after_goal_declaration_is_removed() {
     let ordinary_task = ResolvedTask {
         goal_objective_template: None,
         goal_token_budget: None,
+        goal_blocked_audit_threshold: None,
+        goal_max_infrastructure_retries: None,
         ..goal_task.clone()
     };
     let first_snapshot = snapshot_with_schedules(RapidHashMap::from_iter([(

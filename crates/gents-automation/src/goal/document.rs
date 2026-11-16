@@ -40,6 +40,10 @@ pub struct GoalDocument {
     #[serde(default)]
     pub infrastructure_retry_count: Option<i64>,
     #[serde(default)]
+    pub blocked_audit_threshold: Option<i64>,
+    #[serde(default)]
+    pub max_infrastructure_retries: Option<i64>,
+    #[serde(default)]
     pub last_failure: Option<String>,
     #[serde(default)]
     pub completion_evidence: Option<String>,
@@ -81,6 +85,18 @@ impl GoalDocument {
 
     pub fn continuation_sequence(&self) -> i64 {
         self.continuation_sequence.unwrap_or_default().max(0)
+    }
+
+    /// The threshold pinned when the Goal was assigned, or the default.
+    pub fn blocked_audit_threshold(&self) -> i64 {
+        self.blocked_audit_threshold
+            .unwrap_or(BLOCKED_AUDIT_THRESHOLD)
+    }
+
+    /// The limit pinned when the Goal was assigned, or the default.
+    pub fn max_infrastructure_retries(&self) -> i64 {
+        self.max_infrastructure_retries
+            .unwrap_or(MAX_INFRASTRUCTURE_RETRIES)
     }
 }
 

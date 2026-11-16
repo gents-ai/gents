@@ -82,6 +82,8 @@ pub struct TriggerFire {
     pub goal_id: Option<String>,
     pub goal_objective: Option<String>,
     pub goal_token_budget: Option<i64>,
+    pub goal_blocked_audit_threshold: Option<i64>,
+    pub goal_max_infrastructure_retries: Option<i64>,
     /// Only the winning request claim may mark the queued assignment applied,
     /// in the transaction that updates its Goal and acquires execution.
     #[serde(default)]

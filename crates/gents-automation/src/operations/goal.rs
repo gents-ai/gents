@@ -538,7 +538,9 @@ fn plan_set(
     };
     let post = match action {
         None => pre,
-        Some(action) => pre.step(action).ok_or(illegal)?,
+        Some(action) => pre
+            .step_with_blocked_audit_threshold(action, goal.blocked_audit_threshold())
+            .ok_or(illegal)?,
     };
     Ok(GoalSetPlan {
         goal: goal.clone(),

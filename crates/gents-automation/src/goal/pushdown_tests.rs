@@ -22,6 +22,7 @@ fn generated_goal_decision_cases_fence_runtime_controller() {
             i64::try_from(case.infrastructure_retries).expect("modeled retries fit i64"),
             case.wrapup_requested,
             case.wrapup_completed,
+            i64::try_from(case.max_infrastructure_retries).expect("modeled limit fits i64"),
         )
     });
 }
@@ -58,6 +59,8 @@ fn generated_goal_readiness_gate_cases_fence_retry_accounting() {
                 .expect("modeled retries fit i64"),
             wrapup_requested: case.wrapup_requested,
             wrapup_completed: case.wrapup_completed,
+            max_infrastructure_retries: i64::try_from(case.max_infrastructure_retries)
+                .expect("modeled limit fits i64"),
         };
         let gated = gate_goal_continuation(observation, case.settled, case.cause, &facts);
         gents_lean_vocab::families::contracts_goal_readiness_gate::ReadinessGateOutput {
@@ -113,7 +116,10 @@ fn generated_goal_transition_cases_fence_runtime_state_machine() {
             "clean_turn" => GoalAction::CleanTurn,
             other => panic!("unknown action {other:?} in Lean case {}", case.name),
         };
-        let stepped = pre.step(action);
+        let stepped = pre.step_with_blocked_audit_threshold(
+            action,
+            i64::try_from(case.blocked_audit_threshold).expect("modeled threshold fits i64"),
+        );
         let post = stepped.unwrap_or(pre);
         gents_lean_vocab::families::contracts_goal_transition::GoalTransitionOutput {
             accepted: stepped.is_some(),
