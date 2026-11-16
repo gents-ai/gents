@@ -2,6 +2,53 @@ pub mod acp_policies;
 pub mod relationships;
 pub mod wire_database;
 
+/// Hang detector for a test wait that has no deadline of its own: the longest
+/// the awaited owner may go without a change before the wait fails. It is one
+/// suite-wide ceiling far above any host's scheduling delay, never a per-test
+/// latency budget (TLA+ `WallClockBound`; the same value as the `gents`
+/// suites' `STALL_CEILING`).
+pub const STALL_CEILING: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// A fixture deadline the scenario does not exercise: beyond any run the hang
+/// ceiling lets finish, so the product's deadline cut is never enabled
+/// (`WallClockBound` `DeadlineMode = "unreached"`).
+pub const UNREACHED_DEADLINE: std::time::Duration =
+    std::time::Duration::from_secs(4 * STALL_CEILING.as_secs());
+
+/// [`UNREACHED_DEADLINE`] from now, as the wall-clock instant a fixture binds.
+pub fn unreached_deadline_at() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now() + chrono::TimeDelta::from_std(UNREACHED_DEADLINE).expect("bounded")
+}
+
+/// Resolves with the first `Some` that `read` returns, re-running it after
+/// each committed change to `collections` and failing with `what` once none
+/// has changed for [`STALL_CEILING`]. The subscription opens before the first
+/// read, so a change committed between two reads is never missed; `read` must
+/// change its answer only together with a change to `collections`.
+pub async fn read_when_changed<T, F>(
+    node: &defra_node::Node,
+    collections: &[&str],
+    what: &str,
+    mut read: F,
+) -> T
+where
+    F: AsyncFnMut() -> Option<T>,
+{
+    let mut changes =
+        crate::subscription_source::subscribe_collections(node, collections.iter().copied())
+            .expect("observe the awaited collections");
+    loop {
+        if let Some(value) = read().await {
+            return value;
+        }
+        match tokio::time::timeout(STALL_CEILING, changes.recv()).await {
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("{what}: the change feed for {collections:?} closed"),
+            Err(_) => panic!("{what}: {collections:?} unchanged for {STALL_CEILING:?}"),
+        }
+    }
+}
+
 pub fn attach_node_extensions(
     node: &std::sync::Arc<defra_node::Node>,
     extensions: &crate::node_extension::Extensions,

@@ -145,6 +145,15 @@ See `../README.md` for how this fits the broader formal-verification model.
   inside `next_fire` (#3820). A fixed timeout (`FixedWindow`) fails a correct
   owner; waiting for the transition passes it and still fails an owner that
   fires (`FiringOwner`).
+- `WallClockBound` — a wall-clock bound racing an owner's progress in a test
+  (#3840): an observer that judges at a fixed window (a timeout, a sleep
+  before one read, an elapsed-time bound, a fixture that stops after a delay;
+  `FixedWindow`) or a fixture deadline the product enforces (`WallDeadline`)
+  fails a correct owner on a slow host. Waiting on the owner's notification
+  under the suite's stall ceiling, with the fixture deadline past any run or
+  driven by the test after the steps it must follow (`Driven`), passes under
+  every schedule and still fails an owner that never commits
+  (`StalledOwner`); `SlowHost` is the ceiling's premise.
 - `RuntimeConnectionTransport` — the desktop observer's authenticated SSE
   connection to one runtime it reads as the User (`client/observe`). The
   source task arms `K` subscriptions one at a time and then sends a ready
