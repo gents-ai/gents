@@ -8,7 +8,8 @@ use std::path::Path;
 
 pub fn execution_settings(document: Option<&Value>) -> Result<Value> {
     use gents_documents::inference_defaults::{
-        DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+        DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_REQUEST_MAX_RETRIES,
+        DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
     };
     use gents_inference::resolved::*;
     let mut document = document.cloned().unwrap_or_else(|| {
@@ -26,6 +27,7 @@ pub fn execution_settings(document: Option<&Value>) -> Result<Value> {
         "max_total_tokens": execution.max_total_tokens,
         "max_invalid_tool_calls": execution.max_invalid_tool_calls.unwrap_or(DEFAULT_MAX_INVALID_TOOL_CALLS as i64),
         "repeated_tool_failure_limit": execution.repeated_tool_failure_limit.unwrap_or(DEFAULT_REPEATED_TOOL_FAILURE_LIMIT as i64),
+        "max_request_retries": execution.max_request_retries.unwrap_or(DEFAULT_REQUEST_MAX_RETRIES as i64),
         "stream_batch_ms": execution.stream_batch_ms.unwrap_or(DEFAULT_STREAM_BATCH_MS as i64),
         "stream_liveness_timeout_secs": execution.stream_liveness_timeout_secs.unwrap_or(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
         "provider_idle_timeout_secs": execution.provider_idle_timeout_secs.unwrap_or(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS as i64),

@@ -106,6 +106,7 @@ pub struct ResolvedAgent {
     pub max_total_tokens: Option<u64>,
     pub max_invalid_tool_calls: usize,
     pub repeated_tool_failure_limit: usize,
+    pub max_request_retries: u64,
     pub stream_batch_ms: u64,
     pub stream_liveness_timeout: Duration,
     pub provider_idle_timeout: Duration,
@@ -197,6 +198,18 @@ impl ResolvedInference {
             DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
             "repeated_tool_failure_limit",
         )
+    }
+
+    pub fn max_request_retries(&self) -> Result<u64> {
+        match self
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.max_request_retries)
+        {
+            None => Ok(gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES),
+            Some(value) => u64::try_from(value)
+                .map_err(|_| anyhow::anyhow!("max_request_retries must be non-negative")),
+        }
     }
 
     pub fn sampling_config(&self) -> Result<SamplingConfig> {
@@ -413,6 +426,7 @@ impl std::fmt::Debug for ResolvedAgent {
                 "repeated_tool_failure_limit",
                 &self.repeated_tool_failure_limit,
             )
+            .field("max_request_retries", &self.max_request_retries)
             .field("stream_batch_ms", &self.stream_batch_ms)
             .field("stream_liveness_timeout", &self.stream_liveness_timeout)
             .field("provider_idle_timeout", &self.provider_idle_timeout)
@@ -972,6 +986,7 @@ mod tests {
             max_total_tokens: None,
             max_invalid_tool_calls: DEFAULT_MAX_INVALID_TOOL_CALLS,
             repeated_tool_failure_limit: DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
+            max_request_retries: gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
             stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
             stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
             provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),

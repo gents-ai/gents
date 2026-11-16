@@ -28,6 +28,12 @@ pub struct InferenceExecution {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub repeated_tool_failure_limit: Option<i64>,
+    /// Successors (operator reissues, background wake redrives) one request
+    /// lineage may take; the first claim pins it on the request. Zero allows
+    /// none; default 3.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_request_retries: Option<i64>,
     /// Persistence batching cadence, not provider latency; default 1,000ms.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -142,6 +148,11 @@ impl InferenceExecution {
                     "InferenceExecution {execution_id} {name} must be positive"
                 ));
             }
+        }
+        if self.max_request_retries.is_some_and(|value| value < 0) {
+            violations.push(format!(
+                "InferenceExecution {execution_id} max_request_retries must be non-negative"
+            ));
         }
         if self
             .deadline_duration_secs

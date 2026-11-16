@@ -3735,6 +3735,7 @@ export function createDesktopUiHarness(
           maxTotalTokens: null,
           maxInvalidToolCalls: 8,
           repeatedToolFailureLimit: 3,
+          maxRequestRetries: 3,
           streamBatchMs: 100,
           streamLivenessSecs: 1800,
           providerIdleSecs: 300,

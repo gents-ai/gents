@@ -187,6 +187,7 @@ export function ProfileEditor({
         maxTotalTokens,
         maxInvalidToolCalls,
         repeatedToolFailureLimit,
+        maxRequestRetries,
         streamBatchMs,
         streamLivenessSecs,
         providerIdleSecs,
@@ -238,6 +239,7 @@ export function ProfileEditor({
             max_total_tokens: maxTotalTokens,
             max_invalid_tool_calls: maxInvalidToolCalls,
             repeated_tool_failure_limit: repeatedToolFailureLimit,
+            max_request_retries: maxRequestRetries,
             stream_batch_ms: streamBatchMs,
             stream_liveness_timeout_secs: streamLivenessSecs,
             provider_idle_timeout_secs: providerIdleSecs,
@@ -269,6 +271,7 @@ export function ProfileEditor({
       | "maxTotalTokens"
       | "maxInvalidToolCalls"
       | "repeatedToolFailureLimit"
+      | "maxRequestRetries"
       | "streamBatchMs"
       | "streamLivenessSecs"
       | "providerIdleSecs"
@@ -608,6 +611,20 @@ export function ProfileEditor({
           onChange={(v) => setExecution("repeatedToolFailureLimit", v)}
         />
         <NumberRow
+          id={id("max-request-retries")}
+          label={PROFILE_NUMBERS.maxRequestRetries.label}
+          error={problems.maxRequestRetries}
+          value={
+            editedExecution.has("maxRequestRetries")
+              ? d.draft.maxRequestRetries
+              : d.draft.maxRequestRetries ||
+                (executionDefaults.maxRequestRetries == null
+                  ? ""
+                  : String(executionDefaults.maxRequestRetries))
+          }
+          onChange={(v) => setExecution("maxRequestRetries", v)}
+        />
+        <NumberRow
           id={id("batch")}
           label={PROFILE_NUMBERS.streamBatchMs.label}
           error={problems.streamBatchMs}
@@ -707,6 +724,7 @@ export function ProfileEditor({
           maxTotalTokens: id("max-total"),
           maxInvalidToolCalls: id("max-invalid-tool-calls"),
           repeatedToolFailureLimit: id("repeated-tool-failure-limit"),
+          maxRequestRetries: id("max-request-retries"),
           streamBatchMs: id("batch"),
           streamLivenessSecs: id("liveness"),
           providerIdleSecs: id("provider-idle"),
