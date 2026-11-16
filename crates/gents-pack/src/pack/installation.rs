@@ -17,6 +17,7 @@ mod catalog;
 mod declared_access;
 mod dependencies;
 mod documents;
+mod host_roots;
 mod hosted;
 pub use documents::declared_collections;
 pub(crate) use documents::{prepare_document_pack_archive_with_provisioner, sdl_paths};
