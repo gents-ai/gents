@@ -422,6 +422,7 @@ pub struct LeanCompletionRetryCase {
     pub expected_account_used: Option<usize>,
     pub expected_repair_used: Option<bool>,
     pub expected_usage_charged: Option<usize>,
+    pub pre_max_wait: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
