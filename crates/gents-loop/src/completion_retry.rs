@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use rand::Rng;
 
 use crate::error::{ClassifiedFailure, ContextOverflow, InferenceError};
+use crate::provider_limit::LONG_RATE_LIMIT_WAIT;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionRetryProfileFields {
@@ -12,6 +13,7 @@ pub struct CompletionRetryProfileFields {
     pub retry_max_resample: Option<i64>,
     pub retry_allow_repair: Option<bool>,
     pub retry_interactive_max: Option<i64>,
+    pub retry_max_rate_limit_wait_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,6 +61,10 @@ pub struct CompletionRetryPolicy {
     pub allow_repair: bool,
     /// Other eligible accounts of the pool: one immediate reissue each.
     pub account_hops: u32,
+    /// Longest transport wait held before a retry
+    /// (Lean: `CompletionRetry.Budget.maxWait`); a provider rate-limit wait
+    /// beyond it fails the completion.
+    pub max_rate_limit_wait: Duration,
 }
 
 impl CompletionRetryPolicy {
@@ -98,6 +104,12 @@ impl CompletionRetryPolicy {
                 .unwrap_or(default.max_empty_resample),
             allow_repair: fields.retry_allow_repair.unwrap_or(default.allow_repair),
             account_hops: 0,
+            max_rate_limit_wait: fields
+                .retry_max_rate_limit_wait_ms
+                .and_then(|value| u64::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .map(Duration::from_millis)
+                .unwrap_or(default.max_rate_limit_wait),
         }
     }
 
@@ -119,6 +131,7 @@ impl CompletionRetryPolicy {
             max_empty_resample: 1,
             allow_repair: true,
             account_hops: 0,
+            max_rate_limit_wait: LONG_RATE_LIMIT_WAIT,
         }
     }
 
@@ -129,6 +142,7 @@ impl CompletionRetryPolicy {
             max_empty_resample: 1,
             allow_repair: true,
             account_hops: 0,
+            max_rate_limit_wait: LONG_RATE_LIMIT_WAIT,
         }
     }
 
@@ -139,6 +153,7 @@ impl CompletionRetryPolicy {
             max_empty_resample: 0,
             allow_repair: false,
             account_hops: 0,
+            max_rate_limit_wait: LONG_RATE_LIMIT_WAIT,
         }
     }
 
@@ -153,6 +168,7 @@ impl CompletionRetryPolicy {
             max_empty_resample: 3,
             allow_repair: false,
             account_hops: 0,
+            max_rate_limit_wait: LONG_RATE_LIMIT_WAIT,
         }
     }
 }
@@ -304,7 +320,11 @@ impl CompletionRetryState {
                             } => base_delay.max(*retry_after),
                             _ => base_delay,
                         };
-                        let delay = jitter(base_delay, &mut rand::rng());
+                        let Some(delay) = self.held_wait(base_delay) else {
+                            return PreStreamDirective::Fail {
+                                reason: max_wait_reason(base_delay, self.policy.max_rate_limit_wait),
+                            };
+                        };
                         if exceeds_deadline(now, delay, deadline) {
                             return PreStreamDirective::Fail {
                                 reason: deadline_reason(delay, deadline),
@@ -437,7 +457,11 @@ impl CompletionRetryState {
                 ),
             },
             Some(base_delay) => {
-                let delay = jitter(base_delay, &mut rand::rng());
+                let Some(delay) = self.held_wait(base_delay) else {
+                    return MidStreamDirective::Fail {
+                        reason: max_wait_reason(base_delay, self.policy.max_rate_limit_wait),
+                    };
+                };
                 if exceeds_deadline(now, delay, deadline) {
                     return MidStreamDirective::Fail {
                         reason: deadline_reason(delay, deadline),
@@ -452,6 +476,21 @@ impl CompletionRetryState {
             }
         }
     }
+
+    /// The jittered transport wait, never beyond the policy's cap; none when
+    /// the base wait itself exceeds the cap.
+    fn held_wait(&self, base_delay: Duration) -> Option<Duration> {
+        let cap = self.policy.max_rate_limit_wait;
+        (base_delay <= cap).then(|| jitter(base_delay, &mut rand::rng()).min(cap))
+    }
+}
+
+fn max_wait_reason(delay: Duration, cap: Duration) -> String {
+    format!(
+        "provider wait of {delay:?} exceeds max_rate_limit_wait_ms ({}); failing rather than \
+         holding the request",
+        cap.as_millis()
+    )
 }
 
 fn ladder_delay(backoff: &[Duration], used: u32) -> Option<Duration> {

@@ -1032,6 +1032,7 @@ fn generated_request_loop_configuration_preserves_retry_policy_and_deadline() {
             retry_max_resample: input.resample,
             retry_allow_repair: input.repair,
             retry_backoff_ms: input.delays.clone(),
+            retry_max_rate_limit_wait_ms: input.max_wait,
         });
         agent.backend_provider_kind =
             BackendProviderKind::parse_optional(Some(&input.provider)).unwrap();
@@ -1083,6 +1084,7 @@ fn generated_request_loop_configuration_preserves_retry_policy_and_deadline() {
             params: config
                 .additional_params
                 .map(|value| gents_lean_vocab::compact_model_json(&value)),
+            max_wait: config.retry_policy.max_rate_limit_wait.as_millis() as u64,
         })
     });
 }

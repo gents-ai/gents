@@ -141,7 +141,7 @@ pub fn help_patch_contracts(resource: Option<&str>) -> Value {
             patch_contract(
                 SelfConfigTarget::InferenceRetryPolicy,
                 json!({
-                    "display_name":"string|null","max_transport_retries":"integer >= 0|null","backoff_ms":"array<positive integer>|null","max_resample_retries":"integer >= 0|null","allow_repair":"boolean|null","interactive_max_retries":"integer >= 0|null","tags":"array<string>; default []"
+                    "display_name":"string|null","max_transport_retries":"integer >= 0|null","backoff_ms":"array<positive integer>|null","max_resample_retries":"integer >= 0|null","allow_repair":"boolean|null","interactive_max_transport_retries":"integer >= 0|null; transport retries for interactive requests, in place of max_transport_retries","max_rate_limit_wait_ms":format!("positive integer|null; longest provider rate-limit wait held before failing; default {} ms", gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT.as_millis()),"tags":"array<string>; default []"
                 }),
             ),
             patch_contract(

@@ -70,10 +70,16 @@ pub struct InferenceRetryPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub allow_repair: Option<bool>,
-    /// Default interactive successor ceiling; not a human approval gate.
+    /// Provider transport retries for interactive requests, in place of
+    /// `max_transport_retries`; not a successor-request ceiling.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub interactive_max_retries: Option<i64>,
+    pub interactive_max_transport_retries: Option<i64>,
+    /// Longest provider rate-limit wait the owned loop holds before failing
+    /// the request; default 300,000ms.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_rate_limit_wait_ms: Option<i64>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
@@ -158,13 +164,22 @@ impl InferenceRetryPolicy {
         for (name, value) in [
             ("max_transport_retries", self.max_transport_retries),
             ("max_resample_retries", self.max_resample_retries),
-            ("interactive_max_retries", self.interactive_max_retries),
+            (
+                "interactive_max_transport_retries",
+                self.interactive_max_transport_retries,
+            ),
         ] {
             if value.is_some_and(|value| value < 0) {
                 violations.push(format!(
                     "InferenceRetryPolicy {retry_policy_id} {name} must be non-negative"
                 ));
             }
+        }
+
+        if self.max_rate_limit_wait_ms.is_some_and(|value| value <= 0) {
+            violations.push(format!(
+                "InferenceRetryPolicy {retry_policy_id} max_rate_limit_wait_ms must be positive"
+            ));
         }
 
         if self
