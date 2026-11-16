@@ -1,3 +1,4 @@
+pub mod journal;
 pub mod migration;
 
 #[cfg(test)]
