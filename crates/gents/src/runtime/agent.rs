@@ -160,6 +160,10 @@ pub struct DocumentRuntimeOptions {
     pub backend_prober_options: BackendProberOptions,
     pub p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
     pub p2p_network_id: Option<String>,
+    /// The host routes tracing to the system log and keeps stderr for the
+    /// service manager, so operator-local startup diagnostics are mirrored
+    /// there (`gents server --system-log`).
+    pub system_log: bool,
     pub backend_health: Option<BackendHealthMap>,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     pub runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
@@ -227,6 +231,7 @@ pub struct Gents {
     backend_health: BackendHealthMap,
     p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
     p2p_network_id: String,
+    system_log: bool,
     storage_fault: crate::runtime::storage_fault::StorageFaultObservation,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
@@ -328,6 +333,7 @@ impl Gents {
             p2p_network_id: options
                 .p2p_network_id
                 .unwrap_or_else(|| gents_p2p::p2p_reconcile::DEFAULT_NETWORK_ID.to_owned()),
+            system_log: options.system_log,
             backend_health,
             storage_fault: crate::runtime::storage_fault::StorageFaultObservation::new(),
             process_state_observer: options.process_state_observer,
@@ -515,6 +521,10 @@ impl Gents {
 
     pub(crate) fn p2p_network_id(&self) -> &str {
         &self.p2p_network_id
+    }
+
+    pub(crate) fn system_log(&self) -> bool {
+        self.system_log
     }
 
     pub(crate) fn document_runtime_context(&self) -> Option<&DocumentResolveContext> {

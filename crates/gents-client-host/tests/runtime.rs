@@ -735,7 +735,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let mut init = Command::new(&cli);
     init.current_dir(root)
         .envs(homes.env())
-        .env_remove("GENTS_SYSTEM_LOG")
         .env("RUST_LOG", "warn,gents_server::commands::init=info")
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&node_home)
@@ -2736,7 +2735,6 @@ fn runtime_server_command(binary: &Path, root: &Path, home: &Path, port: u16) ->
     command
         .current_dir(root)
         .envs(support::homes::ProcessHomes::under(root).env())
-        .env_remove("GENTS_SYSTEM_LOG")
         .args(["server", "--home"])
         .arg(home)
         .arg("--http-port")

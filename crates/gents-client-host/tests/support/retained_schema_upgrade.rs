@@ -195,7 +195,6 @@ async fn start(binary: &Path, paths: &DesktopPaths) -> Result<Child> {
         )
         .env("GENTS_HOME", paths.root().join("unused-runtime"))
         .env("GENTS_DESKTOP_HOME", paths.root())
-        .env_remove("GENTS_SYSTEM_LOG")
         .args(["--serve", "--editor-store", "--home"])
         .arg(paths.root())
         .stdin(Stdio::null())

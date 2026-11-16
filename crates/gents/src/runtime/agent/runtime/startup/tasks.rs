@@ -566,6 +566,7 @@ pub(super) fn spawn_control_watcher(
             .expect("checked document runtime context");
         let control_tx = reconcile_tx.clone();
         let control_backend_admission = agent.backend_admission.clone();
+        let control_system_log = agent.system_log();
         let control_runtime_status = runtime_status.clone();
         let control_shutdown = shutdown.clone();
         background_tasks.spawn(async move {
@@ -578,6 +579,7 @@ pub(super) fn spawn_control_watcher(
                         node_did: control_node_did,
                         resolve_context: control_context,
                         tool_runtime: control_tool_runtime,
+                        system_log: control_system_log,
                         proposals_tx: control_tx,
                         runtime_status: control_runtime_status,
                         health_events_rx: backend_health_events_rx,
