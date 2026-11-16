@@ -1,4 +1,5 @@
 import type {
+  RequestOriginView,
   RenderedTimelineItem,
   RenderedToolCallView,
 } from "@source-inc/gents-desktop-client";
@@ -54,40 +55,32 @@ const inCallOrder = (tools: RenderedToolCallView[]) =>
     a.itemKey.localeCompare(b.itemKey, undefined, { numeric: true }),
   );
 
-const XML_ESCAPES: Record<string, string> = {
-  "&amp;": "&",
-  "&lt;": "<",
-  "&gt;": ">",
-  "&quot;": '"',
-  "&apos;": "'",
-};
-const unescapeXml = (text: string) =>
-  text.replace(/&(?:amp|lt|gt|quot|apos);/g, (entity) => XML_ESCAPES[entity]!);
-
-const COMPLETION_OPENING =
-  /^<tool-completion tool_call_id="([^"]*)" tool_name="([^"]*)" status="([^"]*)">/;
-
-/** the call a background result reports on, read from the wrapper the
-    runtime gives the model */
-export function completionOf(
-  content: string | null | undefined,
-): { toolCallId: string; toolName: string; status: string } | null {
-  const opening = content && COMPLETION_OPENING.exec(content);
-  if (!opening) return null;
-  const [, toolCallId, toolName, status] = opening.map(unescapeXml);
-  return { toolCallId: toolCallId!, toolName: toolName!, status: status! };
+export function completionOf(origin: RequestOriginView | null | undefined): {
+  toolCallDocId: string | null;
+  toolCallId: string | null;
+  toolName: string;
+  status: string;
+} | null {
+  if (
+    origin?.kind !== "backgroundCompletion" ||
+    !origin.notification ||
+    !origin.toolName ||
+    !origin.statusKind
+  )
+    return null;
+  return {
+    toolCallDocId: origin.toolCallDocId ?? null,
+    toolCallId: origin.toolCallId,
+    toolName: origin.toolName,
+    status: origin.statusKind,
+  };
 }
 
 const isBackgroundResult = (item: RenderedTimelineItem): item is AutomatedInputItem =>
   item.kind === "automatedInput" && item.origin.kind === "backgroundCompletion";
 
-/* BACKGROUND_COMPLETION_WAKE_PROMPT in crates/gents-protocol/src/background_completion.rs */
-const WAKE_PROMPT =
-  "Review the new background completion results and continue the task if needed.";
-
-/** the runtime's prompt to act on the background results before it */
-export const isWakePrompt = (content: string | null | undefined) =>
-  content?.trim() === WAKE_PROMPT;
+export const isWakePrompt = (origin: RequestOriginView | null | undefined) =>
+  origin?.kind === "backgroundCompletion" && !origin.notification;
 
 export function groupTranscript(items: RenderedTimelineItem[]): TranscriptEntry[] {
   const out: TranscriptEntry[] = [];
@@ -98,7 +91,7 @@ export function groupTranscript(items: RenderedTimelineItem[]): TranscriptEntry[
     if (item.kind === "toolGroup") {
       if (item.tools.length === 0) continue;
       for (const tool of item.tools)
-        if (tool.toolCallId) calls.set(tool.toolCallId, tool);
+        if (tool.toolCallDocId) calls.set(tool.toolCallDocId, tool);
       results = null;
       if (!open) {
         open = { kind: "group", key: item.itemKey, members: [], settled: false };
@@ -114,7 +107,7 @@ export function groupTranscript(items: RenderedTimelineItem[]): TranscriptEntry[
       continue;
     }
     if (isBackgroundResult(item)) {
-      if (isWakePrompt(item.content)) {
+      if (isWakePrompt(item.origin)) {
         const last = results?.[results.length - 1];
         if (last) {
           last.prompts.push(item);
@@ -125,7 +118,7 @@ export function groupTranscript(items: RenderedTimelineItem[]): TranscriptEntry[
         out.push({ kind: "item", key: item.itemKey, item });
         continue;
       }
-      const id = completionOf(item.content)?.toolCallId;
+      const id = completionOf(item.origin)?.toolCallDocId;
       const result = { item, call: (id && calls.get(id)) || null, prompts: [] };
       if (results) {
         results.push(result);

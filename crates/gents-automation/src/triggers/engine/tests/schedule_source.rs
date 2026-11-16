@@ -876,6 +876,15 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         "rendered prompt template should land in AgentRequest.content: {row}"
     );
 
+    let visible = user_access.execute("{ AgentRequest { _docID relationships_pending } AgentSession { _docID relationships_pending } }").await.unwrap();
+    let requests = visible["data"]["AgentRequest"].as_array().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["_docID"], row["_docID"]);
+    assert_eq!(requests[0]["relationships_pending"], false);
+    let sessions = visible["data"]["AgentSession"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0]["relationships_pending"], false);
+
     let input = row
         .get("input")
         .and_then(|value| value.as_object().cloned())

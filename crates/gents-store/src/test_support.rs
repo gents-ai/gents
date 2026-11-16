@@ -1,4 +1,5 @@
 pub mod acp_policies;
+pub mod bounded_process;
 #[cfg(unix)]
 mod executable_script;
 pub mod relationships;

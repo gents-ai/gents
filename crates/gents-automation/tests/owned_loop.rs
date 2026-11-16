@@ -44,7 +44,7 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
                 "config".into(),
                 serde_json::json!({
                     "argv": ["profile", "preview"],
-                    "set": serde_json::json!({"display_name": "{\"literal\":true}"}).to_string(),
+                    "set": serde_json::json!({"display_name": format!("{{\"literal\":true,\"index\":{index}}}")}).to_string(),
                     "options": serde_json::json!({"agent": &agent_did}).to_string()
                 }),
             ))
@@ -648,3 +648,6 @@ async fn parallel_native_reads_publish_distinct_bound_unchanged_receipts() {
     }
     node.shutdown().await.expect("node shutdown");
 }
+
+#[path = "owned_loop/repeated_success.rs"]
+mod repeated_success;

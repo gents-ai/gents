@@ -559,18 +559,12 @@ operator GraphQL endpoint (a discovery- or enrollment-only peer): nothing can
 be observed, and the state says so instead of reading as a connection attempt.
 A peer that is absent from the directory has no state.
 
-`refused` is a runtime that said it does not accept this client's credentials:
-the access owner classified a request as refused (HTTP 401/403, or a
-`PERMISSION_DENIED` envelope). That is the runtime's own answer, not an
-inference, so the state names it and the user can act on it (the device is not
-enrolled there, its key was rotated, or its grant was removed); the source keeps
-reconnecting on `reconnectDelayMs`, so restored access connects by itself.
-
-There is no state inferred from what the client cannot see. Native ACP hides
-the documents a reader may not read by design: a reader whose grant was revoked
-on the pinned served runtime sees fewer documents, possibly none, and the
-runtime does not say why. The client never infers a denial from an omitted or
-empty result; a view with nothing visible is an ordinary `connected` view. -/
+`refused` means access to the selected Node is unavailable: the native access
+owner refused the request, or the snapshot owner could not observe the
+already identified Node root (`selectedRootSnapshot`). It does not infer why
+access is unavailable. The source reconnects on `reconnectDelayMs`, so restored
+access connects by itself. Empty configuration beneath a visible Node is an
+ordinary connected view. -/
 inductive Status where
   | connecting | connected | disconnected | refused | noEndpoint
   deriving DecidableEq, Repr
@@ -728,20 +722,21 @@ theorem stream_end_disarms (wasArmed : Bool) (streamEnd : StreamEnd) (event : Ev
   | completed => simp [streamEndEvent] at h; subst h; rfl
   | failed refused => cases refused <;> simp [streamEndEvent] at h <;> subst h <;> rfl
 
-/-- How the source's snapshot read ended. `refused` is an HTTP 401/403 or a
-`PERMISSION_DENIED` envelope (the access owner's classification).
-
-External premise: the pinned served runtime answers a User whose grant was
-revoked with HTTP 200, no `errors`, and `data` that omits the selected roots;
-it also accepts that User's SSE handshake and keeps its streams silent (observe
-test `revoked_user_is_answered_with_omitted_roots`). That is native ACP hiding
-what the User may not read, not a refusal: the snapshot reader decodes an
-omitted root as an empty list, and the read `succeeded`. Classifying it as a
-denial would show a state the runtime never asserted; classifying it as a
-failure would reconnect a quiet runtime forever. -/
+/-- How the selected Node snapshot ended. Native ACP may omit an unreadable
+Node with HTTP 200 and no errors. The snapshot targets an already identified
+Node: its missing root means this client cannot observe that Node, rather than
+that the Node has no configuration. Refusal is a presentation of unavailable
+access, not a claim about whether the grant was revoked or the Node removed.
+Unrelated omitted collections remain ordinary empty lists. -/
 inductive SnapshotOutcome where
   | succeeded | refused | unreachable
   deriving DecidableEq, Repr
+
+def selectedRootSnapshot (visible : Bool) : SnapshotOutcome :=
+  if visible then .succeeded else .refused
+
+theorem missing_selected_root_is_not_connected :
+    selectedRootSnapshot false = .refused := by rfl
 
 def snapshotEvent : SnapshotOutcome → Event
   | .succeeded => .snapshotSucceeded
@@ -1043,7 +1038,8 @@ structure Served where
   deriving DecidableEq, Repr
 
 def Served.read (served : Served) : SnapshotOutcome :=
-  if !served.reachable then .unreachable else if served.refuses then .refused else .succeeded
+  if !served.reachable then .unreachable
+  else if served.refuses then .refused else selectedRootSnapshot served.granted
 
 /-- The event the observer next produces by itself at `status` against a
 steady runtime, or `none` when only an outside change moves it. A `connecting`
@@ -1056,10 +1052,10 @@ def sourceEvent (served : Served) : Status → Option Event
     if served.reachable then some (snapshotEvent served.read) else some .transportFailed
   | .disconnected =>
     some (if !served.reachable then .transportFailed
-      else if served.refuses then .refused else .subscriptionsReady)
+      else if served.refuses || !served.granted then .refused else .subscriptionsReady)
   | .connected =>
     if !served.reachable then some .transportFailed
-    else if served.refuses then some .refused else none
+    else if served.refuses || !served.granted then some .refused else none
   | .noEndpoint => none
 
 def step (served : Served) (status : Status) : Status :=
@@ -1080,24 +1076,36 @@ theorem run_add (served : Served) (m n : Nat) (status : Status) :
   | zero => simp [run]
   | succ m ih => rw [Nat.add_right_comm, run_succ, run_succ, ih]
 
-/-- A reachable runtime, whether or not it still grants the User: every
-status with an endpoint is `connected` within two source steps, and stays
-there. A revoked User sees a connected view with nothing visible. -/
-theorem reachable_settles_connected (granted : Bool) (status : Status)
+/-- A reachable Node whose root is visible settles connected. -/
+theorem reachable_settles_connected (status : Status)
     (h : status ≠ .noEndpoint) (n : Nat) :
-    run ⟨true, granted, false⟩ (n + 2) status = .connected := by
-  have fixed : ∀ k, run ⟨true, granted, false⟩ k .connected = .connected := by
+    run ⟨true, true, false⟩ (n + 2) status = .connected := by
+  have fixed : ∀ k, run ⟨true, true, false⟩ k .connected = .connected := by
     intro k; induction k with
     | zero => rfl
     | succ k ih => rw [run_succ]; simpa [step, sourceEvent] using ih
   rw [Nat.add_comm, run_add]
-  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
+  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read,
+    selectedRootSnapshot]
 
-/-- A revoked User's connected view at a reachable runtime produces no event:
-no reconnect, no resnapshot loop. -/
-theorem quiet_view_never_reconnects (granted : Bool) :
-    sourceEvent ⟨true, granted, false⟩ .connected = none := by
-  cases granted <;> rfl
+/-- A visible quiet Node needs no reconnect. -/
+theorem quiet_view_never_reconnects :
+    sourceEvent ⟨true, true, false⟩ .connected = none := by rfl
+
+/-- Loss of the selected root reports unavailable access even when the
+transport still accepts this client's subscriptions. -/
+theorem hidden_node_settles_refused (status : Status)
+    (h : status ≠ .noEndpoint) (n : Nat) :
+    run ⟨true, false, false⟩ (n + 2) status = .refused := by
+  have fixed : ∀ k, run ⟨true, false, false⟩ k .refused = .refused := by
+    intro k; induction k with
+    | zero => rfl
+    | succ k ih =>
+      rw [run_succ]; simpa [step, sourceEvent, observe, snapshotEvent, Served.read,
+        selectedRootSnapshot] using ih
+  rw [Nat.add_comm, run_add]
+  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read,
+    selectedRootSnapshot]
 
 /-- An unreachable runtime: every status with an endpoint is `disconnected`
 within two source steps and stays there, reconnecting, until the runtime
@@ -1110,7 +1118,8 @@ theorem unreachable_settles_disconnected (granted refuses : Bool) (status : Stat
     | zero => rfl
     | succ k ih => rw [run_succ]; simpa [step, sourceEvent, observe] using ih
   rw [Nat.add_comm, run_add]
-  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
+  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read,
+    selectedRootSnapshot]
 
 /-- A reachable runtime that refuses this client: every status with an
 endpoint is `refused` within two source steps and stays there, reconnecting on
@@ -1124,24 +1133,21 @@ theorem refusing_settles_refused (granted : Bool) (status : Status)
     | succ k ih =>
       rw [run_succ]; simpa [step, sourceEvent, observe, snapshotEvent, Served.read] using ih
   rw [Nat.add_comm, run_add]
-  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read]
+  cases status <;> simp_all [run, step, sourceEvent, observe, snapshotEvent, Served.read,
+    selectedRootSnapshot]
 
-/-- What a steady runtime settles into reads as its cause: `ready` exactly for
-a reachable runtime that accepts the client, whatever the User may read there;
-`waiting` with `disconnected` only for an unreachable one; and `blocked` with
-`refused` for one that refuses the client, which is never a silent
-`connecting`. A revoked User of the served runtime is never shown an outage or
-a refusal. -/
+/-- Ready means the selected Node is visible; an unavailable Node is blocked,
+and a transport outage is waiting rather than an access refusal. -/
 theorem settled_presentation_names_the_cause (granted refuses : Bool) (status : Status)
     (h : status ≠ .noEndpoint) (n : Nat) :
-    presentation (some (run ⟨true, granted, false⟩ (n + 2) status)) = (.ready, .connected) ∧
+    presentation (some (run ⟨true, true, false⟩ (n + 2) status)) = (.ready, .connected) ∧
     presentation (some (run ⟨false, granted, refuses⟩ (n + 2) status)) =
       (.waiting, .disconnected) ∧
-    presentation (some (run ⟨true, granted, true⟩ (n + 2) status)) = (.blocked, .refused) := by
+    presentation (some (run ⟨true, false, false⟩ (n + 2) status)) = (.blocked, .refused) := by
   refine ⟨?_, ?_, ?_⟩
-  · rw [reachable_settles_connected granted status h n]; rfl
+  · rw [reachable_settles_connected status h n]; rfl
   · rw [unreachable_settles_disconnected granted refuses status h n]; rfl
-  · rw [refusing_settles_refused granted status h n]; rfl
+  · rw [hidden_node_settles_refused status h n]; rfl
 
 /-- Distinct statuses name distinct reasons, so an outage never reads as a
 connection attempt and a missing endpoint never reads as either. -/

@@ -1767,6 +1767,10 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
+      "fold_queue_contracts_queued_turn_rediscovery")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
       "fold_queue_contracts_handover_claim")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage

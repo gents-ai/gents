@@ -120,45 +120,35 @@ pub(super) fn message_is_runtime_control(
     )
 }
 
-pub(super) fn request_origin_view(
-    store: &ClientStore,
-    request: &AgentRequestRow,
-) -> Option<RequestOriginView> {
+pub(super) fn request_origin_view(request: &AgentRequestRow) -> Option<RequestOriginView> {
     use gents_session::request::lifecycle::RequestOrigin;
     Some(
         match gents_session::request::lifecycle::request_origin(request) {
             RequestOrigin::Person => return None,
-            RequestOrigin::SessionMessage {
-                parent_request_doc_id,
-            } => {
-                let parent = parent_request_doc_id.and_then(|doc_id| {
-                    store
-                        .requests
-                        .iter()
-                        .find(|row| row.doc_id.as_deref() == Some(doc_id))
-                });
+            RequestOrigin::SessionMessage { .. } => {
+                let source = request
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.started_by.as_ref());
                 RequestOriginView::SessionMessage {
-                    display_body: parent
-                        .and_then(|parent| {
-                            gents_session::request::lifecycle::session_message_display_body(
-                                request, parent,
-                            )
-                        })
+                    display_body:
+                        gents_session::request::lifecycle::signed_session_message_display_body(
+                            request,
+                        )
                         .map(str::to_owned),
-                    sender_node_did: parent
-                        .and_then(|row| normalize_optional(row.node_did.as_deref()))
-                        .or_else(|| normalize_optional(request.requester_did.as_deref())),
-                    sender_session_id: parent
-                        .and_then(|row| normalize_optional(row.session_id.as_deref())),
-                    sender_request_id: parent.map(|row| row.request_id.clone()).or_else(|| {
-                        normalize_optional(request.caused_by_parent_request_id.as_deref())
-                    }),
+                    sender_node_did: source.map(|source| source.node_did.clone()),
+                    sender_session_id: source.map(|source| source.session_id.clone()),
+                    sender_request_id: normalize_optional(
+                        request.caused_by_parent_request_id.as_deref(),
+                    ),
                 }
             }
             RequestOrigin::Trigger {
                 trigger_id,
                 trigger_kind,
             } => RequestOriginView::Trigger {
+                display_body: gents_automation::triggers::engine::trigger_display_body(request)
+                    .map(str::to_owned),
                 trigger_id: trigger_id.to_owned(),
                 trigger_kind: trigger_kind.map(str::to_owned),
             },
@@ -167,12 +157,23 @@ pub(super) fn request_origin_view(
                 sequence,
                 wrapup,
             } => RequestOriginView::GoalContinuation {
+                retry: gents_automation::triggers::engine::goal_source::goal_retry_presentation(
+                    request,
+                )
+                .map(|retry| crate::types::GoalRetryPresentationView {
+                    cause: retry.cause,
+                    attempt: retry.attempt,
+                    max: retry.max,
+                }),
                 goal_id: goal_id.map(str::to_owned),
                 sequence,
                 wrapup,
             },
             RequestOrigin::BackgroundCompletion => RequestOriginView::BackgroundCompletion {
                 notification: false,
+                tool_call_id: None,
+                reason: None,
+                result_range: None,
                 tool_call_doc_id: None,
                 tool_name: None,
                 status_kind: None,
@@ -182,43 +183,69 @@ pub(super) fn request_origin_view(
 }
 
 pub(super) fn message_origin(
-    store: &ClientStore,
     message: &gents_protocol::output::TranscriptMessage,
     input_request: Option<&AgentRequestRow>,
-    tool_calls: &[&AgentToolCallRow],
 ) -> Option<RequestOriginView> {
-    if message.role != gents_protocol::output::MessageRole::User
-        || gents_protocol::output::authored::is_output_obligation(
-            message.role,
-            message.request_doc_id.as_deref(),
+    use gents_session::request::lifecycle::presentation_origin::{
+        classify, request_facts, Facts, Kind,
+    };
+    let mut facts = input_request.map(request_facts).unwrap_or(Facts {
+        user_role: true,
+        output_obligation: false,
+        completion_notification: false,
+        goal_continuation: false,
+        completion_wake: false,
+        parent_tool: false,
+        trigger: false,
+    });
+    facts.user_role = message.role == gents_protocol::output::MessageRole::User;
+    facts.output_obligation = gents_protocol::output::authored::is_output_obligation(
+        message.role,
+        message.request_doc_id.as_deref(),
+        &message.message_key,
+    );
+    facts.completion_notification =
+        gents_protocol::background_completion::is_background_completion_notification_message_key(
             &message.message_key,
-        )
-    {
+        );
+    let kind = classify(facts);
+    if matches!(kind, Kind::OtherRole | Kind::RuntimeControl) {
         return None;
     }
-    if gents_protocol::background_completion::is_background_completion_notification_message_key(
-        &message.message_key,
-    ) {
+    if kind == Kind::BackgroundResult {
         let tool_call_doc_id = match &message.publication {
             gents_protocol::output::MessagePublication::ToolDelivery { tool_call_doc_id } => {
                 Some(tool_call_doc_id.clone())
             }
             _ => None,
         };
-        let owning_tool = tool_call_doc_id.as_deref().and_then(|doc_id| {
-            tool_calls
-                .iter()
-                .find(|row| row.doc_id.as_deref() == Some(doc_id))
+        let metadata = message.blocks.iter().find_map(|block| {
+            let gents_protocol::output::MessageBlock::Text { text } = block else {
+                return None;
+            };
+            let gents_protocol::output::PayloadPresentation::Composed { parts } =
+                &text.presentation
+            else {
+                return None;
+            };
+            gents_tools::rendering::completion_metadata(parts)
         });
         return Some(RequestOriginView::BackgroundCompletion {
             notification: true,
+            tool_call_id: metadata.as_ref().map(|info| info.tool_call_id.clone()),
+            reason: metadata.as_ref().and_then(|info| info.reason.clone()),
+            result_range: metadata
+                .as_ref()
+                .map(|info| crate::types::CompletionResultRangeView {
+                    start_byte: info.result_start_byte,
+                    end_byte: info.result_end_byte,
+                }),
             tool_call_doc_id,
-            tool_name: owning_tool.and_then(|row| normalize_optional(row.tool_name.as_deref())),
-            status_kind: owning_tool
-                .map(|row| super::timeline::tool_status_kind(row.lifecycle_state.as_deref())),
+            tool_name: metadata.as_ref().map(|info| info.tool_name.clone()),
+            status_kind: metadata.as_ref().map(|info| info.status.clone()),
         });
     }
-    input_request.and_then(|request| request_origin_view(store, request))
+    input_request.and_then(request_origin_view)
 }
 
 pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> bool {

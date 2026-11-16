@@ -31,6 +31,18 @@ def Action.contendsWithUpdate : Action → Bool
   | .install | .start | .restart => true
   | _ => false
 
+inductive StartDisposition where
+  | launch | observe
+  deriving DecidableEq, Repr
+
+/-- A pending desktop start owns provisioning and readiness until it settles.
+Another Start observes it; only Stop, Restart or reconfiguration may cancel it. -/
+def startDisposition (starting : Bool) : StartDisposition :=
+  if starting then .observe else .launch
+
+theorem repeated_start_preserves_the_pending_owner :
+    startDisposition true = .observe := by rfl
+
 inductive Decision where
   | admitted
   /-- The caller runs inside the runtime the action would end, so the action

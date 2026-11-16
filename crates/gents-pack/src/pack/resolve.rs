@@ -123,7 +123,9 @@ fn offline_pack_error(
              has no such pack.",
             home.display()
         ),
-        None => error.context(format!("resolving {coordinate} from the registry")),
+        Some(RegistryError::DownloadHeadersTimedOut { .. }) | None => {
+            error.context(format!("resolving {coordinate} from the registry"))
+        }
     }
 }
 

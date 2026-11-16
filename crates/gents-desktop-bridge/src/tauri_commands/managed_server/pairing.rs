@@ -12,12 +12,9 @@ pub(super) async fn pairing_is_ready(state: &DesktopAppState, node_did: Option<&
     let (Some(core), Some(node_did)) = (current_core(state), node_did) else {
         return false;
     };
-    core.peer_records().await.iter().any(|peer| {
-        peer.node_did == node_did
-            && peer.is_enrollment()
-            && peer.is_managed_runtime()
-            && peer.is_enrollment_ready_at(chrono::Utc::now())
-    })
+    crate::local_pairing::managed_pairing_ready(&core, node_did, None)
+        .await
+        .unwrap_or(false)
 }
 
 pub(in crate::tauri_commands) async fn start_running_managed_pairing(

@@ -287,27 +287,41 @@ async fn live_background_completions_project_as_tool_attributed_activity() {
                 tool_call_doc_id,
                 tool_name,
                 status_kind,
+                tool_call_id,
+                result_range,
+                reason,
                 ..
-            } => (
-                tool_call_doc_id.clone(),
-                tool_name.clone(),
-                status_kind.clone(),
-                content.map(String::as_str).unwrap_or_default().to_owned(),
-            ),
+            } => {
+                assert!(tool_call_id.as_deref().is_some_and(|id| !id.is_empty()));
+                let range = result_range.as_ref().expect("completion result range");
+                let text = content.expect("rendered completion");
+                assert!(text
+                    .get(range.start_byte as usize..range.end_byte as usize)
+                    .is_some());
+                if status_kind.as_deref() == Some("failed") {
+                    assert!(reason.is_some());
+                }
+                (
+                    tool_call_doc_id.clone(),
+                    tool_name.clone(),
+                    status_kind.clone(),
+                    content.map(String::as_str).unwrap_or_default().to_owned(),
+                )
+            }
             other => panic!("unexpected origin {other:?}"),
         })
         .collect::<Vec<_>>();
     observed_states.sort_by(|left, right| left.2.cmp(&right.2));
     let expected = [
         (
-            Some(observed.tool_doc_ids[1].clone()),
-            Some("bash".to_owned()),
-            Some("error".to_owned()),
-        ),
-        (
             Some(observed.tool_doc_ids[0].clone()),
             Some("bash".to_owned()),
-            Some("success".to_owned()),
+            Some("completed".to_owned()),
+        ),
+        (
+            Some(observed.tool_doc_ids[1].clone()),
+            Some("bash".to_owned()),
+            Some("failed".to_owned()),
         ),
     ];
     for (observed_state, expected) in observed_states.iter().zip(expected) {
@@ -325,9 +339,12 @@ async fn live_background_completions_project_as_tool_attributed_activity() {
             "the envelope text is retained verbatim: {observed_state:?}"
         );
     }
-    assert!(observed_states
-        .iter()
-        .any(|state| state.2.as_deref() == Some("error") && state.3.contains("status=\"failed\"")));
+    assert!(
+        observed_states
+            .iter()
+            .any(|state| state.2.as_deref() == Some("failed")
+                && state.3.contains("status=\"failed\""))
+    );
 
     let wake_items = tip
         .iter()

@@ -68,7 +68,7 @@ pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotError,
     OneShotNoVisibleOutput, OneShotProviderFailure,
 };
-pub use repeated_tool_failure::REPEATED_TOOL_FAILURE_PREFIX;
+pub use repeated_tool_failure::{REPEATED_TOOL_FAILURE_PREFIX, REPEATED_TOOL_SUCCESS_PREFIX};
 pub use request_assembly::dispatch::{
     clamp_request_output_budget, completion_request_input_components, ensure_context_can_dispatch,
 };
@@ -316,7 +316,7 @@ where
             new_messages.extend(config.folded_prompts.iter().map(|row| TaggedMessage::unassociated(row.message.clone())));
         }
         let mut invalid_tool_progress = invalid_tool_progress::InvalidToolProgress::default();
-        let mut repeated_tool_failure = repeated_tool_failure::RepeatedToolFailure::default();
+        let mut repeated_tool_failure = repeated_tool_failure::RepeatedToolProgress::default();
         let aggregate_token_budget = config.aggregate_token_budget.clone();
         let mut current_turn: usize = config.initial_turn_index;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
@@ -1351,7 +1351,8 @@ where
                         && admit_tool(tools.as_slice(), name, &args).is_none();
                     (name, args, read)
                 }).collect();
-                let batch_len = if first_decision == repeated_tool_failure::RepeatDecision::Dispatch {
+                let batch_len = if first_decision == repeated_tool_failure::RepeatDecision::Dispatch
+                    && !repeated_tool_failure.success_may_stop(&first_call.function.name, &first_args) {
                     parallel::read_prefix(candidates.iter().map(|(name, args, read)| (*name, args.as_str(), *read)), invalid_tool_progress.remaining().min(4))
                 } else { 0 };
                 if batch_len > 1 {
@@ -1385,10 +1386,11 @@ where
                         };
                         pending_results.push((rig_compat::from_rig_tool_call(&result.call), result.internal_id, bounded));
                     }
-                    if invalid_tool_progress.exhausted() {
+                    let stop_reason = repeated_tool_failure.success_stop_reason().or_else(|| invalid_tool_progress.exhausted().then(|| invalid_tool_progress.exhaustion_reason()));
+                    if let Some(reason) = stop_reason {
                         for item in close_streaming_turn(&mut new_messages, &mut accumulator, turn_ids.clone(), accepted_source.clone(), pending_results) { yield OwnedLoopItem::Output(item); }
-                        Err(StreamingError::Completion(CompletionError::ProviderError(invalid_tool_progress.exhaustion_reason())))?;
-                        unreachable!("invalid tool budget exhaustion ends the stream");
+                        Err(StreamingError::Completion(CompletionError::ProviderError(reason)))?;
+                        unreachable!("tool progress guard ends the stream");
                     }
                     continue;
                 }
@@ -1597,7 +1599,8 @@ where
                     internal_call_id,
                     bounded_result,
                 ));
-                if invalid_tool_progress.exhausted() {
+                let stop_reason = repeated_tool_failure.success_stop_reason().or_else(|| invalid_tool_progress.exhausted().then(|| invalid_tool_progress.exhaustion_reason()));
+                if let Some(reason) = stop_reason {
                     for item in close_streaming_turn(
                         &mut new_messages,
                         &mut accumulator,
@@ -1608,9 +1611,9 @@ where
                         yield OwnedLoopItem::Output(item);
                     }
                     Err(StreamingError::Completion(CompletionError::ProviderError(
-                        invalid_tool_progress.exhaustion_reason(),
+                        reason,
                     )))?;
-                    unreachable!("invalid tool budget exhaustion ends the stream");
+                    unreachable!("tool progress guard ends the stream");
                 }
             }
 

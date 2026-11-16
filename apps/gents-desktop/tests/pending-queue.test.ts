@@ -39,6 +39,9 @@ describe("pendingRows", () => {
   it("preserves native arrival order while locating controls in the pending queue", () => {
     const automated = turn("auto", {
       kind: "backgroundCompletion",
+      toolCallId: null,
+      reason: null,
+      resultRange: null,
     } as PendingTurnView["origin"]);
     const rows = pendingRows(
       [turn("a"), automated, turn("b")],

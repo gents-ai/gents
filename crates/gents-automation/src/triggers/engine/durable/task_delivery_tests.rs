@@ -497,6 +497,14 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
         owner[0].owner.as_ref().map(identity::Did::as_str),
         Some(agent.did())
     );
+    let visible_requests = user_access
+        .execute("{ AgentRequest { _docID request_id relationships_pending } }")
+        .await
+        .unwrap();
+    let visible = visible_requests["data"]["AgentRequest"].as_array().unwrap();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0]["_docID"], first.request.doc_id);
+    assert_eq!(visible[0]["relationships_pending"], false);
     let user_sessions = user_access
         .execute("{ AgentSession { _docID relationships_pending } }")
         .await
