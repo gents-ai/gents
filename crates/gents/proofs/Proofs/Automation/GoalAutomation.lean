@@ -94,16 +94,58 @@ theorem invalid_budget_never_creates (request : CreateRequest)
   split <;> simp_all
   split <;> simp_all
 
+/-- Unset is `Goals.blockedAuditThreshold`; a threshold of zero would block a
+Goal before its first audit. -/
+def validBlockedAuditThreshold : Option Int → Bool
+  | none => true
+  | some value => decide (0 < value ∧ value ≤ maxTokenBudget)
+
+/-- Unset is `Goals.maxInfrastructureRetries`; zero pauses on the first Failed
+or Dead request. -/
+def validMaxInfrastructureRetries : Option Int → Bool
+  | none => true
+  | some value => decide (0 ≤ value ∧ value ≤ maxTokenBudget)
+
+/-- A Task's Goal declaration. The limits are pinned on every Goal the Task
+creates or assigns; Goals the model creates with goal tools have no Task and
+keep the `Goals` defaults. -/
 structure TaskGoalDeclaration where
   goalObjective : Option String
   goalTokenBudget : Option Int
+  goalBlockedAuditThreshold : Option Int
+  goalMaxInfrastructureRetries : Option Int
   deriving DecidableEq, Repr
 
 def validTaskGoalDeclaration (declaration : TaskGoalDeclaration) : Bool :=
   match declaration.goalObjective with
-  | none => declaration.goalTokenBudget.isNone
+  | none =>
+      declaration.goalTokenBudget.isNone &&
+        declaration.goalBlockedAuditThreshold.isNone &&
+        declaration.goalMaxInfrastructureRetries.isNone
   | some objective =>
-      !(TextNormalization.canonicalObjective objective).isEmpty && validBudget declaration.goalTokenBudget
+      !(TextNormalization.canonicalObjective objective).isEmpty &&
+        validBudget declaration.goalTokenBudget &&
+        validBlockedAuditThreshold declaration.goalBlockedAuditThreshold &&
+        validMaxInfrastructureRetries declaration.goalMaxInfrastructureRetries
+
+theorem task_limits_require_goal_objective (declaration : TaskGoalDeclaration)
+    (hobjective : declaration.goalObjective = none)
+    (hlimits : declaration.goalBlockedAuditThreshold.isSome ∨
+      declaration.goalMaxInfrastructureRetries.isSome) :
+    validTaskGoalDeclaration declaration = false := by
+  unfold validTaskGoalDeclaration
+  rw [hobjective]
+  rcases hlimits with h | h <;>
+    cases hthreshold : declaration.goalBlockedAuditThreshold <;>
+    cases hretries : declaration.goalMaxInfrastructureRetries <;>
+    simp_all
+
+theorem valid_task_threshold_is_positive (declaration : TaskGoalDeclaration)
+    (threshold : Int) (hthreshold : declaration.goalBlockedAuditThreshold = some threshold)
+    (hvalid : validTaskGoalDeclaration declaration = true) :
+    0 < threshold := by
+  unfold validTaskGoalDeclaration at hvalid
+  split at hvalid <;> simp_all [validBlockedAuditThreshold]
 
 /-- The runtime-facing encoding is length-prefixed so the same node/Task/fire
 tuple deterministically recovers the same session and request retry identities
@@ -248,7 +290,7 @@ theorem invalid_task_goal_declaration_cannot_publish
   simp [decideTaskPublication, hinvalid]
 
 theorem task_without_goal_uses_ordinary_publication (nodeDid taskId fireKey : String) :
-    (decideTaskPublication ⟨none, none⟩ nodeDid taskId fireKey).mode = .ordinary := by
+    (decideTaskPublication ⟨none, none, none, none⟩ nodeDid taskId fireKey).mode = .ordinary := by
   simp [decideTaskPublication, validTaskGoalDeclaration]
 
 structure SubmissionState where

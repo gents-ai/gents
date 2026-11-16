@@ -264,6 +264,7 @@ pub(super) async fn stage_goal_and_claim(
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
+    limits: gents_protocol::goal::GoalLimits,
     initial_state: GoalState,
     now: &str,
     identity: Option<&GoalCreationIdentity>,
@@ -439,6 +440,8 @@ pub(super) async fn stage_goal_and_claim(
             "wrapup_requested": initial_state.wrapup_requested,
             "wrapup_completed": initial_state.wrapup_completed,
             "infrastructure_retry_count": 0,
+            "blocked_audit_threshold": limits.blocked_audit_threshold,
+            "max_infrastructure_retries": limits.max_infrastructure_retries,
             "created_at": now,
             "updated_at": now,
         }),
@@ -469,8 +472,8 @@ pub(super) async fn stage_goal_and_claim(
             wrapup_requested: Some(initial_state.wrapup_requested),
             wrapup_completed: Some(initial_state.wrapup_completed),
             infrastructure_retry_count: Some(0),
-            blocked_audit_threshold: None,
-            max_infrastructure_retries: None,
+            blocked_audit_threshold: limits.blocked_audit_threshold,
+            max_infrastructure_retries: limits.max_infrastructure_retries,
             last_failure: None,
             completion_evidence: None,
             auto_resume_at_reset: None,
@@ -508,6 +511,8 @@ pub async fn create_goal_for_session_from_access(
     .await
 }
 
+/// The goal-tool creation. The model's Goal has no Task, so it keeps the
+/// default `GoalLimits`.
 pub async fn create_goal_for_request_from_access(
     node: &std::sync::Arc<EmbeddedNode>,
     access: Option<&gents_store::config_client::ConfigAccess>,
@@ -622,6 +627,7 @@ async fn create_goal_for_session_inner(
                     session_id,
                     objective,
                     token_budget,
+                    gents_protocol::goal::GoalLimits::default(),
                     GoalState {
                         status: GoalStatus::Active,
                         blocked_audits: 0,

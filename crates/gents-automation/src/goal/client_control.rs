@@ -419,6 +419,7 @@ pub(crate) async fn stage_goal_control(
                 &request.session_id,
                 &objective,
                 token_budget,
+                gents_protocol::goal::GoalLimits::default(),
                 &request,
                 replacement.as_ref().map(|(_, identity)| identity),
                 client_graphs.as_ref().map(|graphs| &graphs.request),

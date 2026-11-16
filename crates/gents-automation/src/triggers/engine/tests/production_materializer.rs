@@ -827,8 +827,8 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
                     .as_i64()
                     .expect("the materialized budget fits the Task document")
             }),
-            goal_blocked_audit_threshold: None,
-            goal_max_infrastructure_retries: None,
+            goal_blocked_audit_threshold: modeled.goal_blocked_audit_threshold,
+            goal_max_infrastructure_retries: modeled.goal_max_infrastructure_retries,
             output_schema_ref: None,
             hooks: Vec::new(),
         };
@@ -857,7 +857,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         let rows = access.execute(&format!(r#"{{
             AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID agent_did }}
             AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID lifecycle_state }}
-            Goal(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID session_doc_id creator_did parent_linked assignment_root_request_doc_id }}
+            Goal(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID session_doc_id creator_did parent_linked assignment_root_request_doc_id blocked_audit_threshold max_infrastructure_retries }}
             GoalCreationClaim(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID session_doc_id creator_did parent_linked }}
         }}"#)).await.unwrap();
         let sessions = rows["data"]["AgentSession"].as_array().unwrap();
@@ -896,6 +896,16 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         assert_eq!(
             goals[0]["assignment_root_request_doc_id"],
             requests[0]["_docID"]
+        );
+        assert_eq!(
+            goals[0]["blocked_audit_threshold"].as_i64(),
+            modeled.goal_blocked_audit_threshold,
+            "the Goal pins its Task's blocked-audit threshold"
+        );
+        assert_eq!(
+            goals[0]["max_infrastructure_retries"].as_i64(),
+            modeled.goal_max_infrastructure_retries,
+            "the Goal pins its Task's infrastructure retry limit"
         );
     }
 }

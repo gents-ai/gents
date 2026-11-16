@@ -13,6 +13,10 @@ pub struct GoalSnapshot {
     pub tokens_used: i64,
     pub active_time_seconds: i64,
     pub consecutive_blocked_audits: i64,
+    /// The Goal's pinned threshold, or the default when its Task set none.
+    pub blocked_audit_threshold: i64,
+    /// The Goal's pinned limit, or the default when its Task set none.
+    pub max_infrastructure_retries: i64,
     pub continuation_sequence: i64,
     pub wrapup_requested: bool,
     pub wrapup_completed: bool,
@@ -21,6 +25,17 @@ pub struct GoalSnapshot {
     pub completion_evidence: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+}
+
+/// The limits a Goal pins when it is created: a Task's
+/// `goal_blocked_audit_threshold` and `goal_max_infrastructure_retries`.
+/// Unset values are the controller defaults. Goals the model creates with goal
+/// tools, and Goals a person starts, have no Task and keep the defaults. A
+/// replayed creation returns the Goal with the limits it was created with.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GoalLimits {
+    pub blocked_audit_threshold: Option<i64>,
+    pub max_infrastructure_retries: Option<i64>,
 }
 
 pub const GOAL_FIELDS: &str = r#"

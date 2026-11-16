@@ -283,6 +283,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                             task_session,
                             "Task work",
                             None,
+                            gents_protocol::goal::GoalLimits::default(),
                             GoalState {
                                 status: GoalStatus::Active,
                                 blocked_audits: 0,
