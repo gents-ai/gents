@@ -66,9 +66,10 @@ def params (input : Input) : Option String :=
   merge agent (CompletionParameters.cache ⟨input.provider, input.session, input.request⟩)
 
 /-- The longest provider rate-limit wait, in milliseconds, the loop holds when
-the retry policy leaves it unset. It equals the classifier's
-`LONG_RATE_LIMIT_WAIT`, beyond which a throttle already reads as usage
-exhaustion, so the unset cap fails no throttle the classifier retries. -/
+the retry policy leaves it unset; a longer wait fails as the provider's usage
+limit (`CompletionRetry.Budget.maxWait`). It equals `LONG_RATE_LIMIT_WAIT`, the
+wait beyond which a recorded attempt's throttle reads as usage exhaustion, so
+with the unset cap a request's verdict and its recorded attempt agree. -/
 def defaultMaxWaitMs : Nat := 300000
 
 /-- Scheduled work has a longer transport ladder; an interactive override

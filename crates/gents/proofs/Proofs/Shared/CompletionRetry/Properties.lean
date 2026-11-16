@@ -124,9 +124,19 @@ theorem transport_backoff_within_max_wait {s s' : State} {error : String} {wake 
     (hbackoff : s'.phase = .backingOff wake) :
     withinMaxWait s.now wake s.budget.maxWait := by
   simp only [step?, hphase] at h
-  split at h <;> simp only [Option.some.injEq] at h <;> subst s'
-  · simp_all
-  · simp at hbackoff
+  repeat' split at h
+  all_goals simp only [Option.some.injEq] at h
+  all_goals subst s'
+  all_goals simp_all
+
+/-- A provider wait beyond the cap is the provider's usage limit: the
+completion fails permanently whatever transport budget or deadline remains. -/
+theorem transport_wait_beyond_max_wait_is_usage_limited {s : State} {error : String}
+    {wake : Time}
+    (hphase : s.phase = .retracted .transport error wake)
+    (hbeyond : ¬ withinMaxWait s.now wake s.budget.maxWait) :
+    step? s .schedule = some { s with phase := .failedPermanent } := by
+  simp [step?, hphase, hbeyond]
 
 theorem successful_wake_uses_observed_time {s s' : State} {observed : Time}
     (h : step? s (.wake observed) = some s') :

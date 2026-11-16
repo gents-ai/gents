@@ -139,7 +139,7 @@ def retryCases : List RetryCase :=
       { baseState with
           phase := .retracted .emptySample "empty" 12
           deadline := some 11 } .schedule
-  , witness "transport_wait_beyond_max_wait_is_exhausted"
+  , witness "transport_wait_beyond_max_wait_is_usage_limited"
       { baseState with
           phase := .retracted .transport "rate limited" 400
           budget := { defaultBudget with maxWait := some 300 } } .schedule
@@ -147,15 +147,20 @@ def retryCases : List RetryCase :=
       { baseState with
           phase := .retracted .transport "rate limited" 300
           budget := { defaultBudget with maxWait := some 300 } } .schedule
+  , witness "transport_wait_beyond_max_wait_without_budget_is_usage_limited"
+      { baseState with
+          phase := .retracted .transport "rate limited" 400
+          budget := { defaultBudget with maxWait := some 300 }
+          transportUsed := defaultBudget.transportRetries } .schedule
   ]
 
-theorem retryCases_count : retryCases.length = 35 := by decide
+theorem retryCases_count : retryCases.length = 36 := by decide
 
 theorem retry_cases_pin_publication_boundary :
     retryCases.map (fun c => c.post.isSome) =
       [true, false, false, true, true, true, true, true, false, true, false, true, true,
        true, true, true, true, false, true, true, true, true, true, true, true, true,
-       true, true, true, true, true, true, true, true, true] := by
+       true, true, true, true, true, true, true, true, true, true] := by
   native_decide
 
 theorem retry_cases_pin_exhaustion_and_single_repair :
@@ -221,12 +226,14 @@ theorem account_limit_never_backs_off (s : State) (error : String) (wake : Time)
   · exact Or.inl ⟨rfl, rfl, by assumption, rfl, rfl⟩
   · exact Or.inr rfl
 
-/-- The policy holds a transport wait only up to its cap: the provider's
-rate-limit wait beyond it is exhausted without spending the budget. -/
+/-- The policy holds a transport wait up to its cap; the provider's
+rate-limit wait beyond it fails as the provider's usage limit without spending
+the budget, even when the budget is already spent. -/
 theorem max_wait_cases_cap_the_held_wait :
-    ((retryCases.drop 33).take 2).map (fun c => c.post.map (fun state =>
+    ((retryCases.drop 33).take 3).map (fun c => c.post.map (fun state =>
       (state.phase, state.transportUsed, state.attempt))) =
-      [some (.exhausted, 0, 0), some (.backingOff 300, 1, 1)] := by
+      [some (.failedPermanent, 0, 0), some (.backingOff 300, 1, 1),
+       some (.failedPermanent, defaultBudget.transportRetries, 0)] := by
   native_decide
 
 end CompletionRetry
