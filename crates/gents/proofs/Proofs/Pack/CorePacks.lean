@@ -32,6 +32,17 @@ def CorePack.coordinate : CorePack → String
 
 def all : List CorePack := [.packBuilder, .web, .dynamicWorkflows, .charts, .dataTables, .script]
 
+/-- Before reserving a fresh Engineer bootstrap, all default pack archives
+must be present. Existing homes and explicit opt-outs are unaffected. -/
+def refuseInit (fresh engineer defaults allArchives : Bool) : Bool :=
+  fresh && engineer && defaults && !allArchives
+
+theorem fresh_engineer_missing_archive_refused : refuseInit true true true false = true := rfl
+
+theorem existing_home_not_refused (engineer defaults allArchives : Bool) :
+    refuseInit false engineer defaults allArchives = false := by
+  simp [refuseInit]
+
 /-- Where the archive an install takes comes from. -/
 inductive Origin
   /-- The runtime's own release: built from its repository and tested with it. -/
