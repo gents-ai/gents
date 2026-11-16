@@ -2084,6 +2084,106 @@ fn ambient_context_counts_statics_outside_test_items() {
     assert_eq!(ambient_context_sites(&syntax), 3);
 }
 
+/// Application code takes its behaviour from configuration documents and
+/// command-line flags, never from the process environment: an environment
+/// variable is invisible to the store, to other clients and to the model, and
+/// request context read from it is lost across a spawn. Build scripts are
+/// exempt. Entries name why each remaining production read stays or what
+/// replaces it; the list only shrinks (#1764).
+#[rustfmt::skip]
+const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
+];
+
+#[derive(Default)]
+struct EnvironmentReadVisitor {
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for EnvironmentReadVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if let Some(name) = path_name(call) {
+            let mut segments = name.rsplit("::");
+            let function = segments.next().unwrap_or_default();
+            if segments.next() == Some("env")
+                && matches!(function, "var" | "var_os" | "vars" | "vars_os")
+            {
+                self.sites += 1;
+            }
+        }
+        visit::visit_expr_call(self, call);
+    }
+}
+
+fn environment_read_sites(syntax: &syn::File) -> usize {
+    let mut visitor = EnvironmentReadVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+#[test]
+fn runtime_environment_reads_only_shrink() {
+    let root = repo_root();
+    let actual = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .filter(|(relative, _)| !relative.ends_with("build.rs"))
+        .map(|(relative, syntax)| (relative, environment_read_sites(&syntax)))
+        .filter(|(_, sites)| *sites > 0)
+        .collect::<BTreeMap<_, _>>();
+    let allowed = ENVIRONMENT_READ_ALLOWLIST
+        .iter()
+        .map(|(path, count, _)| (path.to_string(), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let found = actual.get(path).copied().unwrap_or_default();
+        match allowed.get(path).copied() {
+            None => violations.push(format!(
+                "{path}: {found} new environment read(s); take the value from a configuration document or a flag"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{path}: {found} environment reads exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{path}: {found} environment reads; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    let current = actual
+        .iter()
+        .map(|(path, count)| format!("    (\"{path}\", {count}, \"<reason>\"),"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        violations.is_empty(),
+        "runtime environment read ratchet failed:\n{}\n\ncurrent sites:\n{current}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn environment_reads_count_calls_outside_test_items() {
+    let syntax = syn::parse_file(
+        r#"
+        fn a() { let _ = std::env::var("A"); let _ = env::var_os("B"); }
+        fn b() { for _ in std::env::vars() {} let _ = env!("C"); let _ = option_env!("D"); }
+        fn c() { let _ = var("E"); std::env::set_var("F", "1"); }
+        #[cfg(test)]
+        fn d() { let _ = std::env::var("G"); }
+        #[cfg(test)]
+        mod tests { fn e() { let _ = std::env::var("H"); } }
+        "#,
+    )
+    .expect("parse snippet");
+    assert_eq!(environment_read_sites(&syntax), 3);
+}
+
 /// Functions that write a file with `fs::write` and then give that path an
 /// exec bit. Linux execve refuses a file any process holds open for writing
 /// (ETXTBSY), and a concurrent test's spawn copies this process's write
