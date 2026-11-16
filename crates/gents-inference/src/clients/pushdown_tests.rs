@@ -37,10 +37,7 @@ fn core_request(reasoning: &str) -> CompletionRequest {
         documents: vec![rig::completion::Document {
             id: "document-1".to_string(),
             text: "provider-visible document payload".to_string(),
-            additional_props: std::collections::HashMap::from([(
-                "source".to_string(),
-                "provider-input-test".to_string(),
-            )]),
+            additional_props: [("source".to_string(), "provider-input-test".to_string())].into(),
         }],
         tools: vec![rig::completion::ToolDefinition {
             name: "lookup".to_string(),

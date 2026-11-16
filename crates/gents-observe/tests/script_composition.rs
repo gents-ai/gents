@@ -228,7 +228,13 @@ async fn background_plugin_keeps_the_selected_tool_surface() {
     accept_hook_tool_call(&fixture.hook, "start-script", "spawn_process", &args, None).await;
     let ToolCallHookAction::Skip { reason } = fixture
         .hook
-        .on_tool_call("spawn_process", None, "start-script", &args)
+        .on_tool_call(
+            "spawn_process",
+            None,
+            "start-script",
+            &args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
     else {
         panic!("spawn did not return its receipt")
@@ -239,7 +245,13 @@ async fn background_plugin_keeps_the_selected_tool_surface() {
     accept_hook_tool_call(&fixture.hook, "wait-script", "wait_process", &wait, None).await;
     let ToolCallHookAction::Skip { reason } = fixture
         .hook
-        .on_tool_call("wait_process", None, "wait-script", &wait)
+        .on_tool_call(
+            "wait_process",
+            None,
+            "wait-script",
+            &wait,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
     else {
         panic!("wait did not return")

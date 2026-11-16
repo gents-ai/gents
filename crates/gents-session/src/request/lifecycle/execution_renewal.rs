@@ -213,9 +213,7 @@ async fn renew_once_with_time(
         )
         .await
         {
-            Err(error) if error.is::<RenewalAdmissionExpired>() => {
-                return Ok(RenewalAttemptOutcome::Lost)
-            }
+            Err(RenewalError::Expired) => return Ok(RenewalAttemptOutcome::Lost),
             Err(error)
                 if gents_store::config_client::is_classified_transaction_conflict(&error) =>
             {
@@ -224,14 +222,46 @@ async fn renew_once_with_time(
                     "execution lease renewal poll lost every attempt to concurrent request writes; re-driving"
                 );
             }
-            result => return result,
+            Err(RenewalError::Access(error)) => return Err(error.into()),
+            Err(RenewalError::Other(error)) => return Err(error),
+            Ok(outcome) => return Ok(outcome),
         }
     }
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("execution lease expired before renewal commit admission")]
-struct RenewalAdmissionExpired;
+pub enum RenewalError {
+    #[error("execution lease expired before renewal commit admission")]
+    Expired,
+    #[error(transparent)]
+    Access(#[from] gents_store::config_client::ConfigClientError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl gents_store::config_client::TransactionFailure for RenewalError {
+    fn config_client_error(&self) -> Option<&gents_store::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Other(error) => {
+                gents_store::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::Expired => None,
+        }
+    }
+
+    fn rerun_requested(&self) -> Option<&gents_store::config_client::RerunNote> {
+        match self {
+            Self::Access(error) => {
+                gents_store::config_client::TransactionFailure::rerun_requested(error)
+            }
+            Self::Other(error) => {
+                gents_store::config_client::TransactionFailure::rerun_requested(error)
+            }
+            Self::Expired => None,
+        }
+    }
+}
 
 pub async fn renew_in_transaction(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
@@ -239,7 +269,7 @@ pub async fn renew_in_transaction(
     generation: &str,
     expected_deadline: Option<DateTime<Utc>>,
     fixture_now: Option<DateTime<Utc>>,
-) -> Result<RenewalAttemptOutcome> {
+) -> std::result::Result<RenewalAttemptOutcome, RenewalError> {
     use gents_protocol::document_query::{
         fields::agent_request as fields, Filter, Input, Query, Selection, Update,
     };
@@ -257,7 +287,8 @@ pub async fn renew_in_transaction(
     .render();
     let result = txn.run_local_response(&rendered).await?;
     let snapshot_read_ms = started.elapsed().as_millis() as u64;
-    let Some(row) = gents_store::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
+    let Some(row) = gents_store::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")
+        .map_err(anyhow::Error::from)?
     else {
         return Ok(RenewalAttemptOutcome::Lost);
     };
@@ -273,13 +304,17 @@ pub async fn renew_in_transaction(
         .execution_lease_expires_at
         .as_deref()
         .context("missing execution deadline")?;
-    let deadline = DateTime::parse_from_rfc3339(expiry)?.timestamp_millis();
+    let deadline = DateTime::parse_from_rfc3339(expiry)
+        .map_err(anyhow::Error::from)?
+        .timestamp_millis();
     let duration = row
         .execution_lease_secs
         .context("missing execution duration")?
         .checked_mul(1000)
         .context("execution duration overflow")?;
-    anyhow::ensure!(duration > 0, "execution duration must be positive");
+    if duration <= 0 {
+        return Err(anyhow::anyhow!("execution duration must be positive").into());
+    }
     let now = fixture_now.unwrap_or_else(Utc::now).timestamp_millis();
     let observed = LeaseObservation {
         request: state,
@@ -318,14 +353,14 @@ pub async fn renew_in_transaction(
     )
     .render();
     let result = txn.run_local_response(&rendered).await?;
-    anyhow::ensure!(
-        result
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentRequest"))
-            .is_some_and(response_has_documents),
-        "lease renewal lost deadline CAS"
-    );
+    if !result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("update_AgentRequest"))
+        .is_some_and(response_has_documents)
+    {
+        return Err(anyhow::anyhow!("lease renewal lost deadline CAS").into());
+    }
     let recheck = renewal_recheck_time(fixture_now).timestamp_millis();
     if !is_live(observed, generation, recheck) {
         tracing::warn!(
@@ -334,7 +369,7 @@ pub async fn renew_in_transaction(
             elapsed_ms = started.elapsed().as_millis() as u64,
             "execution lease expired during renewal commit admission"
         );
-        return Err(RenewalAdmissionExpired.into());
+        return Err(RenewalError::Expired);
     }
     Ok(RenewalAttemptOutcome::Committed)
 }

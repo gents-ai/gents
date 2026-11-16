@@ -155,6 +155,7 @@ pub(super) async fn execute(
             &record,
             &input,
             &gents_toolcalls::plugin::executor::BindContext::headless(None),
+            &gents_loop::tool::ToolCallEnvelope::default(),
         )
         .await
     {
@@ -202,7 +203,14 @@ pub(super) async fn execute(
         ))
     } else {
         plugins
-            .call_bound_data_as(&record, input, bound, caller, actor)
+            .call_bound_data_as(
+                &record,
+                input,
+                bound,
+                caller,
+                actor,
+                &gents_loop::tool::ToolCallEnvelope::default(),
+            )
             .await
     };
     let failure = match called {

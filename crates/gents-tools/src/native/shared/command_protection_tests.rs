@@ -59,6 +59,7 @@ async fn run(
         environment: Some(environment),
         tool_name: Some("command-guard-fixture".into()),
         live_output: None,
+        process_recorder: None,
     })
     .await;
     match outcome {
@@ -235,7 +236,11 @@ async fn configured_cli_tools_keep_the_guard_and_declared_environment() {
         )
         .unwrap();
         let args = serde_json::json!({"argv": ["-c", "printf '%s' \"$FIXTURE_WORD\" > \"$1\"", "fixture", target]}).to_string();
-        let result = workspace::scope(scope, tool.call(args)).await;
+        let result = workspace::scope(
+            scope,
+            tool.call(args, &gents_loop::tool::ToolCallEnvelope::ambient()),
+        )
+        .await;
         if allowed {
             result.unwrap();
         }
@@ -266,6 +271,7 @@ async fn bounded_commands_protect_runtime_keys_without_workspace_consent() {
         ..Default::default()
     };
     scope_request_tool_execution_with_workspace_overlay(
+        None,
         None,
         Default::default(),
         scope,

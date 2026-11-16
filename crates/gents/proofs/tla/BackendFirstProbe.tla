@@ -1,6 +1,6 @@
 ---- MODULE BackendFirstProbe ----
 \* lean: Proofs.BackendHealth.awaitProbeRequest
-\* crates: gents
+\* crates: gents-inference, gents
 EXTENDS Naturals, LeanDecision_Proofs_BackendHealth
 
 CONSTANTS HoldPending, ReleaseDeferred, StartupFailed

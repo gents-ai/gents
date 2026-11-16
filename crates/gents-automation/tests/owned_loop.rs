@@ -328,7 +328,11 @@ async fn refused_tool_arguments_reach_the_model_and_the_row_as_the_lean_model_re
                 parameters: serde_json::json!({"type": "object"}),
             }
         }
-        async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        async fn call(
+            &self,
+            _args: Self::Args,
+            _context: &gents_loop::tool::ToolCallEnvelope,
+        ) -> Result<Self::Output, Self::Error> {
             panic!("the tool must not run on unparseable arguments");
         }
     }

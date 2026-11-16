@@ -119,7 +119,7 @@ fn explicit_unlock_preserves_history_when_the_editor_cannot_cache_its_key() {
             let manifest = std::fs::read(paths.node_data_dir().join("MANIFEST"))?;
 
             let (locked, _) = open(&paths, false, Cache::Missing).await;
-            assert!(locked.err().unwrap().is::<HistoryUnlockRequired>());
+            assert!(HistoryUnlockRequired::occurs_in(&locked.err().unwrap()));
             let (rejected, offered) = open(&paths, true, Cache::RejectWrite).await;
             assert!(rejected
                 .err()

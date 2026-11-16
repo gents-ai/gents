@@ -123,6 +123,7 @@ pub(crate) async fn run_linter_diagnostics(
         environment: Some(command.environment),
         tool_name: Some("lsp".into()),
         live_output: None,
+        process_recorder: None,
     })
     .await;
     match outcome {

@@ -40,6 +40,51 @@ def groups(selection):
     return {entry["group"]: entry["packages"].split() for entry in selection["matrix"]}
 
 
+class TestCacheMode(unittest.TestCase):
+    def mode(self, single=True, **environment):
+        names = ("GATE_TEST_CACHE", "GATE_TEST_CACHE_INPUT", "GATE_TEST_CACHE_MAIN", "GATE_EVENT", "GATE_LABELS")
+        saved = {name: os.environ.pop(name, None) for name in names}
+        os.environ.update(environment)
+        try:
+            return gate.test_cache_mode(single)
+        finally:
+            for name in names:
+                os.environ.pop(name, None)
+                if saved[name] is not None:
+                    os.environ[name] = saved[name]
+
+    def test_off_until_the_repository_turns_it_on(self):
+        self.assertEqual(self.mode(GATE_EVENT="pull_request"), "off")
+        self.assertEqual(self.mode(GATE_EVENT="push"), "off")
+
+    def test_pull_requests_use_it_and_main_runs_everything(self):
+        self.assertEqual(self.mode(GATE_TEST_CACHE="on", GATE_EVENT="pull_request"), "on")
+        self.assertEqual(self.mode(GATE_TEST_CACHE="on", GATE_EVENT="merge_group"), "on")
+        self.assertEqual(self.mode(GATE_TEST_CACHE="on", GATE_EVENT="push"), "full")
+        self.assertEqual(self.mode(GATE_TEST_CACHE="on", GATE_EVENT="push", GATE_TEST_CACHE_MAIN="on"), "on")
+        self.assertEqual(self.mode(GATE_TEST_CACHE="on", GATE_EVENT="schedule"), "full")
+
+    def test_a_label_or_a_dispatch_forces_a_full_run(self):
+        self.assertEqual(self.mode(GATE_TEST_CACHE="on", GATE_EVENT="pull_request",
+                                   GATE_LABELS='["test-cache: full"]'), "full")
+        self.assertEqual(self.mode(GATE_EVENT="workflow_dispatch", GATE_TEST_CACHE_INPUT="full"), "full")
+        self.assertEqual(self.mode(GATE_TEST_CACHE="on", GATE_EVENT="workflow_dispatch",
+                                   GATE_TEST_CACHE_INPUT="off"), "off")
+
+    def test_the_scheduled_run_selects_nothing_while_the_cache_is_off(self):
+        saved = {name: os.environ.pop(name, None) for name in ("GATE_EVENT", "GATE_TEST_CACHE", "GATE_PLAN")}
+        os.environ["GATE_EVENT"] = "schedule"
+        try:
+            arguments = type("Arguments", (), {"everything": True, "files": None, "base": "HEAD"})()
+            self.assertEqual(gate.resolve_plan(arguments)["jobs"], [])
+        finally:
+            os.environ.pop("GATE_EVENT")
+            os.environ.update({name: value for name, value in saved.items() if value is not None})
+
+    def test_it_needs_the_single_slice_in_the_build_job(self):
+        self.assertEqual(self.mode(False, GATE_TEST_CACHE="on", GATE_EVENT="pull_request"), "off")
+
+
 class Selection(unittest.TestCase):
     def test_every_member_has_one_group(self):
         gate.check_groups(MEMBERS)
@@ -70,6 +115,18 @@ class Selection(unittest.TestCase):
         self.assertIn("contract", selection["jobs"])
         self.assertNotIn("lint", selection["jobs"])
         self.assertTrue(selection["contract"]["ts_lean"])
+
+    def test_the_test_cache_model_check_runs_only_for_the_caches_own_files(self):
+        for path in ("crates/gents/proofs/Proofs/Ci/TestCache.lean", "scripts/ci/test_cache.py",
+                     ".github/scripts/check-test-cache-model.sh", "crates/gents/proofs/lean-toolchain"):
+            with self.subTest(path=path):
+                selection = select(path)
+                self.assertIn("contract", selection["jobs"])
+                self.assertTrue(selection["contract"]["test_cache_model"])
+        for path in ("crates/gents/proofs/Proofs/Request/CausalHop.lean", "scripts/ci/gate.py",
+                     "crates/gents-store/src/graphql.rs", "Cargo.lock"):
+            with self.subTest(path=path):
+                self.assertFalse(select(path)["contract"]["test_cache_model"])
 
     def test_a_draft_tests_what_it_changes_and_lints_what_depends_on_it(self):
         selection = select("crates/gents-store/src/graphql.rs", tier="draft")

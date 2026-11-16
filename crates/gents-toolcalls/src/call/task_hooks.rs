@@ -33,6 +33,30 @@ pub(crate) const DEFAULT_TASK_HOOK_TIMEOUT_SECS: u64 = 120;
 /// Bounds each captured hook process stream before building the attempt detail.
 const HOOK_OUTPUT_BYTE_CAP: usize = 64 * 1024;
 
+/// The command a task hook runs. A hook runs outside every tool call, so it
+/// carries only its own deadline, cancellation and recorder (Lean
+/// `CallEnvelope.task_hook_sees_no_request_context`).
+pub(crate) fn hook_exec_request(
+    hook: &TaskHook,
+    cwd: PathBuf,
+    deadline_at: chrono::DateTime<Utc>,
+    cancellation: CancellationToken,
+    recorder: Option<gents_session::exec::ownership::ProcessRecorder>,
+) -> ManagedExecRequest {
+    ManagedExecRequest {
+        argv: hook.command.clone(),
+        cwd,
+        deadline_at: Some(deadline_at),
+        cancellation_token: cancellation,
+        max_output_bytes: HOOK_OUTPUT_BYTE_CAP,
+        stdin: Vec::new(),
+        environment: None,
+        tool_name: Some(format!("task_hook:{}", hook.hook_id)),
+        live_output: None,
+        process_recorder: recorder,
+    }
+}
+
 /// A failure reason carries only a tail of hook output so request failure
 /// summaries do not grow with the full captured output.
 const FAILURE_REASON_OUTPUT_CAP: usize = 4 * 1024;
@@ -480,24 +504,20 @@ impl TaskHookExec for ManagedTaskHookExec {
             }
             return attempt;
         }
-        let execution = run_managed_exec(ManagedExecRequest {
-            argv: hook.command.clone(),
-            cwd: self.cwd.clone(),
-            deadline_at: Some(deadline_at),
-            cancellation_token: cancellation.clone(),
-            max_output_bytes: HOOK_OUTPUT_BYTE_CAP,
-            stdin: Vec::new(),
-            environment: None,
-            tool_name: Some(format!("task_hook:{}", hook.hook_id)),
-            live_output: None,
-        });
-        let outcome = match &self.record {
-            Some(record) => {
-                gents_session::exec::ownership::scope_process_recorder(
-                    record.process_recorder(&hook.hook_id),
-                    execution,
-                )
-                .await
+        let recorder = self
+            .record
+            .as_ref()
+            .map(|record| record.process_recorder(&hook.hook_id));
+        let execution = run_managed_exec(hook_exec_request(
+            hook,
+            self.cwd.clone(),
+            deadline_at,
+            cancellation.clone(),
+            recorder.clone(),
+        ));
+        let outcome = match recorder {
+            Some(recorder) => {
+                gents_session::exec::ownership::scope_process_recorder(recorder, execution).await
             }
             None => execution.await,
         };

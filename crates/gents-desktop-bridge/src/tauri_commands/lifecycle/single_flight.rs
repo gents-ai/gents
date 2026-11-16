@@ -211,7 +211,7 @@ async fn reserve_client_listener(
     ),
     BridgeError,
 > {
-    use crate::host::local::{startup_lock, LocalListener};
+    use crate::host::local::{startup_lock, ListenerBindError, LocalListener};
 
     if !policy.client_host {
         return Ok((None, None));
@@ -236,12 +236,7 @@ async fn reserve_client_listener(
     };
     let listener = match LocalListener::bind(&policy.desktop_paths).await {
         Ok(listener) => Some(listener),
-        Err(error)
-            if matches!(
-                error.downcast_ref::<std::fs::TryLockError>(),
-                Some(std::fs::TryLockError::WouldBlock)
-            ) =>
-        {
+        Err(ListenerBindError::Held(_)) => {
             return Err(BridgeError::new(BridgeErrorCode::ClientStartFailed,
                 "the client installation is already in use; close its editor attachments before starting the desktop"));
         }

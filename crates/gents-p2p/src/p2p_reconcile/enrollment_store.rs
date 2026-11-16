@@ -120,6 +120,10 @@ pub enum EnrollmentDecisionRefusal {
 }
 
 impl EnrollmentDecisionRefusal {
+    pub fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        gents_protocol::error_chain::find_source::<Self>(error)
+    }
+
     pub fn code(&self) -> gents_protocol::enrollment::EnrollmentDecisionRefusalCode {
         use gents_protocol::enrollment::EnrollmentDecisionRefusalCode as Code;
         match self {

@@ -25,11 +25,11 @@ pub fn build_openai_responses_client<H>(
     base_url: &str,
     http_client: H,
     http_headers: HeaderMap,
-) -> Result<rig::providers::openai::Client<H>>
+) -> Result<crate::llm::rig_compat::providers::ResponsesClient<H>>
 where
     H: Default + HttpClientExt,
 {
-    rig::providers::openai::Client::builder()
+    crate::llm::rig_compat::providers::ResponsesClient::builder()
         .api_key(api_key)
         .base_url(base_url)
         .http_headers(http_headers)
@@ -42,16 +42,33 @@ pub fn build_openai_chat_completions_client<H>(
     api_key: &str,
     base_url: &str,
     http_client: H,
-) -> Result<rig::providers::openai::CompletionsClient<H>>
+) -> Result<crate::llm::rig_compat::providers::ChatCompletionsClient<H>>
 where
     H: Default + HttpClientExt,
 {
-    rig::providers::openai::CompletionsClient::builder()
+    crate::llm::rig_compat::providers::ChatCompletionsClient::builder()
         .api_key(api_key)
         .base_url(base_url)
         .http_client(http_client)
         .build()
         .context("building OpenAI Chat Completions client")
+}
+
+pub fn build_openrouter_client<H>(
+    api_key: &str,
+    base_url: &str,
+    http_client: H,
+) -> Result<crate::llm::rig_compat::providers::OpenRouterClient<H>>
+where
+    H: Default + HttpClientExt,
+{
+    Ok(
+        crate::llm::rig_compat::providers::OpenRouterClient::builder()
+            .api_key(api_key)
+            .base_url(base_url)
+            .http_client(http_client)
+            .build()?,
+    )
 }
 
 #[derive(Clone, Debug, Default)]

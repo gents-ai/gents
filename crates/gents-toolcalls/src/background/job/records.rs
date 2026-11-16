@@ -32,6 +32,13 @@ pub enum RecordError {
     GuestStateTooLarge { bytes: usize, max: usize },
 }
 
+impl RecordError {
+    /// The record refusal `error` was raised as, possibly under context.
+    pub fn in_error(error: &anyhow::Error) -> Option<&Self> {
+        error.downcast_ref::<Self>()
+    }
+}
+
 /// Progress fields the host owns; the guest's values for them are overwritten.
 /// `revision` is not here: the compare-and-set assigns it.
 #[derive(Debug, Clone, PartialEq, Eq)]
