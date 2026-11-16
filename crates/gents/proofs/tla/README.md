@@ -355,9 +355,12 @@ See `../README.md` for how this fits the broader formal-verification model.
   spawn copies the process's descriptors into its child until that child
   execs, and Linux execve refuses a file open for writing (ETXTBSY). RED:
   `InProcessWrite` writes the script in the test process, the failure on the
-  Linux runner. Green never opens it for writing there (a checked-in
-  fixture); `Darwin` (no such execve check) and `Alone` (no sibling) explain
-  why the old order passed on macOS and alone.
+  Linux runner, and also what O_CLOEXEC alone gives (std already opens with
+  it). Green never opens it for writing there (a checked-in fixture);
+  `ChildWriter` writes a generated script from a child process the test
+  reaps before its exec (`write_executable_script`), and its RED
+  `ChildWriterUnwaited` drops the reap. `Darwin` (no such execve check) and
+  `Alone` (no sibling) explain why the old order passed on macOS and alone.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
