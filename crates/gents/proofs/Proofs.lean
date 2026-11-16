@@ -3,6 +3,7 @@ import Proofs.Store.AccessClassification
 import Proofs.Store.Views
 import Proofs.Store.Identity.RelationshipReplay
 import Proofs.Shared.Basic
+import Proofs.Ci.TestCache
 import Proofs.Automation.Process
 import Proofs.Store.Persistence
 import Proofs.Store.SchemaInstall

@@ -353,6 +353,9 @@ pub struct ProviderReport {
 }
 
 impl ProviderReport {
+    /// External premise: a provider failure reaches the loop as text through
+    /// Rig's `ProviderError(String)`; its status and kind exist only in the
+    /// provider's wording.
     pub fn classify_failure_text(text: &str) -> Self {
         let lower = text.to_ascii_lowercase();
         let has_status = |status: u16| {

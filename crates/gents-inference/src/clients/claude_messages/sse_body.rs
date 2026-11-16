@@ -1,16 +1,15 @@
 use futures::StreamExt;
-use rig::completion::CompletionError;
-use rig::http_client;
-use rig::streaming::RawStreamingChoice;
 
 use super::sse_state::MessagesSseState;
 use crate::clients::claude_subscription::ClaudeStreamResponse;
+use crate::llm::rig_compat::completion::{CompletionError, RawStreamingChoice};
+use crate::llm::rig_compat::http as http_client;
 use gents_loop::provider_audit::ProviderAuditSender;
 
 /// Incremental line-splitter over a response body.
 #[cfg(test)]
 pub(crate) fn stream_sse_body(
-    body: http_client::sse::BoxedStream,
+    body: http_client::BoxedStream,
     state: MessagesSseState,
 ) -> impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>
 {
@@ -18,7 +17,7 @@ pub(crate) fn stream_sse_body(
 }
 
 pub(super) fn stream_sse_body_observed(
-    body: http_client::sse::BoxedStream,
+    body: http_client::BoxedStream,
     state: MessagesSseState,
     audit_sender: Option<ProviderAuditSender>,
 ) -> impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>

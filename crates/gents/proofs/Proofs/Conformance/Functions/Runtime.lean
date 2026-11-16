@@ -27,5 +27,6 @@ end RouterDispatch
 attribute [conformance_function]
   RouterDispatch.blockedDispatch
   Proofs.BackendHealth.HealthState.blocksRouting
+  Proofs.BackendHealth.awaitProbeRequest
   RuntimeReconcile.MetricsScrapeAccess.decide
   RuntimeReconcile.MetricsScrapeAccess.bindAllowed

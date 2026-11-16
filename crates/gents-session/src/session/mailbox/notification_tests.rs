@@ -309,7 +309,11 @@ async fn content_tool_provenance_follows_lean_model() {
                 question: None,
             };
             let receipt = tool
-                .call_with_request(args, &request_context)
+                .call_with_request(
+                    args,
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    &request_context,
+                )
                 .await
                 .unwrap();
             let receipt: Value = serde_json::from_str(&receipt).unwrap();
@@ -428,7 +432,8 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
         optional: None,
         recommended_order: None,
     };
-    let call = |args: MailboxContentArgs| tool.call_with_request(args, &request_context);
+    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+    let call = |args: MailboxContentArgs| tool.call_with_request(args, &envelope, &request_context);
     let content = |title: &str, payload: Option<&str>, question: Option<MailboxQuestion>| {
         MailboxContentArgs {
             title: title.into(),

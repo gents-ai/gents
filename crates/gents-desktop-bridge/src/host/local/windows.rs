@@ -124,9 +124,7 @@ impl Listener {
             match create_pipe(&name, true) {
                 Ok(next) => break next,
                 Err(error)
-                    if error.downcast_ref::<io::Error>().is_some_and(|error| {
-                        error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32)
-                    }) && tokio::time::Instant::now() < deadline =>
+                    if pipe_name_reserved(&error) && tokio::time::Instant::now() < deadline =>
                 {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
@@ -154,6 +152,15 @@ impl Listener {
             tracing::debug!("rejected a client attachment from another Windows account");
         }
     }
+}
+
+/// External premise: Windows refuses a first pipe instance whose name a
+/// previous listener still reserves with `ERROR_ACCESS_DENIED`, which arrives
+/// as the `std::io::Error` at the root of the creation failure.
+fn pipe_name_reserved(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|error| error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32))
 }
 
 /// The default named-pipe DACL allows read access to Everyone. Supply a protected

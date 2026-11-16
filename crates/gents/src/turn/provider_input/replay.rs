@@ -109,9 +109,9 @@ pub(crate) fn tag_canonical_history(
 /// A violation anywhere under the resolver's context is a request error the
 /// loop refuses; every other failure is storage the loop reports.
 fn replay_resolution_error(error: anyhow::Error) -> ReplayEvidenceResolveError {
-    match error.downcast::<ReplayEvidenceViolation>() {
-        Ok(violation) => ReplayEvidenceResolveError::Violation(violation),
-        Err(error) => ReplayEvidenceResolveError::Storage {
+    match ReplayEvidenceViolation::in_chain(error.as_ref()).cloned() {
+        Some(violation) => ReplayEvidenceResolveError::Violation(violation),
+        None => ReplayEvidenceResolveError::Storage {
             source: error.into(),
         },
     }

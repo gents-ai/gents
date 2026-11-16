@@ -69,9 +69,10 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
     let registry = LiveToolOutputRegistry::default();
     let writer = registry.writer_for(doc_id.clone()).await;
     let outcome = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        None,
         None, tokio_util::sync::CancellationToken::new(), None, Some(writer), None, None,
         Default::default(), false,
-        call_tool_managed(&tool, serde_json::json!({"path": "source.txt", "raw_json": true}).to_string()),
+        call_tool_managed(&tool, serde_json::json!({"path": "source.txt", "raw_json": true}).to_string(), &gents_loop::tool::ToolCallEnvelope::ambient()),
     ).await;
     let ToolOutcome::Completed(output) = outcome else {
         panic!("read failed: {outcome:?}")
@@ -114,6 +115,7 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
     let failed = gents_loop::tool::ToolDyn::call_with_receipt(
         &tool,
         serde_json::json!({"path": "missing.txt"}).to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await;
     assert!(failed.result.is_err());
@@ -145,12 +147,13 @@ async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {
     let writer = registry.writer_for(doc_id.clone()).await;
     let tool = WriteFileTool::new(ToolContext::new(root_path, false).unwrap());
     let output = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        None,
         None, tokio_util::sync::CancellationToken::new(), None, Some(writer), None, None,
         Default::default(), false,
         tool.call(WriteFileArgs {
             path: "maximum.txt".into(), content: after.clone(), raw_json: true,
             expected_content_hash: None, overwrite: true,
-        }),
+        }, &gents_loop::tool::ToolCallEnvelope::ambient()),
     ).await.unwrap();
     call.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
     call.complete(&output).await.unwrap();
@@ -200,6 +203,7 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
     let registry = LiveToolOutputRegistry::default();
     let writer = registry.writer_for(doc_id.clone()).await;
     gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        None,
         None,
         tokio_util::sync::CancellationToken::new(),
         None,

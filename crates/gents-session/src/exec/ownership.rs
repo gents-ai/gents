@@ -399,6 +399,64 @@ pub(super) fn current_process_recorder() -> Option<ProcessRecorder> {
     PROCESS_RECORDER.try_with(Clone::clone).ok()
 }
 
+impl std::fmt::Debug for ProcessRecorder {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ProcessRecorder")
+            .field("evidence", &self.evidence.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ProcessRecorder {
+    fn same_owner(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self._record, &other._record)
+    }
+}
+
+/// Debug builds only: panics when an explicit recorder differs from the
+/// ambient one. Exists while the task-local recorder does (#3765).
+#[track_caller]
+pub(super) fn debug_assert_same_recorder(
+    explicit: Option<&ProcessRecorder>,
+    ambient: Option<&ProcessRecorder>,
+) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    let same = match (explicit, ambient) {
+        (Some(explicit), Some(ambient)) => explicit.same_owner(ambient),
+        (None, None) => true,
+        _ => false,
+    };
+    assert!(
+        same,
+        "explicit process recorder differs from the ambient one: explicit present {}, ambient present {}",
+        explicit.is_some(),
+        ambient.is_some()
+    );
+}
+
+/// The process recorder of the tool call `envelope` serves, if its owner
+/// records the processes it spawns.
+#[track_caller]
+pub fn process_recorder(envelope: &gents_loop::tool::ToolCallEnvelope) -> Option<ProcessRecorder> {
+    let extensions = envelope.extensions();
+    if extensions.is_ambient() {
+        return current_process_recorder();
+    }
+    let explicit = extensions.get::<ProcessRecorder>().cloned();
+    debug_assert_same_recorder(explicit.as_ref(), current_process_recorder().as_ref());
+    explicit
+}
+
+pub fn with_process_recorder(
+    envelope: gents_loop::tool::ToolCallEnvelope,
+    recorder: ProcessRecorder,
+) -> gents_loop::tool::ToolCallEnvelope {
+    envelope.with_extension(recorder)
+}
+
 pub fn record_failure_decision(recorder: Option<&ProcessRecorder>) {
     if let Some(report) = recorder.and_then(|recorder| recorder.failure_decided.as_ref()) {
         report();
@@ -677,6 +735,7 @@ pub mod test_support {
                     environment: None,
                     tool_name: Some("process-ownership-test".into()),
                     live_output: None,
+                    process_recorder: None,
                 }),
             ));
             let identity = receiver.await.expect("test process was recorded");

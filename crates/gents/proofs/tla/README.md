@@ -169,6 +169,15 @@ See `../README.md` for how this fits the broader formal-verification model.
   driven by the test after the steps it must follow (`Driven`), passes under
   every schedule and still fails an owner that never commits
   (`StalledOwner`); `SlowHost` is the ceiling's premise.
+- `ToolDeadlineInheritance` — where an accepted tool call's deadline comes
+  from. The claim fixes the request's one deadline; the provider-turn
+  publication writes it on the `AgentToolCall` row and the session hook's
+  bound deadline becomes the dispatched lifecycle's. Bound from the claim, as
+  the runtime binds it, the two agree under every schedule (Lean
+  `coherent_tool_deadline_eq_request_deadline`). A fixture that binds the
+  hook from its own clock reading gives one request two deadlines:
+  `ShortClaim` (before #3840) passed the test only by their ratio and failed
+  on a slow host; `LongClaim` (after #3840) fails it on every run.
 - `RuntimeConnectionTransport` — the desktop observer's authenticated SSE
   connection to one runtime it reads as the User (`client/observe`). The
   source task arms `K` subscriptions one at a time and then sends a ready
