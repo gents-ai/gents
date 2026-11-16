@@ -240,12 +240,6 @@ jobs:
       - name: Check gate selection and test guards
         run: make gate-selftest
 
-      - name: Install elan for the test cache model
-        run: .github/scripts/setup-elan.sh
-
-      - name: Check the test-result cache against its Lean model
-        run: .github/scripts/check-test-cache-model.sh
-
       - name: Check the live node backstop
         run: |
           shellcheck .github/scripts/host-runtime-service.sh .github/scripts/setup-rust-build-cache.sh \
@@ -453,6 +447,12 @@ jobs:
 
       - name: Check proofs, generated files and structure
         run: make gate-run JOB=contract
+
+      # Here rather than in repository-guard: this job already has the
+      # proofs' Lean toolchain and dependencies, which a cold guard runner
+      # spent its whole 10 minutes fetching.
+      - name: Check the test-result cache against its Lean model
+        run: .github/scripts/check-test-cache-model.sh
 
       - name: Show Rust build cache stats
         if: always()
