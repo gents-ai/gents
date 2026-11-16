@@ -458,8 +458,13 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
-    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(&hook, "req-deadline", &session_id, deadline).await;
+    // The request has one deadline, fixed by its claim; the runtime binds the
+    // hook from it (`tla/ToolDeadlineInheritance`).
+    let lifecycle = claimed_hook_request(&hook, "req-deadline", &session_id).await;
+    let deadline = lifecycle
+        .claimed_deadline_at()
+        .expect("a claimed request carries its deadline");
+    bind_claimed_hook_request(&hook, lifecycle, deadline).await;
 
     accept_hook_tool_call(&hook, "internal-deadline", "read", "{}", None).await;
     assert!(matches!(
@@ -484,7 +489,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     )
     .unwrap()
     .with_timezone(&chrono::Utc);
-    assert!(observed_deadline <= deadline);
+    assert_eq!(observed_deadline, deadline);
     assert!(observed_deadline > chrono::Utc::now());
 
     let _ = std::fs::remove_dir_all(&data_path);
