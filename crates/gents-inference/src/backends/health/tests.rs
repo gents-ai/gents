@@ -11,8 +11,8 @@ use super::probe::{probe_selected_backends, record_probe_event, ProbeEnv, ProbeS
 use super::prober::run_scheduled_backend_probe_cycle;
 use super::*;
 use crate::auth::credential::test_support::{
-    one_shot_token_server, seed_credential, seed_credential_with_refresh_token, test_node,
-    TOKEN_URL_ENV,
+    bearer_refreshing_at, one_shot_token_server, seed_credential,
+    seed_credential_with_refresh_token, test_node,
 };
 use gents_documents::inference_defaults::DEFAULT_MAX_QUEUE_DEPTH;
 
