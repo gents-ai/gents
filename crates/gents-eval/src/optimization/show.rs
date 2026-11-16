@@ -7,7 +7,7 @@ use crate::optimization::job::{
 };
 use crate::optimization::policy::{Decision, Mode};
 use crate::runner::freeze_refused;
-use gents::store::config_client::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DecisionView {
@@ -105,7 +105,7 @@ mod tests {
     use crate::optimization::policy::{InconclusiveReason, RejectReason};
     use crate::optimization::proposer::ScriptedProposer;
     use crate::runner::ScriptedExecutor;
-    use gents::Collection;
+    use gents_store::collection::Collection;
 
     #[tokio::test]
     async fn every_journaled_decision_recomputes_from_its_verdicts() {

@@ -1,0 +1,40 @@
+{
+ "ok": true,
+ "problems": [],
+ "notes": [
+  "materialized_lineage_materialization: new, consumer crates/gents/tests/conformance/request_lifecycle.rs, 8 cases",
+  "router_dispatch_blocked_dispatch: new, consumer crates/gents/src/runtime/agent/runtime/tests/router.rs, 3 cases",
+  "task_hooks_hookless_bound_request: new, consumer crates/gents/src/runtime/agent/daemon/task_hook_tests.rs, 3 cases"
+ ],
+ "deleted_test_assertions": {
+  "crates/gents/src/runtime/agent/daemon/task_hook_tests.rs::a_request_bound_to_a_missing_task_fails_closed": [
+   "5: assert_eq!(harness.calls(), 0, \"{row}\");",
+   "6: assert_eq!(row[\"lifecycle_state\"], \"failed\", \"{row}\");",
+   "7: assert!(reason(&row).contains(\"no longer exists\"), \"{row}\");"
+  ],
+  "crates/gents/src/runtime/agent/daemon/task_hook_tests.rs::a_request_bound_to_a_disabled_hookless_task_fails_closed": [
+   "18: assert_eq!(harness.calls(), 0, \"{row}\");",
+   "19: assert_eq!(row[\"lifecycle_state\"], \"failed\", \"{row}\");",
+   "20: assert!(reason(&row).contains(\"disabled\"), \"{row}\");"
+  ],
+  "crates/gents/tests/conformance/request_lifecycle.rs::scheduled_materialization_persists_trigger_lineage": [
+   "33: assert_eq!(",
+   "48: assert_eq!(",
+   "66: assert_eq!(row[\"admission_kind\"], \"local-self\");",
+   "67: assert_eq!(row[\"admission_signer_did\"], agent.did());",
+   "68: assert!(row[\"admission_signature\"]",
+   "70: .is_some_and(|signature| !signature.is_empty()));"
+  ],
+  "crates/gents/src/runtime/agent/runtime/tests/router.rs::snapshot_change_reroutes_request_blocked_on_old_executor_queue": [
+   "70: .expect(\"router must reach the full queue\");",
+   "79: .expect(\"router must leave the old full queue\")",
+   "80: .expect(\"updated executor must receive the request\");",
+   "81: assert_eq!(dispatched.session_id, \"blocked-dispatch\");",
+   "82: assert_eq!(old_rx.recv().await.unwrap().session_id, \"already-queued\");",
+   "83: assert!(old_rx.try_recv().is_err());",
+   "88: .expect(\"router must shut down\")",
+   "92: node.shutdown().await.expect(\"node shutdown\");"
+  ]
+ },
+ "reviewer_note": "every line in deleted_test_assertions must be a field of a family output on a listed case, or the test is kept with a reason"
+}

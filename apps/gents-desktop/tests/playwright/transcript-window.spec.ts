@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, gotoHarness, test } from "./desktopTest";
+import { expect, framesDrawn, gotoHarness, scrollAtRest, test } from "./desktopTest";
 
 /* The transcript draws only the rows near the view. Wherever the list
    shows in the view, a drawn row must cover it: a gap is a row the list
@@ -55,24 +55,39 @@ async function watchBlank(page: Page) {
   });
 }
 
+/* a reader's pace, and never faster than the page draws: each wheel is
+   given frames to draw before the next, so the frames sampled do not shrink
+   with a slower or busier browser */
 async function loadHistory(page: Page) {
   const panel = page.getByTestId("transcript-panel");
   await panel.hover();
   for (let i = 0; i < 40; i += 1) {
     await page.mouse.wheel(0, -1500);
-    await page.waitForTimeout(150);
+    await Promise.all([page.waitForTimeout(150), framesDrawn(page, 2)]);
   }
   for (let i = 0; i < 40; i += 1) {
     await page.mouse.wheel(0, 1500);
-    await page.waitForTimeout(100);
+    await Promise.all([page.waitForTimeout(100), framesDrawn(page, 1)]);
   }
-  await page.waitForTimeout(500);
+  await Promise.all([page.waitForTimeout(500), framesDrawn(page, 10)]);
 }
 
 const loadedRows = (page: Page) =>
   page
     .locator("[data-transcript-list]")
     .evaluate((list) => Number(list.getAttribute("data-rows")));
+
+/* older pages read until the transcript holds more than `rows`: each wheel
+   lands before the next, so the rows read depend on the wheels sent, not on
+   how fast the page draws them */
+async function loadRows(page: Page, rows: number) {
+  const scroller = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+  await page.getByTestId("transcript-panel").hover();
+  for (let wheel = 0; wheel < 80 && (await loadedRows(page)) <= rows; wheel += 1) {
+    await page.mouse.wheel(0, -1500);
+    await scrollAtRest(scroller);
+  }
+}
 
 test("a long transcript shows no blank row while the reader scrolls up", async ({
   page,
@@ -108,7 +123,7 @@ test("a jump to a far part of a long transcript shows no blank row", async ({
   await gotoHarness(page, "mobile-performance");
   await page.locator('[data-testid="session-session-large"]').click();
   await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
-  await loadHistory(page);
+  await loadRows(page, 200);
   await watchBlank(page);
   expect(await loadedRows(page)).toBeGreaterThan(200);
 

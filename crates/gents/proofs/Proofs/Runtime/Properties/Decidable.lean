@@ -1,0 +1,155 @@
+import Proofs.Session.Request.State
+import Proofs.Automation.Process
+import Proofs.Store.Persistence
+import Proofs.Store.StorageObservation
+import Proofs.Inference.InferenceCall.State
+import Proofs.Inference.Scheduling
+import Mathlib.Data.Fintype.Card
+
+open RequestState ProcessState PersistenceState StorageObservation InferenceCallState ExecutionOrigin AdmissionState
+
+instance : Fintype RequestState :=
+  Fintype.ofList
+    [.workspaceBindingPending, .pending, .claimed, .processing, .waitingForBackend, .resumingBackend,
+     .completed, .failed, .superseded, .dead, .interrupted]
+    (fun s => by cases s <;> simp)
+
+instance : Fintype ProcessState :=
+  Fintype.ofList
+    [.uninitialized, .recovering, .ready, .shuttingDown, .shutdown]
+    (fun s => by cases s <;> simp)
+
+instance : Fintype PersistenceState :=
+  Fintype.ofList
+    [.uncommitted, .committing, .committed, .lost]
+    (fun s => by cases s <;> simp)
+
+instance : Fintype StorageObservation :=
+  Fintype.ofList
+    [.noMutation, .inFlight, .successAcknowledged, .mutationFailed,
+     .staleObserved, .readVisible, .lostAcknowledged]
+    (fun s => by cases s <;> simp)
+
+instance : Fintype InferenceCallState :=
+  Fintype.ofList
+    [.queued, .running, .cancelled, .completed, .failed]
+    (fun s => by cases s <;> simp)
+
+instance : Fintype ExecutionOrigin :=
+  Fintype.ofList
+    [.interactive, .scheduled]
+    (fun s => by cases s <;> simp)
+
+instance : Fintype AdmissionState :=
+  Fintype.ofList
+    [.released, .waiting, .acquired, .executing]
+    (fun s => by cases s <;> simp)
+
+def activeCoreRequestState : RequestState → Prop
+  | .pending => True
+  | .claimed => True
+  | .processing => True
+  | .waitingForBackend => True
+  | .resumingBackend => True
+  | _ => False
+
+theorem active_request_has_distinct_state (s : RequestState) (h : activeCoreRequestState s) :
+    ∃ s' : RequestState, s ≠ s' := by
+  cases s with
+  | workspaceBindingPending => cases h
+  | pending => exact ⟨.claimed, by decide⟩
+  | claimed => exact ⟨.processing, by decide⟩
+  | processing => exact ⟨.completed, by decide⟩
+  | waitingForBackend => exact ⟨.resumingBackend, by decide⟩
+  | resumingBackend => exact ⟨.processing, by decide⟩
+  | completed => cases h
+  | failed => cases h
+  | superseded => cases h
+  | dead => cases h
+  | interrupted => cases h
+
+theorem process_has_distinct_state (s : ProcessState) (h : ¬isTerminal s) :
+    ∃ s' : ProcessState, s ≠ s' := by
+  cases s with
+  | uninitialized => exact ⟨.recovering, by decide⟩
+  | recovering => exact ⟨.ready, by decide⟩
+  | ready => exact ⟨.shuttingDown, by decide⟩
+  | shuttingDown => exact ⟨.shutdown, by decide⟩
+  | shutdown => exact absurd rfl h
+
+theorem persistence_has_distinct_state (s : PersistenceState) (h : ¬isTerminal s) :
+    ∃ s' : PersistenceState, s ≠ s' := by
+  cases s with
+  | uncommitted => exact ⟨.committing, by decide⟩
+  | committing => exact ⟨.committed, by decide⟩
+  | committed => exact absurd (Or.inl rfl) h
+  | lost => exact absurd (Or.inr rfl) h
+
+theorem storage_observation_has_distinct_state
+    (s : StorageObservation)
+    (h : ¬isTerminal s) :
+    ∃ s' : StorageObservation, s ≠ s' := by
+  cases s with
+  | noMutation => exact ⟨.inFlight, by decide⟩
+  | inFlight => exact ⟨.successAcknowledged, by decide⟩
+  | successAcknowledged => exact ⟨.readVisible, by decide⟩
+  | mutationFailed => exact ⟨.noMutation, by decide⟩
+  | staleObserved => exact ⟨.readVisible, by decide⟩
+  | readVisible => exact absurd (Or.inl rfl) h
+  | lostAcknowledged => exact absurd (Or.inr rfl) h
+
+theorem inference_call_has_distinct_state (s : InferenceCallState) (h : ¬isTerminal s) :
+    ∃ s' : InferenceCallState, s ≠ s' := by
+  cases s with
+  | queued => exact ⟨.running, by decide⟩
+  | running => exact ⟨.completed, by decide⟩
+  | cancelled => exact absurd (Or.inl rfl) h
+  | completed => exact absurd (Or.inr (Or.inl rfl)) h
+  | failed => exact absurd (Or.inr (Or.inr rfl)) h
+
+theorem pending_requires_released (a : AdmissionState) :
+    RequestContext.coherentStateAdmission .pending a ↔ a = .released := by
+  cases a <;> simp [RequestContext.coherentStateAdmission]
+
+theorem claimed_requires_waiting_or_acquired (a : AdmissionState) :
+    RequestContext.coherentStateAdmission .claimed a ↔ a = .waiting ∨ a = .acquired := by
+  cases a <;> simp [RequestContext.coherentStateAdmission]
+
+theorem processing_requires_executing (a : AdmissionState) :
+    RequestContext.coherentStateAdmission .processing a ↔ a = .executing := by
+  cases a <;> simp [RequestContext.coherentStateAdmission]
+
+theorem terminal_requires_released (s : RequestState) (a : AdmissionState)
+    (h_terminal : isTerminal s) :
+    RequestContext.coherentStateAdmission s a ↔ a = .released := by
+  cases h_terminal with
+  | inl h =>
+    subst h
+    cases a <;> simp [RequestContext.coherentStateAdmission]
+  | inr h =>
+    cases h with
+    | inl h =>
+      subst h
+      cases a <;> simp [RequestContext.coherentStateAdmission]
+    | inr h =>
+      cases h with
+      | inl h =>
+        subst h
+        cases a <;> simp [RequestContext.coherentStateAdmission]
+      | inr h =>
+        cases h with
+        | inl h =>
+          subst h
+          cases a <;> simp [RequestContext.coherentStateAdmission]
+        | inr h =>
+          subst h
+          cases a <;> simp [RequestContext.coherentStateAdmission]
+
+#eval Fintype.card RequestState
+#eval Fintype.card ProcessState
+#eval Fintype.card PersistenceState
+#eval Fintype.card StorageObservation
+#eval Fintype.card InferenceCallState
+#eval Fintype.card RequestState * Fintype.card ProcessState * Fintype.card PersistenceState
+#eval Fintype.card ExecutionOrigin
+#eval Fintype.card AdmissionState

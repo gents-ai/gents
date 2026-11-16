@@ -1,160 +1,338 @@
-import Proofs.Configuration
-import Proofs.Identity.State
+import Proofs.Documents.Configuration
+import Proofs.Store.Identity.State
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts.PackInstallation
 
-def ownershipCasesJson : String := jsonArray (
-  ["acme/demo", "other/demo", "acme/other"].flatMap fun coordinate =>
+structure OwnershipInput where
+  coordinate : String
+  origin : Option String
+  deriving Lean.ToJson
+
+structure OwnershipObservation where
+  allowed : Bool
+  removalAllowed : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def ownership : Conformance.Family OwnershipInput OwnershipObservation where
+  inputs := ["acme/demo", "other/demo", "acme/other"].flatMap fun coordinate =>
     [none, some "acme/demo", some "other/demo", some "demo"].map fun origin =>
-      "{\"coordinate\":" ++ jsonString coordinate ++
-      ",\"origin\":" ++ (match origin with | none => "null" | some value => jsonString value) ++
-      ",\"allowed\":" ++ toString (Configuration.packDocumentWriteAllowed coordinate origin) ++
-      ",\"removal_allowed\":" ++ toString (Configuration.packDocumentRemovalAllowed coordinate origin) ++ "}")
+      OwnershipInput.mk coordinate origin
+  model := fun i =>
+    OwnershipObservation.mk (Configuration.packDocumentWriteAllowed i.coordinate i.origin)
+      (Configuration.packDocumentRemovalAllowed i.coordinate i.origin)
 
-def schemaCasesJson : String := jsonArray (
-  [false, true].flatMap fun scope => [false, true].flatMap fun signed =>
-    [false, true].map fun nativeUpdate =>
-      "{\"scope_matches\":" ++ toString scope ++
-      ",\"signed\":" ++ toString signed ++
-      ",\"native_update\":" ++ toString nativeUpdate ++
-      ",\"allowed\":" ++ toString (Identity.hostedSchemaAllowed scope signed nativeUpdate) ++ "}")
+structure HostedSchemaInput where
+  scopeMatches : Bool
+  signed : Bool
+  nativeUpdate : Bool
+  deriving Lean.ToJson
 
-def homeCasesJson : String := jsonArray (Configuration.hostedPackHomeCases.map fun written =>
-  "{\"home_written\":" ++ toString written ++ ",\"reported_success\":" ++
-    toString (Configuration.hostedPackReportedSuccess true true written) ++ "}")
+@[conformance_family]
+def hostedSchema : Conformance.Family HostedSchemaInput Bool where
+  inputs := [false, true].flatMap fun scope => [false, true].flatMap fun signed =>
+    [false, true].map fun nativeUpdate => HostedSchemaInput.mk scope signed nativeUpdate
+  model := fun i => Identity.hostedSchemaAllowed i.scopeMatches i.signed i.nativeUpdate
 
-def hostedPluginCasesJson : String := jsonArray (
+structure HostedHomeInput where
+  homeWritten : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def hostedHome : Conformance.Family HostedHomeInput Bool where
+  inputs := Configuration.hostedPackHomeCases.map HostedHomeInput.mk
+  model := fun i => Configuration.hostedPackReportedSuccess true true i.homeWritten
+
+structure HostedEvidenceInput where
+  actorMatches : Bool
+  graphVerified : Bool
+  planApproved : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def hostedEvidence : Conformance.Family HostedEvidenceInput Bool where
+  inputs := Configuration.hostedPackEffectCases.map fun (actor, graph, plan) =>
+    HostedEvidenceInput.mk actor graph plan
+  model := fun i =>
+    Configuration.hostedPackEffectAllowed i.actorMatches i.graphVerified i.planApproved true
+
+deriving instance Lean.ToJson for Configuration.PackIdentity.Binding,
+  Configuration.PackIdentity.DependencyBindings
+
+structure IdentityPlanInput where
+  name : String
+  recorded : List Configuration.PackIdentity.Binding
+  requested : List String
+  provisioned : List Configuration.PackIdentity.Binding
+  deriving Lean.ToJson
+
+structure IdentityPlanResult where
+  accepted : Bool
+  selected : List Configuration.PackIdentity.Binding
+  nextRecorded : List Configuration.PackIdentity.Binding
+  deriving Lean.ToJson
+
+/-- Production holds bindings in a map keyed by slot, so its observation lists
+them in slot order. -/
+def bySlot (bindings : List Configuration.PackIdentity.Binding) :
+    List Configuration.PackIdentity.Binding :=
+  (bindings.toArray.qsort fun a b => decide (a.slot < b.slot)).toList
+
+@[conformance_family]
+def identityPlan : Conformance.Family IdentityPlanInput IdentityPlanResult where
+  inputs := Configuration.PackIdentity.cases.map fun c =>
+    IdentityPlanInput.mk c.name c.recorded c.requested c.provisioned
+  model := fun i =>
+    let result := Configuration.PackIdentity.plan i.recorded i.requested i.provisioned
+    IdentityPlanResult.mk result.isSome (bySlot ((result.map (·.selected)).getD []))
+      (bySlot ((result.map (·.recorded)).getD []))
+
+structure IdentityReferenceInput where
+  name : String
+  declared : List String
+  available : List Configuration.PackIdentity.DependencyBindings
+  dependency : String
+  slot : String
+  deriving Lean.ToJson
+
+structure ResolvedBinding where
+  creationNonce : String
+  agentDid : String
+  deriving Lean.ToJson
+
+@[conformance_family]
+def identityReference :
+    Conformance.Family IdentityReferenceInput (Option ResolvedBinding) where
+  inputs := Configuration.PackIdentity.referenceCases.map fun c =>
+    IdentityReferenceInput.mk c.name c.declared c.available c.dependency c.slot
+  model := fun i =>
+    (Configuration.PackIdentity.resolveDependency i.declared i.available i.dependency i.slot).map
+      fun binding => ResolvedBinding.mk binding.creationNonce binding.agentDid
+
+
+structure HostedPluginInput where
+  reviewed : Bool
+  plan : Bool
+  native : Bool
+  deriving Lean.ToJson
+
+def hostedPluginInputs : List HostedPluginInput :=
   [false, true].flatMap fun reviewed => [false, true].flatMap fun plan =>
-    [false, true].map fun native =>
-      "{\"reviewed\":" ++ toString reviewed ++
-      ",\"plan\":" ++ toString plan ++ ",\"native\":" ++ toString native ++
-      ",\"allowed\":" ++ toString (Configuration.hostedPluginInstallAllowed reviewed plan native) ++ "}")
+    [false, true].map fun native => { reviewed, plan, native }
 
-def evidenceCasesJson : String := jsonArray (Configuration.hostedPackEffectCases.map fun
-    (actor, graph, plan) =>
-  "{\"actor_matches\":" ++ toString actor ++
-    ",\"graph_verified\":" ++ toString graph ++
-    ",\"plan_approved\":" ++ toString plan ++
-    ",\"allowed\":" ++ toString
-      (Configuration.hostedPackEffectAllowed actor graph plan true) ++ "}")
+/-- The hosted plugin-root scenario applies a reviewed archive's graph with
+the client's plan in a native-authorized transaction: it builds only the case
+where all three hold. -/
+@[conformance_family]
+def hostedPlugin : Conformance.Family HostedPluginInput Bool where
+  inputs := hostedPluginInputs.filter fun i => i.reviewed && i.plan && i.native
+  model := fun i => Configuration.hostedPluginInstallAllowed i.reviewed i.plan i.native
 
-def finalityCasesJson : String := jsonArray (Configuration.packFinalityCases.map fun attempts =>
-  let name := fun event : Configuration.PackAttemptEvidence => match event with
-    | .noCommit => "no_commit" | .unknownCommit => "unknown_commit"
-  "{\"attempts\":" ++ jsonStringArray (attempts.map name) ++
-    ",\"unconfirmed\":" ++ toString (Configuration.packCommitUnconfirmed attempts) ++ "}")
+/-- model-production-gap: production has no single decision over the reviewed
+digest, the client plan and native authorization; each denial is distributed
+across the hosted install route, and no production scenario yet installs a
+plugin root with one of them missing. -/
+@[conformance_family]
+def hostedPluginUnreached : Conformance.Family HostedPluginInput Bool where
+  inputs := hostedPluginInputs.filter fun i => !(i.reviewed && i.plan && i.native)
+  model := fun i => Configuration.hostedPluginInstallAllowed i.reviewed i.plan i.native
 
-def caseJson (name : String) (references : List (List String))
-    (rootShips dependencyShips installed : List String) (isLocal : Bool := true) : String :=
-  "{\"witness\":" ++ jsonString name ++
-    ",\"references\":" ++ jsonArray (references.map jsonStringArray) ++
-    ",\"root_ships\":" ++ jsonStringArray rootShips ++
-    ",\"dependency_ships\":" ++ jsonStringArray dependencyShips ++
-    ",\"installed\":" ++ jsonStringArray installed ++
-    ",\"local\":" ++ toString isLocal ++
-    ",\"removal_accepted\":" ++ toString (Configuration.pluginRetirementAllowed
-      references.flatten (rootShips ++ dependencyShips) true) ++
-    ",\"unobserved_removal_accepted\":" ++ toString (Configuration.pluginRetirementAllowed
-      references.flatten (rootShips ++ dependencyShips) false) ++
-    ",\"retain_notification_record\":" ++ toString
-      (Configuration.retainPluginStoreRecord rootShips false) ++
-    ",\"retain_retired_record\":" ++ toString
-      (Configuration.retainPluginStoreRecord rootShips true) ++
-    ",\"accepted\":" ++ toString (Configuration.pluginInstallAvailable
-      references.flatten (rootShips ++ dependencyShips) installed isLocal) ++ "}"
+deriving instance Lean.ToJson for Configuration.PackAttemptEvidence
 
-def pinCaseJson (name : String) (source : String) (pin : Option String) (actual : String) : String :=
-  "{\"name\":" ++ jsonString name ++ ",\"source\":" ++ jsonString source ++
-    ",\"pin\":" ++ (match pin with | none => "null" | some value => jsonString value) ++
-    ",\"actual\":" ++ jsonString actual ++
-    ",\"accepted\":" ++ toString (Configuration.pluginPinMatches pin actual) ++ "}"
+structure FinalityInput where
+  attempts : List Configuration.PackAttemptEvidence
+  deriving Lean.ToJson
 
-def pinCasesJson : String := jsonArray [
-  pinCaseJson "installed_unpinned" "installed" none "a",
-  pinCaseJson "installed_match" "installed" (some "a") "a",
-  pinCaseJson "installed_mismatch" "installed" (some "b") "a",
-  pinCaseJson "shipped_match" "shipped" (some "a") "a",
-  pinCaseJson "shipped_mismatch" "shipped" (some "b") "a"
-]
+structure FinalityOutput where
+  unconfirmed : Bool
+  deriving Lean.ToJson
 
-def wireLockCasesJson : String := jsonArray ([false, true].map fun held =>
-  "{\"held\":" ++ toString held ++ ",\"publish_allowed\":" ++
-    toString (Configuration.wireAndPluginPublishAllowed held) ++
-    ",\"resolve_allowed\":" ++ toString (Configuration.stagedPluginResolutionAllowed held) ++ "}")
+def finalityInputs (histories : List (List Configuration.PackAttemptEvidence)) :
+    List FinalityInput :=
+  histories.map fun attempts => { attempts }
 
-def wireTargetCasesJson : String := jsonArray (
-  [false, true].flatMap fun localTarget => [false, true].flatMap fun preview =>
-    [false, true].map fun remove =>
-      "{\"local\":" ++ toString localTarget ++ ",\"preview\":" ++ toString preview ++
-      ",\"remove\":" ++ toString remove ++ ",\"allowed\":" ++
-      toString (Configuration.wireTargetAllowed localTarget preview remove) ++ "}")
+/-- A store transaction scenario builds one attempt: a rejected callback (no
+commit) or a commit whose receipt is lost (unknown commit). -/
+@[conformance_family]
+def finalityTransaction : Conformance.Family FinalityInput FinalityOutput where
+  inputs := finalityInputs (Configuration.packFinalityCases.filter
+    (· ∈ [[.noCommit], [.unknownCommit]]))
+  model := fun i => { unconfirmed := Configuration.packCommitUnconfirmed i.attempts }
 
-def operatorWireCasesJson : String := jsonArray (
-  [false, true].flatMap fun operator => [false, true].flatMap fun ready =>
-    [false, true].map fun home =>
-      "{\"operator\":" ++ toString operator ++ ",\"ready\":" ++ toString ready ++
-      ",\"home\":" ++ toString home ++ ",\"allowed\":" ++
-      toString (Configuration.operatorWireAvailable operator ready home) ++ "}")
+/-- The staged plugin scenario times out one commit acknowledgement. -/
+@[conformance_family]
+def finalityStagedPlugin : Conformance.Family FinalityInput FinalityOutput where
+  inputs := finalityInputs (Configuration.packFinalityCases.filter (· == [.unknownCommit]))
+  model := fun i => { unconfirmed := Configuration.packCommitUnconfirmed i.attempts }
 
-def casesJson : String := jsonArray [
-  caseJson "plugin_references.empty" [[]] [] [] [],
-  caseJson "plugin_references.missing" [["acme/search"]] [] [] [],
-  caseJson "plugin_references.shipped" [["acme/search"]] ["acme/search"] [] [],
-  caseJson "plugin_references.dependency" [["acme/search"]] [] ["acme/search"] [],
-  caseJson "plugin_references.installed" [["acme/search"]] [] [] ["acme/search"],
-  caseJson "plugin_references.wrong_namespace" [["other/search"]] ["acme/search"] [] [],
-  caseJson "plugin_references.mixed" [["acme/search", "acme/parse"]]
-    ["acme/search"] [] ["acme/parse"],
-  caseJson "plugin_references.missing_in_dependency"
-    [["acme/search"], ["acme/missing"]] ["acme/search"] [] [],
-  caseJson "plugin_references.repeated" [["acme/search", "acme/search"]]
-    [] ["acme/search"] [],
-  caseJson "plugin_references.remote_empty" [[]] [] [] [] false,
-  caseJson "plugin_references.remote_missing" [["acme/search"]] [] [] [] false,
-  caseJson "plugin_references.remote_recorded" [["acme/search"]] [] [] ["acme/search"] false,
-  caseJson "plugin_references.remote_shipped" [["acme/search"]] ["acme/search"] [] [] false,
-  caseJson "plugin_references.remote_dependency" [[]] [] ["acme/search"] [] false
-]
+/-- model-production-gap: the shared transaction owner folds the attempts of
+one write into a sticky unconfirmed flag inside its retry loop, and no
+scenario drives several commit attempts of one transaction or a write with
+no failed attempt to an error, so these histories have no production run. -/
+@[conformance_family]
+def finalityUnreached : Conformance.Family FinalityInput FinalityOutput where
+  inputs := finalityInputs (Configuration.packFinalityCases.filter
+    (· ∉ [[.noCommit], [.unknownCommit]]))
+  model := fun i => { unconfirmed := Configuration.packCommitUnconfirmed i.attempts }
 
+example : Configuration.packCommitUnconfirmed [.noCommit] = false := by decide
 
-def identityBindingJson (binding : Configuration.PackIdentity.Binding) : String :=
-  "{\"slot\":" ++ jsonString binding.slot ++
-    ",\"creation_nonce\":" ++ jsonString binding.creationNonce ++
-    ",\"agent_did\":" ++ jsonString binding.agentDid ++ "}"
+example : Configuration.packCommitUnconfirmed [.unknownCommit, .noCommit] = true := by decide
 
-def identityBindingsJson (bindings : List Configuration.PackIdentity.Binding) : String :=
-  jsonArray (bindings.map identityBindingJson)
+inductive PinSource where
+  | installed | shipped
+  deriving Lean.ToJson, BEq
 
-def identityCasesJson : String := jsonArray (Configuration.PackIdentity.cases.map fun c =>
-  let result := Configuration.PackIdentity.plan c.recorded c.requested c.provisioned
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"recorded\":" ++ identityBindingsJson c.recorded ++
-    ",\"requested\":" ++ jsonStringArray c.requested ++
-    ",\"provisioned\":" ++ identityBindingsJson c.provisioned ++
-    ",\"accepted\":" ++ toString result.isSome ++
-    ",\"selected\":" ++ identityBindingsJson ((result.map (·.selected)).getD []) ++
-    ",\"next_recorded\":" ++ identityBindingsJson ((result.map (·.recorded)).getD []) ++ "}")
+structure PinInput where
+  name : String
+  source : PinSource
+  pin : Option String
+  actual : String
+  deriving Lean.ToJson
 
-def identityReferenceCasesJson : String := jsonArray (Configuration.PackIdentity.referenceCases.map fun c =>
-  let result := Configuration.PackIdentity.resolveDependency c.declared c.available c.dependency c.slot
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"declared\":" ++ jsonStringArray c.declared ++
-    ",\"available\":" ++ jsonArray (c.available.map fun entry =>
-      "{\"coordinate\":" ++ jsonString entry.coordinate ++
-      ",\"bindings\":" ++ identityBindingsJson entry.bindings ++ "}") ++
-    ",\"dependency\":" ++ jsonString c.dependency ++
-    ",\"slot\":" ++ jsonString c.slot ++
-    ",\"expected\":" ++ (match result with
-      | none => "null" | some binding => identityBindingJson binding) ++ "}")
+def pinCases : List PinInput := [
+  ⟨"installed_unpinned", .installed, none, "a"⟩,
+  ⟨"installed_match", .installed, some "a", "a"⟩,
+  ⟨"installed_mismatch", .installed, some "b", "a"⟩,
+  ⟨"shipped_match", .shipped, some "a", "a"⟩,
+  ⟨"shipped_mismatch", .shipped, some "b", "a"⟩]
 
-def evalSubjectCasesJson : String := jsonArray (Configuration.PackIdentity.evalSubjectCases.map fun c =>
-  let result := Configuration.PackIdentity.resolveEvalSubject c.selected c.slot
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"selected\":" ++ (match c.selected with
-      | none => "null" | some binding => identityBindingJson binding) ++
-    ",\"slot\":" ++ jsonString c.slot ++
-    ",\"expected\":" ++ (match result with
-      | none => "null" | some did => jsonString did) ++ "}")
+@[conformance_family]
+def pinPrepare : Conformance.Family PinInput Bool where
+  inputs := pinCases
+  model := fun i => Configuration.pluginPinMatches i.pin i.actual
+
+/-- The graph-commit scenario pins a plugin that is already installed in the
+home and ships none, so only installed sources can be built there. -/
+@[conformance_family]
+def pinInstalledCommit : Conformance.Family PinInput Bool where
+  inputs := pinCases.filter (·.source == .installed)
+  model := fun i => Configuration.pluginPinMatches i.pin i.actual
+
+structure WireLockInput where
+  held : Bool
+  deriving Lean.ToJson
+
+structure WireLockResolution where
+  resolveAllowed : Bool
+  deriving Lean.ToJson
+
+structure WireLockPublish where
+  publishAllowed : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def wireLockResolution : Conformance.Family WireLockInput WireLockResolution where
+  inputs := [false, true].map WireLockInput.mk
+  model := fun i => WireLockResolution.mk (Configuration.stagedPluginResolutionAllowed i.held)
+
+@[conformance_family]
+def wireLockInstallDuringWire : Conformance.Family WireLockInput WireLockPublish where
+  inputs := [false, true].map WireLockInput.mk
+  model := fun i => WireLockPublish.mk (Configuration.wireAndPluginPublishAllowed i.held)
+
+@[conformance_family]
+def wireLockWireDuringRemoval : Conformance.Family WireLockInput WireLockPublish where
+  inputs := [false, true].map WireLockInput.mk
+  model := fun i => WireLockPublish.mk (Configuration.wireAndPluginPublishAllowed i.held)
+
+structure WireTargetInput where
+  «local» : Bool
+  preview : Bool
+  remove : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def wireTarget : Conformance.Family WireTargetInput Bool where
+  inputs := [false, true].flatMap fun localTarget => [false, true].flatMap fun preview =>
+    [false, true].map fun remove => { «local» := localTarget, preview, remove }
+  model := fun i => Configuration.wireTargetAllowed i.«local» i.preview i.remove
+
+structure OperatorWireInput where
+  operator : Bool
+  ready : Bool
+  home : Bool
+  deriving Lean.ToJson
+
+structure OperatorWireOutput where
+  allowed : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def operatorWire : Conformance.Family OperatorWireInput OperatorWireOutput where
+  inputs := [false, true].flatMap fun operator => [false, true].flatMap fun ready =>
+    [false, true].map fun home => { operator, ready, home }
+  model := fun i => { allowed := Configuration.operatorWireAvailable i.operator i.ready i.home }
+
+structure ReferenceInput where
+  witness : String
+  references : List (List String)
+  rootShips : List String
+  dependencyShips : List String
+  installed : List String
+  «local» : Bool
+  deriving Lean.ToJson
+
+def referenceCases : List ReferenceInput := [
+  ⟨"plugin_references.empty", [[]], [], [], [], true⟩,
+  ⟨"plugin_references.missing", [["acme/search"]], [], [], [], true⟩,
+  ⟨"plugin_references.shipped", [["acme/search"]], ["acme/search"], [], [], true⟩,
+  ⟨"plugin_references.dependency", [["acme/search"]], [], ["acme/search"], [], true⟩,
+  ⟨"plugin_references.installed", [["acme/search"]], [], [], ["acme/search"], true⟩,
+  ⟨"plugin_references.wrong_namespace", [["other/search"]], ["acme/search"], [], [], true⟩,
+  ⟨"plugin_references.mixed", [["acme/search", "acme/parse"]], ["acme/search"], [],
+    ["acme/parse"], true⟩,
+  ⟨"plugin_references.missing_in_dependency", [["acme/search"], ["acme/missing"]],
+    ["acme/search"], [], [], true⟩,
+  ⟨"plugin_references.repeated", [["acme/search", "acme/search"]], [], ["acme/search"], [], true⟩,
+  ⟨"plugin_references.remote_empty", [[]], [], [], [], false⟩,
+  ⟨"plugin_references.remote_missing", [["acme/search"]], [], [], [], false⟩,
+  ⟨"plugin_references.remote_recorded", [["acme/search"]], [], [], ["acme/search"], false⟩,
+  ⟨"plugin_references.remote_shipped", [["acme/search"]], ["acme/search"], [], [], false⟩,
+  ⟨"plugin_references.remote_dependency", [[]], [], ["acme/search"], [], false⟩]
+
+@[conformance_family]
+def referenceAvailability : Conformance.Family ReferenceInput Bool where
+  inputs := referenceCases
+  model := fun i => Configuration.pluginInstallAvailable i.references.flatten
+    (i.rootShips ++ i.dependencyShips) i.installed i.«local»
+
+/-- The removal check reads the node's configuration, so its observation is
+the observed one. -/
+@[conformance_family]
+def referenceRemoval : Conformance.Family ReferenceInput Bool where
+  inputs := referenceCases
+  model := fun i => Configuration.pluginRetirementAllowed i.references.flatten
+    (i.rootShips ++ i.dependencyShips) true
+
+structure RetentionInput where
+  rootShips : List String
+  deriving Lean.ToJson
+
+structure RetentionObservation where
+  retainNotificationRecord : Bool
+  retainRetiredRecord : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def storeRecordRetention : Conformance.Family RetentionInput RetentionObservation where
+  inputs := [[], ["acme/search"]].map fun rootShips => { rootShips }
+  model := fun i =>
+    { retainNotificationRecord := Configuration.retainPluginStoreRecord i.rootShips false
+      retainRetiredRecord := Configuration.retainPluginStoreRecord i.rootShips true }
+
+structure EvalSubjectInput where
+  name : String
+  selected : Option Configuration.PackIdentity.Binding
+  slot : String
+  deriving Lean.ToJson
+
+@[conformance_family]
+def evalSubject : Conformance.Family EvalSubjectInput (Option String) where
+  inputs := Configuration.PackIdentity.evalSubjectCases.map fun c =>
+    EvalSubjectInput.mk c.name c.selected c.slot
+  model := fun i => Configuration.PackIdentity.resolveEvalSubject i.selected i.slot
 
 end Conformance.Contracts.PackInstallation

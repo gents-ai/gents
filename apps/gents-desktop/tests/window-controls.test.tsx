@@ -67,7 +67,7 @@ describe("Windows caption controls", () => {
     expect(header).toHaveAttribute("data-tauri-drag-region");
     expect(header?.querySelector("a[aria-label='Nodes']")).toBeInTheDocument();
     expect(
-      screen.getAllByRole("button", { name: /Show sync diagnostics/ })[0],
+      screen.getAllByRole("button", { name: /Show connection details/ })[0],
     ).toBeInTheDocument();
     expect(screen.getByTestId("window-controls")).toBeInTheDocument();
   });

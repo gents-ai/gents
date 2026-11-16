@@ -5,7 +5,7 @@ use crate::optimization::policy::PolicyV2;
 use crate::optimization::proposer::ScriptedProposer;
 use crate::runner::{ScriptKey, ScriptedExecutor, TrialEvidence};
 use crate::TrialUsage;
-use gents::Collection;
+use gents_store::collection::Collection;
 
 pub(crate) const VALIDATION_CASES: [&str; 6] =
     ["val-a", "val-b", "val-c", "val-d", "val-e", "val-f"];

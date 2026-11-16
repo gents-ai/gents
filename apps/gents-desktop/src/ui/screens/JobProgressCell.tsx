@@ -6,9 +6,9 @@
 import { useEffect, useState } from "react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import type { JobControlKind } from "@source-inc/gents-desktop-client/generated/JobControlKind";
+import { PanelRightOpen, Pause, Square } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
-import { cn } from "@gents/ui/lib/utils";
-import { writeDraft } from "../../hooks/draftStore";
+import { Hint } from "./Hint";
 import { toastFailure } from "../lib/failure";
 import { useApp } from "../app/AppContext";
 import { PromoteWorkflowDialog } from "./PromoteWorkflowDialog";
@@ -16,28 +16,35 @@ import { nodeOf } from "../../hooks/fleetStore";
 import { useFleet } from "../hooks/useFleet";
 import { useHomeDid } from "../hooks/useClient";
 import { isLocalNode } from "../lib/firstRun";
-
-const words = (value: string) => value.replace(/_/g, " ");
+import { WorkflowRunSheet } from "./WorkflowRunSheet";
+import { getSurface } from "@/app/surfaces";
+import { openWorkflowRun, WORKFLOWS_SURFACE } from "./WorkflowsSurface";
+import {
+  isTerminalJob,
+  JobProgressBody,
+  JobStateMark,
+  JobStatePill,
+  useAnswerJob,
+  words,
+} from "./jobParts";
 
 export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
-  const { actions, drafts, stores, view } = useApp();
+  const { actions, stores } = useApp();
+  const answerJob = useAnswerJob();
   const sessionId = stores.selection.use.sessionId();
   const sessionNodeDid = stores.selection.use.nodeDid();
   const homeDid = useHomeDid();
   const sessionNode = useFleet((fleet) => nodeOf(fleet, sessionNodeDid));
   const sessionIsLocal = !!sessionNode && isLocalNode(sessionNode, homeDid);
   const [promotingKey, setPromotingKey] = useState<string | null>(null);
+  const [runOpen, setRunOpen] = useState(false);
   const [promotion, setPromotion] = useState<{ key: string; names: string[] }>({
     key: "",
     names: [],
   });
   const state = tool.jobState;
   const progress = tool.jobProgress;
-  const terminal =
-    state === "completed" ||
-    state === "failed" ||
-    state === "cancelled" ||
-    state === "timed_out";
+  const terminal = isTerminalJob(state);
   // Only a completed run is promotable; the host refuses the rest
   // (`promote_not_completed`).
   const promotable =
@@ -67,118 +74,103 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
       .controlJob({ nodeDid: tool.nodeDid, toolCallDocId: tool.toolCallDocId, action })
       .catch((e: unknown) => toastFailure(action, e));
   };
-  const answer = () => {
-    writeDraft(drafts, view.getState().draftKey, `Answer for ${tool.jobHandle}: `);
-    document
-      .querySelector<HTMLTextAreaElement>('[data-testid="composer"] textarea')
-      ?.focus();
-  };
+  const answer = () => answerJob(tool.jobHandle);
+  const observed = [
+    state,
+    progress?.revision,
+    tool.statusKind,
+    tool.completedAt,
+    tool.jobOutcome?.code,
+  ].join("|");
   return (
     <div
-      className="grid gap-2 rounded-md bg-surface px-3 py-2"
+      className="grid gap-2 rounded-lg bg-accent/40 px-3 py-2.5"
       data-testid="job-progress"
     >
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        {state && (
-          <span
-            data-testid="job-state"
-            className={cn(
-              "rounded-full border border-border px-2 text-xs",
-              state === "failed" && "text-destructive",
+      <div className="flex min-w-0 items-center gap-3 text-sm">
+        <JobStateMark state={state} />
+        <span className="min-w-0 truncate font-medium">
+          {progress?.title || tool.jobHandle || "Workflow"}
+        </span>
+        {state && state !== "running" && <JobStatePill state={state} />}
+        <span className="ml-auto flex shrink-0 items-center gap-0.5">
+          {state === "running" && (
+            <>
+              <Hint label="Pause">
+                <Button
+                  size="icon-xs"
+                  variant="quiet"
+                  disabled={!tool.toolCallDocId || !tool.nodeDid}
+                  aria-label="Pause"
+                  onClick={() => control("pause")}
+                >
+                  <Pause />
+                </Button>
+              </Hint>
+              <Hint label="Stop">
+                <Button
+                  size="icon-xs"
+                  variant="quiet"
+                  disabled={!tool.toolCallDocId || !tool.nodeDid}
+                  aria-label="Stop"
+                  onClick={() => control("stop")}
+                >
+                  <Square />
+                </Button>
+              </Hint>
+            </>
+          )}
+          {tool.toolCallDocId && tool.nodeDid && (
+            <Button
+              size="xs"
+              variant="quiet"
+              onClick={() =>
+                sessionId && tool.toolCallDocId && getSurface(WORKFLOWS_SURFACE)
+                  ? openWorkflowRun(sessionId, tool.toolCallDocId, tool.nodeDid!)
+                  : setRunOpen(true)
+              }
+            >
+              <PanelRightOpen />
+              Open run
+            </Button>
+          )}
+        </span>
+      </div>
+      <div className="grid gap-2 pl-7">
+        {progress && (
+          <>
+            <JobProgressBody state={state} progress={progress} nodeDid={tool.nodeDid} />
+            {state === "awaiting_user" && (
+              <div className="flex items-center gap-2 text-sm">
+                <p data-testid="job-question" className="min-w-0 flex-1">
+                  {progress.question}
+                </p>
+                <Button size="sm" variant="outline" onClick={answer}>
+                  Answer
+                </Button>
+              </div>
             )}
-          >
-            {words(state)}
-          </span>
+          </>
         )}
-        {progress && <span className="min-w-0 truncate">{progress.title}</span>}
-        {state === "running" && (
-          <span className="ml-auto flex gap-1">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!tool.toolCallDocId || !tool.nodeDid}
-              onClick={() => control("pause")}
-            >
-              Pause
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!tool.toolCallDocId || !tool.nodeDid}
-              onClick={() => control("stop")}
-            >
-              Stop
-            </Button>
-          </span>
+        {state && terminal && (
+          <div className="flex items-center gap-2">
+            <p data-testid="job-outcome" className="min-w-0 flex-1 text-sm">
+              {tool.jobOutcome
+                ? `${tool.jobOutcome.code}: ${tool.jobOutcome.message}`
+                : words(state)}
+            </p>
+            {promotable && promotedAs.length === 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setPromotingKey(promotionKey)}
+              >
+                Promote
+              </Button>
+            )}
+          </div>
         )}
       </div>
-      {progress && (
-        <>
-          <ol data-testid="job-phases" className="flex flex-wrap gap-x-3 text-xs">
-            {progress.phases.map((phase, i) => (
-              <li
-                key={i}
-                data-phase={phase.state}
-                className={cn(
-                  phase.state === "pending" && "text-muted-foreground",
-                  phase.state === "active" && "font-medium",
-                  phase.state === "failed" && "text-destructive",
-                )}
-              >
-                {phase.title}
-              </li>
-            ))}
-          </ol>
-          <div className="grid gap-1">
-            <span data-testid="job-agents" className="text-xs text-muted-foreground">
-              {progress.budget.spent} of {progress.budget.total} agents
-            </span>
-            <progress
-              className="h-1 w-full"
-              value={progress.budget.spent}
-              max={progress.budget.total}
-            />
-          </div>
-          {progress.last_event && (
-            <p data-testid="job-last-event" className="text-xs text-muted-foreground">
-              {progress.last_event}
-            </p>
-          )}
-          {state === "paused" && progress.pause_reason && (
-            <p data-testid="job-pause-reason" className="text-xs">
-              {words(progress.pause_reason)}
-            </p>
-          )}
-          {state === "awaiting_user" && (
-            <div className="flex items-center gap-2 text-sm">
-              <p data-testid="job-question" className="min-w-0 flex-1">
-                {progress.question}
-              </p>
-              <Button size="sm" variant="outline" onClick={answer}>
-                Answer
-              </Button>
-            </div>
-          )}
-        </>
-      )}
-      {state && terminal && (
-        <div className="flex items-center gap-2">
-          <p data-testid="job-outcome" className="min-w-0 flex-1 text-sm">
-            {tool.jobOutcome
-              ? `${tool.jobOutcome.code}: ${tool.jobOutcome.message}`
-              : words(state)}
-          </p>
-          {promotable && promotedAs.length === 0 && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setPromotingKey(promotionKey)}
-            >
-              Promote
-            </Button>
-          )}
-        </div>
-      )}
       {promotingKey === promotionKey && promotable && (
         <PromoteWorkflowDialog
           key={promotionKey}
@@ -187,6 +179,15 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
             setPromotingKey(null);
             if (promoted) setPromotion({ key: promotionKey, names: [promoted.tool] });
           }}
+        />
+      )}
+      {tool.toolCallDocId && tool.nodeDid && (
+        <WorkflowRunSheet
+          open={runOpen}
+          nodeDid={tool.nodeDid}
+          rowDocId={tool.toolCallDocId}
+          observed={observed}
+          onClose={() => setRunOpen(false)}
         />
       )}
       {!!tool.jobNextCalls?.length && (

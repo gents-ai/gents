@@ -1,0 +1,4 @@
+{
+  "input": {"script": "let n = 3; await sleep(1); n *= 7; return {n};"},
+  "expect": {"n": 21}
+}

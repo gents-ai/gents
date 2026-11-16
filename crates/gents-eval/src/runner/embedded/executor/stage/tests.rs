@@ -9,10 +9,11 @@ use crate::runner::embedded::executor::EventSourcesReady;
 use crate::runner::embedded::home::boot_runtime;
 use crate::runner::embedded::observe::classify_request_outcome;
 use crate::runner::executor::{CaptureResult, FixtureDocument};
-use gents::request::lifecycle::{
+use gents::DocumentRuntimeOptions;
+use gents_session::request::lifecycle::{
     build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
 };
-use gents::{ConfigAccess, DocumentRuntimeOptions};
+use gents_store::config_client::ConfigAccess;
 
 use serde_json::json;
 use std::sync::Arc;
@@ -156,7 +157,7 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
         )
         .await
         .unwrap();
-        gents::request::lifecycle::submit_client_request(&client, &request)
+        gents_session::request::lifecycle::submit_client_request(&client, &request)
             .await
             .unwrap();
         tokio::time::timeout(Duration::from_secs(30), async {
@@ -511,7 +512,7 @@ async fn a_request_that_settled_before_its_runtime_exited_keeps_its_outcome() {
     tokio::time::pause();
     let (observed, stopped) = observe_stage_terminal(
         &home.node,
-        &gents::ConfigAccess::local(home.node.clone()),
+        &gents_store::config_client::ConfigAccess::local(home.node.clone()),
         &CancellationToken::new(),
         &runtime,
         request_id,

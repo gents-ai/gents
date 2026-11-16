@@ -129,7 +129,6 @@ impl super::ClientCore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
 
     fn target(session: &str) -> InferenceTarget {
         InferenceTarget {
@@ -142,49 +141,55 @@ mod tests {
 
     #[test]
     fn generated_inference_observation_traces() {
-        let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["inference_observation_cases"].as_array().unwrap();
-        assert!(!cases.is_empty());
-        for case in cases {
-            let mut owner = InferenceObservationOwner {
-                target: Some(target("session")),
-                ..Default::default()
-            };
-            for (action, expected) in case["actions"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .zip(case["expected"].as_array().unwrap())
-            {
-                let actual = match action["kind"].as_str().unwrap() {
-                    "select" => {
-                        owner.select(
-                            serde_json::from_value(action["target"].clone()).unwrap(),
-                            action["terminal"].as_bool().unwrap(),
-                        );
-                        owner.observation.as_ref().map(|o| o.activity)
-                    }
-                    "receive" => {
-                        let item = &action["observation"];
-                        let incoming = InferenceObservation {
-                            target: serde_json::from_value(item["target"].clone()).unwrap(),
-                            turn: item["turn"].as_u64().unwrap(),
-                            attempt: item["attempt"].as_u64().unwrap(),
-                            sequence: item["sequence"].as_u64().unwrap(),
-                            observed_at: item["observed_at"].as_u64().unwrap(),
-                            activity: serde_json::from_value(item["activity"].clone()).unwrap(),
-                        };
-                        owner.receive(action["epoch"].as_u64().unwrap(), incoming);
-                        owner.observation.as_ref().map(|o| o.activity)
-                    }
-                    "project" => owner.project(
-                        action["now"].as_u64().unwrap(),
-                        action["max_age"].as_u64().unwrap(),
-                    ),
-                    _ => panic!("unknown generated action"),
-                };
-                assert_eq!(serde_json::to_value(actual).unwrap(), *expected, "{case}");
+        use gents_lean_vocab::families::inference_observation_trace as wire;
+
+        fn inference_target(target: &wire::Target) -> InferenceTarget {
+            InferenceTarget {
+                node: target.node.clone(),
+                session: target.session.clone(),
+                request: target.request.clone(),
+                generation: target.generation.clone(),
             }
         }
+
+        gents_lean_vocab::families::inference_observation_trace::replay::<String, InferenceActivity>(
+            |input: &wire::TraceInput<String, InferenceActivity>| {
+                let mut owner = InferenceObservationOwner {
+                    target: Some(target("session")),
+                    ..Default::default()
+                };
+                let expected = input
+                    .actions
+                    .iter()
+                    .map(|action| match action.kind.as_str() {
+                        "select" => {
+                            owner.select(
+                                action.target.as_ref().map(inference_target),
+                                action.terminal.unwrap(),
+                            );
+                            owner.observation.as_ref().map(|o| o.activity)
+                        }
+                        "receive" => {
+                            let item = action.observation.as_ref().unwrap();
+                            owner.receive(
+                                action.epoch.unwrap(),
+                                InferenceObservation {
+                                    target: inference_target(&item.target),
+                                    turn: item.turn,
+                                    attempt: item.attempt,
+                                    sequence: item.sequence,
+                                    observed_at: item.observed_at,
+                                    activity: item.activity,
+                                },
+                            );
+                            owner.observation.as_ref().map(|o| o.activity)
+                        }
+                        "project" => owner.project(action.now.unwrap(), action.max_age.unwrap()),
+                        other => panic!("unknown generated action {other}"),
+                    })
+                    .collect();
+                wire::TraceOutput { expected }
+            },
+        );
     }
 }

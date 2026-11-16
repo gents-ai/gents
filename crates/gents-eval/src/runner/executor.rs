@@ -14,7 +14,7 @@ use crate::runner::embedded::observe::{InferenceCallEvidence, MessageEvidence, T
 use crate::runner::progress::StageProgress;
 use crate::runner::scripted::ScriptKey;
 use crate::{Anchor, OutcomeKind, ProviderReason, TrialUsage};
-use gents::documents::EvalCapture;
+use gents_documents::EvalCapture;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Isolation {
@@ -46,7 +46,7 @@ impl TrialSpec {
     #[cfg(test)]
     pub(crate) fn empty_for_tests(trial_id: &str) -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let evaluator = gents::store::identity::KeyIdentity::load_or_create(
+        let evaluator = gents_store::identity::KeyIdentity::load_or_create(
             directory.path().join("evaluator.key"),
             None,
         )
@@ -56,7 +56,7 @@ impl TrialSpec {
             pack_dir: PathBuf::new(),
             pack_digest: String::new(),
             agent_slot: String::new(),
-            evaluator_did: gents::store::identity::NodeIdentity::did(&evaluator).to_owned(),
+            evaluator_did: gents_store::identity::NodeIdentity::did(&evaluator).to_owned(),
             inference: InferenceBinding {
                 profile: Value::Null,
                 backend: Value::Null,
@@ -126,7 +126,7 @@ pub struct StageSpec {
     #[serde(default)]
     pub settle: bool,
     #[serde(default)]
-    pub continuation: Option<gents::documents::EvalContinuation>,
+    pub continuation: Option<gents_documents::EvalContinuation>,
     #[serde(default)]
     pub review_previous: bool,
     pub captures: Vec<Capture>,

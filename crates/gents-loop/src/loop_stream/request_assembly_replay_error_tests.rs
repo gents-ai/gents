@@ -15,63 +15,6 @@ fn provider_tag(turn_index: u32) -> ReplayTag {
     }
 }
 
-fn associated_assistant(tag: &ReplayTag) -> TaggedMessage {
-    TaggedMessage {
-        message: Message::assistant("native assistant row"),
-        source: Some(tag.clone()),
-        physical_header: None,
-        block_indices: Vec::new(),
-    }
-}
-
-#[test]
-fn replay_prefix_bound_preserves_the_entire_required_capture_prefix() {
-    let earlier = provider_tag(0);
-    let required = provider_tag(1);
-    let rows = vec![
-        TaggedMessage::unassociated(Message::system("preamble")),
-        TaggedMessage::unassociated(Message::user("first")),
-        associated_assistant(&earlier),
-        TaggedMessage::unassociated(Message::user("second")),
-        TaggedMessage::unassociated(Message::assistant("authored history")),
-        associated_assistant(&required),
-    ];
-    assert_eq!(
-        replay_compaction_prefix_bound(&rows, &[required]).unwrap(),
-        Some(0),
-        "summarizing any earlier row can invalidate the required capture"
-    );
-}
-
-#[test]
-fn replay_prefix_bound_without_required_sources_is_unbounded() {
-    let rows = vec![
-        TaggedMessage::unassociated(Message::user("input")),
-        associated_assistant(&provider_tag(0)),
-    ];
-    assert_eq!(replay_compaction_prefix_bound(&rows, &[]), Ok(None));
-}
-
-#[test]
-fn replay_prefix_bound_reuses_checkpoint_missing_and_duplicate_errors() {
-    let required = provider_tag(1);
-    let other = provider_tag(0);
-    let missing = vec![associated_assistant(&other)];
-    assert_eq!(
-        replay_compaction_prefix_bound(&missing, std::slice::from_ref(&required)),
-        Err(ReplayCheckpointError::MissingRequired)
-    );
-
-    let duplicated = vec![
-        associated_assistant(&required),
-        associated_assistant(&required),
-    ];
-    assert_eq!(
-        replay_compaction_prefix_bound(&duplicated, &[required]),
-        Err(ReplayCheckpointError::DuplicateAssociation)
-    );
-}
-
 #[test]
 fn replay_prefix_bound_rejects_tagged_non_assistant() {
     let required = provider_tag(0);
@@ -314,41 +257,6 @@ fn armed_seed(rows: Vec<ReplayEvidenceRow>) -> ReplayEstimateSeed {
     seed.arm();
     seed.record(rows);
     seed
-}
-
-#[tokio::test]
-async fn a_seeded_lookup_serves_an_identical_tag_set_without_invoking_the_resolver() {
-    let first = provider_tag(0);
-    let second = provider_tag(1);
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let replay = LoopReplayInput {
-        resolve: Some(counting_resolver(
-            Vec::new(),
-            vec![first.clone(), second.clone()],
-            calls.clone(),
-        )),
-        estimate_seed: Some(armed_seed(vec![
-            evidence_row(&first, "header-0", Vec::new()),
-            evidence_row(&second, "header-1", Vec::new()),
-        ])),
-        ..LoopReplayInput::default()
-    };
-    let served = resolve_replay_evidence(&replay, &[first.clone(), second])
-        .await
-        .unwrap();
-    assert_eq!(
-        served
-            .iter()
-            .map(|row| row.evidence.physical_header.clone())
-            .collect::<Vec<_>>(),
-        ["header-0", "header-1"],
-        "the dispatch lookup serves the estimate's rows unchanged"
-    );
-    assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
-        0,
-        "an identical tag set needs no second canonical pass"
-    );
 }
 
 #[tokio::test]
@@ -650,12 +558,21 @@ async fn other_providers_never_receive_the_reserved_parameters() {
 async fn cross_provider_tool_identity_reaches_dispatch_and_rebuilt_history() {
     use crate::backend_provider::BackendProviderKind;
     use crate::provider_input::tool_call_identity_tests::{
-        assert_responses_body, cases, counter, messages,
+        body_identities, counter, messages, observed_identities,
     };
-    for case in cases().into_iter().filter(|case| case.responses) {
-        let original = messages(&case);
+    use gents_lean_vocab::families::provider_tool_identity_assembled::IdentityWire;
+    let cases = gents_lean_vocab::families::provider_tool_identity_assembled::cases();
+    for case in &cases {
+        let identities = case
+            .input
+            .input
+            .iter()
+            .map(|wire| (wire.id.clone(), wire.call_id.clone()))
+            .collect::<Vec<_>>();
+        let original = messages(&identities);
         let prompt = original.last().unwrap().clone();
         let history = &original[..original.len() - 1];
+        let mut bodies = Vec::new();
         for provider in [
             BackendProviderKind::OpenAiCompatible,
             BackendProviderKind::ChatGptCodex,
@@ -696,15 +613,16 @@ async fn cross_provider_tool_identity_reaches_dispatch_and_rebuilt_history() {
                 }
                 body
             };
-            let openai = provider != BackendProviderKind::XaiGrokOAuth;
-            assert_responses_body(&dispatch_body(&request), &case, openai);
-            assert_responses_body(
-                &config
-                    .provider_input_counter
-                    .project_body(&request)
-                    .unwrap(),
-                &case,
-                openai,
+            let dispatched = dispatch_body(&request);
+            assert_eq!(
+                body_identities(
+                    &config
+                        .provider_input_counter
+                        .project_body(&request)
+                        .unwrap()
+                ),
+                body_identities(&dispatched),
+                "{provider:?}"
             );
             super::replace_core_chat_history(
                 &mut request,
@@ -717,9 +635,24 @@ async fn cross_provider_tool_identity_reaches_dispatch_and_rebuilt_history() {
                 &[TaggedMessage::unassociated(prompt.clone())],
             )
             .unwrap();
-            assert_responses_body(&dispatch_body(&request), &case, openai);
-            assert_eq!(original, messages(&case));
+            assert_eq!(
+                body_identities(&dispatch_body(&request)),
+                body_identities(&dispatched),
+                "{provider:?}"
+            );
+            assert_eq!(original, messages(&identities));
+            bodies.push(dispatched);
         }
+        case.check(
+            observed_identities(&bodies[0], &bodies[1], &bodies[2])
+                .into_iter()
+                .map(|observed| IdentityWire {
+                    id: observed.id,
+                    call_id: observed.call_id,
+                    openai_item_id: observed.openai_item_id,
+                })
+                .collect(),
+        );
     }
 }
 
@@ -871,59 +804,94 @@ async fn a_seeded_dispatch_assembles_the_same_request_as_a_fresh_resolution() {
 }
 
 #[tokio::test]
-async fn recovered_reasoning_does_not_regain_missing_physical_identity() {
-    let tag = provider_tag(0);
-    let config = replay_assembly_config();
-    let mut evidence =
-        producing_capture(&AssemblyOnlyModel, &config, &replay_assembly_content()).await;
-    evidence.origin = ReplayOrigin::RecoveredProvider;
-    evidence.complete = false;
-    let replay = LoopReplayInput {
-        issuer: Some(evidence.issuer.clone()),
-        wire: Some(crate::claude_messages_body::ReplayWire::ClaudeMessages),
-        resolve: Some(counting_resolver(
-            vec![ReplayEvidenceRow {
-                tag: tag.clone(),
-                evidence,
-            }],
-            vec![tag.clone()],
-            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        )),
-        ..LoopReplayInput::default()
-    };
-    let mut history = replay_assembly_history(&tag);
-    history[1].physical_header = None;
-    history[1].block_indices.clear();
-    let mut next = vec![TaggedMessage::unassociated(Message::user("next"))];
-    let request = assemble_provider_request(
-        &AssemblyOnlyModel,
-        &mut history,
-        &mut next,
-        &[],
-        &config,
-        &replay,
-    )
-    .await
-    .unwrap();
-    let body = config
-        .provider_input_counter
-        .project_body(&request)
+async fn reasoning_identity_matches_the_lean_model() {
+    for case in
+        gents_lean_vocab::families::request_assembly_reasoning_identity::cases::<String, String>()
+    {
+        let tag = provider_tag(0);
+        let config = replay_assembly_config();
+        let mut evidence =
+            producing_capture(&AssemblyOnlyModel, &config, &replay_assembly_content()).await;
+        evidence.origin = match case.input.origin.as_str() {
+            "accepted_provider" => ReplayOrigin::AcceptedProvider,
+            "recovered_provider" => ReplayOrigin::RecoveredProvider,
+            other => panic!("unknown origin {other}"),
+        };
+        evidence.complete = case.input.complete;
+        let replay = LoopReplayInput {
+            issuer: Some(evidence.issuer.clone()),
+            wire: Some(crate::claude_messages_body::ReplayWire::ClaudeMessages),
+            resolve: Some(counting_resolver(
+                vec![ReplayEvidenceRow {
+                    tag: tag.clone(),
+                    evidence,
+                }],
+                vec![tag.clone()],
+                Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            )),
+            ..LoopReplayInput::default()
+        };
+        let mut history = replay_assembly_history(&tag);
+        let Message::Assistant { content, .. } = &mut history[1].message else {
+            panic!("assistant row")
+        };
+        *content = case
+            .input
+            .content
+            .iter()
+            .map(|block| match block.as_str() {
+                "reasoning" => replay_assembly_content()[0].clone(),
+                "text" => replay_assembly_content()[1].clone(),
+                other => panic!("unknown block {other}"),
+            })
+            .collect();
+        history[1].block_indices = (0..content.len()).collect();
+        if !case.input.has_identity {
+            history[1].physical_header = None;
+            history[1].block_indices.clear();
+        }
+        let mut next = vec![TaggedMessage::unassociated(Message::user("next"))];
+        let request = assemble_provider_request(
+            &AssemblyOnlyModel,
+            &mut history,
+            &mut next,
+            &[],
+            &config,
+            &replay,
+        )
+        .await
         .unwrap();
-    let flat = crate::provider_input::replay_frontier::flatten(
-        &body,
-        crate::claude_messages_body::ReplayWire::ClaudeMessages,
-    )
-    .unwrap();
-    assert!(!flat.iter().any(|item| matches!(
-        item,
-        crate::provider_input::replay_frontier::FlatItem::Reasoning(_)
-    )));
-    let Message::Assistant { content, .. } = &history[1].message else {
-        panic!("assistant row")
-    };
-    assert!(content
-        .iter()
-        .any(|block| matches!(block, AssistantContent::Text(_))));
+        let body = config
+            .provider_input_counter
+            .project_body(&request)
+            .unwrap();
+        let flat = crate::provider_input::replay_frontier::flatten(
+            &body,
+            crate::claude_messages_body::ReplayWire::ClaudeMessages,
+        )
+        .unwrap();
+        let Message::Assistant { content, .. } = &history[1].message else {
+            panic!("assistant row")
+        };
+        case.check(
+            gents_lean_vocab::families::request_assembly_reasoning_identity::IdentityObservation {
+                reasoning_replayed: flat.iter().any(|item| {
+                    matches!(
+                        item,
+                        crate::provider_input::replay_frontier::FlatItem::Reasoning(_)
+                    )
+                }),
+                retained: content
+                    .iter()
+                    .map(|block| match block {
+                        AssistantContent::Reasoning(_) => "reasoning".to_string(),
+                        AssistantContent::Text(_) => "text".to_string(),
+                        other => panic!("unexpected block {other:?}"),
+                    })
+                    .collect(),
+            },
+        );
+    }
 }
 
 #[test]
@@ -986,97 +954,143 @@ fn storage_error_is_not_reclassified_by_message_text() {
     ));
 }
 
-/// A compactor whose reduced transcript is under the provider budget by
-/// the raw estimate but over it at the session ratio.
-fn under_raw_over_calibrated_config(
-    compactor_calls: Arc<std::sync::atomic::AtomicUsize>,
-    commits: Arc<std::sync::atomic::AtomicUsize>,
-) -> LoopConfig {
-    let mut config = replay_assembly_config();
-    config.context_window = 100_000;
-    config.compaction_threshold = 0.75;
-    config.context_calibration =
-        crate::provider_input::budget::ContextCalibration::with_ratio(20_000);
-    config.turn_compactor = Some(Arc::new(move |_request: TurnCompactionRequest| {
-        compactor_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let commits = commits.clone();
-        Box::pin(async move {
-            Ok(TurnCompactionOutcome::Reduced {
-                messages: vec![
-                    TaggedMessage::unassociated(Message::user("s".repeat(160_000))),
-                    TaggedMessage::unassociated(Message::user("compacted prompt")),
-                ],
-                reduction_key: "still-too-big".to_string(),
-                commit: crate::loop_stream::TurnReductionCommit::new(move || async move {
-                    commits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    Ok(())
-                }),
-            })
-        })
-    }));
-    config
+async fn sized_user_text(config: &LoopConfig, raw: usize, fill: char, prompt: &str) -> String {
+    let estimate = |text: String| async move {
+        let mut history = vec![TaggedMessage::unassociated(Message::user(text))];
+        let mut new_messages = vec![TaggedMessage::unassociated(Message::user(prompt))];
+        let request = assemble_provider_request(
+            &AssemblyOnlyModel,
+            &mut history,
+            &mut new_messages,
+            &[],
+            config,
+            &LoopReplayInput::default(),
+        )
+        .await
+        .expect("assembles");
+        config
+            .provider_input_counter
+            .estimate_request(&request)
+            .expect("estimate")
+    };
+    let base = estimate(fill.to_string()).await;
+    let text = fill.to_string().repeat(1 + (raw - base) * 4);
+    assert_eq!(estimate(text.clone()).await, raw);
+    text
 }
 
 #[tokio::test]
-async fn rebuilt_request_over_the_calibrated_budget_cannot_fit_and_keeps_the_session() {
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let commits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let config = under_raw_over_calibrated_config(calls.clone(), commits.clone());
-    let original_history = vec![TaggedMessage::unassociated(Message::user(
-        "h".repeat(400_000),
-    ))];
-    let original_prompt = vec![TaggedMessage::unassociated(Message::user("next"))];
-    let mut history = original_history.clone();
-    let mut new_messages = original_prompt.clone();
-    let mut replay = LoopReplayInput::default();
-    let mut chain_keys = vec!["earlier-reduction".to_string()];
-    let mut active_keys = vec!["earlier-reduction".to_string()];
-    config
-        .context_calibration
-        .anchor_accepted(crate::provider_input::budget::ContextAnchor {
-            input_tokens: 1,
-            output_tokens: 0,
-            estimated_input_tokens: 1,
-        });
-
-    let error = build_budgeted_request(
-        &AssemblyOnlyModel,
-        &mut history,
-        &mut new_messages,
-        &[],
-        &config,
-        &mut replay,
-        3,
-        &mut chain_keys,
-        &mut active_keys,
-    )
-    .await
-    .expect_err("the rebuilt request is over the provider budget at the session ratio");
-
-    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert_eq!(
-        commits.load(std::sync::atomic::Ordering::SeqCst),
-        0,
-        "a reduction whose rebuilt request cannot fit is discarded, not committed"
-    );
-    assert!(
-        format!("{error:?}").contains("CannotFit"),
-        "the post-reduction check counts provider tokens: {error:?}"
-    );
-    let rebuilt_raw =
-        crate::provider_input::estimate_json(&serde_json::json!("s".repeat(160_000))).unwrap();
-    assert!(
-        rebuilt_raw < 75_000,
-        "the raw estimate ({rebuilt_raw}) alone would have passed the 75k budget"
-    );
-    assert_eq!(history, original_history, "the transcript is unchanged");
-    assert_eq!(new_messages, original_prompt);
-    assert_eq!(chain_keys, vec!["earlier-reduction".to_string()]);
-    assert_eq!(active_keys, vec!["earlier-reduction".to_string()]);
-    assert!(
-        config.context_calibration.anchor().is_some(),
-        "a failed reduction keeps the anchor"
-    );
+async fn turn_rebuild_matches_the_lean_model() {
+    for case in gents_lean_vocab::families::request_assembly_turn_rebuild::cases::<String>() {
+        let i = &case.input;
+        let mut config = replay_assembly_config();
+        config.context_window = i.context_window as usize;
+        config.compaction_threshold = i.threshold_basis_points as f64 / 10_000.0;
+        config.max_tokens = Some(i.max_output_tokens);
+        config.context_calibration =
+            crate::provider_input::budget::ContextCalibration::with_ratio(i.ratio);
+        let reduced = sized_user_text(&config, i.after_raw as usize, 's', "compacted prompt").await;
+        let original_text = sized_user_text(&config, i.before_raw as usize, 'h', "next").await;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let commits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let compactor_calls = calls.clone();
+        let compactor_commits = commits.clone();
+        config.turn_compactor = Some(Arc::new(move |_request: TurnCompactionRequest| {
+            compactor_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let commits = compactor_commits.clone();
+            let reduced = reduced.clone();
+            Box::pin(async move {
+                Ok(TurnCompactionOutcome::Reduced {
+                    messages: vec![
+                        TaggedMessage::unassociated(Message::user(reduced)),
+                        TaggedMessage::unassociated(Message::user("compacted prompt")),
+                    ],
+                    reduction_key: "reduced".to_string(),
+                    commit: crate::loop_stream::TurnReductionCommit::new(move || async move {
+                        commits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(())
+                    }),
+                })
+            })
+        }));
+        let original_history = vec![TaggedMessage::unassociated(Message::user(original_text))];
+        let original_prompt = vec![TaggedMessage::unassociated(Message::user("next"))];
+        let mut history = original_history.clone();
+        let mut new_messages = original_prompt.clone();
+        let mut replay = LoopReplayInput::default();
+        let mut chain_keys = vec!["earlier-reduction".to_string()];
+        let mut active_keys = vec!["earlier-reduction".to_string()];
+        config
+            .context_calibration
+            .anchor_accepted(crate::provider_input::budget::ContextAnchor {
+                input_tokens: 1,
+                output_tokens: 0,
+                estimated_input_tokens: 1,
+            });
+        let result = build_budgeted_request(
+            &AssemblyOnlyModel,
+            &mut history,
+            &mut new_messages,
+            &[],
+            &config,
+            &mut replay,
+            3,
+            &mut chain_keys,
+            &mut active_keys,
+        )
+        .await;
+        let rebuild = match result {
+            Ok((_, decision)) => match decision.reason {
+                gents_protocol::rendered_request::ContextCompactionReason::BelowThreshold => {
+                    "below_threshold"
+                }
+                gents_protocol::rendered_request::ContextCompactionReason::Compacted => "committed",
+                other => panic!("{i:?}: unexpected decision {other:?}"),
+            },
+            Err(error) => {
+                if gents_protocol::error_chain::find_source::<crate::compaction::ReductionError>(
+                    &error,
+                )
+                .is_some_and(|reason| {
+                    matches!(reason, crate::compaction::ReductionError::CannotFit)
+                }) {
+                    "cannot_fit"
+                } else if gents_protocol::error_chain::find_source::<
+                    crate::provider_input::budget::ContextBudgetError,
+                >(&error)
+                .is_some()
+                {
+                    "no_output_capacity"
+                } else {
+                    panic!("{i:?}: unexpected error {error:?}")
+                }
+            }
+        };
+        let unchanged = history == original_history
+            && new_messages == original_prompt
+            && chain_keys == ["earlier-reduction"]
+            && active_keys == ["earlier-reduction"];
+        let replaced = history.len() == 1
+            && new_messages
+                == [TaggedMessage::unassociated(Message::user(
+                    "compacted prompt",
+                ))]
+            && chain_keys == ["earlier-reduction", "reduced"]
+            && active_keys == ["reduced"];
+        assert!(
+            unchanged || replaced,
+            "{i:?}: the session is partly replaced"
+        );
+        case.check(
+            gents_lean_vocab::families::request_assembly_turn_rebuild::RebuildObservation {
+                rebuild: rebuild.to_string(),
+                compactor_calls: calls.load(std::sync::atomic::Ordering::SeqCst) as u64,
+                commits: commits.load(std::sync::atomic::Ordering::SeqCst) as u64,
+                replaces_session: replaced,
+                keeps_anchor: config.context_calibration.anchor().is_some(),
+            },
+        );
+    }
 }
 
 #[tokio::test]

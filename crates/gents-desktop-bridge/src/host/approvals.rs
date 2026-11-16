@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use gents::plugin::approval;
 use gents_desktop_core::client::ClientCore;
+use gents_tools::plugin::approval;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 

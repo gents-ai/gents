@@ -118,5 +118,4 @@ export function newAgentView(deployment: NodeView): AgentView {
 export type DraftMode = {
   onSaved: (agentDid: string) => void;
   onCancel: () => void;
-  enabled?: boolean;
 };

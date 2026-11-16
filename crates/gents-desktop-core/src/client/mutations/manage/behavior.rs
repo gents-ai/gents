@@ -1,11 +1,13 @@
 use anyhow::Result;
 #[cfg(test)]
-use gents::documents::apply_desired_state_plan;
-use gents::store::collection::Collection;
+use gents_documents::apply_desired_state_plan;
 #[cfg(test)]
-use gents::store::config_client::read_desired_state_record_in_txn;
-use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::AgentDocument;
+use gents_documents::read_desired_state_record_in_txn;
+use gents_documents::Agent as AgentDocument;
+#[cfg(test)]
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 
 #[cfg(test)]
 #[path = "behavior/client_signed_tests.rs"]
@@ -22,22 +24,45 @@ pub async fn upsert_agent_on(access: &ConfigAccess, document: &AgentDocument) ->
     super::apply_plan(access, "desktop.agent.save", plan).await
 }
 
+/// Saves an Agent document through the operations layer's admission
+/// (`operations::agent::put_in_txn`) inside the publication transaction, so a
+/// new Agent's post-commit grants are journaled by `observer`.
 pub(crate) async fn upsert_agent_with_publication_on(
     access: &ConfigAccess,
     document: &AgentDocument,
-    observer: std::sync::Arc<dyn gents::store::config_client::AgentPublicationObserver>,
+    context_patch: Option<&gents_protocol::operations::agent::AgentContextPatch>,
+    observer: std::sync::Arc<dyn gents_store::config_client::AgentPublicationObserver>,
 ) -> Result<()> {
-    let value = serde_json::to_value(document)?;
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::Agent,
-        add: value.clone(),
-        update: value,
-    }])?;
+    use gents::operations::agent::{observe, put_in_txn};
+    use gents_protocol::agent_identity::AgentIdentityBinding;
+    use gents_tools::surface::SelfConfigProcessCeiling;
+
+    use super::principal::agent_failure;
+
+    let ceiling = SelfConfigProcessCeiling::default();
+    let binding = AgentIdentityBinding {
+        creation_nonce: document.creation_nonce.clone(),
+        agent_did: document.agent_did.clone(),
+    };
+    let owner = document.node_did.as_str();
+    let admission = observe(access, owner, std::slice::from_ref(&document.agent_did))
+        .await
+        .map_err(agent_failure)?;
     access
         .transact_write_with_agent_publication("desktop.agent.save", observer, |txn| {
-            let plan = &plan;
+            let (admission, binding, ceiling) = (&admission, &binding, &ceiling);
             Box::pin(async move {
-                gents::documents::apply_desired_state_plan(txn, plan).await?;
+                put_in_txn(
+                    txn,
+                    owner,
+                    admission,
+                    document,
+                    Some(binding.clone()),
+                    context_patch,
+                    ceiling,
+                )
+                .await
+                .map_err(agent_failure)?;
                 Ok(())
             })
         })
@@ -95,7 +120,12 @@ mod tests {
             .transact_write("test.context.create", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    apply_desired_state_plan(txn, plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -129,7 +159,12 @@ mod tests {
                 "node_did":owner, "backend_id":"backend", "name":"Backend",
                 "provider_kind":"OpenAiCompatible", "endpoint":"http://localhost:8000/v1", "auth":{"kind":"unauthenticated"}
             }))?;
-            gents::documents::write_inference_backend_document(&access, &backend).await?;
+            gents_documents::write_inference_backend_document(
+                &access,
+                &backend,
+                &gents_inference::resolved::ProviderProfilePolicy,
+            )
+            .await?;
             let profile = serde_json::from_value(json!({
                 "node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high"
             }))?;
@@ -163,7 +198,12 @@ mod tests {
             .transact_write("test.target", |txn| {
                 let plan = &target_plan;
                 Box::pin(async move {
-                    apply_desired_state_plan(txn, plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -187,7 +227,12 @@ mod tests {
             .transact_write("test.target.remove", |txn| {
                 let plan = &remove_target;
                 Box::pin(async move {
-                    apply_desired_state_plan(txn, plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -207,17 +252,33 @@ mod tests {
             access
                 .transact_write("test.node.default", |txn| {
                     Box::pin(async move {
-                        let (_, mut value) =
-                            read_desired_state_record_in_txn(txn, Collection::Node, alpha, alpha)
-                                .await?
-                                .unwrap();
-                        value["default_agent_did"] = json!(default);
+                        let value = match read_desired_state_record_in_txn(
+                            txn,
+                            Collection::DefaultAgentSelection,
+                            alpha,
+                            alpha,
+                        )
+                        .await?
+                        {
+                            Some((_, mut value)) => {
+                                value["default_agent_did"] = json!(default);
+                                value
+                            }
+                            None => serde_json::to_value(
+                                gents_documents::DefaultAgentSelection::new(alpha, default),
+                            )?,
+                        };
                         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                            collection: Collection::Node,
+                            collection: Collection::DefaultAgentSelection,
                             add: value.clone(),
                             update: value,
                         }])?;
-                        apply_desired_state_plan(txn, &plan).await?;
+                        apply_desired_state_plan(
+                            txn,
+                            &plan,
+                            &gents_inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await?;
                         Ok::<_, anyhow::Error>(())
                     })
                 })
@@ -228,7 +289,7 @@ mod tests {
                     &access,
                     alpha,
                     &[(
-                        gents::store::config_client::patch::SelfConfigTarget::Agent,
+                        gents_documents::patch::SelfConfigTarget::Agent,
                         review.into(),
                         vec![("enabled".into(), Some(json!(false)))],
                     )],
@@ -236,7 +297,7 @@ mod tests {
                 .await
                 .unwrap_err();
                 assert!(
-                    format!("{disable:#}").contains("must be enabled"),
+                    format!("{disable:#}").contains("must stay enabled"),
                     "{disable:#}"
                 );
             }

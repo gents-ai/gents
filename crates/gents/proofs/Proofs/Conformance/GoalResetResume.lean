@@ -1,17 +1,20 @@
-import Proofs.GoalAutomation.ResetResume
+import Proofs.Automation.GoalAutomation.ResetResume
 import Proofs.Conformance.GoalOperatorResume
+import Proofs.Conformance.GoalRequestAssignment
+import Proofs.Conformance.Family
 
 /-! Times are seconds after 2030-01-01T00:00:00Z. -/
 namespace Conformance.GoalResetResumeContracts
 open GoalAutomation.OperatorResume
-open Conformance.GoalOperatorResumeContracts (parentBinding snapshotJson requestJson)
+open Conformance.GoalOperatorResumeContracts (parentBinding)
+open Lean
 
 def limited : Snapshot :=
   ⟨⟨.usageLimited, 0, false, false⟩, 0, none, 10, [], 37, some 1000⟩
 def request : Request := ⟨.usageLimited, 0, true, true, true, true, parentBinding⟩
 def resumed : Snapshot :=
   ⟨⟨.active, 0, false, false⟩, 1, some 10, 20, [parentBinding], 37, some 1000⟩
-def due : ResetFacts := ⟨true, some 3600, 0, 3600, true, true, true⟩
+def due : ResetFacts := ⟨true, some 3600, 0, 3600, true, true, true, true⟩
 def paused : Snapshot := { limited with goal := { limited.goal with status := .paused } }
 
 def limitedAgain : Snapshot :=
@@ -49,7 +52,7 @@ def resetCases : List ResetCase :=
   , ⟨"paused_goal_is_not_timer_resumed", paused, due, {request with expectedStatus := .paused},
        true, paused, .illegal⟩
   , ⟨"repeat_limit_resumes_at_its_new_reset", limitedAgain,
-       ⟨true, some 7200, 3600, 7200, true, true, true⟩, requestAgain, true, resumedAgain, .created⟩
+       ⟨true, some 7200, 3600, 7200, true, true, true, true⟩, requestAgain, true, resumedAgain, .created⟩
   ]
 
 theorem cases_replay_explicit_expectations :
@@ -57,29 +60,69 @@ theorem cases_replay_explicit_expectations :
       resumeBy c.before (.resetReached c.facts) c.request c.commit = (c.expected, c.outcome) := by
   decide
 
-private def b (x : Bool) : String := if x then "true" else "false"
-private def outcomeJson : Outcome → String
-  | .denied => "denied" | .stale => "stale" | .illegal => "illegal"
-  | .conflict => "conflict" | .rolledBack => "rolled_back"
-  | .created => "created" | .recovered => "recovered"
-  | .deferred => "deferred" | .invalidEvidence => "invalid_evidence"
-  | .unavailable => "unavailable"
+deriving instance ToJson for GoalAutomation.OperatorResume.Binding,
+  GoalAutomation.OperatorResume.Outcome, GoalAutomation.OperatorResume.ResetFacts
 
-def factsJson (f : ResetFacts) : String :=
-  "{\"opted_in\":" ++ b f.optedIn ++ ",\"reset_at\":" ++
-    (match f.resetAt with | none => "null" | some t => toString t) ++
-  ",\"limit_started_at\":" ++ toString f.limitStartedAt ++ ",\"now\":" ++ toString f.now ++
-  ",\"profile_names_account\":" ++ b f.profileNamesAccount ++
-  ",\"account_enabled\":" ++ b f.accountEnabled ++
-  ",\"backend_enabled\":" ++ b f.backendEnabled ++ "}"
+structure SnapshotWire where
+  status : Goals.Status
+  blockedAudits : Nat
+  wrapupRequested : Bool
+  wrapupCompleted : Bool
+  sequence : Nat
+  lastContinuedFrom : Option Nat
+  latestRequest : Nat
+  children : List Binding
+  tokensUsed : Nat
+  tokenBudget : Option Nat
+  deriving ToJson
 
-def caseJson (c : ResetCase) : String :=
-  "{\"name\":" ++ Conformance.Contracts.jsonString c.name ++
-  ",\"before\":" ++ snapshotJson c.before ++ ",\"facts\":" ++ factsJson c.facts ++
-  ",\"request\":" ++ requestJson c.request ++ ",\"commit\":" ++ b c.commit ++
-  ",\"expected\":" ++ snapshotJson c.expected ++
-  ",\"outcome\":" ++ Conformance.Contracts.jsonString (outcomeJson c.outcome) ++ "}"
+def SnapshotWire.ofModel (s : Snapshot) : SnapshotWire :=
+  ⟨s.goal.status, s.goal.blockedAudits, s.goal.wrapupRequested, s.goal.wrapupCompleted,
+    s.sequence, s.lastContinuedFrom, s.latestRequest, s.children, s.tokensUsed, s.tokenBudget⟩
 
-def casesJson : String := Conformance.Contracts.jsonArray (resetCases.map caseJson)
+def SnapshotWire.toModel (s : SnapshotWire) : Snapshot :=
+  ⟨⟨s.status, s.blockedAudits, s.wrapupRequested, s.wrapupCompleted⟩,
+    s.sequence, s.lastContinuedFrom, s.latestRequest, s.children, s.tokensUsed, s.tokenBudget⟩
+
+structure RequestWire where
+  expectedStatus : Goals.Status
+  expectedSequence : Nat
+  authorized : Bool
+  parentBelongsToGoal : Bool
+  terminalParent : Bool
+  sessionIdle : Bool
+  binding : Binding
+  deriving ToJson
+
+def RequestWire.ofModel (r : Request) : RequestWire :=
+  ⟨r.expectedStatus, r.expectedSequence, r.authorized, r.parentBelongsToGoal,
+    r.terminalParent, r.sessionIdle, r.binding⟩
+
+def RequestWire.toModel (r : RequestWire) : Request :=
+  ⟨r.expectedStatus, r.expectedSequence, r.authorized, r.parentBelongsToGoal,
+    r.terminalParent, r.sessionIdle, r.binding⟩
+
+structure ResetInput where
+  name : String
+  before : SnapshotWire
+  facts : ResetFacts
+  request : RequestWire
+  commit : Bool
+  deriving ToJson
+
+structure ResetOutput where
+  expected : SnapshotWire
+  outcome : Outcome
+  deriving ToJson
+
+@[conformance_family]
+def reset : Family ResetInput ResetOutput where
+  inputs := resetCases.map fun c =>
+    { name := c.name, before := SnapshotWire.ofModel c.before, facts := c.facts
+      request := RequestWire.ofModel c.request, commit := c.commit }
+  model := fun i =>
+    let (after, outcome) :=
+      resumeBy i.before.toModel (.resetReached i.facts) i.request.toModel i.commit
+    { expected := SnapshotWire.ofModel after, outcome }
 
 end Conformance.GoalResetResumeContracts

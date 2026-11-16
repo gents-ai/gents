@@ -2,7 +2,7 @@
 
 use super::{CredentialSave, IssuedOAuthCredential, PendingOAuthCredentials};
 use crate::error::{BridgeError, BridgeErrorCode};
-use gents::inference::auth::credential::{
+use gents_inference::auth::credential::{
     list_oauth_credentials_on, OAuthCredential, SignIn, SignInResult,
 };
 use serde::Serialize;
@@ -11,15 +11,15 @@ const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
 
 pub(crate) fn provider_label(provider: &str) -> &'static str {
     match provider {
-        gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER => "ChatGPT",
-        gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER => "Claude",
-        gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER => "Grok",
+        gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER => "ChatGPT",
+        gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER => "Claude",
+        gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER => "Grok",
         _ => "provider",
     }
 }
 
 pub(crate) async fn require_reachable_configuration(
-    access: anyhow::Result<gents::ConfigAccess>,
+    access: anyhow::Result<gents_store::config_client::ConfigAccess>,
     node_did: &str,
     provider: &str,
 ) -> Result<(), BridgeError> {
@@ -48,16 +48,16 @@ pub(crate) async fn require_reachable_configuration(
 }
 
 pub(crate) async fn upsert_through(
-    access: anyhow::Result<gents::ConfigAccess>,
+    access: anyhow::Result<gents_store::config_client::ConfigAccess>,
     credential: OAuthCredential,
 ) -> anyhow::Result<SignIn> {
     let access = access?;
     let label = credential.label.clone();
     let mut signed =
-        gents::inference::auth::credential::store_sign_in(&access, credential, None).await?;
+        gents_inference::auth::credential::store_sign_in(&access, credential, None).await?;
     if let (SignInResult::Added, Some(label)) = (&signed.result, label) {
         let stored = &signed.credential;
-        match gents::inference::auth::credential::set_account_label(
+        match gents_inference::auth::credential::set_account_label(
             &access,
             &stored.node_did,
             &stored.credential_id,
@@ -82,7 +82,7 @@ pub(crate) fn sign_in_label(label: Option<&str>) -> Result<Option<String>, Bridg
     label
         .map(str::trim)
         .filter(|label| !label.is_empty())
-        .map(gents::inference::auth::credential::validate_account_label)
+        .map(gents_inference::auth::credential::validate_account_label)
         .transpose()
         .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, error.to_string()))
 }
@@ -105,7 +105,7 @@ fn credential_not_saved(credential: &OAuthCredential) -> BridgeError {
 
 pub(crate) async fn save_issued_credential(
     pending: &PendingOAuthCredentials,
-    access: anyhow::Result<gents::ConfigAccess>,
+    access: anyhow::Result<gents_store::config_client::ConfigAccess>,
     issued: IssuedOAuthCredential,
 ) -> Result<SignIn, BridgeError> {
     let credential = issued.credential().clone();
@@ -124,7 +124,7 @@ pub(crate) async fn save_issued_credential(
 
 pub(crate) async fn retry_pending_credential(
     pending: &PendingOAuthCredentials,
-    access: anyhow::Result<gents::ConfigAccess>,
+    access: anyhow::Result<gents_store::config_client::ConfigAccess>,
     node_did: &str,
     provider: &str,
 ) -> Result<OAuthCredential, BridgeError> {
@@ -147,7 +147,7 @@ pub(crate) async fn retry_pending_credential(
 
 pub(crate) async fn observe_provider_accounts(
     pending: &PendingOAuthCredentials,
-    access: anyhow::Result<gents::ConfigAccess>,
+    access: anyhow::Result<gents_store::config_client::ConfigAccess>,
     node_did: &str,
 ) -> Result<Vec<ProviderAccountView>, BridgeError> {
     let held: Vec<ProviderAccountView> = pending
@@ -209,14 +209,14 @@ impl From<&OAuthCredential> for ProviderAccountView {
             credential_id: credential.credential_id.clone(),
             node_did: credential.node_did.clone(),
             provider: credential.provider.clone(),
-            account_id: gents::inference::auth::credential::account_display_label(credential),
+            account_id: gents_inference::auth::credential::account_display_label(credential),
             plan_type: credential.chatgpt_plan_type.clone(),
             access_token_expires_at: credential.access_token_expires_at.to_rfc3339(),
             last_refresh: credential.last_refresh.map(|value| value.to_rfc3339()),
             enabled: credential.enabled,
             pending_save: false,
             account_ref: credential.account_ref.clone(),
-            label: gents::inference::auth::credential::effective_account_label(credential),
+            label: gents_inference::auth::credential::effective_account_label(credential),
         }
     }
 }
@@ -238,7 +238,7 @@ impl From<&SignIn> for SignInView {
                 SignInResult::Refreshed => "refreshed",
             }
             .to_string(),
-            label: gents::inference::auth::credential::effective_account_label(&signed.credential),
+            label: gents_inference::auth::credential::effective_account_label(&signed.credential),
             account_ref: signed.credential.account_ref.clone(),
             hint: signed.account_chooser_hint(),
         }

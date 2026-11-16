@@ -5,7 +5,7 @@ use serde_json::json;
 
 use crate::cli::{PackRunArgs, PackTestArgs};
 
-pub(crate) type PluginCases = gents::pack::authoring::PluginCases;
+pub(crate) type PluginCases = gents_toolcalls::plugin::authoring_test::PluginCases;
 
 pub(crate) async fn test(args: PackTestArgs) -> Result<()> {
     let dir = args.dir.unwrap_or_else(|| PathBuf::from("."));
@@ -50,7 +50,7 @@ struct ScenarioRun {
 }
 
 pub(crate) async fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
-    gents::pack::authoring::run_plugin_cases(dir).await
+    gents_toolcalls::plugin::authoring_test::run_plugin_cases(dir).await
 }
 
 #[cfg(test)]

@@ -1,14 +1,15 @@
 //! Account-aware rotation over a pool of Claude subscription accounts.
 //! Lean: `AccountRotation`.
 //!
-//! A port of `Proofs/AccountRotation/Policy.lean`, bound by its generated
+//! A port of `Proofs/Shared/AccountRotation/Policy.lean`, bound by its generated
 //! conformance cases. Invariants: `select` never returns a disabled, blocked or
 //! limit-exhausted account, returns `Some` whenever any account is eligible,
 //! prefers the best tier, and keeps a session on its account while that account
 //! holds the best tier. `select` is O(pool x limits) and allocates nothing.
 
 /// Model family a request is made for; limits bind per family.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Family {
     /// Opus models.
     Opus,
@@ -33,7 +34,8 @@ impl Family {
 }
 
 /// The window a limit applies to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Claim {
     /// The five hour session window.
     FiveHour,
@@ -71,6 +73,8 @@ impl Claim {
 
 /// How severe a reported limit is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(rename_all = "snake_case"))]
 pub enum Severity {
     /// Past the early-warning threshold but still serving.
     Warning,
@@ -80,6 +84,8 @@ pub enum Severity {
 
 /// One reported limit, live until `reset_at` (epoch seconds).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(deny_unknown_fields))]
 pub struct Limit {
     /// The window it applies to.
     pub claim: Claim,
@@ -90,7 +96,8 @@ pub struct Limit {
 }
 
 /// State of paid extra usage on an account.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Overage {
     /// Not reported.
     Absent,
@@ -111,6 +118,8 @@ impl Overage {
 
 /// The last observed state of one account.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(deny_unknown_fields))]
 pub struct Account {
     /// Whether the operator enabled the account.
     pub enabled: bool,
@@ -146,6 +155,8 @@ impl Tier {
 
 /// Rotation policy.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(deny_unknown_fields))]
 pub struct Policy {
     /// Paid extra usage is an operator choice and is off by default.
     pub allow_overage: bool,
@@ -242,3 +253,22 @@ where
 #[cfg(test)]
 #[path = "rotation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn claim_binds_matches_lean() {
+        gents_lean_vocab::families::account_rotation_claim_binds::replay(|i| {
+            Claim::binds(i.claim, i.family)
+        });
+    }
+
+    #[test]
+    fn overage_serves_matches_lean() {
+        gents_lean_vocab::families::account_rotation_overage_serves::replay(|i| {
+            Overage::serves(i.overage)
+        });
+    }
+}

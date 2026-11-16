@@ -14,7 +14,8 @@ function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
   return {
     state: "healthy",
     lastError: null,
-    connectedPeerCount: 1,
+    runtimeCount: 1,
+    connectedRuntimeCount: 1,
     activationErrorCount: 0,
     cause: null,
     nextAction: null,

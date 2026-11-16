@@ -1,5 +1,5 @@
 import { expect, gotoHarness, test, type Page } from "./desktopTest";
-import { chatDraftKey, retainChatDraft } from "../../src/hooks/chatDrafts";
+import { chatDraftKey, chatDraftOf } from "../../src/hooks/chatDrafts";
 
 async function openMailbox(page: Page) {
   const link = page.getByRole("link", { name: /^Mailbox(?:\s+\d+)?$/ });
@@ -28,7 +28,7 @@ for (const colorScheme of ["light", "dark"] as const) {
   }, info) => {
     await page.emulateMedia({ colorScheme });
     await gotoHarness(page, "mailbox-question");
-    const draft = retainChatDraft(
+    const draft = chatDraftOf(
       {
         clientDid: "did:key:desktop-harness",
         nodeDid: "did:key:z6MkBombadilAgent",

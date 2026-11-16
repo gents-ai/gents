@@ -100,3 +100,7 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod end_to_end_test;
+
+#[cfg(test)]
+#[path = "prompt_assembly_conformance_tests.rs"]
+mod prompt_assembly_conformance;

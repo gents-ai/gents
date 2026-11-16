@@ -4,17 +4,23 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents::defra_node::{Node as EmbeddedNode, StorageBackend};
-use gents::observe::adapter_projection::{
+use gents_observe::observe::adapter_projection::{
     adapter_projection_eval_jsonl_records, adapter_projection_jsonl_records,
     build_external_adapter_projection,
 };
-use gents::observe::external_adapter_capture::ExternalAdapterView;
-use gents::{
-    adapter_projection_eval_jsonl_record_schema, adapter_projection_json_schema,
-    adapter_projection_jsonl_record_schema, ensure_runtime_schemas,
-    import_external_adapter_capture_to_derived_view, validate_adapter_projection_contract,
-    AdapterProjectionEnvelope, ExternalAdapterCapture, ProjectionContext, ProjectionRedactionMode,
+use gents_observe::observe::external_adapter_capture::ExternalAdapterView;
+use gents_observe::{
+    observe::adapter_projection::adapter_projection_eval_jsonl_record_schema,
+    observe::adapter_projection::adapter_projection_json_schema,
+    observe::adapter_projection::adapter_projection_jsonl_record_schema,
+    observe::adapter_projection::validate_adapter_projection_contract,
+    observe::adapter_projection::AdapterProjectionEnvelope,
+    observe::adapter_projection::ProjectionContext,
+    observe::adapter_projection::ProjectionRedactionMode,
+    observe::external_adapter_capture::import_external_adapter_capture_to_derived_view,
+    observe::external_adapter_capture::ExternalAdapterCapture,
 };
+use gents_store::schema::ensure_runtime_schemas;
 use serde_json::{json, Value};
 
 const FIXTURE_ROOT_ENV: &str = "GENTS_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES";
@@ -138,11 +144,11 @@ fn external_projection_preserves_mapped_children_without_forging_native_provenan
     validate_adapter_projection_contract(&envelope)?;
     assert_eq!(
         envelope.provenance.source_projection_id,
-        gents::observe::adapter_projection::EXTERNAL_ADAPTER_CAPTURE_PROJECTION_ID
+        gents_observe::observe::adapter_projection::EXTERNAL_ADAPTER_CAPTURE_PROJECTION_ID
     );
     assert_eq!(
         envelope.provenance.source_version_status,
-        gents::observe::adapter_projection::ProjectionSourceVersionStatus::ExternalAdapterCapture
+        gents_observe::observe::adapter_projection::ProjectionSourceVersionStatus::ExternalAdapterCapture
     );
     assert!(envelope.source_request_doc_id.is_none());
     let projection = serde_json::to_value(&envelope)?;
@@ -202,8 +208,9 @@ fn external_langgraph_projection_preserves_history_graph_tasks_and_redacts_value
     let capture: ExternalAdapterCapture = serde_json::from_value(value)?;
     let envelope = build_external_adapter_projection(&capture, &ProjectionContext::default())?;
     validate_adapter_projection_contract(&envelope)?;
-    let gents::observe::adapter_projection::AdapterProjection::LangGraphStateHistory(projection) =
-        &envelope.output
+    let gents_observe::observe::adapter_projection::AdapterProjection::LangGraphStateHistory(
+        projection,
+    ) = &envelope.output
     else {
         panic!("expected LangGraph projection")
     };
@@ -290,12 +297,15 @@ async fn negative_external_capture_imports_reject_bad_mappings_without_partial_r
     for (name, value, expected_error) in cases {
         let tempdir = tempfile::tempdir().context("creating tempdir")?;
         let data_dir = tempdir.path().join("data");
-        let identity = gents::KeyIdentity::load_or_create(tempdir.path().join("node.key"), None)
-            .context("creating node identity")?;
+        let identity = gents_store::identity::KeyIdentity::load_or_create(
+            tempdir.path().join("node.key"),
+            None,
+        )
+        .context("creating node identity")?;
         let node = EmbeddedNode::builder()
             .data_path(&data_dir)
             .with_storage_backend(StorageBackend::Regolith)
-            .with_node_identity_did(gents::NodeIdentity::did(&identity))
+            .with_node_identity_did(gents_store::identity::NodeIdentity::did(&identity))
             .build()
             .await
             .with_context(|| format!("opening embedded node for {name}"))?;

@@ -255,6 +255,24 @@ impl MockStreamingBackend {
         self.state.request_count(marker)
     }
 
+    pub async fn wait_for_request(&self, marker: &str, timeout: Duration) {
+        tokio::time::timeout(timeout, async {
+            loop {
+                let changed = self.state.notify.notified();
+                tokio::pin!(changed);
+                changed.as_mut().enable();
+                if self.observed_requests(marker) > 0 {
+                    return;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!("request for {marker} did not reach the provider before its deadline")
+        });
+    }
+
     pub fn enable_dynamic_followups(&self, marker: &str) {
         let mut inner = self
             .state
@@ -292,6 +310,16 @@ impl MockStreamingBackend {
 
     pub fn observed_completion_requests(&self) -> usize {
         self.observed_completion_bodies().len()
+    }
+
+    /// The completions issued for requests' own turns. A session-title audit
+    /// is its own auxiliary request racing the request that opened the
+    /// session, so its completion has no fixed position among them.
+    pub fn observed_turn_completion_bodies(&self) -> Vec<serde_json::Value> {
+        self.observed_completion_bodies()
+            .into_iter()
+            .filter(|body| !body_is_session_title(body))
+            .collect()
     }
 
     pub async fn wait_for_chunks(&self, marker: &str, expected: usize) {
@@ -517,9 +545,10 @@ impl StreamingState {
 }
 
 fn request_is_session_title(body: &str) -> bool {
-    let Ok(body) = serde_json::from_str::<serde_json::Value>(body) else {
-        return false;
-    };
+    serde_json::from_str::<serde_json::Value>(body).is_ok_and(|body| body_is_session_title(&body))
+}
+
+fn body_is_session_title(body: &serde_json::Value) -> bool {
     body.get("tools").is_none()
         && body
             .get("messages")

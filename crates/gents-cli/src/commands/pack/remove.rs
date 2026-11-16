@@ -2,22 +2,18 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::pack::{InstalledPackPlugin, PackChangeError, PackKind, RemoveReport};
-use gents::store::config_client::ConfigAccess;
+use gents_pack::pack::{PackChangeError, PackKind, RemoveReport};
 use serde_json::{json, Value};
 
 use crate::cli::PackRemoveArgs;
 
 pub(crate) async fn remove(args: PackRemoveArgs) -> Result<(), PackChangeError> {
-    let (namespace, name) = super::split_namespace(&args.package);
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.package);
     let coordinate = format!("{namespace}/{name}");
-    let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
 
-    // A documents pack's record has no assets or node-free removal: it goes
-    // through `remove_pack` below and the record is forgotten after.
-    let mut documents_record = false;
     if args.scope.graphql.is_none() {
-        if let Some(record) = gents::pack::read_home_install(&home, &coordinate)? {
+        if let Some(record) = gents_pack::pack::read_home_install(&home, &coordinate)? {
             if matches!(record.kind, PackKind::Assets | PackKind::Plugins) {
                 if args.scope.node_did.is_some() {
                     return Err(anyhow::anyhow!(
@@ -30,9 +26,8 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<(), PackChangeError> 
                     &json!({ "pack": coordinate, "removed": removed }),
                 )?);
             }
-            documents_record = true;
         }
-        if !gents::store::local::home::init_config_path(&home).is_file() {
+        if !gents_store::local::home::init_config_path(&home).is_file() {
             return Err(
                 anyhow::anyhow!("{coordinate} is not installed in {}", home.display()).into(),
             );
@@ -41,57 +36,21 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<(), PackChangeError> 
 
     let (access, owner) = super::resolve_scope_owner(&args.scope).await?;
     let result = async {
-        let report =
-            gents::pack::remove_pack(&access, &owner, &coordinate, args.drift.policy()).await?;
-        if documents_record {
-            // Before the archive scan below, which counts every file record.
-            gents::pack::forget_home_install(&home, &coordinate)?;
-        }
-
-        let mut plugin_digests = BTreeSet::new();
-        let local = args.scope.graphql.is_none();
-        let pack_plugin_records = if local {
-            release_plugin_records(
-                &home,
-                &report.pack,
-                &report.documents.plugins,
-                &mut plugin_digests,
-            )?
+        let report = gents_pack::pack::remove_pack(
+            &access,
+            &owner,
+            &coordinate,
+            args.drift.policy(),
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
+        let released = if args.scope.graphql.is_none() {
+            gents_pack::pack::home_removal::release_documents_pack(&home, Some(&access), &report)
+                .await?
         } else {
-            Vec::new()
+            Default::default()
         };
-        let mut dependency_plugin_records = Vec::with_capacity(report.dependencies.len());
-        for dependency in &report.dependencies {
-            dependency_plugin_records.push(if local {
-                release_plugin_records(
-                    &home,
-                    &dependency.pack,
-                    &dependency.documents.plugins,
-                    &mut plugin_digests,
-                )?
-            } else {
-                Vec::new()
-            });
-        }
-        let plugin_bytes = plugin_release_result(&home, &plugin_digests)?;
-
-        let mut archive_digests: BTreeSet<String> = report.digests.iter().cloned().collect();
-        for dependency in &report.dependencies {
-            archive_digests.extend(dependency.digests.iter().cloned());
-        }
-        let archives = if args.scope.graphql.is_none() {
-            release_archives(&home, Some(&access), &archive_digests).await?
-        } else {
-            Vec::new()
-        };
-
-        let removed = augment_report(
-            &report,
-            &pack_plugin_records,
-            &dependency_plugin_records,
-            &plugin_bytes,
-            &archives,
-        )?;
+        let removed = augment_report(&report, &released)?;
         Ok::<_, PackChangeError>(json!({ "pack": coordinate, "owner": owner, "removed": removed }))
     }
     .await;
@@ -105,73 +64,25 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<(), PackChangeError> 
 
 fn augment_report(
     report: &RemoveReport,
-    pack_plugin_records: &[InstalledPackPlugin],
-    dependency_plugin_records: &[Vec<InstalledPackPlugin>],
-    plugin_bytes: &[String],
-    archives: &[String],
+    released: &gents_pack::pack::home_removal::DocumentsRelease,
 ) -> Result<Value> {
     let mut value = serde_json::to_value(report).context("encoding the remove report")?;
     let object = value
         .as_object_mut()
         .context("remove report must serialize as an object")?;
-    object.insert("plugins".to_owned(), json!(pack_plugin_records));
+    object.insert("plugins".to_owned(), json!(released.plugins));
     if let Some(dependencies) = object.get_mut("dependencies").and_then(Value::as_array_mut) {
-        anyhow::ensure!(
-            dependencies.len() == dependency_plugin_records.len(),
-            "remove report listed {} dependencies but {} were released",
-            dependencies.len(),
-            dependency_plugin_records.len()
-        );
-        for (dependency, plugins) in dependencies.iter_mut().zip(dependency_plugin_records) {
+        for (index, dependency) in dependencies.iter_mut().enumerate() {
             let dependency = dependency
                 .as_object_mut()
                 .context("dependency report must serialize as an object")?;
-            dependency.insert("plugins".to_owned(), json!(plugins));
+            let plugins = released.dependency_plugins.get(index).cloned();
+            dependency.insert("plugins".to_owned(), json!(plugins.unwrap_or_default()));
         }
     }
-    object.insert("plugin_bytes".to_owned(), json!(plugin_bytes));
-    object.insert("archives".to_owned(), json!(archives));
+    object.insert("plugin_bytes".to_owned(), json!(released.plugin_bytes));
+    object.insert("archives".to_owned(), json!(released.archives));
     Ok(value)
-}
-
-fn release_plugin_records(
-    home: &Path,
-    coordinate: &str,
-    plugins: &[InstalledPackPlugin],
-    candidates: &mut BTreeSet<String>,
-) -> Result<Vec<InstalledPackPlugin>> {
-    candidates.extend(plugins.iter().map(|plugin| plugin.digest.clone()));
-    gents::pack::plugin_lifecycle::release_plugin_records(home, coordinate, plugins)
-}
-
-fn plugin_release_result(home: &Path, candidates: &BTreeSet<String>) -> Result<Vec<String>> {
-    if candidates.is_empty() {
-        return Ok(Vec::new());
-    }
-    gents::plugin::store::release_unreferenced_bytes(home, candidates)
-}
-
-async fn release_archives(
-    home: &Path,
-    node: Option<&ConfigAccess>,
-    digests: &BTreeSet<String>,
-) -> Result<Vec<String>> {
-    if digests.is_empty() {
-        return Ok(Vec::new());
-    }
-    let referenced = gents::pack::referenced_pack_digests(home, node).await?;
-    let store = gents::pack::store::PackStore::new(home);
-    let mut released = Vec::new();
-    for digest in digests {
-        if referenced.contains(digest) {
-            continue;
-        }
-        if store.release(digest)? {
-            released.push(digest.clone());
-        }
-    }
-    released.sort();
-    Ok(released)
 }
 
 #[cfg(test)]
@@ -191,13 +102,13 @@ pub(super) static REMOVAL_TEST_PAUSE: std::sync::Mutex<Option<std::sync::Arc<Rem
 pub(crate) async fn ensure_home_plugins_unreferenced(
     home: &Path,
     plugins: &BTreeSet<String>,
-    guard: &gents::plugin::store::StoreGuard,
+    guard: &gents_pack::plugin::store::StoreGuard,
 ) -> Result<()> {
     if plugins.is_empty() {
         return Ok(());
     }
-    if !gents::store::local::home::init_config_path(home).is_file() {
-        return Err(gents::pack::PackRemovalError::NodeUnobserved.into());
+    if !gents_store::local::home::init_config_path(home).is_file() {
+        return Err(gents_pack::pack::PackRemovalError::NodeUnobserved.into());
     }
     #[cfg(test)]
     {
@@ -213,7 +124,7 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
         }
     }
     let (access, owner) = super::resolve_home_owner_under_plugin_store(home, guard).await?;
-    let result = gents::pack::ensure_plugins_unreferenced(&access, &owner, plugins).await;
+    let result = gents_pack::pack::ensure_plugins_unreferenced(&access, &owner, plugins).await;
     if let Some(node) = access.local_node() {
         if let Err(error) = node.shutdown().await {
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
@@ -226,7 +137,7 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
 pub(crate) async fn remove_home_install(home: &Path, coordinate: &str) -> Result<Value> {
     let lock_home = home.to_owned();
     let guard =
-        tokio::task::spawn_blocking(move || gents::plugin::store::try_lock_store(&lock_home))
+        tokio::task::spawn_blocking(move || gents_pack::plugin::store::try_lock_store(&lock_home))
             .await??;
     remove_home_install_with_guard(home, coordinate, guard).await
 }
@@ -234,80 +145,33 @@ pub(crate) async fn remove_home_install(home: &Path, coordinate: &str) -> Result
 pub(crate) async fn remove_home_install_with_guard(
     home: &Path,
     coordinate: &str,
-    guard: gents::plugin::store::StoreGuard,
+    guard: gents_pack::plugin::store::StoreGuard,
 ) -> Result<Value> {
     guard.for_home(home)?;
-    let record = gents::pack::read_home_install(home, coordinate)?
+    let record = gents_pack::pack::read_home_install(home, coordinate)?
         .with_context(|| format!("{coordinate} is not installed"))?;
-    let (namespace, _) = super::split_namespace(coordinate);
+    let (namespace, _) = gents_pack::pack::registry::split_pack_coordinate(coordinate);
     let plugins = record
         .plugins
         .iter()
         .map(|plugin| format!("{namespace}/{}", plugin.name))
         .collect();
     ensure_home_plugins_unreferenced(home, &plugins, &guard).await?;
-    let checked_record = record;
-    let mut retained = Vec::new();
-    let mut assets_removed = Vec::new();
-    let removal = gents::pack::plugin_lifecycle::remove_local_locked(
-        &guard,
-        home,
-        coordinate,
-        |record| {
-            anyhow::ensure!(
-                record == &checked_record,
-                "{coordinate} changed while checking plugin references; retry removal"
-            );
-            Ok((
-                super::cache::prepare_recorded_cache(home, coordinate, record)?,
-                record.assets.clone(),
-            ))
-        },
-        |(prepared, recorded_assets)| {
-            let release = prepared.finish()?;
-            match release {
-                super::CacheRelease::Removed => assets_removed.push(recorded_assets.clone()),
-                super::CacheRelease::Retained(reason) => retained.push(json!({
-                    "item": recorded_assets,
-                    "reason": reason,
-                })),
-            }
-            Ok(())
-        },
-    )?;
-    drop(guard);
-    let record = removal.record;
-    let plugin_records = removal.plugins;
-    if let Some(reason) = removal.cache_error {
-        retained.push(json!({"item": record.assets, "reason": reason}));
-    }
-    let plugin_digests = record
-        .plugins
-        .iter()
-        .map(|plugin| plugin.digest.clone())
-        .collect();
-    if !record.plugins.is_empty() {
+    let removal =
+        gents_pack::pack::home_removal::remove_checked(guard, home, coordinate, record, None)
+            .await?;
+    if !removal.plugins.is_empty() {
         super::warn_on_unrecorded_removal(
             coordinate,
             super::record_plugin_retirement(home, coordinate).await,
         );
     }
-
-    let plugin_bytes = plugin_release_result(home, &plugin_digests).context(
-        "the local pack was removed, but unreferenced plugin-byte cleanup did not finish",
-    )?;
-    let mut archive_digests = BTreeSet::new();
-    archive_digests.insert(record.digest.clone());
-    let archives = release_archives(home, None, &archive_digests)
-        .await
-        .context("the local pack was removed, but unreferenced archive cleanup did not finish")?;
-
     Ok(json!({
-        "assets": assets_removed,
-        "plugins": plugin_records,
-        "retained": retained,
-        "plugin_bytes": plugin_bytes,
-        "archives": archives,
+        "assets": removal.assets,
+        "plugins": removal.plugins,
+        "retained": removal.retained,
+        "plugin_bytes": removal.plugin_bytes,
+        "archives": removal.archives,
     }))
 }
 

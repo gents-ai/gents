@@ -1,0 +1,27 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "s",
+        "type": "uint64"
+      }
+    ],
+    "markdown": "| s |\n| --- |\n| 18446744073709551615 |",
+    "offset": 0,
+    "order": "columns",
+    "row_count": 1,
+    "rows": [
+      [
+        "18446744073709551615"
+      ]
+    ],
+    "warnings": [
+      "people.parquet is the table people_2",
+      "1 integers beyond 2^53 appear as strings so no digit is lost"
+    ]
+  },
+  "input": {
+    "sql": "SELECT sum(big) AS s FROM people_2 WHERE id = 1"
+  }
+}

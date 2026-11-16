@@ -1,9 +1,8 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::store::graphql::escape_graphql_string;
-use gents::ConfigAccess;
-use gents_protocol::row::{project_node_readiness, NodeReadinessRow, ProjectedAgentReadiness};
+use gents_protocol::row::{project_node_readiness, ProjectedAgentReadiness};
+use gents_store::config_client::ConfigAccess;
 
 /// Pack publication precedes router reconciliation, so an HTTP-ready server
 /// can still reject the author's first request as unassigned.
@@ -14,23 +13,16 @@ pub(super) async fn wait_for_author(
     timeout: Duration,
     poll: Duration,
 ) -> Result<()> {
-    let query = format!(
-        r#"{{ NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{ node_did snapshot_json updated_at }} }}"#,
-        escape_graphql_string(owner)
-    );
+    let view = gents_store::views::runtime::NodeReadinessList::new(owner).limit(1);
     let mut last = "no readiness observation".to_owned();
     let waited = tokio::time::timeout(timeout, async {
         loop {
-            let response = access
-                .execute(&query)
+            let row = access
+                .read_view(&view)
                 .await
-                .context("reading runtime readiness for the eval author")?;
-            let row = response
-                .pointer("/data/NodeReadiness/0")
-                .cloned()
-                .map(serde_json::from_value::<NodeReadinessRow>)
-                .transpose()
-                .context("decoding runtime readiness for the eval author")?;
+                .context("reading runtime readiness for the eval author")?
+                .into_iter()
+                .next();
             let projection = project_node_readiness(row.as_ref(), owner, [agent], None);
             let state = projection.agents.get(agent).cloned();
             if state == Some(ProjectedAgentReadiness::Ready) {
@@ -62,6 +54,7 @@ mod tests {
 
     use super::*;
     use axum::{routing::post, Json, Router};
+    use gents_store::identity::NodeIdentity;
     use serde_json::{json, Value};
 
     const OWNER: &str = "did:key:author-test";
@@ -75,7 +68,7 @@ mod tests {
                 "reason": if ready {Value::Null} else {json!("backend_not_configured")}}),
             );
         }
-        json!({"data": {"NodeReadiness": [{"node_did": OWNER, "updated_at": "2026-10-16T00:00:00Z",
+        json!({"data": {"view_0": [{"node_did": OWNER, "updated_at": "2026-10-16T00:00:00Z",
             "snapshot_json": json!({"format_version": gents_protocol::row::NODE_READINESS_FORMAT_VERSION,
                 "process_state": "ready", "active_generation": 2, "router_generation": router_generation,
                 "default_agent_did": "default", "agents": agents}).to_string()}]}})
@@ -99,17 +92,20 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        (
-            ConfigAccess::graphql(format!("http://{address}/graphql")),
-            calls,
-            server,
+        let reader = gents_store::test_support::test_identity("eval-readiness-view");
+        let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
+            format!("http://{address}/graphql"),
+            reader.did(),
         )
+        .with_client_signing_capability(reader.client_signing_capability().unwrap())
+        .unwrap();
+        (ConfigAccess::Graphql(endpoint), calls, server)
     }
 
     #[tokio::test]
     async fn waits_for_the_author_in_the_active_router_generation() {
         let (access, calls, server) = server(vec![
-            json!({"data": {"NodeReadiness": []}}),
+            json!({"data": {"view_0": []}}),
             observation(2, false, false),
             observation(1, true, true),
             observation(2, true, false),

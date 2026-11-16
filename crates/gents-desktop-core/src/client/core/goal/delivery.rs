@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use gents::NodeIdentity;
 use gents_protocol::goal_control::{GoalOperation, GoalRevision, SessionGoalControlReceipt};
 use gents_protocol::request_input::RequestInput;
+use gents_store::identity::NodeIdentity;
 
 use crate::client::mutations::{goal_delivery, submission_journal};
 use crate::client::ClientCore;
@@ -50,7 +50,7 @@ impl ClientCore {
                     .context("Goal signed preparation is unavailable")?;
                 let peer = self.peer_record_for_chat_write(node_did)?;
                 let (signer, _, _) = self.request_authority(node_did, peer.as_ref()).await?;
-                if let Some(receipt) = gents::goal::recover_session_goal_control(
+                if let Some(receipt) = gents_automation::goal::recover_session_goal_control(
                     &self.session_queue_access(node_did)?,
                     signer.as_ref(),
                     command,
@@ -142,7 +142,7 @@ impl ClientCore {
         let peer = self.peer_record_for_chat_write(node_did)?;
         super::ensure_peer_chat_ready(node_did, peer.as_ref())?;
         let (signer, _, _) = self.request_authority(node_did, peer.as_ref()).await?;
-        let receipt = gents::goal::submit_prepared_session_goal_control(
+        let receipt = gents_automation::goal::submit_prepared_session_goal_control(
             &self.session_queue_access(node_did)?,
             signer.as_ref(),
             command,

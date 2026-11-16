@@ -1,4 +1,4 @@
-import { expect, gotoHarness, test, type Page } from "./desktopTest";
+import { expect, gotoHarness, OWN_VIEWPORT, test, type Page } from "./desktopTest";
 
 async function openMailbox(page: Page) {
   const link = page.getByRole("link", { name: /^Mailbox(?:\s+\d+)?$/ });
@@ -21,9 +21,14 @@ test("works through the mailbox in its dialog, and keeps the place across a sess
   await gotoHarness(page, "mailbox-many");
   await openMailbox(page);
   const dialog = page.getByTestId("mailbox-dialog");
+  /* the harness files one more item 2.5s after start; open the stack once it
+     has landed, so the count does not depend on how fast the page got here */
+  await expect(
+    page.getByTestId("mailbox-item").filter({ hasText: "Deploy to staging finished" }),
+  ).toBeVisible();
 
   await rowButton(page, "Button colour").click();
-  await expect(dialog).toContainText("1 of 5");
+  await expect(dialog).toContainText("1 of 6");
   await expect(dialog).toContainText("Which colour should the button be?");
   await page.keyboard.press("ArrowRight");
   await expect(dialog).toContainText("Where should this run?");
@@ -112,7 +117,7 @@ test("opens the mailbox's dialog over another page with its shortcut", async ({
   await expect(dialog).toHaveCount(0);
 });
 
-test.describe("mobile mailbox", () => {
+test.describe("mobile mailbox", { tag: OWN_VIEWPORT }, () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
   async function keyboard(page: Page) {

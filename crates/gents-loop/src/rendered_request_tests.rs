@@ -125,23 +125,6 @@ fn capture_key_is_stable_and_prefixed() {
 }
 
 #[test]
-fn every_capture_key_component_changes_the_key() {
-    let base = capture_key("did:key:a", "session-1", "doc-1", "inference.1", 0, 0).unwrap();
-
-    for varied in [
-        capture_key("did:key:b", "session-1", "doc-1", "inference.1", 0, 0).unwrap(),
-        capture_key("did:key:a", "session-2", "doc-1", "inference.1", 0, 0).unwrap(),
-        capture_key("did:key:a", "session-1", "doc-2", "inference.1", 0, 0).unwrap(),
-        capture_key("did:key:a", "session-1", "doc-1", "inference.2", 0, 0).unwrap(),
-        capture_key("did:key:a", "session-1", "doc-1", "compaction.1", 0, 0).unwrap(),
-        capture_key("did:key:a", "session-1", "doc-1", "inference.1", 1, 0).unwrap(),
-        capture_key("did:key:a", "session-1", "doc-1", "inference.1", 0, 1).unwrap(),
-    ] {
-        assert_ne!(base, varied);
-    }
-}
-
-#[test]
 fn capture_key_does_not_collide_across_component_boundaries() {
     assert_ne!(
         capture_key("did:key:a", "s:1", "doc-1", "inference.1", 0, 0).unwrap(),
@@ -157,14 +140,6 @@ fn capture_key_does_not_collide_across_component_boundaries() {
     );
     assert_ne!(
         capture_key("did:key:a", "s", "req#compaction.1", "inference.1", 0, 0).unwrap(),
-        capture_key("did:key:a", "s", "req", "compaction.1", 0, 0).unwrap(),
-    );
-}
-
-#[test]
-fn the_summarizers_first_call_is_not_the_requests_first_turn() {
-    assert_ne!(
-        capture_key("did:key:a", "s", "req", "inference.1", 0, 0).unwrap(),
         capture_key("did:key:a", "s", "req", "compaction.1", 0, 0).unwrap(),
     );
 }

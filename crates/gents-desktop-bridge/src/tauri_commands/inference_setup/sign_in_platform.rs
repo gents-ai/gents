@@ -1,4 +1,4 @@
-use gents::inference::backends::setup::{InferenceAuthMethod, InferenceSetupCatalog};
+use gents_inference::backends::setup::{InferenceAuthMethod, InferenceSetupCatalog};
 
 use crate::error::{BridgeError, BridgeErrorCode};
 
@@ -15,7 +15,7 @@ fn supported(method: InferenceAuthMethod, ios: bool) -> bool {
 }
 
 pub(super) fn setup_catalog(ios: bool) -> InferenceSetupCatalog {
-    let mut catalog = gents::inference::backends::setup::inference_setup_catalog();
+    let mut catalog = gents_inference::backends::setup::inference_setup_catalog();
     for provider in &mut catalog.providers {
         provider
             .auth_methods
@@ -50,13 +50,13 @@ pub(super) fn require_supported(method: InferenceAuthMethod, ios: bool) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::inference::backends::setup::InferenceProviderId;
+    use gents_inference::backends::setup::InferenceProviderId;
 
     #[test]
     fn desktop_retains_the_canonical_catalog() {
         assert_eq!(
             setup_catalog(false),
-            gents::inference::backends::setup::inference_setup_catalog()
+            gents_inference::backends::setup::inference_setup_catalog()
         );
     }
 
@@ -87,7 +87,7 @@ mod tests {
         assert_eq!(openai.default_auth_method, InferenceAuthMethod::ApiKey);
         assert_eq!(
             openai.default_endpoint,
-            gents::inference::backends::setup::OPENAI_ENDPOINT
+            gents_inference::backends::setup::OPENAI_ENDPOINT
         );
         assert!(catalog.providers.iter().any(|provider| provider
             .auth_methods

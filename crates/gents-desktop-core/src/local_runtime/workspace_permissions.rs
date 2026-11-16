@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use gents::plugin::approval::workspace::{Support, CONTRACT_VERSION, STATUS_SUPPORT_FIELD};
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
+use gents_tools::plugin::approval::workspace::{Support, CONTRACT_VERSION, STATUS_SUPPORT_FIELD};
 use serde_json::Value;
 
 use crate::client::PeerRecord;

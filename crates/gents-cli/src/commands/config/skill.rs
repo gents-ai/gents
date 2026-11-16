@@ -1,67 +1,50 @@
 use anyhow::{Context, Result};
-use gents::documents::SkillDocument;
-use gents::store::graphql::escape_graphql_string;
-use gents::Collection;
+use gents_protocol::operations::document::WriteMode;
+use gents_protocol::operations::skill::{SkillEdit, SkillOperationError};
+use gents_protocol::operations::StringUpdate;
 use serde_json::{json, Value};
 
 use crate::cli::*;
+use crate::commands::refusal::Refusal;
 use crate::config_writes::ConfigAccess;
-use crate::{print_json, EXPORT_SKILL_FIELDS};
+use crate::print_json;
+use gents::operations::skill::{SkillImport, SkillSourceRoot, SkillWrite};
 
-/// Applies `skill` through the desired-state owner, so a served endpoint
-/// signs it as the client. `null` fields clear stale values on update, and
-/// `created_at` is set only when the Skill is created.
-async fn upsert_skill(access: &ConfigAccess, skill: &SkillDocument) -> Result<String> {
-    use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
-        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
-    let mut update = serde_json::to_value(skill)?;
-    let fields = update
-        .as_object_mut()
-        .context("Skill document is an object")?;
-    fields.remove("created_at");
-    if skill.tool_refs.is_empty() {
-        fields.insert("tool_refs".into(), Value::Null);
-    }
-    if skill.tags.is_empty() {
-        fields.insert("tags".into(), Value::Null);
-    }
-    let mut add = update.clone();
-    add["created_at"] = json!(chrono::Utc::now().to_rfc3339());
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::Skill,
-        add,
-        update,
-    }])?;
-    let (node_did, skill_id) = (skill.node_did.as_str(), skill.skill_id.as_str());
-    access
-        .transact_write("cli.config.skill.upsert", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                apply_desired_state_plan(txn, plan).await?;
-                let (doc_id, _) =
-                    read_desired_state_record_in_txn(txn, Collection::Skill, node_did, skill_id)
-                        .await?
-                        .context("the applied Skill is not readable")?;
-                Ok::<_, anyhow::Error>(doc_id)
-            })
-        })
-        .await
+async fn access(graphql: &str) -> Result<ConfigAccess> {
+    Ok(ConfigAccess::Graphql(
+        gents_service::home_state::resolve_graphql_endpoint(Some(graphql), None).await?,
+    ))
 }
 
-/// The Skill rows with `skill_id`, any owner.
-async fn find_skills(access: &ConfigAccess, skill_id: &str) -> Result<Vec<Value>> {
-    let skill_id = escape_graphql_string(skill_id);
-    let response = access
-        .execute(&format!(
-            r#"{{ Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}) {{ {EXPORT_SKILL_FIELDS} }} }}"#
-        ))
-        .await?;
-    Ok(skill_rows(&response))
+fn refused(error: SkillOperationError) -> anyhow::Error {
+    let next = error.recovery();
+    Refusal::new(error, next).into()
+}
+
+fn text(value: Option<String>, cleared: bool) -> StringUpdate {
+    match value {
+        Some(value) => StringUpdate::Set(value),
+        None if cleared => StringUpdate::Clear,
+        None => StringUpdate::Omitted,
+    }
 }
 
 pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
+    const CLEARABLE: [&str; 5] = [
+        "name",
+        "description",
+        "instructions",
+        "display_name",
+        "tool_refs",
+    ];
+    for field in &args.clear {
+        anyhow::ensure!(
+            CLEARABLE.contains(&field.as_str()),
+            "--clear accepts {}; got {field:?}",
+            CLEARABLE.join(", ")
+        );
+    }
+    let cleared = |field: &str| args.clear.iter().any(|name| name == field);
     let instructions = match args.instructions_file {
         Some(ref path) => Some(
             std::fs::read_to_string(path)
@@ -69,125 +52,98 @@ pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
         ),
         None => args.instructions.clone(),
     };
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let skill = SkillDocument {
-        skill_id: args.skill_id.clone(),
-        node_did: args.node_did.clone(),
-        name: args.name.clone(),
-        description: args.description.clone(),
-        instructions,
-        source_directory: None,
-        tool_refs: args.tool_refs.clone(),
-        display_name: args.display_name.clone(),
-        interface_json: None,
+    let edit = SkillEdit {
+        name: text(args.name.clone(), cleared("name")),
+        description: text(args.description.clone(), cleared("description")),
+        instructions: text(instructions, cleared("instructions")),
+        display_name: text(args.display_name.clone(), cleared("display_name")),
+        tool_refs: if args.tool_refs.is_empty() {
+            cleared("tool_refs").then(Vec::new)
+        } else {
+            Some(args.tool_refs.clone())
+        },
         enabled: args.enabled,
-        created_at: None,
-        tags: Vec::new(),
     };
-    let doc_id = upsert_skill(&access, &skill).await?;
+    let access = access(&args.graphql).await?;
+    let receipt = gents::operations::skill::save(
+        &access,
+        &SkillWrite {
+            owner: &args.node_did,
+            skill_id: &args.skill_id,
+            mode: WriteMode::Save,
+            patch: &edit.patch(),
+            node_binding: None,
+        },
+    )
+    .await
+    .map_err(refused)?;
     print_json(&json!({
-        "doc_id": doc_id,
-        "skill_id": args.skill_id,
-        "node_did": args.node_did,
-        "enabled": args.enabled,
-    }))?;
-    Ok(())
-}
-
-fn skill_rows(response: &Value) -> Vec<Value> {
-    response
-        .get("data")
-        .and_then(|data| data.get("Skill"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
+        "doc_id": receipt.doc_id,
+        "skill_id": receipt.id,
+        "node_did": receipt.node_did,
+        "created": receipt.created,
+        "changed": receipt.changed.iter().map(|change| &change.field).collect::<Vec<_>>(),
+    }))
 }
 
 pub(super) async fn skill_list(args: SkillListArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let node_did = escape_graphql_string(&args.node_did);
-    let query = format!(
-        r#"{{ Skill(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ {EXPORT_SKILL_FIELDS} }} }}"#
-    );
-    let response = access.execute(&query).await?;
-    let mut skills = skill_rows(&response);
-    skills.sort_by(|a, b| {
-        a.get("skill_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .cmp(
-                b.get("skill_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-            )
-    });
-    print_json(&json!({ "node_did": args.node_did, "count": skills.len(), "skills": skills }))?;
-    Ok(())
+    let skills =
+        gents::operations::skill::list(&access(&args.graphql).await?, &args.node_did).await?;
+    print_json(&json!({ "node_did": args.node_did, "count": skills.len(), "skills": skills }))
 }
 
 pub(super) async fn skill_show(args: SkillShowArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let skill_id = escape_graphql_string(&args.skill_id);
-    let query = format!(
-        r#"{{ Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}, limit: 1) {{ {EXPORT_SKILL_FIELDS} }} }}"#
-    );
-    let response = access.execute(&query).await?;
-    match skill_rows(&response).into_iter().next() {
-        Some(skill) => print_json(&skill)?,
-        None => anyhow::bail!("no Skill document with skill_id {:?}", args.skill_id),
-    }
-    Ok(())
+    let access = access(&args.graphql).await?;
+    let owner =
+        gents::operations::skill::resolve_owner(&access, args.node_did.as_deref(), &args.skill_id)
+            .await
+            .map_err(refused)?;
+    let skill = gents::operations::skill::get(&access, &owner, &args.skill_id)
+        .await
+        .map_err(refused)?;
+    print_json(&skill)
 }
 
 pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let mut deleted = 0;
-    for skill in find_skills(&access, &args.skill_id).await? {
-        let node_did = skill["node_did"]
-            .as_str()
-            .context("Skill row has no node_did")?
-            .to_owned();
-        let ids = [args.skill_id.clone()];
-        deleted += access
-            .transact_write("cli.config.skill.delete", |txn| {
-                let (node_did, ids) = (&node_did, &ids);
-                Box::pin(async move {
-                    crate::config_import::apply_delete_collection(
-                        txn,
-                        Collection::Skill,
-                        node_did,
-                        ids,
-                    )
-                    .await
-                })
-            })
-            .await?;
-    }
-    if deleted == 0 {
-        anyhow::bail!("no Skill document with skill_id {:?}", args.skill_id);
-    }
-    print_json(&json!({ "deleted": deleted, "skill_id": args.skill_id }))?;
-    Ok(())
+    let access = access(&args.graphql).await?;
+    let owner =
+        gents::operations::skill::resolve_owner(&access, args.node_did.as_deref(), &args.skill_id)
+            .await
+            .map_err(refused)?;
+    let receipt = gents::operations::skill::delete(&access, &owner, &args.skill_id)
+        .await
+        .map_err(refused)?;
+    print_json(&json!({
+        "deleted": receipt.targets.len(),
+        "skill_id": args.skill_id,
+        "node_did": receipt.owner,
+    }))
 }
 
 pub(super) async fn skill_set_enabled(args: SkillRefArgs, enabled: bool) -> Result<()> {
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let mut updated = 0;
-    for row in find_skills(&access, &args.skill_id).await? {
-        let mut skill: SkillDocument =
-            serde_json::from_value(row).context("decoding the stored Skill")?;
-        skill.enabled = enabled;
-        upsert_skill(&access, &skill).await?;
-        updated += 1;
-    }
-    if updated == 0 {
-        anyhow::bail!("no Skill document with skill_id {:?}", args.skill_id);
-    }
-    print_json(&json!({ "skill_id": args.skill_id, "enabled": enabled, "updated": updated }))?;
-    Ok(())
+    let access = access(&args.graphql).await?;
+    let owner =
+        gents::operations::skill::resolve_owner(&access, args.node_did.as_deref(), &args.skill_id)
+            .await
+            .map_err(refused)?;
+    let receipt = gents::operations::skill::save(
+        &access,
+        &SkillWrite {
+            owner: &owner,
+            skill_id: &args.skill_id,
+            mode: WriteMode::Update,
+            patch: &SkillEdit::enabled(enabled).patch(),
+            node_binding: None,
+        },
+    )
+    .await
+    .map_err(refused)?;
+    print_json(&json!({
+        "skill_id": receipt.id,
+        "node_did": receipt.node_did,
+        "enabled": enabled,
+    }))
 }
-
-use gents::documents::skills::import::load_skill_source;
 
 fn skill_id_from_dir(dir: &std::path::Path) -> Option<String> {
     let raw = dir.file_name()?.to_string_lossy();
@@ -235,7 +191,7 @@ fn find_skill_dirs(root: &std::path::Path, max_depth: usize) -> Vec<std::path::P
 pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
     let source = std::fs::canonicalize(&args.dir)
         .with_context(|| format!("resolving {}", args.dir.display()))?;
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = access(&args.graphql).await?;
 
     let mut imported = Vec::new();
     let mut errors = Vec::new();
@@ -260,35 +216,31 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
             }));
             continue;
         };
-        let loaded = match load_skill_source(&dir, &skill_id, &args.node_did, |path| {
-            std::fs::canonicalize(path).with_context(|| format!("resolving {}", path.display()))
-        }) {
-            Ok(skill) => skill,
-            Err(error) => {
-                errors.push(json!({"skill_id": skill_id, "error": format!("{error:#}")}));
-                continue;
-            }
+        let import = SkillImport {
+            owner: &args.node_did,
+            skill_id: &skill_id,
+            source: &dir,
+            root: SkillSourceRoot::Unconfined,
+            overwrite: args.overwrite,
+            enabled: !args.disabled,
+            node_binding: None,
         };
-        let name = loaded.name.clone().unwrap_or_else(|| skill_id.clone());
-        let mut skill = loaded;
-        skill.enabled = !args.disabled;
-
-        if args.dry_run {
-            imported.push(json!({
+        let result = if args.dry_run {
+            gents::operations::skill::preview_import(&access, &import).await
+        } else {
+            gents::operations::skill::import(&access, &import).await
+        };
+        match result {
+            Ok(receipt) => imported.push(json!({
                 "skill_id": skill_id,
-                "name": name,
-                "description": skill.description,
-                "tool_refs": skill.tool_refs,
+                "created": receipt.created,
+                "doc_id": receipt.doc_id,
                 "source": dir.join("SKILL.md").display().to_string(),
-            }));
-            continue;
-        }
-
-        match upsert_skill(&access, &skill).await {
-            Ok(doc_id) => {
-                imported.push(json!({ "skill_id": skill_id, "name": name, "doc_id": doc_id }))
-            }
-            Err(error) => errors.push(json!({ "skill_id": skill_id, "error": error.to_string() })),
+            })),
+            Err(error) => errors.push(json!({
+                "skill_id": skill_id,
+                "error": refused(error).to_string(),
+            })),
         }
     }
 
@@ -393,13 +345,8 @@ fn render_openai_yaml(skill: &Value) -> Result<Option<String>> {
 }
 
 pub(super) async fn skill_export(args: SkillExportArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let node_did = escape_graphql_string(&args.node_did);
-    let query = format!(
-        r#"{{ Skill(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ {EXPORT_SKILL_FIELDS} }} }}"#
-    );
-    let response = access.execute(&query).await?;
-    let skills = skill_rows(&response);
+    let skills =
+        gents::operations::skill::list(&access(&args.graphql).await?, &args.node_did).await?;
 
     let mut exported = Vec::new();
     for skill in &skills {

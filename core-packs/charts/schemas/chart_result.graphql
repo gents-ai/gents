@@ -1,0 +1,16 @@
+type ChartResult {
+  run_id: String @index
+  chart: String
+  width: Int
+  height: Int
+  alt: String
+  svg: String
+  png_base64: String
+  png_width: Int
+  png_height: Int
+  svg_file: String
+  png_file: String
+  series_json: String
+  warnings: [String]
+  error: String
+}

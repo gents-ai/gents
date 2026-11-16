@@ -23,6 +23,8 @@ import {
   validateCronSchedule,
   validateTimezone,
 } from "./draft";
+import { NEW_ITEM } from "./draftItems";
+import { NewItemPage, type ItemDraft } from "./NewItemPage";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
@@ -41,10 +43,13 @@ export function ScheduleEditor({
   deployment,
   schedule,
   embedded = false,
+  draft,
 }: {
   deployment: NodeView;
   schedule: Schedule;
   embedded?: boolean;
+
+  draft?: ItemDraft;
 }) {
   const {
     actions: { acceptsComposeIntent, captureComposeIntent, runSchedule, changeConfig },
@@ -87,6 +92,7 @@ export function ScheduleEditor({
       });
     },
     {
+      isNew: draft !== undefined,
       problems: (next) =>
         next.cadenceKind === "interval"
           ? {
@@ -125,7 +131,13 @@ export function ScheduleEditor({
   return (
     <>
       <Group
-        title={embedded ? undefined : (schedule.display_name ?? schedule.schedule_id)}
+        title={
+          embedded
+            ? undefined
+            : draft
+              ? "New schedule"
+              : (schedule.display_name ?? schedule.schedule_id)
+        }
       >
         <FactRow label="Schedule ID" mono>
           {schedule.schedule_id}
@@ -187,27 +199,36 @@ export function ScheduleEditor({
           expression: id("cron"),
           timezone: id("tz"),
         }}
+        {...(draft && {
+          saveLabel: "Create schedule",
+          onSave: async () => {
+            if (await d.save()) draft.onSaved(schedule.schedule_id);
+          },
+          onCancel: draft.onCancel,
+        })}
       />
-      <div data-readonly-hide="">
-        <Group
-          title="Manual run"
-          action={
-            <Button size="sm" variant="brand" disabled={running} onClick={run}>
-              {running ? "Starting…" : "Run schedule now"}
-            </Button>
-          }
-        >
-          <FactRow label="Trigger">
-            Uses the enabled trigger currently bound to this schedule.
-          </FactRow>
-          {lastRun && (
-            <FactRow label="Started" mono>
-              {lastRun}
+      {!draft && (
+        <div data-readonly-hide="">
+          <Group
+            title="Manual run"
+            action={
+              <Button size="sm" variant="brand" disabled={running} onClick={run}>
+                {running ? "Starting…" : "Run schedule now"}
+              </Button>
+            }
+          >
+            <FactRow label="Trigger">
+              Uses the enabled trigger currently bound to this schedule.
             </FactRow>
-          )}
-        </Group>
-      </div>
-      {!embedded && (
+            {lastRun && (
+              <FactRow label="Started" mono>
+                {lastRun}
+              </FactRow>
+            )}
+          </Group>
+        </div>
+      )}
+      {!embedded && !draft && (
         <DeleteButton
           label={schedule.display_name ?? schedule.schedule_id}
           warning={dependentsWarning(deployment, "schedule", schedule.schedule_id)}
@@ -237,6 +258,13 @@ export function SchedulesPanel({
     nodeDid: deployment.nodeDid,
     section: "schedules",
   };
+  if (
+    item === NEW_ITEM &&
+    !deployment.schedules.some((s) => s.schedule_id === NEW_ITEM)
+  )
+    return (
+      <NewSchedulePage key={deployment.nodeDid} deployment={deployment} base={base} />
+    );
   return (
     <ListDetail
       base={base}
@@ -276,23 +304,7 @@ export function SchedulesPanel({
       }))}
       createLabel="New schedule"
       empty="No schedules. A trigger binds a task to a schedule."
-      onCreate={async () => {
-        const schedule_id = newId("sched");
-        await changeConfig("saveScheduleConfig", {
-          document: {
-            node_did: deployment.nodeDid,
-            schedule_id,
-            display_name: "New schedule",
-            cadence: { kind: "cron", expression: "0 * * * *", timezone: "UTC" },
-          },
-        });
-        navigate({
-          name: "agent",
-          nodeDid: deployment.nodeDid,
-          section: "schedules",
-          item: schedule_id,
-        });
-      }}
+      onCreate={() => navigate({ ...base, item: NEW_ITEM })}
       detail={(id) => {
         const schedule = deployment.schedules.find((s) => s.schedule_id === id)!;
         return (
@@ -304,5 +316,27 @@ export function SchedulesPanel({
         );
       }}
     />
+  );
+}
+
+function NewSchedulePage({
+  deployment,
+  base,
+}: {
+  deployment: NodeView;
+  base: { name: "agent"; nodeDid: string; section: string };
+}) {
+  const [schedule] = useState<Schedule>(() => ({
+    node_did: deployment.nodeDid,
+    schedule_id: newId("sched"),
+    display_name: "New schedule",
+    cadence: { kind: "cron", expression: "0 * * * *", timezone: "UTC" },
+  }));
+  return (
+    <NewItemPage base={base} back="Schedules">
+      {(draft) => (
+        <ScheduleEditor deployment={deployment} schedule={schedule} draft={draft} />
+      )}
+    </NewItemPage>
   );
 }

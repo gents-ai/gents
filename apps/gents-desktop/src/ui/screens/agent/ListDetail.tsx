@@ -281,7 +281,7 @@ export function ListDetail({
   rows: ListRow[];
   onCreate?: () => void | Promise<void>;
   createLabel: string;
-  empty: string;
+  empty: ReactNode;
   detail: (id: string) => ReactNode;
   back?: { route: Route; label: string };
   toolbar?: (id: string) => ReactNode;

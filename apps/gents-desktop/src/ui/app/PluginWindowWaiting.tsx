@@ -1,7 +1,3 @@
-/* A plugin's own window while the app's client starts: what it is waiting
-   for, and where to look if starting fails. Setup and recovery stay with the
-   main window, so this offers none of their actions. */
-
 import { AsciiLoader } from "@gents/ui/components/ascii-loader";
 import type { DesktopStartupPhase } from "../../lib/loadingStatus";
 
@@ -16,7 +12,6 @@ export function PluginWindowWaiting({
   title,
 }: {
   phase: DesktopStartupPhase;
-  /** the page's name, as the window is titled */
   title: string | null;
 }) {
   const failed = FAILED.includes(phase);

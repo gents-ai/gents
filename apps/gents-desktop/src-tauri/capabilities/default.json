@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for Gents views — full desktop production surface",
+  "description": "Capability for Gents views \u2014 full desktop production surface",
   "windows": ["main", "gents-view-*"],
   "permissions": [
     "core:default",
@@ -21,6 +21,14 @@
     "native-swipe",
     "open-plugin-window",
     "plugin-prompt-to-main",
-    "native-browser"
+    "native-browser",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+        }
+      ]
+    }
   ]
 }

@@ -6,6 +6,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Verifiable, multiplayer coding agents"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [lib]
 name = "gents_desktop_tauri_lib"
@@ -20,6 +25,14 @@ clap.workspace = true
 chrono.workspace = true
 defra-p2p-adapter.workspace = true
 gents = { path = "../../../crates/gents" }
+gents-store = { workspace = true }
+gents-documents = { workspace = true }
+gents-inference = { workspace = true }
+gents-p2p = { workspace = true }
+gents-pack = { workspace = true }
+gents-session = { workspace = true }
+gents-tools = { workspace = true }
+gents-observe = { workspace = true }
 gents-fs-runner = { path = "../../../crates/gents-fs-runner" }
 gents-desktop-bridge = { workspace = true }
 gents-desktop-core.workspace = true
@@ -49,9 +62,14 @@ custom-protocol = ["tauri/custom-protocol"]
 native-e2e = ["gents-desktop-bridge/native-e2e"]
 
 [dev-dependencies]
-gents = { path = "../../../crates/gents", features = ["test-home-guard"] }
+gents-eval = { workspace = true, features = ["test-fixtures"] }
+gents-host = { workspace = true, features = ["test-fixtures"] }
+gents-service = { workspace = true, features = ["test-home-guard"] }
+gents-desktop-core = { workspace = true, features = ["test-fixtures", "typescript"] }
+gents-workspace-hack = { workspace = true }
+gents = { path = "../../../crates/gents", features = ["test-fixtures", "typescript"] }
 axum = "0.8"
-gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 mimalloc.workspace = true

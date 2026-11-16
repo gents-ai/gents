@@ -1,9 +1,11 @@
-import Proofs.GoalAutomation.ClientControl
+import Proofs.Automation.GoalAutomation.ClientControl
 import Proofs.Conformance.GoalOperatorResume
+import Proofs.Conformance.GoalResetResume
+import Proofs.Conformance.Family
 
 namespace Conformance.GoalClientControlContracts
 
-open GoalAutomation.ClientControl Conformance.Contracts
+open Lean GoalAutomation.ClientControl Conformance.Contracts
 
 structure Case where
   name : String
@@ -101,16 +103,137 @@ def factsJson (f : Facts) : String :=
     ",\"resume\":" ++ (match f.resume with
       | none => "null" | some value => GoalOperatorResumeContracts.requestJson value) ++ "}"
 
-def caseJson (c : Case) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"before\":" ++ snapshotJson c.before ++
-    ",\"expected_revision\":" ++ revisionJson c.expectedRevision ++
-    ",\"next_composite\":" ++ jsonString c.nextComposite ++
-    ",\"operation\":" ++ operationJson c.operation ++
-    ",\"facts\":" ++ factsJson c.facts ++
-    ",\"expected\":" ++ (match c.after with
-      | none => "null" | some value => snapshotJson value) ++ "}"
+deriving instance ToJson for Revision
 
-def casesJson : String := jsonArray (cases.map caseJson)
+structure GoalSnapshot where
+  revision : Revision
+  execution : GoalResetResumeContracts.SnapshotWire
+  objective : String
+  deriving ToJson
+
+def GoalSnapshot.ofModel (s : Snapshot) : GoalSnapshot :=
+  ⟨s.revision, GoalResetResumeContracts.SnapshotWire.ofModel s.execution, s.objective⟩
+
+def GoalSnapshot.toModel (s : GoalSnapshot) : Snapshot :=
+  ⟨s.revision, s.execution.toModel, s.objective⟩
+
+structure OperationWire where
+  kind : String
+  objective : Option String
+  budget : Option Int
+  deriving ToJson
+
+def OperationWire.ofModel : Operation → OperationWire
+  | .pause => ⟨"pause", none, none⟩
+  | .resume => ⟨"resume", none, none⟩
+  | .stop => ⟨"stop", none, none⟩
+  | .edit fields => ⟨"edit", fields.objective, fields.budget⟩
+
+def OperationWire.toModel (o : OperationWire) : Operation :=
+  match o.kind with
+  | "pause" => .pause
+  | "resume" => .resume
+  | "stop" => .stop
+  | _ => .edit ⟨o.objective, o.budget⟩
+
+structure FactsWire where
+  authorized : Bool
+  unfinishedRequest : Bool
+  resume : Option GoalResetResumeContracts.RequestWire
+  deriving ToJson
+
+def FactsWire.ofModel (f : Facts) : FactsWire :=
+  ⟨f.authorized, f.unfinishedRequest, f.resume.map GoalResetResumeContracts.RequestWire.ofModel⟩
+
+def FactsWire.toModel (f : FactsWire) : Facts :=
+  ⟨f.authorized, f.unfinishedRequest, f.resume.map GoalResetResumeContracts.RequestWire.toModel⟩
+
+structure ControlInput where
+  name : String
+  before : GoalSnapshot
+  expectedRevision : Revision
+  nextComposite : String
+  operation : OperationWire
+  facts : FactsWire
+  deriving ToJson
+
+def ControlInput.ofCase (c : Case) : ControlInput :=
+  { name := c.name, before := GoalSnapshot.ofModel c.before, expectedRevision := c.expectedRevision
+    nextComposite := c.nextComposite, operation := OperationWire.ofModel c.operation
+    facts := FactsWire.ofModel c.facts }
+
+def ControlInput.after (i : ControlInput) : Option GoalSnapshot :=
+  (apply? i.before.toModel i.expectedRevision i.nextComposite i.operation.toModel
+    i.facts.toModel).map GoalSnapshot.ofModel
+
+/-- One signed command persisted directly and answered by the runtime command owner. -/
+@[conformance_family]
+def control : Family ControlInput (Option GoalSnapshot) where
+  inputs := cases.map ControlInput.ofCase
+  model := ControlInput.after
+
+/-- The client submission owner publishes a command, waits for the runtime's
+receipt and recovers it; each submission fixture is a separately served node,
+so only these cases are built: a denied requester needs its own ACP setup and
+a foreign document fence needs the recovery scenario. -/
+def submissionCases (names : List String) : List ControlInput :=
+  (cases.filter fun c => c.name ∈ names).map ControlInput.ofCase
+
+/-- A requester without session update access submits a pause. -/
+@[conformance_family]
+def deniedSubmission : Family ControlInput (Option GoalSnapshot) where
+  inputs := submissionCases ["active_denied_busy_current_pause"]
+  model := ControlInput.after
+
+/-- A pause fenced on a foreign goal document is refused durably and the
+refusal is recoverable by resubmission. -/
+@[conformance_family]
+def foreignSubmission : Family ControlInput (Option GoalSnapshot) where
+  inputs := submissionCases ["active_authorized_idle_foreign_document_pause"]
+  model := ControlInput.after
+
+example : (cases.filter fun c => c.name = "active_denied_busy_current_pause").all fun c =>
+    !c.facts.authorized && c.after.isNone := by native_decide
+
+example : (cases.filter fun c => c.name = "active_authorized_idle_foreign_document_pause").all
+    fun c => c.facts.authorized && !c.facts.unfinishedRequest &&
+      c.expectedRevision == ⟨"foreign-goal", "revision-current"⟩ && c.after.isNone := by
+  native_decide
+
+structure TraceStep where
+  operation : OperationWire
+  facts : FactsWire
+  deriving ToJson
+
+structure TraceInput where
+  name : String
+  before : GoalSnapshot
+  steps : List TraceStep
+  deriving ToJson
+
+/-- Each step is submitted against the goal's current commit; a refused step
+leaves the goal as it was for the next one. -/
+def runTrace (s : Snapshot) : List TraceStep → List (Option GoalSnapshot)
+  | [] => []
+  | step :: rest =>
+    match apply? s s.revision "revision-after" step.operation.toModel step.facts.toModel with
+    | none => none :: runTrace s rest
+    | some next => some (GoalSnapshot.ofModel next) :: runTrace next rest
+
+def pauseThenResume : TraceInput :=
+  { name := "pause_then_resume", before := GoalSnapshot.ofModel (initial .active)
+    steps := [ ⟨OperationWire.ofModel .pause, FactsWire.ofModel (facts .active true true)⟩
+             , ⟨OperationWire.ofModel .resume, FactsWire.ofModel (facts .paused true true)⟩ ] }
+
+/-- An authorized user pauses a goal whose request is still running, then
+resumes it, through the client submission owner on one served goal. -/
+@[conformance_family]
+def submissionTrace : Family TraceInput (List (Option GoalSnapshot)) where
+  inputs := [pauseThenResume]
+  model := fun i => runTrace i.before.toModel i.steps
+
+example : ((apply? (initial .active) (initial .active).revision "revision-after" .pause
+    (facts .active true true)).map (·.execution)) = some (initial .paused).execution := by
+  native_decide
 
 end Conformance.GoalClientControlContracts

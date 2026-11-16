@@ -1,0 +1,110 @@
+{
+  "input": {
+    "chart": "donut",
+    "title": "Traffic sources",
+    "theme": "dark",
+    "output": "svg",
+    "width": 560,
+    "height": 420,
+    "data": {
+      "columns": [
+        "source",
+        "visits"
+      ],
+      "rows": [
+        [
+          "Search",
+          4200
+        ],
+        [
+          "Direct",
+          2100
+        ],
+        [
+          "Social",
+          1300
+        ],
+        [
+          "Email",
+          600
+        ],
+        [
+          "Other",
+          150
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "response": {
+      "alt": "Donut chart titled \"Traffic sources\". 5 slices of visits, total 8,350. \"Search\" 4,200 (50%). \"Direct\" 2,100 (25%). \"Social\" 1,300 (16%). \"Email\" 600 (7.2%). \"Other\" 150 (1.8%).",
+      "chart": "donut",
+      "height": 420,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#56b4e9",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 4200.0,
+          "min": 4200.0,
+          "name": "Search",
+          "points": 1,
+          "share": 0.502994,
+          "value": 4200.0
+        },
+        {
+          "axis": "left",
+          "color": "#e69f00",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 2100.0,
+          "min": 2100.0,
+          "name": "Direct",
+          "points": 1,
+          "share": 0.251497,
+          "value": 2100.0
+        },
+        {
+          "axis": "left",
+          "color": "#009e73",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 1300.0,
+          "min": 1300.0,
+          "name": "Social",
+          "points": 1,
+          "share": 0.155689,
+          "value": 1300.0
+        },
+        {
+          "axis": "left",
+          "color": "#f0e442",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 600.0,
+          "min": 600.0,
+          "name": "Email",
+          "points": 1,
+          "share": 0.071856,
+          "value": 600.0
+        },
+        {
+          "axis": "left",
+          "color": "#d55e00",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 150.0,
+          "min": 150.0,
+          "name": "Other",
+          "points": 1,
+          "share": 0.017964,
+          "value": 150.0
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"420\" viewBox=\"0 0 560 420\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Traffic sources</title><desc id=\"chart-desc\">Donut chart titled &quot;Traffic sources&quot;. 5 slices of visits, total 8,350. &quot;Search&quot; 4,200 (50%). &quot;Direct&quot; 2,100 (25%). &quot;Social&quot; 1,300 (16%). &quot;Email&quot; 600 (7.2%). &quot;Other&quot; 150 (1.8%).</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"420\" fill=\"#14181d\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#e6edf3\">Traffic sources</text><path d=\"M 231.82,52 A 163.5,163.5 0 1 1 228.74,378.97 L 230.03,310.31 A 94.83,94.83 0 1 0 231.82,120.67 Z\" fill=\"#56b4e9\" stroke=\"#14181d\" stroke-width=\"1.5\"><title>Search: 4,200 (50%)</title></path><text x=\"360.98\" y=\"220.71\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">50%</text><path d=\"M 228.74,378.97 A 163.5,163.5 0 0 1 68.38,210.89 L 137.03,212.82 A 94.83,94.83 0 0 0 230.03,310.31 Z\" fill=\"#e69f00\" stroke=\"#14181d\" stroke-width=\"1.5\"><title>Direct: 2,100 (25%)</title></path><text x=\"138.36\" y=\"308.66\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">25%</text><path d=\"M 68.38,210.89 A 163.5,163.5 0 0 1 144.37,77.35 L 181.1,135.38 A 94.83,94.83 0 0 0 137.03,212.82 Z\" fill=\"#009e73\" stroke=\"#14181d\" stroke-width=\"1.5\"><title>Social: 1,300 (16%)</title></path><text x=\"119.55\" y=\"155.62\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#ffffff\">16%</text><path d=\"M 144.37,77.35 A 163.5,163.5 0 0 1 213.4,53.04 L 221.14,121.27 A 94.83,94.83 0 0 0 181.1,135.38 Z\" fill=\"#f0e442\" stroke=\"#14181d\" stroke-width=\"1.5\"><title>Email: 600 (7.2%)</title></path><text x=\"188.91\" y=\"97.67\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">7.2%</text><path d=\"M 213.4,53.04 A 163.5,163.5 0 0 1 231.82,52 L 231.82,120.67 A 94.83,94.83 0 0 0 221.14,121.27 Z\" fill=\"#d55e00\" stroke=\"#14181d\" stroke-width=\"1.5\"><title>Other: 150 (1.8%)</title></path><text x=\"231.82\" y=\"217.5\" font-size=\"20\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#e6edf3\">8,350</text><text x=\"231.82\" y=\"235.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#a3adb8\">total</text><rect x=\"452.63\" y=\"49\" width=\"12\" height=\"12\" fill=\"#56b4e9\"/><text x=\"472.63\" y=\"59\" font-size=\"12\" fill=\"#e6edf3\">Search (50%)</text><rect x=\"452.63\" y=\"67\" width=\"12\" height=\"12\" fill=\"#e69f00\"/><text x=\"472.63\" y=\"77\" font-size=\"12\" fill=\"#e6edf3\">Direct (25%)</text><rect x=\"452.63\" y=\"85\" width=\"12\" height=\"12\" fill=\"#009e73\"/><text x=\"472.63\" y=\"95\" font-size=\"12\" fill=\"#e6edf3\">Social (16%)</text><rect x=\"452.63\" y=\"103\" width=\"12\" height=\"12\" fill=\"#f0e442\"/><text x=\"472.63\" y=\"113\" font-size=\"12\" fill=\"#e6edf3\">Email (7.2%)</text><rect x=\"452.63\" y=\"121\" width=\"12\" height=\"12\" fill=\"#d55e00\"/><text x=\"472.63\" y=\"131\" font-size=\"12\" fill=\"#e6edf3\">Other (1.8%)</text></svg>",
+      "warnings": [],
+      "width": 560
+    }
+  }
+}

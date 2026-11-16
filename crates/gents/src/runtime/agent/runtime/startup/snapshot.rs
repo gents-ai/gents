@@ -4,11 +4,11 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use tracing::Instrument;
 
-use crate::inference::admission::BackendAdmissionConfig;
-use crate::inference::backends::registry;
 use crate::runtime::agent::{DocumentResolveContext, Gents};
-use crate::runtime::snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
-use crate::tools::surface::{ToolRuntimeContext, ToolSurface};
+use gents_automation::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+use gents_inference::admission::BackendAdmissionConfig;
+use gents_inference::backends::registry;
+use gents_tools::surface::{ToolRuntimeContext, ToolSurface};
 
 pub(super) fn is_degraded_startup_unavailable_reason(
     reason: gents_protocol::node_readiness::AgentReadinessUnavailableReason,
@@ -131,13 +131,16 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
 
 async fn resolve_tool_surfaces(
     node: &std::sync::Arc<defra_node::Node>,
-    agents: &[Arc<crate::inference::resolved::ResolvedAgent>],
-    plugins: &crate::plugin::executor::PluginExecutor,
+    agents: &[gents_tools::surface::AgentWithTools],
+    plugins: &gents_toolcalls::plugin::executor::PluginExecutor,
 ) -> Result<RapidHashMap<String, Arc<ToolSurface>>> {
     let mut tool_surfaces = RapidHashMap::with_capacity(agents.len());
     for agent in agents {
-        let tool_surface = agent.tools.resolve(node, agent.node_did(), plugins).await?;
-        tool_surfaces.insert(agent.agent_did.clone(), Arc::new(tool_surface));
+        let tool_surface = agent
+            .tools
+            .resolve(node, agent.agent.node_did(), plugins)
+            .await?;
+        tool_surfaces.insert(agent.agent.agent_did.clone(), Arc::new(tool_surface));
     }
     Ok(tool_surfaces)
 }
@@ -172,10 +175,11 @@ pub(in crate::runtime::agent::runtime) async fn resolve_startup_snapshot(
 
 async fn resolve_backend_admission_configs(
     node: &std::sync::Arc<defra_node::Node>,
-    agents: &[Arc<crate::inference::resolved::ResolvedAgent>],
+    agents: &[gents_tools::surface::AgentWithTools],
 ) -> Result<RapidHashMap<String, BackendAdmissionConfig>> {
     let mut configs = RapidHashMap::new();
     for agent in agents {
+        let agent = &agent.agent;
         let Some(backend_id) = agent
             .backend_id
             .as_deref()

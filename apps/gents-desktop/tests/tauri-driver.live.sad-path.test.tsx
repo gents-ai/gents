@@ -219,6 +219,9 @@ describeLive("Tauri app live bridge runner sad paths", () => {
         ),
       );
       await driver.user.click(screen.getByRole("button", { name: "New remote tools" }));
+
+      await screen.findByTestId("new-item-page", {}, { timeout: 30_000 });
+      await driver.user.click(screen.getByRole("button", { name: "Add remote tools" }));
       let serviceId = "";
       await waitForDeploymentDocument(runner, (deployment) => {
         const created = deployment.toolServiceRegistries.filter(

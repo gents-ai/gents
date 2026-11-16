@@ -21,24 +21,12 @@ mod candidate_name_conformance {
 
     #[test]
     fn fields_match_the_executable_model() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["enrollment_candidate_name_cases"]
-            .as_array()
-            .unwrap();
-        assert!(!cases.is_empty());
-        for case in cases {
-            let expected = case["fields"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|field| field.as_str().unwrap())
-                .collect::<Vec<_>>();
-            assert_eq!(
-                candidate_name_fields(case["name"].as_str()),
-                expected,
-                "{case}"
-            );
-        }
+        gents_lean_vocab::families::enrollment_candidate_name_fields::replay(|i| {
+            candidate_name_fields(i.name.as_deref())
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        });
     }
 
     #[test]

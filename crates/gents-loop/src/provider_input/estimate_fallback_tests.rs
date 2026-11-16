@@ -79,3 +79,24 @@ fn unprojectable_history_falls_back_to_a_byte_estimate_instead_of_failing() {
     assert_eq!(tokens, message_byte_estimate(&messages));
     assert!(tokens > 0);
 }
+
+#[test]
+fn reasoning_only_chat_history_has_zero_provider_visible_message_cost() {
+    let counter = ProviderInputCounter::new(
+        BackendProviderKind::OpenAiCompatible,
+        OpenAiWireApi::ChatCompletions,
+        "test-model",
+    );
+    let reasoning_only = vec![Message::Assistant {
+        request_id: None,
+        id: None,
+        content: vec![AssistantContent::Reasoning(
+            Reasoning::new(&"hidden".repeat(500_000)).with_id("rs_only".to_string()),
+        )],
+    }];
+
+    assert_eq!(
+        counter.estimate_message_request(&reasoning_only).unwrap(),
+        0
+    );
+}

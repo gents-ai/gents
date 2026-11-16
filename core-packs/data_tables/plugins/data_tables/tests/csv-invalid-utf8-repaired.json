@@ -1,0 +1,31 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "name",
+        "type": "text"
+      },
+      {
+        "name": "city",
+        "type": "text"
+      }
+    ],
+    "markdown": "| name | city |\n| --- | --- |\n| Jos\ufffd | Lule\ufffd |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 1,
+    "rows": [
+      [
+        "Jos\ufffd",
+        "Lule\ufffd"
+      ]
+    ],
+    "warnings": [
+      "some text was not valid UTF-8 and the bad bytes were replaced"
+    ]
+  },
+  "input": {
+    "sql": "SELECT * FROM latin1"
+  }
+}

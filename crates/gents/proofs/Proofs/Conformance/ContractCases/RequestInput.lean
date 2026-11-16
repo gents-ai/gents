@@ -1,4 +1,4 @@
-import Proofs.Enrollment.RequestAdmission
+import Proofs.Session.Enrollment.RequestAdmission
 
 namespace Conformance.ContractCases
 open Enrollment

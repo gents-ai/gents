@@ -1,0 +1,10 @@
+{
+ "ok": true,
+ "problems": [],
+ "per_key": {
+  "deviations": []
+ },
+ "notes": [
+  "deviations: no --families given; value parity is checked against every family added on this branch (0)"
+ ]
+}

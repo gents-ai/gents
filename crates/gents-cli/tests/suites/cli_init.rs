@@ -288,7 +288,7 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
     )?;
     let config_path = pack_root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let original_agent_did = config["node"]
+    let original_agent_did = config["default_agent_selection"]
         .get("default_agent_did")
         .and_then(Value::as_str)
         .context("exported principal missing default agent")?
@@ -307,7 +307,8 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
         .as_array_mut()
         .context("agents is not an array")?
         .push(applied_agent);
-    config["node"]["default_agent_did"] = Value::String(applied_agent_did.clone());
+    config["default_agent_selection"]["default_agent_did"] =
+        Value::String(applied_agent_did.clone());
     write_json_file(&config_path, &config)?;
 
     let port = allocate_port()?;
@@ -433,7 +434,7 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
     apply_config_root_through_served_home(&home_dir, &node_did, &pack_root).await?;
     let config_path = pack_root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let agent_did = config["node"]
+    let agent_did = config["default_agent_selection"]
         .get("default_agent_did")
         .and_then(Value::as_str)
         .context("exported principal missing default agent")?
@@ -618,7 +619,7 @@ fn init_hosted_preset_error_fails_before_creating_the_identity_and_store_key() -
     let node_did = retried["node_did"].as_str().context("retried identity")?;
     let identity_path = retried["key_path"].as_str().context("retried key path")?;
     let identity_bytes = fs::read(identity_path)?;
-    let store_key_path = gents::store::local::store_key::home_key_file(&runtime_home);
+    let store_key_path = gents_store::local::store_key::home_key_file(&runtime_home);
     let store_key_bytes = fs::read(&store_key_path)?;
 
     let repeated = run_init_json(&home_dir, &["--model-name", "retry-model"])?;
@@ -689,11 +690,11 @@ async fn init_identity_only_writes_stable_real_did_without_runtime_config() -> R
     let first = run_init_json(&home_dir, &["--identity-only", "--node-name", agent_name])?;
     let first_node_did = node_did_from_init(&first)?;
     let identity_path =
-        gents::store::local::home::default_key_path(&home_dir.join(".gents"), agent_name);
+        gents_store::local::home::default_key_path(&home_dir.join(".gents"), agent_name);
     let identity_bytes = fs::read(&identity_path)?;
     assert_ne!(
         identity_path,
-        gents::store::local::store_key::home_key_file(&home_dir.join(".gents"))
+        gents_store::local::store_key::home_key_file(&home_dir.join(".gents"))
     );
     assert_eq!(identity_bytes.len(), 64);
 
@@ -910,13 +911,13 @@ async fn pin_default_tools_root(
         &graphql,
         &format!(
             r#"{{ Tools(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ tools_id node_did display_name host remote agents built_ins datastore integrations self_config tags }} }}"#,
-            gents::store::graphql::escape_graphql_string(node_did)
+            gents_store::graphql::escape_graphql_string(node_did)
         ),
     )
     .await?;
-    let selected = graphql_query(&graphql, &format!("{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents::store::graphql::escape_graphql_string(node_did))).await?;
+    let selected = graphql_query(&graphql, &format!("{{ DefaultAgentSelection(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents_store::graphql::escape_graphql_string(node_did))).await?;
     let agent_did = selected
-        .pointer("/data/Node/0/default_agent_did")
+        .pointer("/data/DefaultAgentSelection/0/default_agent_did")
         .and_then(Value::as_str)
         .context("node default agent missing")?;
     for operator_root in operator_roots {
@@ -1273,7 +1274,7 @@ async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Re
         &graphql,
         &format!(
             r#"{{ Tools(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ tools_id host }} }}"#,
-            gents::store::graphql::escape_graphql_string(&node_did)
+            gents_store::graphql::escape_graphql_string(&node_did)
         ),
     )
     .await?;
@@ -1432,14 +1433,14 @@ async fn init_reuses_recorded_store_custody_and_refuses_an_unrecorded_key() -> R
     let agent_name = format!("cli-store-key-{}", Uuid::new_v4().simple());
 
     run_init_json(&home_dir, &["--identity-only", "--node-name", &agent_name])?;
-    let config_path = gents::store::local::home::init_config_path(&home);
+    let config_path = gents_store::local::home::init_config_path(&home);
     let recorded = read_json_file(&config_path)?["store_encryption"].clone();
     assert_eq!(
         recorded,
         serde_json::json!({"version": 1, "custody": "file"}),
         "{recorded}"
     );
-    let key_file = gents::store::local::store_key::home_key_file(&home);
+    let key_file = gents_store::local::store_key::home_key_file(&home);
     let key = fs::read(&key_file)?;
     run_init_json(&home_dir, &["--identity-only", "--node-name", &agent_name])?;
     assert_eq!(fs::read(&key_file)?, key, "re-init reuses the recorded key");
@@ -1503,8 +1504,8 @@ fn walkdir_files(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
 fn init_refuses_an_explicit_identity_path_that_collides_with_the_store_key() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let home_dir = temp.path().join("home");
-    let key_path = gents::store::local::store_key::home_key_file(&home_dir.join(".gents"));
-    gents::store::identity::load_or_create_file_identity(&key_path)?;
+    let key_path = gents_store::local::store_key::home_key_file(&home_dir.join(".gents"));
+    gents_store::identity::load_or_create_file_identity(&key_path)?;
     let original = fs::read(&key_path)?;
     let error = run_init_json(
         &home_dir,
@@ -1520,7 +1521,91 @@ fn init_refuses_an_explicit_identity_path_that_collides_with_the_store_key() -> 
         "{error:#}"
     );
     assert_eq!(fs::read(&key_path)?, original);
-    gents::store::identity::load_file_identity(&key_path)?;
+    gents_store::identity::load_file_identity(&key_path)?;
     assert!(!home_dir.join(".gents/init.json").exists());
+    Ok(())
+}
+
+async fn exit_status_within(
+    serve: &mut ServeProcess,
+    limit: Duration,
+) -> Result<std::process::ExitStatus> {
+    let deadline = tokio::time::Instant::now() + limit;
+    loop {
+        if let Some(status) = serve.child.try_wait()? {
+            return Ok(status);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let (stdout, stderr) = serve.captured_output()?;
+            return Err(anyhow!(
+                "server still running after {limit:?}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_on_a_missing_home_exits_68_and_creates_nothing() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let missing = temp.path().join(".gents");
+    let mut serve = spawn_server(temp.path(), allocate_port()?)?;
+    // Not 5 s: a freshly spawned test binary can spend several seconds in
+    // dyld on a loaded host before `main` runs.
+    let status = exit_status_within(&mut serve, Duration::from_secs(30)).await?;
+    assert_eq!(status.code(), Some(68));
+    assert!(!missing.exists());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_deleted_home_stops_its_server_without_writing_into_the_new_one() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join(".gents");
+    let model_name = format!("home-watch-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    run_init_json(
+        temp.path(),
+        &[
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let (mut serve, _) = spawn_server_with_ready_json(temp.path(), allocate_port()?, &[], &[])?;
+    // `service-updates` is the server's last startup write into the home.
+    let started_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !home
+        .join(gents_store::local::home::SERVICE_UPDATES_DIR_NAME)
+        .is_dir()
+    {
+        anyhow::ensure!(
+            tokio::time::Instant::now() < started_deadline,
+            "the server never created its service-updates directory"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // The server writes into the home until it notices, so a removal can
+    // race a new file; repeat it as a user repeats `rm -rf`.
+    let removal_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while let Err(error) = fs::remove_dir_all(&home) {
+        if error.kind() != std::io::ErrorKind::DirectoryNotEmpty
+            || tokio::time::Instant::now() >= removal_deadline
+        {
+            return Err(error.into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    fs::create_dir(&home)?;
+    let status = exit_status_within(&mut serve, Duration::from_secs(5)).await?;
+    assert_eq!(status.code(), Some(68), "{:?}", serve.captured_output()?);
+    let written = fs::read_dir(&home)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    assert!(
+        written.is_empty(),
+        "nothing written into the new folder: {written:?}"
+    );
     Ok(())
 }

@@ -5,6 +5,13 @@ import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import type { JobProgress } from "@source-inc/gents-desktop-client/generated/JobProgress";
 
 import { JobProgressCell } from "../src/ui/screens/JobProgressCell";
+import {
+  ActivityGroup,
+  GroupStateContext,
+  useGroupState,
+} from "../src/ui/screens/ActivityGroup";
+import { groupTranscript } from "../src/ui/screens/transcript-groups";
+import { NO_WORKERS } from "../src/ui/screens/workers";
 import { node, renderIn, testApp } from "./app-fixture";
 
 const progress = (over: Partial<JobProgress> = {}): JobProgress => ({
@@ -68,7 +75,8 @@ const text = (id: string) => screen.getByTestId(id).textContent;
 describe("JobProgressCell", () => {
   it("shows a running row with its phases, agent bar, last event, Stop and Pause", () => {
     mount(row());
-    expect(text("job-state")).toBe("running");
+    expect(screen.getByRole("img", { name: "running" })).toBeTruthy();
+    expect(screen.queryByTestId("job-state")).toBeNull();
     expect(text("job-phases")).toContain("plan");
     expect(text("job-phases")).toContain("verify");
     expect(text("job-agents")).toBe("2 of 5 agents");
@@ -96,7 +104,7 @@ describe("JobProgressCell", () => {
       }),
     );
     expect(text("job-state")).toBe("paused");
-    expect(text("job-pause-reason")).toBe("budget exceeded");
+    expect(text("job-pause-reason")).toBe("Paused: budget exceeded");
     expect(text("job-agents")).toBe("5 of 5 agents");
   });
 
@@ -322,5 +330,32 @@ describe("JobProgressCell", () => {
     expect(await screen.findByRole("button", { name: "Promote" })).toBeTruthy();
     await act(async () => finishOld({ promoted_as: ["gents/old"] }));
     expect(screen.getByRole("button", { name: "Promote" })).toBeTruthy();
+  });
+
+  it("shows a workflow that hasn't ended in the transcript, and a finished one as its row", () => {
+    function Group({ tool }: { tool: RenderedToolCallView }) {
+      const state = useGroupState("session-1");
+      const [entry] = groupTranscript([
+        { kind: "toolGroup", itemKey: "g", messageSequence: 1, tools: [tool] },
+      ] as never);
+      return (
+        <GroupStateContext.Provider value={state}>
+          <ActivityGroup entry={entry as never} workers={NO_WORKERS} />
+        </GroupStateContext.Provider>
+      );
+    }
+    const app = testApp({
+      deployments: [node({ nodeDid: "did:test:row-owner", source: "local" })],
+      selection: { nodeDid: "did:test:row-owner", sessionId: "session-1" },
+    });
+    const view = renderIn(app, <Group tool={row()} />);
+    expect(screen.getByTestId("job-step")).toBeTruthy();
+    expect(text("job-phases")).toContain("verify");
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
+    view.rerender(
+      <Group tool={row({ jobState: "completed", statusKind: "success" } as never)} />,
+    );
+    expect(screen.queryByTestId("job-step")).toBeNull();
+    expect(screen.getByText("review the diff")).toBeTruthy();
   });
 });

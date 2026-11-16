@@ -1,3 +1,11 @@
+use gents_service::home_state::default_data_dir;
+use gents_service::home_state::home_graphql_endpoint;
+use gents_service::home_state::init_config_path;
+use gents_service::home_state::load_initialized_home_identity;
+use gents_service::home_state::read_init_config;
+use gents_service::home_state::read_runtime_state;
+use gents_service::home_state::resolve_graphql_endpoint;
+use gents_service::home_state::resolve_home_dir;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -5,7 +13,6 @@ use anyhow::{Context, Result};
 use clap::Parser;
 #[cfg(test)]
 use gents::defra_node::NodeBuilder;
-use serde::de::DeserializeOwned;
 
 pub mod accounts {
     pub use crate::commands::accounts::{remove_account, request_usage_reads, UsageReads};
@@ -14,12 +21,6 @@ pub mod accounts {
 pub mod jobs {
     pub use crate::commands::job::next_calls;
 }
-pub mod enrollment {
-    pub use crate::http::enrollment::{
-        ensure_enrollment_network, EnrollmentOfferIssuer, EnrollmentOfferStatus,
-    };
-}
-mod caused_sessions;
 mod cli;
 mod commands;
 mod config_bundle;
@@ -27,24 +28,15 @@ mod config_import;
 mod config_writes;
 mod desired_state;
 mod graphql_access;
-mod home_state;
-mod http;
 mod interactive_backend;
-pub mod native_service;
-mod network_settings;
-mod p2p_relay;
+mod next_call;
+mod operation_failure;
 pub mod packs;
-mod process_resources;
 mod request_helpers;
 mod resolve_helpers;
 pub mod server_host;
-mod service_update;
 mod shared;
-mod telemetry;
-
-#[cfg(test)]
-#[path = "../../gents/src/lean_vocab_test/support.rs"]
-pub(crate) mod lean_vocab_test;
+mod version;
 
 use cli::*;
 
@@ -52,31 +44,26 @@ use config_bundle::*;
 use config_import::*;
 use config_writes::ConfigAccess;
 use graphql_access::*;
-use home_state::*;
 use request_helpers::*;
 use resolve_helpers::*;
 
-const DEFAULT_NODE_NAME: &str = "default";
+#[cfg(test)]
+#[ctor::ctor]
+fn select_unit_test_homes() {
+    gents_service::home_state::use_unit_test_homes();
+}
+
 const DEFAULT_INIT_ENDPOINT: &str = "http://127.0.0.1:8080/v1";
 const DEFAULT_INIT_MODEL_NAME: &str = "google/gemma-4-12B-it-qat-q4_0-gguf";
 const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434/v1";
 const DEFAULT_OLLAMA_MODEL_NAME: &str = "hf.co/google/gemma-4-12B-it-qat-q4_0-gguf";
 const DEFAULT_CHATGPT_CODEX_MODEL_NAME: &str = "gpt-6-astra";
 const DEFAULT_XAI_GROK_OAUTH_MODEL_NAME: &str = "grok-4.7";
-#[cfg(not(all(debug_assertions, feature = "native-e2e")))]
-const DEFAULT_HTTP_PORT: u16 = 9191;
-#[cfg(all(debug_assertions, feature = "native-e2e"))]
-const DEFAULT_HTTP_PORT: u16 = 21919;
 const DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS: u64 = 86_400;
 const TOKIO_WORKER_STACK_SIZE: usize = 16 * 1024 * 1024;
-const DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES: usize = p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES;
-const DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS;
-const DEFAULT_P2P_RATE_LIMIT_BURST: u32 = p2p::sync::DEFAULT_RATE_LIMIT_BURST;
-const DEFAULT_P2P_RATE_LIMIT_RATE: f64 = p2p::sync::DEFAULT_RATE_LIMIT_RATE;
-const DEFAULT_P2P_MAX_PENDING_DAGS: usize = p2p::sync::DEFAULT_MAX_PENDING_DAGS;
 const DEFAULT_LOG_FILTER: &str = concat!(
     "warn,",
-    "gents_server::commands::serve=info,",
+    "gents_host::serve=info,",
     "gents::shutdown=info,",
     "gents::runtime::agent::runtime=info,",
     "gents::runtime::agent::daemon=info,",
@@ -89,8 +76,6 @@ const DEFAULT_LOG_FILTER: &str = concat!(
     "gents::request::streaming=info,",
     "gents::triggers::engine=info"
 );
-const INIT_CONFIG_FILE_NAME: &str = "init.json";
-const RUNTIME_STATE_FILE_NAME: &str = gents::store::local::home::RUNTIME_STATE_FILE_NAME;
 const ROOT_HELP_TEMPLATE: &str = "\
 {about-with-newline}
 {usage-heading} {usage}
@@ -321,46 +306,7 @@ Examples:
   gents config export --root ./my-agent --home /path/to/home --bind-node-did home";
 pub(crate) const CONFIG_EXPORT_FORMAT: &str = "gents-config/v2";
 
-pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
-    ("Node", "node_did"),
-    ("Agent", "agent_did"),
-    ("AgentContext", "context_id"),
-    ("NodeRuntime", "node_did"),
-    ("Tools", "tools_id"),
-    ("InferenceProfile", "profile_id"),
-    ("InferenceBackendMetadata", "backend_id"),
-    ("BackendCredential", "credential_id"),
-    ("InferenceSampling", "sampling_id"),
-    ("InferenceExecution", "execution_id"),
-    ("InferenceRetryPolicy", "retry_policy_id"),
-    ("AgentRequest", "request_id"),
-    ("AgentOutputSegment", "request_doc_id"),
-    ("AgentSession", "session_id"),
-    ("AgentMessage", "message_key"),
-    ("AgentToolCall", "tool_call_key"),
-    ("CompactionEntry", "compaction_key"),
-    ("ProjectionAcpBinding", "binding_id"),
-    ("Task", "task_id"),
-    ("Schedule", "schedule_id"),
-    ("Trigger", "trigger_id"),
-    ("EventSource", "event_source_id"),
-    ("ToolServiceRegistry", "service_id"),
-];
-const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
-    "Node",
-    "Agent",
-    "AgentContext",
-    "Tools",
-    "InferenceBackendMetadata",
-    "BackendCredential",
-    "InferenceProfile",
-    "InferenceSampling",
-    "InferenceExecution",
-    "InferenceRetryPolicy",
-];
-pub(crate) const EXPORT_SKILL_FIELDS: &str = "skill_id node_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
-
-pub use commands::prepare_runtime::{prepare_runtime_after_unlock, unlock_runtime_keys};
+pub use commands::prepare_runtime::prepare_runtime_after_unlock;
 
 /// Embedded editor launches must never trigger a system authentication dialog.
 /// Explicit credential access remains with the existing browser or store-unlock owner.
@@ -371,7 +317,7 @@ pub fn run_cli_without_keychain_prompts() -> Result<()> {
 /// The platform interaction prohibition is process-wide and retains any inherited
 /// prohibition. Native startup uses it when creating fresh credential custody.
 pub fn without_keychain_prompts<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
-    let _interaction = process_resources::prevent_keychain_prompts(true)?;
+    let _interaction = gents_service::process_resources::prevent_keychain_prompts(true)?;
     operation()
 }
 
@@ -394,6 +340,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
                     store_key_custody: cli.store_key_custody,
                     agent: cli.agent,
                     print: cli.print,
+                    steer: cli.steer,
                     prompt: cli.prompt,
                     continue_session: cli.continue_session,
                     yolo: cli.yolo,
@@ -412,7 +359,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Some(Command::Shell(args)) => return commands::start::shell(args, runtime).await,
         Some(command) => command,
     };
-    gents::enable_self_runner();
+    gents_tools::native::enable_self_runner();
     if let Command::Utils {
         command: UtilsCommand::Eval { command },
     } = &command
@@ -425,29 +372,44 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         }
     }
 
-    // Client-facing commands create their own principal before resolving an
-    // endpoint; runtime entry points never load this client key.
-    if matches!(
-        &command,
-        Command::Status(_)
-            | Command::Sessions { .. }
-            | Command::Automation { .. }
-            | Command::Config { .. }
-            | Command::Runtime {
-                command: RuntimeCommand::P2p { .. } | RuntimeCommand::Diagnose(_),
-            }
-            | Command::Utils {
-                command: UtilsCommand::Data { .. } | UtilsCommand::Debug { .. },
-            }
-    ) {
-        load_client_identity().await?;
+    // A read-only look at a home an older Gents made gives the repair's report
+    // of it, before anything is asked of a node that home cannot have.
+    let read_only_home = match &command {
+        Command::Status(args) if args.graphql.is_none() => Some(args.home.clone()),
+        Command::Service {
+            command: ServiceCommand::Status(target),
+        }
+        | Command::Runtime {
+            command:
+                RuntimeCommand::Service {
+                    command: ServiceCommand::Status(target),
+                },
+        } => Some(target.home.clone()),
+        _ => None,
+    };
+    if let Some(home) = read_only_home {
+        gents_service::repair::home::refuse_older_home(&resolve_home_dir(home.as_deref())).await?;
     }
-    let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
+    let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER)?;
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
-        Command::Server(args) => commands::serve::serve(args, runtime).await,
+        Command::Server(args) => {
+            gents_host::serve::serve(
+                args,
+                runtime,
+                std::sync::Arc::new(commands::serve_client::CliServeClient),
+            )
+            .await
+        }
         Command::Service { command } => service_command(command).await,
-        Command::PrepareRuntime(args) => commands::prepare_runtime::prepare(args, runtime).await,
+        Command::PrepareRuntime(args) => {
+            gents_host::prepare_runtime::prepare(
+                args,
+                runtime,
+                std::sync::Arc::new(commands::serve_client::CliServeClient),
+            )
+            .await
+        }
         Command::Status(args) => commands::status::status(args).await,
         Command::Sessions { command } => commands::session::dispatch(command).await,
         Command::Automation { command } => match command {
@@ -478,7 +440,14 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         },
         Command::Config { command } => commands::config::dispatch(command).await,
         Command::Runtime { command } => match command {
-            RuntimeCommand::Server(args) => commands::serve::serve(*args, runtime).await,
+            RuntimeCommand::Server(args) => {
+                gents_host::serve::serve(
+                    *args,
+                    runtime,
+                    std::sync::Arc::new(commands::serve_client::CliServeClient),
+                )
+                .await
+            }
             RuntimeCommand::Service { command } => service_command(command).await,
             RuntimeCommand::Provision(args) => commands::provision::provision(args).await,
             RuntimeCommand::Reset(args) => commands::reset::reset(args).await,
@@ -486,7 +455,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
             RuntimeCommand::P2p { command } => commands::p2p::dispatch(command).await,
             RuntimeCommand::Desktop { command } => commands::desktop::run(command).await,
             RuntimeCommand::Version => {
-                print!("{}", http::version::version_text());
+                print!("{}", version::version_text());
                 Ok(())
             }
         },
@@ -525,17 +494,21 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
 
 async fn service_command(command: ServiceCommand) -> Result<()> {
     let command = match command {
-        ServiceCommand::Update(args) => return service_update::submit(args).await,
+        ServiceCommand::Update(args) => return gents_service::service_update::submit(args).await,
         ServiceCommand::UpdateStatus { home, operation_id } => {
-            return service_update::status(home, operation_id).await
+            return gents_service::service_update::status(home, operation_id).await
         }
         ServiceCommand::UpdateRun { home, operation_id } => {
-            return service_update::run(home, operation_id).await
+            return gents_service::service_update::run(home, operation_id).await
         }
-        ServiceCommand::UpdateCheck { home } => return service_update::check(home).await,
+        ServiceCommand::UpdateCheck { home } => {
+            return gents_service::service_update::check(home).await
+        }
+        ServiceCommand::Repoint { home } => return commands::start::repoint(home).await,
         command => command,
     };
-    use native_service::{NativeServiceConfig, NativeServiceManager};
+    use gents_service::lifecycle::ServiceLifecycleReceipt;
+    use gents_service::native_service::{NativeServiceConfig, NativeServiceManager};
 
     tokio::task::spawn_blocking(move || -> Result<()> {
         let (home, executable, action) = command.into_parts();
@@ -544,37 +517,27 @@ async fn service_command(command: ServiceCommand) -> Result<()> {
             Some(path) => absolutize(path)?,
             None => std::env::current_exe().context("resolving the gents executable")?,
         };
-        let config = NativeServiceConfig::new(home, executable)?;
-        let home = config.home.clone();
-        let manager = NativeServiceManager::new(config)?;
-        service_update::refuse_self_disruption(&home, &action)?;
-        match action {
-            ServiceAction::Install {
-                network,
-                environment_file,
+        let manager = NativeServiceManager::new(NativeServiceConfig::new(home, executable)?)?;
+        match gents_service::lifecycle::perform(&manager, &action)? {
+            ServiceLifecycleReceipt::Status { service, network } => {
+                print!("{}\n{}\n", service.summary(), network.summary());
+            }
+            ServiceLifecycleReceipt::Uninstalled {
+                definition,
+                removed,
             } => {
-                let environment = environment_file
-                    .as_deref()
-                    .map(native_service::read_environment_file)
-                    .transpose()?;
-                network_settings::install_service(&manager, &home, &network, environment.as_ref())
-                    .map(drop)
+                for line in commands::service::uninstall_summary(
+                    manager.home(),
+                    &definition,
+                    removed,
+                    manager.config().stderr_path.as_deref(),
+                ) {
+                    println!("{line}");
+                }
             }
-            ServiceAction::Start { enable } => manager.start(enable),
-            ServiceAction::Stop { keep_enabled } => manager.stop(!keep_enabled),
-            ServiceAction::Restart => manager.restart(),
-            ServiceAction::Enable => manager.set_enabled(true),
-            ServiceAction::Disable => manager.set_enabled(false),
-            ServiceAction::Status => {
-                print!(
-                    "{}\n{}\n",
-                    manager.status()?.summary(),
-                    network_settings::NetworkSettings::read(&home)?.summary()
-                );
-                Ok(())
-            }
-            ServiceAction::Uninstall => manager.uninstall(),
+            ServiceLifecycleReceipt::Done | ServiceLifecycleReceipt::Installed(_) => {}
         }
+        Ok(())
     })
     .await?
 }
@@ -596,41 +559,6 @@ pub(crate) fn shell_word(path: &Path) -> String {
     shlex::try_quote(&path).map_or_else(|_| path.to_string(), |quoted| quoted.into_owned())
 }
 
-pub(crate) async fn http_get_json<T>(request: reqwest::RequestBuilder) -> Result<T>
-where
-    T: DeserializeOwned,
-{
-    let (url, body) = http_send_bytes(request).await?;
-    serde_json::from_slice(&body).with_context(|| format!("decoding JSON response from {url}"))
-}
-
-pub(crate) async fn http_send(request: reqwest::RequestBuilder) -> Result<()> {
-    http_send_bytes(request).await.map(|_| ())
-}
-
-async fn http_send_bytes(request: reqwest::RequestBuilder) -> Result<(reqwest::Url, Vec<u8>)> {
-    let (client, request) = request.build_split();
-    let request = request.context("building HTTP request")?;
-    let method = request.method().clone();
-    let url = request.url().clone();
-    let response = client
-        .execute(request)
-        .await
-        .with_context(|| format!("sending {method} request to {url}"))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .with_context(|| format!("reading {method} response body from {url}"))?;
-    if !status.is_success() {
-        anyhow::bail!(
-            "{method} {url} failed with {status}: {}",
-            String::from_utf8_lossy(&body)
-        );
-    }
-    Ok((url, body.to_vec()))
-}
-
 pub(crate) async fn resolve_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
@@ -645,7 +573,7 @@ pub(crate) async fn resolve_config_access(
 /// under that guard instead of contending with it.
 pub(crate) async fn resolve_config_access_under_plugin_store(
     home: &Path,
-    guard: &gents::plugin::store::StoreGuard,
+    guard: &gents_pack::plugin::store::StoreGuard,
 ) -> Result<(ConfigAccess, PathBuf)> {
     let (access, home, _) =
         resolve_config_access_inner(Some(home), None, false, Some(guard)).await?;
@@ -658,7 +586,7 @@ pub(crate) async fn resolve_pack_config_access(
 ) -> Result<(
     ConfigAccess,
     PathBuf,
-    Option<gents::store::config_client::GraphqlEndpoint>,
+    Option<gents_store::config_client::GraphqlEndpoint>,
 )> {
     resolve_config_access_inner(home, explicit_graphql, true, None).await
 }
@@ -667,23 +595,23 @@ async fn resolve_config_access_inner(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
     local_http: bool,
-    plugin_guard: Option<&gents::plugin::store::StoreGuard>,
+    plugin_guard: Option<&gents_pack::plugin::store::StoreGuard>,
 ) -> Result<(
     ConfigAccess,
     PathBuf,
-    Option<gents::store::config_client::GraphqlEndpoint>,
+    Option<gents_store::config_client::GraphqlEndpoint>,
 )> {
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
     let home_dir = resolve_home_dir(home);
     if let Some(guard) = plugin_guard {
         guard.for_home(&home_dir)?;
     }
-    let client_identity = load_client_identity().await?;
+    let client_identity = gents_service::home_state::client_identity_for(&home_dir).await?;
     if let Some(graphql) = explicit_graphql
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let endpoint = resolve_graphql_endpoint(Some(graphql), home)?;
+        let endpoint = resolve_graphql_endpoint(Some(graphql), home).await?;
         return Ok((
             ConfigAccess::Graphql(endpoint.with_client_signed_agent_creates()),
             home_dir,
@@ -692,7 +620,7 @@ async fn resolve_config_access_inner(
     }
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
         if graphql_endpoint_available(&runtime_state.graphql).await {
-            let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql)?;
+            let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql).await?;
             return Ok((
                 ConfigAccess::Graphql(endpoint.with_client_signed_agent_creates()),
                 home_dir,
@@ -709,7 +637,7 @@ async fn resolve_config_access_inner(
         "the initialized data directory {} is unavailable",
         data_dir.display()
     );
-    let claim = gents::store::local::home::lock_store(&home_dir, &data_dir).map_err(|error| {
+    let claim = gents_store::local::home::lock_store(&home_dir, &data_dir).map_err(|error| {
         let held = error.lock_held().is_some();
         let error = anyhow::Error::from(error);
         if held {
@@ -721,8 +649,8 @@ async fn resolve_config_access_inner(
         }
     })?;
     let store_key =
-        gents::store::local::store_key::open_home_store_key(&home_dir, &data_dir).await?;
-    let protected = gents::store::local::backend_protection::ProtectedBackendStore::open(
+        gents_store::local::store_key::open_home_store_key(&home_dir, &data_dir).await?;
+    let protected = gents_store::local::backend_protection::ProtectedBackendStore::open(
         &data_dir, &store_key, &claim,
     )
     .await?;
@@ -739,13 +667,19 @@ async fn resolve_config_access_inner(
         Ok((listener, address))
     })
     .await??;
-    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+    let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
         format!("http://{address}/api/v0/graphql"),
         client_identity.did(),
     )
     .with_client_signing_capability(client_identity.client_signing_capability()?)?
     .with_client_signed_agent_creates();
-    let http = Some(gents::defra_node::HttpConfig::with_listener(listener)?);
+    // Owner-staged relationship changes of those writes are decided by this
+    // node's own route, as the serving runtime decides them.
+    let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
+    let http = Some(
+        gents::defra_node::HttpConfig::with_listener(listener)?
+            .with_extra_routes(owner_staged.router()),
+    );
     let (node, _admission) = match plugin_guard {
         Some(guard) => {
             gents::runtime::node_start::start_node_under_plugin_store(
@@ -754,7 +688,7 @@ async fn resolve_config_access_inner(
                 runtime_identity.clone(),
                 http,
                 None,
-                gents::tools::surface::ToolCeiling::meta_only(),
+                gents_tools::surface::ToolCeiling::meta_only(),
                 guard,
             )
             .await?
@@ -766,7 +700,7 @@ async fn resolve_config_access_inner(
                 runtime_identity.clone(),
                 http,
                 None,
-                gents::tools::surface::ToolCeiling::meta_only(),
+                gents_tools::surface::ToolCeiling::meta_only(),
                 &home_dir,
             )
             .await?
@@ -774,18 +708,19 @@ async fn resolve_config_access_inner(
     };
     let migration_node = node.clone();
     let access = ConfigAccess::claimed_local_as(
-        node,
+        node.clone(),
         claim,
         identity::Did::new(client_identity.did().to_owned())?,
     )?
     .with_client_signed_writes_through(endpoint.clone())?;
     let local_endpoint = local_http.then_some(endpoint);
-    gents::store::schema::migration::ensure_all_runtime_migrations(migration_node)
+    gents_store::schema::migration::ensure_all_runtime_migrations(migration_node)
         .await
         .map_err(|error| {
-            gents::store::local::storage_backend::classify_store_error(error, &data_dir)
+            gents_store::local::storage_backend::classify_store_error(error, &data_dir)
         })?;
-    gents::store::local::store_key::upgrade::finish(&data_dir)?;
+    gents_store::local::store_key::upgrade::finish(&data_dir)?;
+    owner_staged.serve(&node, runtime_identity.clone());
     Ok((access, home_dir, local_endpoint))
 }
 
@@ -794,9 +729,9 @@ pub(crate) async fn persistent_node_builder(
     home_dir: &Path,
     data_dir: &Path,
 ) -> Result<NodeBuilder> {
-    gents::store::local::storage_backend::reject_legacy_store(data_dir)?;
-    let key = gents::store::local::store_key::open_home_store_key(home_dir, data_dir).await?;
-    Ok(gents::store::local::store_key::persistent_builder(
+    gents_store::local::storage_backend::reject_legacy_store(data_dir)?;
+    let key = gents_store::local::store_key::open_home_store_key(home_dir, data_dir).await?;
+    Ok(gents_store::local::store_key::persistent_builder(
         data_dir, &key,
     )?)
 }
@@ -825,13 +760,6 @@ pub(crate) fn require_non_empty<'a>(field: &str, value: &'a str) -> Result<&'a s
         anyhow::bail!("--{field} must not be empty");
     }
     Ok(trimmed)
-}
-
-pub(crate) fn normalize_optional_string(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|candidate| !candidate.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 /// `home` must come from [`overwritable_home`]; the held store lock is kept so
@@ -918,8 +846,11 @@ pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::StoredInitConfig;
-    use gents::NodeIdentity as _;
+    use gents_service::args::ToolCeilingArg;
+    use gents_service::home_state::default_key_path;
+    use gents_service::home_state::write_init_config;
+    use gents_service::state::StoredInitConfig;
+    use gents_store::identity::NodeIdentity as _;
 
     #[tokio::test]
     async fn initialized_offline_node_reuses_the_home_signer() {
@@ -928,7 +859,7 @@ mod tests {
         let data = default_data_dir(&home);
         let key_path = default_key_path(&home, "default");
         std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
-        let identity = gents::KeyIdentity::load_or_create(&key_path, None).unwrap();
+        let identity = gents_store::identity::KeyIdentity::load_or_create(&key_path, None).unwrap();
         let did = identity.did().to_string();
         write_init_config(
             &home,
@@ -944,9 +875,9 @@ mod tests {
                 tool_ceiling: ToolCeilingArg::Readonly,
                 tool_root: None,
                 store_encryption: Some(
-                    gents::store::local::store_key::StoreEncryption::prepare(
-                        gents::store::local::store_key::StoreKeyCustodyChoice::File,
-                        &gents::store::local::store_key::home_key_file(&home),
+                    gents_store::local::store_key::StoreEncryption::prepare(
+                        gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                        &gents_store::local::store_key::home_key_file(&home),
                         &default_data_dir(&home),
                     )
                     .unwrap(),
@@ -972,7 +903,7 @@ mod tests {
         config.store_encryption = None;
         write_init_config(&home, &config).unwrap();
         let data = default_data_dir(&home);
-        let key_file = gents::store::local::store_key::home_key_file(&home);
+        let key_file = gents_store::local::store_key::home_key_file(&home);
         let before = std::fs::read(&key_file).unwrap();
 
         let error = match persistent_node_builder_with_stored_identity(&home, &data).await {
@@ -988,7 +919,7 @@ mod tests {
         let home = temp.join("home");
         let key_path = default_key_path(&home, "default");
         std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
-        let identity = gents::KeyIdentity::load_or_create(&key_path, None).unwrap();
+        let identity = gents_store::identity::KeyIdentity::load_or_create(&key_path, None).unwrap();
         write_init_config(
             &home,
             &StoredInitConfig {
@@ -1003,9 +934,9 @@ mod tests {
                 tool_ceiling: ToolCeilingArg::Readonly,
                 tool_root: None,
                 store_encryption: Some(
-                    gents::store::local::store_key::StoreEncryption::prepare(
-                        gents::store::local::store_key::StoreKeyCustodyChoice::File,
-                        &gents::store::local::store_key::home_key_file(&home),
+                    gents_store::local::store_key::StoreEncryption::prepare(
+                        gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                        &gents_store::local::store_key::home_key_file(&home),
                         &default_data_dir(&home),
                     )
                     .unwrap(),
@@ -1019,7 +950,7 @@ mod tests {
             .store_encryption
             .unwrap()
             .initialize(
-                &gents::store::local::store_key::home_key_file(&home),
+                &gents_store::local::store_key::home_key_file(&home),
                 &default_data_dir(&home),
             )
             .unwrap();
@@ -1034,11 +965,11 @@ mod tests {
         let identity = load_initialized_home_identity(&home, &config).unwrap();
         let data = default_data_dir(&home);
         std::fs::create_dir_all(&data).unwrap();
-        let key = gents::store::local::store_key::open_home_store_key(&home, &data)
+        let key = gents_store::local::store_key::open_home_store_key(&home, &data)
             .await
             .unwrap();
-        let lock = gents::store::local::home::lock_store(&home, &data).unwrap();
-        gents::store::local::backend_protection::FreshBackendStore::observe(&data, &lock)
+        let lock = gents_store::local::home::lock_store(&home, &data).unwrap();
+        gents_store::local::backend_protection::FreshBackendStore::observe(&data, &lock)
             .await
             .unwrap()
             .initialize(&key, Some(identity.did()))
@@ -1059,7 +990,7 @@ mod tests {
             .expect("an offline home opens its store");
         let node = std::sync::Arc::downgrade(node);
 
-        let error = gents::store::local::home::lock_store(&home, &default_data_dir(&home))
+        let error = gents_store::local::home::lock_store(&home, &default_data_dir(&home))
             .expect_err("an opened store excludes another runtime");
         assert!(
             error.lock_held().is_some(),
@@ -1091,7 +1022,7 @@ mod tests {
     async fn an_offline_access_names_the_holder_of_a_claimed_store() {
         let temp = tempfile::tempdir().unwrap();
         let home = initialized_home_with_store(temp.path()).await;
-        let _held = gents::store::local::home::lock_home_store(&home).unwrap();
+        let _held = gents_store::local::home::lock_home_store(&home).unwrap();
 
         let error = match resolve_config_access(Some(&home), None).await {
             Ok(_) => panic!("a claimed store must not be opened a second time"),
@@ -1099,7 +1030,7 @@ mod tests {
         };
 
         assert!(
-            gents::store::local::home::store_lock_held(error.as_ref()).is_some(),
+            gents_store::local::home::store_lock_held(error.as_ref()).is_some(),
             "{error:#}"
         );
     }
@@ -1130,8 +1061,8 @@ mod tests {
             let mut input = service.clone();
             input[field] = value;
             assert!(
-                gents::store::config_client::config_projection(
-                    gents::Collection::ToolServiceRegistry,
+                gents_documents::config_projection(
+                    gents_store::collection::Collection::ToolServiceRegistry,
                     Some(&input)
                 )
                 .is_err(),
@@ -1143,8 +1074,8 @@ mod tests {
     #[test]
     fn canonical_service_import_preserves_optional_endpoint_and_exact_values() {
         let input = serde_json::json!({"node_did":"owner","service_id":"mcp","hostname":"host","mcp_path":null});
-        let projected = gents::store::config_client::config_projection(
-            gents::Collection::ToolServiceRegistry,
+        let projected = gents_documents::config_projection(
+            gents_store::collection::Collection::ToolServiceRegistry,
             Some(&input),
         )
         .unwrap()
@@ -1156,8 +1087,8 @@ mod tests {
         assert_eq!(projected["node_did"], "owner");
         let mut missing_owner = input;
         missing_owner.as_object_mut().unwrap().remove("node_did");
-        assert!(gents::store::config_client::config_projection(
-            gents::Collection::ToolServiceRegistry,
+        assert!(gents_documents::config_projection(
+            gents_store::collection::Collection::ToolServiceRegistry,
             Some(&missing_owner)
         )
         .is_err());

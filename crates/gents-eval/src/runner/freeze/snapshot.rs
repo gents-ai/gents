@@ -6,7 +6,7 @@ use super::documents::definition_ref;
 use super::{refused, RunSidecar};
 use crate::runner::executor::Capture;
 use crate::DefinitionRef;
-use gents::documents::EvalDefinition;
+use gents_documents::EvalDefinition;
 
 pub(super) fn sidecar_path(run_dir: &Path) -> PathBuf {
     run_dir.join("run.json")

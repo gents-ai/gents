@@ -6,17 +6,17 @@ use gents_protocol::output::MessagePublication;
 /// turns whose first prompt is `followup_prompt` pages and forks with exactly
 /// one Goal marker on the opening and its copies.
 pub(crate) async fn assert_paged_native_forks(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session: &gents_protocol::session::AgentSession,
     goal_id: &str,
     source_prompt: &str,
     followup_prompt: &str,
 ) {
-    use gents::session::{ForkBoundary, ForkParams};
+    use gents_session::session::{ForkBoundary, ForkParams};
 
     let source = session.session_id.as_str();
     assert_native_pages(access, session, source, goal_id, 10, Some(source_prompt)).await;
-    let first = gents::session::fork_on(
+    let first = gents_session::session::fork_on(
         access,
         ForkParams {
             source_session_id: source,
@@ -38,7 +38,7 @@ pub(crate) async fn assert_paged_native_forks(
         Some(source_prompt),
     )
     .await;
-    let second = gents::session::fork_on(
+    let second = gents_session::session::fork_on(
         access,
         ForkParams {
             source_session_id: &first.session_id,
@@ -64,7 +64,7 @@ pub(crate) async fn assert_paged_native_forks(
         (followup_prompt, "edit-followup", 2, true),
         (source_prompt, "edit-opening", 0, false),
     ] {
-        let copied = gents::session::fork_edit_on(
+        let copied = gents_session::session::fork_edit_on(
             access,
             ForkParams {
                 source_session_id: source,
@@ -92,7 +92,7 @@ pub(crate) async fn assert_paged_native_forks(
 }
 
 async fn assert_native_pages(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     source_session: &gents_protocol::session::AgentSession,
     session_id: &str,
     goal_id: &str,
@@ -126,7 +126,7 @@ async fn assert_native_pages(
                 .find(|row| row.doc_id == message.message.request_doc_id)
                 .expect("the opening page retains its exact physical request");
             assert_eq!(
-                gents::goal::load_applied_opening_goal_id(access, request)
+                gents_automation::goal::load_applied_opening_goal_id(access, request)
                     .await
                     .unwrap()
                     .as_deref(),
@@ -199,7 +199,7 @@ async fn assert_native_pages(
 }
 
 pub(crate) async fn assert_copied_opening(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     rows: &gents_desktop_core::client::ClientStoreRows,
 ) {
     use gents_desktop_core::client::{ClientStore, ClientStoreRows};

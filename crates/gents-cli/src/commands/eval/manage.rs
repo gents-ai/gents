@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents::eval::{invalidate_run, load_run, load_trials};
-use gents::ConfigAccess;
 use gents_eval::report::load_runs;
 use gents_eval::runner::{request_cancel, run_dir, run_finished, running_elsewhere, slots_owed};
+use gents_store::config_client::ConfigAccess;
 
 use super::render::human_bytes;
 use super::EvalContext;

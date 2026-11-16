@@ -51,9 +51,11 @@ impl RuntimeLifecycleCoordinator {
         }
         *closing = true;
         self.admission_gate.close().await;
-        self.runtime_status
+        let persisted = self
+            .runtime_status
             .set_process_state_durable(ProcessLifecycleState::ShuttingDown)
-            .await?;
+            .await;
+        crate::runtime::storage_fault::tolerate_unwritable_store(persisted)?;
         if let Some(observer) = &self.observer {
             observer.on_process_state_change(ProcessLifecycleState::ShuttingDown);
         }
@@ -62,9 +64,11 @@ impl RuntimeLifecycleCoordinator {
 
     pub(super) async fn finish_shutdown(&self) -> Result<()> {
         let _closing = self.closing.lock().await;
-        self.runtime_status
+        let persisted = self
+            .runtime_status
             .set_process_state_durable(ProcessLifecycleState::Shutdown)
-            .await?;
+            .await;
+        crate::runtime::storage_fault::tolerate_unwritable_store(persisted)?;
         if let Some(observer) = &self.observer {
             observer.on_process_state_change(ProcessLifecycleState::Shutdown);
         }

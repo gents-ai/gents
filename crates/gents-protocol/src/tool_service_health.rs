@@ -2,7 +2,7 @@
 //! and its projection to the collapsed operator-facing status.
 //!
 //! Source of truth: the Lean `HealthState` model in
-//! `crates/gents/proofs/Proofs/MCPHealth/State.lean` — `as_str` here must
+//! `crates/gents/proofs/Proofs/Tools/MCPHealth/State.lean` — `as_str` here must
 //! stay byte-identical to that model's `toDefraDB`.
 
 use std::error::Error;
@@ -10,7 +10,8 @@ use std::fmt::{Display, Formatter};
 
 /// The full internal MCP service health state, persisted verbatim to the
 /// `ToolServiceHealthState` DefraDB collection's `status` column.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolServiceHealthState {
     Healthy,
     Degraded,
@@ -20,7 +21,8 @@ pub enum ToolServiceHealthState {
 
 /// The collapsed three-state projection consumers classify against. Owned
 /// entirely by [`ToolServiceHealthState::project`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolServiceHealthProjection {
     Healthy,
     Stale,
@@ -36,7 +38,7 @@ impl ToolServiceHealthState {
     ];
 
     /// String form persisted to the `status` column. Mirrors
-    /// `HealthState.toDefraDB` in `Proofs/MCPHealth/State.lean` exactly.
+    /// `HealthState.toDefraDB` in `Proofs/Tools/MCPHealth/State.lean` exactly.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Healthy => "healthy",
@@ -120,5 +122,17 @@ impl Display for ToolServiceHealthState {
 impl Display for ToolServiceHealthProjection {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::ToolServiceHealthState;
+
+    #[test]
+    fn health_projection_matches_the_lean_model() {
+        gents_lean_vocab::families::proofs_mcp_health_health_projection::replay(|i| {
+            ToolServiceHealthState::project(i.health_state)
+        });
     }
 }

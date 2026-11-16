@@ -1,0 +1,4 @@
+---- MODULE MCDroppedPermitCleanupNoRecovery ----
+EXTENDS DroppedPermitCleanup
+
+====

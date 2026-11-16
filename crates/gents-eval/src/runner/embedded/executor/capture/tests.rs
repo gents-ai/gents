@@ -2,14 +2,19 @@ use super::*;
 use crate::runner::embedded::executor::install::{apply, desired};
 use crate::runner::embedded::home::EmbeddedHome;
 use crate::OutcomeKind;
-use gents::store::config_client::DesiredStateApplyPlan;
-use gents::{Collection, ConfigAccess};
+use gents_documents::DesiredStateApplyPlan;
+use gents_store::{collection::Collection, config_client::ConfigAccess};
 
 use serde_json::json;
 
 #[tokio::test]
 async fn schema_capture_reads_active_indexes_and_records_absent_collections() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node_db = gents_inference::test_support::test_db(
+        "schema-capture-reads-active-indexes-and-",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     ConfigAccess::local(node.clone())
         .add_collection("type SearchNote { body: String @fulltext(language: \"english\") }")
         .await
@@ -112,7 +117,12 @@ async fn delegation_case_capture_excludes_session_title_requests() {
 
 #[tokio::test]
 async fn document_capture_excludes_other_sessions_with_the_same_sequence() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node_db = gents_inference::test_support::test_db(
+        "document-capture-excludes-other-sessions",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let node = node_db.node.clone();
     let access = ConfigAccess::local(node.clone());
     access
         .add_collection("type CaptureHeader { session_id: String sequence: Int }")
@@ -217,23 +227,17 @@ fn document_captures_reject_secret_fields_and_oauth_documents() {
 fn generated_document_capture_cases_match_lean() {
     use std::collections::BTreeSet;
 
-    let cases = crate::lean_vocab_test::lean_eval_document_capture_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
+    gents_lean_vocab::families::eval_document_capture::replay(|case| {
+        let filter: Value = serde_json::from_str(&case.filter).unwrap();
         let mut filter_fields = Vec::new();
-        gents::tools::builtin::defra_query::collect_filter_field_keys(
-            &case.filter,
-            &mut filter_fields,
-        );
+        gents_tools::builtin::defra_query::collect_filter_field_keys(&filter, &mut filter_fields);
         assert_eq!(
             filter_fields.into_iter().collect::<BTreeSet<_>>(),
             case.filter_fields.iter().cloned().collect::<BTreeSet<_>>(),
             "{case:?}"
         );
-        let query =
-            documents_capture_query(&case.collection, &case.filter, &case.fields, "did:test");
-        assert_eq!(query.is_ok(), case.allowed, "{case:?}: {query:?}");
-    }
+        documents_capture_query(&case.collection, &filter, &case.fields, "did:test").is_ok()
+    });
 }
 
 #[tokio::test]
@@ -242,7 +246,7 @@ async fn l1_backend_capture_grades_metadata_without_retaining_auth() {
         .await
         .unwrap();
     let evaluator = crate::runner::embedded::home::bind_test_evaluator(&mut home);
-    let evaluator_did = gents::NodeIdentity::did(evaluator.as_ref());
+    let evaluator_did = gents_store::identity::NodeIdentity::did(evaluator.as_ref());
     crate::runner::embedded::executor::install::grant_trial_operations(&home, evaluator_did)
         .await
         .unwrap();
@@ -467,8 +471,8 @@ fn capture_filters_bind_only_the_selected_subject() {
 
 #[tokio::test]
 async fn retained_capture_uses_the_evaluator_actor_for_document_access() {
-    use gents::store::config_client::NodePermission;
-    use gents::store::identity::{KeyIdentity, NodeIdentity};
+    use gents_store::config_client::NodePermission;
+    use gents_store::identity::{KeyIdentity, NodeIdentity};
 
     let home = EmbeddedHome::create_temp("capture-evaluator-acp")
         .await
@@ -621,9 +625,10 @@ async fn logical_backend_capture_and_live_counts_use_held_user_metadata() {
     write_slot_pack(&pack, "gents:inference-slot:primary");
     let mut home = EmbeddedHome::create_temp("backend-capture").await.unwrap();
     let evaluator = Arc::new(
-        gents::KeyIdentity::load_or_create(dir.path().join("evaluator.key"), None).unwrap(),
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("evaluator.key"), None)
+            .unwrap(),
     );
-    let evaluator_did = gents::NodeIdentity::did(evaluator.as_ref()).to_owned();
+    let evaluator_did = gents_store::identity::NodeIdentity::did(evaluator.as_ref()).to_owned();
     let capability = evaluator.client_signing_capability().unwrap();
     home.set_evaluator(evaluator, capability);
     let spec = TrialSpec {

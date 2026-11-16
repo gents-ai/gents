@@ -1,6 +1,6 @@
 use gents_protocol::schemas;
 
-mod common;
+use crate::common;
 
 /// A store created before `endpoint_url` keeps its registry lineage, field ids and
 /// documents when the field is appended, and a second pass applies nothing.

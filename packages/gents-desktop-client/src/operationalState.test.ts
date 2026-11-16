@@ -30,7 +30,6 @@ function deployment(
     runtimeConnection: "connected",
     chatSafe: true,
     chatRefusal: null,
-    pairingReady: true,
     lastError: null,
     nodeConfig: null,
     agentConfigs: [],
@@ -86,7 +85,8 @@ function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
   return {
     state: "healthy",
     lastError: null,
-    connectedPeerCount: 1,
+    runtimeCount: 1,
+    connectedRuntimeCount: 1,
     activationErrorCount: 0,
     cause: null,
     nextAction: null,
@@ -110,16 +110,14 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("reads the route from the native chat fence, never from pairing", () => {
-    for (const pairingReady of [false, true]) {
-      const state = projectDeploymentOperationalState(deployment({ pairingReady }));
-      expect(state.admissionBlocker).toBeNull();
-      expect(state.route).toMatchObject({
-        layer: "route",
-        kind: "ready",
-        reason: "route_ready",
-      });
-    }
+  it("reads the route from the native chat fence", () => {
+    const state = projectDeploymentOperationalState(deployment());
+    expect(state.admissionBlocker).toBeNull();
+    expect(state.route).toMatchObject({
+      layer: "route",
+      kind: "ready",
+      reason: "route_ready",
+    });
   });
 
   it("blocks admission with the native chat refusal and its next action", () => {

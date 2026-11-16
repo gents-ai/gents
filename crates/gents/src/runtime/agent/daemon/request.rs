@@ -2,9 +2,9 @@ use anyhow::Result;
 use tracing::Instrument;
 
 use super::{AgentDaemon, HandleRequestOutcome, RequestInterruptionSource};
-use crate::inference::admission::{self, AdmissionCallContext};
-use crate::observe::runtime_trace::RequestTraceAttrs;
+use gents_inference::admission::{self, AdmissionCallContext};
 use gents_loop::loop_stream::TaggedMessage;
+use gents_observe::observe::runtime_trace::RequestTraceAttrs;
 
 mod prepare;
 
@@ -16,7 +16,7 @@ const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from
 /// an unrecorded managed process is killed with its group when dropped.
 pub(super) async fn prepare_unless_interrupted<T>(
     interrupt_rx: &mut tokio::sync::watch::Receiver<
-        Option<crate::request::interrupt::InterruptIntent>,
+        Option<gents_session::request::interrupt::InterruptIntent>,
     >,
     preparation: impl std::future::Future<Output = T>,
 ) -> Option<T> {
@@ -42,8 +42,8 @@ pub(super) async fn prepare_unless_interrupted<T>(
 
 pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<()> {
     match tokio::time::timeout(
-        crate::store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-        crate::inference::rendered_request::scope::flush_received_auxiliary_partial(),
+        gents_store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+        gents_inference::rendered_request::scope::flush_received_auxiliary_partial(),
     ).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => Err(super::ShutdownDrainFailure {
@@ -60,7 +60,7 @@ pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<
 
 impl<M> AgentDaemon<M>
 where
-    M: crate::inference::llm::rig_compat::ProviderModel,
+    M: gents_inference::llm::rig_compat::ProviderModel,
 {
     /// Size the exact first-turn provider request for session-compaction
     /// admission through the owned loop's assembly owner. The loop remains the
@@ -71,8 +71,8 @@ where
         request: &gents_protocol::row::AgentRequest,
         preamble: String,
         history: &[TaggedMessage],
-        skill_reminders: &[crate::inference::llm::message::Message],
-        request_context_message: Option<&crate::inference::llm::message::Message>,
+        skill_reminders: &[gents_inference::llm::message::Message],
+        request_context_message: Option<&gents_inference::llm::message::Message>,
         folded_prompts: &[crate::runtime::agent::loop_stream::FoldedPrompt],
         aggregate_token_budget: Option<crate::runtime::agent::loop_stream::AggregateTokenBudget>,
         replay: &gents_loop::loop_stream::LoopReplayInput,
@@ -133,11 +133,11 @@ where
 
     pub(super) async fn handle_request(
         &mut self,
-        lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
-        stream_writer: &crate::request::streaming::DefraStreamWriter,
+        lifecycle: &mut gents_session::request::lifecycle::RequestLifecycle,
+        stream_writer: &gents_session::request::streaming::DefraStreamWriter,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
         mut interrupt_rx: tokio::sync::watch::Receiver<
-            Option<crate::request::interrupt::InterruptIntent>,
+            Option<gents_session::request::interrupt::InterruptIntent>,
         >,
     ) -> Result<HandleRequestOutcome> {
         let request_token = tokio_util::sync::CancellationToken::new();
@@ -280,7 +280,7 @@ where
 
         match capture_scope {
             Some(scope) => {
-                crate::inference::rendered_request::scope::scope_request(scope, handled).await
+                gents_inference::rendered_request::scope::scope_request(scope, handled).await
             }
             None => handled.await,
         }
@@ -288,10 +288,12 @@ where
 }
 
 async fn resolve_inference_outcome(
-    lifecycle: &crate::request::lifecycle::RequestLifecycle,
+    lifecycle: &gents_session::request::lifecycle::RequestLifecycle,
     request: &gents_protocol::row::AgentRequest,
     request_token: &tokio_util::sync::CancellationToken,
-    interrupt_rx: &tokio::sync::watch::Receiver<Option<crate::request::interrupt::InterruptIntent>>,
+    interrupt_rx: &tokio::sync::watch::Receiver<
+        Option<gents_session::request::interrupt::InterruptIntent>,
+    >,
     result: Result<HandleRequestOutcome>,
 ) -> Result<HandleRequestOutcome> {
     let interrupt_access = lifecycle.access()?;
@@ -301,7 +303,7 @@ async fn resolve_inference_outcome(
         if let Some(intent) = watched_interrupt {
             Some(intent.at.to_rfc3339())
         } else {
-            crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+            gents_session::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
                 &interrupt_access,
                 &request.doc_id,
             )
@@ -312,7 +314,7 @@ async fn resolve_inference_outcome(
         Some(intent.at.to_rfc3339())
     } else {
         let persisted =
-            crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
+            gents_session::request::interrupt::fetch_interrupt_requested_at_by_doc_id_with_access(
                 &interrupt_access,
                 &request.doc_id,
             )
@@ -369,7 +371,7 @@ async fn resolve_inference_outcome(
 }
 
 fn is_stale_compaction_generation(error: &anyhow::Error) -> bool {
-    gents_protocol::error_chain::find_source::<crate::session::StaleCompactionGeneration>(
+    gents_protocol::error_chain::find_source::<gents_session::session::StaleCompactionGeneration>(
         error.as_ref(),
     )
     .is_some()

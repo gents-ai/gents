@@ -1,0 +1,33 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "id",
+        "type": "int64"
+      },
+      {
+        "name": "note",
+        "type": "text"
+      }
+    ],
+    "markdown": "| id | note |\n| --- | --- |\n| 1 | first |\n| 2 | two<br>lines |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 2,
+    "rows": [
+      [
+        1,
+        "first"
+      ],
+      [
+        2,
+        "two\nlines"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT * FROM tabs"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "bar",
+    "file": "/etc/passwd"
+  },
+  "bind": "fixtures/data",
+  "expect": {
+    "chart": "bar",
+    "error": "\"/etc/passwd\" is not a path inside the folder; use a relative path like data/sales.csv",
+    "warnings": []
+  }
+}

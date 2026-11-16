@@ -1,18 +1,70 @@
 use gents::defra_node::Node as EmbeddedNode;
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 
-/// Snapshot readers run as a named actor: ACP-governed rows are visible only to
-/// their related actors. The raw node reader remains for unpoliced collections.
+pub enum SnapshotChanges {
+    Local(events::DocumentChangeSubscription),
+    Remote {
+        access: Box<gents_store::config_client::ConfigAccess>,
+        query: String,
+        changes: gents_store::config_client::GraphqlSubscription,
+    },
+}
+
+impl SnapshotChanges {
+    pub async fn recv(&mut self) {
+        match self {
+            Self::Local(changes) => {
+                changes.recv().await.expect("document subscription closed");
+            }
+            Self::Remote {
+                access,
+                query,
+                changes,
+            } => {
+                if changes
+                    .recv()
+                    .await
+                    .expect("document subscription failed")
+                    .is_none()
+                {
+                    assert_eq!(
+                        changes.end(),
+                        Some(gents_store::config_client::SubscriptionEnd::RenewalDue),
+                        "document subscription closed unexpectedly"
+                    );
+                    *changes = access
+                        .subscribe(query)
+                        .await
+                        .expect("renew document subscription");
+                }
+            }
+        }
+    }
+}
+
 pub trait SnapshotReader {
+    fn subscribe_changes(
+        &self,
+        collection: &str,
+    ) -> impl std::future::Future<Output = SnapshotChanges>;
     fn read_data(&self, query: &str) -> impl std::future::Future<Output = serde_json::Value>;
 }
 
 impl SnapshotReader for EmbeddedNode {
+    async fn subscribe_changes(&self, collection: &str) -> SnapshotChanges {
+        SnapshotChanges::Local(
+            gents_store::subscription_source::subscribe_collections(self, [collection])
+                .expect("observe collection"),
+        )
+    }
     async fn read_data(&self, query: &str) -> serde_json::Value {
-        let response = self.execute(query).await;
+        let response =
+            gents_store::graphql::graphql_with_transaction_retry(self, query, "test.snapshot")
+                .await
+                .expect("snapshot read");
         assert!(
             !response.has_errors(),
             "snapshot query failed: {:?}",
@@ -26,12 +78,28 @@ impl<T> SnapshotReader for std::sync::Arc<T>
 where
     T: SnapshotReader + ?Sized,
 {
+    async fn subscribe_changes(&self, collection: &str) -> SnapshotChanges {
+        self.as_ref().subscribe_changes(collection).await
+    }
     async fn read_data(&self, query: &str) -> serde_json::Value {
         self.as_ref().read_data(query).await
     }
 }
 
-impl SnapshotReader for gents::ConfigAccess {
+impl SnapshotReader for gents_store::config_client::ConfigAccess {
+    async fn subscribe_changes(&self, collection: &str) -> SnapshotChanges {
+        if let Some(node) = self.local_node() {
+            node.subscribe_changes(collection).await
+        } else {
+            let query = format!("subscription {{ {collection} {{ _docID }} }}");
+            let changes = self.subscribe(&query).await.expect("subscribe as actor");
+            SnapshotChanges::Remote {
+                access: Box::new(self.clone()),
+                query,
+                changes,
+            }
+        }
+    }
     async fn read_data(&self, query: &str) -> serde_json::Value {
         let mut response = self.execute(query).await.expect("snapshot query as actor");
         response["data"].take()
@@ -39,6 +107,9 @@ impl SnapshotReader for gents::ConfigAccess {
 }
 
 impl SnapshotReader for super::agent_requests::RequestActors {
+    async fn subscribe_changes(&self, collection: &str) -> SnapshotChanges {
+        self.agent_access.subscribe_changes(collection).await
+    }
     async fn read_data(&self, query: &str) -> serde_json::Value {
         self.agent_access.read_data(query).await
     }
@@ -345,7 +416,13 @@ pub async fn fetch_runtime_snapshot(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Option<RuntimeSnapshot> {
-    let response = node.execute(&runtime_snapshot_query(node_did)).await;
+    let response = gents_store::graphql::graphql_with_transaction_retry(
+        node,
+        &runtime_snapshot_query(node_did),
+        "test.fetch_runtime_snapshot",
+    )
+    .await
+    .expect("read runtime snapshot");
     assert!(
         !response.has_errors(),
         "query failed: {:?}",
@@ -355,7 +432,7 @@ pub async fn fetch_runtime_snapshot(
 }
 
 pub async fn fetch_runtime_snapshot_as(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
 ) -> Option<RuntimeSnapshot> {
     let response = access
@@ -433,7 +510,7 @@ pub async fn fetch_message_snapshots_for_session(
         let header_id = row["_docID"].as_str().expect("physical message identity");
         let node_did = row["node_did"].as_str().expect("message principal");
         let requester_did = row["requester_did"].as_str();
-        let (header, native) = gents::session::load_canonical_message_from_node(
+        let (header, native) = gents_session::session::load_canonical_message_from_node(
             node,
             header_id,
             node_did,
@@ -448,7 +525,7 @@ pub async fn fetch_message_snapshots_for_session(
 
 /// The session's transcript as `access` reconstructs it.
 pub async fn fetch_message_snapshots_for_session_as(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
 ) -> Vec<MessageSnapshot> {
     let session_id = escape_graphql_string(session_id);
@@ -460,7 +537,7 @@ pub async fn fetch_message_snapshots_for_session_as(
     let mut snapshots = Vec::new();
     for row in data["AgentMessage"].as_array().expect("message rows") {
         let header_id = row["_docID"].as_str().expect("physical message identity");
-        let (header, native) = gents::session::load_canonical_message(
+        let (header, native) = gents_session::session::load_canonical_message(
             access,
             header_id,
             row["node_did"].as_str().expect("message principal"),
@@ -555,13 +632,16 @@ impl ToolCallSnapshot {
         &self,
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
-        self.try_load_result_as(&gents::store::config_client::ConfigAccess::local(node))
+        self.try_load_result_as(&gents_store::config_client::ConfigAccess::local(node))
             .await
     }
 
     /// The call's exact invocation reply as `access` reads it.
-    pub async fn try_load_result_as(&self, access: &gents::ConfigAccess) -> anyhow::Result<String> {
-        let message = gents::tools::call::lifecycle::load_tool_call_result(
+    pub async fn try_load_result_as(
+        &self,
+        access: &gents_store::config_client::ConfigAccess,
+    ) -> anyhow::Result<String> {
+        let message = gents_session::tool_call::query::result::load_tool_call_result(
             access,
             &self.doc_id,
             &self.node_did,
@@ -569,23 +649,23 @@ impl ToolCallSnapshot {
             self.requester_did.as_deref(),
         )
         .await?;
-        gents::tools::call::lifecycle::render_tool_result(&message)
+        gents_session::tool_call::query::result::render_tool_result(&message)
     }
 
     pub async fn try_load_arguments(
         &self,
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
-        self.try_load_arguments_as(&gents::store::config_client::ConfigAccess::local(node))
+        self.try_load_arguments_as(&gents_store::config_client::ConfigAccess::local(node))
             .await
     }
 
     /// The call's exact arguments as `access` reads them.
     pub async fn try_load_arguments_as(
         &self,
-        access: &gents::ConfigAccess,
+        access: &gents_store::config_client::ConfigAccess,
     ) -> anyhow::Result<String> {
-        gents::tools::call::lifecycle::load_tool_call_arguments(
+        gents_session::tool_call::query::result::load_tool_call_arguments(
             access,
             &self.doc_id,
             &self.node_did,
@@ -631,7 +711,7 @@ pub async fn fetch_tool_call_payloads_for_request(
 /// [`fetch_tool_call_payloads_for_request`] read as `access`, one of the
 /// call's related actors or the node's native admin.
 pub async fn fetch_tool_call_payloads_for_request_as(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request_id: &str,
 ) -> Vec<ToolCallPayload> {
     let filter = format!(
@@ -760,19 +840,4 @@ where
     );
     let data = node.read_data(&query).await;
     serde_json::from_value(data["CompactionEntry"].clone()).expect("parse CompactionEntrySnapshot")
-}
-
-/// The verified signer of `cid`, read under document ACP as `reader`: a
-/// private row's block is visible only to an actor its policy admits, so an
-/// anonymous node read of it fails closed.
-pub async fn verified_block_signer_as(node: &EmbeddedNode, reader: &str, cid: &str) -> String {
-    let (block, signature) = node
-        .authorized_signed_block_bytes(cid, Some(reader))
-        .await
-        .unwrap_or_else(|error| panic!("read {cid} as {reader}: {error:#}"));
-    let block = defra_core::block::Block::from_dag_cbor(&block).expect("decode signed block");
-    let signature =
-        defra_core::block::Signature::from_dag_cbor(&signature).expect("decode block signature");
-    db::block::verify::verified_signature_signer_did(&block, &signature)
-        .unwrap_or_else(|error| panic!("verify {cid}: {error}"))
 }

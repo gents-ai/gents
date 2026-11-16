@@ -1,6 +1,8 @@
 import type {
   DesktopApiAdapter,
+  DesktopClientSnapshot,
   DesktopSessionSnapshot,
+  HeldSessionGoal,
   RenderedTimelineItem,
   SessionRowsView,
   SessionRowsWindow,
@@ -10,6 +12,7 @@ import {
   applySessionLiveDelta,
   sessionLiveDeltaRequest,
 } from "@source-inc/gents-desktop-client";
+import { shareUnchanged } from "./fleetStore";
 import { acceptsAsyncResult } from "./observationOrdering";
 import { createContextDetailsCache } from "./sessionContextDetails";
 import { timingConfig } from "./timing";
@@ -17,23 +20,22 @@ import {
   mergeSessionTipSnapshot,
   sessionGoalReadOf,
 } from "@source-inc/gents-desktop-client";
-import {
-  isSessionDeliveryPhase,
-  selectionMatches,
-  sessionDeliveryPhase,
-  type SessionLoadState,
-} from "../lib/loadingStatus";
+import { selectionMatches, type SessionLoadState } from "../lib/loadingStatus";
 import type { SelectionStore } from "./selectionStore";
 import {
   IDLE_LOAD,
+  heldFor,
   readSession,
   writeSession,
   writeSessionGoalRead,
   writeSessionLoad,
+  writeSessionRead,
+  writeSessionRecent,
   type SessionStore,
 } from "./sessionStore";
 
 export const SESSION_TIMELINE_PAGE_SIZE = 40;
+export const RECENT_READS = 8;
 /* the bridge's largest rows page */
 const TRANSCRIPT_READ_SIZE = 80;
 /** how long a session's reads must find nothing new before they slow down */
@@ -54,12 +56,31 @@ export function waitingRereadDelay(used: number): number | null {
   return WAITING_REREAD_MS[used] ?? null;
 }
 
-/* a session's content apart from the store-wide revision, which moves when
-   any document in the store changes */
-const sessionSignature = (snapshot: DesktopSessionSnapshot) =>
-  JSON.stringify(snapshot, (key, value) =>
-    key === "projectionRevision" ? undefined : value,
-  );
+const keepStoreRevision = (
+  held: DesktopSessionSnapshot,
+  merged: DesktopSessionSnapshot,
+): DesktopSessionSnapshot =>
+  held.projectionRevision &&
+  merged.projectionRevision &&
+  held.projectionRevision.provenanceVersion ===
+    merged.projectionRevision.provenanceVersion
+    ? { ...merged, projectionRevision: held.projectionRevision }
+    : merged;
+
+const supersedes = (held: DesktopSessionSnapshot, next: DesktopSessionSnapshot) =>
+  held.sessionId === next.sessionId &&
+  held.projectionRevision != null &&
+  next.projectionRevision != null &&
+  held.projectionRevision.storeVersion > next.projectionRevision.storeVersion;
+
+type RecentRead = {
+  nodeDid: string;
+  session: DesktopSessionSnapshot;
+  goal: HeldSessionGoal | null;
+};
+
+const recentKey = (nodeDid: string, sessionId: string) =>
+  JSON.stringify([nodeDid, sessionId]);
 
 type SessionReadParams = {
   api: DesktopApiAdapter;
@@ -85,7 +106,8 @@ export function createSessionReads({
   let readAt = 0;
   let readCost = 0;
   let changedAt = 0;
-  let lastOutcome: string | null = null;
+
+  let lastOutcome: { sessionId: string; outcome: unknown } | null = null;
   /* the scheduled re-read of a waiting phase, and the re-reads its streak has
      used; any read the timer did not start begins a new streak */
   let waitingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -96,12 +118,16 @@ export function createSessionReads({
     clearTimeout(waitingTimer);
     waitingTimer = undefined;
   };
-  const noteRead = (sessionId: string, outcome: string, started: number) => {
+  const noteRead = (
+    sessionId: string,
+    outcome: string | DesktopSessionSnapshot,
+    started: number,
+  ) => {
     readAt = performance.now();
     readCost = readAt - started;
-    const keyed = `${sessionId}\0${outcome}`;
-    if (keyed !== lastOutcome) changedAt = readAt;
-    lastOutcome = keyed;
+    if (lastOutcome?.sessionId !== sessionId || lastOutcome.outcome !== outcome)
+      changedAt = readAt;
+    lastOutcome = { sessionId, outcome };
   };
   const quiet = () => readAt - changedAt >= QUIET_AFTER_MS;
   /* A full read of a long session can take over a second, and nothing tells
@@ -114,8 +140,33 @@ export function createSessionReads({
     if (base === null) return null;
     return Math.max(readCost, quiet() ? QUIET_READ_GAP_MS : base);
   };
+  const recent = new Map<string, RecentRead>();
+  let recentClientDid: string | null = null;
+  const remember = (nodeDid: string | null, sessionId: string) => {
+    const { session, goal } = sessionStore.getState();
+    const node = nodeDid ?? session?.nodeDid;
+    if (!node || !heldFor(session, sessionId, node)) return;
+    const key = recentKey(node, sessionId);
+    recent.delete(key);
+    recent.set(key, { nodeDid: node, session: session!, goal });
+    for (const oldest of recent.keys()) {
+      if (recent.size <= RECENT_READS) break;
+      recent.delete(oldest);
+    }
+  };
+  const forget = (nodeDid: string | null, sessionId: string) => {
+    for (const [key, entry] of recent)
+      if (
+        entry.session.sessionId === sessionId &&
+        (!nodeDid || entry.nodeDid === nodeDid)
+      )
+        recent.delete(key);
+  };
   const setSession = (next: Parameters<typeof writeSession>[1]) =>
     writeSession(sessionStore, next);
+  const clearUnconfirmed = () => {
+    if (sessionStore.getState().load.phase === "cached") setSession(null);
+  };
   const setSessionLoad = (load: SessionLoadState) =>
     writeSessionLoad(sessionStore, load);
 
@@ -181,17 +232,26 @@ export function createSessionReads({
     const previous = sessionStore.getState().load;
     const sameSelection =
       previous.sessionId === nextSessionId && previous.nodeDid === nodeDid;
-    const waiting =
-      previous.phase === "pending" || isSessionDeliveryPhase(previous.phase);
-    setSessionLoad({
-      phase: sameSelection && waiting ? previous.phase : "loading",
-      sessionId: nextSessionId,
-      nodeDid,
-      /* looking again doesn't bring a missing session back until it's found */
-      found: sameSelection && previous.found === false ? false : null,
-      error: sameSelection ? previous.error : null,
-      reread: true,
-    });
+    const waiting = previous.phase === "pending";
+    const heldAtStart = readSession(sessionStore);
+
+    const refreshes =
+      sameSelection &&
+      previous.phase === "loaded" &&
+      heldFor(heldAtStart, nextSessionId, nodeDid) !== null;
+    if (!refreshes)
+      setSessionLoad({
+        phase:
+          sameSelection && (waiting || previous.phase === "cached")
+            ? previous.phase
+            : "loading",
+        sessionId: nextSessionId,
+        nodeDid,
+        /* looking again doesn't bring a missing session back until it's found */
+        found: sameSelection && previous.found === false ? false : null,
+        error: sameSelection ? previous.error : null,
+        reread: true,
+      });
     const started = performance.now();
     try {
       const next = await api.fetchSessionSnapshot(
@@ -211,6 +271,7 @@ export function createSessionReads({
          the same question, so it fails visibly. */
       if (next && next.sessionId !== nextSessionId) {
         noteRead(nextSessionId, "mismatch", started);
+        clearUnconfirmed();
         setSessionLoad({
           phase: "failed",
           sessionId: nextSessionId,
@@ -222,9 +283,25 @@ export function createSessionReads({
         return null;
       }
       waitingRereads = 0;
-      setSession((current) => (next ? mergeSessionTipSnapshot(current, next) : null));
-      if (next) writeSessionGoalRead(sessionStore, sessionGoalReadOf(next));
-      noteRead(nextSessionId, next ? sessionSignature(next) : "missing", started);
+      const held = readSession(sessionStore);
+      let outcome: string | DesktopSessionSnapshot = "missing";
+      if (!next) {
+        setSession(null);
+        forget(nodeDid, nextSessionId);
+      } else if (held && held !== heldAtStart && supersedes(held, next)) {
+        outcome = held;
+        remember(nodeDid, nextSessionId);
+      } else {
+        const merged = mergeSessionTipSnapshot(held, next);
+
+        const kept = held
+          ? shareUnchanged(held, keepStoreRevision(held, merged))
+          : merged;
+        writeSessionRead(sessionStore, kept, sessionGoalReadOf(next));
+        remember(nodeDid, nextSessionId);
+        outcome = kept;
+      }
+      noteRead(nextSessionId, outcome, started);
       setSessionLoad({
         phase: "loaded",
         sessionId: nextSessionId,
@@ -235,26 +312,23 @@ export function createSessionReads({
       });
       return next;
     } catch (error) {
+      const code = error instanceof BridgeInvokeError ? error.code : null;
+      if (code === "permissionDenied") forget(nodeDid, nextSessionId);
       if (refreshSeq === currentRefresh && !selects(nextSessionId, nodeDid))
         settleMovedRead();
       else if (refreshSeq === currentRefresh) {
-        const code = error instanceof BridgeInvokeError ? error.code : null;
         if (code === "permissionDenied") {
           setSession(null);
           writeSessionGoalRead(sessionStore, { kind: "refused" });
-        }
-        const delivery = code ? sessionDeliveryPhase(code) : null;
-        const phase = code === "projectionPending" ? "pending" : (delivery ?? "failed");
-        const message =
-          delivery && error instanceof BridgeInvokeError
-            ? error.message
-            : String(error);
+        } else clearUnconfirmed();
+        const phase = code === "projectionPending" ? "pending" : "failed";
+        const message = String(error);
         noteRead(
           nextSessionId,
           phase === "failed" ? `failed ${message}` : phase,
           started,
         );
-        const waiting = phase === "pending" || isSessionDeliveryPhase(phase);
+        const waiting = phase === "pending";
         setSessionLoad({
           phase,
           sessionId: nextSessionId,
@@ -282,7 +356,7 @@ export function createSessionReads({
     const nodeDid =
       projected?.sessionId === nextSessionId
         ? (projected.nodeDid ?? store.getState().nodeDid)
-        : null;
+        : store.getState().nodeDid;
     try {
       setError(null);
       await api.reloadSession(nextSessionId, nodeDid);
@@ -335,6 +409,7 @@ export function createSessionReads({
       const next = applySessionLiveDelta(latest, delta);
       if (!next) return 0;
       setSession(next);
+      remember(capturedNodeDid, next.sessionId);
       return gap === null ? null : Math.max(0, gap - (performance.now() - readAt));
     } catch {
       if (!stillCurrent()) return null;
@@ -361,6 +436,8 @@ export function createSessionReads({
         limit,
       });
     } catch (error) {
+      if (error instanceof BridgeInvokeError && error.code === "permissionDenied")
+        forget(nodeDid, current.sessionId);
       if (
         error instanceof BridgeInvokeError &&
         error.code === "permissionDenied" &&
@@ -439,7 +516,8 @@ export function createSessionReads({
       refreshSeq += 1;
       liveSeq += 1;
       const load = sessionStore.getState().load;
-      if (load.phase === "loading")
+      if (load.phase === "loading" || load.phase === "cached") {
+        clearUnconfirmed();
         setSessionLoad({
           ...load,
           phase: "failed",
@@ -447,7 +525,34 @@ export function createSessionReads({
             load.error ?? "The desktop client stopped before this session was read.",
           reread: false,
         });
-      else if (load.reread) setSessionLoad({ ...load, reread: false });
+      } else if (load.reread) setSessionLoad({ ...load, reread: false });
+    },
+    showRecentRead() {
+      const { sessionId, nodeDid } = store.getState();
+      if (!sessionId || !nodeDid) return;
+      const entry = recent.get(recentKey(nodeDid, sessionId));
+      if (!entry) return;
+      cancelWaitingReread();
+      if (!heldFor(readSession(sessionStore), sessionId, nodeDid))
+        writeSessionRecent(sessionStore, entry.session, entry.goal);
+      setSessionLoad({
+        phase: "cached",
+        sessionId,
+        nodeDid,
+        found: null,
+        error: null,
+        reread: true,
+      });
+    },
+    forgetWithdrawnReads(client: DesktopClientSnapshot["client"]) {
+      if (!client) return;
+      const clientDid = client.clientDid ?? null;
+      if (clientDid && recentClientDid && clientDid !== recentClientDid) recent.clear();
+      if (clientDid) recentClientDid = clientDid;
+      const listed = new Set(client.deployments.map((node) => node.nodeDid));
+      const ended = new Set((client.endedAccess ?? []).map((node) => node.nodeDid));
+      for (const [key, entry] of recent)
+        if (!listed.has(entry.nodeDid) || ended.has(entry.nodeDid)) recent.delete(key);
     },
     refreshSession,
     /** a waiting phase's re-read, which continues its streak */

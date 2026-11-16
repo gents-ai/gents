@@ -1,4 +1,4 @@
-import Proofs.Background.Interrupt
+import Proofs.ToolCalls.Background.Interrupt
 import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases

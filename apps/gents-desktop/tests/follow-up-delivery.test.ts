@@ -10,6 +10,7 @@ import { createChatActions } from "../src/hooks/chatActions";
 import { applyFleetSnapshot } from "../src/hooks/fleetStore";
 import type { ShellProjection } from "../src/hooks/shellProjection";
 import { admittingProjection, shellStores } from "./shell-fixture";
+import { memorySendAttachments } from "./send-attachments-fixture";
 
 const deployment = {
   nodeDid: "agent",
@@ -47,6 +48,7 @@ function send(running: boolean) {
     refreshSession: async () => null,
     refreshSnapshot: async () => {},
     reportFailure: vi.fn(),
+    sendAttachments: memorySendAttachments(),
   });
   return { actions, sendChatMessage };
 }

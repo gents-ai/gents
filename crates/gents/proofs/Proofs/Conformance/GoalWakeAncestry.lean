@@ -1,10 +1,11 @@
 import Proofs.Conformance.GoalRequestAncestry
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.GoalWakeAncestryContracts
 
 open GoalAutomation.RequestAncestry GoalAutomation.RequestHead Lean
-open GoalRequestHeadContracts (root child grandchild rowJson)
+open GoalRequestHeadContracts (root child grandchild RowWire RowWire.ofModel RowWire.toModel)
 
 def entry : AssignmentRow := {request := root}
 def wake : AssignmentRow :=
@@ -57,18 +58,55 @@ def cases : List Case :=
       rows := [entry, {request := {child with receiptValid := false}, openingGoals := [1]}]}
   ]
 
-def rowValue (r : AssignmentRow) : Json := Json.mkObj
-  [("request", (Json.parse (rowJson r.request)).toOption.getD Json.null),
-    ("background_wake", toJson r.backgroundWake), ("tagged", toJson r.tagged),
-    ("runtime_wake_receipt", toJson r.runtimeWakeReceipt), ("opening_goals", toJson r.openingGoals)]
+structure AssignmentRowWire where
+  request : RowWire
+  backgroundWake : Bool
+  tagged : Bool
+  runtimeWakeReceipt : Bool
+  openingGoals : List Nat
+  deriving ToJson
 
-def caseJson (c : Case) : Json := Json.mkObj
-  [("name", toJson c.name), ("rows", toJson (c.rows.map rowValue)),
-    ("current", toJson c.current), ("expected_goal", toJson c.expectedGoal),
-    ("expected_entry", toJson (assignmentEntry 1 1 c.rows c.expectedGoal c.current)),
-    ("expected_invocation_entry", toJson (signedEntry 1 1 (c.rows.map AssignmentRow.request) c.expectedGoal c.current))]
+def AssignmentRowWire.ofModel (r : AssignmentRow) : AssignmentRowWire :=
+  ⟨RowWire.ofModel r.request, r.backgroundWake, r.tagged, r.runtimeWakeReceipt, r.openingGoals⟩
 
-def casesJson : String := (toJson (cases.map caseJson)).compress
+def AssignmentRowWire.toModel (r : AssignmentRowWire) : AssignmentRow :=
+  ⟨r.request.toModel, r.backgroundWake, r.tagged, r.runtimeWakeReceipt, r.openingGoals⟩
+
+structure AncestryInput where
+  name : String
+  rows : List AssignmentRowWire
+  current : Nat
+  expectedGoal : Option Nat
+  deriving ToJson
+
+def AncestryInput.ofCase (c : Case) : AncestryInput :=
+  ⟨c.name, c.rows.map AssignmentRowWire.ofModel, c.current, c.expectedGoal⟩
+
+def AncestryInput.rowsModel (i : AncestryInput) : List AssignmentRow :=
+  i.rows.map AssignmentRowWire.toModel
+
+example : cases.all (fun c => (AncestryInput.ofCase c).rowsModel = c.rows) := by native_decide
+
+structure AncestryOutput where
+  entry : Option Nat
+  invocationEntry : Option Nat
+  deriving ToJson
+
+@[conformance_family]
+def ancestry : Family AncestryInput AncestryOutput where
+  inputs := cases.map AncestryInput.ofCase
+  model := fun i =>
+    { entry := assignmentEntry 1 1 i.rowsModel i.expectedGoal i.current
+      invocationEntry := signedEntry 1 1 (i.rowsModel.map AssignmentRow.request) i.expectedGoal i.current }
+
+/-- A served operator resume publishes one continuation after a terminal
+parent, so only the first-continuation opening is a history it can build. -/
+@[conformance_family]
+def continuationOpening : Family AncestryInput Bool where
+  inputs := (cases.filter fun c =>
+    c.name == "first_continuation_opens_assignment_without_reclassifying_parent").map
+      AncestryInput.ofCase
+  model := fun i => assignmentEntry 1 1 i.rowsModel i.expectedGoal i.current == some i.current
 
 example : (cases.map fun c => assignmentEntry 1 1 c.rows c.expectedGoal c.current).take 8 =
     [some 10, some 20, some 20, some 20, some 10, some 10, none, none] := by native_decide

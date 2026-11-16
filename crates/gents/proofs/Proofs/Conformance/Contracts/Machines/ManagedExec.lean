@@ -1,4 +1,4 @@
-import Proofs.ManagedExec
+import Proofs.Session.ManagedExec
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.Contracts

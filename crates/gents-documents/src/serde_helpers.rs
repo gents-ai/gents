@@ -1,0 +1,250 @@
+use std::fmt;
+
+use serde::de::{DeserializeOwned, SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer};
+use serde_json::Value;
+
+pub fn deserialize_default_on_null<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+pub(super) fn deserialize_optional_string_vec<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct OptionalStringVecVisitor;
+
+    impl<'de> Visitor<'de> for OptionalStringVecVisitor {
+        type Value = Option<Vec<String>>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a string list, null, or empty string")
+        }
+
+        fn visit_unit<E>(self) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_none<E>(self) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if value.trim().is_empty() {
+                Ok(Some(Vec::new()))
+            } else {
+                Ok(Some(vec![value.to_string()]))
+            }
+        }
+
+        fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            self.visit_str(&value)
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut values = Vec::new();
+            while let Some(value) = seq.next_element::<String>()? {
+                values.push(value);
+            }
+            Ok(Some(values))
+        }
+    }
+
+    deserializer.deserialize_any(OptionalStringVecVisitor)
+}
+
+/// Dual-shape JSON decoding: a list of `T` objects, a list of JSON strings
+/// encoding `T`, a single JSON string, null, or missing. Shared by write-tool
+/// and surface-entry deserializers so the contract cannot drift.
+pub fn deserialize_dual_shape<T>(
+    value: Option<Value>,
+    label: &str,
+) -> std::result::Result<Vec<T>, String>
+where
+    T: DeserializeOwned,
+{
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    match value {
+        Value::Null => Ok(Vec::new()),
+        Value::String(s) if s.trim().is_empty() => Ok(Vec::new()),
+        Value::String(s) => {
+            let item = serde_json::from_str(&s).map_err(|error| error.to_string())?;
+            Ok(vec![item])
+        }
+        Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                let parsed = match item {
+                    Value::String(s) => serde_json::from_str(&s),
+                    other => serde_json::from_value(other),
+                }
+                .map_err(|error| error.to_string())?;
+                out.push(parsed);
+            }
+            Ok(out)
+        }
+        other => Err(format!("{label}, got {other}")),
+    }
+}
+
+/// Schema for a field these deserializers also accept `null` for: the
+/// field's own schema, or null.
+pub fn accepts_null(schema: &mut schemars::Schema) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+    let null = Value::String("null".into());
+    let constrained = ["$ref", "anyOf", "oneOf", "allOf", "enum", "const", "not"]
+        .iter()
+        .any(|key| object.contains_key(*key));
+    match object.get_mut("type") {
+        Some(Value::Array(types)) if !constrained => {
+            if !types.contains(&null) {
+                types.push(null);
+            }
+        }
+        Some(kind @ Value::String(_)) if !constrained => {
+            if *kind != null {
+                *kind = Value::Array(vec![kind.take(), null]);
+            }
+        }
+        None if !constrained => {}
+        _ => widen_schema(object, serde_json::json!({ "type": "null" })),
+    }
+}
+
+/// The annotation on a schema member that accepts another spelling of the
+/// canonical values: one sentence the reference shows instead of the member.
+const SCHEMA_NOTE: &str = "x-gents-note";
+
+/// `member` annotated with `note` under [`SCHEMA_NOTE`].
+pub fn noted(mut member: Value, note: &str) -> Value {
+    if let Some(object) = member.as_object_mut() {
+        object.insert(SCHEMA_NOTE.into(), note.into());
+    }
+    member
+}
+
+/// Makes `schema` accept `alternative` as well, keeping its annotations on
+/// the outside so readers still see them.
+pub fn widen_schema(schema: &mut serde_json::Map<String, Value>, alternative: Value) {
+    const ANNOTATIONS: [&str; 7] = [
+        "title",
+        "description",
+        "default",
+        "deprecated",
+        "examples",
+        "readOnly",
+        "writeOnly",
+    ];
+    let inner: serde_json::Map<String, Value> = schema
+        .iter()
+        .filter(|(key, _)| !ANNOTATIONS.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    schema.retain(|key, _| ANNOTATIONS.contains(&key.as_str()));
+    schema.insert(
+        "anyOf".into(),
+        Value::Array(vec![Value::Object(inner), alternative]),
+    );
+}
+
+/// Schema for [`deserialize_optional_string_vec`] and
+/// [`deserialize_string_vec_or_null`]: a string list, one string, or null.
+pub(crate) fn string_list_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "anyOf": [
+            { "type": "array", "items": { "type": "string" } },
+            { "type": "string" },
+            { "type": "null" }
+        ]
+    })
+}
+
+pub(super) fn deserialize_string_vec_or_null<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(deserialize_optional_string_vec(deserializer)?.unwrap_or_default())
+}
+
+pub(super) fn first_row_with_doc_id<T>(data: Option<&Value>, field: &str) -> Option<(String, T)>
+where
+    T: DeserializeOwned,
+{
+    rows_with_doc_id(data, field).into_iter().next()
+}
+
+pub(super) fn rows_with_doc_id<T>(data: Option<&Value>, field: &str) -> Vec<(String, T)>
+where
+    T: DeserializeOwned,
+{
+    data.and_then(|data| data.get(field))
+        .and_then(|value| value.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let doc_id = row.get("_docID")?.as_str()?.to_string();
+                    let mut payload = row.clone();
+                    payload.as_object_mut()?.remove("_docID");
+                    let parsed = match serde_json::from_value(payload) {
+                        Ok(parsed) => parsed,
+                        Err(error) => {
+                            tracing::warn!(
+                                field = field,
+                                doc_id = %doc_id,
+                                error = %error,
+                                "failed to deserialize document row"
+                            );
+                            return None;
+                        }
+                    };
+                    Some((doc_id, parsed))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Installed configuration is enabled unless explicitly disabled.
+pub(super) fn default_enabled() -> bool {
+    true
+}
+pub(super) fn is_enabled(value: &bool) -> bool {
+    *value
+}
+pub(super) fn deserialize_enabled<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<bool>::deserialize(deserializer)?.unwrap_or(true))
+}
+
+pub(super) fn is_disabled(value: &bool) -> bool {
+    !*value
+}

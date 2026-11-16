@@ -275,7 +275,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
 
     let tool_call = wait_for_tool_call(&graphql, &session_id, "read_file").await?;
     assert_eq!(
-        tool_call.get("status").and_then(Value::as_str),
+        tool_call.get("lifecycle_state").and_then(Value::as_str),
         Some("completed")
     );
     let tool_result = canonical_tool_result_text(&graphql, &tool_call).await?;

@@ -63,7 +63,7 @@ fn folder_command_refuses_broad_and_runtime_aliases_before_persisting() {
     let entries = allowed::list(&home).unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].path, work.canonicalize().unwrap());
-    assert_eq!(entries[0].access, gents::pack::BindAccess::Read);
+    assert_eq!(entries[0].access, gents_pack::pack::BindAccess::Read);
 }
 use crate::config::{BootstrapPolicy, BridgeConfig, HomePolicy, NodeHomePolicy};
 use crate::state::resolve_policy;

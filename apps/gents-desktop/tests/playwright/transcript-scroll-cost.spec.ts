@@ -1,5 +1,5 @@
 import type { Locator, Page } from "@playwright/test";
-import { expect, gotoHarness, test } from "./desktopTest";
+import { expect, gotoHarness, scrollAtRest, test } from "./desktopTest";
 
 type Cost = {
   rects: number;
@@ -138,18 +138,17 @@ async function loadEveryPage(page: Page) {
   const expected = await page.evaluate(
     () => window.__GENTS_MOBILE_PERFORMANCE__!.fixture.largeSessionTimelineItems,
   );
-  await expect
-    .poll(
-      async () => {
-        const loaded = await scroller(page)
-          .locator("[data-transcript-list]")
-          .getAttribute("data-rows");
-        if (Number(loaded) < expected) await page.mouse.wheel(0, -1500);
-        return Number(loaded);
-      },
-      { timeout: 30_000, intervals: [150] },
-    )
-    .toBeGreaterThanOrEqual(expected);
+  const loaded = async () =>
+    Number(
+      await scroller(page).locator("[data-transcript-list]").getAttribute("data-rows"),
+    );
+  /* each wheel lands before the next, so the pages read depend on the wheels
+     sent, not on how fast the page draws them */
+  for (let wheel = 0; wheel < 200 && (await loaded()) < expected; wheel += 1) {
+    await page.mouse.wheel(0, -1500);
+    await scrollAtRest(scroller(page));
+  }
+  expect(await loaded()).toBeGreaterThanOrEqual(expected);
   await page.waitForTimeout(600);
   await expect
     .poll(() =>

@@ -99,7 +99,7 @@ impl Check for ToolCallsExpected {
                 let result = decode(&call.result);
                 let receipt = result.get("config_execution").and_then(|value| {
                     serde_json::from_value::<
-                        gents::tools::builtin::self_config::ConfigExecutionReceipt,
+                        gents_tools::builtin::self_config::ConfigExecutionReceipt,
                     >(value.clone())
                     .ok()
                 });
@@ -109,12 +109,12 @@ impl Check for ToolCallsExpected {
                     None => {
                         (call.tool_failure_class.as_deref() == Some("argumentInvalid")
                             && serde_json::from_value::<
-                                gents::tools::builtin::self_config::ConfigCommandParams,
+                                gents_tools::builtin::self_config::ConfigCommandParams,
                             >(decode(&call.args))
                             .is_err())
                             || (call.status.as_deref().or(call.lifecycle_state.as_deref())
                                 == Some("completed")
-                                && gents::tools::builtin::self_config::is_help_call(&decode(
+                                && gents_tools::builtin::self_config::is_help_call(&decode(
                                     &call.args,
                                 )))
                     }

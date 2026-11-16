@@ -2,4 +2,8 @@
 import type { DesktopBootstrapSummary } from "./DesktopBootstrapSummary.js";
 import type { DesktopRuntimeSnapshot } from "./DesktopRuntimeSnapshot.js";
 
-export type DesktopClientSnapshot = { bootstrap: DesktopBootstrapSummary, client: DesktopRuntimeSnapshot | null, };
+export type DesktopClientSnapshot = { bootstrap: DesktopBootstrapSummary, client: DesktopRuntimeSnapshot | null,
+/**
+ * What this client start set aside before opening, for the repair banner.
+ */
+repairNote?: string | null, };

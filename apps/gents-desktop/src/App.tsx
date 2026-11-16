@@ -8,6 +8,7 @@ import {
   type Route as ShellRoute,
 } from "@gents/shell";
 import { AppToaster } from "./ui/app/AppToaster";
+import { RepairBanner } from "./ui/app/RepairBanner";
 import { toast } from "sonner";
 import { TooltipProvider } from "@gents/ui/components/tooltip";
 
@@ -183,7 +184,6 @@ function PluginWindowBody({ pluginId }: { pluginId: string }) {
     return (
       <PluginWindowWaiting
         phase={startup.phase}
-        /* the shell titles the window after the page, else "Gents" */
         title={document.title && document.title !== "Gents" ? document.title : null}
       />
     );
@@ -215,7 +215,7 @@ function AppReactions({ app, bridge }: { app: DesktopApp; bridge: DesktopBridge 
   return <NodeNavigationGuard />;
 }
 
-function AppBody() {
+export function AppBody() {
   const { actions } = useApp();
   const route = useRoute();
   const history = useHistory();
@@ -302,7 +302,12 @@ function AppBody() {
   return (
     <TooltipProvider>
       <AppShell route={route} history={history}>
-        <RouteScreen route={route} />
+        <div className="relative flex h-full min-h-0 flex-col">
+          <RepairBanner />
+          <div className="relative min-h-0 flex-1">
+            <RouteScreen route={route} />
+          </div>
+        </div>
       </AppShell>
       <AppToaster />
       {hasLocalNode && <PluginAccessPrompt />}

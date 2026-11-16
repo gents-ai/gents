@@ -48,6 +48,7 @@ import { GoalChip, goalCommand, goalIsEditable, useGoalMode } from "./goalMode";
 import { useComposerSend } from "./useComposerSend";
 import { useFollowUp } from "@/preferences";
 import { GoalDeliveryFeedback } from "./GoalDeliveryFeedback";
+import { WorkflowStrip } from "../WorkflowsSurface";
 import { ChatDeliveryFeedback } from "./ChatDeliveryFeedback";
 import { ActiveNodeLabel } from "@/app/ActiveNodeLabel";
 import { chipSkills, withSkillLines } from "@/lib/skillLines";
@@ -287,6 +288,7 @@ export function OpenSessionComposer({
 
   return (
     <div ref={roomRef} className="sticky bottom-0 z-20 mt-auto bg-background pt-6 pb-6">
+      {sessionId && <WorkflowStrip sessionId={sessionId} />}
       {shown.kind === "unavailable" && (
         <GoalUnavailable label={shown.label} text={shown.text} />
       )}
@@ -557,6 +559,7 @@ export function OpenSessionComposer({
           reason ? null : (
             <SessionSubmissionStatus
               activityStatus={activityStatus}
+              refresh={loadingStatus?.quiet ? loadingStatus : null}
               hint={
                 status.kind === "disabled" &&
                 !inFlight &&

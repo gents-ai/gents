@@ -965,66 +965,238 @@ fn render_reasoning_text(reasoning: &AssistantReasoning) -> String {
 }
 
 #[cfg(test)]
-use gents_protocol as test_protocol;
-#[cfg(test)]
-#[path = "../../gents-lean-contract/tests/support/rendered_reasoning.rs"]
-mod rendered_reasoning_contract;
-
-#[cfg(test)]
 mod tests {
+    use super::AssistantTurnAccumulator;
     use super::{render_reasoning_text, AssistantMessageContent, CompletionMessage};
+    use crate::provider_input::ProviderInputProfile;
+    use gents_protocol::message::{AssistantContent, Message, Reasoning};
 
     #[test]
-    fn provider_stop_marks_the_exact_reasoning_block_once() {
-        use super::AssistantTurnAccumulator;
+    fn claude_audit_stop_matches_lean_model() {
         use crate::provider_audit::{ClaudeAuditEvent as Event, ClaudeBlockKind};
+        use gents_lean_vocab::families::claude_audit_stop_reasoning_stop as family;
 
-        let mut turn = AssistantTurnAccumulator::default();
-        turn.apply_provider_audit(&Event::BlockStart {
-            index: 0,
-            kind: ClaudeBlockKind::Thinking,
-        })
-        .unwrap();
-        turn.apply_provider_audit(&Event::ThinkingText {
-            index: 0,
-            fragment: "thought".into(),
-        })
-        .unwrap();
-        turn.apply_provider_audit(&Event::Signature {
-            index: 0,
-            fragment: "sig".into(),
-        })
-        .unwrap();
-        let stop = Event::BlockStop { index: 0 };
-        turn.apply_provider_audit(&stop).unwrap();
-        assert_eq!(turn.reasoning_stop_index(&stop).unwrap(), Some(0));
-        assert!(turn.apply_provider_audit(&stop).is_err());
-
-        turn.apply_provider_audit(&Event::BlockStart {
-            index: 1,
-            kind: ClaudeBlockKind::Text,
-        })
-        .unwrap();
-        let text_stop = Event::BlockStop { index: 1 };
-        turn.apply_provider_audit(&text_stop).unwrap();
-        assert_eq!(turn.reasoning_stop_index(&text_stop).unwrap(), None);
+        family::replay::<String, String>(|case| {
+            let mut turn = AssistantTurnAccumulator::default();
+            let mut steps = Vec::new();
+            for step in &case.steps {
+                let index = u32::try_from(step.index).expect("modeled block index fits u32");
+                let event = match step.kind.as_str() {
+                    "block_start_text" => Event::BlockStart {
+                        index,
+                        kind: ClaudeBlockKind::Text,
+                    },
+                    "block_start_thinking" => Event::BlockStart {
+                        index,
+                        kind: ClaudeBlockKind::Thinking,
+                    },
+                    "block_start_tool_use" => Event::BlockStart {
+                        index,
+                        kind: ClaudeBlockKind::ToolUse {
+                            id: format!("toolu_{index}"),
+                            name: "lookup".into(),
+                        },
+                    },
+                    "thinking_text" => Event::ThinkingText {
+                        index,
+                        fragment: "thought".into(),
+                    },
+                    "signature" => Event::Signature {
+                        index,
+                        fragment: "sig".into(),
+                    },
+                    "block_stop" => Event::BlockStop { index },
+                    other => panic!("unsupported modeled provider step {other}"),
+                };
+                let outcome = match turn.apply_provider_audit(&event) {
+                    Err(_) => family::ProviderStepOutcome {
+                        verdict: "rejected".into(),
+                        reasoning_stop: None,
+                    },
+                    Ok(_) if matches!(event, Event::BlockStop { .. }) => {
+                        match turn.reasoning_stop_index(&event) {
+                            Ok(stop) => family::ProviderStepOutcome {
+                                verdict: "accepted".into(),
+                                reasoning_stop: stop.map(u64::from),
+                            },
+                            Err(_) => family::ProviderStepOutcome {
+                                verdict: "refused_stop".into(),
+                                reasoning_stop: None,
+                            },
+                        }
+                    }
+                    Ok(_) => family::ProviderStepOutcome {
+                        verdict: "accepted".into(),
+                        reasoning_stop: None,
+                    },
+                };
+                steps.push(outcome);
+            }
+            family::ProviderOutcome { steps }
+        });
     }
 
     #[test]
-    fn generated_reasoning_visibility_matches_live_preview() {
-        for case in super::rendered_reasoning_contract::generated_reasoning_cases() {
-            let CompletionMessage::Assistant { content, .. } = &case.message else {
-                panic!("{}: expected generated assistant message", case.name);
+    fn live_reasoning_preview_follows_the_lean_model() {
+        use gents_lean_vocab::canonical_wire::{self as wire, Reconstructed};
+
+        gents_lean_vocab::families::canonical_output_projection_preview::replay(|input| {
+            let native: Reconstructed = wire::decode(&input.native.0);
+            let CompletionMessage::Assistant { content, .. } = wire::native_assistant(&native)
+            else {
+                panic!("{}: expected modeled assistant message", input.name);
             };
             let [AssistantMessageContent::Reasoning(reasoning)] = content.as_slice() else {
-                panic!("{}: expected generated reasoning block", case.name);
+                panic!("{}: expected one modeled reasoning block", input.name);
             };
-            assert_eq!(
-                render_reasoning_text(reasoning),
-                case.expected_text,
-                "{}",
-                case.name
-            );
-        }
+            let rendered = render_reasoning_text(reasoning);
+            if rendered.is_empty() {
+                Vec::new()
+            } else {
+                rendered.split('\n').map(str::to_owned).collect()
+            }
+        });
+    }
+
+    #[test]
+    fn claude_signed_final_seals_preview_without_duplicating_bytes() {
+        use gents_protocol::message::ReasoningContent;
+
+        let mut accumulator = AssistantTurnAccumulator::default();
+        accumulator.push_reasoning_delta(None, "考");
+        accumulator.push_reasoning_delta(None, "慮");
+        accumulator
+            .push_provider_reasoning(
+                ProviderInputProfile::ClaudeMessages,
+                Reasoning {
+                    id: None,
+                    content: vec![ReasoningContent::Text {
+                        text: "考慮".into(),
+                        signature: Some("署名".into()),
+                    }],
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            accumulator.take_message(),
+            Some(Message::Assistant {
+                request_id: None,
+                id: None,
+                content: vec![AssistantContent::Reasoning(Reasoning {
+                    id: None,
+                    content: vec![ReasoningContent::Text {
+                        text: "考慮".into(),
+                        signature: Some("署名".into()),
+                    }],
+                })],
+            })
+        );
+
+        let mut mismatch = AssistantTurnAccumulator::default();
+        mismatch.push_reasoning_delta(None, "prefix");
+        assert!(mismatch
+            .push_provider_reasoning(
+                ProviderInputProfile::ClaudeMessages,
+                Reasoning {
+                    id: None,
+                    content: vec![ReasoningContent::Text {
+                        text: "rewritten".into(),
+                        signature: Some("sig".into()),
+                    }],
+                }
+            )
+            .is_err());
+
+        let mut other = AssistantTurnAccumulator::default();
+        other.push_reasoning_delta(None, "first");
+        other
+            .push_provider_reasoning(
+                ProviderInputProfile::OpenAiChatCompletions,
+                Reasoning {
+                    id: None,
+                    content: vec![ReasoningContent::Text {
+                        text: "last".into(),
+                        signature: None,
+                    }],
+                },
+            )
+            .unwrap();
+        let Some(Message::Assistant { content, .. }) = other.take_message() else {
+            panic!("other provider reasoning turn");
+        };
+        let AssistantContent::Reasoning(reasoning) = &content[0] else {
+            panic!("reasoning content");
+        };
+        assert_eq!(
+            reasoning.content.len(),
+            2,
+            "non-Claude final remains append-only"
+        );
+    }
+
+    #[test]
+    fn reasoning_deltas_coalesce_as_the_lean_model_does() {
+        use gents_lean_vocab::families::reasoning_deltas_coalesce::{DeltaInput, PartWire};
+        use gents_protocol::message::ReasoningContent;
+        gents_lean_vocab::families::reasoning_deltas_coalesce::replay::<String>(
+            |case: &DeltaInput<String>| {
+                let mut accumulator = AssistantTurnAccumulator::default();
+                for part in &case.before {
+                    match part.kind.as_str() {
+                        "reasoning" => accumulator.push_reasoning(Reasoning {
+                            id: part.id.map(|id| id.to_string()),
+                            content: vec![ReasoningContent::Text {
+                                text: String::from_utf8(
+                                    part.bytes.iter().map(|byte| *byte as u8).collect(),
+                                )
+                                .unwrap(),
+                                signature: part.signature.map(|signature| signature.to_string()),
+                            }],
+                        }),
+                        "text" => accumulator.push_text(
+                            &String::from_utf8(part.bytes.iter().map(|byte| *byte as u8).collect())
+                                .unwrap(),
+                        ),
+                        other => panic!("{case:?}: unknown part kind {other}"),
+                    }
+                }
+                accumulator.push_reasoning_delta(
+                    case.id.map(|id| id.to_string()),
+                    &String::from_utf8(case.fragment.iter().map(|byte| *byte as u8).collect())
+                        .unwrap(),
+                );
+                let Some(Message::Assistant { content, .. }) = accumulator.take_message() else {
+                    panic!("{case:?}: missing assistant message");
+                };
+                content
+                    .into_iter()
+                    .flat_map(|part| match part {
+                        AssistantContent::Text(text) => vec![PartWire {
+                            kind: "text".into(),
+                            id: None,
+                            signature: None,
+                            bytes: text.text.into_bytes().into_iter().map(u64::from).collect(),
+                        }],
+                        AssistantContent::Reasoning(reasoning) => reasoning
+                            .content
+                            .into_iter()
+                            .map(|part| {
+                                let ReasoningContent::Text { text, signature } = part else {
+                                    panic!("{case:?}: unexpected reasoning type");
+                                };
+                                PartWire {
+                                    kind: "reasoning".into(),
+                                    id: reasoning.id.as_ref().map(|id| id.parse().unwrap()),
+                                    signature: signature
+                                        .map(|signature| signature.parse().unwrap()),
+                                    bytes: text.into_bytes().into_iter().map(u64::from).collect(),
+                                }
+                            })
+                            .collect(),
+                        _ => panic!("{case:?}: unexpected content type"),
+                    })
+                    .collect()
+            },
+        );
     }
 }

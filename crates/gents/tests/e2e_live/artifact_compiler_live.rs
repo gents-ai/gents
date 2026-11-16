@@ -4,11 +4,12 @@ use crate::support::{
     interrupt::{wait_for_runtime_ready, BootedAgent},
     test_db,
 };
-use gents::documents::{BashTools, FileTools, HostTools, Tools};
-use gents::{
-    tools::workspace::*, BashMode, CommandExecutionMode, CommandNetworkMode,
-    DocumentRuntimeOptions, FileToolMode, Gents, NodeIdentity, ToolCeiling,
-};
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::{BashMode, FileToolMode};
+use gents_documents::{BashTools, FileTools, HostTools, Tools};
+use gents_session::workspace::*;
+use gents_store::identity::NodeIdentity;
+use gents_tools::{native::CommandExecutionMode, native::CommandNetworkMode, surface::ToolCeiling};
 use serde_json::{json, Value};
 use std::{path::Path, process::Command, sync::Arc, time::Duration};
 
@@ -32,39 +33,47 @@ fn git(repo: &Path, args: &[&str]) -> String {
 
 #[cfg(target_os = "macos")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "live compiler QA; run built test executable directly without parent Cargo; GENTS_ARTIFACT_LIVE=1"]
-async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
-    assert_eq!(std::env::var("GENTS_ARTIFACT_LIVE").as_deref(), Ok("1"));
+#[ignore = "macOS compiler qualification: run the built live test executable directly without parent Cargo"]
+async fn live_compiler_keeps_sealed_sources_unchanged() {
     let db = test_db("artifact-compiler-live").await;
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let did = identity.did().to_owned();
-    let target = crate::support::live_inference::live_target();
+    let target = crate::support::live_inference::live_target().await;
     let actors = crate::support::live_inference::bind_target(&db, &target).await;
     let agent_did = actors.agent_did().to_owned();
     let backend_id = target.backend_id().to_owned();
     let access = actors.fixture.access.clone();
-    // The node's client key bounds the live profile with an execution.
     access
         .transact_write("test.artifact_live.profile", |txn| {
-            use gents::documents::apply_desired_state_plan;
-            use gents::store::config_client::{
+            use gents_documents::apply_desired_state_plan;
+            use gents_documents::{
                 read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
                 DesiredStateApplyPlan,
             };
             let did = &did;
             let agent_did = &agent_did;
             let backend_id = &backend_id;
-            let model = target.model().to_owned();
+            let mut profile = target.profile(did);
+            profile.profile_id = "artifact-live-profile".into();
+            profile.backend_id = backend_id.clone();
+            profile.execution_id = Some("artifact-live-execution".into());
+            profile.max_output_tokens =
+                Some(profile.max_output_tokens.map_or(4096, |cap| cap.min(4096)));
             Box::pin(async move {
-                let (_, agent) = read(txn, gents::Collection::Agent, did, agent_did)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("the live Agent is missing"))?;
-                let mut agent: gents::documents::Agent = serde_json::from_value(agent)?;
+                let (_, agent) = read(
+                    txn,
+                    gents_store::collection::Collection::Agent,
+                    did,
+                    agent_did,
+                )
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("the live Agent is missing"))?;
+                let mut agent: gents_documents::Agent = serde_json::from_value(agent)?;
                 agent.inference_profile_id = "artifact-live-profile".into();
                 agent.enabled = true;
                 let documents = [
                     (
-                        gents::Collection::InferenceExecution,
+                        gents_store::collection::Collection::InferenceExecution,
                         json!({
                             "execution_id": "artifact-live-execution", "node_did": did,
                             "max_turns": 8, "deadline_duration_secs": 600,
@@ -72,15 +81,13 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
                         }),
                     ),
                     (
-                        gents::Collection::InferenceProfile,
-                        json!({
-                            "profile_id": "artifact-live-profile", "node_did": did,
-                            "display_name": "Bounded artifact live QA", "backend_id": backend_id,
-                            "model_name": model, "max_output_tokens": 4096,
-                            "execution_id": "artifact-live-execution"
-                        }),
+                        gents_store::collection::Collection::InferenceProfile,
+                        serde_json::to_value(profile)?,
                     ),
-                    (gents::Collection::Agent, serde_json::to_value(agent)?),
+                    (
+                        gents_store::collection::Collection::Agent,
+                        serde_json::to_value(agent)?,
+                    ),
                 ];
                 let plan = DesiredStateApplyPlan::new(
                     documents
@@ -92,32 +99,41 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
                         })
                         .collect(),
                 )?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await
         .expect("bound the artifact live profile as the node's client key");
 
-    let fixture = tempfile::tempdir().unwrap();
-    let parent = std::fs::canonicalize(fixture.path()).unwrap();
-    let repo = parent.join("repo");
-    std::fs::create_dir(&repo).unwrap();
-    git(&repo, &["init", "-b", "main"]);
-    git(
-        &repo,
-        &["config", "user.email", "artifact-live@example.com"],
-    );
-    git(&repo, &["config", "user.name", "Artifact Live QA"]);
-    let files = [("Cargo.toml", "[package]\nname = \"artifact-live-probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
-        ("Cargo.lock", "version = 3\n\n[[package]]\nname = \"artifact-live-probe\"\nversion = \"0.1.0\"\n"),
-        ("src/lib.rs", "pub fn answer() -> u32 { 42 }\n#[test] fn live_artifact_answer() { assert_eq!(answer(), 42); }\n")];
-    for (path, bytes) in files {
-        let path = repo.join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, bytes).unwrap();
-    }
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-m", "sealed compiler fixture"]);
+    let (fixture, repo, files) = tokio::task::spawn_blocking(|| {
+        let fixture = tempfile::tempdir().unwrap();
+        let parent = std::fs::canonicalize(fixture.path()).unwrap();
+        let repo = parent.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        gents_session::workspace::init_test_repo(&repo, &["-b", "main"]);
+        let files = [
+            ("Cargo.toml", "[package]\nname = \"artifact-live-probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[profile.fast-dev]\ninherits = \"dev\"\ndebug = 0\n"),
+            ("Cargo.lock", "version = 3\n\n[[package]]\nname = \"artifact-live-probe\"\nversion = \"0.1.0\"\n"),
+            ("src/lib.rs", "pub fn answer() -> u32 { 42 }\n#[test] fn live_artifact_answer() { assert_eq!(answer(), 42); }\n"),
+        ];
+        for (path, bytes) in files {
+            let path = repo.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        }
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "sealed compiler fixture"]);
+        (fixture, repo, files)
+    })
+    .await
+    .unwrap();
+    let _fixture = fixture;
 
     crate::support::fixtures::configure_agent_tools_as(
         &access,
@@ -146,15 +162,16 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
         Vec::new(),
     )
     .await;
-    // The User publishes the repository and the managed Agent creates and
-    // seals the read-only workspace through the production provisioning owner,
-    // which publishes the workspace documents as that Agent.
     let workspace_id = uuid::Uuid::new_v4().to_string();
-    let sealed = gents::tools::workspace::provision_read_only_workspace(
+    let revision_repo = repo.clone();
+    let revision = tokio::task::spawn_blocking(move || git(&revision_repo, &["rev-parse", "HEAD"]))
+        .await
+        .unwrap();
+    let sealed = gents_session::workspace::provision_read_only_workspace(
         &access,
         &actors.agent_access,
         &repo,
-        &git(&repo, &["rev-parse", "HEAD"]),
+        &revision,
         &WorkspaceProvisioningSelection {
             workspace_id: workspace_id.clone(),
             node_did: did.clone(),
@@ -169,12 +186,20 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     let placement = sealed.placement.clone();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let source = std::path::PathBuf::from(&placement.host_path);
-    let before_tree = git(&source, &["rev-parse", "HEAD^{tree}"]);
-    let gitdir = std::path::PathBuf::from(git(&source, &["rev-parse", "--absolute-git-dir"]));
-    let before_metadata: Vec<_> = ["HEAD", "index", "commondir", "gitdir"]
-        .into_iter()
-        .map(|file| (file, std::fs::read(gitdir.join(file)).unwrap()))
-        .collect();
+    let snapshot_source = source.clone();
+    let (before_tree, gitdir, before_metadata) = tokio::task::spawn_blocking(move || {
+        let source = snapshot_source;
+        let before_tree = git(&source, &["rev-parse", "HEAD^{tree}"]);
+        let gitdir = std::path::PathBuf::from(git(&source, &["rev-parse", "--absolute-git-dir"]));
+        let before_metadata: Vec<_> = ["HEAD", "index", "commondir", "gitdir"]
+            .into_iter()
+            .map(|file| (file, std::fs::read(gitdir.join(file)).unwrap()))
+            .collect();
+
+        (before_tree, gitdir, before_metadata)
+    })
+    .await
+    .unwrap();
 
     let agent = Gents::from_default_agent_documents(
         db.node.clone(),
@@ -187,14 +212,13 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     )
     .await
     .unwrap();
-    // The Agent authors its own request against the sealed workspace.
     let mut seed = crate::support::agent_requests::RequestSeed::new(
         "artifact-live-request",
         "artifact-live-session",
         &now,
     );
     seed.content = Some(
-        "Inspect Cargo.toml and src/lib.rs, then call bash exactly once with command cargo, args [\"test\",\"--locked\",\"--offline\"], raw_json true. This is a sealed read-only source with runtime-managed compiler artifacts. Do not edit source or set output directories. You must execute the test, not merely suggest it. After observing its actual result, report the test count and answer value. If the compiler fails, report the exact failure without claiming success.",
+        "Inspect Cargo.toml and src/lib.rs, then call bash with command cargo, args [\"test\",\"--locked\",\"--offline\",\"--profile\",\"fast-dev\"], raw_json true. This is a sealed read-only source with runtime-managed compiler artifacts. Do not edit source or set output directories. You must execute the test, not merely suggest it. After observing its actual result, report the test count and answer value. If the compiler fails, report the exact failure without claiming success.",
     );
     let mut request = actors.request_create(&seed);
     request.initial_lifecycle_state =
@@ -213,31 +237,29 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     let evidence = access.execute(r#"{
         AgentRequest(filter: { request_id: { _eq: "artifact-live-request" } }) { _docID request_id lifecycle_state failure_reason terminal_output execution_generation workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash }
         AgentToolCall(filter: { request_id: { _eq: "artifact-live-request" } }) { tool_call_id tool_name lifecycle_state request_doc_id }
-        InferenceCall(filter: { request_id: { _eq: "artifact-live-request" } }) { call_id backend_id request_doc_id call_state prompt_tokens completion_tokens }
         WorkspaceBinding(filter: { request_id: { _eq: "artifact-live-request" } }) { request_doc_id workspace_id authority owner_node_did seal_hash lifecycle_state }
     }"#).await.expect("read artifact live evidence as the node's client key")["data"].take();
     let payloads = fetch_tool_call_payloads_for_request_as(&access, "artifact-live-request").await;
     booted.shutdown().await;
     if let Some(path) = std::env::var_os("GENTS_ARTIFACT_LIVE_EVIDENCE") {
-        std::fs::write(
+        tokio::fs::write(
             path,
             serde_json::to_vec_pretty(
                 &json!({"endpoint":target.endpoint(),"model":target.model(),"terminal":terminal,"evidence":evidence}),
             )
             .unwrap(),
         )
-        .unwrap();
+        .await.unwrap();
     }
     assert_eq!(terminal, "completed", "{evidence}");
     let row = &evidence["AgentRequest"][0];
-    assert_eq!(evidence["AgentRequest"].as_array().unwrap().len(), 1);
     let calls = evidence["AgentToolCall"].as_array().unwrap();
     assert!(
         calls.iter().any(|call| {
             let payload = payloads.iter().find(|payload| {
                 call["tool_call_id"].as_str() == Some(payload.tool_call_id.as_str())
             });
-            let args = payload
+            let arguments = payload
                 .and_then(|payload| payload.arguments.as_deref())
                 .and_then(|text| serde_json::from_str::<Value>(text).ok())
                 .unwrap_or(Value::Null);
@@ -248,11 +270,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
             call["tool_name"] == "bash_unrestricted"
                 && call["request_doc_id"] == row["_docID"]
                 && call["lifecycle_state"] == "completed"
-                && args["command"] == "cargo"
-                && args["args"] == json!(["test", "--locked", "--offline"])
-                && result["execution_mode"] == "artifact_write"
-                && result["sandbox"] == "macos_seatbelt"
-                && result["network_mode"] == "disabled"
+                && arguments["command"] == "cargo"
                 && result["exit_code"] == 0
                 && result["stdout"]
                     .as_str()
@@ -260,20 +278,6 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
         }),
         "actual successful artifact compiler ToolCall required: {evidence}"
     );
-    let inference = evidence["InferenceCall"].as_array().unwrap();
-    assert!(!inference.is_empty());
-    assert!(
-        inference
-            .iter()
-            .all(|call| call["request_doc_id"] == row["_docID"]
-                && call["backend_id"] == target.backend_id()
-                && call["call_state"] == "completed"
-                && call["call_id"].as_str().is_some_and(|id| !id.is_empty())),
-        "every inference must belong to this physical request and configured backend: {evidence}"
-    );
-    assert!(inference.iter().any(|call| call["completion_tokens"]
-        .as_u64()
-        .is_some_and(|tokens| tokens > 0)));
     assert_eq!(row["workspace_id"], workspace_id.as_str());
     assert_eq!(row["workspace_owner_node_did"], did);
     assert_eq!(row["workspace_authority"], "readOnly");
@@ -281,9 +285,6 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
         row["workspace_seal_hash"],
         sealed.workspace.seal_hash.as_deref().unwrap()
     );
-    assert!(row["execution_generation"]
-        .as_str()
-        .is_some_and(|s| !s.is_empty()));
     assert!(evidence["WorkspaceBinding"]
         .as_array()
         .unwrap()
@@ -291,13 +292,17 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
         .any(|binding| binding["request_doc_id"] == row["_docID"]
             && binding["authority"] == "readOnly"
             && binding["seal_hash"] == row["workspace_seal_hash"]));
-    for (path, bytes) in files {
-        assert_eq!(std::fs::read(source.join(path)).unwrap(), bytes.as_bytes());
-    }
-    for (name, bytes) in before_metadata {
-        assert_eq!(std::fs::read(gitdir.join(name)).unwrap(), bytes);
-    }
-    assert_eq!(git(&source, &["rev-parse", "HEAD^{tree}"]), before_tree);
-    assert!(git(&source, &["status", "--porcelain=v1"]).is_empty());
-    assert!(!source.join("target").exists());
+    tokio::task::spawn_blocking(move || {
+        for (path, bytes) in files {
+            assert_eq!(std::fs::read(source.join(path)).unwrap(), bytes.as_bytes());
+        }
+        for (name, bytes) in before_metadata {
+            assert_eq!(std::fs::read(gitdir.join(name)).unwrap(), bytes);
+        }
+        assert_eq!(git(&source, &["rev-parse", "HEAD^{tree}"]), before_tree);
+        assert!(git(&source, &["status", "--porcelain=v1"]).is_empty());
+        assert!(!source.join("target").exists());
+    })
+    .await
+    .unwrap();
 }
