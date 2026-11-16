@@ -51,7 +51,11 @@ def handle(connection, program):
 
         def watch():
             # The caller died (a test timed out and killed its children): stop Lake too.
-            if not connection.recv(1):
+            try:
+                ended = not connection.recv(1)
+            except OSError:
+                return  # the reply was sent and the connection closed
+            if ended:
                 try:
                     os.killpg(child.pid, signal.SIGKILL)
                 except ProcessLookupError:

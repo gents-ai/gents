@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """The test-result cache against its Lean model, and its tracer against strace logs; no builds."""
 
+import contextlib
+import io
 import json
 import os
 import random
@@ -301,6 +303,11 @@ class Recording(unittest.TestCase):
 
     def record(self, passed, trace, trusted=True, dirty=()):
         answers = {"ws:a": {"file": "1"}}
+        # A contradiction prints a workflow error annotation; keep it out of CI's log.
+        with contextlib.redirect_stdout(io.StringIO()):
+            return self.record_quietly(passed, trace, trusted, dirty, answers)
+
+    def record_quietly(self, passed, trace, trusted, dirty, answers):
         return test_cache.record_run(self.plan(), {("b", "t"): passed}, {("/bin/b", "t"): trace},
                                      {path: {None} for path in dirty},
                                      lambda path: answers.get(path, "absent"), {"b": "/bin/b"}, trusted,
