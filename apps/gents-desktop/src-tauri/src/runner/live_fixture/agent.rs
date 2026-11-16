@@ -62,7 +62,6 @@ pub(super) async fn spawn_live_node(
     let docs = seed_live_agent_documents(
         home,
         config_actor,
-        &node_did,
         name,
         &tool_root,
         backend,
@@ -101,7 +100,6 @@ pub(super) async fn spawn_live_node(
 async fn seed_live_agent_documents(
     home: &EmbeddedHome,
     config_actor: &PrincipalIdentity,
-    node_did: &str,
     agent_name: &str,
     tool_root: &std::path::Path,
     backend: &LiveBackendConfig,
@@ -118,6 +116,8 @@ async fn seed_live_agent_documents(
     let tool_root = tool_root
         .to_str()
         .context("fixture tool root is not UTF-8")?;
+    let node_did = home.identity.did().to_string();
+    let node_did = node_did.as_str();
     let config_actor_did = config_actor.did();
     anyhow::ensure!(
         home.node.node_identity_did() == Some(node_did),
