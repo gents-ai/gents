@@ -372,7 +372,7 @@ pub enum RequestOperationError {
         source: Box<dyn Error + Send + Sync>,
     },
     #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    Passthrough(crate::error_chain::PassedThrough),
 }
 
 impl RequestOperationError {
@@ -380,7 +380,7 @@ impl RequestOperationError {
     where
         E: crate::error_chain::PassedSource,
     {
-        Self::Passthrough(crate::error_chain::PassedThrough::boxed(error))
+        Self::Passthrough(crate::error_chain::PassedThrough::new(error))
     }
 
     /// Passes a typed owner error through as itself, the first error on the
@@ -389,7 +389,7 @@ impl RequestOperationError {
     where
         E: Error + Send + Sync + 'static,
     {
-        Self::Passthrough(Box::new(error))
+        Self::Passthrough(crate::error_chain::PassedThrough::error(error))
     }
 
     pub fn code(&self) -> &'static str {
@@ -464,14 +464,14 @@ impl RequestOperationError {
 
     pub fn into_passthrough(self) -> Result<Box<dyn Error + Send + Sync>, Self> {
         match self {
-            Self::Passthrough(error) => Ok(error),
+            Self::Passthrough(error) => Ok(Box::new(error)),
             other => Err(other),
         }
     }
 
     pub fn source_passthrough(&self) -> Option<&(dyn Error + Send + Sync + 'static)> {
         match self {
-            Self::Passthrough(error) => Some(error.as_ref()),
+            Self::Passthrough(error) => Some(error.get()),
             Self::Unconfirmed { source, .. } | Self::IdentityConflict { source, .. } => {
                 Some(source.as_ref())
             }

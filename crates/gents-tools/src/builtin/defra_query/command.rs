@@ -10,15 +10,15 @@ use gents_store::config_client::{ConfigClientError, ConfigRead, RerunNote, Trans
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
-pub(super) struct CollectionDiscoveryError(String);
+pub(crate) struct CollectionDiscoveryError(String);
 
 #[derive(Debug, thiserror::Error)]
-pub(super) enum QueryCommandError {
+pub(crate) enum QueryCommandError {
     #[error(transparent)]
     Discovery(#[from] CollectionDiscoveryError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] ConfigClientError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

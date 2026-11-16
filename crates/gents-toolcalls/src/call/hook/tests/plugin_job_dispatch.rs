@@ -364,7 +364,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         }
         hook = hook.with_job_driver(JobDriver::with_service_admission(runtime, admission));
     }
-    bind_claimed_hook_request(&hook, lifecycle, Utc::now() + chrono::Duration::minutes(5)).await;
+    bind_claimed_hook_request(&hook, lifecycle).await;
     hook.on_completion_call(&user_text_message("run the workflow"), &[])
         .await;
     Step0 {

@@ -49,8 +49,7 @@ pub async fn bind_managed_hook_request(
     hook: &mut DefraSessionHook,
     request_id: &str,
     root: &dyn NodeIdentity,
-    deadline: chrono::DateTime<chrono::Utc>,
-) {
+) -> chrono::DateTime<chrono::Utc> {
     let session = hook.session_id().await.expect("hook session");
     let lifecycle = crate::call::lifecycle::admission_fixture::claimed_signed_request(
         &hook.node, request_id, &session, root, None,
@@ -61,7 +60,7 @@ pub async fn bind_managed_hook_request(
         .expect("fixture retains managed Agent signer");
     hook.actor = Some(identity::Did::new(signer.did()).unwrap());
     hook.agent_signer = Some(signer);
-    bind_claimed_hook_request(hook, lifecycle, deadline).await;
+    bind_claimed_hook_request(hook, lifecycle).await
 }
 
 pub fn user_text_message(text: &str) -> Message {
@@ -235,17 +234,20 @@ pub async fn bind_interruptible_request(
     hook: &DefraSessionHook,
     request_id: &str,
     session_id: &str,
-    deadline_at: chrono::DateTime<chrono::Utc>,
-) {
+) -> chrono::DateTime<chrono::Utc> {
     let lifecycle = claimed_hook_request(hook, request_id, session_id).await;
-    bind_claimed_hook_request(hook, lifecycle, deadline_at).await;
+    bind_claimed_hook_request(hook, lifecycle).await
 }
 
+/// Binds a claimed request to the hook the way the daemon does and returns the
+/// bound deadline, which is the claim's: tool calls inherit it.
 pub async fn bind_claimed_hook_request(
     hook: &DefraSessionHook,
     mut lifecycle: gents_session::request::lifecycle::RequestLifecycle,
-    deadline_at: chrono::DateTime<chrono::Utc>,
-) {
+) -> chrono::DateTime<chrono::Utc> {
+    let deadline_at = lifecycle
+        .claimed_deadline_at()
+        .expect("a claimed request carries its claim's deadline");
     let request_id = lifecycle.request().request_id.clone();
     let request_doc_id = lifecycle.request().doc_id.clone();
     let requester_did = lifecycle.request().requester_did.clone();
@@ -290,6 +292,7 @@ pub async fn bind_claimed_hook_request(
             turn: 0,
         },
     );
+    deadline_at
 }
 
 pub async fn publish_claimed_authored_input(

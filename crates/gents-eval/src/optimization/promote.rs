@@ -49,12 +49,12 @@ fn refused(reason: &'static str, detail: impl Into<String>) -> anyhow::Error {
 /// The promote transaction's failure: a closure that moved since the job froze
 /// it is told apart from every other failure without asking an erased error.
 #[derive(Debug, thiserror::Error)]
-enum PromoteTxnError {
+pub(crate) enum PromoteTxnError {
     #[error("the frozen closure moved: {0:?}")]
     Drift(Vec<DriftedRef>),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] gents_store::config_client::ConfigClientError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 
