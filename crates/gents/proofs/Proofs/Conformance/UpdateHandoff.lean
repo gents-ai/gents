@@ -50,4 +50,20 @@ def transitions : Conformance.Family HandoffCase HandoffVerdict where
     canRestoreSameBuild := canRestore c.phase c.flag true,
     next := step c.phase (handoffAction c.action c.flag) }
 
+structure PreflightCase where
+  verified : Bool
+  keychainCustody : Bool
+  keyReadableWithoutInteraction : Bool
+  deriving ToJson
+
+@[conformance_family]
+def preflight : Conformance.Family PreflightCase (Option Phase) where
+  inputs := [false, true].flatMap fun verified =>
+    [false, true].flatMap fun keychain =>
+      [false, true].map fun readable => {
+        verified := verified, keychainCustody := keychain,
+        keyReadableWithoutInteraction := readable }
+  model := fun c => _root_.RuntimeReconcile.UpdateHandoff.preflight
+    c.verified c.keychainCustody c.keyReadableWithoutInteraction
+
 end Conformance.UpdateHandoff

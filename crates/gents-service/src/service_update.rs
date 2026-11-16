@@ -16,6 +16,7 @@ mod backup_conformance;
 mod execute;
 mod files;
 mod notices;
+mod preflight;
 mod recovery;
 mod repair_backups;
 mod stage;
@@ -319,21 +320,24 @@ async fn check_metadata(home: Option<PathBuf>) -> Result<serde_json::Value> {
         return Ok(metadata(false));
     };
     let _keychain = crate::process_resources::prevent_keychain_prompts(true)?;
-    let (identity, state, settings) = tokio::task::spawn_blocking(move || -> Result<_> {
-        gents_store::local::storage_backend::reject_legacy_store(
-            &gents_store::local::home::default_data_dir(&home),
-        )?;
-        let config = read_init_config(&home)?.context("home must be initialized")?;
-        let state = read_runtime_state(&home)?.context("runtime endpoint missing")?;
-        let settings = NetworkSettings::read(&home)?;
-        let identity = crate::home_state::load_initialized_home_identity(&home, &config)?;
-        anyhow::ensure!(
-            state.node_did == config.node_did,
-            "runtime identity mismatch"
-        );
-        Ok((identity, state, settings))
-    })
-    .await??;
+    let (identity, state, settings, store_key_checked) =
+        tokio::task::spawn_blocking(move || -> Result<_> {
+            gents_store::local::storage_backend::reject_legacy_store(
+                &gents_store::local::home::default_data_dir(&home),
+            )?;
+            let config = read_init_config(&home)?.context("home must be initialized")?;
+            let store_key_checked =
+                preflight::check_store_key(&home, config.store_encryption.as_ref())?;
+            let state = read_runtime_state(&home)?.context("runtime endpoint missing")?;
+            let settings = NetworkSettings::read(&home)?;
+            let identity = crate::home_state::load_initialized_home_identity(&home, &config)?;
+            anyhow::ensure!(
+                state.node_did == config.node_did,
+                "runtime identity mismatch"
+            );
+            Ok((identity, state, settings, store_key_checked))
+        })
+        .await??;
     execute::endpoint(&state.graphql, &settings)?;
     let access = gents_store::config_client::ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(state.graphql, identity.did())
@@ -351,6 +355,7 @@ async fn check_metadata(home: Option<PathBuf>) -> Result<serde_json::Value> {
         eprintln!("warning: {mismatch}");
     }
     let mut metadata = metadata(true);
+    metadata["keychain_store_key_checked"] = serde_json::json!(store_key_checked);
     metadata["non_canonical_lineages"] = serde_json::json!(lineage);
     Ok(metadata)
 }

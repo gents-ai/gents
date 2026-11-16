@@ -28,6 +28,14 @@ pub enum Action {
     Fail,
 }
 
+pub fn preflight(
+    verified: bool,
+    keychain_custody: bool,
+    key_readable_without_interaction: bool,
+) -> Option<Phase> {
+    (verified && (!keychain_custody || key_readable_without_interaction)).then_some(Phase::Staged)
+}
+
 impl Phase {
     pub fn can_restore_prior(self, candidate_may_have_opened: bool, same_build: bool) -> bool {
         (!candidate_may_have_opened || same_build)
@@ -57,6 +65,17 @@ impl Phase {
 #[cfg(test)]
 mod conformance {
     use super::*;
+
+    #[test]
+    fn update_preflight_matches_lean() {
+        gents_lean_vocab::families::update_handoff_preflight::replay::<Phase>(|i| {
+            preflight(
+                i.verified,
+                i.keychain_custody,
+                i.key_readable_without_interaction,
+            )
+        });
+    }
 
     #[test]
     fn update_handoff_transitions_match_lean() {
