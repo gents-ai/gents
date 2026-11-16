@@ -536,6 +536,7 @@ jobs:
         run: make gate-run JOB="build:${{ matrix.archive }}"
 
       - name: Upload the ${{ matrix.archive }} test archive
+        if: ${{ !matrix.run }}
         uses: actions/upload-artifact@v7
         with:
           name: gents-tests-${{ matrix.archive }}

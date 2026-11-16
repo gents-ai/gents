@@ -173,6 +173,14 @@ class Shards(unittest.TestCase):
         self.assertIn("shard:portable", selection["jobs"])
         self.assertFalse(any(job in selection["jobs"] for job in ("test:foundation", "test:store", "test:session")))
 
+    def test_one_slice_runs_in_the_build_job(self):
+        selection = sharded(1, everything=True)
+        self.assertEqual(selection["shards"], [])
+        self.assertTrue(selection["archives"][0]["run"])
+        self.assertIn("build:portable", selection["jobs"])
+        self.assertNotIn("shard:portable", selection["jobs"])
+        self.assertFalse(sharded(3, everything=True)["archives"][0]["run"])
+
     def test_zero_or_unset_keeps_one_job_per_group(self):
         for selection in (select(everything=True), sharded(0, everything=True)):
             self.assertEqual(set(groups(selection)), {group.name for group in gate.GROUPS})
@@ -181,7 +189,8 @@ class Shards(unittest.TestCase):
     def test_never_more_slices_than_crates_with_tests(self):
         selection = sharded(6, "crates/gents-store/src/graphql.rs", tier="draft")
         self.assertEqual(archived(selection), ["gents-store"])
-        self.assertEqual(len(selection["shards"]), 1)
+        self.assertEqual(selection["shards"], [])
+        self.assertTrue(selection["archives"][0]["run"])
         compile_only = sharded(6, "crates/gents-core-packs/src/lib.rs", tier="draft")
         self.assertEqual(archived(compile_only), ["gents-core-packs"])
         self.assertEqual(compile_only["shards"], [])

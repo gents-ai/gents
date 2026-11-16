@@ -352,10 +352,15 @@ def plan(files, members, everything=False, only=None, tier="full"):
         if archived:
             # At most one slice per crate with tests, so every slice runs some.
             count = min(count, len([package for package in archived if package not in NO_TESTS]))
-            archives.append({"archive": ARCHIVE, "runs_on": runner("portable"),
-                             "packages": " ".join(archived), "timeout": 60})
-            shards = [{"archive": ARCHIVE, "index": index, "count": count, "runs_on": runner("portable"),
-                       "timeout": 60} for index in range(1, count + 1)]
+            # One slice runs in the build job itself: no archive transfer, which
+            # from the minisforums costs more than the tests (1.24 GB: 3.5 min
+            # up, 14 min down in dispatch 43775099812).
+            single = count == 1
+            archives.append({"archive": ARCHIVE, "runs_on": runner("portable"), "run": single,
+                             "packages": " ".join(archived), "timeout": 90 if single else 60})
+            shards = [] if single else [
+                {"archive": ARCHIVE, "index": index, "count": count, "runs_on": runner("portable"),
+                 "timeout": 60} for index in range(1, count + 1)]
     if only:
         jobs = {job: wanted and job in only for job, wanted in jobs.items()}
         matrix = [entry for entry in matrix if f"test:{entry['group']}" in only]
@@ -766,6 +771,13 @@ def run_build(selection, name):
         print(f"::error::{problem}", flush=True)
     results.append((f"check {name} archive", "ok" if not problems else "; ".join(problems),
                     f"{total} tests listed, {ignored} ignored", time.time() - started))
+    if not problems and entry.get("run"):
+        # The whole archive, on this runner, from this job's own checkout.
+        os.environ["GENTS_TEST_BINARIES_PREBUILT"] = "1"
+        arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci"]
+        if os.environ.get("RUST_TEST_THREADS"):
+            arguments += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
+        nextest(arguments, label=f"run {name}")
 
 
 def run_shard(selection, name, index=None):
