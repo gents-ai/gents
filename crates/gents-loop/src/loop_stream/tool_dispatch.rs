@@ -75,6 +75,7 @@ where
                     Unavailable("tool effects require a request execution scope".to_owned())
                 })?;
                 scope_request_tool_execution_with_session(
+                    None,
                     scope.deadline_at,
                     scope.cancellation_token,
                     scope.workspace_cwd,
@@ -307,6 +308,7 @@ pub(super) async fn dispatch_provider_tool(
 
     let receipt_writer = live_output.clone();
     let mut call = Box::pin(scope_request_tool_execution_with_session(
+        None,
         scope.deadline_at,
         scope.cancellation_token.clone(),
         scope.workspace_cwd.clone(),
@@ -393,13 +395,11 @@ where
             );
             let scoped = async {
                 match input.scope {
-                Some(scope) => crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
-                    scope.requester_did, scope.node_did, scope.agent_did, scope.request_id,
-                    crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                Some(scope) => crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                        Some(crate::tool_call_lifecycle::runtime::ToolRequestIdentity::new(scope.requester_did, scope.node_did, scope.agent_did, scope.request_id)),
                         scope.deadline_at, token.clone(), scope.workspace_cwd, scope.live_output,
                         scope.session_id, scope.correlation, scope.source_fields, scope.background, execute,
-                    ),
-                ).await,
+                    ).await,
                 None => tokio::select! {
                     biased;
                     _ = token.cancelled() => ToolOutcome::Cancelled,

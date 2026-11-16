@@ -69,6 +69,7 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
     let registry = LiveToolOutputRegistry::default();
     let writer = registry.writer_for(doc_id.clone()).await;
     let outcome = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        None,
         None, tokio_util::sync::CancellationToken::new(), None, Some(writer), None, None,
         Default::default(), false,
         call_tool_managed(&tool, serde_json::json!({"path": "source.txt", "raw_json": true}).to_string()),
@@ -145,6 +146,7 @@ async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {
     let writer = registry.writer_for(doc_id.clone()).await;
     let tool = WriteFileTool::new(ToolContext::new(root_path, false).unwrap());
     let output = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        None,
         None, tokio_util::sync::CancellationToken::new(), None, Some(writer), None, None,
         Default::default(), false,
         tool.call(WriteFileArgs {
@@ -200,6 +202,7 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
     let registry = LiveToolOutputRegistry::default();
     let writer = registry.writer_for(doc_id.clone()).await;
     gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        None,
         None,
         tokio_util::sync::CancellationToken::new(),
         None,

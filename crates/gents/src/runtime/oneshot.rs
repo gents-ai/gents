@@ -397,12 +397,16 @@ where
             "provider stream ended without an explicit terminal response"
         ))
     };
-    let scoped_inference = gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
-        request.requester_did.clone(),
-        Some(request.node_did.clone()),
-        Some(request.agent_did.clone()),
-        Some(request.request_id.clone()),
+    let scoped_inference =
         gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+            Some(
+                gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
+                    request.requester_did.clone(),
+                    Some(request.node_did.clone()),
+                    Some(request.agent_did.clone()),
+                    Some(request.request_id.clone()),
+                ),
+            ),
             deadline,
             tokio_util::sync::CancellationToken::new(),
             None,
@@ -420,8 +424,7 @@ where
                     None => inference.await,
                 }
             },
-        ),
-    );
+        );
     let response = scoped_inference.await;
 
     let session_id = hook.session_id().await;

@@ -2,9 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes() {
-    use crate::runtime_context::{
-        scope_request_tool_execution_with_session, scope_tool_request_identity,
-    };
+    use crate::runtime_context::{scope_request_tool_execution_with_session, ToolRequestIdentity};
     use gents_store::config_client::ConfigAccess;
 
     let identities = tempfile::tempdir().unwrap();
@@ -91,19 +89,19 @@ async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes()
             .collect::<Vec<_>>()
     };
     let scoped_list = |node_did: String, session_id: &str| {
-        scope_tool_request_identity(
-            Some(node_did.clone()),
-            Some(node_did),
-            Some("shared-agent".into()),
-            Some("caller-request-not-the-latest-request".into()),
-            scope_request_tool_execution_with_session(
-                None,
-                tokio_util::sync::CancellationToken::new(),
-                None,
-                None,
-                Some(session_id.to_owned()),
-                list(),
-            ),
+        scope_request_tool_execution_with_session(
+            Some(ToolRequestIdentity::new(
+                Some(node_did.clone()),
+                Some(node_did),
+                Some("shared-agent".into()),
+                Some("caller-request-not-the-latest-request".into()),
+            )),
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            None,
+            None,
+            Some(session_id.to_owned()),
+            list(),
         )
     };
     let (a, b) = tokio::join!(
@@ -112,19 +110,19 @@ async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes()
     );
     assert_eq!(a, vec!["session-a"]);
     assert_eq!(b, vec!["session-b"]);
-    let unauthorized = scope_tool_request_identity(
-        Some(other.did().to_owned()),
-        Some(other.did().to_owned()),
+    let unauthorized = scope_request_tool_execution_with_session(
+        Some(ToolRequestIdentity::new(
+            Some(other.did().to_owned()),
+            Some(other.did().to_owned()),
+            None,
+            None,
+        )),
+        None,
+        tokio_util::sync::CancellationToken::new(),
         None,
         None,
-        scope_request_tool_execution_with_session(
-            None,
-            tokio_util::sync::CancellationToken::new(),
-            None,
-            None,
-            Some("session-a".to_owned()),
-            Tool::call(&tool, SessionHistoryParams::default()),
-        ),
+        Some("session-a".to_owned()),
+        Tool::call(&tool, SessionHistoryParams::default()),
     )
     .await
     .unwrap_err();

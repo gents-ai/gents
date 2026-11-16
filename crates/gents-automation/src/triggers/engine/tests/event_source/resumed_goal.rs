@@ -141,6 +141,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
     );
     gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
         None,
+        None,
         CancellationToken::new(),
         None,
         None,

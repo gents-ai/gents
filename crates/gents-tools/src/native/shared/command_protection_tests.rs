@@ -267,6 +267,7 @@ async fn bounded_commands_protect_runtime_keys_without_workspace_consent() {
     };
     scope_request_tool_execution_with_workspace_overlay(
         None,
+        None,
         Default::default(),
         scope,
         None,

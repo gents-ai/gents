@@ -384,12 +384,16 @@ where
                 retry_attempt = false,
             )));
 
-        let outcome = gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
-            request.requester_did.clone(),
-            Some(request.node_did.clone()),
-            Some(agent_did.to_string()),
-            Some(request.request_id.clone()),
+        let outcome =
             gents_tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+                Some(
+                    gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
+                        request.requester_did.clone(),
+                        Some(request.node_did.clone()),
+                        Some(agent_did.to_string()),
+                        Some(request.request_id.clone()),
+                    ),
+                ),
                 request_deadline,
                 request_token.clone(),
                 workspace,
@@ -402,9 +406,8 @@ where
                     request.execution_origin.as_deref() == Some("interactive"),
                     gents_tools::plugin::approval::workspace::scope(approval_context, inference),
                 ),
-            ),
-        )
-        .await;
+            )
+            .await;
 
         if let Some(error) = reviewer.take_failure() {
             return Err(error);

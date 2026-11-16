@@ -500,19 +500,21 @@ where
     if inherited {
         collection.await
     } else {
-        gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
-            requester_did,
-            Some(node_did),
-            Some(agent_did),
-            Some(request_id),
-            gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
-                deadline,
-                tokio_util::sync::CancellationToken::new(),
-                None,
-                None,
-                Some(session_id),
-                collection,
+        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
+            Some(
+                gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
+                    requester_did,
+                    Some(node_did),
+                    Some(agent_did),
+                    Some(request_id),
+                ),
             ),
+            deadline,
+            tokio_util::sync::CancellationToken::new(),
+            None,
+            None,
+            Some(session_id),
+            collection,
         )
         .await
     }

@@ -123,6 +123,7 @@ async fn returned_receipt_survives_outer_deadline_and_conflicting_receipt_is_ref
     let registry = crate::live_output::LiveToolOutputRegistry::default();
     let writer = registry.writer_for("physical-call").await;
     let outcome = scope_request_tool_execution_with_session(
+        None,
         Some(Utc::now() + chrono::Duration::milliseconds(10)),
         CancellationToken::new(),
         None,
@@ -334,6 +335,7 @@ async fn foreground_and_background_scopes_preserve_trigger_fill_context() {
     fields.insert("expected_total".to_string(), "4".to_string());
     scope_request_tool_execution_with_trigger_context(
         None,
+        None,
         CancellationToken::new(),
         None,
         None,
@@ -370,6 +372,7 @@ async fn foreground_and_background_scopes_preserve_trigger_fill_context() {
 async fn explicit_session_survives_a_spawned_background_task_boundary() {
     let observed = tokio::spawn(async {
         scope_request_tool_execution_with_trigger_context(
+            None,
             None,
             CancellationToken::new(),
             None,

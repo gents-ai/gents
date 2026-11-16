@@ -57,6 +57,7 @@ pub struct CurrentToolRuntimeContext {
     reason = "mirrors the gents-loop scope entry point; called from toolset, hook, plugin and workspace tests"
 )]
 pub async fn scope_request_tool_execution_with_workspace_overlay<F, T>(
+    identity: Option<ToolRequestIdentity>,
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
     workspace: ToolWorkspaceScope,
@@ -78,6 +79,7 @@ where
         .scope(
             workspace,
             gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                identity,
                 deadline_at,
                 cancellation_token,
                 cwd,
@@ -125,10 +127,10 @@ pub fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session;
 pub(crate) use gents_loop::tool_call_lifecycle::runtime::tool_execution_bounds;
+pub use gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity;
 #[cfg(test)]
 pub(crate) use gents_loop::tool_call_lifecycle::runtime::{
     call_tool_managed, scope_request_tool_execution_with_trigger_context,
-    scope_tool_request_identity,
 };
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -161,6 +163,7 @@ where
     F: std::future::Future<Output = T>,
 {
     scope_request_tool_execution_with_session(
+        None,
         deadline_at,
         cancellation_token,
         workspace_cwd,
@@ -184,6 +187,7 @@ where
 {
     let inherited = current_tool_runtime_context();
     scope_request_tool_execution_with_trigger_context(
+        None,
         deadline_at,
         cancellation_token,
         workspace_cwd,

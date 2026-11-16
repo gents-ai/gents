@@ -379,6 +379,7 @@ async fn full_access_cannot_widen_read_only_workspace_authority() {
     let path = fixture.outside();
     let result = scope_request_tool_execution_with_workspace_overlay(
         None,
+        None,
         tokio_util::sync::CancellationToken::new(),
         ToolWorkspaceScope {
             runtime_home: None,

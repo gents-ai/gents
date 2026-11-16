@@ -300,6 +300,7 @@ mod tests {
         let tool = CliTool::new(config.clone());
         crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
             None,
+            None,
             tokio_util::sync::CancellationToken::new(),
             crate::runtime_context::ToolWorkspaceScope {
                 runtime_home: None,
