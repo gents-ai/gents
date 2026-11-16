@@ -5024,23 +5024,19 @@ function clone<T>(value: T): T {
   return structuredClone(value);
 }
 
-const limits = (memory: number, seconds: number, output: number) =>
-  `up to ${memory} MiB memory, ${seconds}s wall clock, ${output} MiB output`;
+/* the starter packs as a release carries them: each missing until installed,
+   and dynamic_workflows installed and off until turned on */
 const starterPack = (
   name: string,
   purpose: string,
   without: string,
-  requested: { plugin: string; asks: string }[],
-  turns_on: string[] = [],
+  state: DefaultPack["state"] = "missing",
 ): DefaultPack => ({
   pack: `gents/${name}`,
   purpose,
   without,
-  state: "needs_approval",
+  state,
   version: "1.0.0",
-  digest: `sha256:${name}`,
-  requested,
-  turns_on,
   reason: null,
 });
 const STARTER_PACKS: DefaultPack[] = [
@@ -5048,43 +5044,22 @@ const STARTER_PACKS: DefaultPack[] = [
     "web",
     "searching and reading the web",
     "Without it the Engineer cannot search or read the web.",
-    [
-      { plugin: "web_search", asks: `HTTP to any host; ${limits(512, 120, 4)}` },
-      { plugin: "web_fetch", asks: `HTTP to any host; ${limits(512, 120, 4)}` },
-      { plugin: "web_crawl", asks: `HTTP to any host; ${limits(512, 120, 4)}` },
-      {
-        plugin: "browser_exec",
-        asks: `HTTP to http://127.0.0.1:18765; subprocesses; reads one directory its caller binds, per call; ${limits(256, 600, 2)}`,
-      },
-    ],
   ),
   starterPack(
     "dynamic_workflows",
     "workflows that put several agents on one job",
     "Without it the Engineer cannot run workflows.",
-    [{ plugin: "workflow", asks: limits(256, 60, 4) }],
-    [
-      "Lets the agents it ships use their file and shell tools in the Engineer's folder.",
-      "Lets workflow scripts the model writes start agents on this node.",
-    ],
+    "not_enabled",
   ),
   starterPack(
     "charts",
     "charts on the pages it builds",
     "Without it the Engineer's pages have no charts.",
-    [
-      {
-        plugin: "charts",
-        asks: `reads and writes one directory its caller binds, per call; ${limits(1024, 300, 4)}`,
-      },
-    ],
   ),
   starterPack(
     "script",
     "short scripts over its own tools: waiting, trying logic, bulk changes",
     "Without it the Engineer makes every tool call one at a time.",
-    [{ plugin: "script", asks: limits(128, 300, 1) }],
-    ["Lets a script it runs call the Engineer's own tools."],
   ),
 ];
 
