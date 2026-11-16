@@ -3086,6 +3086,7 @@ export function createDesktopUiHarness(
             authKind: backend.auth.kind,
             connectTimeoutSecs: backend.connect_timeout_secs ?? null,
             discoveryTimeoutSecs: backend.discovery_timeout_secs ?? null,
+            requestTimeoutSecs: backend.request_timeout_secs ?? null,
             apiKeyConfigured: backend.auth.kind === "api_key",
             apiKeyEnvVar:
               backend.auth.kind === "environment" ? backend.auth.variable : null,
@@ -3531,6 +3532,7 @@ export function createDesktopUiHarness(
             authKind: document.auth.kind,
             connectTimeoutSecs: document.connect_timeout_secs ?? null,
             discoveryTimeoutSecs: document.discovery_timeout_secs ?? null,
+            requestTimeoutSecs: document.request_timeout_secs ?? null,
             apiKeyConfigured: document.auth.kind !== "unauthenticated",
             apiKeyEnvVar,
             maxConcurrent: document.max_concurrent ?? null,
@@ -4855,6 +4857,7 @@ function createDeployment(): DeploymentView {
         openaiWireApi: null,
         connectTimeoutSecs: null,
         discoveryTimeoutSecs: null,
+        requestTimeoutSecs: null,
         maxConcurrent: 4,
         maxQueueDepth: 16,
         enabled: true,

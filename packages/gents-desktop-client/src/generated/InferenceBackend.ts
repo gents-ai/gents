@@ -27,6 +27,10 @@ connect_timeout_secs?: number | null,
  */
 discovery_timeout_secs?: number | null,
 /**
+ * Total plugin model-call timeout through this backend; default 120s.
+ */
+request_timeout_secs?: number | null,
+/**
  * Shared backend capacity across profiles; absent resolves to 1.
  */
 max_concurrent?: number | null,
