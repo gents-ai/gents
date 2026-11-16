@@ -378,6 +378,7 @@ async fn workspace_command_sandbox_tracks_the_selected_permission_mode() {
                         timeout_secs: None,
                         raw_json: true,
                     },
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
                 );
                 let answer = async {
                     let question = fixture.question().await;
@@ -419,6 +420,7 @@ async fn workspace_command_sandbox_tracks_the_selected_permission_mode() {
                     timeout_secs: None,
                     raw_json: true,
                 },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
             .unwrap();

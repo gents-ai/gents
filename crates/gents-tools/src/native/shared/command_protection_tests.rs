@@ -236,7 +236,11 @@ async fn configured_cli_tools_keep_the_guard_and_declared_environment() {
         )
         .unwrap();
         let args = serde_json::json!({"argv": ["-c", "printf '%s' \"$FIXTURE_WORD\" > \"$1\"", "fixture", target]}).to_string();
-        let result = workspace::scope(scope, tool.call(args)).await;
+        let result = workspace::scope(
+            scope,
+            tool.call(args, &gents_loop::tool::ToolCallEnvelope::ambient()),
+        )
+        .await;
         if allowed {
             result.unwrap();
         }

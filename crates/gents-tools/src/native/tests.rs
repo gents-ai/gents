@@ -172,6 +172,7 @@ async fn workspace_write_bash_names_its_process_limits() {
         let output = gents_loop::tool::Tool::call(
             &tool,
             serde_json::from_value(serde_json::json!({"command":"ps -p 1 -o pid="})).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await;
         let text = match output {
@@ -1763,6 +1764,7 @@ async fn workspace_write_bash_contains_writes_to_tool_root() {
             "timeout_secs": DEFAULT_COMMAND_TIMEOUT_SECS,
         })
         .to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await;
     let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
@@ -2637,6 +2639,7 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
                     timeout_secs: Some(120),
                     raw_json: true,
                 },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             ),
         )
         .await;
