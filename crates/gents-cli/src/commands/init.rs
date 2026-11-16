@@ -1593,7 +1593,7 @@ fn wide_open_tools_document(node_did: &str) -> Tools {
     Tools {
         tools_id: wide_open_tools_id_for_node(node_did),
         node_did: node_did.to_string(),
-        display_name: Some("Wide-open (permissive preset)".to_string()),
+        display_name: Some("Database queries and context budget".to_string()),
         built_ins: Some(BuiltInTools {
             enable_context_budget: Some(true),
             ..Default::default()
@@ -1920,6 +1920,28 @@ mod inference_seed_tests;
 mod tests {
     use super::*;
     use gents::runtime::embedded::EmbeddedHome;
+
+    #[test]
+    fn wide_open_preset_label_and_grants_are_exact() {
+        let node_did = "did:key:example";
+        assert_eq!(
+            wide_open_tools_document(node_did),
+            Tools {
+                tools_id: "did:key:example:wide-open".to_string(),
+                node_did: node_did.to_string(),
+                display_name: Some("Database queries and context budget".to_string()),
+                built_ins: Some(BuiltInTools {
+                    enable_context_budget: Some(true),
+                    ..Default::default()
+                }),
+                datastore: Some(DatastoreTools {
+                    enable_defra_query: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        );
+    }
 
     #[tokio::test]
     async fn an_identity_only_home_protects_its_fresh_store_for_later_openers() {
