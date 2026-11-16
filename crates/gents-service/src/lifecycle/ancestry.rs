@@ -30,23 +30,27 @@ pub(super) fn is_ancestor(_ancestor: u32) -> Option<bool> {
     None
 }
 
+/// The short BSD record, because the kernel serves it for any user's process:
+/// the full record (`PROC_PIDTBSDINFO`) refuses a process another user owns,
+/// such as the root `login` or `sshd` above every terminal session, which
+/// would leave the chain unobservable for every interactive caller.
 #[cfg(target_os = "macos")]
 fn parent_of(pid: u32) -> Option<u32> {
     let pid = libc::c_int::try_from(pid).ok()?;
-    // SAFETY: proc_bsdinfo is plain data for which all zero bytes are valid.
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).ok()?;
-    // SAFETY: the buffer holds one proc_bsdinfo of `size` bytes.
+    // SAFETY: proc_bsdshortinfo is plain data for which all zero bytes are valid.
+    let mut info: libc::proc_bsdshortinfo = unsafe { std::mem::zeroed() };
+    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdshortinfo>()).ok()?;
+    // SAFETY: the buffer holds one proc_bsdshortinfo of `size` bytes.
     let written = unsafe {
         libc::proc_pidinfo(
             pid,
-            libc::PROC_PIDTBSDINFO,
+            libc::PROC_PIDT_SHORTBSDINFO,
             0,
             std::ptr::from_mut(&mut info).cast(),
             size,
         )
     };
-    (written == size).then_some(info.pbi_ppid)
+    (written == size).then_some(info.pbsi_ppid)
 }
 
 #[cfg(target_os = "linux")]
