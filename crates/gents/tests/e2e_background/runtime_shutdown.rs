@@ -324,7 +324,7 @@ async fn runtime_shutdown_terminates_a_spawned_background_process() {
     .await;
     let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("background handle");
-    let pid: i32 = tokio::time::timeout(Duration::from_secs(30), async {
+    let pid: i32 = tokio::time::timeout(crate::support::live_inference::STALL_CEILING, async {
         loop {
             if let Ok(recorded) = tokio::fs::read_to_string(&pid_path).await {
                 if let Ok(pid) = recorded.trim().parse() {

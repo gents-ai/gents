@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use gents::runtime::embedded::EmbeddedHome;
 use gents::{DocumentRuntimeOptions, Gents};
@@ -25,6 +24,7 @@ use crate::support::accepted_turn::{
 use crate::support::fixtures::{
     agent_target, bind_selected_managed_agent_backend, configure_agent_tools_as,
 };
+use crate::support::live_inference::STALL_CEILING;
 use crate::support::streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan};
 use crate::support::{managed_agent_fixture, test_db_from_home, ManagedAgentFixture, TestDb};
 
@@ -450,15 +450,14 @@ pub(crate) async fn job_row(h: &JobHarness, tool_call_id: &str) -> String {
         .row_doc_id
 }
 
+/// Fails once `AgentToolCall` has not changed for [`STALL_CEILING`].
 pub(crate) async fn wait_job(
     h: &JobHarness,
     tool_call_id: &str,
     until: impl Fn(&JobView) -> bool,
-    timeout: Duration,
 ) -> JobView {
     let access = h.actors.fixture.access.clone();
     use crate::support::snapshots::SnapshotReader;
-    let deadline = tokio::time::Instant::now() + timeout;
     let mut changes = access.subscribe_changes("AgentToolCall").await;
     loop {
         let last = load_job_view(&access, None, address(h, tool_call_id)).await;
@@ -467,13 +466,10 @@ pub(crate) async fn wait_job(
             Ok(_) | Err(JobReadError::NotYetObservable | JobReadError::NotAJob) => {}
             Err(error) => panic!("job {tool_call_id} is unreadable: {error:?}"),
         }
-        if tokio::time::Instant::now() >= deadline {
-            panic!("job {tool_call_id} did not reach the awaited state; last read: {last:?}");
-        }
-        tokio::time::timeout_at(deadline, changes.recv())
+        tokio::time::timeout(STALL_CEILING, changes.recv())
             .await
             .unwrap_or_else(|_| {
-                panic!("job {tool_call_id} did not reach the awaited state; last read: {last:?}")
+                panic!("job {tool_call_id} made no progress for {STALL_CEILING:?}; last read: {last:?}")
             });
     }
 }
