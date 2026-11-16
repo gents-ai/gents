@@ -5,11 +5,13 @@
 \* The owner claims the request (`RequestLifecycle::claim_at`): the claim
 \* persists `execution_lease_expires_at = now + Lease` and starts the renewal
 \* task (`RenewalTask::start`) on the runtime that polled the claim. The owner
-\* then publishes provider output (`publish_provider_turn_with_time`), which
-\* is admitted only for the owning generation while the deadline is ahead of
-\* the clock (`authorize_output_append`; Lean
-\* `RequestExecutionLease.expired_rejects_all_producer_actions`). Output never
-\* renews the lease (Lean `append_output_is_identity_and_never_renews`).
+\* then takes a producer action: it publishes provider output
+\* (`publish_provider_turn_with_time`, `authorize_output_append`) or begins
+\* execution (`begin_owned_execution`, `authorize_begin`). Either is admitted
+\* only for the owning generation while the deadline is ahead of the clock
+\* (Lean `RequestExecutionLease.expired_rejects_all_producer_actions`), so
+\* `Publish` stands for both. Output never renews the lease (Lean
+\* `append_output_is_identity_and_never_renews`).
 \*
 \* The renewal task polls every quarter lease (`renewal_poll_interval`, with
 \* missed ticks skipped). A poll renews once half a lease or less remains
@@ -28,6 +30,15 @@
 \* so no renewal poll runs until it returns. Production never takes this
 \* step: `gents-lean-vocab` is linked only through dev-dependencies and the
 \* `test-fixtures` features, which no production dependency enables.
+\*
+\* Three tests took the `SyncInsideLease` order (#3704, #3891, #3892), so the
+\* green order is now the accessor's: async code awaits
+\* `gents_lean_vocab::snapshot()`, whose first load runs on Tokio's blocking
+\* pool (the `OffRuntime` configuration), and the load stays lazy so only
+\* tests that read the model run `lake`. `lease_holders_await_the_lean_snapshot`
+\* refuses a synchronous model read after a lease starts without that await,
+\* and `lean_generator_runs_stay_off_async_runtime_threads` keeps per-call
+\* generator runs off async bodies.
 \*
 \* The lease's promise to its owner is conditional: an owner that holds a
 \* live lease keeps it while its runtime can schedule the renewal
