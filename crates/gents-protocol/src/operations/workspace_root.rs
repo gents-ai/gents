@@ -252,6 +252,19 @@ fn enabled_when_absent() -> bool {
     true
 }
 
+/// A published root with the Agents that hold its `reader` relationship: who
+/// the runtime admits to run host tools under it. An Agent with host tools and
+/// no reader is the `workspace_root_reader_missing` cause, so a listing that
+/// shows the readers shows whether each Agent can start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceRootWithReaders {
+    #[serde(flatten)]
+    pub root: WorkspaceRootView,
+    /// The reader subjects as the store reports them: Agent DIDs, in the order
+    /// the store returns them.
+    pub reader_agents: Vec<String>,
+}
+
 fn enabled_unless_false<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,

@@ -140,7 +140,9 @@ impl ConfigAccess {
     }
 
     /// Every relationship on a document, for an actor that owns it or holds a
-    /// relation managing its resource. Native DefraDB decides the gate.
+    /// relation managing its resource. Native DefraDB decides the gate on the
+    /// actor, which an offline read needs but no signature: a plain read signs
+    /// nothing, as the GraphQL route's authenticated caller does not.
     pub async fn list_document_relationships(
         &self,
         collection: &str,
@@ -149,9 +151,6 @@ impl ConfigAccess {
         crate::graphql::validate_collection_identifier(collection)?;
         match self {
             Self::Local(local) => {
-                local
-                    .agent_signer()
-                    .ok_or(ConfigClientError::ManagedAgentSignerRequired)?;
                 let actor = local
                     .identity()
                     .cloned()

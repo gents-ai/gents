@@ -47,10 +47,23 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
             .ok_or_else(|| anyhow!("missing resolved agent {agent_did} during tool admission"))?;
         let tool_runtime = tool_runtime.for_agent(agent);
         if let Err(error) = tool_surface.build_tools(&tool_runtime).await {
-            let reason = UnavailableAgent::new(
-                gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
-                format!("building tool surface: {error:#}"),
-            );
+            // A missing workspace-root reader is the one cause of an unbuilt
+            // surface with a call of its own; it is reported as that cause (and
+            // its text, which carries the grant), not as every unbuilt surface.
+            let reason = match gents_tools::surface::tool_root_refusal(error.as_ref()) {
+                Some(refusal @ gents_tools::surface::ToolRootRefusal::ReaderMissing { .. }) => {
+                    let grant = refusal.to_string();
+                    UnavailableAgent::new(
+                        gents_protocol::node_readiness::AgentReadinessUnavailableReason::WorkspaceRootReaderMissing,
+                        format!("building tool surface: {grant}"),
+                    )
+                    .with_public_message(grant)
+                }
+                _ => UnavailableAgent::new(
+                    gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+                    format!("building tool surface: {error:#}"),
+                ),
+            };
             tracing::error!(
                 agent_did = %agent_did,
                 public_reason = ?reason.public_reason,

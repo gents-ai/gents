@@ -6,7 +6,7 @@ use gents_protocol::operations::workspace_root::{
     enabled_after, normalize_root_path, reader_decision, writes_display_name, EnabledUpdate,
     NameUpdate, ReaderChange, ReaderDecision, ReaderSubject, StoredRoot, WorkspaceRootError,
     WorkspaceRootPublish, WorkspaceRootReaderInput, WorkspaceRootReaderReceipt,
-    WorkspaceRootReceipt, WorkspaceRootRemoved, WorkspaceRootView,
+    WorkspaceRootReceipt, WorkspaceRootRemoved, WorkspaceRootView, WorkspaceRootWithReaders,
 };
 use gents_protocol::operations::StringUpdate;
 use gents_store::collection::Collection;
@@ -373,6 +373,66 @@ pub async fn show_workspace_root(
         .ok_or(WorkspaceRootError::RootMissing(root_path))
 }
 
+/// The Agent DIDs holding the `reader` relation on a root: who the runtime
+/// admits to run host tools under it. Readers are document relationships, so
+/// only an actor that manages the root's resource — its Node's owner or an
+/// administrator — reads them; anyone else gets a refusal, never a guess.
+async fn reader_agents_of(
+    access: &ConfigAccess,
+    doc_id: &str,
+) -> std::result::Result<Vec<String>, WorkspaceRootError> {
+    let passthrough = |error: gents_store::config_client::ConfigClientError| {
+        WorkspaceRootError::Passthrough(
+            anyhow::Error::from(error).reallocate_into_boxed_dyn_error_without_backtrace(),
+        )
+    };
+    let mut readers = access
+        .list_document_relationships("WorkspaceRoot", doc_id)
+        .await
+        .map_err(passthrough)?
+        .into_iter()
+        .filter(|relationship| relationship.relation == ROOT_READER_RELATION)
+        // A `reader` subject is an actor; leave any other subject spelling as
+        // the store reports it rather than hiding who holds the relation.
+        .map(|relationship| relationship.subject)
+        .collect::<Vec<_>>();
+    readers.sort();
+    readers.dedup();
+    Ok(readers)
+}
+
+/// The `reader` relation on a WorkspaceRoot: a User's grant to an Agent.
+pub const ROOT_READER_RELATION: &str = "reader";
+
+/// [`list_workspace_roots`], each root with the Agents granted `reader` on it.
+pub async fn list_workspace_roots_with_readers(
+    access: &ConfigAccess,
+) -> std::result::Result<Vec<WorkspaceRootWithReaders>, WorkspaceRootError> {
+    let roots = list_workspace_roots(access).await?;
+    let mut listed = Vec::with_capacity(roots.len());
+    for root in roots {
+        let reader_agents = reader_agents_of(access, &root.doc_id).await?;
+        listed.push(WorkspaceRootWithReaders {
+            root,
+            reader_agents,
+        });
+    }
+    Ok(listed)
+}
+
+/// [`show_workspace_root`], with the Agents granted `reader` on it.
+pub async fn show_workspace_root_with_readers(
+    access: &ConfigAccess,
+    root_path: &str,
+) -> std::result::Result<WorkspaceRootWithReaders, WorkspaceRootError> {
+    let root = show_workspace_root(access, root_path).await?;
+    let reader_agents = reader_agents_of(access, &root.doc_id).await?;
+    Ok(WorkspaceRootWithReaders {
+        root,
+        reader_agents,
+    })
+}
+
 async fn read_roots(
     access: &ConfigAccess,
     query: gents_protocol::document_query::Query<RootDoc>,
@@ -696,6 +756,7 @@ mod tests {
             agent_did: writer.did().to_owned(),
             selected_root: Some(std::path::PathBuf::from(&path)),
             ceiling_root: None,
+            node_home: None,
         };
         let mut expected = Vec::new();
         let mut may_publish = Vec::new();
