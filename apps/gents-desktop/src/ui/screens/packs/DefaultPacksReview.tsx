@@ -240,9 +240,15 @@ export function StarterPacksCard() {
   const missing = review.packs.some((pack) => pack.state === "missing");
   const offering = nodeDid !== null && !dismissed && missing;
   const suggesting = trying && nodeDid !== null && settled && !tried && !offering;
+  /* a closing card keeps what it opened with, so its packs and what failed
+     stay put while it goes, rather than turning into the things to try */
+  const shown = useRef<"packs" | "try">("packs");
+  if (offering) shown.current = "packs";
+  else if (suggesting) shown.current = "try";
+  const packs = shown.current === "packs";
   const dismiss = () => {
     if (nodeDid === null || busy) return;
-    if (offering) preferences.dismissStarterPacks(nodeDid);
+    if (packs) preferences.dismissStarterPacks(nodeDid);
     else preferences.closeThingsToTry(nodeDid);
   };
   const start = (message: string) => {
@@ -262,9 +268,9 @@ export function StarterPacksCard() {
           className: "bg-black/10 supports-backdrop-filter:backdrop-blur-[1.5px]",
         }}
         className="outline-none sm:max-w-xl"
-        data-testid={offering ? "starter-packs-card" : "things-to-try-card"}
+        data-testid={packs ? "starter-packs-card" : "things-to-try-card"}
       >
-        {offering ? (
+        {packs ? (
           <>
             <DialogHeader>
               <DialogTitle>{TITLE}</DialogTitle>

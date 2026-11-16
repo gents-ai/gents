@@ -137,7 +137,7 @@ describe("things to try, after the starter packs", () => {
     withFlags({ "get-started": true });
     const topic = TOPICS_TO_TRY.find((one) => one.pack)!;
     const name = topic.pack!.id.split("/")[1]!;
-    const lacking = harness([pack(name, { state: "unavailable", digest: null })]);
+    const lacking = harness([pack(name, { state: "unavailable" })]);
     renderIn(local(lacking.api), <StarterPacksCard />);
     const tries = await screen.findByTestId("things-to-try-card");
     await click(within(tries).getByRole("button", { name: topic.title }));
