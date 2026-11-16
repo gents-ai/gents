@@ -36,7 +36,7 @@ env:
 
 jobs:
   live-cli-smoke:
-    runs-on: [self-hosted, macOS, ARM64, studio]
+    runs-on: [self-hosted, macOS, ARM64, ci-macos]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
@@ -55,14 +55,14 @@ jobs:
         run: .github/scripts/setup-rust-build-cache.sh
 
       - name: Run live CLI smoke test
-        run: cargo test -p gents-cli --features live-e2e --test cli_live_suite cli_live::standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools -- --ignored --nocapture --test-threads=1
+        run: cargo test -p gents-cli --features live-e2e --test integration cli_live_suite::cli_live::standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools -- --ignored --nocapture --test-threads=1
 
       - name: Show Rust build cache stats
         if: always()
         run: .github/scripts/show-sccache-stats.sh
 
   desktop-live-smoke:
-    runs-on: [self-hosted, macOS, ARM64, studio]
+    runs-on: [self-hosted, macOS, ARM64, ci-macos]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
@@ -126,7 +126,7 @@ jobs:
         run: .github/scripts/show-sccache-stats.sh
 
   desktop-live-browser-smoke:
-    runs-on: [self-hosted, macOS, ARM64, studio]
+    runs-on: [self-hosted, macOS, ARM64, ci-macos]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7

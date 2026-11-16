@@ -75,6 +75,35 @@ def rerunHonoured (mode : Mode) (discarded poisoned dispatched : Bool) : Bool :=
   (mode != .singleAttempt && mode != .observeConflict) && discarded && !poisoned
     && (!dispatched || mode == .signedConflictRebuild)
 
+/-- Whether a client may repeat an operation whose transaction the owner
+failed on this attempt. Only a conflict is worth repeating, and only when the
+attempt is known not to have landed: a conflict before commit never sent the
+commit, and at commit the store must confirm the abort. External premise:
+DefraDB's HTTP commit confirms an aborted conflict only with the
+`transaction_conflict_aborted` outcome; a conflict without it may have
+committed, and repeating a non-idempotent operation after it could apply it
+twice. Decision 2026-11-15: the desktop reports such a conflict as typed and
+retryable, and an unconfirmed one as typed and not retryable. -/
+def clientMayRepeat (stage : Stage) (failure : Failure) (confirmedAbort : Bool) : Bool :=
+  failure == .conflict && (stage != .commit || confirmedAbort)
+
+theorem unconfirmed_commit_conflict_is_never_repeated (failure : Failure) :
+    clientMayRepeat .commit failure false = false := by
+  cases failure <;> rfl
+
+theorem client_repeats_only_a_conflict (stage : Stage) (failure : Failure) (c : Bool)
+    (h : clientMayRepeat stage failure c = true) : failure = .conflict := by
+  cases stage <;> cases failure <;> cases c <;> simp_all [clientMayRepeat]
+
+/-- The owner's own retry and the client's agree on what is safe to repeat: a
+signed write the owner rebuilt after a commit conflict is one the client could
+also repeat. -/
+theorem owner_rebuild_is_client_repeatable (stage : Stage) (failure : Failure) (c r : Bool)
+    (h : disposition .signedConflictRebuild stage failure true c r = .retry) :
+    clientMayRepeat stage failure c = true := by
+  cases stage <;> cases failure <;> cases c <;> cases r <;>
+    simp_all [disposition, repeatable, signedWriteMayRepeat, Mode.idempotent?, clientMayRepeat]
+
 theorem repeat_needs_a_conflict_or_an_idempotent_transaction
     (mode : Mode) (stage : Stage) (failure : Failure) (d c r : Bool)
     (h : disposition mode stage failure d c r = .retry) :

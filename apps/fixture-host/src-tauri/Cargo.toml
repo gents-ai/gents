@@ -24,4 +24,9 @@ tauri-plugin-opener = "2"
 tauri-plugin-fs = "2"
 
 [dev-dependencies]
+gents-eval = { workspace = true, features = ["test-fixtures"] }
+gents-host = { workspace = true, features = ["test-fixtures"] }
 gents-service = { workspace = true, features = ["test-home-guard"] }
+gents-desktop-core = { workspace = true, features = ["test-fixtures", "typescript"] }
+gents = { path = "../../../crates/gents", features = ["test-fixtures", "typescript"] }
+gents-workspace-hack = { workspace = true }

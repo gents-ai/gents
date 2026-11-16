@@ -1,0 +1,101 @@
+{
+  "roles": {
+    "linux": {
+      "labels": ["self-hosted", "Linux", "X64", "ci-linux"],
+      "hosted": "ubuntu-latest",
+      "fallback": "ubuntu-latest"
+    },
+    "browser": {
+      "labels": ["self-hosted", "Linux", "X64", "ci-browser"],
+      "pool": "hosted",
+      "hosted": "ubuntu-latest",
+      "fallback": "ubuntu-latest"
+    },
+    "portable": {
+      "labels": ["self-hosted", "Linux", "X64", "ci-portable"],
+      "fallback": "macos",
+      "target": {
+        "max_gib": 65,
+        "floor_gib": 50
+      },
+      "cache": {
+        "systemd_unit": "gents-sccache.service"
+      }
+    },
+    "macos": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-macos"],
+      "hosted": "macos-latest",
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
+    },
+    "runtime": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-runtime"],
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
+    },
+    "runtime-isolated": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-runtime-isolated"],
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
+    },
+    "cli": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-cli"],
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
+    },
+    "desktop": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-desktop"],
+      "target": {
+        "max_gib": 400,
+        "floor_gib": 150
+      },
+      "cache": {
+        "launchd_label": "com.source.gents.sccache"
+      }
+    },
+    "support": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-support"]
+    },
+    "notary": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-notary"]
+    },
+    "release-macos": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-desktop"]
+    },
+    "release-candidate-macos": {
+      "labels": ["self-hosted", "macOS", "ARM64", "ci-release-candidate"]
+    },
+    "docker": {
+      "labels": ["self-hosted", "Linux", "X64", "ci-docker"]
+    },
+    "inference": {
+      "labels": ["self-hosted", "Linux", "X64", "ci-inference"]
+    },
+    "release-linux-x64": {
+      "labels": ["self-hosted", "Linux", "X64", "ci-release"]
+    },
+    "release-linux-arm64": {
+      "labels": ["self-hosted", "Linux", "ARM64", "ci-release"]
+    }
+  }
+}

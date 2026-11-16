@@ -5,14 +5,15 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Headless native host for Gents clients"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [features]
 runtime-e2e = []
 editor-e2e = ["runtime-e2e"]
-
-[[test]]
-name = "runtime"
-required-features = ["runtime-e2e"]
 
 [dependencies]
 gents-service.workspace = true
@@ -56,8 +57,12 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+gents-eval = { workspace = true, features = ["test-fixtures"] }
+gents-host = { workspace = true, features = ["test-fixtures"] }
 gents-service = { workspace = true, features = ["test-home-guard"] }
-gents = { path = "../gents", features = ["test-fixtures"] }
+gents-desktop-core = { workspace = true, features = ["test-fixtures", "typescript"] }
+gents-workspace-hack = { workspace = true }
+gents = { path = "../gents", features = ["test-fixtures", "typescript"] }
 defra-node.workspace = true
 chrono.workspace = true
 reqwest.workspace = true

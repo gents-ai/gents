@@ -1,0 +1,4 @@
+---- MODULE MCGoalSourceObservationFixedWindow ----
+EXTENDS GoalSourceObservation
+
+====

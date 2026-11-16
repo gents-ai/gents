@@ -10,7 +10,7 @@
 
 use gents_migration::{ensure_migrations, CLIENT_AUTHORED_COLLECTIONS};
 
-mod common;
+use crate::common;
 use common::fresh_node;
 
 fn current_sdl(name: &str) -> &'static str {

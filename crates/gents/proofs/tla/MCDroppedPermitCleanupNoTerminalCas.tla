@@ -1,0 +1,4 @@
+---- MODULE MCDroppedPermitCleanupNoTerminalCas ----
+EXTENDS DroppedPermitCleanup
+
+====
