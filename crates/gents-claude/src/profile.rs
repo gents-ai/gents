@@ -26,5 +26,7 @@ pub const BASE_URL: &str = "https://api.anthropic.com";
 /// Every Messages call goes through the SDK's beta namespace, for API keys too.
 pub const MESSAGES_PATH: &str = "/v1/messages?beta=true";
 
-/// Client request timeout (`F2r`), sent as `X-Stainless-Timeout: 600`.
+/// Client request timeout (`F2r`), sent as `X-Stainless-Timeout: 600`. Only a wire
+/// fingerprint value: nothing enforces it. `InferenceExecution.provider_idle_timeout_secs`
+/// and `deadline_duration_secs` bound the request.
 pub const REQUEST_TIMEOUT_MS: u64 = 600_000;

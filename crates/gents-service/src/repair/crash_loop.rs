@@ -1,5 +1,6 @@
 use crate::native_service::ServiceExit;
 
+/// Restarts after the first observed exit that mark the native service as crash-looping, so readiness waits stop and report the exit cause; a repair diagnosis, not a deployment setting.
 pub const CRASH_LOOP_RESTARTS: u64 = 2;
 
 pub fn job_sample(ready: bool, job_loaded: bool, last_exit: Option<&ServiceExit>) -> JobSample<'_> {
