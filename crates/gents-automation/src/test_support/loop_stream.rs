@@ -327,6 +327,8 @@ pub fn config(max_turns: usize) -> LoopConfig {
         provider_idle_timeout: None,
         deadline: None,
         max_turns,
+        max_invalid_tool_calls: gents_loop::loop_stream::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_loop::loop_stream::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,

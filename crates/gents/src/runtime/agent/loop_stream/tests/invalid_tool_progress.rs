@@ -34,13 +34,15 @@ async fn invalid_tool_progress_composition_drives_owned_loop() {
             RawStreamingChoice::FinalResponse(()),
         ]);
         let model = ScriptedModel::new_turns(turns);
+        let mut config = owned_config(64);
+        config.max_invalid_tool_calls = usize::try_from(case.input.max_invalid_tool_calls).unwrap();
         let stream = run_loop_stream(
             model.clone(),
             Some(hook.clone()),
             TaggedMessage::unassociated(Message::user("exercise typed outcomes")),
             Vec::new(),
             Arc::new(vec![Box::new(InvalidProgressProbe) as Box<dyn ToolDyn>]),
-            owned_config(64),
+            config,
         );
         let collected = collect_owned_scripted_stream(
             stream,

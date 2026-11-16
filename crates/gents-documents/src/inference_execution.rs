@@ -18,6 +18,16 @@ pub struct InferenceExecution {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_total_tokens: Option<i64>,
+    /// Invalid-argument, unknown-tool and policy-denied calls one execution
+    /// may make before it stops; default 8.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_invalid_tool_calls: Option<i64>,
+    /// Identical failing calls (same tool, arguments and error) dispatched
+    /// before further repeats are intercepted; default 3.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub repeated_tool_failure_limit: Option<i64>,
     /// Persistence batching cadence, not provider latency; default 1,000ms.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -100,6 +110,11 @@ impl InferenceExecution {
         for (name, value) in [
             ("max_turns", self.max_turns),
             ("max_total_tokens", self.max_total_tokens),
+            ("max_invalid_tool_calls", self.max_invalid_tool_calls),
+            (
+                "repeated_tool_failure_limit",
+                self.repeated_tool_failure_limit,
+            ),
             ("stream_batch_ms", self.stream_batch_ms),
             (
                 "stream_liveness_timeout_secs",
