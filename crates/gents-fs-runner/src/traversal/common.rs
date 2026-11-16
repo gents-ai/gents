@@ -107,6 +107,7 @@ pub(super) fn sorted_children(
     dir: &Path,
     walk: &mut WalkState,
 ) -> Result<Vec<std::fs::DirEntry>> {
+    #[cfg(feature = "test-seams")]
     if let Some(blocker) = context.blocker() {
         blocker.block(dir);
     }

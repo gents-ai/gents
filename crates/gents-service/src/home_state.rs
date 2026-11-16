@@ -74,12 +74,12 @@ pub fn is_default_home(home_dir: &Path) -> bool {
     default.is_ok_and(|default| canonical(home_dir) == canonical(&default))
 }
 
-/// What `gents` opens with neither `--home` nor `GENTS_HOME`.
-pub fn default_home_ignoring_env() -> Result<PathBuf> {
+/// What `gents` opens with no `--home`.
+pub fn default_home() -> Result<PathBuf> {
     #[cfg(test)]
     let default = Ok::<_, gents_store::local::home::HomeError>(default_home_dir());
     #[cfg(not(test))]
-    let default = gents_store::local::home::default_home_ignoring_env();
+    let default = gents_store::local::home::default_home_dir();
     Ok(default?)
 }
 

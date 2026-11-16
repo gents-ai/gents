@@ -9,12 +9,29 @@ source consistency checks, not a separate runtime compatibility version.
 - Breaking: `GENTS_REGISTRY` no longer selects the pack or plugin registry.
   The `--registry` flag of each pack and plugin command is the only override;
   without it the public registry is used.
+- Breaking: `gents service install`, `stop`, `restart` and `uninstall`, and
+  a managed update's helper, refuse to run when the service's running job is
+  an ancestor of the calling process, which they observe from the service
+  manager and the operating system instead of `GENTS_CALLER_RUNTIME_HOME`.
+  Where that ancestry cannot be read (a sandboxed command, a platform other
+  than macOS or Linux) they refuse while the job runs. Agent commands no
+  longer receive `GENTS_CALLER_RUNTIME_HOME`, `GENTS_CALLER_SESSION_ID` or
+  `GENTS_CALLER_REQUEST_ID`, and a managed update submitted from an Agent's
+  shell no longer posts "Runtime update complete" or "Runtime update failed"
+  to the submitting session; read `gents service update-status` instead.
+  Update receipts no longer carry `session_id` or `request_id` (#3922).
+- Breaking: `GENTS_HOME` is no longer read. `--home` is the only way to choose a
+  node home; without it commands use the folder chosen at setup, then `~/.gents`.
+  The macOS uninstall script takes `--home DIR` instead.
 - Task `goal_blocked_audit_threshold` (positive, default 3) and
   `goal_max_infrastructure_retries` (non-negative, default 2) replace the fixed
   Goal limits for the Goals a Task creates. Every Goal a Task creates pins them,
   including Task messages to an Agent. A Task that sets either without a goal
   objective is rejected. Goals a person starts or the model creates keep the
-  defaults. Goal snapshots report both, and the desktop Tasks panel edits them.
+  defaults. Goal snapshots and the desktop's Goal view report both, and the
+  desktop Tasks panel edits them. A Goal's creation claim records both beside
+  its token budget, so a replayed creation that asks for other limits
+  conflicts, as one with another budget does.
 - InferenceExecution `max_invalid_tool_calls` (positive, default 8) and
   `repeated_tool_failure_limit` (positive, default 3) replace the fixed loop
   guards that end a turn after invalid or repeatedly failing tool calls. The
@@ -36,8 +53,7 @@ source consistency checks, not a separate runtime compatibility version.
   `GENTS_NETWORK_ID` as the registry partition.
 - Breaking: `gents server --system-log` replaces `GENTS_SYSTEM_LOG=1`. The
   installed launchd and systemd definitions pass the flag, and a definition
-  without it is rewritten by `gents service repair`; a definition only moved
-  by a managed update keeps its arguments and logs to stderr until then.
+  without it gains it from `gents service repair` or a managed update.
 - Breaking: `gents init` and the interactive backend setup take the inference
   endpoint only from `--inference-url` (or a preset); `INFERENCE_ENDPOINT` is
   no longer read.
@@ -62,6 +78,10 @@ source consistency checks, not a separate runtime compatibility version.
   `--inference-settings`, the fixture host takes `--domain-home`, and the
   filesystem runner and `gents server` take hidden test flags; the test
   harnesses map their own variables to these arguments.
+- The filesystem runner's `--block-*` flags and `gents server
+  --stall-after-client-access` exist only in builds with the `test-seams`
+  cargo feature of `gents-fs-runner`, `gents-host` and `gents-cli`. Release
+  builds reject them as unknown arguments.
 - InferenceRetryPolicy `max_rate_limit_wait_ms` is now the live threshold
   between a provider throttle and its usage limit: a provider wait beyond it
   fails the request as usage-limited (with its reset time) even when transport

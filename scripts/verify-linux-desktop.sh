@@ -32,7 +32,7 @@ smoke() {
   set +e
   # shellcheck disable=SC2016
   timeout --kill-after=5s 20s runuser -u "$smoke_user" -- \
-    env GENTS_HOME="$smoke_root/agent" GENTS_DESKTOP_HOME="$smoke_root/desktop" \
+    env HOME="$smoke_root" GENTS_DESKTOP_HOME="$smoke_root/desktop" \
     XDG_RUNTIME_DIR="$smoke_root/runtime" TMPDIR="$smoke_root/tmp" APPIMAGE_EXTRACT_AND_RUN=1 \
     bash -c 'cd "$1" && exec dbus-run-session -- xvfb-run -a "$2"' bash "$smoke_root" "$executable" \
     > "$log" 2>&1

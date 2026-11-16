@@ -97,9 +97,10 @@ async fn stage_reset_resume(
         .or(call.queued_at.as_deref())
         .and_then(|at| DateTime::parse_from_rfc3339(at).ok())
         .map(|at| at.with_timezone(&Utc));
-    let (Some(reset), Some(started)) =
-        (reported_reset(call.failure_reason.as_deref(), now), started)
-    else {
+    let (Some(reset), Some(started)) = (
+        call.usage_limit(now).and_then(|limit| limit.resets_at),
+        started,
+    ) else {
         return Ok(ResetResume::Deferred);
     };
     if !(started < reset && reset <= now) {

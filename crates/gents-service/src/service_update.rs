@@ -15,7 +15,6 @@ use std::time::Duration;
 mod backup_conformance;
 mod execute;
 mod files;
-mod notices;
 mod recovery;
 mod repair_backups;
 mod stage;
@@ -37,8 +36,6 @@ struct Plan {
     id: uuid::Uuid,
     home: PathBuf,
     node_did: String,
-    session_id: Option<String>,
-    request_id: Option<String>,
     endpoint: String,
     prior_build: String,
     intent: Intent,
@@ -63,8 +60,6 @@ struct HelperReady {
 struct Receipt {
     operation_id: uuid::Uuid,
     node_did: String,
-    session_id: Option<String>,
-    request_id: Option<String>,
     phase: Phase,
     message: String,
     updated_at: String,
@@ -305,7 +300,6 @@ pub async fn status(home: Option<PathBuf>, id: uuid::Uuid) -> Result<()> {
     emit(&receipt).await
 }
 
-pub use notices::watch_notices;
 pub fn executable_digest(path: &Path) -> Result<String> {
     files::digest(path)
 }
@@ -362,11 +356,6 @@ fn metadata(schema_checked: bool) -> serde_json::Value {
 }
 
 pub async fn run(home: PathBuf, id: uuid::Uuid) -> Result<()> {
-    let guarded_home = home.clone();
-    tokio::task::spawn_blocking(move || {
-        crate::lifecycle::refuse_update_from_its_runtime(&guarded_home)
-    })
-    .await??;
     let directory = operation_dir(&home, id);
     let lock_dir = directory.clone();
     let _lock =
@@ -376,6 +365,13 @@ pub async fn run(home: PathBuf, id: uuid::Uuid) -> Result<()> {
         plan.version == 1 && plan.id == id && plan.home == tokio::fs::canonicalize(&home).await?,
         "update plan does not match helper invocation"
     );
+    let (guarded_home, guarded_executable) = (plan.home.clone(), directory.join("gents"));
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let manager =
+            NativeServiceManager::new(NativeServiceConfig::new(guarded_home, guarded_executable)?)?;
+        Ok(crate::lifecycle::refuse_update_from_its_runtime(&manager)?)
+    })
+    .await??;
     let mut receipt: Receipt = files::read_json_async(&directory.join("receipt.json")).await?;
     if matches!(receipt.phase, Phase::Healthy | Phase::Failed) {
         return cleanup_helper(&plan).await;

@@ -30,8 +30,9 @@ pub struct GoalSnapshot {
 /// The limits a Goal pins when it is created: a Task's
 /// `goal_blocked_audit_threshold` and `goal_max_infrastructure_retries`.
 /// Unset values are the controller defaults. Goals the model creates with goal
-/// tools, and Goals a person starts, have no Task and keep the defaults. A
-/// replayed creation returns the Goal with the limits it was created with.
+/// tools, and Goals a person starts, have no Task and keep the defaults. The
+/// creation claim records them beside the token budget, so a replayed creation
+/// with other limits conflicts (`GoalAutomation.decideCreate`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GoalLimits {
     pub blocked_audit_threshold: Option<i64>,
