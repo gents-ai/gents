@@ -100,7 +100,10 @@ def cases : List (String × List Event) :=
         .claim [102, 103]])
   , ("ordinary_queued_inputs_run_in_order",
       [.enqueue (user 101), .enqueue (user 102 (some 101)), .enqueue (user 103 (some 101)),
-        .claim [102, 103], .finish, .claim [103], .finish, .claim []]) ]
+        .claim [102, 103], .finish, .claim [103], .finish, .claim []])
+  , ("ordinary_queued_inputs_arrive_during_busy_turn",
+      [.enqueue (user 101), .claim [], .enqueue (user 102 (some 101)),
+        .enqueue (user 103 (some 101)), .finish, .claim [103], .finish, .claim []]) ]
 
 example : cases.map (fun c => observation c.2) =
     [ some ⟨some 101, [], [], [102, 103], [(101, [102, 103])]⟩
@@ -114,6 +117,7 @@ example : cases.map (fun c => observation c.2) =
     , some ⟨some 101, [102, 103], [], [], [(101, [])]⟩
     , some ⟨some 101, [102], [], [], [(101, [])]⟩
     , some ⟨some 101, [102, 103], [], [], [(101, [])]⟩
+    , some ⟨some 103, [], [], [101, 102], [(101, []), (102, []), (103, [])]⟩
     , some ⟨some 103, [], [], [101, 102], [(101, []), (102, []), (103, [])]⟩ ] := by native_decide
 
 def turnInputCases : List (String × TurnInput String) :=

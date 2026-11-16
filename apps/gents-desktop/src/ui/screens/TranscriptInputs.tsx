@@ -90,33 +90,13 @@ function triggerName(triggerId: string, node: NodeView | null) {
 
 type SessionMessageOrigin = Extract<RequestOriginView, { kind: "sessionMessage" }>;
 
-const ROUTING_HEADER =
-  /^\[message agent:(\S+) session:(\S+) node:(\S+) · at:(\S+) · cause:(\S+)\]$/;
-
-/* the runtime shortens a long node DID in the routing line */
-const shortDid = (did: string) =>
-  did.length > 20 ? `${did.slice(0, 16)}..${did.slice(-4)}` : did;
-
-/** The sender's session as the fleet lists it. A routing line is the
-    sender's own text, so without a sender session on the origin it only
-    names a session the fleet lists under the authenticated sender node,
-    and only when its node and cause agree with the origin. */
 export function senderSession(
   fleet: FleetState,
   origin: SessionMessageOrigin,
-  content: string | null | undefined,
 ): SessionSummary | null {
-  const node = origin.senderNodeDid;
-  if (origin.senderSessionId)
-    return (
-      listedSession(fleet, node, origin.senderSessionId) ??
-      fleet.bySessionId[origin.senderSessionId] ??
-      null
-    );
-  const header = ROUTING_HEADER.exec(content?.split("\n", 1)[0]?.trimEnd() ?? "");
-  if (!header || !node || header[3] !== shortDid(node)) return null;
-  if (origin.senderRequestId && header[5] !== origin.senderRequestId) return null;
-  return listedSession(fleet, node, header[2]);
+  return origin.senderSessionId && origin.senderNodeDid
+    ? listedSession(fleet, origin.senderNodeDid, origin.senderSessionId)
+    : null;
 }
 
 function senderName(
@@ -147,6 +127,8 @@ export function originLabel(
           : `Task run · ${name}`;
     }
     case "goalContinuation":
+      if (origin.retry)
+        return `Goal retry · ${origin.retry.attempt} of ${origin.retry.max}`;
       if (origin.wrapup) return "Goal wrap-up";
       return origin.sequence != null
         ? `Goal continuation · ${origin.sequence}`
@@ -160,15 +142,6 @@ export function originLabel(
     behind it */
 export const oneLine = (origin: RequestOriginView) =>
   origin.kind === "backgroundCompletion" || origin.kind === "goalContinuation";
-
-/** a message's text without the routing line the runtime writes above it
-    for the model */
-export function withoutRoutingHeader(content: string): string {
-  const end = content.indexOf("\n");
-  const first = (end === -1 ? content : content.slice(0, end)).trimEnd();
-  if (!first.startsWith("[message ") || !first.endsWith("]")) return content;
-  return end === -1 ? "" : content.slice(end + 1).replace(/^(?:[ \t]*\r?\n)+/, "");
-}
 
 const OUTCOMES: Record<string, string> = {
   failed: "failed",
@@ -188,11 +161,11 @@ type BackgroundName = {
 /** the call a background result reports on, by what the step that started
     it shows when that step is drawn, and how it ended */
 export function backgroundName(
-  content: string | null | undefined,
+  origin: RequestOriginView,
   call: RenderedToolCallView | null,
   reached: Reached | null = null,
 ): BackgroundName | null {
-  const completion = completionOf(content);
+  const completion = completionOf(origin);
   if (!completion) return null;
   const outcome = OUTCOMES[completion.status] ?? "finished";
   const p = call?.presentation;
@@ -213,22 +186,13 @@ export function backgroundName(
   return { subject: subject || "call", outcome };
 }
 
-const LABEL_CHARS = 80;
-
-/** what a background input says: the call it names, else the runtime's
-    wake prompt, else its first line */
 export function backgroundText(
   named: BackgroundName | null,
-  content?: string | null,
+  origin?: RequestOriginView | null,
 ): string {
   if (named) return `${named.subject} ${named.outcome}`;
-  if (isWakePrompt(content)) return "Asked to review background results";
-  const line = content
-    ?.split("\n")
-    .map((l) => l.trim())
-    .find(Boolean);
-  if (!line) return "Background result";
-  return line.length > LABEL_CHARS ? `${line.slice(0, LABEL_CHARS - 1)}…` : line;
+  if (isWakePrompt(origin)) return "Asked to review background results";
+  return "Background result";
 }
 
 /** the line a run of background results folds into */
@@ -238,12 +202,11 @@ export function backgroundRunLabel(
 ): string {
   const named = results.flatMap(
     (r) =>
-      backgroundName(r.item.content, r.call, r.call && workers.byToolCall(r.call)) ??
-      [],
+      backgroundName(r.item.origin, r.call, r.call && workers.byToolCall(r.call)) ?? [],
   );
   const count = named.length || results.length;
   if (count > 1) return `${count} background results`;
-  return backgroundText(named[0] ?? null, results[0]?.item.content);
+  return backgroundText(named[0] ?? null, results[0]?.item.origin);
 }
 
 function OriginIcon({ origin }: { origin: RequestOriginView }) {
@@ -388,12 +351,12 @@ function SessionLink({ sessionId, name }: { sessionId: string; name: string }) {
 
 function BackgroundTitle({
   named,
-  content,
+  origin,
 }: {
   named: BackgroundName | null;
-  content: string | null | undefined;
+  origin: RequestOriginView;
 }) {
-  if (!named) return <>{backgroundText(null, content)}</>;
+  if (!named) return <>{backgroundText(null, origin)}</>;
   const sessionId = named.worker?.sessionId;
   return (
     <>
@@ -456,7 +419,7 @@ export function AutomatedInput({
   const unavailable = unavailableReason(reconstruction);
   const node = useSelectedNode();
   const sender = useFleet((fleet) =>
-    origin.kind === "sessionMessage" ? senderSession(fleet, origin, content) : null,
+    origin.kind === "sessionMessage" ? senderSession(fleet, origin) : null,
   );
   const senderNode = useFleet((fleet) => nodeOf(fleet, sender?.nodeDid));
   const [open, setOpen] = useKeptOpen(stateKey && `input:${stateKey}`);
@@ -467,7 +430,7 @@ export function AutomatedInput({
   };
   const named =
     origin.kind === "backgroundCompletion"
-      ? backgroundName(content, call, reached)
+      ? backgroundName(origin, call, reached)
       : null;
   let label: string;
   let title: ReactNode;
@@ -489,8 +452,8 @@ export function AutomatedInput({
       <OriginIcon origin={origin} />
     );
   } else if (origin.kind === "backgroundCompletion") {
-    label = backgroundText(named, content);
-    title = <BackgroundTitle named={named} content={content} />;
+    label = backgroundText(named, origin);
+    title = <BackgroundTitle named={named} origin={origin} />;
     const agentDid = named?.worker?.agentDid;
     icon = agentDid ? (
       avatar(agentDid, node)
@@ -507,8 +470,10 @@ export function AutomatedInput({
   const body = oneLine(origin)
     ? null
     : origin.kind === "sessionMessage"
-      ? (origin.displayBody ?? withoutRoutingHeader(content ?? ""))
-      : content;
+      ? (origin.displayBody ?? "Message contents unavailable")
+      : origin.kind === "trigger"
+        ? (origin.displayBody ?? "Trigger input unavailable")
+        : content;
   const badge = state && (
     <Badge variant="outline" className="shrink-0 font-normal">
       {state}

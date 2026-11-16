@@ -21,21 +21,18 @@ pub async fn session_request_create_mutation(
     fields: SessionRequestFields<'_>,
     signer: &gents_store::identity::ManagedAgentSigner,
 ) -> Result<String> {
-    session_request_create_mutation_at_hop_with_signer(
-        parent,
-        parent.request_hop,
-        fields,
-        Some(signer),
-    )
-    .await
+    build_session_request_at_hop_with_signer(parent, parent.request_hop, fields, Some(signer))
+        .await?
+        .graphql_mutation()
+        .map_err(anyhow::Error::msg)
 }
 
-pub async fn session_request_create_mutation_at_hop_with_signer(
+pub async fn build_session_request_at_hop_with_signer(
     parent: &AgentRequest,
     hop: u32,
     fields: SessionRequestFields<'_>,
     signer: Option<&gents_store::identity::ManagedAgentSigner>,
-) -> Result<String> {
+) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     let SessionRequestFields {
         agent_did,
         content,
@@ -95,6 +92,5 @@ pub async fn session_request_create_mutation_at_hop_with_signer(
         signer.did() == parent.agent_did,
         "queued continuation signer differs from parent Agent"
     );
-    let create = build_signed_request(spec, RequestSigner::Identity(signer)).await?;
-    create.graphql_mutation().map_err(anyhow::Error::msg)
+    build_signed_request(spec, RequestSigner::Identity(signer)).await
 }

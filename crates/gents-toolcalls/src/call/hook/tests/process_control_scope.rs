@@ -415,7 +415,7 @@ async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job()
     finish_owned_request(&foreign, &foreign_request).await;
     bind_interruptible_request(&owner, &owner_cancel_request, &session_id, deadline).await;
     let cancelled = invoke(&owner, "owner-cancel", "cancel_process", &args).await;
-    assert_eq!(cancelled["status"], "cancelled");
+    assert_eq!(cancelled["status"], "cancelled", "{cancelled}");
     executions.wait_for_completion(&tool_call_id).await;
     let final_row = fetch_tool_call_row(&owner, &session_id, &tool_call_id).await;
     assert_eq!(final_row["lifecycle_state"], "cancelled");

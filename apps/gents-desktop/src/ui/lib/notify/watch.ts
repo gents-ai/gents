@@ -123,7 +123,10 @@ export function watchNotifications(
     const events = queued;
     queued = [];
     if (deps.focused()) return;
-    for (const notice of noticesFor(events)) teller.tell(notice);
+    for (const notice of noticesFor(events))
+      void teller
+        .tell(notice)
+        .catch((error: unknown) => console.warn("notification not shown", error));
   };
 
   const unsubscribe = stores.fleet.subscribe((next) => {
@@ -172,8 +175,7 @@ export function createTeller(
       to: notice.to,
       at: deps.now(),
     };
-    if (!deps.platform.reportsClicks) pending.push(offer);
-    deps.platform
+    return deps.platform
       .show({
         title: notice.title,
         body: notice.body,
@@ -182,13 +184,10 @@ export function createTeller(
           deps.open(notice.to);
         },
       })
-      .then(
-        (shown) => {
-          if (deps.platform.reportsClicks && shown?.reportsClick === false)
-            pending.push(offer);
-        },
-        (error: unknown) => console.warn("notification not shown", error),
-      );
+      .then((shown) => {
+        if (!deps.platform.reportsClicks || shown?.reportsClick === false)
+          pending.push(offer);
+      });
   };
   return { tell, stop };
 }

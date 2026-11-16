@@ -1947,6 +1947,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
                 view.compactions.insert(
                     "compaction-b".into(),
                     DocumentRecord {
+                        version: Some("fixture-compaction-version".into()),
                         doc_id: "compaction-b".into(),
                         value: compaction,
                     },

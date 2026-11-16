@@ -1,0 +1,3 @@
+---- MODULE MCBackendFirstProbeStranded ----
+EXTENDS BackendFirstProbe
+====

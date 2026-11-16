@@ -2021,6 +2021,17 @@ mod job_calls {
             None,
         );
         record.declaration.job = PluginJobDeclaration(declared);
+        // The call's wall-clock budget spans the host's database reads that
+        // serve each round; these tests exercise the answers, not that cut,
+        // so the declared budget is the host ceiling, past any run
+        // (`WallClockBound` `"unreached"`).
+        record.declaration.limits = Some(gents_pack::pack::PluginLimits {
+            wall_clock_secs: Some(gents_protocol::plugin::MAX_DECLARED_WALL_CLOCK_SECS),
+            ..Default::default()
+        });
+        record.granted =
+            store::grant_on_install(home.path(), &record.namespace, &record.declaration, true)
+                .unwrap();
         store::write_record(home.path(), &record).unwrap();
         PluginExecutor::new(Some(home.path().to_owned()))
             .call_with_jobs(

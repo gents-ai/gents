@@ -29,6 +29,7 @@ gents-observe = { workspace = true }
 schema.workspace = true
 rapidhash = { workspace = true }
 anyhow.workspace = true
+thiserror.workspace = true
 async-trait = "0.1"
 chrono.workspace = true
 gents-protocol.workspace = true

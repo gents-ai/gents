@@ -44,9 +44,31 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
         let foreign_binding = gents_store::identity::provision_agent_identity(&root).unwrap();
         let foreign =
             gents_store::identity::resolve_agent_identity(&root, &foreign_binding).unwrap();
-        let agent_doc = create_document(&root_access, "Agent", json!({
-            "node_did":root.did(), "agent_did":agent.did(), "creation_nonce":binding.creation_nonce,
-        })).await;
+        gents_inference::test_support::install_test_agent_binding(
+            &node,
+            root.did(),
+            "binding fixture",
+            &binding,
+        )
+        .await;
+        let agent_doc = root_access
+            .transact_write("test.session_child.agent", |txn| {
+                let agent = &agent;
+                let root = &root;
+                Box::pin(async move {
+                    gents_documents::read_desired_state_record_in_txn(
+                        txn,
+                        gents_store::collection::Collection::Agent,
+                        root.did(),
+                        agent.did(),
+                    )
+                    .await?
+                    .map(|(doc, _)| doc)
+                    .ok_or_else(|| anyhow::anyhow!("fixture Agent"))
+                })
+            })
+            .await
+            .unwrap();
         let map_requester = |value: Option<&str>| -> Option<String> {
             value.map(|value| match value {
                 "user" => root.did().to_owned(),
@@ -62,17 +84,23 @@ async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
             "AgentSession",
             json!({
                 "session_id":session_id, "node_did":root.did(), "agent_did":agent.did(),
-                "requester_did":session_requester, "created_at":"2026-10-21T00:00:00Z",
+                "requester_did":session_requester, "relationships_pending":true, "created_at":"2026-10-21T00:00:00Z",
             }),
         )
         .await;
         root_access
-            .add_actor_relationship(
-                "AgentSession",
-                &session_doc,
-                "working_agent",
-                &agent.did().parse().unwrap(),
-            )
+            .transact_write("test.session_child.session", |txn| {
+                let (session_doc, agent_doc, agent) = (&session_doc, &agent_doc, &agent);
+                Box::pin(async move {
+                    crate::session::stage_created_session_relationships_in_txn(
+                        txn,
+                        session_doc,
+                        agent_doc,
+                        &agent.did().parse()?,
+                    )
+                    .await
+                })
+            })
             .await
             .unwrap();
         let mut parent = AgentRequestCreate::base(

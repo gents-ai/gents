@@ -213,16 +213,19 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
             identity::Did::new(actor)?,
             vec![
                 SelectedConfigurationDocument {
+                    version: "fixture-version".into(),
                     collection: Collection::Agent,
                     doc_id: agent_doc.clone(),
                     logical_id: None,
                 },
                 SelectedConfigurationDocument {
+                    version: "fixture-version".into(),
                     collection: Collection::AgentContext,
                     doc_id: context_doc.clone(),
                     logical_id: None,
                 },
                 SelectedConfigurationDocument {
+                    version: "fixture-version".into(),
                     collection: Collection::Skill,
                     doc_id: skill_doc.clone(),
                     logical_id: Some("skill".into()),

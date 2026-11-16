@@ -1,4 +1,7 @@
 ---- MODULE InterruptLatchContention ----
+\* lean: none
+\* crates: gents-session
+\* models: TransactionReplay.disposition
 \* A User's interrupt of a running turn racing the turn's own writes to the
 \* request document.
 \*

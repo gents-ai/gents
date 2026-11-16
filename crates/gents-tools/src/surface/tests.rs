@@ -108,6 +108,15 @@ async fn presented_mcp_tool_names_match_the_attached_tools() {
             true,
         ),
         (
+            "omitted style selects discovery",
+            vec![serde_json::from_value(serde_json::json!({
+                "mcp_service_id": "research",
+                "tool_names": ["search"]
+            }))
+            .unwrap()],
+            true,
+        ),
+        (
             "no selected names",
             vec![selection(Vec::new(), Vec::new())],
             false,
@@ -143,18 +152,16 @@ async fn presented_mcp_tool_names_match_the_attached_tools() {
         .unwrap();
 
         let names = surface.tool_names();
-        let presented = gents_protocol::tool_names::META_TOOL_NAMES
-            .iter()
-            .any(|meta| names.iter().any(|name| name == meta));
         let built = surface.build_tools(&runtime).await.unwrap();
-        let attached = gents_protocol::tool_names::META_TOOL_NAMES
-            .iter()
-            .any(|meta| built.iter().any(|tool| tool.name() == *meta));
-        assert_eq!(
-            presented, attached,
-            "{case}: advertised meta tool names must match the attached tools"
-        );
-        assert_eq!(attached, attaches, "{case}: attachment");
+        for meta in gents_protocol::tool_names::META_TOOL_NAMES {
+            let presented = names.iter().any(|name| name == meta);
+            let attached = built.iter().any(|tool| tool.name() == meta);
+            assert_eq!(
+                presented, attached,
+                "{case}: advertised {meta} must match the attached tool"
+            );
+            assert_eq!(attached, attaches, "{case}: {meta} attachment");
+        }
     }
 }
 

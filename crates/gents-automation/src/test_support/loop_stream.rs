@@ -779,7 +779,9 @@ async fn owned_test_hook_with_identity_policy(
     let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         row.try_into().unwrap(),
-        60,
+        // The claim's deadline bounds every tool call of the owned loop; no
+        // test here exercises that cut (`WallClockBound` `"unreached"`).
+        gents_store::test_support::UNREACHED_DEADLINE.as_secs(),
     );
     lifecycle
         .bind_managed_agent(agent_identity.as_ref())

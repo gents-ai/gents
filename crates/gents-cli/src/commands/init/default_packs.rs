@@ -1120,6 +1120,64 @@ mod tests {
     /// release carries without asking and leaves each as `initWiring` says;
     /// enabling leaves each as `enabledWiring` says.
     #[tokio::test]
+    async fn first_run_installs_packs_and_releases_the_home_for_its_service() {
+        let packs = tempfile::tempdir().unwrap();
+        let archives: Vec<_> = CorePack::ALL
+            .into_iter()
+            .map(|pack| {
+                let (_, name) =
+                    gents_pack::pack::registry::split_pack_coordinate(pack.coordinate());
+                let dir = packs.path().join(name);
+                let manifest = json!({
+                    "manifest_version": 1, "name": name, "namespace": "gents",
+                    "version": "1.0.0", "description": "Store handoff fixture",
+                    "authors": ["tests"], "tags": [], "kind": "documents",
+                    "assets": ["README.md", "pack_config.json"], "dependencies": [],
+                    "config": "pack_config.json",
+                });
+                let config = json!({
+                    "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
+                    "skills": [{"skill_id": format!("handoff-{name}"),
+                        "node_did": "${GENTS_PACK_NODE_DID}", "name": name,
+                        "description": "Handoff premise", "instructions": "Use it."}],
+                });
+                write_pack(
+                    &dir,
+                    manifest,
+                    &[("pack_config.json", serde_json::to_vec(&config).unwrap())],
+                );
+                (pack.coordinate().to_owned(), archive(&dir))
+            })
+            .collect();
+        let archives = borrowed(&archives);
+        let home = tempfile::tempdir().unwrap();
+        let initialized = crate::commands::init::init_home_with_core_packs(
+            init_args(home.path(), &[]),
+            &archives,
+        )
+        .await
+        .unwrap();
+        let report = &initialized["default_packs"];
+        assert_eq!(report["not_installed"], json!([]), "{report}");
+        assert_eq!(
+            report["installed"].as_array().unwrap().len(),
+            CorePack::ALL.len()
+        );
+        let installed = status(home.path(), &archives).await.unwrap();
+        assert_eq!(installed.len(), CorePack::ALL.len());
+        assert!(
+            installed
+                .iter()
+                .all(|pack| matches!(pack.state, PackState::Installed | PackState::NotEnabled)),
+            "{installed:?}"
+        );
+        let data = gents_service::home_state::default_data_dir(home.path());
+        let claim = crate::commands::init::lock_init_store(home.path(), &data, false)
+            .expect("provisioning and all pack readers released the service's home");
+        drop(claim);
+    }
+
+    #[tokio::test]
     async fn init_and_enable_leave_the_core_packs_as_the_model_says() {
         let archives = fixture_archives().await;
         let archives = borrowed(&archives);

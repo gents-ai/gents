@@ -103,9 +103,106 @@ pub(super) fn xml_escape_text(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionMetadata {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub status: String,
+    pub reason: Option<String>,
+    pub result_start_byte: u64,
+    pub result_end_byte: u64,
+}
+
+pub fn completion_metadata(
+    parts: &[gents_protocol::output::PresentationPart],
+) -> Option<CompletionMetadata> {
+    use gents_protocol::output::PresentationPart;
+    let PresentationPart::Literal { text: opening } = parts.first()? else {
+        return None;
+    };
+    let PresentationPart::Literal { text: closing } = parts.last()? else {
+        return None;
+    };
+    let fields = opening.strip_prefix("<tool-completion tool_call_id=\"")?;
+    let (call, fields) = fields.split_once("\" tool_name=\"")?;
+    let (name, fields) = fields.split_once("\" status=\"")?;
+    let status = fields.strip_suffix("\">\n  <result>")?;
+    let reason = closing
+        .strip_prefix("</result>")?
+        .strip_suffix("\n</tool-completion>")?;
+    let reason = if reason.is_empty() {
+        None
+    } else {
+        Some(unescape_xml(
+            reason
+                .strip_prefix("\n  <reason>")?
+                .strip_suffix("</reason>")?,
+        ))
+    };
+    let size = parts.iter().try_fold(0u64, |size, part| {
+        let bytes = match part {
+            PresentationPart::Literal { text } => u64::try_from(text.len()).ok()?,
+            PresentationPart::OutputRange {
+                start_byte,
+                end_byte,
+            } => end_byte.checked_sub(*start_byte)?,
+        };
+        size.checked_add(bytes)
+    })?;
+    Some(CompletionMetadata {
+        tool_call_id: unescape_xml(call),
+        tool_name: unescape_xml(name),
+        status: unescape_xml(status),
+        reason,
+        result_start_byte: opening.len().try_into().ok()?,
+        result_end_byte: size.checked_sub(closing.len().try_into().ok()?)?,
+    })
+}
+
+fn unescape_xml(text: &str) -> String {
+    text.replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
 #[cfg(test)]
 mod context_accounting_tests {
     use super::*;
+
+    #[test]
+    fn completion_metadata_roundtrips_the_owned_wire_format() {
+        for (result, budget, expected) in [
+            ("", 4000, ""),
+            ("  café\n<&>  done", 4000, "café &lt;&amp;&gt; done"),
+            ("雪abc", 3, "雪..."),
+        ] {
+            let (text, parts) = tool_completion_presentation(
+                "call\"&lt;",
+                "shell'&",
+                "failed",
+                result,
+                Some("tool<&> failed"),
+                budget,
+            );
+            let metadata = completion_metadata(&parts).expect("owned completion framing");
+            assert_eq!(metadata.tool_call_id, "call\"&lt;");
+            assert_eq!(metadata.tool_name, "shell'&");
+            assert_eq!(metadata.status, "failed");
+            assert_eq!(metadata.reason.as_deref(), Some("tool<&> failed"));
+            assert_eq!(
+                &text[metadata.result_start_byte as usize..metadata.result_end_byte as usize],
+                expected,
+            );
+        }
+        let (_, parts) =
+            tool_completion_presentation("call", "shell", "success", "done", None, 4000);
+        assert_eq!(
+            completion_metadata(&parts).expect("owned framing").reason,
+            None
+        );
+    }
 
     #[test]
     fn tool_completion_text_matches_the_rendered_notification() {

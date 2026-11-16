@@ -1,0 +1,7 @@
+#!/bin/sh
+/bin/stty "$@"
+status=$?
+if [ "$status" -eq 0 ] && [ "$#" -eq 1 ] && [ "$1" = "-echo" ]; then
+    printf '%s\n' GENTS_TEST_TERMINAL_ECHO_DISABLED >&2
+fi
+exit "$status"

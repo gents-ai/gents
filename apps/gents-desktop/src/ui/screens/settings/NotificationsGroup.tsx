@@ -7,6 +7,7 @@ import {
 } from "@/lib/notify/platform";
 import type { NotifyKind } from "@/lib/notify/events";
 import { IS_MAC } from "@/screens/shortcutKeys";
+import { openNotificationSettings } from "../../../lib/nativeShell";
 import { errorText } from "../../../lib/errorText";
 import { notifierKey } from "@/contrib/activate";
 import { useUxPluginRecords, type UxPluginRecord } from "@/contrib/plugins-store";
@@ -64,13 +65,21 @@ function useNotifyPermission() {
   const [permission, setPermission] = useState<NotifyPermission | null>(null);
   useEffect(() => {
     let live = true;
-    void notifyPlatform
-      .permission()
-      .then((now) => (now === "default" ? notifyPlatform.request() : now))
-      .then((now) => live && setPermission(now))
-      .catch(() => live && setPermission("denied"));
+    let reading = 0;
+    const read = (ask: boolean) => {
+      const request = ++reading;
+      void notifyPlatform
+        .permission()
+        .then((now) => (ask && now === "default" ? notifyPlatform.request() : now))
+        .then((now) => live && request === reading && setPermission(now))
+        .catch(() => live && request === reading && setPermission(null));
+    };
+    const refresh = () => read(false);
+    read(true);
+    window.addEventListener("focus", refresh);
     return () => {
       live = false;
+      window.removeEventListener("focus", refresh);
     };
   }, []);
   return permission;
@@ -87,6 +96,7 @@ const origin = (record: UxPluginRecord) =>
     it on, grouped under the plugin that declares it: a kind is listed once
     its plugin has loaded, since the module is what declares it. */
 function PluginNotifications({ blocked }: { blocked: boolean }) {
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const records = useUxPluginRecords();
   const on = usePluginNotify();
   const notifying = Object.values(records)
@@ -105,7 +115,27 @@ function PluginNotifications({ blocked }: { blocked: boolean }) {
     <>
       {blocked && (
         <Group title="From packs">
-          <Row label="Blocked by the system" description={SYSTEM_BLOCKED} />
+          <Row
+            label="Blocked by the system"
+            description={settingsError ?? SYSTEM_BLOCKED}
+          >
+            {IS_MAC && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setSettingsError(null);
+                  void openNotificationSettings().catch((error: unknown) =>
+                    setSettingsError(
+                      `Could not open System Settings: ${errorText(error)}`,
+                    ),
+                  );
+                }}
+              >
+                Open System Settings
+              </Button>
+            )}
+          </Row>
         </Group>
       )}
       {notifying.map((record) => {

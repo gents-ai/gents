@@ -169,6 +169,11 @@ export async function notificationsGranted(): Promise<boolean> {
   return (await import("@tauri-apps/plugin-notification")).isPermissionGranted();
 }
 
+export async function openNotificationSettings(): Promise<void> {
+  const { openUrl } = await import("@tauri-apps/plugin-opener");
+  await openUrl("x-apple.systempreferences:com.apple.Notifications-Settings.extension");
+}
+
 export async function requestNotifications() {
   return (await import("@tauri-apps/plugin-notification")).requestPermission();
 }

@@ -1,0 +1,4 @@
+---- MODULE MCScriptFixtureExecDarwin ----
+EXTENDS ScriptFixtureExec
+
+====

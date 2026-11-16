@@ -117,6 +117,13 @@ where
 {
     ensure_allowed(&state)?;
     let lifecycle = state.managed_server_lifecycle.lock().await;
+    let starting = state.managed_server.lock().await.starting;
+    if matches!(
+        start_wait::start_disposition(starting),
+        start_wait::StartDisposition::Observe
+    ) {
+        return managed_server_status_for(&app, &state).await;
+    }
     start_managed_server(&app, request, &state, lifecycle).await
 }
 

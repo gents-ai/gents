@@ -153,3 +153,24 @@ fn configuration_fingerprint_reflects_lsp_configuration() {
     );
     assert_ne!(baseline, lsp_changed.configuration_fingerprint());
 }
+
+#[test]
+fn generated_probe_request_cases_preserve_startup_failure() {
+    use gents_lean_vocab::families::backend_health_admission_probe_request as family;
+
+    family::replay(|input: &family::ProbeRequestInput| {
+        let unavailable = UnavailableAgent::new(
+            AgentReadinessUnavailableReason::BackendTemporarilyUnavailable,
+            "backend probe pending",
+        )
+        .with_awaiting_first_probe(input.awaiting_probe);
+        let admission = effective_agent_admission(
+            false,
+            Some(&unavailable),
+            input.startup_failed.then_some("executor failed"),
+        );
+        family::WaitingOutput {
+            waiting: matches!(admission, EffectiveAgentAdmission::AwaitFirstProbe),
+        }
+    });
+}
