@@ -13,6 +13,11 @@
     },
     "portable": {
       "labels": ["self-hosted", "Linux", "X64", "ci-portable"],
+      "host_groups": ["ci-portable-a", "ci-portable-b"],
+      "jobs": {
+        "build": 10,
+        "test": 8
+      },
       "fallback": "macos",
       "target": {
         "max_gib": 65,

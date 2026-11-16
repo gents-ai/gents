@@ -40,6 +40,17 @@ runs:
           echo "${name}=${value}"
         done
 
+    # Each runner unit and the host's sccache server have their own private
+    # /tmp (systemd PrivateTmp), so the server cannot write a compile's output
+    # under the job's /tmp, where tests build plugins. The job's temporary
+    # directory is one both can see; the runner empties it after the job.
+    - name: Keep temporary files where the compiler cache can write
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        mkdir -p "${RUNNER_TEMP}/tmp"
+        echo "TMPDIR=${RUNNER_TEMP}/tmp" >> "${GITHUB_ENV}"
+
     # gents-migration's build script compiles the fixture lens for WASM and
     # the callback fixture and pack tests need WASI.
     - name: Install pinned Rust toolchain and WASM targets
