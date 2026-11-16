@@ -141,22 +141,16 @@ async fn supplied_path_preserves_native_spawn_errors() {
     std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o700)).unwrap();
 }
 
+/// The script is checked in rather than written here: Linux execve refuses a
+/// file any process holds open for writing (ETXTBSY), and a sibling test's
+/// spawn copies this process's descriptors into its child until that child
+/// execs. `tla/ScriptFixtureExec.tla` checks the interleaving.
 #[tokio::test]
 async fn supplied_path_retains_native_script_fallback() {
-    let directory = tempfile::tempdir().unwrap();
-    let script = directory.path().join("fixture-command");
-    std::fs::write(&script, "printf fallback").unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let directory =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/exec/process/spawn/script-fallback");
     assert_eq!(
-        complete_output(
-            capture(
-                directory.path().to_path_buf(),
-                ".",
-                "fixture-command",
-                "unused",
-            )
-            .await,
-        ),
+        complete_output(capture(directory, ".", "fixture-command", "unused").await),
         b"fallback"
     );
 }
