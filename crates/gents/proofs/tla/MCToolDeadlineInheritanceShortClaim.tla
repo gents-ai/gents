@@ -1,0 +1,4 @@
+---- MODULE MCToolDeadlineInheritanceShortClaim ----
+EXTENDS ToolDeadlineInheritance
+
+====
