@@ -478,7 +478,11 @@ impl Tool for BoundedQueryTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         self.ensure_well_formed()?;
         let fields = self.resolve_projection(&args.0)?;
         let filter = self.resolve_filter(&args.0)?;
@@ -669,7 +673,12 @@ mod tests {
             let args = value
                 .map(|value| Map::from_iter([(field.into(), value)]))
                 .unwrap_or_default();
-            let result = tool.call(BoundedQueryParams(args)).await;
+            let result = tool
+                .call(
+                    BoundedQueryParams(args),
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
+                .await;
             if case.input.actual.as_ref() == Some(&case.input.expected) {
                 let payload: Value = serde_json::from_str(result.as_ref().unwrap()).unwrap();
                 assert_eq!(payload["count"], 1, "{:?}", case.input);
@@ -741,9 +750,10 @@ mod tests {
             .to_owned();
         let tool = BoundedQueryTool::new(ConfigAccess::local(node.clone()), decl());
         crate::runtime_context::scope_request_tool_execution_with_trigger_context(
+            None,
             None, tokio_util::sync::CancellationToken::new(), None, None, None,
             Some("run-42".into()), Default::default(), false, async {
-                let initial: Value = serde_json::from_str(&Tool::call(&tool, BoundedQueryParams(json!({"fields":["title"]}).as_object().unwrap().clone())).await.unwrap()).unwrap();
+                let initial: Value = serde_json::from_str(&Tool::call(&tool, BoundedQueryParams(json!({"fields":["title"]}).as_object().unwrap().clone()), &gents_loop::tool::ToolCallEnvelope::ambient()).await.unwrap()).unwrap();
                 assert_eq!(initial["truncated"], true);
                 assert_eq!(initial["truncated_fields"][0], json!({"row":0,"field":"title","path":"","total_bytes":text.len()}));
                 assert_eq!(initial["field_recovery"][0]["total_bytes"], text.len());
@@ -755,7 +765,7 @@ mod tests {
                 loop {
                     let mut page=json!({"doc_id":doc,"field":"title","offset_bytes":offset});
                     if let Some(hash)=&hash { page["expected_hash"]=json!(hash); }
-                    let out: Value=serde_json::from_str(&Tool::call(&tool, BoundedQueryParams(json!({"fields":["title"],"field_page":page}).as_object().unwrap().clone())).await.unwrap()).unwrap();
+                    let out: Value=serde_json::from_str(&Tool::call(&tool, BoundedQueryParams(json!({"fields":["title"],"field_page":page}).as_object().unwrap().clone()), &gents_loop::tool::ToolCallEnvelope::ambient()).await.unwrap()).unwrap();
                     let page=&out["field_page"];
                     recovered.push_str(page["text"].as_str().unwrap());
                     hash=Some(page["value_hash"].as_str().unwrap().to_owned());
@@ -764,13 +774,13 @@ mod tests {
                 }
                 assert_eq!(recovered,text);
                 for page in [json!({"doc_id":doc,"field":"run_id"}),json!({"doc_id":doc,"field":"title","offset_bytes":1}),json!({"doc_id":doc,"field":"title","offset_bytes":2}),json!({"doc_id":doc,"field":"title","expected_hash":"changed"})] {
-                    assert!(Tool::call(&tool,BoundedQueryParams(json!({"fields":["title"],"field_page":page}).as_object().unwrap().clone())).await.is_err());
+                    assert!(Tool::call(&tool, BoundedQueryParams(json!({"fields":["title"],"field_page":page}).as_object().unwrap().clone()), &gents_loop::tool::ToolCallEnvelope::ambient()).await.is_err());
                 }
                 let other = gents_store::config_client::ConfigAccess::local(node.clone()).execute("{ CandidateFinding(filter: {finding_id: {_eq: \"f2\"}}) {_docID} }").await.unwrap();
                 let other_doc=&other["data"]["CandidateFinding"][0]["_docID"];
-                assert!(Tool::call(&tool,BoundedQueryParams(json!({"fields":["title"],"field_page":{"doc_id":other_doc,"field":"title"}}).as_object().unwrap().clone())).await.is_err());
+                assert!(Tool::call(&tool, BoundedQueryParams(json!({"fields":["title"],"field_page":{"doc_id":other_doc,"field":"title"}}).as_object().unwrap().clone()), &gents_loop::tool::ToolCallEnvelope::ambient()).await.is_err());
                 gents_store::config_client::ConfigAccess::write_local(&node,"test.field_recovery.change",&format!("mutation {{update_CandidateFinding(docID: \"{}\", input: {{title: \"changed\"}}) {{_docID}}}}",gents_store::graphql::escape_graphql_string(&doc))).await.unwrap();
-                assert!(Tool::call(&tool,BoundedQueryParams(json!({"fields":["title"],"field_page":{"doc_id":doc,"field":"title","offset_bytes":2,"expected_hash":hash.unwrap()}}).as_object().unwrap().clone())).await.is_err());
+                assert!(Tool::call(&tool, BoundedQueryParams(json!({"fields":["title"],"field_page":{"doc_id":doc,"field":"title","offset_bytes":2,"expected_hash":hash.unwrap()}}).as_object().unwrap().clone()), &gents_loop::tool::ToolCallEnvelope::ambient()).await.is_err());
             }).await;
     }
 
@@ -789,7 +799,11 @@ mod tests {
             );
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            Tool::call(&tool, BoundedQueryParams(Map::new())),
+            Tool::call(
+                &tool,
+                BoundedQueryParams(Map::new()),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            ),
         )
         .await
         .expect("actor read must not wait for mutation gate")
@@ -806,6 +820,7 @@ mod tests {
         let tool = BoundedQueryTool::new(ConfigAccess::local(Arc::clone(&node)), decl());
         let out = crate::runtime_context::scope_request_tool_execution_with_trigger_context(
             None,
+            None,
             tokio_util::sync::CancellationToken::new(),
             None,
             None,
@@ -814,9 +829,13 @@ mod tests {
             Default::default(),
             false,
             async {
-                Tool::call(&tool, BoundedQueryParams(Map::new()))
-                    .await
-                    .expect("query")
+                Tool::call(
+                    &tool,
+                    BoundedQueryParams(Map::new()),
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
+                .await
+                .expect("query")
             },
         )
         .await;
@@ -837,9 +856,13 @@ mod tests {
 
         let mut args = Map::new();
         args.insert("run_id".into(), json!("model-value"));
-        let err = Tool::call(&tool, BoundedQueryParams(args))
-            .await
-            .unwrap_err();
+        let err = Tool::call(
+            &tool,
+            BoundedQueryParams(args),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("runtime-filled"));
     }
 
@@ -851,6 +874,7 @@ mod tests {
         args.insert("fields".into(), json!(["_docID"]));
         crate::runtime_context::scope_request_tool_execution_with_trigger_context(
             None,
+            None,
             tokio_util::sync::CancellationToken::new(),
             None,
             None,
@@ -859,9 +883,13 @@ mod tests {
             Default::default(),
             false,
             async {
-                let err = Tool::call(&tool, BoundedQueryParams(args))
-                    .await
-                    .unwrap_err();
+                let err = Tool::call(
+                    &tool,
+                    BoundedQueryParams(args),
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
+                .await
+                .unwrap_err();
                 assert!(err.to_string().contains("allowlist"));
             },
         )
@@ -875,9 +903,13 @@ mod tests {
         protected.collection = gents_protocol::schemas::EVAL_VERDICT_NAME.into();
         let tool = BoundedQueryTool::new(ConfigAccess::local(node), protected);
         assert!(!tool.is_well_formed());
-        let err = Tool::call(&tool, BoundedQueryParams(Map::new()))
-            .await
-            .unwrap_err();
+        let err = Tool::call(
+            &tool,
+            BoundedQueryParams(Map::new()),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap_err();
         assert!(format!("{err:#}").contains("protected"), "{err:#}");
     }
 
@@ -887,10 +919,14 @@ mod tests {
         let tool = BoundedQueryTool::new(ConfigAccess::local(node), decl())
             .declared_by(Some("findings".into()));
         let args = serde_json::from_value(json!({"title":"graphql"})).unwrap();
-        let error = Tool::call(&tool, BoundedQueryParams(args))
-            .await
-            .unwrap_err()
-            .to_string();
+        let error = Tool::call(
+            &tool,
+            BoundedQueryParams(args),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         for detail in [
             "filter `title` is not permitted",
             "filter_fields declares filter arguments",
@@ -935,9 +971,13 @@ mod tests {
     }
 
     async fn call_unscoped(tool: &BoundedQueryTool, args: Value) -> Result<Value> {
-        let text = Tool::call(tool, BoundedQueryParams(args.as_object().unwrap().clone()))
-            .await
-            .map_err(|error| anyhow!("{error}"))?;
+        let text = Tool::call(
+            tool,
+            BoundedQueryParams(args.as_object().unwrap().clone()),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .map_err(|error| anyhow!("{error}"))?;
         Ok(serde_json::from_str(&text)?)
     }
 
@@ -1037,6 +1077,7 @@ mod tests {
         args.insert("limit".into(), json!(0));
         let err = crate::runtime_context::scope_request_tool_execution_with_trigger_context(
             None,
+            None,
             tokio_util::sync::CancellationToken::new(),
             None,
             None,
@@ -1045,9 +1086,13 @@ mod tests {
             Default::default(),
             false,
             async {
-                Tool::call(&tool, BoundedQueryParams(args))
-                    .await
-                    .unwrap_err()
+                Tool::call(
+                    &tool,
+                    BoundedQueryParams(args),
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
+                .await
+                .unwrap_err()
             },
         )
         .await;

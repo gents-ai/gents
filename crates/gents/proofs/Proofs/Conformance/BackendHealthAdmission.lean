@@ -63,16 +63,4 @@ def firstProbe : Family FirstProbeInput WaitingOutput where
   model := fun i =>
     { waiting := Proofs.BackendHealth.awaitingFirstProbe i.enabled i.probeStatus i.measuredUnhealthy }
 
-structure ProbeRequestInput where
-  awaitingProbe : Bool
-  startupFailed : Bool
-  deriving ToJson
-
-@[conformance_family]
-def probeRequest : Family ProbeRequestInput WaitingOutput where
-  inputs := [false, true].flatMap fun awaitingProbe =>
-    [false, true].map fun startupFailed => { awaitingProbe, startupFailed }
-  model := fun i =>
-    { waiting := Proofs.BackendHealth.awaitProbeRequest i.awaitingProbe i.startupFailed }
-
 end Conformance.BackendHealthAdmission

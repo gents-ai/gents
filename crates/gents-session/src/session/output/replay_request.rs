@@ -168,7 +168,7 @@ pub(super) async fn validated_canonical_replay_boundary(
     )
     .await
     .map_err(|error| {
-        if error.downcast_ref::<CanonicalOutputReadError>().is_some() {
+        if CanonicalOutputReadError::in_error(&error).is_some() {
             replay_violation(error.to_string())
         } else {
             error

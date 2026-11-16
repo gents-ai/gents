@@ -81,7 +81,11 @@ impl Tool for DescribeToolTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         Tool::admit(self, &args)?;
 
         if let Err(error) = enforce_health_gate(&self.ctx.health, &args.service_id).await {
@@ -761,11 +765,14 @@ mod tests {
         });
 
         let error = tool
-            .call(DescribeToolArgs {
-                service_id: "observability-mcp".to_string(),
-                tool_name: "query_metrics".to_string(),
-                raw_schema: false,
-            })
+            .call(
+                DescribeToolArgs {
+                    service_id: "observability-mcp".to_string(),
+                    tool_name: "query_metrics".to_string(),
+                    raw_schema: false,
+                },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .expect_err("disallowed service should return a typed failure");
         let value: Value = serde_json::from_str(&error.to_string()).expect("structured json");
@@ -801,11 +808,14 @@ mod tests {
         });
 
         let error = tool
-            .call(DescribeToolArgs {
-                service_id: "missing-service".to_string(),
-                tool_name: "search_posts".to_string(),
-                raw_schema: false,
-            })
+            .call(
+                DescribeToolArgs {
+                    service_id: "missing-service".to_string(),
+                    tool_name: "search_posts".to_string(),
+                    raw_schema: false,
+                },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .expect_err("missing service should return a typed failure");
         let value: Value = serde_json::from_str(&error.to_string()).expect("structured json");

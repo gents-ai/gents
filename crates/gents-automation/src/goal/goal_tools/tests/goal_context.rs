@@ -298,7 +298,13 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 });
             }
             let action = hook
-                .on_tool_call(tool, None, "goal-context-call", args)
+                .on_tool_call(
+                    tool,
+                    None,
+                    "goal-context-call",
+                    args,
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
                 .await;
             let terminated = matches!(&action, ToolCallHookAction::Terminate { .. });
             let reason = match action {

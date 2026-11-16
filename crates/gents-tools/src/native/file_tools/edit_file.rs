@@ -101,7 +101,11 @@ impl Tool for EditFileTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         if !args.dry_run {
             deny_workspace_file_writes()?;
         }

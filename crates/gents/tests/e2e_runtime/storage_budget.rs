@@ -290,7 +290,11 @@ impl ToolDyn for AuditProbe {
         })
     }
 
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             let note = serde_json::from_str::<Value>(&args)
                 .ok()

@@ -69,6 +69,7 @@ async fn incomplete_images_retain_the_original_without_claiming_a_finished_mutat
     std::fs::write(&path, "original bytes").unwrap();
     gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
         None,
+        None,
         tokio_util::sync::CancellationToken::new(),
         None,
         Some(writer),
@@ -110,6 +111,7 @@ async fn previews_and_rejected_edits_do_not_publish_file_images() {
     let tool = EditFileTool::new(ToolContext::new(root_path.clone(), false).unwrap());
     gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
         None,
+        None,
         tokio_util::sync::CancellationToken::new(),
         None,
         Some(writer),
@@ -129,12 +131,28 @@ async fn previews_and_rejected_edits_do_not_publish_file_images() {
                 operation: None,
                 expected_content_hash,
             };
-            tool.call(args(true, None)).await.unwrap();
+            tool.call(
+                args(true, None),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap();
             assert!(registry.deferred_writes("preview-tool").await.is_none());
             assert_eq!(std::fs::read(&path).unwrap(), b"original\r\nbytes\r\n");
-            assert!(tool.call(args(false, Some("stale".into()))).await.is_err());
+            assert!(tool
+                .call(
+                    args(false, Some("stale".into())),
+                    &gents_loop::tool::ToolCallEnvelope::ambient()
+                )
+                .await
+                .is_err());
             assert!(registry.deferred_writes("preview-tool").await.is_none());
-            tool.call(args(false, None)).await.unwrap();
+            tool.call(
+                args(false, None),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap();
         },
     )
     .await;
