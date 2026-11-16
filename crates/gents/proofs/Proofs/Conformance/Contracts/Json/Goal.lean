@@ -334,12 +334,14 @@ structure GoalCreateCase where
   existing : Option GoalAutomation.Fingerprint
 
 def createRequest (owner session objective : String) (budget : Option Int := none)
-    (goalTools : Bool := true) (goalCreate : Bool := true) :
+    (goalTools : Bool := true) (goalCreate : Bool := true)
+    (threshold : Option Int := none) (retries : Option Int := none) :
     GoalAutomation.CreateRequest :=
   { caller := owner, currentSession := session
   , requestedOwner := owner, requestedSession := session
   , objective := objective, objectiveNonempty := !objective.isEmpty
-  , tokenBudget := budget, goalTools := goalTools, goalCreate := goalCreate }
+  , tokenBudget := budget, blockedAuditThreshold := threshold
+  , maxInfrastructureRetries := retries, goalTools := goalTools, goalCreate := goalCreate }
 
 def goalCreateCases : List GoalCreateCase :=
   let base := createRequest "did:a" "session-a" "ship feature"
@@ -350,6 +352,8 @@ def goalCreateCases : List GoalCreateCase :=
   let canonical : GoalAutomation.Fingerprint :=
     { owner := "did:a", session := "session-a"
     , objective := "ship feature", tokenBudget := none }
+  let pinned := createRequest "did:a" "session-a" "ship feature" (threshold := some 5)
+    (retries := some 4)
   [ { name := "authorized_fresh", request := base, existing := none }
   , { name := "authorized_duplicate_idempotent", request := base,
       existing := some (GoalAutomation.createFingerprint base) }
@@ -384,6 +388,22 @@ def goalCreateCases : List GoalCreateCase :=
   , { name := "overflow_budget_invalid",
       request := createRequest "did:a" "session-a" "ship"
         (some (GoalAutomation.maxTokenBudget + 1)), existing := none }
+  , { name := "pinned_limits_fresh", request := pinned, existing := none }
+  , { name := "pinned_limits_duplicate_idempotent", request := pinned,
+      existing := some (GoalAutomation.createFingerprint pinned) }
+  , { name := "duplicate_conflicting_limits", request := pinned,
+      existing := some canonical }
+  , { name := "duplicate_dropping_limits_conflicts", request := base,
+      existing := some (GoalAutomation.createFingerprint pinned) }
+  , { name := "zero_retry_limit_valid",
+      request := createRequest "did:a" "session-a" "ship" (retries := some 0),
+      existing := none }
+  , { name := "zero_threshold_invalid",
+      request := createRequest "did:a" "session-a" "ship" (threshold := some 0),
+      existing := none }
+  , { name := "negative_retry_limit_invalid",
+      request := createRequest "did:a" "session-a" "ship" (retries := some (-1)),
+      existing := none }
   ]
 
 structure TaskGoalPublicationCase where
@@ -446,15 +466,21 @@ structure GoalFingerprintWire where
   session : String
   objective : String
   tokenBudget : Option Lean.Json
+  blockedAuditThreshold : Option Int
+  maxInfrastructureRetries : Option Int
   deriving Lean.ToJson
 
 def GoalFingerprintWire.ofModel (f : GoalAutomation.Fingerprint) : GoalFingerprintWire :=
   { owner := f.owner, session := f.session, objective := f.objective
-  , tokenBudget := budgetWire f.tokenBudget }
+  , tokenBudget := budgetWire f.tokenBudget
+  , blockedAuditThreshold := f.blockedAuditThreshold
+  , maxInfrastructureRetries := f.maxInfrastructureRetries }
 
 def GoalFingerprintWire.toModel (f : GoalFingerprintWire) : GoalAutomation.Fingerprint :=
   { owner := f.owner, session := f.session, objective := f.objective
-  , tokenBudget := budgetOfWire f.tokenBudget }
+  , tokenBudget := budgetOfWire f.tokenBudget
+  , blockedAuditThreshold := f.blockedAuditThreshold
+  , maxInfrastructureRetries := f.maxInfrastructureRetries }
 
 /-- A token budget is a JSON number: the overflow case carries
 `maxTokenBudget + 1`, which no signed 64-bit wire integer holds. -/
@@ -467,6 +493,8 @@ structure GoalCreateInput where
   objective : String
   objectiveNonempty : Bool
   tokenBudget : Option Lean.Json
+  blockedAuditThreshold : Option Int
+  maxInfrastructureRetries : Option Int
   goalTools : Bool
   goalCreate : Bool
   existingFingerprint : Option GoalFingerprintWire
@@ -476,16 +504,20 @@ def GoalCreateInput.ofCase (w : GoalCreateCase) : GoalCreateInput :=
   { name := w.name, caller := w.request.caller, currentSession := w.request.currentSession
   , requestedOwner := w.request.requestedOwner, requestedSession := w.request.requestedSession
   , objective := w.request.objective, objectiveNonempty := w.request.objectiveNonempty
-  , tokenBudget := budgetWire w.request.tokenBudget, goalTools := w.request.goalTools
-  , goalCreate := w.request.goalCreate
+  , tokenBudget := budgetWire w.request.tokenBudget
+  , blockedAuditThreshold := w.request.blockedAuditThreshold
+  , maxInfrastructureRetries := w.request.maxInfrastructureRetries
+  , goalTools := w.request.goalTools, goalCreate := w.request.goalCreate
   , existingFingerprint := w.existing.map GoalFingerprintWire.ofModel }
 
 def GoalCreateInput.request (i : GoalCreateInput) : GoalAutomation.CreateRequest :=
   { caller := i.caller, currentSession := i.currentSession
   , requestedOwner := i.requestedOwner, requestedSession := i.requestedSession
   , objective := i.objective, objectiveNonempty := i.objectiveNonempty
-  , tokenBudget := budgetOfWire i.tokenBudget, goalTools := i.goalTools
-  , goalCreate := i.goalCreate }
+  , tokenBudget := budgetOfWire i.tokenBudget
+  , blockedAuditThreshold := i.blockedAuditThreshold
+  , maxInfrastructureRetries := i.maxInfrastructureRetries
+  , goalTools := i.goalTools, goalCreate := i.goalCreate }
 
 deriving instance Lean.ToJson for GoalAutomation.CreateDisposition
 

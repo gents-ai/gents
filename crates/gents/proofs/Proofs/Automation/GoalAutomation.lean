@@ -12,11 +12,28 @@ def validBudget : Option Int → Bool
   | none => true
   | some value => decide (0 < value ∧ value ≤ maxTokenBudget)
 
+/-- Unset is `Goals.blockedAuditThreshold`; a threshold of zero would block a
+Goal before its first audit. -/
+def validBlockedAuditThreshold : Option Int → Bool
+  | none => true
+  | some value => decide (0 < value ∧ value ≤ maxTokenBudget)
+
+/-- Unset is `Goals.maxInfrastructureRetries`; zero pauses on the first Failed
+or Dead request. -/
+def validMaxInfrastructureRetries : Option Int → Bool
+  | none => true
+  | some value => decide (0 ≤ value ∧ value ≤ maxTokenBudget)
+
+/-- The creation claim pins the Goal limits beside the budget, so a replay
+that asks for other limits conflicts instead of returning a Goal that keeps
+the earlier ones. Unset limits are the `Goals` defaults; only a Task sets them. -/
 structure Fingerprint where
   owner : Did
   session : SessionId
   objective : String
   tokenBudget : Option Int
+  blockedAuditThreshold : Option Int := none
+  maxInfrastructureRetries : Option Int := none
   deriving DecidableEq, Repr
 
 structure CreateRequest where
@@ -27,6 +44,8 @@ structure CreateRequest where
   objective : String
   objectiveNonempty : Bool
   tokenBudget : Option Int
+  blockedAuditThreshold : Option Int := none
+  maxInfrastructureRetries : Option Int := none
   goalTools : Bool
   goalCreate : Bool
   deriving DecidableEq, Repr
@@ -43,14 +62,18 @@ def createFingerprint (request : CreateRequest) : Fingerprint :=
   { owner := request.caller
   , session := request.currentSession
   , objective := TextNormalization.canonicalObjective request.objective
-  , tokenBudget := request.tokenBudget }
+  , tokenBudget := request.tokenBudget
+  , blockedAuditThreshold := request.blockedAuditThreshold
+  , maxInfrastructureRetries := request.maxInfrastructureRetries }
 
 def decideCreate (request : CreateRequest) (existing : Option Fingerprint) : CreateDisposition :=
   if !request.goalTools || !request.goalCreate then .denied
   else if request.requestedOwner != request.caller ||
       request.requestedSession != request.currentSession then .denied
   else if !request.objectiveNonempty || (TextNormalization.canonicalObjective request.objective).isEmpty ||
-      !validBudget request.tokenBudget then .invalid
+      !validBudget request.tokenBudget ||
+      !validBlockedAuditThreshold request.blockedAuditThreshold ||
+      !validMaxInfrastructureRetries request.maxInfrastructureRetries then .invalid
   else match existing with
   | none => .fresh
   | some fingerprint =>
@@ -81,10 +104,26 @@ theorem duplicate_create_is_idempotent (request : CreateRequest)
     (hsession : request.requestedSession = request.currentSession)
     (hobjective : request.objectiveNonempty = true)
     (htrimmed : (TextNormalization.canonicalObjective request.objective).isEmpty = false)
-    (hbudget : validBudget request.tokenBudget = true) :
+    (hbudget : validBudget request.tokenBudget = true)
+    (hthreshold : validBlockedAuditThreshold request.blockedAuditThreshold = true)
+    (hretries : validMaxInfrastructureRetries request.maxInfrastructureRetries = true) :
     decideCreate request (some (createFingerprint request)) = .idempotent := by
   rcases hcaps with ⟨hgoal, hcreate⟩
-  simp [decideCreate, hgoal, hcreate, howner, hsession, hobjective, htrimmed, hbudget]
+  simp [decideCreate, hgoal, hcreate, howner, hsession, hobjective, htrimmed, hbudget,
+    hthreshold, hretries]
+
+theorem replay_with_other_limits_conflicts (request : CreateRequest)
+    (existing : Fingerprint)
+    (hlimits : existing.blockedAuditThreshold ≠ request.blockedAuditThreshold ∨
+      existing.maxInfrastructureRetries ≠ request.maxInfrastructureRetries) :
+    decideCreate request (some existing) ≠ .idempotent := by
+  unfold decideCreate
+  split <;> simp_all
+  split <;> simp_all
+  split <;> simp_all
+  intro heq
+  subst heq
+  rcases hlimits with h | h <;> simp [createFingerprint] at h
 
 theorem invalid_budget_never_creates (request : CreateRequest)
     (existing : Option Fingerprint)
@@ -93,18 +132,6 @@ theorem invalid_budget_never_creates (request : CreateRequest)
   unfold decideCreate
   split <;> simp_all
   split <;> simp_all
-
-/-- Unset is `Goals.blockedAuditThreshold`; a threshold of zero would block a
-Goal before its first audit. -/
-def validBlockedAuditThreshold : Option Int → Bool
-  | none => true
-  | some value => decide (0 < value ∧ value ≤ maxTokenBudget)
-
-/-- Unset is `Goals.maxInfrastructureRetries`; zero pauses on the first Failed
-or Dead request. -/
-def validMaxInfrastructureRetries : Option Int → Bool
-  | none => true
-  | some value => decide (0 ≤ value ∧ value ≤ maxTokenBudget)
 
 /-- A Task's Goal declaration. The limits are pinned on every Goal the Task
 creates or assigns; Goals the model creates with goal tools have no Task and
