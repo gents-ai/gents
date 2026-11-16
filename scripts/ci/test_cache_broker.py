@@ -43,7 +43,7 @@ def handle(connection, program):
             child = subprocess.Popen([program, *request["arguments"]], cwd=request["cwd"], env=request["env"],
                                      stdin=fds[0], stdout=fds[1], stderr=fds[2], start_new_session=True)
         except OSError as error:
-            connection.sendall(json.dumps({"status": 127, "error": str(error)}).encode())
+            connection.sendall(json.dumps({"status": 127, "error": str(error)}).encode() + b"\n")
             return
         finally:
             for fd in fds:
@@ -60,7 +60,10 @@ def handle(connection, program):
         status = child.wait()
         status = 128 - status if status < 0 else status
         try:
-            connection.sendall(json.dumps({"status": status}).encode())
+            connection.sendall(json.dumps({"status": status}).encode() + b"\n")
+            # Wakes the watcher: a close alone leaves its pending receive holding
+            # the socket open, and the caller would wait for the end forever.
+            connection.shutdown(socket.SHUT_RDWR)
         except OSError:
             pass
 
@@ -71,7 +74,7 @@ def call(path, arguments):
     request = {"arguments": arguments, "cwd": os.getcwd(), "env": dict(os.environ)}
     socket.send_fds(connection, [json.dumps(request).encode()], [0, 1, 2])
     reply = b""
-    while chunk := connection.recv(4096):
+    while not reply.endswith(b"\n") and (chunk := connection.recv(4096)):
         reply += chunk
     response = json.loads(reply or b'{"status": 1}')
     if response.get("error"):

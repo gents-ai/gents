@@ -360,6 +360,12 @@ class Broker(unittest.TestCase):
         self.assertEqual(result.returncode, 3)
         self.assertEqual(result.stdout.strip(), f"hello in {os.path.realpath(directory)} env")
         self.assertEqual(result.stderr.strip(), "err")
+        # Many concurrent calls each return: a reply must not wait for the broker's watcher.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(16) as pool:
+            codes = list(pool.map(lambda code: subprocess.run([shim, "-c", f"exit {code}"], timeout=20).returncode,
+                                  range(48)))
+        self.assertEqual(codes, list(range(48)))
 
 
 class Policy(unittest.TestCase):
