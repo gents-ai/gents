@@ -422,3 +422,54 @@ async fn hosted_pack_install_preview_names_variables_without_their_values() -> R
     )?;
     assert_preview_hides_the_secret(&preview, secret)
 }
+
+/// A hosted install plans with the installer's values: when the runtime's own
+/// environment holds a different value for an install variable, both sides
+/// still plan the same graph and the install goes through (gents#3857).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosted_pack_install_ignores_the_runtime_environment() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home)?;
+    let endpoint = MockModelEndpoint::start("pack-env")?;
+    let init = run_init_json(
+        &home,
+        &[
+            "--node-name",
+            "pack-env",
+            "--model-name",
+            "pack-env",
+            "--inference-url",
+            endpoint.endpoint(),
+        ],
+    )?;
+    let owner = node_did_from_init(&init)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut server = spawn_server_with_env(
+        &home,
+        port,
+        &[],
+        &[("PACK_PREVIEW_SECRET", "runtime-value")],
+    )?;
+    wait_for_port(port, &mut server)?;
+    wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
+    let pack = documents_fixture_with_secret_variable(temp.path())?;
+    let installed = run_cli_json_with_env(
+        &home,
+        &[
+            "config",
+            "pack",
+            "install",
+            pack.to_str().context("pack path")?,
+            "--graphql",
+            &graphql,
+        ],
+        &[("PACK_PREVIEW_SECRET", "installer-value")],
+    )?;
+    anyhow::ensure!(
+        !installed.to_string().contains("runtime-value"),
+        "the install used the runtime's value: {installed}"
+    );
+    Ok(())
+}
