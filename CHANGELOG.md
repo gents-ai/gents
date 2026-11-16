@@ -33,8 +33,7 @@ source consistency checks, not a separate runtime compatibility version.
   `GENTS_NETWORK_ID` as the registry partition.
 - Breaking: `gents server --system-log` replaces `GENTS_SYSTEM_LOG=1`. The
   installed launchd and systemd definitions pass the flag, and a definition
-  without it is rewritten by `gents service repair`; a definition only moved
-  by a managed update keeps its arguments and logs to stderr until then.
+  without it gains it from `gents service repair` or a managed update.
 - Breaking: `gents init` and the interactive backend setup take the inference
   endpoint only from `--inference-url` (or a preset); `INFERENCE_ENDPOINT` is
   no longer read.
