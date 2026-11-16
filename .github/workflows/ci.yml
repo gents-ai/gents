@@ -924,7 +924,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          sparse-checkout: scripts/ci
+          sparse-checkout: |
+            scripts/ci
+            crates/gents/proofs/tla/scripts
 
       - name: Require every selected job
         env:

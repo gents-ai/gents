@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -461,6 +462,19 @@ class Verdict(unittest.TestCase):
         self.assertEqual(set(workflow_jobs(CI)) - {"gate"}, needs)
         self.assertEqual(gate.verdict({name: {"result": "success"} for name in needs - {"lint"}}),
                          ["lint: missing from the gate job's needs", "plan: produced no plan"])
+
+    def test_verdict_runs_from_a_checkout_of_scripts_ci_alone(self):
+        # The gate job's sparse checkout; it also holds the TLA+ runner, which
+        # verdict must not need.
+        with tempfile.TemporaryDirectory() as directory:
+            sparse = Path(directory) / "scripts/ci"
+            sparse.parent.mkdir()
+            shutil.copytree(gate.ROOT / "scripts/ci", sparse, ignore=shutil.ignore_patterns("__pycache__"))
+            needs = self.needs(select("crates/gents-cli/src/lib.rs"))
+            result = subprocess.run([sys.executable, str(sparse / "gate.py"), "verdict"], capture_output=True,
+                                    text=True, env={**os.environ, "NEEDS": json.dumps(needs), "GATE_FORK": "false"},
+                                    timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_every_event_passes_when_its_jobs_pass(self):
         plans = {
