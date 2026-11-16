@@ -1,28 +1,69 @@
 use std::error::Error;
 use std::fmt;
 
+/// The messages of `error` and every `source()`, outermost first, with a
+/// message that repeats the one just printed left out (Lean
+/// `AccessClassification.collapse`). An owner variant that holds an error as
+/// its `#[source]` and a passthrough ([`PassedThrough`]) keep that error's text
+/// as their own message, so a printer of the whole chain meets it twice in a
+/// row, and printing it twice says nothing more. A message repeats the one
+/// just printed when it equals it or is that message's first line, as for a
+/// report that adds lines below the error it reports (`Next: ...`).
+pub fn printed_messages(error: &(dyn Error + '_)) -> Vec<String> {
+    let mut printed: Vec<String> = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let message = cause.to_string();
+        let previous = printed.last().map(String::as_str).unwrap_or_default();
+        let repeats = previous == message
+            || previous
+                .strip_prefix(message.as_str())
+                .is_some_and(|rest| rest.starts_with('\n'));
+        if !repeats {
+            printed.push(message);
+        }
+        source = cause.source();
+    }
+    printed
+}
+
 /// Renders an error and every `source()` joined by `": "`, as anyhow's `{:#}`
-/// does, except that a source whose message repeats the message just printed
-/// is printed once: an owner variant that holds an error as its `#[source]`
-/// keeps that error's text as its own message
-/// (`AccessClassification.Chain.exposed`), and printing it twice in a row says
-/// nothing more. Typed errors format only their own message under `{:#}`, so
-/// callers that showed a chain (logs, model-facing text, user reports) format
-/// through this instead.
+/// does, except that a repeated message is printed once
+/// ([`printed_messages`]). Typed errors format only their own message under
+/// `{:#}`, so callers that showed a chain (logs, model-facing text, user
+/// reports) format through this instead.
 pub struct ErrorChain<'a>(pub &'a (dyn Error + 'a));
 
 impl fmt::Display for ErrorChain<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut previous = self.0.to_string();
-        formatter.write_str(&previous)?;
-        let mut source = self.0.source();
-        while let Some(cause) = source {
-            let message = cause.to_string();
-            if message != previous {
-                write!(formatter, ": {message}")?;
-                previous = message;
+        formatter.write_str(&printed_messages(self.0).join(": "))
+    }
+}
+
+/// Renders an error as anyhow's `{:?}` lays it out (the message, then a
+/// `Caused by:` list of its sources), except that a repeated message is
+/// printed once ([`printed_messages`]). The CLI reports a failed command with
+/// this; anyhow's own `{:?}` prints a passthrough's text twice (Lean
+/// `AccessClassification.joined_passthrough_repeats`).
+pub struct ErrorReport<'a>(pub &'a (dyn Error + 'a));
+
+impl fmt::Display for ErrorReport<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let printed = printed_messages(self.0);
+        let (message, causes) = printed.split_first().expect("the error's own message");
+        formatter.write_str(message)?;
+        if causes.is_empty() {
+            return Ok(());
+        }
+        formatter.write_str("\n\nCaused by:")?;
+        let numbered = causes.len() > 1;
+        for (index, cause) in causes.iter().enumerate() {
+            formatter.write_str("\n    ")?;
+            if numbered {
+                write!(formatter, "{index}: ")?;
             }
-            source = cause.source();
+            let indent = if numbered { "\n       " } else { "\n    " };
+            formatter.write_str(&cause.replace('\n', indent))?;
         }
         Ok(())
     }
@@ -47,9 +88,11 @@ where
 /// error converted into `Box<dyn Error>` keeps its top error's message but
 /// forwards `source()` past it, so a classifier walking the chain never meets
 /// that error: a store conflict or refusal on top reads as unclassified (Lean
-/// `AccessClassification.hidden_is_unclassified`). This holder returns the top
-/// error from `source()`, so the chain shows its message twice, the trade
-/// `AccessClassification.exposed` records for every sourced holder.
+/// `AccessClassification.Chain.hidden_passthrough_is_not_found`). This holder
+/// returns the top error from `source()`, so classifiers find it
+/// (`AccessClassification.Chain.passthrough_is_found`); it shows that error's
+/// message as its own, which [`ErrorChain`] and [`ErrorReport`] print once
+/// (`AccessClassification.passthrough_is_printed_once`).
 #[derive(Debug)]
 pub struct PassedThrough(Box<dyn PassedSource>);
 
@@ -132,7 +175,7 @@ pub fn find_map_source<'a, T>(
 
 #[cfg(test)]
 mod tests {
-    use super::{find_source, ErrorChain};
+    use super::{find_source, ErrorChain, ErrorReport, PassedThrough};
 
     #[derive(Debug, thiserror::Error)]
     #[error("outer {id}")]
@@ -160,6 +203,11 @@ mod tests {
     #[error("reading")]
     struct Reading(#[source] Holder);
 
+    /// A report that adds a line below the error it reports.
+    #[derive(Debug, thiserror::Error)]
+    #[error("{0}\nNext: retry")]
+    struct Reported(#[source] Holder);
+
     #[test]
     fn renders_like_anyhow_alternate() {
         let error = Outer {
@@ -184,6 +232,25 @@ mod tests {
         assert_eq!(ErrorChain(&context).to_string(), "reading: denied");
         let repeating = Holder::Repeating(Repeated(std::io::Error::other("denied")));
         assert_eq!(ErrorChain(&repeating).to_string(), "holder: denied");
+    }
+
+    #[test]
+    fn a_report_lists_each_cause_once_as_anyhow_lays_it_out() {
+        let single = Reading(Holder::Held(std::io::Error::other("denied")));
+        assert_eq!(
+            ErrorReport(&single).to_string(),
+            "reading\n\nCaused by:\n    denied"
+        );
+        let passed = Holder::Repeating(Repeated(std::io::Error::other("denied")));
+        let passed = PassedThrough::error(Reading(passed));
+        assert_eq!(
+            ErrorReport(&passed).to_string(),
+            "reading\n\nCaused by:\n    0: holder\n    1: denied"
+        );
+        let reported = Reported(Holder::Held(std::io::Error::other("denied")));
+        assert_eq!(ErrorReport(&reported).to_string(), "denied\nNext: retry");
+        let alone = std::io::Error::other("one\ntwo");
+        assert_eq!(ErrorReport(&alone).to_string(), "one\ntwo");
     }
 
     #[test]
