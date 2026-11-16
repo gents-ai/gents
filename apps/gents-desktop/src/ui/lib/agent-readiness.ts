@@ -14,6 +14,8 @@ const READINESS_REASON: Record<string, string> = {
   tool_configuration_invalid: "tool configuration is invalid",
   tool_surface_unavailable:
     "tools are unavailable; check installed plugins and Tools configuration on the node",
+  workspace_root_reader_missing:
+    "host tools read a workspace root this agent is not a reader of; grant it the reader on the node",
   executor_start_failed: "executor failed to start",
 };
 

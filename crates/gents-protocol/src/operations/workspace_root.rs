@@ -252,17 +252,31 @@ fn enabled_when_absent() -> bool {
     true
 }
 
-/// A published root with the Agents that hold its `reader` relationship: who
-/// the runtime admits to run host tools under it. An Agent with host tools and
-/// no reader is the `workspace_root_reader_missing` cause, so a listing that
-/// shows the readers shows whether each Agent can start.
+/// A published root with who may run host tools under it: the subjects holding
+/// its `reader` relationship. An Agent with host tools and no reader is the
+/// `workspace_root_reader_missing` cause, so a listing that shows the readers
+/// shows whether each Agent can start.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceRootWithReaders {
     #[serde(flatten)]
     pub root: WorkspaceRootView,
-    /// The reader subjects as the store reports them: Agent DIDs, in the order
-    /// the store returns them.
-    pub reader_agents: Vec<String>,
+    /// The Agents holding `reader` on this root, or the reason they are
+    /// unknown when the relationship read failed.
+    pub readers: WorkspaceRootReaders,
+}
+
+/// Who holds `reader` on a root, as a listing reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum WorkspaceRootReaders {
+    Known {
+        /// The holder of each `reader` relationship, as the store reports the
+        /// subject: an Agent DID for the grants a User makes.
+        agents: Vec<String>,
+    },
+    Unknown {
+        reason: String,
+    },
 }
 
 fn enabled_unless_false<'de, D>(deserializer: D) -> Result<bool, D::Error>

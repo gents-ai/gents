@@ -142,6 +142,7 @@ describe("selectedNodeReadinessDecision", () => {
     "inference_profile_invalid",
     "tool_configuration_invalid",
     "tool_surface_unavailable",
+    "workspace_root_reader_missing",
     "executor_start_failed",
   ] satisfies AgentUnavailableReasonView[])(
     "blocks the typed unavailable reason %s",

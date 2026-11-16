@@ -489,11 +489,7 @@ pub(super) fn print_workspace_root_readers_table(rows: &[WorkspaceRootReadership
             [
                 Some(row.root_path.clone()),
                 Some(if row.enabled { "true" } else { "false" }.to_owned()),
-                Some(if row.reader_agents.is_empty() {
-                    "(no reader: host tools cannot start)".to_owned()
-                } else {
-                    row.reader_agents.join(", ")
-                }),
+                Some(row.readers.clone()),
             ]
         })
         .collect::<Vec<_>>();
@@ -523,7 +519,9 @@ pub(super) fn print_workspace_root_readers_table(rows: &[WorkspaceRootReadership
 pub(super) struct WorkspaceRootReadership {
     pub root_path: String,
     pub enabled: bool,
-    pub reader_agents: Vec<String>,
+    /// The readers as the table shows them: the Agents, `(no reader: …)` when
+    /// the set is empty, or `unknown (<reason>)` when the read failed.
+    pub readers: String,
 }
 
 pub(super) fn print_document_table(id_field: &str, rows: &[Value]) {

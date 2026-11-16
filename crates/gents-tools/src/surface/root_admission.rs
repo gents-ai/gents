@@ -74,28 +74,25 @@ pub enum ToolRootRefusal {
     #[error("agent {agent_did} has active host tools but no explicit root under current WorkspaceRoot policy; set Tools.host.root to an admitted absolute workspace path")]
     NoExplicitRoot { agent_did: String },
     #[error("agent {agent_did} persisted root {} re-resolved to {} at the execution boundary", .selected_root.display(), .resolved.display())]
-    RerResolved {
+    ReResolved {
         agent_did: String,
         selected_root: PathBuf,
         resolved: PathBuf,
     },
-    /// The WorkspaceRoot its tools read is published, but this Agent holds no
-    /// `reader` relationship on it — the one cause a User grants away.
-    #[error("{}", gents_protocol::node_readiness::workspace_root_reader_missing_message(
-        .agent_did,
-        &.root.to_string_lossy(),
-        &.home.as_ref().map(|home| home.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "<this node's home>".to_owned()),
-    ))]
+    /// The WorkspaceRoot its tools read is published and enabled, but this
+    /// Agent holds no `reader` relationship on it — the one cause a User grants
+    /// away. Every other denial keeps [`Self::Denied`].
+    #[error("{}", self.text())]
     ReaderMissing {
         agent_did: String,
-        /// The root path the grant names: the published root as stored, which
-        /// is what `grant-reader --path` matches.
-        root: PathBuf,
-        /// The tool root that policy denied, when it differs from `root`.
-        tool_root: Option<PathBuf>,
+        /// The published root the grant names, as stored: what
+        /// `grant-reader --path` matches. `None` when the owner's view failed,
+        /// and then the text names the listing call instead.
+        root: Option<PathBuf>,
+        /// The tool root policy denied.
+        tool_root: PathBuf,
+        /// The node home the grant must run against.
         home: Option<PathBuf>,
-        denial: RootDenialReason,
     },
     #[error("agent {agent_did} cannot admit the root {} for its tools: {denial}", .root.display())]
     Denied {
@@ -109,6 +106,130 @@ impl ToolRootRefusal {
     /// Whether the fix is the reader grant a User runs.
     pub fn is_reader_missing(&self) -> bool {
         matches!(self, Self::ReaderMissing { .. })
+    }
+
+    /// The cause as a sentence plus the one call that fixes it. Neither half
+    /// carries a placeholder inside the command: with no home the grant omits
+    /// `--home` and the sentence says to add it; with no root the sentence names
+    /// the listing call that shows the roots and their readers.
+    fn text(&self) -> String {
+        use gents_protocol::node_readiness as readiness;
+        match self {
+            Self::ReaderMissing {
+                agent_did,
+                root,
+                home,
+                ..
+            } => match (root, home) {
+                (Some(root), Some(home)) => readiness::workspace_root_reader_missing_message(
+                    agent_did,
+                    &root.to_string_lossy(),
+                    &home.to_string_lossy(),
+                ),
+                (Some(root), None) => {
+                    readiness::workspace_root_reader_missing_message_without_home(
+                        agent_did,
+                        &root.to_string_lossy(),
+                    )
+                }
+                (None, Some(home)) => format!(
+                    "{}, which it is not a reader of; find it with `{}` and grant the reader it names, then start the agent again",
+                    fallback_cause(agent_did),
+                    readiness::workspace_root_list_call(home),
+                ),
+                (None, None) => readiness::WORKSPACE_ROOT_READER_MISSING_MESSAGE.to_owned(),
+            },
+            Self::Denied {
+                agent_did, root, denial,
+            } => format!(
+                "agent {agent_did} cannot admit the root {} for its tools: {denial}",
+                root.display()
+            ),
+            other => other.to_string_fallback(),
+        }
+    }
+
+    /// The text of every variant but [`Self::ReaderMissing`], whose cause has
+    /// more than one spelling.
+    fn to_string_fallback(&self) -> String {
+        match self {
+            Self::WrongAgentIdentity { held } => format!(
+                "workspace root requires the selected Agent identity, but the held identity is {held}"
+            ),
+            Self::NoExplicitRoot { agent_did } => format!(
+                "agent {agent_did} has active host tools but no explicit root under current WorkspaceRoot policy; set Tools.host.root to an admitted absolute workspace path"
+            ),
+            Self::ReResolved {
+                agent_did,
+                selected_root,
+                resolved,
+            } => format!(
+                "agent {agent_did} persisted root {} re-resolved to {} at the execution boundary",
+                selected_root.display(),
+                resolved.display()
+            ),
+            Self::Denied {
+                agent_did, root, denial,
+            } => format!(
+                "agent {agent_did} cannot admit the root {} for its tools: {denial}",
+                root.display()
+            ),
+            Self::ReaderMissing { .. } => self.text(),
+        }
+    }
+}
+
+/// The opening of the reader-missing cause, used when the owner's view names no
+/// published root to put in it.
+fn fallback_cause(agent_did: &str) -> String {
+    format!("agent {agent_did} has host tools under a workspace root")
+}
+
+/// How the node publishes the root an Agent's host tools read: the premise Lean
+/// `Runtime.StartupDegraded.RootPublishing` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RootPublishing {
+    NoPolicy,
+    PublishedEnabled,
+    PublishedDisabled,
+}
+
+/// What the policy said about the root the Agent's tools read, as Lean
+/// `Runtime.StartupDegraded.RootDenial` names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RootDenialKind {
+    Admitted,
+    NoAllowedRoots,
+    Outside,
+}
+
+impl RootDenialKind {
+    /// The guard's own denial, in the model's terms.
+    pub fn of(denial: RootDenialReason) -> Self {
+        match denial {
+            RootDenialReason::NoAllowedRoots => Self::NoAllowedRoots,
+            _ => Self::Outside,
+        }
+    }
+}
+
+/// Lean `Runtime.StartupDegraded.toolSurfaceReason`: the reason the runtime
+/// reports for a tool surface it could not build, from how the node publishes
+/// the root and what the policy said about it. A root the node publishes and
+/// enables that the Agent cannot read is the missing reader; every other
+/// denial is the unadmitted surface.
+pub fn tool_surface_reason(
+    publishing: RootPublishing,
+    denial: RootDenialKind,
+) -> gents_protocol::node_readiness::AgentReadinessUnavailableReason {
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
+    match (publishing, denial) {
+        (RootPublishing::PublishedEnabled, RootDenialKind::NoAllowedRoots | RootDenialKind::Outside) => {
+            Reason::WorkspaceRootReaderMissing
+        }
+        _ => Reason::ToolSurfaceUnavailable,
     }
 }
 
@@ -159,7 +280,7 @@ impl RootExecutionGuard {
         };
         match policy.admit(selected_root)? {
             RootAdmission::Admitted(root) if root == selected_root => Ok(()),
-            RootAdmission::Admitted(root) => Err(ToolRootRefusal::RerResolved {
+            RootAdmission::Admitted(root) => Err(ToolRootRefusal::ReResolved {
                 agent_did: self.agent_did.clone(),
                 selected_root: selected_root.to_path_buf(),
                 resolved: root,
@@ -168,70 +289,76 @@ impl RootExecutionGuard {
             RootAdmission::Denied {
                 reason: denial,
                 resolved_candidate,
-            } => {
-                // A configured policy with nothing published for this actor is
-                // the Agent holding no reader on the root its tools read, not a
-                // path that fell outside the roots it may use.
-                let published = if matches!(denial, RootDenialReason::NoAllowedRoots) {
-                    self.published_root_covering(node).await.unwrap_or(None)
-                } else {
-                    None
-                };
-                let refusal = match published {
-                    Some(published_root) => ToolRootRefusal::ReaderMissing {
-                        agent_did: self.agent_did.clone(),
-                        root: PathBuf::from(published_root),
-                        tool_root: Some(resolved_candidate),
-                        home: self.node_home.clone(),
-                        denial,
-                    },
-                    None => ToolRootRefusal::Denied {
-                        agent_did: self.agent_did.clone(),
-                        root: resolved_candidate,
-                        denial,
-                    },
-                };
-                Err(refusal.into())
-            }
+            } => Err(self.refusal_for_denial(node, resolved_candidate, denial).await),
         }
     }
 
-    /// The WorkspaceRoot this node publishes over the selected root, read as the
-    /// node's owner rather than the Agent: an Agent without a reader sees no
-    /// roots at all, which is the very cause a refusal has to name. The answer is
-    /// the root's stored path, which is what `grant-reader --path` matches.
-    async fn published_root_covering(
+    /// The typed refusal for a denied root. A configured publishing policy
+    /// denies for one of two reasons: nothing this Agent may use is published
+    /// (the Agent holds no reader at all), or the path falls outside every
+    /// published root (possibly one it reads, while its tools point at another
+    /// it does not). Both are a missing `reader` on a root the node publishes
+    /// and enables — so both name that grant, on the covering root; a denial
+    /// that covers no published root keeps the plain [`ToolRootRefusal::Denied`].
+    async fn refusal_for_denial(
         &self,
         node: &std::sync::Arc<defra_node::Node>,
-    ) -> Result<Option<String>> {
-        let Some(selected_root) = self.selected_root.as_deref() else {
-            return Ok(None);
-        };
+        denied: PathBuf,
+        denial: RootDenialReason,
+    ) -> anyhow::Error {
+        let covering = self.published_roots_covering(node, &denied).await;
+        // Prefer a covering root the Agent cannot read; a denial that matches
+        // none of them is about the path, not about a reader.
+        if let Some(root) = covering.into_iter().next() {
+            return ToolRootRefusal::ReaderMissing {
+                agent_did: self.agent_did.clone(),
+                root: Some(root),
+                tool_root: denied,
+                home: self.node_home.clone(),
+            }
+            .into();
+        }
+        ToolRootRefusal::Denied {
+            agent_did: self.agent_did.clone(),
+            root: denied,
+            denial,
+        }
+        .into()
+    }
+
+    /// The published, enabled roots this node keeps that contain `path` in their
+    /// resolution, read as the node's owner rather than the Agent: an Agent
+    /// without a reader sees no roots at all, which is the very cause a refusal
+    /// has to name. The answer is each root's stored path, which is what
+    /// `grant-reader --path` matches.
+    async fn published_roots_covering(
+        &self,
+        node: &std::sync::Arc<defra_node::Node>,
+        path: &Path,
+    ) -> Vec<PathBuf> {
         let Some(node_did) = node.node_identity_did().map(str::to_owned) else {
-            return Ok(None);
+            return Vec::new();
         };
-        let owner = gents_store::config_client::ConfigAccess::local_as(
-            node.clone(),
-            identity::Did::new(&node_did)?,
-        );
+        let Ok(actor) = identity::Did::new(&node_did) else {
+            return Vec::new();
+        };
+        let owner = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor);
         match owner
             .transact_readonly("workspace_root.owner_covering", |txn| {
+                let path = path.to_path_buf();
                 let node_did = node_did.clone();
-                Box::pin(async move {
-                    published_root_covering_in_txn(txn, &node_did, selected_root).await
-                })
+                Box::pin(async move { published_roots_covering_in_txn(txn, &node_did, &path).await })
             })
             .await
         {
-            Ok(published) => Ok(published),
+            Ok(roots) => roots,
             // The owner's view serves the refusal's wording alone: if it fails,
             // the cause stays a plain denial rather than an error about a call
             // the Agent cannot make.
-            Err(_) => Ok(None),
+            Err(_) => Vec::new(),
         }
     }
 }
-
 
 impl WorkspaceRootPolicy {
     pub(crate) fn admit(&self, candidate: &Path) -> Result<RootAdmission> {
@@ -380,6 +507,42 @@ pub(crate) async fn published_root_covering_in_txn(
     Ok(None)
 }
 
+/// The stored paths of every enabled WorkspaceRoot, visible to the
+/// transaction's actor, whose resolution contains `path` — or that `path`
+/// contains. An Agent that reads root A while its tools point at published root
+/// B is denied for B, so the covering set is what names the missing grant. The
+/// transaction's actor is the node's owner: an Agent with no reader sees no
+/// roots at all, which is the cause itself.
+pub(crate) async fn published_roots_covering_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    path: &Path,
+) -> Result<Vec<PathBuf>> {
+    let complete = txn.collection_has_no_document_policy("WorkspaceRoot");
+    let response = txn
+        .execute(&workspace_root_query(complete, node_did))
+        .await
+        .context("querying WorkspaceRoot paths in configuration transaction")?;
+    let mut covering = Vec::new();
+    for document in decode_workspace_root_rows(&response)? {
+        let Some(stored) = document
+            .root_path
+            .filter(|_| document.enabled.unwrap_or(false))
+        else {
+            continue;
+        };
+        let Ok(published) = resolve_configured_tool_root(Path::new(stored.trim())) else {
+            continue;
+        };
+        if published.starts_with(path) || path.starts_with(&published) {
+            covering.push(PathBuf::from(stored.trim()));
+        }
+    }
+    covering.sort();
+    covering.dedup();
+    Ok(covering)
+}
+
 /// The WorkspaceRoot a User grants an Agent reader on so it can run the host
 /// tools its Tools select. Agent creation names the same root in its receipt
 /// ([`reader_grant_step`]).
@@ -509,21 +672,45 @@ pub async fn agents_tool_root_readers(
 pub(crate) fn reader_grant_step(
     agent_did: &str,
     published_root: Option<&str>,
+    home: Option<&std::path::Path>,
     known_missing: bool,
 ) -> serde_json::Value {
-    let path = published_root.unwrap_or("PUBLISHED_ROOT");
-    let answer = if known_missing {
-        format!("Saved, but {agent_did} cannot use its host tools yet: a User must grant it reader on the published WorkspaceRoot {path}. Until then the runtime cannot load its tools and reports the agent unavailable.")
-    } else {
-        format!("{agent_did} uses host tools only if a User granted it reader on the published WorkspaceRoot {path}; without that grant the runtime cannot load its tools and the agent is unavailable (agent_new to it is not offered).")
+    let (answer, user_command) = match (published_root, home) {
+        (Some(root), Some(home)) => (
+            if known_missing {
+                format!("Saved, but {agent_did} cannot use its host tools yet: a User must grant it reader on the published WorkspaceRoot {root}. Until then the runtime cannot load its tools and reports the agent unavailable.")
+            } else {
+                format!("{agent_did} uses host tools only if a User granted it reader on the published WorkspaceRoot {root}; without that grant the runtime cannot load its tools and the agent is unavailable (agent_new to it is not offered).")
+            },
+            gents_protocol::node_readiness::workspace_root_reader_grant(
+                root,
+                agent_did,
+                &home.to_string_lossy(),
+            ),
+        ),
+        (Some(root), None) => (
+            if known_missing {
+                format!("Saved, but {agent_did} cannot use its host tools yet: a User must grant it reader on the published WorkspaceRoot {root}. Until then the runtime cannot load its tools and reports the agent unavailable.")
+            } else {
+                format!("{agent_did} uses host tools only if a User granted it reader on the published WorkspaceRoot {root}; without that grant the runtime cannot load its tools and the agent is unavailable (agent_new to it is not offered).")
+            },
+            format!(
+                "gents config workspace-root grant-reader --path {root} --agent-did {agent_did} (add --home with this node's home when it runs against a node other than your default one)"
+            ),
+        ),
+        (None, home) => (
+            format!("{agent_did} uses host tools read through a WorkspaceRoot this node has not published. Until a User publishes one and grants {agent_did} reader on it, the runtime cannot load its tools and the agent is unavailable."),
+            match home {
+                Some(home) => gents_protocol::node_readiness::workspace_root_list_call(home),
+                None => "gents config workspace-root list (add --home with this node's home when it runs against a node other than your default one)".to_owned(),
+            },
+        ),
     };
     serde_json::json!({
         "state": if known_missing { "waiting_for_user" } else { "requires_user_grant" },
         "published_root": published_root,
         "answer": answer,
-        "user_command": format!(
-            "gents config workspace-root grant-reader --path {path} --agent-did {agent_did}"
-        ),
+        "user_command": user_command,
         "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
     })
 }
