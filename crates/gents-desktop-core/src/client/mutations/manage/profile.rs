@@ -28,7 +28,7 @@ pub async fn select_agent_model_on(
     use super::principal::agent_failure;
 
     anyhow::ensure!(!model_name.trim().is_empty(), "Choose a model.");
-    let admission = observe(access, node_did, &[agent_did.to_owned()])
+    let admission = observe(access, node_did, &[agent_did.to_owned()], None)
         .await
         .map_err(agent_failure)?;
     access

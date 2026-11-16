@@ -1208,13 +1208,21 @@ async fn missing_plugin_node(label: &str) -> (HeldRuntimeFixture, String, MockMo
 }
 
 async fn documents_agent(fixture: &HeldRuntimeFixture) -> (crate::Gents, tempfile::TempDir) {
+    documents_agent_with_ceiling(fixture, ToolCeiling::meta_only()).await
+}
+
+/// [`documents_agent`] with a chosen tool ceiling, so a test can run host tools.
+async fn documents_agent_with_ceiling(
+    fixture: &HeldRuntimeFixture,
+    tool_ceiling: ToolCeiling,
+) -> (crate::Gents, tempfile::TempDir) {
     let plugin_home = tempfile::tempdir().unwrap();
     let agent = crate::Gents::from_default_agent_documents(
         fixture.db.node.clone(),
         fixture.db.node_identity.clone(),
         crate::runtime::agent::DocumentRuntimeOptions {
             backend_admission: Some(fixture.admission()),
-            tool_ceiling: ToolCeiling::meta_only(),
+            tool_ceiling,
             plugin_home: Some(plugin_home.path().to_path_buf()),
             ..Default::default()
         },
@@ -1363,18 +1371,24 @@ fn tools_with_host_root(
     (
         gents_store::collection::Collection::Tools,
         serde_json::json!({"node_did": node_did, "tools_id": tools_id,
-            "host": {"enabled": true, "root": root},
-            "self_config": {"enabled": false}}),
+            "host": {"root": root, "files": {"mode": "ReadOnly"}},
+            "self_config": {"enable_self_config": false}}),
     )
 }
 
 /// Publish a WorkspaceRoot the Agent is not a reader of. WorkspaceRoot is not
 /// part of the desired-state plan, so it is written directly as the owner.
 async fn publish_workspace_root(
-    access: &gents_store::config_client::ConfigAccess,
+    node: &std::sync::Arc<defra_node::Node>,
     node_did: &str,
     root_path: &str,
 ) {
+    // The fixture's user_access is the GraphQL route, which cannot carry the
+    // local Agent signer a write needs; the owner's local access can.
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        node_did.parse().unwrap(),
+    );
     let response = access
         .write(
             "test.workspace.root",
@@ -1421,8 +1435,9 @@ async fn an_agent_with_host_tools_under_an_unread_root_is_rejected_with_the_gran
         ],
     )
     .await;
-    publish_workspace_root(&fixture.user_access, &node_did, &root_text).await;
-    let (agent, plugin_home) = documents_agent(&fixture).await;
+    publish_workspace_root(&node, &node_did, &root_text).await;
+    let (agent, plugin_home) =
+        documents_agent_with_ceiling(&fixture, ToolCeiling::readonly_at(root_dir.path())).await;
     let home_text = plugin_home.path().to_string_lossy().into_owned();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
