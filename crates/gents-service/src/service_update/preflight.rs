@@ -13,7 +13,7 @@ pub(super) enum PreflightError {
         home: PathBuf,
         command: String,
         #[source]
-        source: StoreKeyError,
+        source: Box<StoreKeyError>,
     },
     #[error("candidate preflight refused; runtime and service unchanged. After resolving trust/access, run `{command}` using the original candidate (the temporary probe copy is removed). Diagnostic: {detail}")]
     CandidateRefused { command: String, detail: String },
@@ -68,7 +68,7 @@ fn check_store_key_with(
     .map_err(|source| PreflightError::StoreKey {
         home: home.to_path_buf(),
         command: check_command(&executable, home),
-        source,
+        source: Box::new(source),
     })?;
     Ok(true)
 }

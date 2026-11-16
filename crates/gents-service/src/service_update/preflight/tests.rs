@@ -112,7 +112,10 @@ fn candidate_keychain_refusal_precedes_staging_without_touching_runtime() {
             panic!("an unreadable candidate must not pass preflight")
         },
     );
-    let error = result.err().expect("untrusted candidate must be refused");
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => panic!("untrusted candidate must be refused"),
+    };
     assert!(matches!(
         error.downcast_ref::<PreflightError>(),
         Some(PreflightError::StoreKey { .. })
