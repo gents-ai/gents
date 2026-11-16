@@ -9,7 +9,7 @@ use gents_tools::native::shared::ToolContext;
 use serde_json::{json, Value};
 use sha2::Digest;
 
-struct Files(ReadFileTool);
+struct Files(ReadFileTool, std::sync::atomic::AtomicU32);
 
 impl ToolEffectDispatcher for Files {
     fn definitions<'a>(&'a self) -> BoxFuture<'a, Vec<ToolDefinition>> {
@@ -24,7 +24,10 @@ impl ToolEffectDispatcher for Files {
     ) -> BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
         Box::pin(async move {
             assert_eq!(name, "read_file");
-            assert!((1..=2).contains(&ordinal));
+            assert_eq!(
+                ordinal,
+                self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+            );
             let args: Value = serde_json::from_str(arguments).unwrap();
             assert_eq!(args["raw_json"], true);
             self.0
@@ -54,12 +57,16 @@ async fn script_discovers_batches_and_reads_objects_on_a_scratch_home() {
     gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
     std::fs::write(home.path().join("a.txt"), "alpha\n").unwrap();
     std::fs::write(home.path().join("b.txt"), "beta\n").unwrap();
-    let files = Files(ReadFileTool::new(
-        ToolContext::new(home.path().to_owned(), false).unwrap(),
-        32000,
-    ));
+    let files = Files(
+        ReadFileTool::new(
+            ToolContext::new(home.path().to_owned(), false).unwrap(),
+            32000,
+        ),
+        Default::default(),
+    );
     let executor = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
-    let result = tool_effects::scope(Some(Arc::new(files)), executor.call_data_bound_for(
+    let files = Arc::new(files);
+    let result = tool_effects::scope(Some(files.clone()), executor.call_data_bound_for(
         &record,
         json!({"script": r#"
             const names = Object.keys(tools);
@@ -79,4 +86,30 @@ async fn script_discovers_batches_and_reads_objects_on_a_scratch_home() {
         result.outcome.output,
         json!({"names": ["read_file"], "types": ["object", "object"], "contents": ["L1: alpha", "L1: beta"], "ok": true})
     );
+    let oversized = tool_effects::scope(
+        Some(files.clone()),
+        executor.call_data_bound_for(
+            &record,
+            json!({"script": r#"
+            const path = 'x'.repeat(600000);
+            await Promise.all([tools.read_file({path}), tools.read_file({path})]);
+        "#}),
+            None,
+            true,
+            None,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_ne!(oversized.outcome.verdict, PluginVerdict::Success);
+    assert!(
+        oversized.outcome.diagnostics.contains("TOO_LARGE"),
+        "{}",
+        oversized.outcome.diagnostics
+    );
+    assert!(!oversized
+        .outcome
+        .diagnostics
+        .contains("ScriptHostProtocolMismatch"));
+    assert_eq!(files.1.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
