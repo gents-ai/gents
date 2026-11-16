@@ -17,6 +17,9 @@ source consistency checks, not a separate runtime compatibility version.
   shell no longer posts "Runtime update complete" or "Runtime update failed"
   to the submitting session; read `gents service update-status` instead.
   Update receipts no longer carry `session_id` or `request_id` (#3922).
+- Breaking: `GENTS_HOME` is no longer read. `--home` is the only way to choose a
+  node home; without it commands use the folder chosen at setup, then `~/.gents`.
+  The macOS uninstall script takes `--home DIR` instead.
 - Task `goal_blocked_audit_threshold` (positive, default 3) and
   `goal_max_infrastructure_retries` (non-negative, default 2) replace the fixed
   Goal limits for the Goals a Task creates. Every Goal a Task creates pins them,
