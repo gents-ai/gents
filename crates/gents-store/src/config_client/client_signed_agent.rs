@@ -349,7 +349,8 @@ pub(super) async fn execute(
     }
     url.set_path(&format!("{}/client-sign", url.path()));
     let authorization = endpoint
-        .authorization()?
+        .authorization()
+        .await?
         .ok_or(ConfigClientError::ClientAgentSignerRequired)?;
     let request = defra_http::client_signed_create::websocket_request(url.as_str(), &authorization)
         .map_err(ConfigClientError::ClientAgentSigning)?;
@@ -431,7 +432,8 @@ pub(super) async fn execute_update(
     }
     url.set_path(&format!("{}/client-sign", url.path()));
     let authorization = endpoint
-        .authorization()?
+        .authorization()
+        .await?
         .ok_or(ConfigClientError::ClientAgentSignerRequired)?;
     let request = defra_http::client_signed_create::websocket_request(url.as_str(), &authorization)
         .map_err(ConfigClientError::ClientAgentSigning)?;
@@ -493,7 +495,8 @@ pub(super) async fn execute_delete(
     }
     url.set_path(&format!("{}/client-sign", url.path()));
     let authorization = endpoint
-        .authorization()?
+        .authorization()
+        .await?
         .ok_or(ConfigClientError::ClientAgentSignerRequired)?;
     let request = defra_http::client_signed_create::websocket_request(url.as_str(), &authorization)
         .map_err(ConfigClientError::ClientAgentSigning)?;

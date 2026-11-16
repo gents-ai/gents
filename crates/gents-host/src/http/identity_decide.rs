@@ -372,7 +372,8 @@ mod tests {
                         owner.private_key_bytes(),
                     )?,
                 )?
-                .authorization()?
+                .authorization()
+                .await?
                 .expect("operator authorization"),
             )
             .json(&json!({

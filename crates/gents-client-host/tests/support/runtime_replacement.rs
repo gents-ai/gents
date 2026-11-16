@@ -373,7 +373,8 @@ impl Fixture<'_> {
             },
         };
         let receipt: RuntimeControlReceipt = endpoint
-            .authorize(client.post(url).json(&command))?
+            .authorize(client.post(url).json(&command))
+            .await?
             .send()
             .await?
             .error_for_status()?

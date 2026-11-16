@@ -1,3 +1,4 @@
+import Proofs.Conformance.ClientDelegation
 import Proofs.Conformance.BackendPreflight
 import Proofs.Conformance.Identity.SessionChild
 import Proofs.Conformance.RemoteDelivery

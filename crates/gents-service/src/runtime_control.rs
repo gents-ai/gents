@@ -73,6 +73,7 @@ pub async fn control(
     if let Some(authorization) = authorization {
         request = authorization
             .authorize(request)
+            .await
             .map_err(|error| ControlFailure::Authorization(Box::new(error)))?;
     }
     let mut response = match request.send().await {

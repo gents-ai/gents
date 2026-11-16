@@ -272,7 +272,7 @@ impl Sources {
     pub(super) fn reconcile(
         &mut self,
         peers: &[PeerRecord],
-        capability: &gents_store::config_client::ClientSigningCapability,
+        endpoints: &gents_store::config_client::runtime_endpoints::RuntimeEndpoints,
         notices: &mpsc::UnboundedSender<Notice>,
         stores: &Arc<ObservedStores>,
         metrics: &Arc<ObserverMetrics>,
@@ -281,7 +281,9 @@ impl Sources {
         let endpoints: BTreeMap<_, _> = peers
             .iter()
             .filter_map(|peer| {
-                let endpoint = crate::local_runtime::operator_endpoint(peer, capability);
+                let endpoint = peer
+                    .operator_graphql()
+                    .and_then(|url| endpoints.endpoint(&peer.node_did, url).ok());
                 if endpoint.is_none() {
                     unavailable.insert(peer.node_did.clone());
                 }
@@ -424,6 +426,15 @@ async fn observe(
             })
             .is_ok()
     };
+    if let Err(error) = endpoint.refresh_runtime_authentication().await {
+        tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), node, "runtime authentication discovery failed");
+        end.send(if error.is_permission_denied() {
+            RuntimeConnectionEvent::Refused
+        } else {
+            RuntimeConnectionEvent::TransportFailed
+        });
+        return;
+    }
     let mut current: Option<Armed> = None;
     loop {
         let renewal = current.is_some();

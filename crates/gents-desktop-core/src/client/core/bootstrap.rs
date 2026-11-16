@@ -6,6 +6,7 @@ use defra_node::{HttpConfig, P2PConfig};
 #[cfg(test)]
 use defra_node::{NodeBuilder, StorageBackend};
 use defra_p2p_adapter::P2POperations as P2POps;
+use gents_store::identity::NodeIdentity as _;
 use p2p::iroh::parse_public_peer_addr;
 use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep, Instant};
@@ -181,12 +182,15 @@ impl ClientCore {
                 super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default()).await;
             checkpoint("p2p_health");
             sync_state.replace_transport_observation(initial_health);
+            let runtime_endpoints = Arc::new(
+                gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+                    node_identity.client_signing_capability()?,
+                ),
+            );
             let observer = spawn_observer(
                 Arc::clone(&stores),
                 sync_state.clone(),
-                gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-                    node_identity.private_key_bytes(),
-                )?,
+                Arc::clone(&runtime_endpoints),
             );
             let (p2p_control, p2p_control_rx) = mpsc::channel(8);
             let p2p_supervisor = spawn_p2p_supervisor_task(
@@ -200,6 +204,7 @@ impl ClientCore {
                 options.install_replicators_on_bootstrap,
             );
             Ok(Self {
+                runtime_endpoints,
                 store_access: tokio::sync::Mutex::new(None),
                 paths,
                 options,

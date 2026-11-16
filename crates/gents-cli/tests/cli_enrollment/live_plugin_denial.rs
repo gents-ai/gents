@@ -256,7 +256,7 @@ async fn live_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Result<()
         ).with_client_signing_capability(runtime_identity.client_signing_capability()?)?;
         let activation = runtime_endpoint.authorize(
             reqwest::Client::new().get(format!("http://127.0.0.1:{port}/activation")),
-        )?.send().await.context("waiting for the selected plugin configuration to activate")?;
+        ).await?.send().await.context("waiting for the selected plugin configuration to activate")?;
         let activation_status = activation.status();
         let activation_body = activation.text().await?;
         anyhow::ensure!(activation_status.is_success(),

@@ -1,31 +1,9 @@
 import Proofs.Store.Identity.Household
+import Proofs.Store.Identity.ClientDelegation
 
 namespace ClientRuntimeAccess
 
-open Identity.Household
-
-structure Runtime where
-  node : String
-  worker : String
-  deployment : String
-  deriving BEq, DecidableEq, Repr
-
-/-- DefraDB verifies the client's signature and the Vera delegation's worker,
-deployment and expiry. This records that external authentication premise;
-Gents neither signs as the client nor treats a delegation as an ACP grant. -/
-structure Delegation where
-  issuer : String
-  worker : String
-  deployment : String
-  expires : Nat
-  verified : Bool
-  deriving BEq, DecidableEq, Repr
-
-def authenticates (client : String) (runtime : Runtime) (now : Nat)
-    (delegation : Delegation) : Bool :=
-  delegation.verified && delegation.issuer == client &&
-    delegation.worker == runtime.worker && delegation.deployment == runtime.deployment &&
-    now < delegation.expires
+open Identity.Household Identity.ClientDelegation
 
 inductive Phase where
   | disconnected | requesting | connected | unreachable | revoked
@@ -93,31 +71,15 @@ theorem observation_does_not_grant (state : Identity.Household.State) (client : 
     admitted state (observe state client delegation now reachable) delegation now =
       admitted state client delegation now := rfl
 
-theorem expired_delegation_is_refused (client : Client) (runtime : Runtime)
-    (delegation : Delegation) (now : Nat) (expired : delegation.expires ≤ now) :
-    authenticates client.did runtime now delegation = false := by
-  simp [authenticates, Nat.not_lt_of_ge expired]
-
-theorem another_worker_is_refused (client : Client) (runtime : Runtime)
-    (delegation : Delegation) (now : Nat) (different : delegation.worker ≠ runtime.worker) :
-    authenticates client.did runtime now delegation = false := by
-  simp [authenticates, different]
-
-theorem another_deployment_is_refused (client : Client) (runtime : Runtime)
-    (delegation : Delegation) (now : Nat)
-    (different : delegation.deployment ≠ runtime.deployment) :
-    authenticates client.did runtime now delegation = false := by
-  simp [authenticates, different]
-
 def initial : Identity.Household.State :=
   { objects := [⟨"nodes", "runtime", "owner"⟩,
       ⟨"nodes", "other-runtime", "other-owner"⟩], relations := [], enrolled := [] }
 
 def desktop : Client :=
-  { did := "client", runtime := ⟨"runtime", "worker", "deployment"⟩,
+  { did := "client", runtime := ⟨"runtime", "worker", 1⟩,
     queued := ["chat", "goal"] }
 
-def signed : Delegation := ⟨"client", "worker", "deployment", 20, true⟩
+def signed : Delegation := ⟨"client", "worker", 1, 20, true⟩
 
 theorem valid_delegation_is_not_a_grant : admitted initial desktop signed 10 = false := by
   native_decide
@@ -130,7 +92,7 @@ theorem approval_uses_existing_node_authority :
 
 theorem approval_does_not_reach_another_runtime :
     admitted (approve initial "owner" desktop)
-      { desktop with runtime := ⟨"other-runtime", "worker", "deployment"⟩ } signed 10 = false := by
+      { desktop with runtime := ⟨"other-runtime", "worker", 1⟩ } signed 10 = false := by
   native_decide
 
 theorem revoked_client_can_ask_but_cannot_restore_its_grant :

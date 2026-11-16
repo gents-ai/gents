@@ -2,19 +2,27 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use gents_store::identity::{
-    load_file_identity, load_or_create_file_identity, register_ed25519_signing_identity,
-    IdentityError, NodeIdentity, ServiceAccount,
+    load_file_identity, load_or_create_file_identity, IdentityError, NodeIdentity, ServiceAccount,
 };
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 use serde::{Deserialize, Serialize};
 
 use super::paths::DesktopPaths;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PrincipalIdentity {
     did: String,
     public_key_bytes: Vec<u8>,
     private_key_bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for PrincipalIdentity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PrincipalIdentity")
+            .field("did", &self.did)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -65,7 +73,6 @@ impl PrincipalIdentity {
         };
 
         validate_or_persist_metadata(metadata_path, &metadata).await?;
-        register_ed25519_signing_identity(&did, &private_key_bytes, &public_key_bytes)?;
 
         Ok(Self {
             did,
@@ -87,7 +94,6 @@ impl PrincipalIdentity {
             metadata.did == did && metadata.public_key_bytes == public_key_bytes,
             "client identity metadata does not match its signing key"
         );
-        register_ed25519_signing_identity(&did, &private_key_bytes, &public_key_bytes)?;
         Ok(Self {
             did,
             public_key_bytes,

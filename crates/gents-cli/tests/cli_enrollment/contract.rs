@@ -773,6 +773,7 @@ async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
     let database_now = timeout(Duration::from_secs(3), core.p2p().sync_status()).await;
     let runtime_database = crate::support::graphql::node_principal_endpoint(graphql)
         .authorize(reqwest::Client::new().get(graphql.replace("/graphql", "/p2p/sync/status")))
+        .await
         .expect("runtime diagnostics request")
         .timeout(Duration::from_secs(3))
         .send()
@@ -783,6 +784,7 @@ async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
     };
     let runtime_replicators = crate::support::graphql::node_principal_endpoint(graphql)
         .authorize(reqwest::Client::new().get(graphql.replace("/graphql", "/p2p/replicators")))
+        .await
         .expect("runtime diagnostics request")
         .timeout(Duration::from_secs(3))
         .send()
@@ -1117,13 +1119,13 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
         };
         let url = format!("http://127.0.0.1:{port}{}", gents_inference::inference_observation::INFERENCE_ACTIVITY_PATH);
         let http = reqwest::Client::new();
-        let call = |actor: &dyn gents_store::identity::NodeIdentity, key: gents_inference::inference_observation::InferenceKey| {
+        let call = async |actor: &dyn gents_store::identity::NodeIdentity, key: gents_inference::inference_observation::InferenceKey| {
             let capability = actor.client_signing_capability().expect("held client signing key");
             let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(&graphql, capability.did())
                 .with_client_signing_capability(capability)
                 .expect("endpoint signs as its own principal");
-            let request = endpoint.authorize(http.post(&url)).unwrap().json(&key);
-            async move { request.send().await }
+            let request = endpoint.authorize(http.post(&url)).await.unwrap().json(&key);
+            request.send().await
         };
         let allowed = call(owner.node_identity(), key.clone()).await?;
         anyhow::ensure!(allowed.status().is_success(), "requester could not observe held inference: {}", allowed.status());

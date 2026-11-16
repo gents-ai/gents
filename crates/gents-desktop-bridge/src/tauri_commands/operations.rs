@@ -42,8 +42,7 @@ where
         .ok_or_else(|| BridgeError::untyped("no node selected; pass nodeDid explicitly"))?;
 
     let endpoint = core
-        .operator_observation_endpoint(&node_did)
-        .await
+        .operator_observation_graphql(&node_did)
         .ok_or_else(|| {
             BridgeError::untyped(format!(
                 "runtime {node_did} has no authenticated database endpoint"
@@ -292,8 +291,7 @@ pub async fn list_backends_with_health_for_core(
 ) -> Result<Vec<BackendHealthView>, BridgeError> {
     let node_did = node_did.ok_or_else(|| BridgeError::untyped("no runtime selected"))?;
     let endpoint = core
-        .operator_observation_endpoint(&node_did)
-        .await
+        .operator_observation_graphql(&node_did)
         .ok_or_else(|| {
             BridgeError::untyped(format!(
                 "runtime {node_did} has no authenticated database endpoint"

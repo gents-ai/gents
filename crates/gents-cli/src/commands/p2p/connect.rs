@@ -18,11 +18,13 @@ pub(super) async fn p2p_connect(args: P2pConnectArgs) -> Result<()> {
         gents_host::p2p_status::p2p_http_client().context("building P2P connect HTTP client")?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
     http_send(
-        graphql.authorize(
-            client
-                .post(format!("{api_base}/p2p/connect"))
-                .json(&vec![args.peer.clone()]),
-        )?,
+        graphql
+            .authorize(
+                client
+                    .post(format!("{api_base}/p2p/connect"))
+                    .json(&vec![args.peer.clone()]),
+            )
+            .await?,
     )
     .await?;
     let home_dir = resolve_home_dir(args.home.as_deref());

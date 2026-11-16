@@ -394,6 +394,7 @@ where
     let url = watch_url(&endpoint)?;
     let builder = endpoint
         .authorize(client.post(url).json(request))
+        .await
         .map_err(|_| WatchEvent::PermanentError)?;
     let response = tokio::select! {
         biased;

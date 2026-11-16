@@ -304,6 +304,7 @@ enum P2PSupervisorCommand {
 type ShutdownOutcome = std::result::Result<(), String>;
 
 pub struct ClientCore {
+    runtime_endpoints: Arc<gents_store::config_client::runtime_endpoints::RuntimeEndpoints>,
     store_access: Mutex<Option<ConfigAccess>>,
     paths: DesktopPaths,
     options: ClientCoreOptions,
@@ -547,13 +548,10 @@ impl ClientCore {
         let store = self.stores.ensure(node_did);
         let captured = store.capture_read();
         let records = self.sync_state.records();
-        let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-            self.node_identity.private_key_bytes(),
-        )?;
         let snapshot = match load_node_scoped_snapshot_with_peer_records(
             node_did,
             &records,
-            &capability,
+            &self.runtime_endpoints,
         )
         .await
         {

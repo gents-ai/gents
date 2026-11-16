@@ -63,6 +63,7 @@ typescript = ["gents/typescript"]
 test-fixtures = []
 
 [dev-dependencies]
+axum = "0.8"
 gents-workspace-hack = { workspace = true }
 gents-automation = { workspace = true, features = ["test-fixtures"] }
 gents-store = { workspace = true, features = ["test-fixtures"] }

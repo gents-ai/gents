@@ -88,7 +88,8 @@ impl PackInstallSession {
             .map_err(|_| anyhow::anyhow!("invalid runtime WebSocket URL"))?;
         let mut upgrade = url.as_str().into_client_request()?;
         let authorization = endpoint
-            .authorization()?
+            .authorization()
+            .await?
             .context("client authentication is required")?;
         let mut authorization =
             authorization.parse::<tokio_tungstenite::tungstenite::http::HeaderValue>()?;

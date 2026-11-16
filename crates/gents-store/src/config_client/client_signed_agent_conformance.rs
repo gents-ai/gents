@@ -595,7 +595,7 @@ async fn client_configuration_creates_are_signed_by_the_authenticated_principal(
     ));
     let did_only = super::GraphqlEndpoint::as_principal(&url, actor.did());
     assert!(matches!(
-        did_only.authorization(),
+        did_only.authorization().await,
         Err(super::ConfigClientError::ClientAgentSignerRequired)
     ));
     let did_only = super::ConfigAccess::Graphql(did_only);

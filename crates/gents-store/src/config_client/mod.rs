@@ -22,9 +22,11 @@ mod application_failure;
 mod application_pairing;
 pub mod authored_document;
 mod client_agent_publication;
+pub mod client_authentication;
 mod client_pack_evidence;
 pub mod client_request_input;
 pub mod client_signed_agent;
+pub mod runtime_endpoints;
 pub use client_pack_evidence::{
     prepare_pack_evidence, prepare_pack_evidence_from_history, prepare_pack_evidence_in_txn,
     prepare_pack_relationship, prepare_pack_schema_approval, verify_pack_schema_approval,
@@ -181,6 +183,7 @@ pub(crate) enum WriteRoute<'a> {
 pub struct GraphqlEndpoint {
     url: String,
     principal_did: Option<String>,
+    client_authentication: Arc<runtime_endpoints::EndpointAuthentication>,
     delegated_authorization: Option<reqwest::header::HeaderValue>,
     client_signed_agent_creates: bool,
     client_signing_capability: Option<ClientSigningCapability>,
@@ -193,6 +196,9 @@ impl GraphqlEndpoint {
         Self {
             url: url.into(),
             principal_did: None,
+            client_authentication: Arc::new(runtime_endpoints::EndpointAuthentication::Fixed(
+                gents_protocol::client_authentication::ClientAuthentication::Local,
+            )),
             delegated_authorization: None,
             client_signed_agent_creates: false,
             client_signing_capability: None,
@@ -205,6 +211,9 @@ impl GraphqlEndpoint {
         Self {
             url: url.into(),
             principal_did: Some(principal_did.into()),
+            client_authentication: Arc::new(runtime_endpoints::EndpointAuthentication::Fixed(
+                gents_protocol::client_authentication::ClientAuthentication::Local,
+            )),
             delegated_authorization: None,
             client_signed_agent_creates: false,
             client_signing_capability: None,
@@ -227,6 +236,9 @@ impl GraphqlEndpoint {
         Ok(Self {
             url: url.into(),
             principal_did: None,
+            client_authentication: Arc::new(runtime_endpoints::EndpointAuthentication::Fixed(
+                gents_protocol::client_authentication::ClientAuthentication::Local,
+            )),
             delegated_authorization: Some(header),
             client_signed_agent_creates: false,
             client_signing_capability: None,
@@ -347,43 +359,6 @@ impl GraphqlEndpoint {
         Ok(match url.port() {
             Some(port) => format!("{host}:{port}"),
             None => host.to_string(),
-        })
-    }
-
-    pub fn authorization(&self) -> Result<Option<String>> {
-        if let Some(value) = &self.delegated_authorization {
-            return Ok(Some(value.to_str()?.to_owned()));
-        }
-        let Some(did) = self.principal_did.as_deref() else {
-            return Ok(None);
-        };
-        let audience = self.audience()?;
-        let authorization = if let Some(capability) = &self.client_signing_capability {
-            crate::identity::defradb_bearer_authorization_with_config(
-                did,
-                &audience,
-                &capability.config,
-            )?
-        } else {
-            return Err(ConfigClientError::ClientAgentSignerRequired);
-        };
-        Ok(Some(authorization))
-    }
-
-    fn authorization_header(&self) -> Result<Option<reqwest::header::HeaderValue>> {
-        let Some(authorization) = self.authorization()? else {
-            return Ok(None);
-        };
-        let mut value = reqwest::header::HeaderValue::from_str(&authorization)
-            .map_err(ConfigClientError::BearerHeader)?;
-        value.set_sensitive(true);
-        Ok(Some(value))
-    }
-
-    pub fn authorize(&self, request: reqwest::RequestBuilder) -> Result<reqwest::RequestBuilder> {
-        Ok(match self.authorization_header()? {
-            Some(value) => request.header(reqwest::header::AUTHORIZATION, value),
-            None => request,
         })
     }
 }
@@ -744,7 +719,8 @@ impl ConfigAccess {
                 let url = format!("{api_base}/collections");
                 let client = graphql::http_client().await?;
                 let response = graphql
-                    .authorize(client.post(&url))?
+                    .authorize(client.post(&url))
+                    .await?
                     .header(reqwest::header::CONTENT_TYPE, "text/plain; charset=utf-8")
                     .body(sdl.to_owned())
                     .send()
@@ -771,15 +747,11 @@ impl ConfigAccess {
             }
             Self::Local(local) => {
                 let sdl = sdl.to_owned();
-                let actor = local.identity().cloned();
+                let context = local.request_context();
                 local
                     .run_owned(move |node| async move {
-                        match actor {
-                            Some(actor) => {
-                                let context = defra_core::RequestContext::default()
-                                    .with_identity(Some(actor.to_string()));
-                                node.add_collection_as(&context, &sdl).await.map(|_| ())
-                            }
+                        match context.identity() {
+                            Some(_) => node.add_collection_as(&context, &sdl).await.map(|_| ()),
                             None => node.add_collection(&sdl).await,
                         }
                         .map_err(|error| ConfigClientError::AddSchema(Box::new(error)))
@@ -817,7 +789,8 @@ impl ConfigAccess {
                 let url = format!("{api_base}/collections?get_inactive=true");
                 let client = graphql::http_client().await?;
                 let versions: Value = graphql
-                    .authorize(client.get(&url))?
+                    .authorize(client.get(&url))
+                    .await?
                     .send()
                     .await
                     .map_err(|source| ConfigClientError::FetchCollectionVersions {
@@ -857,11 +830,9 @@ impl ConfigAccess {
         match self {
             Self::Local(local) if local.identity().is_some() => {
                 let collection = collection.to_owned();
-                let actor = local.identity().cloned();
+                let context = local.request_context();
                 local
                     .run_owned(move |node| async move {
-                        let context = defra_core::RequestContext::default()
-                            .with_identity(actor.map(|did| did.to_string()));
                         let selector = schema::CollectionSelector::with_names(vec![collection]);
                         node.get_collections_as(&context, &selector)
                             .await?
@@ -884,7 +855,8 @@ impl ConfigAccess {
                 let url = format!("{api_base}/collections?get_inactive=true");
                 let client = graphql::http_client().await?;
                 let versions: Value = graphql
-                    .authorize(client.get(&url))?
+                    .authorize(client.get(&url))
+                    .await?
                     .send()
                     .await
                     .map_err(|source| ConfigClientError::FetchCollectionVersions {

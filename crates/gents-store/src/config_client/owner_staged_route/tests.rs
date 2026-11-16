@@ -277,7 +277,10 @@ impl Fixture {
         url.set_path(OWNER_STAGED_PATH);
         let request = reqwest::Client::new().post(url).json(command);
         let request = match bearer {
-            Some(key) => endpoint(&self.graphql, key).authorize(request).unwrap(),
+            Some(key) => endpoint(&self.graphql, key)
+                .authorize(request)
+                .await
+                .unwrap(),
             None => request,
         };
         let response = request.send().await.unwrap();

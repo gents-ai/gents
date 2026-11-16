@@ -447,7 +447,7 @@ impl ConfigApplyTxn<'_> {
         // The node owns the transaction; native NAC judges each changing
         // edge against the explicit actor and admits an unchanged one without
         // authority (Lean `Configuration.sourceChangeAllowed`).
-        let context = defra_core::RequestContext::default().with_identity(Some(actor.to_string()));
+        let context = self.request_context(Some(actor.clone()));
         let roots = |records: &[crate::local::ProjectedPlugin]| {
             let mut roots = std::collections::BTreeSet::new();
             for record in records {
@@ -567,8 +567,7 @@ impl ConfigApplyTxn<'_> {
                 let actor = identity
                     .as_ref()
                     .ok_or(ConfigClientError::RelationshipActorRequired)?;
-                let context =
-                    defra_core::RequestContext::default().with_identity(Some(actor.to_string()));
+                let context = self.request_context(Some(actor.clone()));
                 let node = Arc::clone(node);
                 let handle = handle.clone();
                 let (collection, doc_id, relation, target) = (
@@ -626,7 +625,7 @@ impl ConfigApplyTxn<'_> {
                 };
                 let response = endpoint.authorize(client.request(method, url).header("x-defradb-tx", id).json(&json!({
                     "collection": collection, "doc_id": doc_id, "relation": relation, "target_actor": target,
-                })))?.send().await?;
+                }))).await?.send().await?;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::RelationshipStatus {
@@ -864,7 +863,7 @@ impl ConfigApplyTxn<'_> {
                 let node = Arc::clone(node);
                 let request = QueryRequest::new(document)
                     .with_variables(variables.clone())
-                    .with_identity(identity.clone());
+                    .with_context(self.request_context(identity.clone()));
                 let handle = handle.clone();
                 let agent_signer = agent_signer.as_deref().cloned();
                 let result = execute_owned_native(
@@ -1061,7 +1060,8 @@ impl ConfigApplyTxn<'_> {
         let response = endpoint
             .authorize(client.post(url).header("x-defradb-tx", id).json(&json!({
                 "collection": collection, "doc_ids": doc_ids,
-            })))?
+            })))
+            .await?
             .send()
             .await?
             .error_for_status()?;
@@ -1107,7 +1107,8 @@ impl ConfigApplyTxn<'_> {
                     graphql_api_base(endpoint.url())?
                 );
                 let versions: Value = endpoint
-                    .authorize(client.get(&url).header("x-defradb-tx", id))?
+                    .authorize(client.get(&url).header("x-defradb-tx", id))
+                    .await?
                     .send()
                     .await?
                     .error_for_status()?
@@ -1241,7 +1242,7 @@ impl ConfigApplyTxn<'_> {
         };
         let started = Instant::now();
         let node = Arc::clone(node);
-        let mut request = QueryRequest::new(document).with_identity(identity);
+        let mut request = QueryRequest::new(document).with_context(self.request_context(identity));
         if let Some(variables) = variables {
             request = request.with_variables(variables);
         }

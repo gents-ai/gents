@@ -470,8 +470,8 @@ fn hosted_record(home: &std::path::Path, did: &str, graphql: &str) -> crate::cli
     record
 }
 
-#[test]
-fn cached_runtime_operator_endpoint_does_not_load_a_cold_runtime_key() {
+#[tokio::test]
+async fn cached_runtime_operator_endpoint_does_not_load_a_cold_runtime_key() {
     use identity::Identity as _;
 
     let tempdir = tempfile::tempdir().unwrap();
@@ -498,7 +498,7 @@ fn cached_runtime_operator_endpoint_does_not_load_a_cold_runtime_key() {
     let unlocked = super::OperatorIdentityInteraction::default()
         .runtime_endpoint(&record)
         .unwrap();
-    assert!(unlocked.authorization().unwrap().is_some());
+    assert!(unlocked.authorization().await.unwrap().is_some());
     std::fs::remove_file(home.join("init.json")).unwrap();
     std::fs::remove_file(key_path).unwrap();
     assert_eq!(
@@ -593,10 +593,9 @@ async fn hosted_runtime_status_reads_as_the_user_and_never_loads_the_node_key() 
     let record = hosted_record(&home, &did, &graphql);
     Mock::given(method("GET"))
         .and(path("/status"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"node_did":did,"tool_root":"/w"})),
-        )
-        .up_to_n_times(1)
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({"node_did":did,"tool_root":"/w", "client_authentication":{"kind":"local"}}),
+        ))
         .mount(&server)
         .await;
     let payload = super::fetch_hosted_runtime_status(&record, Some(&capability))
@@ -606,9 +605,9 @@ async fn hosted_runtime_status_reads_as_the_user_and_never_loads_the_node_key() 
     assert_eq!(payload["tool_root"], "/w");
     assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
     let requests = server.received_requests().await.unwrap();
-    let bearer = requests[0]
-        .headers
-        .get("authorization")
+    let bearer = requests
+        .iter()
+        .find_map(|request| request.headers.get("authorization"))
         .unwrap()
         .to_str()
         .unwrap()
@@ -623,6 +622,7 @@ async fn hosted_runtime_status_reads_as_the_user_and_never_loads_the_node_key() 
         gents_store::identity::NodeIdentity::did(&user)
     );
 
+    server.reset().await;
     Mock::given(method("GET"))
         .and(path("/status"))
         .respond_with(ResponseTemplate::new(403))
@@ -745,8 +745,8 @@ async fn managed_readiness_status_rejects_redirects_without_forwarding_authority
     assert!(error.to_string().contains("302"), "{error:#}");
 }
 
-#[test]
-fn document_operator_endpoint_preserves_client_without_loading_runtime_key() {
+#[tokio::test]
+async fn document_operator_endpoint_preserves_client_without_loading_runtime_key() {
     let directory = tempfile::tempdir().unwrap();
     let runtime = "did:key:unloaded-runtime";
     let caller = gents_store::identity::KeyIdentity::load_or_create(
@@ -754,10 +754,21 @@ fn document_operator_endpoint_preserves_client_without_loading_runtime_key() {
         None,
     )
     .unwrap();
-    let record = hosted_record(directory.path(), runtime, HOSTED_GRAPHQL);
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::path("/status"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "node_did": runtime, "client_authentication": {"kind": "local"}
+        })))
+        .mount(&server)
+        .await;
+    let record = hosted_record(
+        directory.path(),
+        runtime,
+        &format!("{}/api/v0/graphql", server.uri()),
+    );
     let capability = caller.client_signing_capability().unwrap();
     let endpoint = super::operator_endpoint(&record, &capability).unwrap();
-    assert!(endpoint.authorization().unwrap().is_some());
+    assert!(endpoint.authorization().await.unwrap().is_some());
     assert!(!gents_store::identity::can_mint_defradb_bearer(runtime));
 }
 

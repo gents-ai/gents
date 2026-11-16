@@ -135,7 +135,7 @@ async fn discover_stored_backend(args: &BackendDiscoverModelsArgs, id: &str) -> 
                 .timeout(std::time::Duration::from_secs(30))
                 .build()?;
             let response = endpoint
-                .authorize(client.post(url))?
+                .authorize(client.post(url)).await?
                 .json(&json!({"node_did":backend.node_did.as_str(), "backend_id":backend.backend_id.as_str()}))
                 .send()
                 .await?;

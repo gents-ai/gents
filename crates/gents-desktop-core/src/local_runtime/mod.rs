@@ -130,8 +130,8 @@ pub fn operator_endpoint(
     capability: &gents_store::config_client::ClientSigningCapability,
 ) -> Option<gents_store::config_client::GraphqlEndpoint> {
     let url = record.operator_graphql()?;
-    gents_store::config_client::GraphqlEndpoint::as_principal(url, capability.did())
-        .with_client_signing_capability(capability.clone())
+    gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(capability.clone())
+        .endpoint(&record.node_did, url)
         .ok()
 }
 
@@ -503,16 +503,30 @@ async fn read_runtime_status(
     );
     let status_url = runtime_status_url(endpoint.url())?;
     let client = runtime_http_client().await?;
-    let response = endpoint
-        .authorize(client.get(&status_url))?
-        .send()
-        .await
-        .map_err(|error| {
-            crate::error::BridgeError::runtime_http_error(
-                error,
-                format!("sending runtime status request to {status_url}"),
-            )
-        })?;
+    let request = match endpoint.authorize(client.get(&status_url)).await {
+        Ok(request) => request,
+        Err(error) => {
+            if let Some(status) = error
+                .transport_error()
+                .and_then(reqwest::Error::status)
+                .filter(|status| {
+                    matches!(
+                        *status,
+                        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+                    )
+                })
+            {
+                return Ok(RuntimeStatusRead::Refused(status));
+            }
+            return Err(error.into());
+        }
+    };
+    let response = request.send().await.map_err(|error| {
+        crate::error::BridgeError::runtime_http_error(
+            error,
+            format!("sending runtime status request to {status_url}"),
+        )
+    })?;
     if matches!(
         response.status(),
         reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN

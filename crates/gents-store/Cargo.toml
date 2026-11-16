@@ -15,6 +15,7 @@ test-fixtures = ["test-home-guard", "axum/ws"]
 
 [dependencies]
 acp.workspace = true
+vera.workspace = true
 schema.workspace = true
 storage.workspace = true
 db.workspace = true
@@ -46,7 +47,7 @@ k256 = { version = "0.13", default-features = false }
 libc = "0.2"
 query.workspace = true
 rand.workspace = true
-regolith = "0.2.4"
+regolith = "0.2.5"
 serde.workspace = true
 serde_json.workspace = true
 regex = "1"
@@ -58,7 +59,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 uuid.workspace = true
 reqwest = { workspace = true, features = ["stream"] }
 tempfile = "3"
@@ -67,6 +68,7 @@ tempfile = "3"
 security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
 
 [dev-dependencies]
+defra-node = { workspace = true, features = ["embedded-vera"] }
 gents-claude = { workspace = true, features = ["transport"] }
 gents-store = { path = ".", features = ["test-fixtures", "typescript"] }
 gents-workspace-hack = { workspace = true }

@@ -499,30 +499,21 @@ impl crate::client::ClientCore {
         node_did: &str,
     ) -> anyhow::Result<InferenceSetupState> {
         use anyhow::Context;
-        let records = self.peer_records().await;
-        let mut matching = records.iter().filter(|record| record.node_did == node_did);
-        let record = matching
-            .next()
-            .filter(|_| matching.next().is_none())
+        let endpoint = self
+            .operator_observation_graphql(node_did)
             .context("runtime connection is missing or ambiguous")?;
-        let graphql = record
-            .graphql
-            .as_deref()
-            .context("runtime has no HTTP endpoint")?;
-        read_inference_setup_state_from(graphql, node_did, self.node_identity()).await
+        read_inference_setup_state_from(&endpoint, node_did).await
     }
 }
 
 /// A runtime endpoint can be unavailable or unresponsive while settings are
 /// opened; bound the HTTP wait as well as the response body.
 async fn read_inference_setup_state_from(
-    graphql: &str,
+    endpoint: &gents_store::config_client::GraphqlEndpoint,
     node_did: &str,
-    client_identity: &crate::client::PrincipalIdentity,
 ) -> anyhow::Result<InferenceSetupState> {
     use anyhow::Context;
-    use gents_store::config_client::GraphqlEndpoint;
-    let mut url = reqwest::Url::parse(graphql).context("runtime endpoint is invalid")?;
+    let mut url = reqwest::Url::parse(endpoint.url()).context("runtime endpoint is invalid")?;
     anyhow::ensure!(
         matches!(url.scheme(), "http" | "https")
             && url.username().is_empty()
@@ -541,13 +532,9 @@ async fn read_inference_setup_state_from(
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
-    let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-        client_identity.private_key_bytes(),
-    )?;
-    let endpoint = GraphqlEndpoint::as_principal(graphql, client_identity.did())
-        .with_client_signing_capability(capability)?;
     let mut response = endpoint
-        .authorize(client.get(url))?
+        .authorize(client.get(url))
+        .await?
         .send()
         .await
         .map_err(|error| {
@@ -595,6 +582,7 @@ async fn read_inference_setup_state_from(
 mod tests {
     use super::*;
     use crate::client::{ClientStore, DesktopPaths, PrincipalIdentity};
+    use gents_store::identity::NodeIdentity as _;
     use serde_json::json;
     use wiremock::{
         matchers::{method, path},
@@ -611,6 +599,15 @@ mod tests {
         paths.ensure_root_dirs().await.unwrap();
         let identity = PrincipalIdentity::load_or_create(&paths).await.unwrap();
         (temp, identity)
+    }
+
+    fn settings_endpoint(
+        graphql: &str,
+        identity: &PrincipalIdentity,
+    ) -> gents_store::config_client::GraphqlEndpoint {
+        gents_store::config_client::GraphqlEndpoint::as_principal(graphql, identity.did())
+            .with_client_signing_capability(identity.client_signing_capability().unwrap())
+            .unwrap()
     }
 
     #[tokio::test]
@@ -630,9 +627,8 @@ mod tests {
             .mount(&server)
             .await;
         let state = read_inference_setup_state_from(
-            &format!("{}/api/v0/graphql", server.uri()),
+            &settings_endpoint(&format!("{}/api/v0/graphql", server.uri()), &identity),
             node,
-            &identity,
         )
         .await
         .unwrap();
@@ -672,9 +668,8 @@ mod tests {
                 .mount(&server)
                 .await;
             assert!(read_inference_setup_state_from(
-                &format!("{}/api/v0/graphql", server.uri()),
+                &settings_endpoint(&format!("{}/api/v0/graphql", server.uri()), &identity),
                 "did:runtime",
-                &identity
             )
             .await
             .is_err());
@@ -696,9 +691,8 @@ mod tests {
                 .mount(&server)
                 .await;
             let error = read_inference_setup_state_from(
-                &format!("{}/api/v0/graphql", server.uri()),
+                &settings_endpoint(&format!("{}/api/v0/graphql", server.uri()), &identity),
                 "did:runtime",
-                &identity,
             )
             .await
             .unwrap_err();
@@ -720,9 +714,8 @@ mod tests {
             .mount(&server)
             .await;
         let error = read_inference_setup_state_from(
-            &format!("{}/api/v0/graphql", server.uri()),
+            &settings_endpoint(&format!("{}/api/v0/graphql", server.uri()), &identity),
             "did:runtime",
-            &identity,
         )
         .await
         .unwrap_err();

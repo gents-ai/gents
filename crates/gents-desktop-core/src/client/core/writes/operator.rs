@@ -2,7 +2,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use gents_store::config_client::ConfigAccess;
-use gents_store::identity::NodeIdentity as _;
 
 use super::super::bootstrap::normalize_required;
 use super::{ux_local_runtime_record, ClientCore, LocalHomeAccessError};
@@ -115,23 +114,15 @@ impl ClientCore {
             .find(|record| record.node_did == node_did)
             .and_then(|record| {
                 record.operator_graphql().and_then(|url| {
-                    let capability =
-                        gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-                            self.node_identity.private_key_bytes(),
-                        )
-                        .ok()?;
-                    gents_store::config_client::GraphqlEndpoint::as_principal(
-                        url,
-                        self.node_identity.did(),
-                    )
-                    .with_client_signing_capability(capability)
-                    .ok()
-                    .and_then(|endpoint| {
-                        gents::runtime::lifecycle_hooks::compose_endpoint(
-                            endpoint.with_client_signed_agent_creates(),
-                        )
+                    self.runtime_endpoints
+                        .endpoint(&record.node_did, url)
                         .ok()
-                    })
+                        .and_then(|endpoint| {
+                            gents::runtime::lifecycle_hooks::compose_endpoint(
+                                endpoint.with_client_signed_agent_creates(),
+                            )
+                            .ok()
+                        })
                 })
             })
     }
@@ -145,29 +136,10 @@ impl ClientCore {
             .iter()
             .find(|record| record.node_did == node_did)
             .and_then(|record| {
-                crate::local_runtime::operator_endpoint(
-                    record,
-                    &self.node_identity.client_signing_capability().ok()?,
-                )
+                record
+                    .operator_graphql()
+                    .and_then(|url| self.runtime_endpoints.endpoint(&record.node_did, url).ok())
             })
-    }
-
-    pub async fn operator_observation_endpoint(
-        &self,
-        node_did: &str,
-    ) -> Option<gents_store::config_client::GraphqlEndpoint> {
-        let record = self
-            .sync_state
-            .records()
-            .into_iter()
-            .find(|record| record.node_did == node_did)?;
-        let capability = self.node_identity.client_signing_capability().ok()?;
-        tokio::task::spawn_blocking(move || {
-            crate::local_runtime::operator_endpoint(&record, &capability)
-        })
-        .await
-        .ok()
-        .flatten()
     }
 
     pub fn operator_signer(
@@ -203,31 +175,8 @@ impl ClientCore {
     }
 
     pub fn operator_access(&self, node_did: &str) -> Result<ConfigAccess> {
-        let record = self
-            .sync_state
-            .records()
-            .into_iter()
-            .find(|record| record.node_did == node_did)
-            .context("Connect this runtime before editing configuration.")?;
-        record
-            .operator_graphql()
-            .map(|url| -> Result<ConfigAccess> {
-                let capability =
-                    gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-                        self.node_identity.private_key_bytes(),
-                    )?;
-                Ok(ConfigAccess::Graphql(
-                    gents::runtime::lifecycle_hooks::compose_endpoint(
-                        gents_store::config_client::GraphqlEndpoint::as_principal(
-                            url,
-                            self.node_identity.did(),
-                        )
-                        .with_client_signing_capability(capability)?
-                        .with_client_signed_agent_creates(),
-                    )?,
-                ))
-            })
-            .transpose()?
+        self.operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
             .context("Connect this runtime before editing configuration.")
     }
 
@@ -254,18 +203,10 @@ impl ClientCore {
         let url = record
             .operator_graphql()
             .ok_or(LocalHomeAccessError::NoOperatorConnection)?;
-        let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-            self.node_identity.private_key_bytes(),
-        )
-        .map_err(LocalHomeAccessError::Signing)?;
-        Ok(
-            gents_store::config_client::GraphqlEndpoint::as_principal(
-                url,
-                self.node_identity.did(),
-            )
-            .with_client_signing_capability(capability)
+        Ok(self
+            .runtime_endpoints
+            .endpoint(&record.node_did, url)
             .map_err(LocalHomeAccessError::Signing)?
-            .with_client_signed_agent_creates(),
-        )
+            .with_client_signed_agent_creates())
     }
 }

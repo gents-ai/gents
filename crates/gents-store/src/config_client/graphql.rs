@@ -42,7 +42,8 @@ pub(super) async fn auto_commit(
         None => serde_json::json!({"query": mutation}),
     };
     let response = endpoint
-        .authorize(http_client().await?.post(endpoint.url()))?
+        .authorize(http_client().await?.post(endpoint.url()))
+        .await?
         .json(&body)
         .send()
         .await
@@ -80,7 +81,7 @@ pub(super) async fn query_with_options(
     options: GraphqlRequestOptions,
 ) -> Result<Value> {
     ensure_query_document(query)?;
-    let authorization = endpoint.authorization()?;
+    let authorization = endpoint.authorization().await?;
     Ok(match variables {
         Some(variables) => {
             gents_protocol::graphql::execute_graphql_with_variables_async(
@@ -110,7 +111,8 @@ pub(super) async fn txn_begin(
         path
     };
     let response = endpoint
-        .authorize(client.post(url))?
+        .authorize(client.post(url))
+        .await?
         .send()
         .await
         .map_err(|source| ConfigClientError::PostTxBegin {
@@ -157,7 +159,8 @@ pub(super) async fn txn_execute(
     variables: &Value,
 ) -> Result<Value> {
     let response = endpoint
-        .authorize(client.post(endpoint.url()))?
+        .authorize(client.post(endpoint.url()))
+        .await?
         .header("x-defradb-tx", id)
         .json(&serde_json::json!({"query": query, "variables": variables}))
         .send()
@@ -215,6 +218,7 @@ pub(super) async fn txn_commit(
     let api_base = graphql_api_base(endpoint.url()).map_err(TxnCommitError::CleanupRequired)?;
     let response = endpoint
         .authorize(client.post(format!("{api_base}/tx/{id}")))
+        .await
         .map_err(TxnCommitError::CleanupRequired)?
         .send()
         .await
@@ -280,7 +284,8 @@ pub(super) async fn txn_discard(
     client: &reqwest::Client,
 ) -> Result<()> {
     let response = endpoint
-        .authorize(client.delete(format!("{}/tx/{id}", graphql_api_base(endpoint.url())?)))?
+        .authorize(client.delete(format!("{}/tx/{id}", graphql_api_base(endpoint.url())?)))
+        .await?
         .send()
         .await
         .map_err(|source| ConfigClientError::PostTxDiscard {

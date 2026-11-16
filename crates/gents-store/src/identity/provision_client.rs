@@ -88,7 +88,8 @@ where
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
     let mut response = endpoint
-        .authorize(client.post(url).json(body))?
+        .authorize(client.post(url).json(body))
+        .await?
         .send()
         .await?
         .error_for_status()?;

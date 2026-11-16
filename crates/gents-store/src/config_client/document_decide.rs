@@ -48,6 +48,7 @@ pub async fn decide_document_access(
     if let Some(endpoint) = authorization {
         request = endpoint
             .authorize(request)
+            .await
             .map_err(DocumentDecideError::Authorize)?;
     }
     let response = request

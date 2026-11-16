@@ -128,7 +128,8 @@ impl ConfigAccess {
         let client = subscription_client().await?;
         let started_at = Instant::now();
         let request = endpoint
-            .authorize(client.post(endpoint.url()))?
+            .authorize(client.post(endpoint.url()))
+            .await?
             .header(reqwest::header::ACCEPT, "text/event-stream")
             .json(&serde_json::json!({"query": query}));
         let response = tokio::time::timeout(HANDSHAKE_TIMEOUT, request.send())

@@ -86,7 +86,19 @@ pub async fn install_session(
         );
     }
     let runtime_access = ConfigAccess::local_as(node.clone(), runtime_did);
-    let user_access = ConfigAccess::local_as(node, actor.clone());
+    let authorization =
+        match gents_store::config_client::client_authentication::ClientAuthorization::from_http(
+            &identity, &headers,
+        ) {
+            Ok(authorization) => authorization,
+            Err(error) => return refused(StatusCode::UNAUTHORIZED, error),
+        };
+    let user_access = match ConfigAccess::local_as(node, actor.clone())
+        .with_client_authorization(authorization)
+    {
+        Ok(access) => access,
+        Err(error) => return refused(StatusCode::FORBIDDEN, error),
+    };
     upgrade
         .max_message_size(MAX_BODY.saturating_add(128))
         .max_frame_size(MAX_BODY.saturating_add(128))

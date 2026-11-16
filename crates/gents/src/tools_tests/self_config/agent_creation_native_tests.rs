@@ -222,7 +222,8 @@ async fn user_signed_node(
     let request = defra_http::client_signed_create::websocket_request(
         url.as_str(),
         &endpoint
-            .authorization()?
+            .authorization()
+            .await?
             .context("test user authorization missing")?,
     )?;
     let (socket, _) = tokio_tungstenite::connect_async_with_config(

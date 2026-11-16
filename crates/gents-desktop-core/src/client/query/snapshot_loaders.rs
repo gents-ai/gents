@@ -399,12 +399,15 @@ pub async fn load_inference_configuration(
 pub async fn load_node_scoped_snapshot_with_peer_records(
     node_did: &str,
     peers: &[PeerRecord],
-    capability: &gents_store::config_client::ClientSigningCapability,
+    endpoints: &gents_store::config_client::runtime_endpoints::RuntimeEndpoints,
 ) -> std::result::Result<ClientStore, SnapshotReadError> {
     let endpoint = peers
         .iter()
         .find(|peer| peer.node_did == node_did)
-        .and_then(|peer| crate::local_runtime::operator_endpoint(peer, capability))
+        .and_then(|peer| {
+            peer.operator_graphql()
+                .and_then(|url| endpoints.endpoint(&peer.node_did, url).ok())
+        })
         .with_context(|| format!("runtime {node_did} has no authenticated database endpoint"))?;
     load_node_snapshot_on(
         &gents_store::config_client::ConfigAccess::Graphql(endpoint),

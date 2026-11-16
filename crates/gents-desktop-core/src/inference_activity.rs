@@ -23,8 +23,7 @@ impl crate::client::ClientCore {
             .filter(|_| matches.next().is_none())
             .context("runtime connection is unavailable")?;
         let operator = self
-            .operator_observation_endpoint(&key.node)
-            .await
+            .operator_observation_graphql(&key.node)
             .filter(|endpoint| !endpoint.is_anonymous());
         let endpoint = if let Some(operator) = operator {
             operator
@@ -66,7 +65,8 @@ impl crate::client::ClientCore {
             .timeout(std::time::Duration::from_secs(2))
             .build()?;
         let mut response = endpoint
-            .authorize(client.post(url).json(key))?
+            .authorize(client.post(url).json(key))
+            .await?
             .send()
             .await
             .map_err(|error| {

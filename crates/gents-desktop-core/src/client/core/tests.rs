@@ -1560,6 +1560,14 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
         };
         let server = MockServer::start().await;
         let graphql = format!("{}/api/v0/graphql", server.uri());
+        Mock::given(method("GET"))
+            .and(path("/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "node_did": did, "client_authentication": {"kind": "local"}
+            })))
+            .mount(&server)
+            .await;
+
         std::fs::write(
             home.join("runtime.json"),
             serde_json::json!({
@@ -1574,7 +1582,7 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
         }
         record.local_node_home = Some(home.to_string_lossy().into_owned());
         core.sync_state.upsert_for_test(record).await.unwrap();
-        let operator = core.operator_observation_endpoint(&did).await.unwrap();
+        let operator = core.operator_observation_graphql(&did).unwrap();
         assert!(!operator.is_anonymous(), "{case}");
         let key = gents_inference::inference_observation::InferenceKey {
             node: did.clone(),

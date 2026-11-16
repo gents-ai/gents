@@ -407,6 +407,7 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
     }
     let response = principal_endpoint(format!("{endpoint}/api/v0/graphql"), &owner)
         .authorize(client.get(format!("{endpoint}/api/v0/collections")))
+        .await
         .unwrap()
         .send()
         .await
@@ -456,6 +457,7 @@ async fn generated_http_access_cases_bind_real_bearers_and_router_dispatch() {
             let authorization =
                 principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), identity)
                     .authorization()
+                    .await
                     .unwrap()
                     .unwrap();
             request = request.header(header::AUTHORIZATION, &authorization);
@@ -562,6 +564,7 @@ async fn node_principal_routes_refuse_anonymous_and_foreign_callers_before_work(
     let f = Fixture::start().await;
     let authorization = principal_endpoint(format!("{}/api/v0/graphql", f.endpoint), &f.other)
         .authorization()
+        .await
         .unwrap()
         .unwrap();
     for path in [
@@ -868,6 +871,7 @@ async fn remote_pack_install_requires_authenticated_client_before_work() {
         if let Some(identity) = identity {
             request = principal_endpoint(format!("{}/api/v0/graphql", fixture.endpoint), identity)
                 .authorize(request)
+                .await
                 .unwrap();
         }
         let response = request.send().await.unwrap();
@@ -899,6 +903,7 @@ async fn agent_identity_provisioning_requires_client_authentication_and_writes_n
                 .post(&url)
                 .json(&serde_json::json!({"node_did":"different-node"})),
         )
+        .await
         .unwrap()
         .send()
         .await

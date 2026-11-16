@@ -81,7 +81,7 @@ impl ConfigAccess {
             Self::Graphql(endpoint) => {
                 let url = format!("{}/acp/node/status", graphql_api_base(endpoint.url())?);
                 let client = graphql::http_client().await?;
-                let response = endpoint.authorize(client.get(url))?.send().await?;
+                let response = endpoint.authorize(client.get(url)).await?.send().await?;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::HttpOperationStatus {
@@ -104,15 +104,13 @@ impl ConfigAccess {
         match self {
             Self::Local(local) => {
                 local.require_actor_signer()?;
-                let actor = local
+                local
                     .identity()
-                    .cloned()
                     .ok_or(ConfigClientError::NodePermissionActorRequired)?;
+                let context = local.request_context();
                 let subject = subject.clone();
                 local
                     .run_owned(move |node| async move {
-                        let context = defra_core::RequestContext::default()
-                            .with_identity(Some(actor.to_string()));
                         Ok::<_, ConfigClientError>(
                             node.explain_nac_subject_as(&context, subject.as_str())
                                 .await?,
@@ -124,7 +122,8 @@ impl ConfigAccess {
                 let url = format!("{}/acp/node/explain", graphql_api_base(endpoint.url())?);
                 let client = graphql::http_client().await?;
                 let response = endpoint
-                    .authorize(client.get(url).query(&[("subject", subject.as_str())]))?
+                    .authorize(client.get(url).query(&[("subject", subject.as_str())]))
+                    .await?
                     .send()
                     .await?;
                 let status = response.status();
@@ -152,15 +151,13 @@ impl ConfigAccess {
                 local
                     .agent_signer()
                     .ok_or(ConfigClientError::ManagedAgentSignerRequired)?;
-                let actor = local
+                local
                     .identity()
-                    .cloned()
                     .ok_or(ConfigClientError::NodePermissionActorRequired)?;
+                let context = local.request_context();
                 let (collection, doc_id) = (collection.to_owned(), doc_id.to_owned());
                 local
                     .run_owned(move |node| async move {
-                        let context = defra_core::RequestContext::default()
-                            .with_identity(Some(actor.to_string()));
                         Ok::<_, ConfigClientError>(
                             node.list_dac_relationships_as(&context, &collection, &doc_id)
                                 .await?,
@@ -179,7 +176,8 @@ impl ConfigAccess {
                         client
                             .get(url)
                             .query(&[("collection", collection), ("docID", doc_id)]),
-                    )?
+                    )
+                    .await?
                     .send()
                     .await?;
                 let status = response.status();
@@ -205,15 +203,13 @@ impl ConfigAccess {
         match self.write_route() {
             WriteRoute::Local(local) => {
                 local.require_mutation_signer()?;
-                let actor = local
+                local
                     .identity()
-                    .cloned()
                     .ok_or(ConfigClientError::NodePermissionActorRequired)?;
+                let context = local.request_context();
                 let target = target.clone();
                 local
                     .run_owned(move |node| async move {
-                        let context = defra_core::RequestContext::default()
-                            .with_identity(Some(actor.to_string()));
                         if delete {
                             node.delete_nac_actor_relationship_as(
                                 &context,
@@ -243,7 +239,11 @@ impl ConfigAccess {
                 } else {
                     client.post(url)
                 };
-                let response = endpoint.authorize(request.json(&body))?.send().await?;
+                let response = endpoint
+                    .authorize(request.json(&body))
+                    .await?
+                    .send()
+                    .await?;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::NodePermissionStatus {

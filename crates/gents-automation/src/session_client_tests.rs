@@ -286,6 +286,7 @@ async fn http_client_creates_session_and_grants_only_its_selected_agent() {
                         .post(relationship_url.as_str())
                         .json(&serde_json::json!({"Relation": relation, "TargetActor": did})),
                 )
+                .await
                 .unwrap()
                 .send()
                 .await

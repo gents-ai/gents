@@ -220,7 +220,7 @@ impl ConfigAccess {
                 };
                 let response = endpoint.authorize(client.request(method, url).json(&serde_json::json!({
                     "collection": collection, "doc_id": doc_id, "relation": relation, "target_actor": target,
-                })))?.send().await?;
+                }))).await?.send().await?;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::DocumentRelationshipStatus {

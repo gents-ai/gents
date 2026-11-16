@@ -76,7 +76,7 @@ impl ConfigApplyTxn<'_> {
         let handle = handle.clone();
         let request = QueryRequest::new(document)
             .with_variables(variables.clone())
-            .with_identity(Some(actor));
+            .with_context(self.request_context(Some(actor)));
         self.client_signed_write_dispatched
             .store(true, Ordering::Release);
         let started = Instant::now();

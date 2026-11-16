@@ -482,7 +482,8 @@ pub async fn wire_remote(
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
     let response = endpoint
-        .authorize(client.post(url))?
+        .authorize(client.post(url))
+        .await?
         .json(&WireCommand {
             node_did: owner.to_owned(),
             request: request.clone(),

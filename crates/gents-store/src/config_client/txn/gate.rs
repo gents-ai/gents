@@ -43,6 +43,8 @@ pub struct LocalConfigAccess {
     /// The runtime key's derivation proof, held only by an access its host
     /// built with that key; staging as an Agent requires it.
     pub(super) agent_proof: Option<crate::identity::RuntimeAgentProof>,
+    pub(super) client_authorization:
+        Option<crate::config_client::client_authentication::ClientAuthorization>,
 }
 
 impl LocalConfigAccess {
@@ -56,6 +58,7 @@ impl LocalConfigAccess {
             client_signed_writes: false,
             client_endpoint: None,
             agent_proof: None,
+            client_authorization: None,
         }
     }
 
@@ -79,6 +82,24 @@ impl LocalConfigAccess {
         }
         self.agent_signer = Some(signer);
         self
+    }
+
+    pub(crate) fn attach_client_authorization(
+        &mut self,
+        authorization: crate::config_client::client_authentication::ClientAuthorization,
+    ) -> Result<()> {
+        if self.identity.as_ref() != Some(authorization.actor()) && self.agent_signer.is_none() {
+            return Err(ConfigClientError::TransactionActorMismatch);
+        }
+        self.client_authorization = Some(authorization);
+        Ok(())
+    }
+
+    pub(crate) fn request_context(&self) -> defra_core::RequestContext {
+        crate::config_client::client_authentication::ClientAuthorization::request_context(
+            self.client_authorization.as_ref(),
+            self.identity.clone(),
+        )
     }
 
     pub(crate) fn require_client_signed_writes(&mut self) {
@@ -148,6 +169,7 @@ impl LocalConfigAccess {
             client_signed_writes: false,
             client_endpoint: None,
             agent_proof: None,
+            client_authorization: None,
         })
     }
 

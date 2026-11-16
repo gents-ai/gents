@@ -399,7 +399,7 @@ impl ConfigApplyTxn<'_> {
         if !managed {
             return refused(unmanaged);
         }
-        let context = defra_core::RequestContext::default().with_identity(Some(owner.to_string()));
+        let context = self.request_context(Some(owner.clone()));
         let node = Arc::clone(node);
         let handle = handle.clone();
         let (collection, doc_id, relation, target) = (

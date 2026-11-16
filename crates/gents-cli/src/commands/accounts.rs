@@ -336,7 +336,8 @@ pub async fn request_usage_reads(
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
     let response = graphql
-        .authorize(client.post(url))?
+        .authorize(client.post(url))
+        .await?
         .json(&command)
         .send()
         .await

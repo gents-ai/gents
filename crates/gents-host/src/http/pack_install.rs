@@ -152,7 +152,8 @@ pub async fn install_remote(
     })
     .await??;
     let response = endpoint
-        .authorize(client.post(url))?
+        .authorize(client.post(url))
+        .await?
         .json(&body)
         .send()
         .await

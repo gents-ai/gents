@@ -40,7 +40,9 @@ pub(super) async fn p2p_replicators_list(args: P2pAccessArgs) -> Result<()> {
     let client = p2p_http_client()?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
     let raw_replicators: Vec<P2pReplicatorRow> = gents_host::http_client::http_get_json(
-        graphql.authorize(client.get(format!("{api_base}/p2p/replicators")))?,
+        graphql
+            .authorize(client.get(format!("{api_base}/p2p/replicators")))
+            .await?,
     )
     .await?;
     let collection_names_by_id = load_collection_name_by_id(&client, &api_base).await;
@@ -71,11 +73,13 @@ pub(super) async fn p2p_replicators_add(args: P2pReplicatorAddArgs) -> Result<()
         filters: wire_filters,
     };
     http_send(
-        graphql.authorize(
-            client
-                .post(format!("{api_base}/p2p/replicators"))
-                .json(&request),
-        )?,
+        graphql
+            .authorize(
+                client
+                    .post(format!("{api_base}/p2p/replicators"))
+                    .json(&request),
+            )
+            .await?,
     )
     .await?;
     let home_dir = resolve_home_dir(args.home.as_deref());
@@ -160,11 +164,13 @@ pub(super) async fn p2p_replicators_remove(args: P2pReplicatorRemoveArgs) -> Res
         collections: collections.clone(),
     };
     http_send(
-        graphql.authorize(
-            client
-                .delete(format!("{api_base}/p2p/replicators"))
-                .json(&request),
-        )?,
+        graphql
+            .authorize(
+                client
+                    .delete(format!("{api_base}/p2p/replicators"))
+                    .json(&request),
+            )
+            .await?,
     )
     .await?;
     let home_dir = resolve_home_dir(args.home.as_deref());

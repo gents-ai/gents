@@ -465,7 +465,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(resolved.url(), record.graphql_url.as_deref().unwrap());
-            assert!(resolved.authorization().unwrap().is_some());
+            assert!(resolved.authorization().await.unwrap().is_some());
             let did_only =
                 gents_store::identity::RegisteredIdentity::from_registered_did(caller.did(), None)
                     .unwrap();
@@ -486,7 +486,7 @@ mod tests {
                     .as_deref(),
                 Some(agent.did())
             );
-            assert!(resolved_agent.authorization().unwrap().is_some());
+            assert!(resolved_agent.authorization().await.unwrap().is_some());
             assert_eq!(
                 ConfigAccess::Graphql(resolved).actor_did().as_deref(),
                 Some(caller.did())

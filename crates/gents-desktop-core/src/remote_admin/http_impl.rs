@@ -93,7 +93,7 @@ impl HttpRemoteP2pAdmin {
         format!("{}{}", self.api_base, path)
     }
 
-    fn request(
+    async fn request(
         &self,
         method: Method,
         path: &str,
@@ -115,7 +115,7 @@ impl HttpRemoteP2pAdmin {
         }
 
         if let Some(endpoint) = self.node_identity.as_ref() {
-            request = endpoint.authorize(request).map_err(|error| {
+            request = endpoint.authorize(request).await.map_err(|error| {
                 RemoteP2pAdminError::LocalError(format!(
                     "authenticating remote admin request: {error:#}"
                 ))
@@ -129,7 +129,7 @@ impl HttpRemoteP2pAdmin {
         Ok(request)
     }
 
-    fn json_request<T>(
+    async fn json_request<T>(
         &self,
         method: Method,
         path: &str,
@@ -141,7 +141,7 @@ impl HttpRemoteP2pAdmin {
         let body = serde_json::to_vec(body).map_err(|error| {
             RemoteP2pAdminError::LocalError(format!("encoding remote admin request body: {error}"))
         })?;
-        self.request(method, path, Some(body))
+        self.request(method, path, Some(body)).await
     }
 }
 
@@ -167,7 +167,8 @@ struct DeleteReplicatorBody<'a> {
 impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
     async fn peer_info(&self) -> RemoteP2pAdminResult<Vec<String>> {
         let resp = self
-            .request(Method::GET, "/p2p/info", None)?
+            .request(Method::GET, "/p2p/info", None)
+            .await?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -179,7 +180,8 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
 
     async fn active_peers(&self) -> RemoteP2pAdminResult<Vec<String>> {
         let resp = self
-            .request(Method::GET, "/p2p/active-peers", None)?
+            .request(Method::GET, "/p2p/active-peers", None)
+            .await?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -191,7 +193,8 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
 
     async fn connect(&self, addresses: &[String]) -> RemoteP2pAdminResult<()> {
         let resp = self
-            .json_request(Method::POST, "/p2p/connect", addresses)?
+            .json_request(Method::POST, "/p2p/connect", addresses)
+            .await?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -213,7 +216,8 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
         }
 
         let resp = self
-            .request(Method::GET, "/p2p/replicators", None)?
+            .request(Method::GET, "/p2p/replicators", None)
+            .await?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -244,7 +248,8 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
             filters: to_replication_filters(filters).map_err(RemoteP2pAdminError::LocalError)?,
         };
         let resp = self
-            .json_request(Method::POST, "/p2p/replicators", &body)?
+            .json_request(Method::POST, "/p2p/replicators", &body)
+            .await?
             .send()
             .await
             .map_err(map_reqwest_err)?;
@@ -259,7 +264,8 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
     ) -> RemoteP2pAdminResult<()> {
         let body = DeleteReplicatorBody { collections, id };
         let resp = self
-            .json_request(Method::DELETE, "/p2p/replicators", &body)?
+            .json_request(Method::DELETE, "/p2p/replicators", &body)
+            .await?
             .send()
             .await
             .map_err(map_reqwest_err)?;

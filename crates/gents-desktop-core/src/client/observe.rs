@@ -418,7 +418,7 @@ fn clear_node(stores: &ObservedStores, node: &str) {
 pub fn spawn_observer(
     stores: Arc<ObservedStores>,
     configured_peers: ClientSyncStateOwner,
-    capability: gents_store::config_client::ClientSigningCapability,
+    endpoints: Arc<gents_store::config_client::runtime_endpoints::RuntimeEndpoints>,
 ) -> ObserverHandle {
     let (stop_tx, mut stop_rx) = watch::channel(false);
     let metrics = Arc::new(ObserverMetrics::default());
@@ -435,7 +435,7 @@ pub fn spawn_observer(
         let mut waiters = RetryWaiters::default();
         sources.reconcile(
             &configured_peers.records(),
-            &capability,
+            &endpoints,
             &notices,
             &stores,
             &metrics_for_task,
@@ -454,7 +454,7 @@ pub fn spawn_observer(
                 changed = peer_updates.changed() => {
                     if changed.is_err() { break; }
                     let previous: Vec<_> = sources.entries.keys().cloned().collect();
-                    let removed = sources.reconcile(&configured_peers.records(), &capability,
+                    let removed = sources.reconcile(&configured_peers.records(), &endpoints,
                         &notices, &stores, &metrics_for_task);
                     for node in previous.iter().filter(|node| !sources.entries.contains_key(*node)) {
                         clear_node(&stores, node);
@@ -560,7 +560,7 @@ pub fn spawn_observer(
             if sources.take_due_reconnects(now) {
                 for node in sources.reconcile(
                     &configured_peers.records(),
-                    &capability,
+                    &endpoints,
                     &notices,
                     &stores,
                     &metrics_for_task,

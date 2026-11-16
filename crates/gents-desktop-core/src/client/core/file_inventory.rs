@@ -29,7 +29,8 @@ impl ClientCore {
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
         let response = endpoint
-            .authorize(client.post(url))?
+            .authorize(client.post(url))
+            .await?
             .json(&DirectFileInventoryRequest {
                 node_did: node_did.to_owned(),
                 session_id: session_id.to_owned(),

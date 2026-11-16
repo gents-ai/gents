@@ -283,7 +283,9 @@ impl ObservedRuntime {
             crate::test_support::node_builder()
                 .with_node_identity_did(runtime_identity.did())
                 .with_http(
-                    defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap(),
+                    defra_node::HttpConfig::with_listener(listener.into_std().unwrap())
+                        .unwrap()
+                        .with_extra_routes(runtime_status(runtime_identity.did())),
                 )
                 .build()
                 .await
@@ -405,7 +407,11 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
     let runtime = Arc::new(
         crate::test_support::node_builder()
             .with_node_identity_did(runtime_identity.did())
-            .with_http(defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap())
+            .with_http(
+                defra_node::HttpConfig::with_listener(listener.into_std().unwrap())
+                    .unwrap()
+                    .with_extra_routes(runtime_status(runtime_identity.did())),
+            )
             .build()
             .await
             .unwrap(),
@@ -471,7 +477,11 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
     let handle = spawn_observer(
         store.clone(),
         configured,
-        client.client_signing_capability().unwrap(),
+        Arc::new(
+            gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+                client.client_signing_capability().unwrap(),
+            ),
+        ),
     );
     wait_for_name(&store, Some("remote")).await;
     let mut notices = store.subscribe();
@@ -604,12 +614,14 @@ async fn missing_endpoint_never_reads_runtime_data_from_desktop_store() {
     .await
     .unwrap()
     .unwrap();
-    let capability = client.client_signing_capability().unwrap();
+    let endpoints = gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+        client.client_signing_capability().unwrap(),
+    );
     assert!(
         crate::client::query::load_node_scoped_snapshot_with_peer_records(
             "did:test:runtime",
             &[],
-            &capability,
+            &endpoints,
         )
         .await
         .is_err()
@@ -756,7 +768,11 @@ async fn retry_now_answers_a_connected_runtime_without_reconnecting() {
     let handle = spawn_observer(
         store.clone(),
         configured,
-        fixture.client.client_signing_capability().unwrap(),
+        Arc::new(
+            gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+                fixture.client.client_signing_capability().unwrap(),
+            ),
+        ),
     );
     wait_for_connection(
         &store,
@@ -848,7 +864,11 @@ async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() 
     let handle = spawn_observer(
         store.clone(),
         configured,
-        fixture.client.client_signing_capability().unwrap(),
+        Arc::new(
+            gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+                fixture.client.client_signing_capability().unwrap(),
+            ),
+        ),
     );
     wait_for_name(&store, Some("remote")).await;
     wait_for_connection(
@@ -914,7 +934,11 @@ async fn refused_snapshot_read_reconnects_the_source() {
     let handle = spawn_observer(
         store.clone(),
         configured,
-        fixture.client.client_signing_capability().unwrap(),
+        Arc::new(
+            gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+                fixture.client.client_signing_capability().unwrap(),
+            ),
+        ),
     );
     wait_for_name(&store, Some("remote")).await;
     wait_for_connection(
@@ -975,7 +999,11 @@ async fn failed_snapshot_read_keeps_the_streams_armed() {
     let handle = spawn_observer(
         store.clone(),
         configured,
-        fixture.client.client_signing_capability().unwrap(),
+        Arc::new(
+            gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+                fixture.client.client_signing_capability().unwrap(),
+            ),
+        ),
     );
     wait_for_name(&store, Some("remote")).await;
     wait_for_connection(
@@ -1042,7 +1070,11 @@ async fn stalled_runtime_snapshot_delays_neither_another_runtime_nor_shutdown() 
     let handle = spawn_observer(
         store.clone(),
         configured,
-        fixture.client.client_signing_capability().unwrap(),
+        Arc::new(
+            gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+                fixture.client.client_signing_capability().unwrap(),
+            ),
+        ),
     );
     tokio::time::timeout(
         Duration::from_secs(15),
@@ -1263,9 +1295,11 @@ async fn reconcile_keeps_an_ended_source_until_its_notice_schedules_the_reconnec
     })
     .await
     .unwrap();
-    let capability = client.client_signing_capability().unwrap();
+    let endpoints = gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+        client.client_signing_capability().unwrap(),
+    );
     let peers = std::slice::from_ref(&peer);
-    sources.reconcile(peers, &capability, &notices, &store, &metrics);
+    sources.reconcile(peers, &endpoints, &notices, &store, &metrics);
     let generation = sources.entries["did:test:ended"].generation;
     let notice = tokio::time::timeout(Duration::from_secs(15), notice_rx.recv())
         .await
@@ -1274,7 +1308,7 @@ async fn reconcile_keeps_an_ended_source_until_its_notice_schedules_the_reconnec
     assert_eq!(notice.event, RuntimeConnectionEvent::TransportFailed);
     assert_eq!(notice.generation, generation);
 
-    sources.reconcile(peers, &capability, &notices, &store, &metrics);
+    sources.reconcile(peers, &endpoints, &notices, &store, &metrics);
     assert_eq!(
         sources.entries["did:test:ended"].generation, generation,
         "the ended source is kept for its notice"
@@ -1315,7 +1349,11 @@ async fn served_observer(
     let handle = spawn_observer(
         store.clone(),
         configured,
-        home.user().client_signing_capability().unwrap(),
+        Arc::new(
+            gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+                home.user().client_signing_capability().unwrap(),
+            ),
+        ),
     );
     (directory, store, handle)
 }
@@ -1413,7 +1451,11 @@ async fn peer_without_an_endpoint_shows_no_endpoint_until_it_has_one() {
     let handle = spawn_observer(
         store.clone(),
         configured.clone(),
-        client.client_signing_capability().unwrap(),
+        Arc::new(
+            gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+                client.client_signing_capability().unwrap(),
+            ),
+        ),
     );
     wait_for_connection(
         &store,
@@ -1850,7 +1892,11 @@ async fn request_events_during_every_snapshot_load_still_publish() {
     let handle = spawn_observer(
         store.clone(),
         configured,
-        runtime.user().client_signing_capability().unwrap(),
+        Arc::new(
+            gents_store::config_client::runtime_endpoints::RuntimeEndpoints::new(
+                runtime.user().client_signing_capability().unwrap(),
+            ),
+        ),
     );
     let node = runtime.node_did().to_owned();
     for load in 1..=3_u64 {
@@ -1888,4 +1934,20 @@ async fn request_events_during_every_snapshot_load_still_publish() {
     handle.shutdown().await;
     release.abort();
     runtime.shutdown().await;
+}
+
+fn runtime_status(node: &str) -> axum::Router {
+    let node = node.to_owned();
+    axum::Router::new().route(
+        "/status",
+        axum::routing::get(move || {
+            let node = node.clone();
+            async move {
+                axum::Json(serde_json::json!({
+                    "node_did": node,
+                    "client_authentication": {"kind": "local"}
+                }))
+            }
+        }),
+    )
 }
