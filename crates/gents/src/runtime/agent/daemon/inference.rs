@@ -723,6 +723,7 @@ pub(super) mod tests {
             openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
             claude_platform: None,
+            client_version: None,
             backend_auth: gents_documents::BackendAuth::Unauthenticated,
             model_name: "scripted".to_string(),
             service_tier: None,

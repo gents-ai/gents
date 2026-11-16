@@ -21,4 +21,5 @@ type InferenceBackendMetadata @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f48
     tags: [String!]
     updated_at: DateTime @index(direction: DESC)
     claude_platform: JSON
+    client_version: String
 }

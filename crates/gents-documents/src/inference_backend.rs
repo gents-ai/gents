@@ -156,6 +156,7 @@ pub struct InferenceBackendMetadata {
     pub oauth_account_ref: Option<String>,
     pub oauth_allow_overage: Option<bool>,
     pub claude_platform: Option<ClaudePlatform>,
+    pub client_version: Option<String>,
     pub connect_timeout_secs: Option<i64>,
     pub discovery_timeout_secs: Option<i64>,
     pub request_timeout_secs: Option<i64>,
@@ -226,6 +227,7 @@ impl InferenceBackendMetadata {
             oauth_account_ref: fields.oauth_account_ref,
             oauth_allow_overage: fields.oauth_allow_overage,
             claude_platform: backend.claude_platform,
+            client_version: backend.client_version,
             connect_timeout_secs: backend.connect_timeout_secs,
             discovery_timeout_secs: backend.discovery_timeout_secs,
             request_timeout_secs: backend.request_timeout_secs,
@@ -272,6 +274,7 @@ impl InferenceBackendMetadata {
             endpoint: self.endpoint,
             auth,
             claude_platform: self.claude_platform,
+            client_version: self.client_version,
             connect_timeout_secs: self.connect_timeout_secs,
             discovery_timeout_secs: self.discovery_timeout_secs,
             request_timeout_secs: self.request_timeout_secs,
@@ -406,6 +409,11 @@ pub struct InferenceBackend {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub claude_platform: Option<ClaudePlatform>,
+    /// Wire client version sent to providers that require one (ChatGPT Codex,
+    /// Grok OAuth); absent uses the built-in version of that client.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub client_version: Option<String>,
     /// Connection establishment only; default 10s, bounded by the operation deadline.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -544,6 +552,11 @@ impl InferenceBackend {
             ClaudePlatform::validate(self.provider_kind, self.claude_platform.as_ref())
         {
             violations.push(error.to_string());
+        }
+        if self.client_version.as_deref().is_some_and(|version| {
+            version.is_empty() || !version.bytes().all(|byte| byte.is_ascii_graphic())
+        }) {
+            violations.push("client_version must be a non-empty version without whitespace".into());
         }
         if self.provider_kind.is_claude_platform()
             && !(self.endpoint.starts_with("https://") || self.endpoint.starts_with("http://"))

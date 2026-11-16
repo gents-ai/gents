@@ -247,6 +247,7 @@ async fn probe_models(base: &str) -> Option<String> {
         base,
         None,
         None,
+        None,
     )
     .await
     .ok()?

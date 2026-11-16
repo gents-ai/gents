@@ -326,6 +326,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         backend_endpoint: String::new(),
         backend_auth: gents_documents::BackendAuth::Unauthenticated,
         claude_platform: None,
+        client_version: None,
         model_name: "fixture".into(),
         profile_id: None,
         service_tier: None,
