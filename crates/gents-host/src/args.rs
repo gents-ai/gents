@@ -79,6 +79,11 @@ pub struct ServeArgs {
     pub keychain_startup_approval: bool,
     #[arg(long, hide = true)]
     pub data_dir: Option<PathBuf>,
+    /// Startup waits after client access opens until this path opens for
+    /// reading, so a test can observe a runtime serving clients before it is
+    /// ready; a FIFO holds it until the test opens the writing end.
+    #[arg(long, hide = true, value_name = "PATH")]
+    pub stall_after_client_access: Option<PathBuf>,
     #[arg(
         long,
         help = "HTTP listen address. Defaults to the home's network.json (`gents runtime service install --http-addr`), else 127.0.0.1"
