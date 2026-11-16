@@ -17,6 +17,7 @@ use gents_pack::pack::BindAccess;
 use gents_pack::plugin::allowed;
 
 // Consent gates plugin calls inside the existing OS-user trust boundary; it does not isolate same-user shell commands.
+/// How long a plugin call waits for a person's consent answer before the question expires; a human response window, not an agent budget.
 pub const WAIT: Duration = Duration::from_secs(10 * 60);
 
 const LISTENER_FRESH: Duration = Duration::from_secs(15);

@@ -285,6 +285,7 @@ enum ParkAdmission {
     SafeReadRetry,
 }
 
+/// Closes pooled MCP connections idle this long. Callers reconnect transparently, so this is host connection hygiene, not agent behaviour; per-service timeouts live on `RemoteServiceTools`.
 pub const DEFAULT_MCP_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 impl McpPool {
