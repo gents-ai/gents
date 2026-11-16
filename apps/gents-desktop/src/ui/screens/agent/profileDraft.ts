@@ -41,6 +41,7 @@ export function profileDraftFrom(profile: InferenceProfile, deployment: NodeView
     streamBatchMs: str(execution?.stream_batch_ms),
     streamLivenessSecs: str(execution?.stream_liveness_timeout_secs),
     providerIdleSecs: str(execution?.provider_idle_timeout_secs),
+    titleTimeoutSecs: str(execution?.title_timeout_secs),
     deadlineSecs: str(execution?.deadline_duration_secs),
     retryPolicyId: execution?.retry_policy_id ?? "",
     tags: profile.tags ?? [],
@@ -77,6 +78,7 @@ export const PROFILE_NUMBERS = {
   streamBatchMs: { label: "Stream batch ms", integer: true, min: 1 },
   streamLivenessSecs: { label: "Execution lease seconds", integer: true, min: 1 },
   providerIdleSecs: { label: "Provider idle seconds", integer: true, min: 1 },
+  titleTimeoutSecs: { label: "Title timeout seconds", integer: true, min: 1 },
   deadlineSecs: { label: "Deadline seconds", integer: true, min: 1 },
 } as const satisfies Partial<Record<keyof ProfileDraft, NumberSpec>>;
 
@@ -90,6 +92,7 @@ const EXECUTION_FIELDS = [
   "streamBatchMs",
   "streamLivenessSecs",
   "providerIdleSecs",
+  "titleTimeoutSecs",
   "deadlineSecs",
 ] as const satisfies readonly ProfileNumber[];
 

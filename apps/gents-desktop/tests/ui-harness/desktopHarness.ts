@@ -3736,6 +3736,7 @@ export function createDesktopUiHarness(
           streamBatchMs: 100,
           streamLivenessSecs: 1800,
           providerIdleSecs: 300,
+          titleTimeoutSecs: 10,
           deadlineSecs: 86400,
         },
         contractVersion: 1,

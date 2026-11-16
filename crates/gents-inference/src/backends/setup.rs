@@ -168,6 +168,10 @@ pub fn inference_setup_catalog() -> InferenceSetupCatalog {
                 Some(crate::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS as i64),
             ),
             (
+                "titleTimeoutSecs",
+                Some(crate::resolved::DEFAULT_TITLE_TIMEOUT_SECS as i64),
+            ),
+            (
                 "deadlineSecs",
                 Some(gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS as i64),
             ),

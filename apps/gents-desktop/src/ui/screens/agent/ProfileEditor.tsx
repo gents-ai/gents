@@ -190,6 +190,7 @@ export function ProfileEditor({
         streamBatchMs,
         streamLivenessSecs,
         providerIdleSecs,
+        titleTimeoutSecs,
         deadlineSecs,
       } = profileNumbers(next, profileContext(next));
       const sampling = deployment.inferenceSampling.find(
@@ -240,6 +241,7 @@ export function ProfileEditor({
             stream_batch_ms: streamBatchMs,
             stream_liveness_timeout_secs: streamLivenessSecs,
             provider_idle_timeout_secs: providerIdleSecs,
+            title_timeout_secs: titleTimeoutSecs,
             deadline_duration_secs: deadlineSecs,
             retry_policy_id: next.retryPolicyId.trim() || null,
           }
@@ -270,6 +272,7 @@ export function ProfileEditor({
       | "streamBatchMs"
       | "streamLivenessSecs"
       | "providerIdleSecs"
+      | "titleTimeoutSecs"
       | "deadlineSecs",
     value: string,
   ) => {
@@ -647,6 +650,20 @@ export function ProfileEditor({
           onChange={(v) => setExecution("providerIdleSecs", v)}
         />
         <NumberRow
+          id={id("title-timeout")}
+          label={PROFILE_NUMBERS.titleTimeoutSecs.label}
+          error={problems.titleTimeoutSecs}
+          value={
+            editedExecution.has("titleTimeoutSecs")
+              ? d.draft.titleTimeoutSecs
+              : d.draft.titleTimeoutSecs ||
+                (executionDefaults.titleTimeoutSecs == null
+                  ? ""
+                  : String(executionDefaults.titleTimeoutSecs))
+          }
+          onChange={(v) => setExecution("titleTimeoutSecs", v)}
+        />
+        <NumberRow
           id={id("deadline")}
           label={PROFILE_NUMBERS.deadlineSecs.label}
           error={problems.deadlineSecs}
@@ -693,6 +710,7 @@ export function ProfileEditor({
           streamBatchMs: id("batch"),
           streamLivenessSecs: id("liveness"),
           providerIdleSecs: id("provider-idle"),
+          titleTimeoutSecs: id("title-timeout"),
           deadlineSecs: id("deadline"),
         }}
         saveLabel={draftMode ? "Create" : undefined}
