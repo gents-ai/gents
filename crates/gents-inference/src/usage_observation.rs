@@ -10,7 +10,7 @@ pub use gents_loop::account_usage;
 use gents_loop::account_usage::{
     usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW,
 };
-use rig::http_client::HeaderMap;
+use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
