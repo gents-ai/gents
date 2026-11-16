@@ -343,6 +343,33 @@ where
     }
 }
 
+/// The cases of shard `shard` of `of`, taken round-robin by case index, so
+/// the shards of one family partition its cases: every case lands in exactly
+/// one shard. A generated family too large to replay within one test's hang
+/// ceiling runs as one test per shard; its consumer stays one file.
+pub fn shard<T>(cases: Vec<T>, shard: usize, of: usize) -> Vec<T> {
+    assert!(shard < of, "shard {shard} of {of}");
+    cases
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| index % of == shard)
+        .map(|(_, case)| case)
+        .collect()
+}
+
+/// Asserts that `shards` names each shard `0..of` once, so the tests that run
+/// a sharded family replay every one of its `cases` cases exactly once.
+pub fn assert_shards_cover(cases: usize, shards: &[usize], of: usize) {
+    let mut named = shards.to_vec();
+    named.sort_unstable();
+    assert_eq!(named, (0..of).collect::<Vec<_>>(), "shard tests");
+    let mut replayed: Vec<usize> = (0..of)
+        .flat_map(|index| shard((0..cases).collect(), index, of))
+        .collect();
+    replayed.sort_unstable();
+    assert_eq!(replayed, (0..cases).collect::<Vec<_>>(), "sharded cases");
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -354,6 +381,14 @@ mod tests {
             std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
         )
         .join("families.schema.json")
+    }
+
+    #[test]
+    fn shards_partition_the_cases() {
+        for cases in [0, 1, 7, 64, 129] {
+            assert_shards_cover(cases, &[2, 0, 1], 3);
+        }
+        assert_eq!(shard((0..7).collect(), 1, 3), vec![1, 4]);
     }
 
     #[test]

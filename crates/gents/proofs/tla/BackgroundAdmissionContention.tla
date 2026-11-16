@@ -1,4 +1,6 @@
 ---- MODULE BackgroundAdmissionContention ----
+\* lean: TransactionReplay.disposition
+\* crates: gents-toolcalls, gents-session, gents-store
 \* Concurrent writers of one request's `AgentRequest` row and session
 \* documents during a turn (#3592).
 \*
@@ -59,7 +61,7 @@
 \* `RequestExecutionLease.consecutive_renewals_obey_cadence`), longer than any
 \* one call's bounded attempt series, so at most one renewal commits while a
 \* call's transaction is retrying. FALSE lets renewals commit back to back.
-EXTENDS Naturals, FiniteSets
+EXTENDS Naturals, FiniteSets, LeanDecision_TransactionReplay
 
 CONSTANTS
   N,                    \* calls in one assistant turn, admitted in order 1..N
@@ -135,6 +137,13 @@ KeysOf(c) ==
 
 BudgetOf(c) == IF phase[c] = "start" THEN StartAttempts ELSE Attempts
 
+\* Every transaction here is an ordinary conflict-retried one with no signed
+\* write, aborted at commit by the store's conflict; whether it runs again is
+\* Lean `TransactionReplay.disposition`.
+Replays(spent, budget) ==
+  disposition("conflict_retry", "commit", "conflict", FALSE, TRUE,
+              spent < budget) = "retry"
+
 \* The call has begun its current transaction and not yet committed it.
 InSeries(c) == phase[c] \in Active /\ tries[c] > 0
 
@@ -205,9 +214,9 @@ Abort(c) ==
   /\ open[c]
   /\ Conflicts(c)
   /\ open' = [open EXCEPT ![c] = FALSE]
-  /\ phase' = IF tries[c] >= BudgetOf(c)
-                THEN [phase EXCEPT ![c] = "lost"]
-                ELSE phase
+  /\ phase' = IF Replays(tries[c], BudgetOf(c))
+                THEN phase
+                ELSE [phase EXCEPT ![c] = "lost"]
   /\ startConflicted' = (startConflicted \/ phase[c] = "start")
   /\ UNCHANGED <<ver, snap, liveSnap, tries, refused, child, receipts, rseen,
                  renewVars>>
@@ -287,14 +296,14 @@ RenewAbort ==
   /\ rOpen
   /\ RenewConflicts
   /\ rOpen' = FALSE
-  /\ IF rTries >= RenewAttempts
-       THEN /\ rTries' = 0
+  /\ IF Replays(rTries, RenewAttempts)
+       THEN UNCHANGED <<rTries, rLost, rTicks, lease>>
+       ELSE /\ rTries' = 0
             /\ rLost' = rLost + 1
             /\ IF RedriveLostPoll
                  THEN UNCHANGED <<rTicks, lease>>
                  ELSE /\ rTicks' = rTicks - 1
                       /\ lease' = IF rTicks = 1 THEN "lapsed" ELSE "live"
-       ELSE UNCHANGED <<rTries, rLost, rTicks, lease>>
   /\ UNCHANGED <<ver, callVars, rseen, startConflicted, rSnap, rCommits>>
 
 \* Under the cadence premise a renewal does not commit twice within one

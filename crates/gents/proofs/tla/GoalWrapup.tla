@@ -1,4 +1,7 @@
 ---- MODULE GoalWrapup ----
+\* lean: none
+\* crates: gents-automation
+\* models: Goals.decide
 (***************************************************************************)
 (* The one wrap-up turn of a Goal whose token budget is exhausted (#3810). *)
 (*                                                                          *)

@@ -232,6 +232,7 @@ import Proofs.Conformance.Hooks
 import Proofs.Conformance.HookDecisions
 import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.TransactionReplay
+import Proofs.Conformance.ClientWindowScopeBound
 import Proofs.Conformance.SubscriptionStream
 import Proofs.Conformance.ReceiptRecovery
 import Proofs.Conformance.HomeRetirement

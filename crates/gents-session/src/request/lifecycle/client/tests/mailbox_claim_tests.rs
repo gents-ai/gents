@@ -129,6 +129,7 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     );
     let context = lifecycle.claimed_tool_context()?;
     let mut after_claim = Some(context.admitted_client.is_some());
+    gents_lean_vocab::snapshot().await;
     for case in gents_lean_vocab::families::mailbox_access_claim_tool_context::cases() {
         case.check(
             match case.input.committed {

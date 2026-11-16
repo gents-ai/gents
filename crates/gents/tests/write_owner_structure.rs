@@ -2084,6 +2084,205 @@ fn ambient_context_counts_statics_outside_test_items() {
     assert_eq!(ambient_context_sites(&syntax), 3);
 }
 
+/// Functions that write a file with `fs::write` and then give that path an
+/// exec bit. Linux execve refuses a file any process holds open for writing
+/// (ETXTBSY), and a concurrent test's spawn copies this process's write
+/// descriptor into its child until that child execs, even with O_CLOEXEC
+/// (`tla/ScriptFixtureExec.tla`). A static script is checked in; a generated
+/// one goes through `gents_store::test_support::write_executable_script`.
+/// Entries name why each remaining site never executes the file; the list
+/// only shrinks.
+#[rustfmt::skip]
+const EXECUTABLE_WRITE_ALLOWLIST: &[(&str, usize, &str)] = &[
+    ("crates/gents-tools/src/native/file_tools/change_capture/tests.rs", 1, "reads the mode back as an observation; never executes the file"),
+];
+
+#[derive(Default)]
+struct ExecutableWriteScan {
+    written: BTreeSet<String>,
+    permitted: Vec<String>,
+    executable_mode: bool,
+}
+
+fn path_argument_key(expression: &Expr) -> String {
+    match expression {
+        Expr::Reference(reference) => path_argument_key(&reference.expr),
+        Expr::Paren(inner) => path_argument_key(&inner.expr),
+        other => quote::ToTokens::to_token_stream(other).to_string(),
+    }
+}
+
+fn executable_literal(expression: &Expr) -> bool {
+    matches!(
+        expression,
+        Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(literal), .. })
+            if literal.base10_parse::<u32>().is_ok_and(|mode| mode & 0o111 != 0)
+    )
+}
+
+impl<'ast> Visit<'ast> for ExecutableWriteScan {
+    fn visit_item_fn(&mut self, _: &'ast ItemFn) {}
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if let Expr::Path(path) = call.func.as_ref() {
+            let segments = path
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>();
+            let first = call.args.first();
+            match segments.as_slice() {
+                [.., fs, write] if fs == "fs" && write == "write" => {
+                    self.written.extend(first.map(path_argument_key));
+                }
+                [.., set] if set == "set_permissions" => {
+                    self.permitted.extend(first.map(path_argument_key));
+                }
+                [.., from_mode] if from_mode == "from_mode" => {
+                    self.executable_mode |= first.is_some_and(executable_literal);
+                }
+                _ => {}
+            }
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
+        if call.method == "set_mode" {
+            self.executable_mode |= call.args.first().is_some_and(executable_literal);
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+#[derive(Default)]
+struct ExecutableWriteVisitor {
+    sites: usize,
+}
+
+impl ExecutableWriteVisitor {
+    fn scan(&mut self, block: &syn::Block) {
+        let mut scan = ExecutableWriteScan::default();
+        scan.visit_block(block);
+        if scan.executable_mode
+            && scan
+                .permitted
+                .iter()
+                .any(|path| scan.written.contains(path))
+        {
+            self.sites += 1;
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ExecutableWriteVisitor {
+    fn visit_item_fn(&mut self, function: &'ast ItemFn) {
+        self.scan(&function.block);
+        visit::visit_item_fn(self, function);
+    }
+
+    fn visit_impl_item_fn(&mut self, function: &'ast syn::ImplItemFn) {
+        self.scan(&function.block);
+        visit::visit_impl_item_fn(self, function);
+    }
+}
+
+fn executable_write_sites(syntax: &syn::File) -> usize {
+    let mut visitor = ExecutableWriteVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+#[test]
+fn executables_are_never_written_in_process() {
+    let root = repo_root();
+    let mut sources = Vec::new();
+    for directory in ["crates", "apps"] {
+        all_rust_sources(&root.join(directory), &mut sources);
+    }
+    let actual = sources
+        .into_iter()
+        .filter_map(|path| {
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            let syntax = syn::parse_file(&source)
+                .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+            let sites = executable_write_sites(&syntax);
+            (sites > 0).then(|| {
+                let relative = path
+                    .strip_prefix(&root)
+                    .expect("source under repo root")
+                    .to_string_lossy()
+                    .into_owned();
+                (relative, sites)
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    let allowed = EXECUTABLE_WRITE_ALLOWLIST
+        .iter()
+        .map(|(path, count, _)| (path.to_string(), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let found = actual.get(path).copied().unwrap_or_default();
+        match allowed.get(path).copied() {
+            None => violations.push(format!(
+                "{path}: {found} function(s) write a file and then make it executable; check in a static script or use gents_store::test_support::write_executable_script"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{path}: {found} in-process executable writes exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{path}: {found} in-process executable writes; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "executable write ratchet failed:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn executable_write_fence_pairs_a_write_with_an_exec_bit_on_its_path() {
+    for (source, sites) in [
+        (
+            "fn f() { std::fs::write(&p, b\"x\").unwrap(); std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap(); }",
+            1,
+        ),
+        (
+            "fn f() { fs::write(&p, b\"x\")?; let mut m = fs::metadata(&p)?.permissions(); m.set_mode(0o700); fs::set_permissions(p, m)?; }",
+            1,
+        ),
+        (
+            "fn f() { let stub = |body: &str| { std::fs::write(&b, body).unwrap(); std::fs::set_permissions(&b, Permissions::from_mode(0o751)).unwrap(); }; }",
+            1,
+        ),
+        (
+            "impl S { fn f(&self) { fs::write(&p, b\"x\")?; fs::set_permissions(&p, Permissions::from_mode(0o755))?; } }",
+            1,
+        ),
+        (
+            "fn f() { std::fs::write(&p, b\"x\").unwrap(); std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap(); }",
+            0,
+        ),
+        (
+            "fn f() { std::fs::write(&p.join(\"a\"), b\"x\").unwrap(); std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap(); }",
+            0,
+        ),
+        (
+            "fn f() { write_executable_script(&p, \"#!/bin/sh\\n\").unwrap(); }",
+            0,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(executable_write_sites(&syntax), sites, "{source}");
+    }
+}
+
 /// Owner and library interfaces: the seams where callers decide behavior by
 /// which failure occurred. They return module-owned `thiserror` enums and
 /// classifiers match those enums; application code may use `anyhow`.
@@ -3300,4 +3499,416 @@ fn runtime_requests_have_one_publication_owner() {
     let mut probe = RuntimeRequestWriteSites::default();
     probe.visit_file(&syn::parse_file(r#"async fn bare(txn: &Txn) { txn.execute("mutation { create_AgentRequest(input: $input) { _docID } }").await; }"#).unwrap());
     assert!(!probe.0.is_empty(), "a new bare create must fail the guard");
+}
+
+/// `gents_lean_contract` entry points that build or run the Lean model with
+/// `lake`, synchronously, for as long as the machine takes.
+const LEAN_GENERATOR_RUNS: &[&str] = &[
+    "load_contract_json",
+    "load_contract_snapshot",
+    "load_contract_stdout",
+    "run_contract_generator",
+    "run_lake_build",
+    "run_prepared_generator",
+    "run_prepared_generator_with_input",
+];
+
+/// Async bodies that still run a Lean generator on their runtime thread. On a
+/// `#[tokio::test]` runtime that thread is the only worker: a body holding an
+/// execution lease starves its renewal for the whole run
+/// (`LeaseRenewalStarvation.tla`, `SyncInsideLease`). New code awaits
+/// `gents_lean_vocab::snapshot()`, which loads off the runtime, or runs the
+/// generator inside `spawn_blocking`. This allowlist only shrinks.
+#[rustfmt::skip]
+const LEAN_GENERATOR_ON_RUNTIME_ALLOWLIST: &[(&str, usize)] = &[
+    ("crates/gents-automation/src/goal/client_control/start_tests.rs", 1),
+    ("crates/gents-cli/tests/cli_enrollment/live_delegation.rs", 1),
+    ("crates/gents-cli/tests/cli_enrollment/live_two_agent.rs", 1),
+    ("crates/gents-desktop-bridge/src/snapshot/tests/goal_provenance.rs", 1),
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/tests/readiness.rs", 1),
+    ("crates/gents-desktop-core/src/client/core/sync_state.rs", 1),
+    ("crates/gents-host/src/http/access_tests.rs", 1),
+    ("crates/gents-loop/src/end_to_end_test.rs", 1),
+];
+
+struct LeanGeneratorVisitor {
+    imports_owner: bool,
+    in_async: bool,
+    sites: usize,
+}
+
+impl LeanGeneratorVisitor {
+    fn off_runtime<F>(&mut self, visit_arguments: F)
+    where
+        F: FnOnce(&mut Self),
+    {
+        let in_async = std::mem::replace(&mut self.in_async, false);
+        visit_arguments(self);
+        self.in_async = in_async;
+    }
+
+    fn with_async<F>(&mut self, asynchronous: bool, visit_body: F)
+    where
+        F: FnOnce(&mut Self),
+    {
+        let in_async = std::mem::replace(&mut self.in_async, asynchronous);
+        visit_body(self);
+        self.in_async = in_async;
+    }
+}
+
+impl<'ast> Visit<'ast> for LeanGeneratorVisitor {
+    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+        self.with_async(item.sig.asyncness.is_some(), |visitor| {
+            visit::visit_item_fn(visitor, item);
+        });
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        self.with_async(item.sig.asyncness.is_some(), |visitor| {
+            visit::visit_impl_item_fn(visitor, item);
+        });
+    }
+
+    fn visit_trait_item_fn(&mut self, item: &'ast syn::TraitItemFn) {
+        self.with_async(item.sig.asyncness.is_some(), |visitor| {
+            visit::visit_trait_item_fn(visitor, item);
+        });
+    }
+
+    fn visit_expr_async(&mut self, block: &'ast syn::ExprAsync) {
+        self.with_async(true, |visitor| visit::visit_expr_async(visitor, block));
+    }
+
+    fn visit_expr_closure(&mut self, closure: &'ast syn::ExprClosure) {
+        let asynchronous = self.in_async || closure.asyncness.is_some();
+        self.with_async(asynchronous, |visitor| {
+            visit::visit_expr_closure(visitor, closure);
+        });
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        let Expr::Path(function) = call.func.as_ref() else {
+            visit::visit_expr_call(self, call);
+            return;
+        };
+        let segments = &function.path.segments;
+        let last = segments.last().map(|segment| segment.ident.to_string());
+        let leaves_runtime = last.as_deref() == Some("spawn_blocking")
+            || (last.as_deref() == Some("spawn")
+                && segments.iter().any(|segment| segment.ident == "thread"));
+        if leaves_runtime {
+            self.visit_expr(&call.func);
+            self.off_runtime(|visitor| {
+                for argument in &call.args {
+                    visitor.visit_expr(argument);
+                }
+            });
+            return;
+        }
+        let names_owner = segments
+            .iter()
+            .any(|segment| segment.ident == "gents_lean_contract")
+            || (self.imports_owner && segments.len() == 1);
+        if self.in_async
+            && names_owner
+            && last
+                .as_deref()
+                .is_some_and(|name| LEAN_GENERATOR_RUNS.contains(&name))
+        {
+            self.sites += 1;
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
+        if call.method == "spawn_blocking" {
+            self.visit_expr(&call.receiver);
+            self.off_runtime(|visitor| {
+                for argument in &call.args {
+                    visitor.visit_expr(argument);
+                }
+            });
+            return;
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+fn lean_generator_runtime_sites(source: &str, syntax: &syn::File) -> usize {
+    let mut visitor = LeanGeneratorVisitor {
+        imports_owner: source.contains("use gents_lean_contract::"),
+        in_async: false,
+        sites: 0,
+    };
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+#[test]
+fn lean_generator_runs_stay_off_async_runtime_threads() {
+    let root = repo_root();
+    let mut sources = Vec::new();
+    for directory in ["crates", "apps"] {
+        all_rust_sources(&root.join(directory), &mut sources);
+    }
+    let actual = sources
+        .into_iter()
+        .filter_map(|path| {
+            let relative = path
+                .strip_prefix(&root)
+                .expect("source under repo root")
+                .to_string_lossy()
+                .into_owned();
+            if relative.starts_with("crates/gents-lean-contract/src/") {
+                return None;
+            }
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            if !source.contains("gents_lean_contract") {
+                return None;
+            }
+            let syntax = syn::parse_file(&source)
+                .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+            let sites = lean_generator_runtime_sites(&source, &syntax);
+            (sites > 0).then_some((relative, sites))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let allowed = LEAN_GENERATOR_ON_RUNTIME_ALLOWLIST
+        .iter()
+        .map(|(path, count)| (path.to_string(), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let found = actual.get(path).copied().unwrap_or_default();
+        match allowed.get(path).copied() {
+            None => violations.push(format!(
+                "{path}: {found} Lean generator run(s) on an async runtime thread; await gents_lean_vocab::snapshot() or run it inside spawn_blocking"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{path}: {found} Lean generator runs on an async runtime thread exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{path}: {found} Lean generator runs on an async runtime thread; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    let current = actual
+        .iter()
+        .map(|(path, count)| format!("    (\"{path}\", {count}),"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        violations.is_empty(),
+        "Lean generator runtime ratchet failed:\n{}\n\ncurrent sites:\n{current}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn lean_generator_fence_counts_async_bodies_only() {
+    for (source, sites) in [
+        (
+            "async fn f() { gents_lean_contract::run_prepared_generator(d, t, f); }",
+            1,
+        ),
+        (
+            "fn f() { gents_lean_contract::run_prepared_generator(d, t, f); }",
+            0,
+        ),
+        (
+            "fn f() { let _ = async { gents_lean_contract::load_contract_json() }; }",
+            1,
+        ),
+        (
+            "async fn f() { tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_json()).await; }",
+            0,
+        ),
+        (
+            "async fn f() { std::thread::spawn(move || gents_lean_contract::run_lake_build(d)); }",
+            0,
+        ),
+        (
+            "async fn f() { fn g() { gents_lean_contract::run_lake_build(d); } }",
+            0,
+        ),
+        (
+            "async fn f() { let g = || gents_lean_contract::run_lake_build(d); g(); }",
+            1,
+        ),
+        ("async fn f() { gents_lean_contract::proofs_dir(); }", 0),
+        (
+            "use gents_lean_contract::run_lake_build;\nasync fn f() { run_lake_build(d); }",
+            1,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(lean_generator_runtime_sites(source, &syntax), sites, "{source}");
+    }
+}
+
+/// Calls that start or extend a request's execution lease and its renewal task
+/// on the calling runtime, directly or through a test fixture.
+const LEASE_STARTS: &[&str] = &[
+    "begin_owned_execution",
+    "bind_interruptible_request",
+    "claim_at",
+    "claim_with_identity",
+    "fixture_with_ids",
+];
+
+/// Counts synchronous `gents_lean_vocab` reads that an async body makes after
+/// starting a lease without having awaited `gents_lean_vocab::snapshot()` or
+/// read the model before the lease.
+/// Such a read can be the process's first, which runs Lean on the runtime
+/// thread for minutes and starves the lease renewal (#3704, #3891, #3892).
+#[derive(Default)]
+struct LeanReadAfterLeaseVisitor {
+    events: Vec<(usize, usize, LeanEvent)>,
+    sites: usize,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum LeanEvent {
+    LeaseStart,
+    SnapshotAwait,
+    SyncRead,
+}
+
+impl LeanReadAfterLeaseVisitor {
+    fn record(&mut self, span: proc_macro2::Span, event: LeanEvent) {
+        let start = span.start();
+        self.events.push((start.line, start.column, event));
+    }
+
+    fn settle(&mut self) {
+        self.events
+            .sort_by_key(|(line, column, _)| (*line, *column));
+        let (mut leased, mut loaded) = (false, false);
+        for (_, _, event) in self.events.drain(..) {
+            match event {
+                LeanEvent::LeaseStart => leased = true,
+                LeanEvent::SnapshotAwait => loaded = true,
+                LeanEvent::SyncRead if leased && !loaded => self.sites += 1,
+                // A read before any lease loaded the snapshot already.
+                LeanEvent::SyncRead => loaded = true,
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for LeanReadAfterLeaseVisitor {
+    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+        let outer = std::mem::take(&mut self.events);
+        visit::visit_item_fn(self, item);
+        if item.sig.asyncness.is_some() {
+            self.settle();
+        }
+        self.events = outer;
+    }
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if let Expr::Path(function) = call.func.as_ref() {
+            let segments = &function.path.segments;
+            let last = segments.last().map(|segment| segment.ident.to_string());
+            if segments
+                .iter()
+                .any(|segment| segment.ident == "gents_lean_vocab")
+            {
+                let event = if last.as_deref() == Some("snapshot") {
+                    LeanEvent::SnapshotAwait
+                } else {
+                    LeanEvent::SyncRead
+                };
+                self.record(call.span(), event);
+            } else if last
+                .as_deref()
+                .is_some_and(|name| LEASE_STARTS.contains(&name))
+            {
+                self.record(call.span(), LeanEvent::LeaseStart);
+            }
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
+        if LEASE_STARTS.iter().any(|name| call.method == name) {
+            self.record(call.method.span(), LeanEvent::LeaseStart);
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+fn lean_reads_after_lease(syntax: &syn::File) -> usize {
+    let mut visitor = LeanReadAfterLeaseVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+/// An async test that holds an execution lease awaits
+/// `gents_lean_vocab::snapshot()` before any synchronous model read, so the
+/// first load runs off its runtime (`LeaseRenewalStarvation.tla`,
+/// `OffRuntime`). Syntactic: fixtures are matched by name and macro arguments
+/// are not read.
+#[test]
+fn lease_holders_await_the_lean_snapshot() {
+    let root = repo_root();
+    let mut sources = Vec::new();
+    for directory in ["crates", "apps"] {
+        all_rust_sources(&root.join(directory), &mut sources);
+    }
+    let violations = sources
+        .into_iter()
+        .filter_map(|path| {
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            if !source.contains("gents_lean_vocab") {
+                return None;
+            }
+            let syntax = syn::parse_file(&source)
+                .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+            let sites = lean_reads_after_lease(&syntax);
+            (sites > 0).then(|| {
+                format!(
+                    "{}: {sites} synchronous gents_lean_vocab read(s) after a lease starts; await gents_lean_vocab::snapshot() first",
+                    path.strip_prefix(&root).expect("source under repo root").display()
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+#[test]
+fn lean_read_fence_counts_reads_after_a_lease_without_the_await() {
+    for (source, sites) in [
+        (
+            "async fn f() { l.claim_with_identity().await; gents_lean_vocab::lean_contract_snapshot(); }",
+            1,
+        ),
+        (
+            "async fn f() { gents_lean_vocab::lean_contract_snapshot(); l.claim_with_identity().await; }",
+            0,
+        ),
+        (
+            "async fn f() { fixture_with_ids(\"x\").await; gents_lean_vocab::snapshot().await; gents_lean_vocab::families::k::cases(); }",
+            0,
+        ),
+        (
+            "async fn f() { fixture_with_ids(\"x\").await; for c in gents_lean_vocab::families::k::cases() {} }",
+            1,
+        ),
+        (
+            "fn f() { l.claim_with_identity(); gents_lean_vocab::lean_contract_snapshot(); }",
+            0,
+        ),
+        (
+            "async fn f() { gents_lean_vocab::lean_contract_snapshot(); l.claim_with_identity().await; gents_lean_vocab::lean_contract_snapshot(); }",
+            0,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(lean_reads_after_lease(&syntax), sites, "{source}");
+    }
 }

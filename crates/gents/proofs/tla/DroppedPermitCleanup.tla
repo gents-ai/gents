@@ -1,4 +1,7 @@
 ---- MODULE DroppedPermitCleanup ----
+\* lean: none
+\* crates: gents-inference, gents-store
+\* models: InferenceCall.DroppedPermit.outcome
 (***************************************************************************)
 (* The InferenceCall row of one admitted provider call, from the row the   *)
 (* admission controller persists to its terminal, and what a reader may    *)

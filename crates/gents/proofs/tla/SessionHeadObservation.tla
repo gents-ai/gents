@@ -1,4 +1,7 @@
 ---- MODULE SessionHeadObservation ----
+\* lean: AgentSession.newerByKeys
+\* crates: gents-session
+\* models: AgentSession.advance, AgentSession.refresh, ClientDataPublication.uncached_request_event_rejects_old_read
 \* A session's observed request head and the client that projects it on
 \* reopen (#3604).
 \*
@@ -19,7 +22,8 @@
 \* `request_id` is random, so A and B admitted in the same second have no
 \* admission order of their own. `Order` selects the canonical tie rule:
 \*   "lean"          created second, live over terminal, later terminalization,
-\*                   request_id (Lean `AgentSession.newer`, the fix);
+\*                   request_id (Lean `AgentSession.newer`, the fix), read from
+\*                   the generated table of its finite form `newerByKeys`;
 \*   "requestId"     created second, request_id (the code before the fix);
 \*   "noLive"        created second, terminalization (live rows count as 0),
 \*                   request_id;
@@ -41,7 +45,7 @@
 \* the observation names B. A refusal admitted in the second of a still-live
 \* turn deliberately leaves the live turn as the head (the order errs toward a
 \* busy session), so neither property claims it (`refusedWhileLive`).
-EXTENDS Naturals
+EXTENDS Naturals, LeanDecision_AgentSession
 
 CONSTANTS
   Order,    \* "lean" | "requestId" | "noLive" | "noTerminal"
@@ -94,20 +98,27 @@ Init ==
 IdHigher(x) == IF x = "A" THEN aHigher ELSE ~aHigher
 LiveRank(x, s) == IF s[x] \in Live THEN 1 ELSE 0
 
+\* Lean `AgentSession.KeyOrder.of`.
+KeyOrder(a, b) == IF a < b THEN "less" ELSE IF a = b THEN "equal" ELSE "greater"
+
 \* x is newer than y under `Order`, reading the transaction's own view of
 \* request states `s`, terminalization times `t` and created seconds `c`.
+\* The two requests' random ids differ.
 Newer(x, y, s, t, c) ==
-  LET tie == c[x] = c[y]
-      byId == IdHigher(x)
-      live == LiveRank(x, s) > LiveRank(y, s)
-      sameLive == LiveRank(x, s) = LiveRank(y, s)
-      later == t[x] > t[y]
-      sameTerm == t[x] = t[y]
-  IN \/ c[x] > c[y]
-     \/ tie /\ CASE Order = "lean" -> live \/ (sameLive /\ (later \/ (sameTerm /\ byId)))
-                 [] Order = "requestId" -> byId
-                 [] Order = "noLive" -> later \/ (sameTerm /\ byId)
-                 [] Order = "noTerminal" -> live \/ (sameLive /\ byId)
+  IF Order = "lean"
+    THEN newerByKeys(KeyOrder(c[x], c[y]), KeyOrder(LiveRank(x, s), LiveRank(y, s)),
+                     KeyOrder(t[x], t[y]), IF IdHigher(x) THEN "greater" ELSE "less")
+    ELSE
+      LET tie == c[x] = c[y]
+          byId == IdHigher(x)
+          live == LiveRank(x, s) > LiveRank(y, s)
+          sameLive == LiveRank(x, s) = LiveRank(y, s)
+          later == t[x] > t[y]
+          sameTerm == t[x] = t[y]
+      IN \/ c[x] > c[y]
+         \/ tie /\ CASE Order = "requestId" -> byId
+                     [] Order = "noLive" -> later \/ (sameTerm /\ byId)
+                     [] Order = "noTerminal" -> live \/ (sameLive /\ byId)
 
 \* Lean `AgentSession.advance`: name r when no admitted request is newer.
 Advance(r, s, t, c) ==

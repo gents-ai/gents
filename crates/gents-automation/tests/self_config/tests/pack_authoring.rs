@@ -372,16 +372,14 @@ async fn a_plugin_build_runs_confined_to_the_tool_root() {
         "failures":["deal.json: output differs from expect at 1 path(s): $.writes: returned [isle... instead of nothing","small.json: returned 1 instead of 2"],
         "shortened":[{"case":"deal.json","returned":{"ok":true,"writes":[&whole]},"expect":{"ok":true}}],
     }]});
-    std::fs::write(
+    gents_store::test_support::write_executable_script(
         &builder,
-        format!(
+        &format!(
             "#!/bin/sh\nprintf stub > \"$2/plugins/tool_a.afb\"\nprintf x > {} 2>/dev/null\ncat <<'REPORT'\n{report}\nREPORT\n",
             escaped.display()
         ),
     )
     .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&builder, std::fs::Permissions::from_mode(0o755)).unwrap();
     let _stub = PLUGIN_BUILDER_STUB.lock().await;
     let _builder = gents_store::test_support::EnvVarGuard::set(
         "GENTS_PLUGIN_BUILDER",

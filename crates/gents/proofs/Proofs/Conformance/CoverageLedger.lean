@@ -3597,7 +3597,10 @@ def externalPremiseCoverage : List CoverageEntry :=
 def coverageLedger : List CoverageEntry :=
   vocabularyCoverage ++ stateMachineCoverage ++ caseCoverage ++ followUpHookCoverage ++ externalPremiseCoverage ++
     [tagged (consumerCoverage "family" "event_delivery_cooldown_pruning")
-      "event-delivery" [Surface.runtimeInternal]]
+      "event-delivery" [Surface.runtimeInternal]
+    , tagged (boundaryCoverage "family" "client_window_scope_bound_delivers"
+        "TLA WindowIndependence reads this bound of ClientWindowScope.delivers as its delivery decision; the bridge's window registry replays the unbounded owner through generated window traces.")
+      "client-shell" [Surface.operatorUi]]
 
 structure FeatureMatrixCell where
   feature : String

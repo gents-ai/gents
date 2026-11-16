@@ -1,0 +1,4 @@
+---- MODULE MCScriptFixtureExecAlone ----
+EXTENDS ScriptFixtureExec
+
+====

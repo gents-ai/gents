@@ -1,4 +1,7 @@
 ---- MODULE ClientIdentityMetadata ----
+\* lean: none
+\* crates: gents-desktop-core
+\* models: ClientIdentityMetadata.decide
 (***************************************************************************)
 (* First-run writers of one home's client identity metadata                *)
 (* (`principal.json`, `PrincipalIdentity::load_or_create`): two `gents`    *)

@@ -1,4 +1,6 @@
 ---- MODULE GoalSourceObservation ----
+\* lean: none
+\* crates: gents-automation
 (***************************************************************************)
 (* A test observing the goal owner's decision on a settled request (#3820). *)
 (* The owner is `GoalSource` (`goal_source.rs`): its rescans run inside     *)

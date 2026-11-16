@@ -1,0 +1,4 @@
+---- MODULE MCWallClockBound ----
+EXTENDS WallClockBound
+
+====
