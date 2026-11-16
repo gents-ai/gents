@@ -21,4 +21,4 @@ pub use registry::{
     CLIENT_AUTHORED_COLLECTIONS, DEFAULT_BASELINE, DEFAULT_ORDINARY_INDEXES, DEFAULT_REGISTRY,
     DEFAULT_STEPS,
 };
-pub use report::{MaterializationStats, MigrationReport};
+pub use report::{MaterializationStats, MigrationReport, ParkedUniqueConflict, ParkedUniqueIndex};

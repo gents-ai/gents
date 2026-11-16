@@ -49,7 +49,8 @@ async fn dropping_the_loop_cancels_pending_compaction() {
 #[tokio::test]
 async fn dropping_pending_provider_dispatch_keeps_scope_and_cancels_work() {
     use crate::tool_call_lifecycle::runtime::{
-        current_tool_runtime_context, scope_request_tool_execution, scope_tool_request_identity,
+        current_tool_runtime_context, scope_request_tool_execution_with_session,
+        ToolRequestIdentity,
     };
     struct Dropped(Arc<AtomicBool>);
     impl Drop for Dropped {
@@ -73,15 +74,22 @@ async fn dropping_pending_provider_dispatch_keeps_scope_and_cancels_work() {
         })));
     };
     let mut stream = Box::pin(drive_admissions(inner));
-    scope_tool_request_identity(
-        Some("requester".into()),
-        Some("node".into()),
-        Some("agent".into()),
-        Some("request".into()),
-        scope_request_tool_execution(None, Default::default(), async {
+    scope_request_tool_execution_with_session(
+        Some(ToolRequestIdentity::new(
+            Some("requester".into()),
+            Some("node".into()),
+            Some("agent".into()),
+            Some("request".into()),
+        )),
+        None,
+        Default::default(),
+        None,
+        None,
+        None,
+        async {
             assert!(futures::poll!(stream.next()).is_pending());
             drop(stream);
-        }),
+        },
     )
     .await;
     assert_eq!(*observed.lock().unwrap(), Some("request".into()));
@@ -334,7 +342,7 @@ async fn skip_keeps_the_hook_effect_as_the_lean_admission_model() {
 async fn handoff_retains_the_calling_request_scope() {
     use crate::tool_call_lifecycle::runtime::{
         current_tool_runtime_context, scope_request_tool_execution_with_trigger_context,
-        scope_tool_request_identity,
+        ToolRequestIdentity,
     };
     let observed = Arc::new(std::sync::Mutex::new(None));
     let capture = observed.clone();
@@ -359,24 +367,24 @@ async fn handoff_retains_the_calling_request_scope() {
         let _ = receiver.await;
     };
     let mut stream = Box::pin(drive_admissions(inner));
-    scope_tool_request_identity(
-        Some("requester".into()),
-        Some("node".into()),
-        Some("selected-agent".into()),
-        Some("request".into()),
-        scope_request_tool_execution_with_trigger_context(
-            None,
-            Default::default(),
-            None,
-            None,
-            Some("session".into()),
-            Some("correlation".into()),
-            Default::default(),
-            false,
-            async {
-                assert!(stream.next().await.is_none());
-            },
-        ),
+    scope_request_tool_execution_with_trigger_context(
+        Some(ToolRequestIdentity::new(
+            Some("requester".into()),
+            Some("node".into()),
+            Some("selected-agent".into()),
+            Some("request".into()),
+        )),
+        None,
+        Default::default(),
+        None,
+        None,
+        Some("session".into()),
+        Some("correlation".into()),
+        Default::default(),
+        false,
+        async {
+            assert!(stream.next().await.is_none());
+        },
     )
     .await;
     assert_eq!(

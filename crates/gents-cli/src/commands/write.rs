@@ -12,6 +12,8 @@ pub(crate) async fn write(args: WriteArgs) -> Result<()> {
         args.collections.into_iter().collect(),
         None,
     );
-    let result = tool.call(call).await?;
+    let result = tool
+        .call(call, &gents_loop::tool::ToolCallEnvelope::default())
+        .await?;
     crate::print_json(&serde_json::from_str::<serde_json::Value>(&result)?)
 }

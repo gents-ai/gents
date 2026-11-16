@@ -92,7 +92,11 @@ impl Tool for CallToolTool {
         }
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         Tool::admit(self, &args)?;
 
         let arguments =
@@ -499,11 +503,14 @@ mod tests {
         });
 
         let error = tool
-            .call(CallToolArgs {
-                service_id: "observability-mcp".to_string(),
-                tool_name: "query_metrics".to_string(),
-                arguments: json!("not an object"),
-            })
+            .call(
+                CallToolArgs {
+                    service_id: "observability-mcp".to_string(),
+                    tool_name: "query_metrics".to_string(),
+                    arguments: json!("not an object"),
+                },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .expect_err("disallowed service should return a typed failure");
         let value: Value = serde_json::from_str(&error.to_string()).expect("structured json");

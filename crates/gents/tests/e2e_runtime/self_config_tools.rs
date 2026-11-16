@@ -227,7 +227,10 @@ async fn call_tool(
         .iter()
         .find(|tool| tool.name() == "config")
         .unwrap_or_else(|| panic!("missing config tool for {name}"))
-        .call(json!({"argv": argv}).to_string())
+        .call(
+            json!({"argv": argv}).to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .map_err(|error| format!("{error:#}"))
 }
@@ -595,7 +598,10 @@ async fn task_run_fires_a_task_now_and_reuses_target_id() {
                 .iter()
                 .find(|tool| tool.name() == "config")
                 .unwrap()
-                .call(argv.to_string())
+                .call(
+                    argv.to_string(),
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
                 .await
         }
     };
