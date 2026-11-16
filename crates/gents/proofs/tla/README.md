@@ -450,6 +450,15 @@ See `../README.md` for how this fits the broader formal-verification model.
   every ephemeral range; `PerRunnerSpread` shows
   why separate directories rarely collided while one process per binary
   spread its cursor.
+- `ExecutableStaging` — the service updater stages an executable that is
+  exec'd afterwards (`copy_executable`), while other threads spawn. A
+  sibling's spawn copies the updater's descriptors until that child execs,
+  and Linux execve refuses a file open for writing (ETXTBSY); a later exec by
+  the service manager is not ordered after the siblings' execs. RED:
+  `InProcessCopy` (`fs::copy` in the updater), `TempHandle` (a
+  `NamedTempFile` held open until persist), `Unwaited` (the copy child not
+  reaped). Green copies with a reaped `/bin/cp` child into a file the updater
+  never opens for writing.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## Checking
