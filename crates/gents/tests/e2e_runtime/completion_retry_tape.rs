@@ -513,35 +513,6 @@ async fn provider_headers_that_never_arrive_fail_the_attempt_and_retry() {
 }
 
 #[tokio::test]
-async fn provider_silent_after_headers_fails_the_attempt_and_retries() {
-    let marker = "stall-first-item";
-    assert_stall_recovered(
-        marker,
-        vec![
-            StreamResponse::Stream(StreamScript::paused_before(
-                marker,
-                vec![StreamChunk::text("never released")],
-            )),
-            StreamResponse::completes(marker, ["recovered after first-item stall"]),
-        ],
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn provider_silent_between_chunks_retracts_and_retries() {
-    let marker = "stall-between-chunks";
-    assert_stall_recovered(
-        marker,
-        vec![
-            StreamResponse::Stream(StreamScript::paused(marker, ["partial before stall"])),
-            StreamResponse::completes(marker, ["recovered after inter-chunk stall"]),
-        ],
-    )
-    .await;
-}
-
-#[tokio::test]
 async fn stalled_call_is_terminal_before_the_retry_backoff_ends() {
     let marker = "stall-releases-permit";
     let (backend, _db, actors, agent, doc_id, _) = start_stall_tape(

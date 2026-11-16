@@ -33,7 +33,13 @@ concurrency:
 
 jobs:
   driver:
-    runs-on: ubuntu-latest
+    # Our Linux runners (the `linux` role in .github/ci-runners.json); a fork
+    # pull request or GENTS_CI_FALLBACK=hosted uses a hosted runner.
+    runs-on: >-
+      ${{ ((github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name != github.repository) ||
+      vars.GENTS_CI_FALLBACK == 'hosted') && 'ubuntu-latest' ||
+      fromJSON('["self-hosted","Linux","X64","ci-linux"]') }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7

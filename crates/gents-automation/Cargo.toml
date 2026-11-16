@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Triggers, callbacks and goals for Gents"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [features]
 default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]

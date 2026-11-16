@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Test helper for loading Gents Lean conformance contracts"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [dependencies]
 anyhow.workspace = true

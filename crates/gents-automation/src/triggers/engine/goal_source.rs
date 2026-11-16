@@ -1061,6 +1061,19 @@ pub(crate) fn continuation_prompt(
     )
 }
 
+#[cfg(test)]
+impl GoalSource {
+    /// One complete rescan, the owner's settled point: every goal it reaches
+    /// has been decided and committed, and the intent, if any, is what
+    /// `next_fire` returns for the same trigger (`tick` for the rescan
+    /// interval, otherwise a document update). Tests observe the owner here
+    /// instead of under a wall-clock window (TLA+ `GoalSourceObservation`).
+    pub(crate) async fn rescan_to_settled(&mut self, tick: bool) -> Option<FireIntent> {
+        self.ensure_subscription();
+        self.rescan(tick).await
+    }
+}
+
 /// A closed invalidation feed does not establish that durable Goals finished.
 /// Runtime cancellation and snapshot-owner shutdown remain the termination owners.
 impl TriggerSource for GoalSource {
