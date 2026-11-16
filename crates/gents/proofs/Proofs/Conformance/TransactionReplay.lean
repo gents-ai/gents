@@ -5,7 +5,7 @@ namespace TransactionReplay
 
 deriving instance Lean.ToJson for Mode, Stage, Failure, Disposition
 
-attribute [conformance_function] disposition rerunHonoured Mode.maxAttempts
+attribute [conformance_function] disposition rerunHonoured Mode.maxAttempts clientMayRepeat
 
 end TransactionReplay
 

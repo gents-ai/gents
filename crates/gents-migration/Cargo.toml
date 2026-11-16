@@ -6,6 +6,11 @@ license.workspace = true
 repository.workspace = true
 description = "Lens-first schema migration engine for Gents (DefraDB version DAG)"
 build = "build.rs"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [dependencies]
 defra-core.workspace = true

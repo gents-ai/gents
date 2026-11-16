@@ -155,3 +155,43 @@ pub async fn verified_block_signer_as(node: &defra_node::Node, reader: &str, cid
     db::block::verify::verified_signature_signer_did(&block, &signature)
         .unwrap_or_else(|error| panic!("verify {cid}: {error}"))
 }
+
+/// Makes write-attempt events visible to a scoped subscriber. tracing caches
+/// one interest per callsite for the whole process, and while a single
+/// dispatcher is registered it computes that interest from the default of
+/// whichever thread reaches the callsite first; a thread with no default
+/// caches `never`, which then hides the event from a scoped subscriber on
+/// another thread. A global default that enables the target is every such
+/// thread's default.
+#[cfg(test)]
+pub(crate) fn enable_scoped_event_capture() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        tracing::subscriber::set_global_default(CapturedTargetSubscriber)
+            .expect("no other global tracing default in this test binary");
+    });
+}
+
+#[cfg(test)]
+struct CapturedTargetSubscriber;
+
+#[cfg(test)]
+impl tracing::Subscriber for CapturedTargetSubscriber {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target() == crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::Id {
+        tracing::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::Id, _follows: &tracing::Id) {}
+
+    fn event(&self, _event: &tracing::Event<'_>) {}
+
+    fn enter(&self, _span: &tracing::Id) {}
+
+    fn exit(&self, _span: &tracing::Id) {}
+}

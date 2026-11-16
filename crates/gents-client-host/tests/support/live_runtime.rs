@@ -514,6 +514,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn configure(
     client: &mut Attachment,
     id: &mut u32,

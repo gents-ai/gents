@@ -119,8 +119,12 @@ pub async fn interrupt_request_by_doc_id_with_access(
     requester_did: Option<&str>,
 ) -> Result<()> {
     let filter = exact_request_filter(request_doc_id, node_did, requester_did)?;
+    // The latch reads the request row the running turn keeps writing (lease
+    // renewal, other interrupters). The callback re-reads that row and is
+    // transaction-only, so a User-signed latch whose commit a confirmed
+    // conflict aborted is rebuilt (InterruptLatchContention.tla).
     access
-        .transact_write("interrupt.latch_request", |txn| {
+        .transact_signed_conflict_rebuild("interrupt.latch_request", |txn| {
             let filter = &filter;
             Box::pin(async move { interrupt_request_matching_in_txn(txn, filter).await })
         })

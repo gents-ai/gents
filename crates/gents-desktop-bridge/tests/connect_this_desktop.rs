@@ -73,6 +73,7 @@ fn terminal_home(home: &Path) {
         tauri::async_runtime::handle().inner(),
         gents_server::server_host::ProvisionOptions {
             home: home.to_path_buf(),
+            desktop_root: DesktopPaths::discover().unwrap().root().to_path_buf(),
             node_name: "Anvil".to_owned(),
             tool_ceiling: gents_service::args::ToolCeilingArg::Readonly,
             tool_root: None,

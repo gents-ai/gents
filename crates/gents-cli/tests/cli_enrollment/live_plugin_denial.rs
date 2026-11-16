@@ -276,7 +276,7 @@ async fn live_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Result<()
         let session = Uuid::new_v4().to_string();
         let prompt = format!("Call job_fixture exactly once with these exact JSON arguments: {}. Do not change any value or retry. Report the result.", args);
         let receipt = core.submit_request(&session, &node_did, &prompt, Some(&agent_did)).await?;
-        let _reply = wait_for_complete_agent_response_with_access(&access, &receipt.request_id, &session, Duration::from_secs(240)).await?;
+        let _reply = wait_for_complete_agent_response_with_access(&access, &receipt.request_id, &session).await?;
         let observed = access.execute(&format!("{{ InferenceCall(filter: {{request_id: {{_eq: \"{}\"}}}}) {{model_name agent_did call_state}} AgentToolCall(filter: {{request_id: {{_eq: \"{}\"}}}}) {{_docID node_did requester_did session_id request_doc_id tool_name lifecycle_state tool_failure_class}} }}", escape_graphql_string(&receipt.request_id), escape_graphql_string(&receipt.request_id))).await?;
         let calls = observed["data"]["InferenceCall"].as_array().context("missing inference evidence")?;
         anyhow::ensure!(calls.iter().any(|call| call["model_name"] == model && call["agent_did"] == agent_did && call["call_state"] == "completed"), "missing completed real model call: {calls:?}");

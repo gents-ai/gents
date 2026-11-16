@@ -6,6 +6,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Verifiable, multiplayer coding agents"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [lib]
 name = "gents_desktop_tauri_lib"

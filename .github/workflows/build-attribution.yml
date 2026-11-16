@@ -24,7 +24,7 @@ permissions:
 jobs:
   macos-arm64-cold:
     name: macOS arm64 cold release attribution
-    runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
+    runs-on: [self-hosted, macOS, ARM64, ci-support]
     timeout-minutes: 120
     env:
       CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '12' }}

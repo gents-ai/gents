@@ -1096,3 +1096,85 @@ async fn remote_client_signs_conditional_mailbox_dismissal() -> anyhow::Result<(
     node.shutdown().await?;
     Ok(())
 }
+
+/// A write of the item landing between the User's dismissal read and its
+/// commit aborts that commit with a DefraDB conflict; the dismissal re-reads
+/// and re-signs (`TransactionReplay.disposition`, signed-conflict rebuild).
+#[tokio::test]
+async fn remote_dismissal_rebuilds_after_a_concurrent_item_write() -> anyhow::Result<()> {
+    use gents_store::config_client::ConfigApplyTxn;
+
+    let directory = tempfile::tempdir()?;
+    let actor = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("user.key"),
+        None,
+    )?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .enable_signing()
+            .with_node_acp_owner(actor.did().to_owned())
+            .with_http(defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?,
+    );
+    let owner_context =
+        defra_core::RequestContext::default().with_identity(Some(actor.did().to_owned()));
+    node.add_dac_policy_with_counter_as(&owner_context, gents_protocol::schemas::MAILBOX_POLICY, 0)
+        .await?;
+    node.add_collection(gents_protocol::schemas::MAILBOX_ITEM)
+        .await?;
+    let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
+        format!("http://{address}/api/v0/graphql"),
+        actor.did(),
+    )
+    .with_client_signing_capability(actor.client_signing_capability()?)?;
+    let access = gents_store::config_client::ConfigAccess::Graphql(endpoint);
+    let now = Utc::now().to_rfc3339();
+    let input = json!({"item_key":"mailbox:contended", "requester_did":actor.did(), "node_did":"did:key:node", "status":"open", "kind":"ask", "action":"ack", "title":"Review", "source_kind":"session", "source_id":"contended", "target_node_did":"did:key:node", "target_agent_did":"did:key:agent", "created_at":now, "updated_at":now});
+    let created = access.transact_write("test.client_mailbox_create", |txn| {
+        let input = &input;
+        Box::pin(async move {
+            txn.execute_client_signed_create(
+                "mutation($input: MailboxItemMutationInputArg!) { create_MailboxItem(input:$input) { _docID } }",
+                &json!({"input": input}), gents_protocol::schemas::MAILBOX_ITEM,
+            ).await
+        })
+    }).await?;
+    let doc_id = created["data"]["add_MailboxItem"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let retitle = async {
+        access
+            .transact_write("test.client_mailbox_retitle", |txn| {
+                let doc_id = &doc_id;
+                Box::pin(async move {
+                    txn.execute_client_signed_update(
+                        "mutation($id: ID!, $input: MailboxItemMutationInputArg!) { update_MailboxItem(filter: { _docID: { _eq: $id } }, input: $input) { _docID } }",
+                        &json!({"id": doc_id, "input": {"title": "Retitled"}}),
+                        gents_protocol::schemas::MAILBOX_ITEM,
+                    )
+                    .await
+                })
+            })
+            .await
+            .expect("retitle the item between the dismissal's read and commit");
+    };
+    let (dismissed, paused) = ConfigApplyTxn::with_concurrent_write_before_commit(
+        crate::operations::mailbox::dismiss(&access, &doc_id),
+        retitle,
+    )
+    .await;
+    assert!(paused, "the dismissal paused after its signed update");
+    let dismissed = dismissed?;
+    assert_eq!(dismissed.status, "dismissed");
+    assert_eq!(
+        dismissed.title, "Retitled",
+        "the rebuilt dismissal read the concurrent write"
+    );
+    node.shutdown().await?;
+    Ok(())
+}

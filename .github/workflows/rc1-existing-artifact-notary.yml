@@ -28,7 +28,7 @@ env:
 jobs:
   repository-guard:
     name: Guard repository and dispatch context
-    runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
+    runs-on: [self-hosted, macOS, ARM64, ci-notary]
     timeout-minutes: 10
     steps:
       # Job-level trusted-context guard that runs BEFORE any checkout. On a
@@ -117,7 +117,7 @@ jobs:
   notary-auth-preflight:
     name: Notary auth-only preflight (history)
     needs: repository-guard
-    runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
+    runs-on: [self-hosted, macOS, ARM64, ci-notary]
     timeout-minutes: 10
     steps:
       - name: Job-level trusted context guard (pre-checkout)

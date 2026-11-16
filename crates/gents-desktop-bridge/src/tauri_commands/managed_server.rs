@@ -539,6 +539,7 @@ where
     let was_enabled = service_status.enabled;
     let provision = gents_server::server_host::ProvisionOptions {
         home: node_home.clone(),
+        desktop_root: state.policy.desktop_paths.root().to_path_buf(),
         node_name: request.node_name.clone(),
         tool_ceiling: runtime_tool_ceiling(tool_ceiling),
         tool_root: authority.tool_root.clone(),

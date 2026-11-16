@@ -32,6 +32,10 @@ pub enum BridgeErrorCode {
     RuntimeStillBooting,
     /// The session belongs to another requester, so core would refuse the send.
     SessionNotOwned,
+    /// A DefraDB transaction conflict that outlasted the store's own attempts.
+    /// Retryable only when the store confirmed the failed attempt did not
+    /// commit (Lean `TransactionReplay.clientMayRepeat`).
+    TransactionConflict,
     Unknown,
 }
 
@@ -58,6 +62,7 @@ impl BridgeErrorCode {
             Self::CredentialNotSaved => "credentialNotSaved",
             Self::RuntimeStillBooting => "runtimeStillBooting",
             Self::SessionNotOwned => "sessionNotOwned",
+            Self::TransactionConflict => "transactionConflict",
             Self::Unknown => "unknown",
         }
     }
@@ -183,6 +188,21 @@ impl BridgeError {
         }
     }
 
+    /// A conflict the store's attempts could not settle. `repeatable` is the
+    /// store's word that the failed attempt did not commit; otherwise the
+    /// change may have been saved and repeating it could apply it twice.
+    pub fn transaction_conflict(repeatable: bool, detail: String) -> Self {
+        let message = if repeatable {
+            format!("Another change to the same data landed first, so nothing was saved. Try again. ({detail})")
+        } else {
+            format!("Another change to the same data landed at the same time, and this change may already have been saved. Check before trying again. ({detail})")
+        };
+        Self {
+            retryable: repeatable,
+            ..Self::new(BridgeErrorCode::TransactionConflict, message)
+        }
+    }
+
     pub fn storage_full() -> Self {
         Self::new(BridgeErrorCode::StorageFull,
             "Storage is full. Free disk space, then restart Gents to reopen the same store. Your saved chats and pending message are kept.")
@@ -202,6 +222,13 @@ impl BridgeError {
             return Self::new(
                 BridgeErrorCode::PermissionDenied,
                 "Access was denied. Check this client's permissions with the runtime owner.",
+            );
+        }
+        if let Some(repeatable) = gents_store::config_client::classified_conflict_repeatable(&error)
+        {
+            return Self::transaction_conflict(
+                repeatable,
+                gents_protocol::error_chain::ErrorChain(error.as_ref()).to_string(),
             );
         }
         let transport = gents_store::config_client::TransactionFailure::config_client_error(&error)
@@ -652,6 +679,44 @@ mod tests {
         ));
         assert_eq!(lookalike.code, BridgeErrorCode::Unknown);
         assert_eq!(lookalike.endpoint, None);
+    }
+}
+
+#[cfg(test)]
+mod transaction_conflict_tests {
+    use super::*;
+
+    /// A conflict an operation passed through reaches the desktop typed, and
+    /// retryable exactly when the store confirmed its attempt did not commit.
+    #[test]
+    fn passed_through_conflicts_are_typed_and_retryable_only_when_aborted() {
+        use gents_protocol::operations::request::RequestOperationError;
+        for (conflict, repeatable) in [
+            (
+                gents_store::config_client::classified_conflict_for_test(),
+                true,
+            ),
+            (
+                gents_store::config_client::unconfirmed_commit_conflict_for_test(),
+                false,
+            ),
+        ] {
+            let error = BridgeError::classify_transport_error(request_operation_failure(
+                RequestOperationError::passthrough(anyhow::Error::new(conflict)),
+            ));
+            assert_eq!(error.code, BridgeErrorCode::TransactionConflict);
+            assert_eq!(error.retryable, repeatable);
+            assert!(error.message.contains("DefraDB transaction conflict"));
+        }
+    }
+
+    #[test]
+    fn a_conflict_under_application_context_keeps_its_type() {
+        let error = anyhow::Error::new(gents_store::config_client::classified_conflict_for_test())
+            .context("interrupting the request");
+        let error = BridgeError::classify_transport_error(error);
+        assert_eq!(error.code, BridgeErrorCode::TransactionConflict);
+        assert!(error.retryable);
     }
 }
 

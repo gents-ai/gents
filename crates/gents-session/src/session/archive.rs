@@ -70,8 +70,10 @@ pub async fn set_session_archived_on(
                 ::identity::Did::new(actor.did())?,
                 actor.managed_agent_signer(),
             )?;
+            // The callback re-reads the session and fences on its archive revision, so
+            // a confirmed conflict is rebuilt and a concurrent archive reports Conflict.
             selected
-                .transact_write("session.archive", |txn| {
+                .transact_signed_conflict_rebuild("session.archive", |txn| {
                     Box::pin(apply_in_txn(
                         txn,
                         node_did,
@@ -84,8 +86,10 @@ pub async fn set_session_archived_on(
                 .await
         }
         ConfigAccess::Graphql(_) => {
+            // The callback re-reads the session and fences on its archive revision, so
+            // a confirmed conflict is rebuilt and a concurrent archive reports Conflict.
             access
-                .transact_write("session.archive", |txn| {
+                .transact_signed_conflict_rebuild("session.archive", |txn| {
                     Box::pin(apply_in_txn(
                         txn,
                         node_did,

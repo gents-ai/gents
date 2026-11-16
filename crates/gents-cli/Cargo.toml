@@ -6,6 +6,23 @@ license.workspace = true
 repository.workspace = true
 description = "Command-line interface for the Gents runtime"
 autobins = false
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+[[test]]
+name = "heap_profile"
+path = "tests/heap_profile.rs"
+
+[[test]]
+name = "port_allocation"
+path = "tests/port_allocation.rs"
+
+[[test]]
+name = "plugin_build_sandbox"
+path = "tests/plugin_build_sandbox.rs"
 
 [lib]
 name = "gents_server"
@@ -24,14 +41,6 @@ live-e2e = []
 native-e2e = ["gents-service/native-e2e"]
 heap-profiling = ["dep:tikv-jemallocator"]
 typescript = ["dep:ts-rs"]
-
-# All other test binaries are auto-discovered; this explicit target overrides
-# autodiscovery for cli_live_suite so its link only happens on live runs
-# (`cargo test -p gents-cli --features live-e2e --test cli_live_suite -- --ignored`).
-[[test]]
-name = "cli_live_suite"
-path = "tests/cli_live_suite.rs"
-required-features = ["live-e2e"]
 
 [dependencies]
 gents-eval.workspace = true

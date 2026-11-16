@@ -1,5 +1,3 @@
-mod support;
-
 #[path = "suites/cli_diagnose.rs"]
 mod cli_diagnose;
 #[path = "suites/cli_document.rs"]
