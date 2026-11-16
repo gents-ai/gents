@@ -11,8 +11,9 @@ pub use init_config::{
     write_init_config, StoredInitConfig, SECURE_ENCLAVE_IDENTITY_BACKEND,
 };
 pub use lock::{
-    lock_home_store, lock_store, lock_store_at, reserve_runtime_startup, wait_for_store_release,
-    RuntimeStartupReservation, StoreLock, StoreLockHeld,
+    acquire_store, lock_home_store, lock_store, lock_store_at, reserve_runtime_startup, try_store,
+    wait_for_store_release, RuntimeStartupReservation, StoreAttempt, StoreLock, StoreLockHeld,
+    StoreRelease,
 };
 pub use retire::{
     archive_preflight, home_entries, retire_entries, HomeEntries, RetireDisposition, RetireGroup,
