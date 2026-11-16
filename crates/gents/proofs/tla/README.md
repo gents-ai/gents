@@ -7,7 +7,22 @@ See `../README.md` for how this fits the broader formal-verification model.
 ## Specs
 
 - `PairingTransport` — connection establishment + replication liveness for one directed pairing edge, the transport layer below the reconciler. The Lean `PairingReconcile` model assumes the transport carries the install RPC / that `connect` succeeds; it does not model *establishing* the link, so the live #511 fleet hang was outside the modeled world. This spec closes that gap. It distinguishes the **three real failure modes** (grounded in the production code) with two independent BOOLEAN constants — `Dialable` (the connect-gate ticket form) and `ReplicatorInstallable` (whether `add_replicator` can succeed once connected) — exercised by a **three-config diagnostic**: `MCPairingTransportDialable` (both true: the shareable-address fix — all properties hold); `MCPairingTransportUndialable` (MODE A — `Dialable = FALSE`: connect-fails-first, the *literal* #511 hang, never reaches `Connected` so nothing subscribes and no applied row is written); `MCPairingTransportReplicatorStuck` (MODE B/C — `ReplicatorInstallable = FALSE`: connect OK and collections subscribe but the replicator install never succeeds — the durable "subscribed collections, `replicator_addresses` null" partial row). Companion to the Lean `PairingReconcile` `dialFailed` (MODE A) and `reconcileInstallReplicatorFailed` (MODE B/C) transitions and the `convergence_requires_successful_install` obligation.
+- `P2PBackpressure` — hub fan-in/fan-out admission **obligation** model for #630, not a multi-wave flood-safety proof. `PairingTransport` proves a single edge can connect/install; this model starts after that. Its one-wave necessity obligations say outbound timeouts release push-worker slots and inbound success acks are backed by modeled pending registration or merge. The pinned DefraDB implementation has since added bounded queue admission before worker execution, per-peer scheduling/coalescing, persisted retry handoff on overflow, and durable push-originated pending-DAG recovery. Those multi-wave and restart properties, plus Bitswap stalls, rate limits, gossip-loop health, multi-slow-peer fill, and peer-vs-CID pending, remain outside this model. Receiver-side pending-DAG slot starvation and acknowledged-DAG TTL loss belong to the defradb.rs receiver dispatch model (`proofs/tla/SyncOwnership.tla`, `MC_SyncOwnership_Dispatch` configs), not here. See `boundary.p2p-backpressure.obligation-model`. Green/red configs: `MCP2PBackpressureGreen` / `TimeoutStall` / `BadAck`.
 - `P2PBackpressure` — hub fan-in/fan-out admission **obligation** model for #630, not a multi-wave flood-safety proof. `PairingTransport` proves a single edge can connect/install; this model starts after that. Its one-wave necessity obligations say outbound timeouts release push-worker slots and inbound success acks are backed by modeled pending registration or merge. The pinned DefraDB implementation has since added bounded queue admission before worker execution, per-peer scheduling/coalescing, persisted retry handoff on overflow, and durable push-originated pending-DAG recovery. Those multi-wave and restart properties, plus Bitswap stalls, rate limits, gossip-loop health, multi-slow-peer fill, and peer-vs-CID pending, remain outside this model. Receiver-side pending-DAG slot starvation and acknowledged-DAG TTL loss belong to the defradb.rs receiver dispatch model (`proofs/tla/SyncOwnership.tla`, `MC_SyncOwnership_Dispatch` configs), not here. See `boundary.p2p-backpressure.obligation-model`. Green/red configs (`MCP2PBackpressureGreen` / `TimeoutStall` / `BadAck`) are **modeled, not yet TLC-checked**.
+- `PairingGrantRevocation` — an application pairing racing the withdrawal of
+  its author's P2P mutation grant. The reconciler reads authority when it
+  prepares a peer and applies the owned diff one transport operation at a
+  time; a scope change is a teardown then an install; a replicator pushes and
+  backfills with no grant check. The green config (each install re-derives
+  its scope from authority read after the operations before it; the observer
+  waits for the base route to stand without the collection) keeps
+  `NoStaleInstall`, `ObservedWithdrawalHolds` and `WithdrawalTakesEffect`.
+  `NoRecheck`/`NoRecheckObserved` are the found race (the CI failure trace);
+  `GapObserver` acts inside the reinstall gap. `Strict` shows that no
+  Gents-side ordering keeps every document written after the withdrawal off
+  the peer, and `RevokeTearsDown` that a revoke-driven teardown does not
+  either; only `PushChecksGrant`, a push-time grant check in the transport,
+  does.
 - `BackgroundAdmissionContention` — concurrent writers of one request's
   `AgentRequest` document and session documents during a turn (#3592). Each
   accepted `spawn_process` call runs a dispatch start (reads the request to
@@ -145,6 +160,15 @@ See `../README.md` for how this fits the broader formal-verification model.
   inside `next_fire` (#3820). A fixed timeout (`FixedWindow`) fails a correct
   owner; waiting for the transition passes it and still fails an owner that
   fires (`FiringOwner`).
+- `WallClockBound` — a wall-clock bound racing an owner's progress in a test
+  (#3840): an observer that judges at a fixed window (a timeout, a sleep
+  before one read, an elapsed-time bound, a fixture that stops after a delay;
+  `FixedWindow`) or a fixture deadline the product enforces (`WallDeadline`)
+  fails a correct owner on a slow host. Waiting on the owner's notification
+  under the suite's stall ceiling, with the fixture deadline past any run or
+  driven by the test after the steps it must follow (`Driven`), passes under
+  every schedule and still fails an owner that never commits
+  (`StalledOwner`); `SlowHost` is the ceiling's premise.
 - `RuntimeConnectionTransport` — the desktop observer's authenticated SSE
   connection to one runtime it reads as the User (`client/observe`). The
   source task arms `K` subscriptions one at a time and then sends a ready
@@ -210,7 +234,8 @@ See `../README.md` for how this fits the broader formal-verification model.
   `NoReadWithoutReason`, `EventualPublication` and `Convergence` hold when
   request events stay off the reload fence, a rejected load requeues without
   back-off and a rejected refresh hands its node to the observer (Lean
-  `ClientDataPublication.acceptsReload`, `ObserverResync`).
+  `ClientDataPublication.acceptsReload`, `ObserverResync`). The reload fence
+  is the generated table of `ClientDataPublication.reloadAcceptedSince`.
   `NoReadWithoutReason` bounds hosted reads by batches of reasons to read, not
   below them: with a lease renewal during every load the node is read back to
   back. `RejectDelay` restores the 250 ms wait after a rejected load and still
@@ -259,6 +284,30 @@ See `../README.md` for how this fits the broader formal-verification model.
   waits on the `pending_native` write-attempt event, a projection the attempt
   may skip once it holds a terminal outcome; `LostWakeup` drops permit
   semantics, the lost wakeup an enable-then-check wait avoids.
+- `SharedOwnerHotCounter` — concurrent read-modify-write increments of one
+  document through the shared transaction owner (`transact_write` in
+  `ConflictRetry` mode on an embedded node), the
+  `shared_owner_hot_counter_has_no_lost_updates_at_c64` workload. Writers
+  take a mutation-gate permit (a FIFO semaphore that parks and wakes), open a
+  native transaction, read the counter in it, and commit under Regolith's
+  validation of every read and written key against its observed sequence; a
+  conflict repeats the callback on a fresh transaction while Lean
+  `TransactionReplay.disposition` allows, and a commit-phase timeout is a
+  storage fault that is never repeated. `AckedApplied`, `ConflictNotApplied`,
+  `NoDoubleApply`, `NoLostUpdate`, `TestAccounting`, `AttemptBound`,
+  `PermitsAccounted` and `EveryCallSettles` hold with the gate contended and
+  commits that may time out; `Unbounded` shows first-committer-wins alone
+  rules out livelock. `ReadOutsideTxn`, `StaleRetry`, `ConflictAsSuccess` and
+  `RetryAmbiguous` each break one safety guard; `LostWakeup` and
+  `AbortOnOpenWriter` are the two stall shapes, each refuted for the code.
+  `WaveDeadline` is the test's 60 s per-wave timeout as a property: wall time
+  passes while the writers wait for the host, so it fails with every safety
+  property holding. `Native` is one round of raw single-attempt transactions
+  without the owner, as the native c64 experiment runs them: `RoundProgress`
+  (some writer commits) holds by first-committer-wins, and
+  `NativeAbortOnOpenWriter` (overlapping writers aborted together) ends a
+  round with no commit.
+
 - `DroppedPermitCleanup` — one admitted provider call's `InferenceCall` row
   from its creation to its terminal, and what a reader may await before
   reading it (#3659). The holder finishes explicitly (the terminal write is
@@ -350,38 +399,85 @@ See `../README.md` for how this fits the broader formal-verification model.
   bytes, the observed failure; `TimeoutKill` is the tool timeout killing it
   at the gate, which the wait reports as failed; `PollBudget` is the test's poll budget failing
   before the child prints. Green has neither clock.
+- `ScriptFixtureExec` — a test that executes a script beside sibling tests
+  that spawn (`supplied_path_retains_native_script_fallback`). A sibling's
+  spawn copies the process's descriptors into its child until that child
+  execs, and Linux execve refuses a file open for writing (ETXTBSY). RED:
+  `InProcessWrite` writes the script in the test process, the failure on the
+  Linux runner, and also what O_CLOEXEC alone gives (std already opens with
+  it). Green never opens it for writing there (a checked-in fixture);
+  `ChildWriter` writes a generated script from a child process the test
+  reaps before its exec (`write_executable_script`), and its RED
+  `ChildWriterUnwaited` drops the reap. `Darwin` (no such execve check) and
+  `Alone` (no sibling) explain why the old order passed on macOS and alone.
 - `Sanity` — toolchain smoke test; not a real model.
 
-## One-time setup
+## Checking
 
-```bash
-./scripts/install-tools.sh
+Each model config's first line states the result TLC must report for it:
+
+```
+\* expect: holds
+\* expect: deadlock
+\* expect: violates <Name>
+\* expect: violates <Name> initially
 ```
 
-Downloads `tla2tools.jar` into `.tools/` (gitignored). Requires Java 11+ on `PATH`. On macOS without a JDK, install via `brew install openjdk@17` and ensure `/opt/homebrew/opt/openjdk@17/bin` is on `PATH`. Override version via `TLA_VERSION=v1.8.0`.
+`<Name>` is one `INVARIANT` or `PROPERTY` the config checks; `initially`
+records that the initial state violates it, and a violation in the initial
+state matches no other header. `deadlock` requires deadlock checking on. TLC
+must also report at least two distinct states, or the number an optional
+second line `\* states: <N>` records, so a model whose initial predicate
+admits nothing, or that stops after its first state, does not pass.
 
-## Running
+Each spec follows its `---- MODULE X ----` line with the Lean decisions it
+reads and the crates that implement it, then optionally the Lean it restates
+by hand and the code outside any crate that it models:
 
-For Sanity (toolchain smoke test):
-```bash
-./scripts/run-tlc.sh Sanity
+```
+\* lean: none | <Lean.owner>, <Lean.owner>
+\* crates: none | <crate>, <crate>
+\* models: <Lean.declaration>, <Lean.declaration>
+\* paths: <repository path>, <repository path>
 ```
 
-For PairingTransport — the dialable model checks clean (all properties hold):
-```bash
-./scripts/run-tlc.sh MCPairingTransportDialable
-```
+A `lean:` owner is a Lean `conformance_function` over a finite domain (its key
+in `crates/gents-lean-vocab/families.schema.json`); the spec `EXTENDS` the
+generated module that holds its table. A `models:` declaration is any Lean
+definition the spec restates without a table; naming it selects the spec when
+its source changes. A crate is a workspace package; a `paths:` entry is a file
+or directory outside every crate, and a change to it or under it selects the
+spec. These headers are the
+record of expected results; `scripts/tla_check.py check-headers` and
+`scripts/ci/test_gate.py` check them: every owner is in the snapshot, every
+`models:` declaration and path exists, every crate is a package, every config has a
+header, and every `LeanDecision_*` module a spec extends exists and holds one
+of its `lean:` owners.
 
-The other two configs are diagnostics and are EXPECTED to report violations — each reproduces a distinct real failure mode. MODE A (connect-fails-first, the literal #511 hang) violates `ReplicatorLiveness` with a never-`Connected` trace:
-```bash
-./scripts/run-tlc.sh MCPairingTransportUndialable
-```
+`scripts/tla_check.py run --all` model-checks every config in breadth-first
+mode with one worker per config and a fixed fingerprint, compares each result
+with its header and prints a table; a mismatch, too few states, a missing
+header, a TLC error or a timeout (`--timeout`, seconds per config) fails it.
+`--spec`, `--config`, `--crate`, `--lean` and `--files` narrow the run. The
+pull request gate runs the specs whose headers name a changed crate or Lean
+owner, declaration or path, or whose own files or generated imports changed; main
+and the nightly `TLA+ nightly` workflow run every config.
+`scripts/tla_check.py install` installs the pinned JDK and `tla2tools.jar`
+(version and SHA-256 in the script) under `~/.cache/gents-tla`.
+`scripts/run-tlc.sh <MC config>` runs TLC with them and prints its full
+output, counterexample included.
 
-MODE B/C (connect OK, replicator install never succeeds) violates `PartialApplyHasProgress` and returns the exact "subscribed collections, null replicator" partial row:
-```bash
-./scripts/run-tlc.sh MCPairingTransportReplicatorStuck
-```
+## Generated Lean decisions
 
+`make lean-regen` writes `generated/LeanDecision_<Namespace>.tla` for every
+`lean:` owner: `<name>_table`, the decision over its whole domain keyed by the
+tuple of its arguments in Lean parameter order and written as a balanced tree
+of `@@` (a long left-nested chain overflows TLC's stack), and `<name>(...)`,
+its lookup. Regeneration fails for an owner that is not such a function. A
+spec `EXTENDS` that module instead of restating the decision, and must not
+define an operator of the same name. `generated_tla_modules_are_current` in
+`gents-lean-vocab` fails when a module is stale. The scripts put `generated/`
+on TLC's library path (`-DTLA-Library`).
 For P2PBackpressure — **modeled, not yet TLC-checked** on the reference
 runner (no recorded-runs row; TLC was not executed when this model landed).
 The configs below are the intended green/red suite; treat the prose outcomes
@@ -610,7 +706,7 @@ The two diagnostic configs each reproduce one real failure mode (the production 
 
 The key structural result: `DialSucceed` requires `Dialable` and `InstallReplicator` requires `ReplicatorInstallable`, and no fairness annotation can enable a disabled action. The reconciler's retries (SF on `Dial`/`Redial`, WF on the install) cannot make an un-dialable ticket dialable or make a non-installable replicator install — both are *transport/materialization preconditions the layer above must supply* (dial the shareable public address, not a listen-form address; resolve every replicated collection's schema so `add_replicator`'s cid lookup and filter validation pass). This is the TLA+ counterpart of the Lean `convergence_requires_successful_install` obligation: a connect/install *failure* step leaves the disagreement count unchanged and `> 0`, so convergence requires a *successful* install, which requires both a live connection and an installable replicator.
 
-Active lines from `MCP2PBackpressureGreen.cfg` (`TimeoutReleasesSlot = TRUE`, `AckWithoutPendingAllowed = FALSE`) — **modeled properties; TLC not yet run** (no recorded-runs row):
+Active lines from `MCP2PBackpressureGreen.cfg` (`TimeoutReleasesSlot = TRUE`, `AckWithoutPendingAllowed = FALSE`):
 
 - **`INVARIANT TypeOK`** — outbound states and inbound admission sets stay in their declared bounded domains.
 - **`INVARIANT PushSlotsBounded`** — in-flight outbound PushLog sends never exceed `PushWorkers`.
@@ -620,7 +716,7 @@ Active lines from `MCP2PBackpressureGreen.cfg` (`TimeoutReleasesSlot = TRUE`, `A
 - **`PROPERTY HealthyPeersDeliver`** — every responsive peer eventually reaches `Delivered`, even if the nonresponsive peer gets the first worker slot.
 - **`PROPERTY InboundSettles`** — every inbound PushLog eventually receives either success or nack.
 
-The diagnostics are **designed** to reproduce one load-bearing failure each (claims, not TLC-verified results):
+The diagnostics each reproduce one load-bearing failure:
 
 - **`MCP2PBackpressureTimeoutStall.cfg`** (`TimeoutReleasesSlot = FALSE`) — intended counterexample: start `slow` first, fill the only worker slot, leave healthy peers queued forever so `HealthyPeersDeliver` fails. This encodes **necessity** of slot release in a one-worker toy: if timeout does not free the semaphore, healthy delivery can fail even under fairness. It is **not** a sufficiency claim that Amy hub saturation is solved when the green BOOLEAN holds (production can still fail via multi-slow-peer fill, re-queue storms, Bitswap stalls, or gossip-loop death after the permit is released).
 - **`MCP2PBackpressureBadAck.cfg`** (`AckWithoutPendingAllowed = TRUE`) — intended counterexample: fill the pending-DAG map and success-ack a second inbound PushLog without merging or registering it so `SuccessAckBacked` fails. Formal counterpart of the production invariant (defradb.rs #1089 / pinned hub admission) that pending-DAG capacity overflow must return the backpressure nack, not success.
@@ -698,6 +794,17 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCObserverResyncStaleCommit.cfg` | `NoPublicationFence` checking only `TypeOK` and `NoStaleCommit` | `NoStaleCommit` intentionally VIOLATED: the same older refresh replaces the newer published version | 114 distinct states before counterexample; 201 generated | 9 | <1s |
 | `MCObserverResyncNoEventQueue.cfg` | 1 node, a delivered event does not queue its node | `NoLostWrite` intentionally VIOLATED: a write after the snapshot read is delivered and never loaded | 21 distinct states before counterexample; 25 generated | 7 | <1s |
 | `MCObserverResyncSnapshotBeforeArm.cfg` | 1 node, the snapshot is queued before the streams arm | `NoLostWrite` intentionally VIOLATED: a write between the read and the arm has no event and no later load | 65 distinct states before counterexample; 102 generated | 7 | <1s |
+| `MCSharedOwnerHotCounter.cfg` | `Writers = {w1, w2, w3}`, `Iters = 2`, `Attempts = 4`, `Capacity = 2`, commit timeouts | Passes `TypeOK`, `AckedApplied`, `ConflictNotApplied`, `NoDoubleApply`, `NoLostUpdate`, `TestAccounting`, `AttemptBound`, `PermitsAccounted`, `EveryCallSettles` | 86,973 distinct states; 171,709 generated | — | 30s (Linux, OpenJDK 17, 8 workers) |
+| `MCSharedOwnerHotCounterUnbounded.cfg` | as green, `BoundedRetry = FALSE`, no timeouts | Passes every invariant but `AttemptBound` (unchecked) and `EveryCallSettles` | 8,428 distinct states; 18,517 generated | — | 2s |
+| `MCSharedOwnerHotCounterReadOutsideTxn.cfg` | as green, read before begin | `NoLostUpdate` intentionally VIOLATED | 144 distinct states; 186 generated | — | <1s |
+| `MCSharedOwnerHotCounterStaleRetry.cfg` | as green, the retry keeps the aborted read | `NoLostUpdate` intentionally VIOLATED | 297 distinct states; 465 generated | — | <1s |
+| `MCSharedOwnerHotCounterConflictAsSuccess.cfg` | as green, an abort acknowledged | `AckedApplied` intentionally VIOLATED | 126 distinct states; 181 generated | — | <1s |
+| `MCSharedOwnerHotCounterRetryAmbiguous.cfg` | as green, a timed-out commit repeated | `NoDoubleApply` intentionally VIOLATED | 1,354 distinct states; 2,427 generated | — | <1s |
+| `MCSharedOwnerHotCounterLostWakeup.cfg` | as green, a parked acquirer never woken | `EveryCallSettles` intentionally VIOLATED | 15,628 distinct states; 30,262 generated | — | 1s |
+| `MCSharedOwnerHotCounterAbortOnOpenWriter.cfg` | as green, aborts for uncommitted writers, unbounded retries | `EveryCallSettles` intentionally VIOLATED: a livelock lasso | 22,124 distinct states; 56,227 generated | — | 2s |
+| `MCSharedOwnerHotCounterWaveDeadline.cfg` | as green, `CheckDeadline`, `Deadline = 2` | `WaveDeadline` intentionally VIOLATED: three ticks pass before any writer runs; every safety invariant holds | 226 distinct states; 386 generated | 4 | <1s |
+| `MCSharedOwnerHotCounterNative.cfg` | `Iters = 1`, `Attempts = 1`, `Capacity = 3`, no timeouts | Passes every invariant, `RoundProgress` and `EveryCallSettles` | 195 distinct states; 304 generated | — | <1s |
+| `MCSharedOwnerHotCounterNativeAbortOnOpenWriter.cfg` | as `Native`, two writers, overlapping writers aborted together | `RoundProgress` intentionally VIOLATED: both writers read, both abort | 26 distinct states; 32 generated | — | <1s |
 | `MCBackgroundLiveOutputObservation.cfg` | no child self-expiry, no poll budget | Passes `TypeOK`, `ReadAgrees`, `NoWindowFailure`, `CompletedOk`, `Completes` | 7 distinct states; 8 generated | — | <1s (Linux, OpenJDK 17) |
 | `MCBackgroundLiveOutputObservationTimed.cfg` | `SelfExpire`, `K = 2` | `ReadAgrees` intentionally VIOLATED: ChildPrint, Tick, Tick, Poll (running, 4 bytes), ChildFinish, Read returns 8 | 20 distinct states; 25 generated | 7 | <1s |
 | `MCBackgroundLiveOutputObservationTimeoutKill.cfg` | `SelfExpire`, `K = 2` | `CompletedOk` intentionally VIOLATED: the tool timeout kills the child at its gate after the running/4 listing; the wait reports failed | 31 distinct states; 39 generated | 9 | <1s |

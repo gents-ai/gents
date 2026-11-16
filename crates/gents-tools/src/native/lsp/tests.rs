@@ -2131,8 +2131,10 @@ async fn rust_analyzer_starts_and_reports_ready() {
     {
         return;
     }
-    let src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/lsp_rust_workspace");
+    let src = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("tests/fixtures/lsp_rust_workspace");
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join("src")).unwrap();
     // rust-analyzer prefers Cargo.toml over rust-project.json. An isolated
@@ -2150,7 +2152,9 @@ async fn rust_analyzer_starts_and_reports_ready() {
     // default toolchain with no rust-analyzer component installed.
     server.command = super::admit::admit_command(
         "rust-analyzer",
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        &std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+        ),
     )
     .expect("repository rust-analyzer must pass host executable admission")
     .to_string_lossy()
@@ -2233,10 +2237,12 @@ async fn rust_analyzer_hover_on_gents_crate() {
     {
         return;
     }
-    let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("workspace root");
+    let workspace_root = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("../..")
+    .canonicalize()
+    .expect("workspace root");
     let auth = workspace_root.join("crates/gents/src/tools/native/lsp/auth.rs");
     let policy = workspace_root.join("crates/gents-loop/src/tool_policy.rs");
     let advertised_line = first_line_containing(&auth, "pub fn lsp_advertised");
@@ -2514,12 +2520,10 @@ fn requested_result_limit_applies_to_diagnostics_symbols_and_references() {
 #[cfg(unix)]
 #[tokio::test]
 async fn linter_fallback_obeys_its_total_deadline() {
-    use std::os::unix::fs::PermissionsExt;
-
     let workspace = tempfile::tempdir().unwrap();
     let host = tempfile::tempdir().unwrap();
     let linter_path = host.path().join("hung-biome");
-    std::fs::write(
+    gents_store::test_support::write_executable_script(
         &linter_path,
         r#"#!/bin/sh
 : > "$0.started"
@@ -2527,9 +2531,6 @@ exec sleep 30
 "#,
     )
     .unwrap();
-    let mut permissions = std::fs::metadata(&linter_path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&linter_path, permissions).unwrap();
     let source = workspace.path().join("source.js");
     std::fs::write(&source, "const x = 1;\n").unwrap();
     std::fs::write(workspace.path().join("package.json"), "{}").unwrap();

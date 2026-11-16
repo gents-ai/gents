@@ -144,7 +144,7 @@ pub(super) fn project_pending_turn(
         selected_skill_ids: request_input.selected_skill_ids,
         lifecycle_state,
         folded_into_request_id: folded_into.map(str::to_owned),
-        origin: super::request_origin_view(store, request),
+        origin: super::request_origin_view(request),
         created_at: normalize_optional(request.created_at.as_deref()),
     })
 }

@@ -1,6 +1,7 @@
-//! `--regenerate`: one pass that writes `src/generated.rs` and
-//! `families.schema.json` from a single Lean snapshot, and does nothing when no
-//! input changed since the last pass that completed.
+//! `--regenerate`: one pass that writes `src/generated.rs`,
+//! `families.schema.json` and the TLA+ Lean decision modules from a single
+//! Lean snapshot, and does nothing when no input changed since the last pass
+//! that completed.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -200,6 +201,13 @@ pub fn run(src: &Path, snapshot_file: Option<&str>, force: bool) {
     });
     let ((schema, schema_ms), (gone, passes, decoders_ms)) = (schema, decoders);
     let schema_changed = write_if_changed(&crate_dir.join(SCHEMA), &schema);
+    let phase = Instant::now();
+    let tla = repo.join("crates/gents/proofs/tla");
+    let modules = gents_lean_vocab::tla::render_modules_from_snapshot(&snapshot, &tla)
+        .unwrap_or_else(|error| panic!("TLA+ Lean decisions: {error}"));
+    let tla_changed = gents_lean_vocab::tla::write_modules(&tla.join("generated"), &modules)
+        .expect("write the TLA+ Lean decisions");
+    let tla_ms = ms(phase);
 
     if stamped {
         let digest = inputs_digest(repo);
@@ -212,6 +220,10 @@ pub fn run(src: &Path, snapshot_file: Option<&str>, force: bool) {
     println!("parse_ms: {parse_ms}");
     println!("decoders_ms: {decoders_ms} ({passes} passes, root fields removed: {gone:?})");
     println!("schema_ms: {schema_ms} (changed: {schema_changed})");
+    println!(
+        "tla_ms: {tla_ms} ({} modules, changed: {tla_changed})",
+        modules.len()
+    );
     println!("total_ms: {}", ms(started));
 }
 

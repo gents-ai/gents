@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """Selection and guard checks for gate.py against the real workspace graph; no builds."""
 
+import contextlib
+import hashlib
+import io
 import json
 import os
+import platform
 import re
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gate  # noqa: E402
@@ -103,7 +109,7 @@ class Selection(unittest.TestCase):
         # A path that classifies as inert runs only the always-on jobs, so every
         # script a plan-selected job or the runner setup calls must select work.
         jobs = workflow_jobs(CI)
-        sources = [jobs[name] for name in set(gate.WORKFLOW_JOBS.values()) | {"test"}]
+        sources = [jobs[name] for name in set(gate.WORKFLOW_JOBS.values()) | set(gate.MATRIX_JOBS)]
         sources += [(gate.ROOT / ".github/actions/rust-runner/action.yml").read_text(),
                     Path(gate.__file__).read_text()]
         referenced = {path for text in sources for path in SCRIPT.findall(text)}
@@ -145,6 +151,122 @@ class Selection(unittest.TestCase):
         selection = select(everything=True, only={"lint", "test:cli"})
         self.assertEqual(selection["jobs"], ["lint", "test:cli"])
         self.assertEqual(list(groups(selection)), ["cli"])
+        self.assertEqual(selection["archives"], [])
+
+
+def sharded(count, *files, **options):
+    os.environ["GATE_PORTABLE_SHARDS"] = str(count)
+    try:
+        return select(*files, **options)
+    finally:
+        del os.environ["GATE_PORTABLE_SHARDS"]
+
+
+def archived(selection):
+    return [package for entry in selection["archives"] for package in entry["packages"].split()]
+
+
+class Shards(unittest.TestCase):
+    PORTABLE = [package for group in gate.GROUPS if group.runner == "portable" for package in group.packages]
+
+    def test_the_portable_groups_build_once_and_run_as_slices(self):
+        selection = sharded(4, everything=True)
+        self.assertEqual(set(groups(selection)), {"runtime", "cli", "desktop"})
+        self.assertEqual(archived(selection), self.PORTABLE)
+        self.assertEqual([(entry["index"], entry["count"]) for entry in selection["shards"]],
+                         [(1, 4), (2, 4), (3, 4), (4, 4)])
+        self.assertIn("build:portable", selection["jobs"])
+        self.assertIn("shard:portable", selection["jobs"])
+        self.assertFalse(any(job in selection["jobs"] for job in ("test:foundation", "test:store", "test:session")))
+
+    def test_one_slice_runs_in_the_build_job(self):
+        selection = sharded(1, everything=True)
+        self.assertEqual(selection["shards"], [])
+        self.assertTrue(selection["archives"][0]["run"])
+        self.assertIn("build:portable", selection["jobs"])
+        self.assertNotIn("shard:portable", selection["jobs"])
+        self.assertFalse(sharded(3, everything=True)["archives"][0]["run"])
+
+    def test_zero_or_unset_keeps_one_job_per_group(self):
+        for selection in (select(everything=True), sharded(0, everything=True)):
+            self.assertEqual(set(groups(selection)), {group.name for group in gate.GROUPS})
+            self.assertEqual((selection["archives"], selection["shards"]), ([], []))
+
+    def test_never_more_slices_than_crates_with_tests(self):
+        selection = sharded(6, "crates/gents-store/src/graphql.rs", tier="draft")
+        self.assertEqual(archived(selection), ["gents-store"])
+        self.assertEqual(selection["shards"], [])
+        self.assertTrue(selection["archives"][0]["run"])
+        compile_only = sharded(6, "crates/gents-core-packs/src/lib.rs", tier="draft")
+        self.assertEqual(archived(compile_only), ["gents-core-packs"])
+        self.assertEqual(compile_only["shards"], [])
+        self.assertIn("build:portable", compile_only["jobs"])
+        self.assertNotIn("shard:portable", compile_only["jobs"])
+
+    def test_only_selects_portable_groups_or_the_whole_archive(self):
+        session = sharded(4, everything=True, only={"test:session"})
+        self.assertEqual(archived(session), gate.GROUPS[2].packages)
+        self.assertEqual(session["jobs"], ["build:portable", "shard:portable"])
+        whole = sharded(4, everything=True, only={"shard:portable", "test:cli"})
+        self.assertEqual(archived(whole), self.PORTABLE)
+        self.assertEqual(list(groups(whole)), ["cli"])
+
+    def test_the_slice_count_must_be_a_small_whole_number(self):
+        for value in ("-1", "four", "1.5", "33"):
+            with self.assertRaises(SystemExit, msg=value):
+                sharded(value, everything=True)
+
+    def test_an_archive_is_found_in_the_runner_temp_artifact_directory(self):
+        saved = {name: os.environ.get(name) for name in ("GITHUB_ACTIONS", "RUNNER_TEMP")}
+        os.environ.update(GITHUB_ACTIONS="true", RUNNER_TEMP="/runner/_temp")
+        try:
+            self.assertEqual(gate.archive_dir(), Path("/runner/_temp/gents-tests"))
+        finally:
+            for name, value in saved.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    def test_slices_cap_their_test_threads(self):
+        captured = []
+        original = gate.nextest
+        gate.nextest = lambda arguments, **options: captured.append(arguments) or True
+        saved = os.environ.get("RUST_TEST_THREADS")
+        try:
+            for threads in ("12", "4"):
+                os.environ["RUST_TEST_THREADS"] = threads
+                gate.run_shard(sharded(3, everything=True), "portable", 1)
+        finally:
+            gate.nextest = original
+            os.environ.pop("GENTS_TEST_BINARIES_PREBUILT", None)
+            if saved is None:
+                os.environ.pop("RUST_TEST_THREADS", None)
+            else:
+                os.environ["RUST_TEST_THREADS"] = saved
+        threads = [arguments[arguments.index("--test-threads") + 1] for arguments in captured]
+        self.assertEqual(threads, [str(gate.SLICE_THREADS), "4"])
+
+    def test_a_shard_job_names_its_slice(self):
+        selection = sharded(3, everything=True)
+        with self.assertRaises(SystemExit):
+            gate.run_shard(selection, "portable", 4)
+
+    def test_no_portable_crate_has_a_doctest(self):
+        self.assertEqual(gate.doctests(self.PORTABLE), [])
+        for line in ("/// ```", "    //! ```rust", '#[doc = "```"]', "/// ```no_run"):
+            self.assertTrue(gate.DOC_FENCE.match(line), line)
+        for line in ("/// ```text", "//! ```ignore", "// ```", "let fence = \"```\";"):
+            self.assertFalse(gate.DOC_FENCE.match(line), line)
+
+    def test_a_binary_holding_the_build_checkout_path_is_unrelocatable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "src"
+            portable = Path(directory) / "portable"
+            portable.write_bytes(b"\0" + str(source / "target/debug/build/x/out").encode() + b"\0")
+            pinned = Path(directory) / "pinned"
+            pinned.write_bytes(b"\0" + str(source / "crates/gents-pack").encode() + b"\0")
+            self.assertEqual(gate.unrelocatable([portable, pinned], source), ["pinned"])
 
 
 ROLES = gate.inventory()["roles"]
@@ -265,7 +387,7 @@ class Verdict(unittest.TestCase):
     """The `gate` job: `needs` as GitHub passes it, for the plans each event makes."""
 
     def needs(self, selection, **results):
-        names = set(gate.ALWAYS) | set(gate.WORKFLOW_JOBS.values()) | {"test"}
+        names = set(gate.ALWAYS) | set(gate.WORKFLOW_JOBS.values()) | set(gate.MATRIX_JOBS)
         selected = {gate.workflow_job(job) for job in selection["jobs"]}
         needs = {name: {"result": "success" if name in selected or name in gate.ALWAYS else "skipped",
                         "outputs": {}} for name in names}
@@ -278,7 +400,7 @@ class Verdict(unittest.TestCase):
         listed = re.search(r"^  gate:\n(?:    .*\n)*?    needs:\n((?:      - \S+\n)+)", CI, flags=re.M)
         self.assertIsNotNone(listed)
         needs = set(re.findall(r"- (\S+)", listed.group(1)))
-        self.assertEqual(needs, set(gate.ALWAYS) | set(gate.WORKFLOW_JOBS.values()) | {"test"})
+        self.assertEqual(needs, set(gate.ALWAYS) | set(gate.WORKFLOW_JOBS.values()) | set(gate.MATRIX_JOBS))
         self.assertEqual(set(workflow_jobs(CI)) - {"gate"}, needs)
         self.assertEqual(gate.verdict({name: {"result": "success"} for name in needs - {"lint"}}),
                          ["lint: missing from the gate job's needs", "plan: produced no plan"])
@@ -291,6 +413,9 @@ class Verdict(unittest.TestCase):
             "draft": select("crates/gents-store/src/graphql.rs", tier="draft"),
             "frontend": select("packages/gents-desktop-ui/src/index.ts"),
             "everything (push, merge queue, dispatch)": select(everything=True),
+            "everything, sharded": sharded(4, everything=True),
+            "draft, sharded": sharded(4, "crates/gents-store/src/graphql.rs", tier="draft"),
+            "compile only, sharded": sharded(4, "crates/gents-core-packs/src/lib.rs", tier="draft"),
         }
         for event, selection in plans.items():
             self.assertEqual(gate.verdict(self.needs(selection)), [], event)
@@ -301,6 +426,13 @@ class Verdict(unittest.TestCase):
             problems = gate.verdict(self.needs(selection, **{job: "skipped"}))
             self.assertEqual(len(problems), 1, job)
             self.assertIn(f"{job}: the plan selected", problems[0])
+
+    def test_a_selected_build_or_shard_that_was_skipped_fails(self):
+        selection = sharded(4, everything=True)
+        for job in ("build", "shard"):
+            problems = gate.verdict(self.needs(selection, **{job: "skipped"}))
+            self.assertEqual(problems, [f"{job}: the plan selected {job}:portable but it was skipped"], job)
+        self.assertEqual(gate.verdict(self.needs(selection, shard="failure")), ["shard: failure"])
 
     def test_a_job_the_plan_left_out_may_be_skipped_but_not_fail(self):
         selection = select("docs/upgrade-from-rc1.md")
@@ -384,6 +516,279 @@ class Guards(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("stuck", verdict)
         self.assertNotIn("fine", verdict)
+
+
+def tlc_message(code, kind, body):
+    return f"@!@!@STARTMSG {code}:{kind} @!@!@\n{body}\n@!@!@ENDMSG {code} @!@!@\n"
+
+
+class TlaSelection(unittest.TestCase):
+    """The planner picks TLA+ specs by the crates and Lean owners their headers name."""
+
+    def test_a_crate_change_selects_the_specs_that_name_it(self):
+        tla = select("crates/gents-desktop-core/src/lib.rs")["contract"]["tla"]
+        self.assertIn("RuntimeConnectionTransport", tla)
+        self.assertNotIn("ClientSubmissionContention", tla)
+        for name in tla:
+            self.assertIn("gents-desktop-core", gate.tla_check.spec_header(gate.tla_check.specs()[name])[1])
+
+    def test_a_lean_change_selects_the_specs_that_name_its_owner(self):
+        selection = select("crates/gents/proofs/Proofs/Store/TransactionReplay.lean")
+        self.assertIn("ClientSubmissionContention", selection["contract"]["tla"])
+        self.assertNotIn("PackUxWatch", selection["contract"]["tla"])
+
+    def test_a_generated_decision_selects_the_specs_that_import_it(self):
+        importers = {name for name, node in gate.tla_check.graph().items()
+                     if "LeanDecision_TransactionReplay" in node["generated"]}
+        self.assertTrue(importers)
+        tla = select("crates/gents/proofs/tla/generated/LeanDecision_TransactionReplay.tla")["contract"]["tla"]
+        self.assertEqual(set(tla), importers)
+
+    def test_a_config_selects_its_spec_and_the_runner_selects_every_spec(self):
+        self.assertEqual(select("crates/gents/proofs/tla/MCPackUxWatchTransient.cfg")["contract"]["tla"],
+                         ["PackUxWatch"])
+        everything = sorted(gate.tla_check.specs())
+        self.assertEqual(select("crates/gents/proofs/tla/scripts/tla_check.py")["contract"]["tla"], everything)
+        self.assertEqual(select("Cargo.lock")["contract"]["tla"], everything)
+
+    def test_selection_follows_the_header_not_the_file_name(self):
+        nodes = {"A": {"path": Path("A.tla"), "lean": ["X.decide"], "crates": ["gents-p2p"], "configs": [],
+                       "generated": []},
+                 "B": {"path": Path("B.tla"), "lean": [], "crates": ["gents-store"], "configs": [],
+                       "generated": ["LeanDecision_X"]}}
+        owner = lambda path: gate.crate_of(path, MEMBERS)  # noqa: E731
+        check = gate.tla_check
+        self.assertEqual(check.select(["crates/gents-p2p/src/lib.rs"], nodes, owner), ["A"])
+        self.assertEqual(check.select(["crates/gents-store/src/lib.rs"], nodes, owner), ["B"])
+        self.assertEqual(check.select(["crates/gents/proofs/tla/generated/LeanDecision_X.tla"], nodes, owner),
+                         ["B"])
+        self.assertEqual(check.select(["crates/gents-cli/src/lib.rs", "docs/a.md"], nodes, owner), [])
+
+    def test_a_conformance_export_selects_the_spec_that_names_its_owner(self):
+        """Lean exports live in `namespace Conformance.<Owner>` or name the owner in full."""
+        check = gate.tla_check
+        cases = "crates/gents/proofs/Proofs/Conformance/ClientDataPublicationCases.lean"
+        self.assertIn("ObserverResync", select(cases)["contract"]["tla"])
+        resources = "crates/gents/proofs/Proofs/Conformance/PluginResources.lean"
+        nodes = {"A": {"path": Path("A.tla"), "lean": ["PluginResources.computeAllowances"], "crates": [],
+                       "configs": [], "generated": []}}
+        self.assertEqual(check.select([resources], nodes, lambda path: None), ["A"])
+        self.assertFalse(check.lean_declares("namespace Conformance.Other\ndef computeAllowances := 1\n",
+                                             "PluginResources.computeAllowances"))
+        self.assertTrue(check.lean_declares("attribute [conformance_function] A.B.decide\n", "A.B.decide"))
+
+    def test_code_outside_a_crate_selects_the_spec_whose_paths_name_it(self):
+        observation = "apps/gents-desktop/src/hooks/clientObservation.ts"
+        self.assertIn("DesktopUpdateListener", select(observation)["contract"]["tla"])
+        self.assertNotIn("DesktopUpdateListener", select("apps/gents-desktop/src/hooks/chatStore.ts")["contract"]["tla"])
+        check = gate.tla_check
+        nodes = {"A": {"path": Path("A.tla"), "lean": [], "crates": [], "paths": ["packages/ui/src"],
+                       "configs": [], "generated": []}}
+        self.assertEqual(check.select(["packages/ui/src/view.ts"], nodes, lambda path: None), ["A"])
+        self.assertEqual(check.select(["packages/ui/srcx/view.ts"], nodes, lambda path: None), [])
+        with tempfile.TemporaryDirectory() as scratch:
+            spec = Path(scratch) / "A.tla"
+            spec.write_text("---- MODULE A ----\n\\* lean: none\n\\* crates: none\n"
+                            "\\* paths: apps/x.ts, packages/y\n====\n")
+            self.assertEqual(check.spec_header(spec).paths, ["apps/x.ts", "packages/y"])
+            spec.write_text("---- MODULE A ----\n\\* lean: none\n\\* crates: none\n"
+                            "\\* paths: apps/x.ts\n\\* models: A.b\n====\n")
+            with self.assertRaises(check.HeaderError):
+                check.spec_header(spec)
+
+    def test_lean_a_spec_restates_selects_it(self):
+        """Specs that copied Lean by hand name it, as a generated table or on `models:`."""
+        proofs = "crates/gents/proofs/Proofs/"
+        for source, spec in [("Session/AgentSession.lean", "SessionHeadObservation"),
+                             ("Clients/ClientShell/PackWatch.lean", "PackUxWatch"),
+                             ("Store/NativeCompletion.lean", "NativeCompletionHandshake"),
+                             ("Tools/ToolPolicy/PluginCalls.lean", "GuestAllowance")]:
+            self.assertIn(spec, select(proofs + source)["contract"]["tla"], source)
+        node = gate.tla_check.graph()["SessionHeadObservation"]
+        self.assertEqual(node["lean"], ["AgentSession.newerByKeys"])
+        self.assertEqual(node["generated"], ["LeanDecision_AgentSession"])
+
+    def test_prose_selects_no_spec(self):
+        self.assertEqual(select("docs/guide.md")["contract"]["tla"], [])
+
+
+class TlaStructure(unittest.TestCase):
+    """Every spec names its Lean owners and crates, every config its TLC result."""
+
+    def test_headers_owners_crates_and_generated_imports(self):
+        schema = json.loads((gate.ROOT / "crates/gents-lean-vocab/families.schema.json").read_text())
+        problems = gate.tla_check.structure_problems(set(schema["functions"]), set(MEMBERS))
+        self.assertEqual(problems, [])
+
+    def test_a_missing_or_unnamed_generated_module_is_a_problem_and_still_selects(self):
+        """Imports come from the EXTENDS text, so a deleted module neither hides
+        its importers from selection nor passes the structure check."""
+        check = gate.tla_check
+        with tempfile.TemporaryDirectory() as scratch:
+            tla = Path(scratch)
+            (tla / "generated").mkdir()
+            (tla / "generated/LeanDecision_Here.tla").write_text(
+                "---- MODULE LeanDecision_Here ----\nEXTENDS TLC\nkeep(a) == a\n====\n")
+            (tla / "A.tla").write_text("---- MODULE A ----\n\\* lean: Gone.decide\n\\* crates: none\n"
+                                       "EXTENDS Naturals, LeanDecision_Gone\n====\n")
+            (tla / "B.tla").write_text("---- MODULE B ----\n\\* lean: none\n\\* crates: none\n"
+                                       "\\* models: Nowhere.decide\nEXTENDS LeanDecision_Here\n====\n")
+            (tla / "C.tla").write_text("---- MODULE C ----\n\\* lean: Here.keep\n\\* crates: none\n"
+                                       "EXTENDS Naturals\n====\n")
+            for spec in "ABC":
+                (tla / f"{spec}.cfg").write_text("\\* expect: holds\nSPECIFICATION Spec\n")
+            nodes = check.graph(tla)
+            self.assertEqual(nodes["A"]["generated"], ["LeanDecision_Gone"])
+            self.assertEqual(nodes["B"]["models"], ["Nowhere.decide"])
+            self.assertEqual(check.select(["crates/gents/proofs/tla/generated/LeanDecision_Gone.tla"], nodes,
+                                          lambda path: None), ["A"])
+            problems = check.structure_problems({"gone_decide", "here_keep"}, set(), tla, sources={})
+        self.assertEqual(problems, [
+            "A.tla: extends LeanDecision_Gone, which is not generated",
+            "B.tla: models Nowhere.decide, which no Lean source declares",
+            "B.tla: extends LeanDecision_Here but names none of its owners on its lean line",
+            "C.tla: names Here.keep but does not extend LeanDecision_Here",
+        ])
+
+    def test_check_headers_reports_every_structure_problem(self):
+        """Not only the expect lines: owners, crates and imports too."""
+        check = gate.tla_check
+        with tempfile.TemporaryDirectory() as scratch:
+            tla = Path(scratch)
+            (tla / "A.tla").write_text("---- MODULE A ----\n\\* lean: Ns.decide\n\\* crates: no-such-crate\n"
+                                       "EXTENDS Naturals\n====\n")
+            (tla / "A.cfg").write_text("\\* expect: holds\nSPECIFICATION Spec\n")
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                status = check.check_headers(tla, functions=set(), members={"gents"})
+        self.assertEqual(status, 1)
+        self.assertIn("no-such-crate is not a workspace package", errors.getvalue())
+        self.assertIn("Ns.decide is not in the conformance snapshot", errors.getvalue())
+        self.assertIn("does not extend LeanDecision_Ns", errors.getvalue())
+        self.assertEqual(check.check_headers(functions=set(json.loads(
+            (gate.ROOT / "crates/gents-lean-vocab/families.schema.json").read_text())["functions"]),
+            members=set(MEMBERS)), 0)
+
+    def test_lean_owner_keys_follow_lean_wire_names(self):
+        check = gate.tla_check
+        self.assertEqual(check.wire_key("TransactionReplay.disposition"), "transaction_replay_disposition")
+        self.assertEqual(check.wire_key("Conformance.PluginResources.computeAllowances"),
+                         "plugin_resources_compute_allowances")
+        self.assertEqual(check.wire_name("MCPHealth"), "mcp_health")
+
+    def test_tlc_results_parse(self):
+        parse = gate.tla_check.parse
+        stats = tlc_message(2199, 0, "1,234 states generated, 1,045 distinct states found, 0 states left on queue.")
+        self.assertEqual(parse(tlc_message(2193, 0, "Model checking completed. No error has been found.") + stats, 0),
+                         ("holds", 1045))
+        self.assertEqual(parse(tlc_message(2110, 1, "Invariant NoLostWrite is violated.") + stats, 12),
+                         ("violates NoLostWrite", 1045))
+        self.assertEqual(parse(tlc_message(2116, 1, "Temporal property EventualResume was violated."), 13).verdict,
+                         "violates EventualResume")
+        self.assertEqual(parse(tlc_message(2116, 1, "Temporal properties were violated."), 13).verdict, "violates ?")
+        self.assertEqual(parse(tlc_message(2114, 1, "Deadlock reached."), 11).verdict, "deadlock")
+        self.assertTrue(parse(tlc_message(1000, 1, "Unknown operator Foo"), 255).verdict
+                        .startswith("error: Unknown operator"))
+        self.assertTrue(parse("", 1).verdict.startswith("error:"))
+
+    def test_a_model_without_states_or_violated_initially_does_not_match(self):
+        """TLC reports `Init == FALSE` as holding over zero states and an initial
+        state's violation like any other; neither is the recorded result."""
+        check = gate.tla_check
+        empty = (tlc_message(2190, 0, "Finished computing initial states: 0 distinct states generated at t.")
+                 + tlc_message(2193, 0, "Model checking completed. No error has been found.")
+                 + tlc_message(2199, 0, "0 states generated, 0 distinct states found, 0 states left on queue."))
+        self.assertEqual(check.parse(empty, 0), ("holds", 0))
+        self.assertEqual(check.judge(check.Expect("holds", 2), check.parse(empty, 0)), "FEW STATES")
+        self.assertEqual(check.judge(check.Expect("holds", 2), check.parse(
+            tlc_message(2193, 0, "Model checking completed. No error has been found."), 0)), "FEW STATES")
+        initial = tlc_message(2107, 1, "Invariant Inv is violated by the initial state:\nx = 0")
+        self.assertEqual(check.parse(initial, 12).verdict, "violates Inv initially")
+        self.assertEqual(check.judge(check.Expect("violates Inv", 2), check.parse(initial, 12)), "MISMATCH")
+        self.assertEqual(check.judge(check.Expect("violates Inv initially", 2), check.parse(initial, 12)), "ok")
+        early = tlc_message(2116, 1, "Temporal properties were violated.") + tlc_message(
+            2199, 0, "3 states generated, 3 distinct states found, 0 states left on queue.")
+        self.assertEqual(check.judge(check.Expect("violates ?", 2), check.parse(early, 13)), "ok")
+        self.assertEqual(check.judge(check.Expect("violates ?", 40), check.parse(early, 13)), "FEW STATES")
+        with tempfile.TemporaryDirectory() as scratch:
+            cfg = Path(scratch) / "MCX.cfg"
+            cfg.write_text("\\* expect: violates Live\n\\* states: 40\nSPECIFICATION Spec\nPROPERTY Live\n")
+            self.assertEqual(check.expectation(cfg), ("violates Live", 40))
+            cfg.write_text("\\* expect: violates Inv initially\nSPECIFICATION Spec\nINVARIANT Inv\n")
+            self.assertEqual(check.expectation(cfg), ("violates Inv initially", 2))
+            cfg.write_text("\\* expect: holds\n\\* states: many\nSPECIFICATION Spec\n")
+            with self.assertRaises(check.HeaderError):
+                check.expectation(cfg)
+
+    def test_tlc_runs_with_a_large_thread_stack(self):
+        """A default Java thread stack overflows on a large generated table."""
+        check = gate.tla_check
+        command = check.tlc_command("java", "tla2tools.jar", "4g", "/tmp/x", "MCX.cfg", "MCX")
+        self.assertIn("-Xss16m", command)
+        self.assertLess(command.index("-Xss16m"), command.index("tlc2.TLC"))
+        script = (check.TLA / "scripts/run-tlc.sh").read_text()
+        self.assertIn("s/^jvm: //p", script)
+        self.assertIn('"${JVM[@]}"', script)
+
+    def test_a_cached_jdk_is_reinstalled_unless_its_stamp_names_the_pinned_archive(self):
+        check = gate.tla_check
+        key = (platform.system(), platform.machine())
+        if key not in check.JDKS:
+            self.skipTest(f"no pinned JDK for {key}")
+        archive, digest = check.JDKS[key]
+        inside = "Contents/Home/bin/java" if key[0] == "Darwin" else "bin/java"
+        fetched = []
+
+        def fetch(url, expected, destination):
+            fetched.append(url.rsplit("/", 1)[1])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if url == check.TLA_TOOLS["url"]:
+                destination.write_bytes(b"jar")
+                return
+            with tarfile.open(destination, "w:gz") as bundle:
+                data = b"#!/bin/sh\n"
+                entry = tarfile.TarInfo(f"{check.JDK_RELEASE}/{inside}")
+                entry.size = len(data)
+                bundle.addfile(entry, io.BytesIO(data))
+
+        with tempfile.TemporaryDirectory() as scratch, \
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": scratch}), \
+                mock.patch.object(check, "fetch", fetch), \
+                mock.patch.dict(check.TLA_TOOLS, {"sha256": hashlib.sha256(b"jar").hexdigest()}):
+            home = Path(scratch) / "gents-tla" / check.JDK_RELEASE
+            (home / inside).parent.mkdir(parents=True)
+            (home / inside).write_text("left over by an interrupted install")
+            java, _ = check.install()
+            self.assertEqual(fetched, ["tla2tools.jar", archive])
+            self.assertEqual(java, home / inside)
+            self.assertEqual(java.read_text(), "#!/bin/sh\n")
+            self.assertEqual((home / check.JDK_STAMP).read_text().strip(), digest)
+            check.install()
+            self.assertEqual(fetched, ["tla2tools.jar", archive])
+            (home / check.JDK_STAMP).write_text("another archive\n")
+            check.install()
+            self.assertEqual(fetched, ["tla2tools.jar", archive, archive])
+
+    def test_expectations_and_isolated_properties(self):
+        check = gate.tla_check
+        with tempfile.TemporaryDirectory() as scratch:
+            cfg = Path(scratch) / "MCX.cfg"
+            cfg.write_text("\\* expect: violates Live\nSPECIFICATION Spec\nINVARIANT TypeOK\nPROPERTY Live\n")
+            self.assertEqual(check.expectation(cfg), ("violates Live", 2))
+            cfg.write_text("\\* expect: violates Missing\nSPECIFICATION Spec\nINVARIANT TypeOK\n")
+            with self.assertRaises(check.HeaderError):
+                check.expectation(cfg)
+            cfg.write_text("\\* expect: deadlock\nSPECIFICATION Spec\nCHECK_DEADLOCK FALSE\n")
+            with self.assertRaises(check.HeaderError):
+                check.expectation(cfg)
+            cfg.write_text("SPECIFICATION Spec\n")
+            with self.assertRaises(check.HeaderError):
+                check.expectation(cfg)
+        text = "\\* note\nCONSTANTS\n  N = 2\nSPECIFICATION Spec\nINVARIANT TypeOK\nPROPERTY A\nPROPERTY B\n"
+        self.assertEqual(check.cfg_sections(text)["PROPERTY"], ["A", "B"])
+        alone = check.without_checks(text, "B")
+        self.assertEqual(check.cfg_sections(alone), {"CONSTANTS": ["N", "=", "2"], "SPECIFICATION": ["Spec"],
+                                                     "PROPERTY": ["B"]})
 
 
 if __name__ == "__main__":

@@ -17,14 +17,10 @@ mod tests {
     fn under_root_absolute_is_denied() {
         let root = tempfile::tempdir().unwrap();
         let bin = root.path().join("evil-ls");
-        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&bin).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&bin, perms).unwrap();
-        }
+        gents_store::test_support::write_executable_script(&bin, "#!/bin/sh\n").unwrap();
+        #[cfg(not(unix))]
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
         let err = admit_command(&bin.to_string_lossy(), root.path()).unwrap_err();
         assert_eq!(err.to_contract(), "workspaceExecutable");
     }
@@ -58,7 +54,9 @@ mod tests {
             return;
         }
 
-        let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let workspace = std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+        );
         // rustup is the authority on whether the SELECTED toolchain carries
         // the component; a shim on PATH proves nothing (minimal profiles omit
         // rust-analyzer). Executing rustup here is fine: the production

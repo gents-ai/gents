@@ -381,6 +381,7 @@ def runtimeMaterializedSessionSelection :
 structure ConfigurationAdmissionInput where
   name : String
   visible : Bool
+  versionsCurrent : Bool
   deferredAt : Nat
   active : Nat
   deriving Lean.ToJson
@@ -394,12 +395,14 @@ structure ConfigurationAdmissionOutput where
 def runtimeConfigurationAdmissionDeferral :
     Family ConfigurationAdmissionInput ConfigurationAdmissionOutput where
   inputs :=
-    [ { name := "visible", visible := true, deferredAt := 3, active := 3 }
-    , { name := "invisible_same_generation", visible := false, deferredAt := 3, active := 3 }
-    , { name := "invisible_newer_generation", visible := false, deferredAt := 3, active := 4 }
-    , { name := "invisible_older_generation", visible := false, deferredAt := 4, active := 3 } ]
+    [ { name := "visible", visible := true, versionsCurrent := true, deferredAt := 3, active := 3 }
+    , { name := "superseded_same_generation", visible := true, versionsCurrent := false, deferredAt := 3, active := 3 }
+    , { name := "superseded_newer_generation", visible := true, versionsCurrent := false, deferredAt := 3, active := 4 }
+    , { name := "invisible_same_generation", visible := false, versionsCurrent := true, deferredAt := 3, active := 3 }
+    , { name := "invisible_newer_generation", visible := false, versionsCurrent := true, deferredAt := 3, active := 4 }
+    , { name := "invisible_older_generation", visible := false, versionsCurrent := true, deferredAt := 4, active := 3 } ]
   model := fun i =>
-    { expected := RuntimeState.configurationAdmission i.visible
+    { expected := RuntimeState.configurationAdmission i.visible i.versionsCurrent
       retries := RuntimeState.retriesDeferred i.deferredAt i.active }
 
 end Conformance.ContractCases

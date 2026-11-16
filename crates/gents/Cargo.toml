@@ -190,6 +190,7 @@ gents-toolcalls = { workspace = true, features = ["test-fixtures"] }
 gents-automation = { workspace = true, features = ["test-fixtures"] }
 gents-observe = { workspace = true, features = ["test-fixtures"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
 oxc_allocator = "=0.127.0"
 oxc_ast = "=0.127.0"
 oxc_ast_visit = "=0.127.0"

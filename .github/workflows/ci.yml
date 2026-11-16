@@ -36,6 +36,11 @@ on:
         required: false
         type: string
         default: ""
+      portable_shards:
+        description: Build the portable groups once and run their tests as this many slices on this run only; empty uses GENTS_CI_PORTABLE_SHARDS, 0 keeps one job per group.
+        required: false
+        type: string
+        default: ""
 
 # A new push to a pull request cancels its run in progress. A run of main, a
 # merge queue entry or a dispatch finishes: main's post-merge run is the only
@@ -95,6 +100,8 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       jobs: ${{ steps.plan.outputs.jobs }}
       tests: ${{ steps.plan.outputs.tests }}
+      archives: ${{ steps.plan.outputs.archives }}
+      shards: ${{ steps.plan.outputs.shards }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -147,6 +154,7 @@ jobs:
           GATE_FORK: >-
             ${{ github.event_name == 'pull_request' &&
             github.event.pull_request.head.repo.full_name != github.repository }}
+          GATE_PORTABLE_SHARDS: ${{ inputs.portable_shards || vars.GENTS_CI_PORTABLE_SHARDS }}
           GATE_RUNTIME_ISOLATED: ${{ vars.GENTS_CI_RUNTIME_ISOLATED }}
           # Inside a stack only the top is tested in full: lower layers may be
           # intentionally red. A pull request into the default branch always is.
@@ -245,7 +253,7 @@ jobs:
         env:
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || 'a deleted repository' }}
         run: |
-          message="This pull request comes from ${HEAD_REPOSITORY}, so jobs that run on self-hosted runners (lint, contract, test, desktop-ui-bombadil, core-packs build, adapter-interop) are skipped and gate fails if the plan selected one; the other jobs run on GitHub-hosted runners. A maintainer reruns the change from a branch of this repository to test it on the self-hosted runners."
+          message="This pull request comes from ${HEAD_REPOSITORY}, so jobs that run on self-hosted runners (lint, contract, test, build, shard, desktop-ui-bombadil, core-packs build, adapter-interop) are skipped and gate fails if the plan selected one; the other jobs run on GitHub-hosted runners. A maintainer reruns the change from a branch of this repository to test it on the self-hosted runners."
           echo "::notice title=Self-hosted jobs skipped for a fork::${message}"
           printf '### Self-hosted jobs skipped for a fork\n\n%s\n' "${message}" >> "${GITHUB_STEP_SUMMARY}"
 
@@ -337,6 +345,9 @@ jobs:
       - uses: ./.github/actions/rust-runner
         with:
           role: macos
+
+      - name: Install cargo-hakari
+        run: .github/scripts/setup-hakari.sh
 
       - name: Check the product build and clippy
         run: make gate-run JOB=lint
@@ -491,6 +502,132 @@ jobs:
         if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
         run: .github/scripts/host-runtime-service.sh verify
 
+  # With GATE_PORTABLE_SHARDS set, the portable groups' crates compile once
+  # here into a nextest archive; `shard` runs slices of it and compiles nothing.
+  build:
+    name: build (${{ matrix.archive }})
+    needs: [plan, repository-guard]
+    if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      contains(fromJSON(needs.plan.outputs.jobs), 'build:portable')
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.archives) }}
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
+
+      # A single slice runs its tests in this job, and the Lean-backed ones
+      # need the built contract: without it 12 waited out 600 s behind the
+      # proofs lock (dispatch 43780116459).
+      - uses: ./.github/actions/rust-runner
+        with:
+          lean: ${{ matrix.run && 'true' || 'false' }}
+
+      - name: Install cargo-nextest
+        run: .github/scripts/setup-nextest.sh
+
+      - name: Build the ${{ matrix.archive }} test archive
+        run: make gate-run JOB="build:${{ matrix.archive }}"
+
+      - name: Upload the ${{ matrix.archive }} test archive
+        if: ${{ !matrix.run }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-tests-${{ matrix.archive }}
+          path: ${{ runner.temp }}/gents-tests
+          if-no-files-found: error
+          compression-level: 0
+          # Re-running failed slices needs the run's archive; a rebuilt one replaces it.
+          overwrite: true
+          retention-days: 1
+
+      - name: Show Rust build cache stats
+        if: always()
+        run: .github/scripts/show-sccache-stats.sh
+
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
+
+  shard:
+    name: test (${{ matrix.archive }} ${{ matrix.index }}/${{ matrix.count }})
+    needs: [plan, build]
+    if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      contains(fromJSON(needs.plan.outputs.jobs), 'shard:portable')
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.shards) }}
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
+
+      - uses: ./.github/actions/rust-runner
+        with:
+          lean: "true"
+
+      - name: Install cargo-nextest
+        run: .github/scripts/setup-nextest.sh
+
+      - name: Download the ${{ matrix.archive }} test archive
+        uses: actions/download-artifact@v7
+        with:
+          name: gents-tests-${{ matrix.archive }}
+          path: ${{ runner.temp }}/gents-tests
+
+      - name: Run slice ${{ matrix.index }} of ${{ matrix.count }}
+        run: make gate-run JOB="shard:${{ matrix.archive }}:${{ matrix.index }}"
+
+      - name: Upload the slice's JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-junit-${{ matrix.archive }}-${{ matrix.index }}-of-${{ matrix.count }}-${{ github.run_attempt }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Collect migration lens diagnostics on failure
+        if: failure()
+        run: python3 .github/scripts/collect-migration-lens-diagnostics.py "${RUNNER_TEMP}/gents-migration-lenses"
+
+      - name: Upload migration lens diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-migration-lenses-${{ github.sha }}-${{ matrix.index }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gents-migration-lenses
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
+
   desktop-packages:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.jobs), 'ts-packages')
@@ -520,17 +657,22 @@ jobs:
     if: contains(fromJSON(needs.plan.outputs.jobs), 'ts-unit')
     # This job exercises browser-only code. Keep scarce macOS capacity for the
     # Rust/Lean work that benefits from persistent host caches.
-    name: desktop-ui (${{ matrix.suite }})
+    name: desktop-ui (${{ matrix.suite }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }})
     runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.browser }}
-    # The browser journeys take 44 to 58 minutes on one Playwright worker on a
-    # hosted runner (#3786); 60 cut a run whose journeys had passed.
-    timeout-minutes: 75
+    # On two Playwright workers the browser journeys take 24 to 37 minutes on
+    # a hosted four-core runner (#3786); each third takes about 9 to 12.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        suite: [unit, browser]
+        include:
+          - suite: unit
+          - { suite: browser, shard: 1/3 }
+          - { suite: browser, shard: 2/3 }
+          - { suite: browser, shard: 3/3 }
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
+      DESKTOP_UI_E2E_SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -550,7 +692,7 @@ jobs:
       # once by its operator (`npx playwright install-deps chromium webkit`)
       # and keeps the browsers in its account's cache.
       - name: Use the Ubuntu archive for browser system dependencies
-        if: matrix.suite == 'browser' && runner.environment == 'github-hosted'
+        if: runner.environment == 'github-hosted'
         run: |
           sudo python3 - <<'PYTHON'
           from pathlib import Path
@@ -572,26 +714,29 @@ jobs:
                   print(f'Using the Ubuntu archive in {path}')
           PYTHON
 
+      # The unit lane's interaction budgets drive Chromium; the journeys
+      # also need WebKit.
       - name: Install Playwright browsers
-        if: matrix.suite == 'browser'
         working-directory: apps/gents-desktop
         env:
           HOSTED: ${{ runner.environment == 'github-hosted' }}
+          BROWSERS: ${{ matrix.suite == 'browser' && 'chromium webkit' || 'chromium' }}
         run: |
+          read -ra browsers <<< "${BROWSERS}"
           if [[ "${HOSTED}" == true ]]; then
-            npx playwright install --with-deps chromium webkit
+            npx playwright install --with-deps "${browsers[@]}"
           else
-            npx playwright install chromium webkit
+            npx playwright install "${browsers[@]}"
           fi
 
       - name: Run the desktop ${{ matrix.suite }} suite
         run: make gate-run JOB="ts-${{ matrix.suite }}"
 
       - name: Upload desktop UI artifacts
-        if: failure() && matrix.suite == 'browser'
+        if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: desktop-ui-artifacts
+          name: desktop-ui-artifacts-${{ matrix.suite }}-${{ strategy.job-index }}
           if-no-files-found: ignore
           path: |
             apps/gents-desktop/test-results
@@ -711,6 +856,8 @@ jobs:
       - lint
       - contract
       - test
+      - build
+      - shard
       - desktop-packages
       - desktop-ui
       - desktop-ui-bombadil

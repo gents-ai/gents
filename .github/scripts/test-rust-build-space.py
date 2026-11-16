@@ -476,7 +476,7 @@ def pull_request_context(head_repository, repository="gents-ai/gents"):
     # routed as the plan job routes this pull request.
     plan = {"runs_on": {role: GATE.runner(role, fork=fork, fallback=False) for role in GATE.WORKFLOW_ROLES},
             "jobs": ["contract", "fmt", "lint", "ts-browser", "ts-fuzz", "ts-packages", "ts-unit",
-                     "test:runtime"]}
+                     "test:runtime", "build:portable", "shard:portable"]}
     matrix = [{"group": group.name, "runs_on": GATE.runner(group.runner, fork=fork, fallback=False)}
               for group in GATE.GROUPS]
     outputs = {"plan": json.dumps(plan), "jobs": json.dumps(plan["jobs"]), "tests": "true"}

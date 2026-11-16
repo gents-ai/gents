@@ -94,7 +94,6 @@ pub enum ToolOutputAppendRejection {
 #[derive(Debug)]
 pub struct ToolOutputAppendReceipt {
     pub(crate) range: std::ops::Range<u64>,
-    #[cfg(any(test, feature = "test-fixtures"))]
     pub segment_doc_id: String,
 }
 
@@ -270,7 +269,6 @@ async fn append_tool_output_with_time(
                         );
                         return Ok(ToolOutputAppendReceipt {
                             range: start..start + segment.payload.len() as u64,
-                            #[cfg(any(test, feature = "test-fixtures"))]
                             segment_doc_id: existing.doc_id.clone(),
                         });
                     }
@@ -289,21 +287,20 @@ async fn append_tool_output_with_time(
                             &output_segment_bound_variables(txn, &segment).await?,
                         )
                         .await?;
-                    let _segment_doc_id = created_doc_id(&response, "AgentOutputSegment")?;
                     Ok(ToolOutputAppendReceipt {
                         range: start..start + segment.payload.len() as u64,
-                        #[cfg(any(test, feature = "test-fixtures"))]
-                        segment_doc_id: _segment_doc_id,
+                        segment_doc_id: created_doc_id(&response, "AgentOutputSegment")?,
                     })
                 })
             },
         )
         .await?;
-    gents_store::config_client::session_children::publish_agent_session_child_relationships_with_access(
+    gents_store::config_client::session_children::publish_output_segment_relationships_with_access(
         &access,
         &repair_node_did,
         &repair_actor,
         &repair_session_id,
+        &result.segment_doc_id,
     )
     .await?;
     Ok(result)

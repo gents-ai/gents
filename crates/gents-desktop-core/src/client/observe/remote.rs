@@ -51,11 +51,12 @@ pub(super) enum SnapshotOutcome {
     Unreachable,
 }
 
-/// The snapshot owner's classification of a failed read; an omitted root is
-/// not a failure (`load_node_snapshot_on`).
+/// The snapshot owner's classification (`RuntimeConnectionObservation.selectedRootSnapshot`).
 pub(super) fn snapshot_outcome(error: &SnapshotReadError) -> SnapshotOutcome {
     match error {
-        SnapshotReadError::Refused(_) => SnapshotOutcome::Refused,
+        SnapshotReadError::Refused(_) | SnapshotReadError::NodeUnavailable => {
+            SnapshotOutcome::Refused
+        }
         SnapshotReadError::Failed(_) => SnapshotOutcome::Unreachable,
     }
 }

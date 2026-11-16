@@ -1,0 +1,3 @@
+#!/bin/sh
+echo "error: unexpected argument '--check' found" >&2
+exit 2

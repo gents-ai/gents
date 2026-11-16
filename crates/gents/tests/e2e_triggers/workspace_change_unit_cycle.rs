@@ -590,8 +590,18 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     assert_eq!(inbox["session_id"], supervisor_session);
     assert_eq!(inbox["agent_did"], supervisor);
     assert_eq!(inbox["requester_did"], cycle.user.did());
-    assert_eq!(inbox["lifecycle_state"], "completed");
-    assert!(inbox["content"].as_str().unwrap().contains(FAILURE_UNIT));
+    if gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
+        assert_eq!(inbox["lifecycle_state"], "completed");
+        assert!(inbox["content"].as_str().unwrap().contains(FAILURE_UNIT));
+    } else {
+        assert_eq!(inbox["lifecycle_state"], "failed");
+        assert!(
+            inbox["failure_reason"].as_str().is_some_and(|reason| reason.contains(
+                "ReadWrite workspace binding requires an enforceable WorkspaceWrite sandbox on this host"
+            )),
+            "an unsupported host must return the workspace owner's refusal: {inbox:#}"
+        );
+    }
 
     let outcome_count = access
         .execute(&format!(
@@ -1334,17 +1344,16 @@ async fn wait_supervisor_inbox(access: &ConfigAccess, work_unit_id: &str) -> Val
         let response = access.execute(&query).await.unwrap();
         let rows = response["data"]["AgentRequest"].as_array().unwrap();
         if let Some(row) = rows.first() {
-            if row["lifecycle_state"] == "completed" {
+            if matches!(
+                row["lifecycle_state"].as_str(),
+                Some("completed" | "failed")
+            ) {
                 return row.clone();
             }
-            assert!(
-                row["lifecycle_state"] != "failed",
-                "supervisor inbox request failed: {row:#}"
-            );
         }
         assert!(
             Instant::now() < deadline,
-            "failed-stage inbox request was not completed: {response:#}"
+            "failed-stage inbox request did not settle: {response:#}"
         );
         let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }

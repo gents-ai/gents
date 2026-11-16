@@ -10,6 +10,8 @@ const viteBin = join(
 );
 
 const port = Number(process.env.DESKTOP_UI_E2E_PORT ?? 1421);
+/* CI splits the journeys across runners: "1/3" runs the first third */
+const shard = /^(\d+)\/(\d+)$/.exec(process.env.DESKTOP_UI_E2E_SHARD ?? "");
 const baseURL = process.env.DESKTOP_UI_E2E_BASE_URL ?? `http://127.0.0.1:${port}`;
 
 export default defineConfig({
@@ -21,6 +23,7 @@ export default defineConfig({
   /* the journeys are CPU-bound: on a four-core hosted runner two workers
      took 24-26 min against 52 at one, and four workers were no faster */
   workers: process.env.CI ? 2 : undefined,
+  shard: shard ? { current: Number(shard[1]), total: Number(shard[2]) } : null,
   reporter: process.env.CI
     ? [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]]
     : "list",

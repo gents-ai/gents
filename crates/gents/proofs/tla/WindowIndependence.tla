@@ -1,4 +1,6 @@
 ---- MODULE WindowIndependence ----
+\* lean: ClientWindowScope.Bound.delivers
+\* crates: gents-desktop-core
 (***************************************************************************)
 (* Several desktop windows, each on its own node (Lean `ClientWindowScope`). *)
 (* One client core serves them all: one observer source per runtime        *)
@@ -13,7 +15,7 @@
 (* selection; no selection is shared between windows.                      *)
 (* `CancelOnSwitch = FALSE` keeps a window's pack watch on its old node.    *)
 (***************************************************************************)
-EXTENDS Naturals, Sequences, FiniteSets
+EXTENDS Naturals, Sequences, FiniteSets, LeanDecision_ClientWindowScope_Bound
 
 CONSTANTS
   Windows,
@@ -21,6 +23,9 @@ CONSTANTS
   MaxWrites,       \* runtime writes per node
   MaxSwitch,       \* selection changes in a behavior
   CancelOnSwitch   \* FALSE: a selection change keeps the old node's watch
+
+\* The generated `delivers` table covers the Lean bound's nodes only.
+ASSUME Nodes \subseteq {"n1", "n2"}
 
 None == "none"
 NoVer == MaxWrites + 1
@@ -95,10 +100,11 @@ Rewatch(w) ==
   /\ UNCHANGED <<sel, latest, observed, dirty, epoch, reading, view, switches, crossed>>
 
 \* A watch event of the watch's node reaches its window (the registry sends
-\* only to a registered watch).
+\* only to a registered watch); it crosses when Lean
+\* `ClientWindowScope.delivers` refuses it to that window.
 WatchDeliver(w) ==
   /\ watch[w] # None
-  /\ crossed' = (crossed \/ watch[w] # sel[w])
+  /\ crossed' = (crossed \/ ~delivers(sel[w], watch[w]))
   /\ UNCHANGED <<sel, latest, observed, dirty, epoch, reading, view, watch, switches>>
 
 StartRead(w) ==
@@ -132,7 +138,8 @@ Spec == Init /\ [][Next]_vars /\ Fairness
 \* No delivery crosses windows: a window shows only its own node, and its
 \* pack watch delivers only its own node's events.
 NoCrossDelivery ==
-  /\ \A w \in Windows : view[w].node = sel[w]
+  /\ \A w \in Windows : IF view[w].node = None THEN sel[w] = None
+                                              ELSE delivers(sel[w], view[w].node)
   /\ ~crossed
 
 \* Each window converges for its own node, whatever the other windows do.

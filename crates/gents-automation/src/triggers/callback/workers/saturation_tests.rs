@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::{extract::State, http::StatusCode, routing::get, Router};
 use futures::FutureExt;
@@ -19,11 +18,10 @@ use gents_pack::plugin::store;
 use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
 use gents_store::config_client::ConfigAccess;
 use gents_store::subscription_source::UpdateSubscriptionSource;
+use gents_store::test_support::STALL_CEILING;
 use gents_toolcalls::plugin::executor::PluginExecutor;
 
 const CALLBACK: &str = "saturation";
-const WAIT: Duration = Duration::from_secs(10);
-const SCENARIO_LIMIT: Duration = Duration::from_secs(20);
 
 #[derive(Clone)]
 struct Gate {
@@ -65,20 +63,20 @@ async fn wait_for_invocations(
     updates: &mut events::Subscription,
     ready: impl Fn(&[Value]) -> bool,
 ) -> Vec<Value> {
-    tokio::time::timeout(WAIT, async {
-        loop {
-            let current = invocations(access).await;
-            if ready(&current) {
-                return current;
-            }
-            updates
-                .recv()
-                .await
-                .expect("database update stream stays open");
+    loop {
+        let current = invocations(access).await;
+        if ready(&current) {
+            return current;
         }
-    })
-    .await
-    .expect("callback invocations did not reach the expected durable state")
+        tokio::time::timeout(STALL_CEILING, updates.recv())
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "callback invocations stalled before the expected durable state: {current:?}"
+                )
+            })
+            .expect("database update stream stays open");
+    }
 }
 
 async fn arrival_head(access: &ConfigAccess) -> Value {
@@ -98,25 +96,21 @@ async fn wait_for_arrival_checkpoint(
     updates: &mut events::Subscription,
     through: &Value,
 ) {
-    tokio::time::timeout(WAIT, async {
-        loop {
-            let response = access
-                .execute("{ EventSourceCursor { after } }")
-                .await
-                .unwrap();
-            let cursors = response["data"]["EventSourceCursor"].as_array().unwrap();
-            assert_eq!(cursors.len(), 1);
-            if cursors[0]["after"] == *through {
-                return;
-            }
-            updates
-                .recv()
-                .await
-                .expect("database update stream stays open");
+    loop {
+        let response = access
+            .execute("{ EventSourceCursor { after } }")
+            .await
+            .unwrap();
+        let cursors = response["data"]["EventSourceCursor"].as_array().unwrap();
+        assert_eq!(cursors.len(), 1);
+        if cursors[0]["after"] == *through {
+            return;
         }
-    })
-    .await
-    .expect("source delivery must checkpoint the claimed prefix after the capacity refusal");
+        tokio::time::timeout(STALL_CEILING, updates.recv())
+            .await
+            .expect("source delivery must checkpoint the claimed prefix after the capacity refusal")
+            .expect("database update stream stays open");
+    }
 }
 
 fn checkpoint(
@@ -239,7 +233,9 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             "env": "None", "crypto": false, "child_process": false
         }));
         plugin.declaration.limits = Some(gents_pack::pack::PluginLimits {
-            wall_clock_secs: Some(30),
+            // The held calls wait on the test, which a loaded host can slow past any
+            // fixed budget; the declared one is the host ceiling.
+            wall_clock_secs: Some(gents_protocol::plugin::MAX_DECLARED_WALL_CLOCK_SECS),
             ..Default::default()
         });
         plugin.granted =
@@ -328,7 +324,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             let mut releases = Vec::new();
             for _ in 0..PLUGIN_CALLBACK_CONCURRENCY {
                 releases.push(
-                    tokio::time::timeout(WAIT, arrivals.recv())
+                    tokio::time::timeout(STALL_CEILING, arrivals.recv())
                         .await
                         .expect("all plugin workers must enter their HTTP gates")
                         .unwrap(),
@@ -375,7 +371,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             assert!(arrivals.try_recv().is_err());
 
             releases.pop().unwrap().send(()).unwrap();
-            releases.push(tokio::time::timeout(WAIT, arrivals.recv()).await
+            releases.push(tokio::time::timeout(STALL_CEILING, arrivals.recv()).await
                 .expect("periodic recovery must start the pending invocation without another source arrival")
                 .unwrap());
             let resumed = invocations(&access).await;
@@ -469,21 +465,19 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
             assert!(arrivals.try_recv().is_err());
         };
         let outcome = AssertUnwindSafe(async {
-            tokio::time::timeout(SCENARIO_LIMIT, scenario)
-                .await
-                .expect("callback saturation scenario exceeded its total deadline");
+            scenario.await;
         })
         .catch_unwind()
         .await;
 
         cancel.cancel();
         release_all.cancel();
-        let drained = tokio::time::timeout(WAIT, &mut engine).await;
+        let drained = tokio::time::timeout(STALL_CEILING, &mut engine).await;
         if drained.is_err() {
             engine.abort();
         }
         server_stop.cancel();
-        let stopped = tokio::time::timeout(WAIT, &mut server).await;
+        let stopped = tokio::time::timeout(STALL_CEILING, &mut server).await;
         if stopped.is_err() {
             server.abort();
         }

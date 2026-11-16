@@ -1,4 +1,6 @@
 ---- MODULE PairingTransport ----
+\* lean: none
+\* crates: gents-p2p
 EXTENDS Naturals, FiniteSets, TLC
 
 CONSTANTS

@@ -367,6 +367,13 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
         .get("requester_did")
         .map(String::as_str);
     let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
+    gents_inference::test_support::install_test_agent_binding(
+        &node,
+        identity.did(),
+        "mailbox fixture",
+        &binding,
+    )
+    .await;
     let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
     let root_access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),

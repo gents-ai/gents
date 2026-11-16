@@ -978,6 +978,7 @@ async fn a_reader_granted_only_the_fork_reads_its_whole_retained_transcript() {
 #[tokio::test]
 async fn edit_fork_reuses_canonical_request_reads_for_the_retained_prefix() {
     use gents_store::identity::NodeIdentity as _;
+    const RETAINED: usize = 200;
     const SOURCE: &str = "fork-shared-source";
     const CHILD: &str = "fork-shared-child";
     let (db, user, client, binding) = fork_reader_node("fork-shared-reads").await;
@@ -993,16 +994,19 @@ async fn edit_fork_reuses_canonical_request_reads_for_the_retained_prefix() {
     .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let mut keys = Vec::new();
-    for sequence in 1..=21 {
+    let mut headers = Vec::new();
+    for sequence in 1..=RETAINED + 1 {
         let name = format!("message-{sequence}");
         keys.push(gents_protocol::output::rows::authored_message_key(
             &lifecycle.request().doc_id,
             &name,
         ));
-        writer
-            .publish_authored_message(&lifecycle, &name, &Message::user(&name))
-            .await
-            .unwrap();
+        headers.push(
+            writer
+                .publish_authored_message(&lifecycle, &name, &Message::user(&name))
+                .await
+                .unwrap(),
+        );
     }
     lifecycle
         .terminalize_owned(
@@ -1014,13 +1018,13 @@ async fn edit_fork_reuses_canonical_request_reads_for_the_retained_prefix() {
         .unwrap();
     let params = ForkParams {
         source_session_id: SOURCE,
-        boundary: ForkBoundary::BeforeMessageKey(&keys[20]),
+        boundary: ForkBoundary::BeforeMessageKey(&keys[RETAINED]),
         caller_node_did: &node_did,
         caller_requester_did: Some(user.did()),
         target_agent_did: None,
     };
     let (result, scans) =
-        count_request_output_scans(fork_edit_on(&client, params, CHILD, user.did())).await;
+        count_request_output_scans(fork_edit_on(&client, params.clone(), CHILD, user.did())).await;
     assert_eq!(result.unwrap(), CHILD);
     assert_eq!(
         scans, 1,
@@ -1031,7 +1035,90 @@ async fn edit_fork_reuses_canonical_request_reads_for_the_retained_prefix() {
             .await
             .unwrap()
             .len(),
-        20
+        RETAINED
+    );
+    let committed = session_rewrite_rows(&client).await;
+    assert_eq!(
+        fork_edit_on(&client, params.clone(), CHILD, user.did())
+            .await
+            .unwrap(),
+        CHILD
+    );
+    assert_eq!(session_rewrite_rows(&client).await, committed);
+
+    let last = escape_graphql_string(&headers[RETAINED - 1]);
+    let observed = client
+        .execute(&format!(
+            r#"{{AgentMessage(filter:{{_docID:{{_eq:"{last}"}}}}){{{}}}}}"#,
+            gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
+        ))
+        .await
+        .unwrap();
+    let header = gents_protocol::output::rows::decode_transcript_message_row(
+        &observed["data"]["AgentMessage"][0],
+    )
+    .unwrap();
+    let close = escape_graphql_string(&header.message.payload_references()[0].close_doc_id);
+    let agent =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
+    gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(&node_did).unwrap(),
+    )
+    .grant_node_permission(
+        &identity::Did::new(agent.did()).unwrap(),
+        gents_store::config_client::NodePermission::DocumentDelete,
+    )
+    .await
+    .unwrap();
+    let source_owner = gents_store::config_client::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let deleted = source_owner
+        .write(
+            "test.remove_last_fork_dependency",
+            &format!(r#"mutation{{delete_AgentOutputSegment(docID:"{close}"){{_docID}}}}"#),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        deleted["data"]["delete_AgentOutputSegment"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let damaged = session_rewrite_rows(&client).await;
+    assert!(
+        fork_edit_on(&client, params.clone(), "incomplete-child", user.did())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        session_rewrite_rows(&client).await,
+        damaged,
+        "an invalid dependency at the end of a long prefix must publish no partial child"
+    );
+    assert_eq!(
+        fork_edit_on(&client, params, CHILD, user.did())
+            .await
+            .unwrap(),
+        CHILD
+    );
+    assert_eq!(
+        session_rewrite_rows(&client).await,
+        damaged,
+        "a retained destination must not re-copy a source whose dependencies later disappeared"
+    );
+    assert_eq!(
+        history_on(&client, CHILD, &node_did, Some(user.did()), None)
+            .await
+            .unwrap()
+            .len(),
+        RETAINED
     );
     db.node.shutdown().await.expect("shut down test node");
 }

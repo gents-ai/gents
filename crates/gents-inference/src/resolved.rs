@@ -36,6 +36,7 @@ pub enum ResolvedConfiguration {
 
 #[derive(Clone, Debug)]
 pub struct SelectedConfigurationDocument {
+    pub version: String,
     pub collection: gents_store::collection::Collection,
     pub doc_id: String,
     pub logical_id: Option<String>,

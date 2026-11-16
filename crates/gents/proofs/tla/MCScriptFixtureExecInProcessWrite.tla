@@ -1,0 +1,4 @@
+---- MODULE MCScriptFixtureExecInProcessWrite ----
+EXTENDS ScriptFixtureExec
+
+====

@@ -15,6 +15,7 @@ use rapidhash::RapidHashMap;
 
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentRecord<T> {
+    pub(crate) version: Option<String>,
     pub(crate) doc_id: String,
     pub(crate) value: T,
 }

@@ -55,6 +55,8 @@ pub enum BackendProtectionError {
          re-enable NAC as the node owner or an admin before starting"
     )]
     NodeAcpNotEnabled { status: String },
+    #[error("the store could not be checked on a copy; the original was not opened")]
+    CopyCheck(#[source] Box<super::store_compat::StoreCompatibilityError>),
     #[error("backend protection storage operation failed")]
     Io(#[from] std::io::Error),
     #[error("backend protection native operation failed")]
@@ -134,6 +136,25 @@ async fn start(builder: defra_node::NodeBuilder) -> Result<defra_node::Node> {
             Some(refused) => refused.into(),
             None => error.into(),
         })
+}
+
+pub(crate) fn checked_copy(
+    data: &Path,
+    verdict: std::result::Result<
+        Option<gents_protocol::operations::install_repair::IncompatibleStoreKind>,
+        super::store_compat::StoreCompatibilityError,
+    >,
+) -> Result<()> {
+    match verdict {
+        Ok(None) => Ok(()),
+        Ok(Some(kind)) => Err(BackendProtectionError::Incompatible(
+            gents_protocol::operations::install_repair::IncompatibleStore {
+                kind,
+                data_path: data.to_path_buf(),
+            },
+        )),
+        Err(error) => Err(BackendProtectionError::CopyCheck(Box::new(error))),
+    }
 }
 
 async fn check_lock(data: &Path, lock: &StoreLock) -> Result<PathBuf> {
@@ -264,21 +285,10 @@ impl<'a> ProtectedBackendStore<'a> {
         let did = node_did(node)?;
         let stamped = super::store_compat::stamped(&self.data);
         if !stamped {
-            match super::store_compat::check_copy(&self.data, key).await {
-                Ok(None) => {}
-                Ok(Some(kind)) => {
-                    return Err(BackendProtectionError::Incompatible(
-                        gents_protocol::operations::install_repair::IncompatibleStore {
-                            kind,
-                            data_path: self.data.clone(),
-                        },
-                    ))
-                }
-                Err(error) => tracing::warn!(
-                    error = %gents_protocol::error_chain::ErrorChain(&error),
-                    "could not check a copy of the store first; opening it directly"
-                ),
-            }
+            checked_copy(
+                &self.data,
+                super::store_compat::check_copy(&self.data, key).await,
+            )?;
         }
         let builder = super::store_key::persistent_builder(&self.data, key)
             .map_err(|error| BackendProtectionError::Schema(error.into()))?

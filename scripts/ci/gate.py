@@ -2,7 +2,8 @@
 """The pull request gate, shared by CI and `make gate`.
 
   gate.py plan [--base REF | --files FILE]   select jobs for a change
-  gate.py run JOB                            run one job (fmt, lint, contract, ts-*, test:<group>)
+  gate.py run JOB                            run one job (fmt, lint, contract, ts-*, test:<group>,
+                                             build:<archive>, shard:<archive>[:<index>])
   gate.py all [--base REF]                   plan, then run every selected job
   gate.py packages GROUP...                  list the crates of test groups
   gate.py verdict                            decide the `gate` job from NEEDS
@@ -12,6 +13,7 @@ computes it against --base.
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -25,6 +27,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PROOFS = "crates/gents/proofs"
+TLA_CHECK = ROOT / PROOFS / "tla/scripts/tla_check.py"
+
+
+def load_tla_check():
+    spec = importlib.util.spec_from_file_location("tla_check", TLA_CHECK)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+tla_check = load_tla_check()
 
 # Roles -> runner labels: the one inventory of CI runners. Jobs select runners
 # by these capability labels only, never by host name, so new machines join by
@@ -92,6 +105,15 @@ NO_TESTS = {
     "gents-workspace-hack",
 }
 
+# With GATE_PORTABLE_SHARDS above zero the portable groups' crates build once
+# into one nextest archive (`build:portable`) and `shard:portable` runs it as
+# that many slices on their own runners, compiling nothing. Test binaries must
+# then find source files and binaries through the runtime CARGO_MANIFEST_DIR,
+# NEXTEST_WORKSPACE_ROOT and CARGO_BIN_EXE_<name>: the build checkout is gone.
+ARCHIVE = "portable"
+ARCHIVE_SOURCE = "gents-archive-src"
+NEXTEST = "cargo-nextest"
+
 # A change here can alter any build or the gate itself, so it selects everything.
 # Every script a selected job runs is here, under CONTRACT_PATHS or TS_PATHS;
 # test_gate.py fails when one would classify as inert.
@@ -137,12 +159,14 @@ TS_JOBS = {
         "npm --prefix apps/gents-desktop run typecheck",
         "npm --prefix apps/gents-desktop run build",
         "npm --prefix apps/gents-desktop test",
+        # the interaction budgets drive Chromium; they run here, beside the
+        # browser lane's shards, rather than after one of them
+        "npm --prefix apps/gents-desktop run perf:mobile -- --runs=3 --output=test-results/mobile-performance/ci",
     ],
     "ts-browser": [
         "npm run build:packages",
         "npm --prefix apps/gents-desktop run build",
         "npm --prefix apps/gents-desktop run test:ui:e2e",
-        "npm --prefix apps/gents-desktop run perf:mobile -- --runs=3 --output=test-results/mobile-performance/ci",
     ],
     "ts-fuzz": [
         "npm run build:packages",
@@ -215,6 +239,12 @@ def under(path, prefixes):
     return any(path == prefix or path.startswith(prefix) for prefix in prefixes)
 
 
+def crate_of(path, members):
+    """The workspace member whose directory holds `path`, if any."""
+    return max((name for name, (directory, _) in members.items() if path.startswith(directory + "/")),
+               key=lambda name: len(members[name][0]), default=None)
+
+
 def classify(path, members):
     """One file -> the tags it selects."""
     tags = set()
@@ -226,8 +256,7 @@ def classify(path, members):
         return tags | {"proofs"}
     if under(path, CONTRACT_PATHS):
         return tags | {"contract"}
-    owner = max((name for name, (directory, _) in members.items() if path.startswith(directory + "/")),
-                key=lambda name: len(members[name][0]), default=None)
+    owner = crate_of(path, members)
     if owner:
         return tags | {f"crate:{owner}"}
     if under(path, TS_PATHS):
@@ -273,6 +302,28 @@ def runner(role, roles=None, fork=None, fallback=None):
     return entry["labels"]
 
 
+def tla_specs(files, members, everything):
+    """The TLA+ specs a change selects by their headers: every spec when it
+    changes everything or a header does not parse (the runner then reports it)."""
+    try:
+        nodes = tla_check.graph()
+    except tla_check.HeaderError:
+        return ["*"]
+    if everything:
+        return sorted(nodes)
+    return tla_check.select(files, nodes, lambda path: crate_of(path, members))
+
+
+def portable_shards():
+    """GATE_PORTABLE_SHARDS: 0 or empty keeps one job per portable group."""
+    raw = os.environ.get("GATE_PORTABLE_SHARDS", "").strip()
+    if not raw:
+        return 0
+    if not raw.isdigit() or int(raw) > 32:
+        fail(f"GATE_PORTABLE_SHARDS must be a whole number from 0 to 32, got {raw!r}")
+    return int(raw)
+
+
 def plan(files, members, everything=False, only=None, tier="full"):
     check_groups(members)
     tags, reasons = set(), {}
@@ -291,10 +342,11 @@ def plan(files, members, everything=False, only=None, tier="full"):
     tested = affected if tier == "full" or "proofs" in tags else changed
     ts = everything or "ts" in tags
     proofs = everything or "proofs" in tags
+    tla = tla_specs(files, members, everything)
     jobs = {
         "fmt": rust,
         "lint": rust,
-        "contract": rust or ts or proofs or "contract" in tags,
+        "contract": rust or ts or proofs or "contract" in tags or bool(tla),
         "ts-packages": ts,
         "ts-unit": ts,
         "ts-browser": ts,
@@ -317,9 +369,36 @@ def plan(files, members, everything=False, only=None, tier="full"):
             "timeout": group.timeout,
             "go": group.name == "cli",
         })
+    archives, shards = [], []
+    count = portable_shards()
+    if count:
+        # `only` names a portable group as test:<group> or the whole archive.
+        portable = {group.name for group in GROUPS if group.runner == "portable"}
+        whole = only and {f"build:{ARCHIVE}", f"shard:{ARCHIVE}"} & only
+        archived = [package for entry in matrix if entry["group"] in portable
+                    and (not only or whole or f"test:{entry['group']}" in only)
+                    for package in entry["packages"].split()]
+        matrix = [entry for entry in matrix if entry["group"] not in portable]
+        for group in portable:
+            jobs.pop(f"test:{group}", None)
+        if archived:
+            # At most one slice per crate with tests, so every slice runs some.
+            count = min(count, len([package for package in archived if package not in NO_TESTS]))
+            # One slice runs in the build job itself: no archive transfer, which
+            # from the minisforums costs more than the tests (1.24 GB: 3.5 min
+            # up, 14 min down in dispatch 43775099812).
+            single = count == 1
+            archives.append({"archive": ARCHIVE, "runs_on": runner("portable"), "run": single,
+                             "packages": " ".join(archived), "timeout": 90 if single else 60})
+            shards = [] if single else [
+                {"archive": ARCHIVE, "index": index, "count": count, "runs_on": runner("portable"),
+                 "timeout": 60} for index in range(1, count + 1)]
     if only:
         jobs = {job: wanted and job in only for job, wanted in jobs.items()}
         matrix = [entry for entry in matrix if f"test:{entry['group']}" in only]
+    if archives:
+        jobs[f"build:{ARCHIVE}"] = True
+        jobs[f"shard:{ARCHIVE}"] = bool(shards)
     return {
         "tier": tier,
         "everything": everything,
@@ -329,11 +408,16 @@ def plan(files, members, everything=False, only=None, tier="full"):
         "affected": sorted(affected),
         "jobs": sorted(job for job, wanted in jobs.items() if wanted),
         "matrix": matrix,
+        "archives": archives,
+        "shards": shards,
         "contract": {
             # write_owner_structure scans every crate's sources but is a
             # gents test target, which the runtime group runs when selected.
             "ratchets": rust and "gents" not in tested,
             "ts_lean": ts or proofs,
+            # TLA+ specs whose header names a changed crate or Lean owner, or
+            # whose own files or imported generated modules changed.
+            "tla": tla,
         },
         "core_packs": everything or "core-packs" in tags,
         "runs_on": {role: runner(role) for role in WORKFLOW_ROLES},
@@ -495,6 +579,11 @@ def run_fmt(selection):
 def run_lint(selection):
     packages, affected = package_flags(selection), set(selection["built"])
     profile = profile_flags()
+    # gents-workspace-hack keeps per-crate and joint test builds on one feature
+    # set (the archive builds every portable crate in one invocation). `verify`
+    # and `manage-deps` do not fit its dev-dependency-only, unify-target-host =
+    # "none" setup, so the check is that the generated hack is current.
+    sh(["cargo", "hakari", "generate", "--diff"])
     # The product build: no test targets, so no dev-dependency features.
     sh(["cargo", "check", *packages, *profile])
     sh(["cargo", "clippy", *packages, "--all-targets", *profile, "--", "-D", "warnings"])
@@ -534,6 +623,11 @@ def run_contract(selection):
         "regenerate_household_policy", "--", "--check"])
     if selection["contract"]["ratchets"]:
         cargo_test("gents write_owner_structure", ["-p", "gents", "--test", "write_owner_structure"])
+    tla = selection["contract"].get("tla", [])
+    if tla:
+        sh(["python3", str(TLA_CHECK), "check-headers"])
+        selected = ["--all"] if tla == ["*"] else [flag for spec in tla for flag in ("--spec", spec)]
+        sh(["python3", str(TLA_CHECK), "run", *selected])
     if selection["contract"]["ts_lean"]:
         for command in TS_LEAN:
             sh(command)
@@ -583,7 +677,189 @@ def run_test(selection, name):
                 harness=("runtime::", "--skip", "cli_runtime::"))
 
 
+SUMMARY = re.compile(r"^\s*Summary \[\s*([\d.]+)s\] (\d+) tests? run: (.*)$")
+
+
+# Slices of one run can share a host, and each test process starts its own
+# embedded node: 3 slices at 12 threads took a 32-core minisforum from load
+# 20 to over 100, where 8 threads each kept it under 80 (dispatch 43739322437).
+SLICE_THREADS = 8
+
+
+def archive_dir():
+    """Where `build:` writes the archive and `shard:` reads it (the workflow's artifact directory)."""
+    if os.environ.get("GATE_ARCHIVE_DIR"):
+        return Path(os.environ["GATE_ARCHIVE_DIR"])
+    if os.environ.get("GITHUB_ACTIONS") and os.environ.get("RUNNER_TEMP"):
+        return Path(os.environ["RUNNER_TEMP"]) / "gents-tests"
+    return ROOT / "target" / "gents-tests"
+
+
+def nextest(arguments, cwd=ROOT, label=None, expect=None):
+    """`cargo nextest`, recording the summary's counts; `expect` checks the listed tests per package."""
+    command = ["cargo", "nextest", *arguments]
+    env = dict(os.environ)
+    env.setdefault("RUST_MIN_STACK", "16777216")
+    print(f"\n$ {shlex.join(command)}", flush=True)
+    started = time.time()
+    process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    counts = ""
+    for raw in process.stdout:
+        line = raw.decode("utf-8", "replace")
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        if match := SUMMARY.match(line.rstrip()):
+            counts = f"{match.group(2)} run: {match.group(3).strip()}"
+    process.wait()
+    verdict = "ok" if process.returncode == 0 else f"exit {process.returncode}"
+    results.append((label or shlex.join(command), verdict, counts, time.time() - started))
+    if verdict != "ok":
+        print(f"::error::{label}: {verdict} ({counts})", flush=True)
+    return verdict == "ok"
+
+
+def listed_tests(archive, workspace):
+    """Package -> (tests, ignored) in an archive, and the paths of its test binaries."""
+    raw = subprocess.run(["cargo", "nextest", "list", "--archive-file", str(archive), "--workspace-remap",
+                          str(workspace), "--message-format", "json", "--run-ignored", "all"],
+                         cwd=workspace, check=True, stdout=subprocess.PIPE).stdout
+    listing = json.loads(raw)
+    tests, binaries = {}, []
+    for suite in listing["rust-suites"].values():
+        binaries.append(Path(suite["binary-path"]))
+        package = suite["package-name"]
+        total, ignored = tests.get(package, (0, 0))
+        cases = suite["testcases"].values()
+        tests[package] = (total + len(cases), ignored + sum(1 for case in cases if case.get("ignored")))
+    return tests, binaries
+
+
+def unrelocatable(binaries, source):
+    """Binaries holding the build checkout's path: compile-time env!("CARGO_MANIFEST_DIR"),
+    CARGO_BIN_EXE_<name> or CARGO_TARGET_TMPDIR, which a shard's checkout cannot satisfy."""
+    needle = re.compile(re.escape(str(source).encode()) + rb"/(?!target/)")
+    found = []
+    for binary in binaries:
+        if binary.is_file() and needle.search(binary.read_bytes()):
+            found.append(binary.name)
+    return sorted(found)
+
+
+DOC_FENCE = re.compile(r"^\s*(?://[/!]|#!?\[doc\s*=).*```(?!\s*(?:text|ignore)\b)")
+
+
+def doctests(packages):
+    """Doc comments that rustdoc would test. nextest does not run doctests and
+    none exist today, so the archive job refuses the first one instead of
+    letting it go unrun; add a `cargo test --doc` step when one is wanted."""
+    members = workspace()
+    found = []
+    for package in packages:
+        for path in sorted((ROOT / members[package][0]).rglob("*.rs")):
+            if "target" in path.relative_to(ROOT).parts:
+                continue
+            for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+                if DOC_FENCE.match(line):
+                    found.append(f"{path.relative_to(ROOT)}:{number}")
+    return found
+
+
+def run_build(selection, name):
+    """Build every selected crate's tests once, in one Cargo invocation, into a nextest archive.
+
+    In CI the build runs from a worktree under RUNNER_TEMP that the runner removes
+    after the job, so a test binary can only reach source files through the
+    runtime paths a shard remaps to its own checkout.
+    """
+    entry = next(entry for entry in selection["archives"] if entry["archive"] == name)
+    packages = entry["packages"].split()
+    source = ROOT
+    if os.environ.get("GITHUB_ACTIONS") and os.environ.get("RUNNER_TEMP"):
+        source = Path(os.environ["RUNNER_TEMP"]) / ARCHIVE_SOURCE
+        subprocess.run(["git", "worktree", "remove", "--force", str(source)], cwd=ROOT,
+                       stderr=subprocess.DEVNULL, check=False)
+        subprocess.run(["git", "worktree", "prune"], cwd=ROOT, check=False)
+        if not sh(["git", "worktree", "add", "--detach", str(source), "HEAD"]):
+            return
+    output = archive_dir()
+    output.mkdir(parents=True, exist_ok=True)
+    archive = output / f"{name}.tar.zst"
+    features = [PACKAGE_FEATURES[package] for package in packages
+                if package in PACKAGE_FEATURES and package != "gents-desktop-bridge"]
+    arguments = ["archive", *[flag for package in packages for flag in ("-p", package)]]
+    if features:
+        arguments += ["--features", ",".join(features)]
+    profile = os.environ.get("PROFILE", "")
+    if profile:
+        arguments += ["--cargo-profile", profile]
+    arguments += ["--archive-file", str(archive)]
+    if not nextest(arguments, cwd=source, label=f"build {name}: {len(packages)} crates"):
+        return
+    started = time.time()
+    try:
+        tests, binaries = listed_tests(archive, source)
+    except subprocess.CalledProcessError as error:
+        results.append((f"check {name} archive", f"listing failed: exit {error.returncode}", "",
+                        time.time() - started))
+        return
+    problems = []
+    for package in packages:
+        total, _ = tests.get(package, (0, 0))
+        if package in NO_TESTS and total:
+            problems.append(f"{package} has {total} tests but is listed in NO_TESTS; remove it from the list")
+        elif package not in NO_TESTS and not total:
+            problems.append(f"{package} selected zero tests")
+    if fences := doctests(packages):
+        problems.append(f"doc comments hold code blocks rustdoc would test, which nextest does not run "
+                        f"(tag them text or ignore, or add a doctest step): {', '.join(fences[:10])}")
+    if stuck := unrelocatable(binaries, source):
+        problems.append(f"test binaries embed the build checkout's path {source}: {', '.join(stuck)}")
+    (output / f"{name}.tests.json").write_text(json.dumps(tests, indent=2, sort_keys=True))
+    total = sum(count for count, _ in tests.values())
+    ignored = sum(count for _, count in tests.values())
+    for problem in problems:
+        print(f"::error::{problem}", flush=True)
+    results.append((f"check {name} archive", "ok" if not problems else "; ".join(problems),
+                    f"{total} tests listed, {ignored} ignored", time.time() - started))
+    if not problems and entry.get("run"):
+        # The whole archive, on this runner, from this job's own checkout.
+        os.environ["GENTS_TEST_BINARIES_PREBUILT"] = "1"
+        arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci"]
+        if os.environ.get("RUST_TEST_THREADS"):
+            arguments += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
+        nextest(arguments, label=f"run {name}")
+
+
+def run_shard(selection, name, index=None):
+    """Run one slice of an archive against this checkout; without an index, all of it."""
+    archive = archive_dir() / f"{name}.tar.zst"
+    arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci"]
+    label = f"shard {name}"
+    if index is not None:
+        entry = next((entry for entry in selection["shards"]
+                      if entry["archive"] == name and entry["index"] == index), None)
+        if entry is None:
+            fail(f"shard {name}:{index} is not selected by this plan")
+        arguments += ["--partition", f"slice:{index}/{entry['count']}"]
+        label = f"shard {name} {index}/{entry['count']}"
+    threads = os.environ.get("RUST_TEST_THREADS")
+    if index is not None:
+        threads = str(min(int(threads or SLICE_THREADS), SLICE_THREADS))
+    if threads:
+        arguments += ["--test-threads", threads]
+    # Tests that would otherwise `cargo build` a helper binary use the archived one.
+    os.environ["GENTS_TEST_BINARIES_PREBUILT"] = "1"
+    nextest(arguments, label=label)
+
+
 def run(selection, job):
+    if job.startswith("shard:") and job.count(":") == 2:
+        _, name, index = job.split(":")
+        if f"shard:{name}" not in selection["jobs"]:
+            print(f"gate: shard:{name} is not selected by this plan; nothing to do")
+            return
+        run_shard(selection, name, int(index))
+        return
     if job not in selection["jobs"]:
         print(f"gate: {job} is not selected by this plan; nothing to do")
         return
@@ -597,6 +873,10 @@ def run(selection, job):
         run_ts(job)
     elif job.startswith("test:"):
         run_test(selection, job[5:])
+    elif job.startswith("build:"):
+        run_build(selection, job[6:])
+    elif job.startswith("shard:"):
+        run_shard(selection, job[6:])
     else:
         fail(f"unknown job {job}")
 
@@ -606,11 +886,14 @@ WORKFLOW_JOBS = {
     "fmt": "fmt", "lint": "lint", "contract": "contract", "ts-packages": "desktop-packages",
     "ts-unit": "desktop-ui", "ts-browser": "desktop-ui", "ts-fuzz": "desktop-ui-bombadil",
 }
+# Matrix jobs: a plan job `<prefix>:<name>` runs in the workflow job `<prefix>`.
+MATRIX_JOBS = ("test", "build", "shard")
 ALWAYS = ("plan", "repository-guard", "publish-control-tests", "triage-hygiene", "notary-control-tests")
 
 
 def workflow_job(job):
-    return "test" if job.startswith("test:") else WORKFLOW_JOBS[job]
+    prefix = job.split(":", 1)[0]
+    return prefix if prefix in MATRIX_JOBS and ":" in job else WORKFLOW_JOBS[job]
 
 
 def verdict(needs, fork=False):
@@ -620,7 +903,7 @@ def verdict(needs, fork=False):
     needs failed, so a skip passes only for a job the plan left out.
     """
     problems = {}
-    known = set(ALWAYS) | set(WORKFLOW_JOBS.values()) | {"test"}
+    known = set(ALWAYS) | set(WORKFLOW_JOBS.values()) | set(MATRIX_JOBS)
     for name in sorted(set(needs) - known):
         problems[name] = "gate needs it but gate.py does not know it; add it to WORKFLOW_JOBS or ALWAYS"
     for name in sorted(known - set(needs)):
@@ -656,6 +939,8 @@ def emit(selection):
             handle.write(f"matrix={json.dumps({'include': selection['matrix']})}\n")
             handle.write(f"jobs={json.dumps(selection['jobs'])}\n")
             handle.write(f"tests={'true' if selection['matrix'] else 'false'}\n")
+            handle.write(f"archives={json.dumps({'include': selection['archives']})}\n")
+            handle.write(f"shards={json.dumps({'include': selection['shards']})}\n")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a") as handle:
@@ -666,6 +951,9 @@ def emit(selection):
             handle.write(f"### Gate plan\n\nScope: {scope}\n\nJobs: {', '.join(selection['jobs']) or 'none'}\n\n")
             for entry in selection["matrix"]:
                 handle.write(f"- `test:{entry['group']}`: {entry['packages']}\n")
+            for entry in selection["archives"]:
+                handle.write(f"- `build:{entry['archive']}`, then {len(selection['shards'])} "
+                             f"`shard:{entry['archive']}` slices: {entry['packages']}\n")
 
 
 def main():

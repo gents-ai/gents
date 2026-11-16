@@ -1,4 +1,7 @@
 ---- MODULE GuestAllowance ----
+\* lean: none
+\* crates: gents-pack, gents-toolcalls
+\* models: ToolPolicy.PluginCalls.allowanceTicks, ToolPolicy.PluginCalls.wakeCountedEpoch, ToolPolicy.PluginCalls.catchUpEpoch
 (***************************************************************************)
 (* How long a computing plugin guest runs once it has its compute         *)
 (* allowance, and when the worker thread it occupies is released.         *)

@@ -313,3 +313,17 @@ async fn changed_identity_configuration_invalidates_waiting_command_exclusions()
     )
     .await;
 }
+
+#[test]
+fn runtime_test_credentials_are_isolated_from_unrelated_backup_trees() {
+    let account = tempfile::tempdir().unwrap();
+    let updates = account.path().join(".gents/service-updates/backup");
+    std::fs::create_dir_all(&updates).unwrap();
+    std::os::unix::fs::symlink("SingletonLock", updates.join("SingletonLock")).unwrap();
+    let sources = inactive_runtime_homes(&[account.path().to_owned()]);
+    let paths = sources
+        .iter()
+        .flat_map(|home| standard_runtime_credentials(home));
+    CredentialProtection::capture(paths).unwrap();
+    assert!(CredentialProtection::capture([updates]).is_err());
+}

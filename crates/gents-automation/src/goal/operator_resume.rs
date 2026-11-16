@@ -398,10 +398,7 @@ async fn stage_resume_inner(
     sign_request(&mut create, RequestSigner::Identity(identity)).await?;
     stage_resume_state(txn, &goal, post, Some((sequence, from_request_id)), now).await?;
     let doc_id = if agent_initiated {
-        let response = txn
-            .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
-            .await?;
-        gents_store::graphql::created_doc_id(&response, "AgentRequest")?
+        gents_session::request::lifecycle::runtime_publication::publish(txn, &create).await?
     } else {
         let session_doc = create
             .session_doc_id
