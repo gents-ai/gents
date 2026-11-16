@@ -206,7 +206,7 @@ pub(super) async fn resend_member_intent(
             && intent.predecessor_sequence == approval.authorization_sequence,
         "renewal intent does not match the current enrollment"
     );
-    let p2p = gents_store::identity::node_p2p(node).context("runtime P2P is unavailable")?;
+    let p2p = crate::node_access::operations(node).context("runtime P2P is unavailable")?;
     push_enrollment_document(
         &p2p,
         &approval.server_ticket,

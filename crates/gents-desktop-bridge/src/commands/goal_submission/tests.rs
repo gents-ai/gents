@@ -86,35 +86,36 @@ async fn missing_goal_preparation_never_allocates_or_resubmits_work() -> Result<
 
 #[tokio::test]
 async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparation() -> Result<()> {
-    use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
+    use gents_desktop_core::client::DesktopPaths;
     use std::sync::Arc;
     use std::time::Duration;
 
     let home = tempfile::tempdir()?;
     let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
+        ClientRuntime::start_with_paths_and_options(
             DesktopPaths::from_root(home.path()),
-            ClientCoreOptions::local_simulated_route(),
+            crate::client_test_support::file_journal_options(),
         )
         .await?,
     );
     // The desktop's client key is the User of a served runtime it routes to.
-    let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start_unpublished_for(
-        Arc::new(core.node_identity().clone()),
-    )
+    let runtime = gents::client_test_support::ServedRuntimeHome::start_unpublished_for(Arc::new(
+        core.node_identity().clone(),
+    ))
     .await;
     runtime.publish_node(json!({})).await;
     let agent = runtime.publish_chat_agent().await;
     let proxy =
         crate::tests::support::ServingStatusProxy::start(runtime.graphql(), runtime.node_did())
             .await;
-    core.add_local_standard_peer_route_for_test(
-        "Goal fixture",
-        "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-        runtime.node_did(),
-        proxy.url(),
-        &runtime.home_path().display().to_string(),
-    )
+    core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: (runtime.node_did()).to_string(),
+        label: ("Goal fixture").to_string(),
+        graphql: (proxy.url()).to_string(),
+        local_node_home: Some((&runtime.home_path().display().to_string()).to_string()),
+        access_request: None,
+        access_state: None,
+    })
     .await?;
     let result = async {
         let did = core.node_identity().did().to_owned();

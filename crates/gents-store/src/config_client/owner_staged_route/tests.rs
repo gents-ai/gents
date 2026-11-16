@@ -86,7 +86,7 @@ impl Fixture {
                 .with_http(
                     defra_node::HttpConfig::with_listener(listener)
                         .unwrap()
-                        .with_extra_routes(route.router()),
+                        .with_authenticated_routes(route.router()),
                 )
                 .build()
                 .await

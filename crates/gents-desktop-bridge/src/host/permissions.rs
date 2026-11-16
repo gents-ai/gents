@@ -1,4 +1,4 @@
-use gents_desktop_core::client::ClientCore;
+use crate::client_runtime::ClientRuntime;
 use gents_tools::plugin::approval::workspace::{self, Mode, Support, WorkspaceKey};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -118,7 +118,7 @@ enum Target {
 }
 
 pub(super) async fn state(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: WorkspacePermissionsRequest,
 ) -> Result<WorkspacePermissionsState, BridgeError> {
     Ok(match target(core, request).await? {
@@ -128,7 +128,7 @@ pub(super) async fn state(
 }
 
 pub(super) async fn save(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: WorkspacePermissionsSaveRequest,
 ) -> Result<WorkspacePermissionsState, BridgeError> {
     let expected: u64 = request.expected_revision.parse().map_err(|_| {
@@ -199,7 +199,7 @@ pub(super) async fn save(
 }
 
 pub(super) async fn forget_commands(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: WorkspacePermissionsForgetCommandsRequest,
 ) -> Result<WorkspacePermissionsState, BridgeError> {
     let expected: u64 = request.expected_revision.parse().map_err(|_| {
@@ -244,7 +244,7 @@ pub(super) async fn forget_commands(
 }
 
 async fn target(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: WorkspacePermissionsRequest,
 ) -> Result<Target, BridgeError> {
     if request.agent_did.trim().is_empty() {
@@ -254,10 +254,10 @@ async fn target(
         ));
     }
     let record = super::approvals::peer(core, &request.node_did).await?;
-    let support = gents_desktop_core::local_runtime::workspace_permission_support(&record)
+    let support = gents::client_runtime::workspace_permission_support(&record)
         .await
         .map_err(super::backend_error)?;
-    if record.operator_graphql().is_none() || record.local_node_home.is_none() {
+    if !record.validate() || record.local_node_home.is_none() {
         return Ok(Target::Unavailable(
             WorkspacePermissionsState::RemoteUnavailable { support },
         ));
@@ -267,7 +267,7 @@ async fn target(
             WorkspacePermissionsState::UnsupportedRuntime,
         ));
     };
-    let home = gents_desktop_core::local_runtime::hosted_runtime_home(&record)
+    let home = gents::client_runtime::hosted_runtime_home(&record)
         .map_err(super::backend_error)?
         .to_owned();
     let requester = core.node_identity().did().to_owned();

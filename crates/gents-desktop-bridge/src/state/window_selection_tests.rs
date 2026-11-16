@@ -221,9 +221,9 @@ fn two_windows_on_two_nodes_resolve_through_their_own_selection() {
     let (_temp, state) = state();
     let core = Arc::new(
         runtime
-            .block_on(ClientCore::start_with_paths_and_options(
+            .block_on(ClientRuntime::start_with_paths_and_options(
                 state.policy.desktop_paths.clone(),
-                gents_desktop_core::client::ClientCoreOptions::local_only(),
+                crate::client_test_support::file_journal_options(),
             ))
             .expect("client core"),
     );

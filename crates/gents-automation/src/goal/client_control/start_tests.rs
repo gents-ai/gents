@@ -647,7 +647,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                     for collection in ["Goal", "AgentRequest", "GoalCreationClaim"] {
                         assert!(before["data"][collection].as_array().unwrap().is_empty());
                     }
-                    process_command(&node, &identity, &doc_id, selected_identity)
+                    process_command(&node, &identity, &doc_id, selected_identity, None)
                         .await
                         .unwrap();
                     assert!(receipt(&access, &doc_id).await.is_none());
@@ -672,7 +672,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                     node.shutdown().await.expect("node shutdown");
                     continue;
                 }
-                process_command(&node, &identity, &doc_id, selected_identity)
+                process_command(&node, &identity, &doc_id, selected_identity, None)
                     .await
                     .unwrap();
                 assert!(
@@ -691,7 +691,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
         if case.name == "authority_unavailable" {
             let result = ConfigApplyTxn::with_read_storage_failure(
                 "AgentSessionGoalControl",
-                process_command(&node, &identity, &doc_id, selected_identity),
+                process_command(&node, &identity, &doc_id, selected_identity, None),
             )
             .await;
             assert!(result.is_err());
@@ -702,7 +702,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
         if case.commit && (!case.signature_valid || !case.first_request_valid) {
             assert!(!case.published, "{}", case.name);
             assert_eq!(
-                process_command(&node, &identity, &doc_id, selected_identity)
+                process_command(&node, &identity, &doc_id, selected_identity, None)
                     .await
                     .unwrap(),
                 None,
@@ -730,7 +730,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             );
         } else if case.commit {
             assert_eq!(
-                process_command(&node, &identity, &doc_id, selected_identity)
+                process_command(&node, &identity, &doc_id, selected_identity, None)
                     .await
                     .unwrap(),
                 None,

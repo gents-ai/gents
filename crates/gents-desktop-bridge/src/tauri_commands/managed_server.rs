@@ -25,8 +25,8 @@ use crate::types::{
 use authority::{
     runtime_tool_ceiling, validate_ready_runtime, validate_tool_root, EffectiveManagedAuthority,
 };
+use gents::client_workspace::select_agent_workspace_root;
 use gents_desktop_core::preference::StoredManagedServer;
-use gents_desktop_core::workspace_root::select_agent_workspace_root;
 use gents_protocol::operations::service::ServiceLifecycleAction;
 use gents_protocol::operations::workspace_root::AgentWorkspaceRoot;
 use gents_service::args::ServiceAction;

@@ -4,7 +4,7 @@ import type {
   DesktopClientSnapshot,
   ManagedServerResetResult,
 } from "@source-inc/gents-desktop-client";
-import type { SavedPeerView } from "@source-inc/gents-desktop-client/generated/SavedPeerView";
+import type { SavedRuntimeView } from "@source-inc/gents-desktop-client/generated/SavedRuntimeView";
 
 import type { DesktopStartupPhase } from "../lib/loadingStatus";
 import { createSelectors, type WithSelectors } from "./createSelectors";
@@ -16,7 +16,7 @@ export type ClientState = {
   starting: boolean;
   stopping: boolean;
   repairNotes: string[];
-  repairPeers: SavedPeerView[];
+  repairPeers: SavedRuntimeView[];
   localNodeLost: boolean;
   startupDiagnosticsHint: string | null;
   home: {

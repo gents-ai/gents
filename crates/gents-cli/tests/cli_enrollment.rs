@@ -25,13 +25,14 @@ use std::time::Duration;
 use anyhow::anyhow;
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
+use gents::client_runtime::fetch_runtime_connection_payload;
 use gents::support::snapshots::{SnapshotChanges, SnapshotReader};
+use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
+use gents_desktop_core::client::DesktopPaths;
 #[cfg(feature = "live-e2e")]
-use gents_desktop_core::client::canonical_output::{
+use gents_observe::client_projection::canonical_output::{
     project_canonical_message, CanonicalMessageProjection,
 };
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
-use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
 #[cfg(feature = "live-e2e")]
 use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
 #[cfg(feature = "live-e2e")]
@@ -234,12 +235,12 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
                 Some(node_did.as_str())
             );
 
-            let core = ClientCore::start_with_paths_and_options(
+            let core = ClientRuntime::start_with_paths_and_options(
                 DesktopPaths::from_root(&desktop_home),
-                ClientCoreOptions::local_only(),
+                ClientRuntimeOptions::local_only(),
             )
             .await
-            .context("starting fresh desktop ClientCore")?;
+            .context("starting fresh desktop ClientRuntime")?;
 
             let pending = core
                 .request_status_enrollment_with_label(&status, Some(&agent_name))
@@ -447,7 +448,7 @@ async fn wait_for_enrollment_token(status_url: &str, graphql: &str) -> Result<(V
     let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
     let mut changes = observed_changes(&access, &["NodeRuntime", "NodeReadiness"]).await;
     loop {
-        match fetch_runtime_connection_payload(status_url, None).await {
+        match fetch_runtime_connection_payload(status_url).await {
             Ok(status) => {
                 let token = status
                     .pointer("/enrollment/token")
@@ -731,7 +732,7 @@ fn client_selected_reply(
 
 #[cfg(feature = "live-e2e")]
 async fn wait_for_client_complete_response(
-    core: &ClientCore,
+    core: &ClientRuntime,
     session_id: &str,
     node_did: &str,
     request_id: &str,
@@ -741,7 +742,7 @@ async fn wait_for_client_complete_response(
     let mut changes = core.store_updates();
     loop {
         changes.borrow_and_update();
-        let page = gents_desktop_core::client::load_session_transcript_page_on(
+        let page = gents_observe::client_projection::query::load_session_transcript_page_on(
             &core.operator_access(node_did)?,
             session_id,
             Some(node_did),
@@ -798,9 +799,9 @@ async fn wait_for_client_complete_response(
 }
 
 async fn wait_for_chat_ready_enrollment(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: &str,
-) -> Result<gents_desktop_core::client::PeerRecord> {
+) -> Result<gents_protocol::runtime_connection::RuntimeConnection> {
     let deadline = Instant::now() + Duration::from_secs(90);
     let mut updates = core.sync_state_updates();
     loop {
@@ -832,7 +833,7 @@ async fn wait_for_chat_ready_enrollment(
     }
 }
 
-async fn wait_for_client_node_readiness(core: &ClientCore, node_did: &str) -> Result<()> {
+async fn wait_for_client_node_readiness(core: &ClientRuntime, node_did: &str) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut updates = core.store_updates();
     loop {

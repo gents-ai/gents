@@ -30,6 +30,16 @@ RequestContext's explicit empty bearer suppresses the process fallback. -/
 def credentialForActor (presented actorMatches : Bool) : Bool :=
   presented && actorMatches
 
+/-- A remote ACP provider needs the caller's live delegation before a
+client-owned graph can be staged. Local ACP has no remote credential premise.
+This is transport readiness; the native provider still decides authorization. -/
+def clientGraphReady (remote presented actorMatches : Bool) : Bool :=
+  !remote || credentialForActor presented actorMatches
+
+theorem remote_graph_waits_without_credential (actorMatches : Bool) :
+    clientGraphReady true false actorMatches = false := by
+  simp [clientGraphReady, credentialForActor]
+
 theorem no_presented_credential_never_borrows (actorMatches : Bool) :
     credentialForActor false actorMatches = false := by simp [credentialForActor]
 

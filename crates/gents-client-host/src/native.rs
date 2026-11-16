@@ -5,8 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
 use gents_desktop_bridge::host::{local, ClientHost};
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_desktop_core::client::DesktopPaths;
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, Command};
 use tokio_util::sync::CancellationToken;
@@ -63,15 +64,13 @@ pub async fn serve(paths: DesktopPaths, editor_store: bool, interactive: bool) -
         ))
     });
     let options = match &provider {
-        Some(provider) => ClientCoreOptions {
+        Some(provider) => ClientRuntimeOptions {
             store_key_provider: Some(provider.clone()),
-            operator_identity_interaction:
-                gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent,
             ..Default::default()
         },
-        None => ClientCoreOptions::default(),
+        None => ClientRuntimeOptions::default(),
     };
-    let core = match ClientCore::start_with_paths_and_options(paths, options).await {
+    let core = match ClientRuntime::start_with_paths_and_options(paths, options).await {
         Ok(core) => Arc::new(core),
         Err(error) => {
             tracing::error!(error = %format!("{error:#}"), "native client startup failed");

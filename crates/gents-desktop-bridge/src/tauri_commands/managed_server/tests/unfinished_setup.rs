@@ -12,7 +12,7 @@ fn unfinished_home(temp: &Path) -> (PathBuf, gents_desktop_core::client::Desktop
         "",
     );
     let desktop = gents_desktop_core::client::DesktopPaths::from_root(temp.join("desktop"));
-    write(desktop.peer_directory_path(), r#"{"peers":[]}"#);
+    write(desktop.runtime_directory_path(), r#"{"peers":[]}"#);
     (home, desktop)
 }
 
@@ -69,7 +69,7 @@ async fn an_unfinished_home_is_recognized_only_before_it_served_or_paired() {
     std::fs::remove_file(home.join(gents_store::local::home::RUNTIME_STATE_FILE_NAME)).unwrap();
 
     write(
-        desktop.peer_directory_path(),
+        desktop.runtime_directory_path(),
         r#"{"peers":[{"peer_id":"p","node_did":"did:key:forge","label":"Forge","addr":"iroh://forge","source":"enrollment","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}"#,
     );
     assert!(
@@ -146,7 +146,7 @@ async fn backing_up_drops_the_pairing_with_the_node_it_retired() {
     let desktop = state.policy.desktop_paths.clone();
     let (_, _) = unfinished_home(temp.path());
     write(
-        desktop.peer_directory_path(),
+        desktop.runtime_directory_path(),
         &format!(
             r#"{{"peers":[
               {{"peer_id":"local","node_did":"did:key:forge","label":"Forge","addr":"iroh://forge","source":"enrollment","graphql":"http://127.0.0.1:9191/api/v0/graphql","local_node_home":{home:?},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}},
@@ -156,11 +156,13 @@ async fn backing_up_drops_the_pairing_with_the_node_it_retired() {
         ),
     );
 
-    let dropped = retire_desktop_pairing(&state, &home, Some("did:key:forge")).await;
+    let dropped = retire_desktop_pairing(&state, &home).await;
     assert_eq!(dropped, 1);
-    let left = gents_desktop_core::client::load_peer_records(desktop.peer_directory_path())
-        .await
-        .unwrap();
+    let left = gents_desktop_core::client::runtime_directory::load_runtime_connections(
+        desktop.runtime_directory_path(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         left.iter()
             .map(|record| record.node_did.clone())

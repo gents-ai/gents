@@ -3,7 +3,6 @@ import { createStore, type StoreApi } from "zustand/vanilla";
 import type {
   DeploymentView,
   DesktopClientSnapshot,
-  EndedAccessView,
   MailboxItemView,
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
@@ -30,8 +29,6 @@ export type FleetState = {
   parentOf: Readonly<Record<SessionKey, SessionSummary>>;
   workersOf: Readonly<Record<SessionKey, readonly SessionSummary[]>>;
   bySessionId: Readonly<Record<string, SessionSummary>>;
-  /** joined nodes this app can no longer use, until dismissed or joined again */
-  endedAccess: readonly EndedAccessView[];
 };
 
 export type FleetStore = StoreApi<FleetState>;
@@ -50,8 +47,6 @@ export const firstNode = (fleet: FleetState) => {
   return first ? (fleet.nodes[first] ?? null) : null;
 };
 
-export const endedAccessOf = (fleet: FleetState, nodeDid: string | null | undefined) =>
-  (nodeDid && fleet.endedAccess.find((ended) => ended.nodeDid === nodeDid)) || null;
 
 export const nodeOrFirst = (fleet: FleetState, nodeDid: string | null | undefined) =>
   nodeDid ? nodeOf(fleet, nodeDid) : firstNode(fleet);
@@ -75,7 +70,6 @@ const EMPTY: FleetState = {
   parentOf: {},
   workersOf: {},
   bySessionId: {},
-  endedAccess: [],
 };
 
 export function createFleetStore() {
@@ -117,9 +111,6 @@ function reconcile(prev: FleetState, snapshot: DesktopClientSnapshot): FleetStat
     mailboxOf[key] = keepList(prev.mailboxOf[key], items);
   }
   const nodeKeys = deployments.map(nodeKeyOf);
-  const ended = (snapshot.client?.endedAccess ?? []).map((entry, i) =>
-    keep(prev.endedAccess[i], entry),
-  );
   const sessionsChanged = !sameRecord(prev.sessions, sessions);
   const lineage = sessionsChanged
     ? lineageOf(sessions, prev)
@@ -137,7 +128,6 @@ function reconcile(prev: FleetState, snapshot: DesktopClientSnapshot): FleetStat
       ? prev.byNodeSessionId
       : byNodeSessionId,
     mailboxOf: sameRecord(prev.mailboxOf, mailboxOf) ? prev.mailboxOf : mailboxOf,
-    endedAccess: keepList(prev.endedAccess, ended),
     ...lineage,
   };
   return (Object.keys(next) as (keyof FleetState)[]).every(

@@ -1,11 +1,11 @@
+use crate::client_runtime::ClientRuntime;
 use crate::error::{BridgeError, BridgeErrorCode};
-use gents_desktop_core::client::ClientCore;
 use gents_protocol::job::{JobReadError, JobView};
 use gents_protocol::operations::job::{JobListInput, JobQueryError, JobViewInput};
 use std::sync::Arc;
 
 pub async fn jobs_list(
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     input: JobListInput,
 ) -> Result<Vec<JobView>, BridgeError> {
     let access = core
@@ -17,7 +17,7 @@ pub async fn jobs_list(
 }
 
 pub async fn job_view(
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     node_did: &str,
     address: Option<String>,
     row_doc_id: Option<String>,

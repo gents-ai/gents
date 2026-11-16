@@ -7,7 +7,7 @@ use gents_inference::auth::credential::{
 };
 use serde::Serialize;
 
-const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
+const LOG_TARGET: &str = "crate::inference_setup";
 
 pub(crate) fn provider_label(provider: &str) -> &'static str {
     match provider {

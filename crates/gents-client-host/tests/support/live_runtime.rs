@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
 use gents::support::live_inference::{live_target, wait_for_request_terminal, InferenceTarget};
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
+use gents_desktop_core::client::DesktopPaths;
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents_store::identity::NodeIdentity;
 use serde_json::{json, Value};
@@ -227,8 +228,11 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     );
     let paths = DesktopPaths::from_root(root.join("client"));
     let seed = Arc::new(
-        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
-            .await?,
+        ClientRuntime::start_with_paths_and_options(
+            paths.clone(),
+            ClientRuntimeOptions::local_only(),
+        )
+        .await?,
     );
     let client_did = seed.node_identity().did().to_owned();
     seed.shutdown().await?;

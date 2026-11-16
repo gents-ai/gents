@@ -151,18 +151,6 @@ pub(super) async fn load_preference(
     match tokio::fs::read(&path).await {
         Ok(bytes) => match serde_json::from_slice(&bytes) {
             Ok(stored) => Ok(Some(stored)),
-            Err(error) if error.classify() == serde_json::error::Category::Data => {
-                let aside = gents_desktop_core::client::set_aside_unreadable(&path)
-                    .await
-                    .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
-                tracing::warn!(
-                    target: "gents_desktop::managed_server",
-                    %error,
-                    aside = %aside.display(),
-                    "managed-server.json is from another version; set it aside"
-                );
-                Ok(None)
-            }
             Err(error) => Err(BridgeError::untyped(error.to_string())),
         },
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),

@@ -3,7 +3,7 @@ use gents_protocol::file_changes::{
     MAX_FILE_IMAGE_BYTES,
 };
 use gents_protocol::job::{JobBudget, JobProgress, JobState};
-use gents_store::config_client::ConfigAccess;
+
 use gents_store::graphql::escape_graphql_string;
 
 use super::operations_job_control::seed_admission_for_node;
@@ -12,7 +12,7 @@ use super::support::{create_session, seed_job_row_for_node, OPERATOR};
 #[tokio::test]
 async fn file_change_review_reads_the_bound_request_without_touching_a_local_checkout() {
     let (core, _dir) = boot_review_core().await;
-    let node = core.node_identity().did().to_owned();
+    let node = core.runtime_connections()[0].node_did.clone();
     let session = "file-review-session";
     let call = "file-review-call";
     let request = format!("req-{call}");
@@ -121,7 +121,9 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
             Ok(Some(_))
         ));
     }
-    let access = ConfigAccess::local(core.node_arc());
+    let access = core
+        .operator_access(&core.runtime_connections()[0].node_did)
+        .unwrap();
     let observation = access.execute(&format!(
         r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}) {{ _docID tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
         escape_graphql_string(&physical),
@@ -180,7 +182,7 @@ async fn file_change_review_reads_the_bound_request_without_touching_a_local_che
 }
 
 async fn seed_review(
-    core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
+    core: &std::sync::Arc<crate::client_runtime::ClientRuntime>,
     session: &str,
     call: &str,
     before: FileImage,
@@ -204,7 +206,7 @@ async fn seed_review(
         observed_terminal_children: 0,
         revision: 1,
     };
-    let node = core.node_identity().did();
+    let node = &core.runtime_connections()[0].node_did;
     let physical =
         seed_job_row_for_node(core, node, session, call, "completed", &progress, None).await;
     seed_admission_for_node(core, node, session, &physical, call, 1).await;
@@ -218,7 +220,9 @@ async fn seed_review(
             after,
         }],
     };
-    let access = ConfigAccess::local(core.node_arc());
+    let access = core
+        .operator_access(&core.runtime_connections()[0].node_did)
+        .unwrap();
     let binding = access
         .execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ request_doc_id }} }}"#,
@@ -245,7 +249,7 @@ async fn seed_review(
 #[tokio::test]
 async fn concurrent_file_reviews_preserve_each_retained_image() {
     let (core, _directory) = boot_review_core().await;
-    let node = core.node_identity().did().to_owned();
+    let node = core.runtime_connections()[0].node_did.clone();
     let session = "concurrent-file-review";
     let call = "concurrent-file-call";
     create_session(&core, &node, session, None).await;
@@ -272,7 +276,7 @@ async fn concurrent_file_reviews_preserve_each_retained_image() {
 #[tokio::test]
 async fn unavailable_file_review_scope_is_retryable_not_missing_versions() {
     let (core, _directory) = boot_review_core().await;
-    let node = core.node_identity().did().to_owned();
+    let node = core.runtime_connections()[0].node_did.clone();
     let error = crate::commands::tool_file_changes(
         &core,
         node,
@@ -298,7 +302,7 @@ async fn maximum_file_images_cross_the_editor_host_frames_without_truncation() {
     use tokio_util::{codec::LengthDelimitedCodec, sync::CancellationToken};
 
     let (core, _dir) = boot_review_core().await;
-    let node = core.node_identity().did().to_owned();
+    let node = core.runtime_connections()[0].node_did.clone();
     let session = "file-review-maximum";
     let call = "maximum-file-call";
     create_session(&core, &node, session, None).await;
@@ -387,43 +391,35 @@ async fn maximum_file_images_cross_the_editor_host_frames_without_truncation() {
     core.shutdown().await.unwrap();
 }
 
+struct ReviewFixture {
+    _directory: tempfile::TempDir,
+    _runtime: gents::client_test_support::ServedRuntimeHome,
+}
+
 async fn boot_review_core() -> (
-    std::sync::Arc<gents_desktop_core::client::ClientCore>,
-    tempfile::TempDir,
+    std::sync::Arc<crate::client_runtime::ClientRuntime>,
+    ReviewFixture,
 ) {
-    use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
     let directory = tempfile::tempdir().unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    drop(listener);
     let core = std::sync::Arc::new(
-        ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(directory.path().join("client")),
-            ClientCoreOptions {
-                http_addr: Some(address),
-                ..ClientCoreOptions::local_simulated_route()
-            },
+        crate::client_runtime::ClientRuntime::start_with_paths_and_options(
+            gents_desktop_core::client::DesktopPaths::from_root(directory.path()),
+            crate::client_test_support::file_journal_options(),
         )
         .await
         .unwrap(),
     );
-    let endpoint = format!("http://{address}/api/v0/graphql");
-    let runtime_home = directory.path().join("runtime");
-    std::fs::create_dir(&runtime_home).unwrap();
-    std::fs::write(runtime_home.join("runtime.json"), serde_json::to_vec(&serde_json::json!({
-        "node_name": "file-review-fixture", "node_did": core.node_identity().did(), "graphql": endpoint,
-    })).unwrap()).unwrap();
-    core.add_local_standard_peer_route_for_test(
-        "File review fixture",
-        "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-        core.node_identity().did(),
-        &endpoint,
-        runtime_home.to_str().unwrap(),
+    let runtime = gents::client_test_support::ServedRuntimeHome::start_unpublished_for(
+        std::sync::Arc::new(core.node_identity().clone()),
     )
-    .await
-    .unwrap();
-    assert!(core
-        .operator_observation_graphql(core.node_identity().did())
-        .is_some());
-    (core, directory)
+    .await;
+    runtime.publish_node(serde_json::json!({})).await;
+    crate::client_test_support::connect_runtime(&runtime, &core).await;
+    (
+        core,
+        ReviewFixture {
+            _directory: directory,
+            _runtime: runtime,
+        },
+    )
 }

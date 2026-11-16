@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
+use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
 use gents_desktop_bridge::host::{local, protocol};
 use gents_desktop_bridge::{BridgeError, BridgeErrorCode};
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_desktop_core::client::DesktopPaths;
 use serde_json::{json, Value};
 use tokio::process::Command;
 use tokio_util::codec::{Framed, FramedRead, LengthDelimitedCodec};
@@ -54,9 +55,12 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
     let directory = tempfile::tempdir().unwrap();
     let paths = DesktopPaths::from_root(directory.path().join("retained history"));
     let seed = Arc::new(
-        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
-            .await
-            .unwrap(),
+        ClientRuntime::start_with_paths_and_options(
+            paths.clone(),
+            ClientRuntimeOptions::local_only(),
+        )
+        .await
+        .unwrap(),
     );
     let client_did = seed.node_identity().did().to_owned();
     let did = gents_store::graphql::escape_graphql_string(&client_did);
@@ -175,9 +179,12 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
     .await
     .unwrap();
     let reopened = Arc::new(
-        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
-            .await
-            .unwrap(),
+        ClientRuntime::start_with_paths_and_options(
+            paths.clone(),
+            ClientRuntimeOptions::local_only(),
+        )
+        .await
+        .unwrap(),
     );
     assert_eq!(reopened.node_identity().did(), client_did);
     let data = gents_store::config_client::ConfigAccess::local(reopened.node_arc())

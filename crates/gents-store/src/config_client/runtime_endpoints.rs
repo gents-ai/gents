@@ -123,7 +123,7 @@ impl GraphqlEndpoint {
     }
 }
 
-async fn discovery_client() -> Result<&'static reqwest::Client> {
+pub(super) async fn discovery_client() -> Result<&'static reqwest::Client> {
     static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
     CLIENT
         .get_or_try_init(|| async {

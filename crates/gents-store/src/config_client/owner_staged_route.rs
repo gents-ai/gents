@@ -118,7 +118,7 @@ impl OwnerStagedRoute {
         ));
     }
 
-    /// The route, for `HttpConfig::with_extra_routes`.
+    /// The route, for `HttpConfig::with_authenticated_routes`.
     pub fn router(&self) -> axum::Router {
         axum::Router::new().route(
             OWNER_STAGED_PATH,

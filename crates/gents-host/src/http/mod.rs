@@ -1,10 +1,12 @@
 pub mod access;
 mod agent_identity;
+pub mod client_access;
 pub mod enrollment;
 pub mod explorer;
 pub mod file_inventory;
 pub mod fleet;
 pub mod fleet_slots;
+mod goal_control;
 pub mod healthz;
 pub mod identity_decide;
 pub mod inference;

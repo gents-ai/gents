@@ -111,7 +111,7 @@ where
             repaired: Vec::new(),
             outcome: ManagedServerRepairOutcome::NoLocalNode,
             blocker: None,
-            saved_peers: Vec::new(),
+            saved_runtimes: Vec::new(),
             local_node_lost: false,
         });
     };
@@ -151,24 +151,24 @@ where
         ),
     };
 
-    let peers_path = paths.peer_directory_path();
+    let peers_path = paths.runtime_directory_path();
     let mut local_node_lost = stale_node;
     let late = async {
         let client = repair_client_state(state, &mut repaired, RepairClientScope::All).await?;
         local_node_lost |= client.local_node_lost;
-        gents_desktop_core::client::load_peer_records(peers_path)
+        gents_desktop_core::client::runtime_directory::load_runtime_connections(peers_path)
             .await
             .map_err(|error| BridgeError::untyped(error.to_string()))
     }
     .await;
-    let saved_peers = match late {
-        Ok(peers) => crate::snapshot::saved_peer_views(&peers),
+    let saved_runtimes = match late {
+        Ok(peers) => crate::snapshot::saved_runtime_views(&peers),
         Err(error) => {
             outcome = ManagedServerRepairOutcome::Blocked;
             blocker = Some(capitalize(format!("{error:#}")));
-            gents_desktop_core::client::load_peer_records(peers_path)
+            gents_desktop_core::client::runtime_directory::load_runtime_connections(peers_path)
                 .await
-                .map(|peers| crate::snapshot::saved_peer_views(&peers))
+                .map(|peers| crate::snapshot::saved_runtime_views(&peers))
                 .unwrap_or_default()
         }
     };
@@ -176,7 +176,7 @@ where
         repaired,
         outcome,
         blocker,
-        saved_peers,
+        saved_runtimes,
         local_node_lost,
     })
 }

@@ -99,13 +99,13 @@ async fn unreadable_saved_connections_are_reported_as_repaired() {
     let (_temp, state) = orchestration_state();
     let paths = &state.policy.desktop_paths;
     std::fs::create_dir_all(paths.root()).unwrap();
-    std::fs::write(paths.peer_directory_path(), "{ not json").unwrap();
+    std::fs::write(paths.runtime_directory_path(), "{ not json").unwrap();
     let result = repair_with(&state, true, |_| async { ready() })
         .await
         .unwrap();
     assert_eq!(result.outcome, ManagedServerRepairOutcome::Ready);
-    assert!(result.saved_peers.is_empty());
-    assert!(!paths.peer_directory_path().exists());
+    assert!(result.saved_runtimes.is_empty());
+    assert!(!paths.runtime_directory_path().exists());
     let set_aside = std::fs::read_dir(paths.root())
         .unwrap()
         .filter_map(Result::ok)
@@ -211,7 +211,7 @@ async fn a_late_failure_keeps_the_notes_already_gathered() {
     let (_temp, state) = orchestration_state();
     let paths = &state.policy.desktop_paths;
     std::fs::create_dir_all(paths.root()).unwrap();
-    std::fs::write(paths.peer_directory_path(), "{ not json").unwrap();
+    std::fs::write(paths.runtime_directory_path(), "{ not json").unwrap();
     write(paths.store_encryption_path(), "not a record");
     let result = repair_with(&state, true, |_| async { ready() })
         .await
@@ -229,7 +229,7 @@ async fn archiving_the_client_store_leaves_the_grant_and_identity_in_place() {
     write(&paths.root().join("managed-server.json"), "{}");
     write(paths.principal_metadata_path(), "meta");
     write(paths.identity_key_path(), "key");
-    write(paths.peer_directory_path(), "{}");
+    write(paths.runtime_directory_path(), "{}");
     archive_client_store(
         &state,
         gents_protocol::operations::install_repair::IncompatibleStoreKind::MissingStoreKey,
@@ -245,7 +245,7 @@ async fn archiving_the_client_store_leaves_the_grant_and_identity_in_place() {
     for name in [paths.principal_metadata_path(), paths.identity_key_path()] {
         assert!(name.exists(), "{}", name.display());
     }
-    assert!(paths.peer_directory_path().exists());
+    assert!(paths.runtime_directory_path().exists());
     let backups = tree(temp.path())
         .into_iter()
         .filter(|path| path.contains("backup") && path.ends_with("MANIFEST"))
@@ -255,12 +255,11 @@ async fn archiving_the_client_store_leaves_the_grant_and_identity_in_place() {
 
 #[tokio::test]
 async fn another_versions_client_store_is_set_aside_and_the_banner_names_the_backup() {
-    use gents_desktop_core::client::{ClientCore, ClientCoreOptions};
+    use crate::client_runtime::ClientRuntime;
     for encrypted in [false, true] {
         let (temp, state) = orchestration_state();
         let paths = &state.policy.desktop_paths;
-        gents_desktop_core::test_fixtures::write_other_version_client_store(paths, true, encrypted)
-            .await;
+        gents::client_test_support::write_other_version_client_store(paths, true, encrypted).await;
         write(
             &paths.root().join("managed-server.json"),
             r#"{"nodeName":"Forge"}"#,
@@ -290,9 +289,9 @@ async fn another_versions_client_store_is_set_aside_and_the_banner_names_the_bac
         assert_eq!(std::fs::read(paths.identity_key_path()).unwrap(), identity);
         assert!(paths.root().join("managed-server.json").exists());
 
-        let core = ClientCore::start_with_paths_and_options(
+        let core = ClientRuntime::start_with_paths_and_options(
             paths.clone(),
-            ClientCoreOptions::local_only(),
+            crate::client_test_support::file_journal_options(),
         )
         .await
         .expect("a fresh client store opens");
@@ -310,9 +309,8 @@ async fn the_field_state_after_an_upgrade_of_another_versions_store_is_set_aside
     use gents_store::local::store_key::upgrade;
     let (temp, state) = orchestration_state();
     let paths = &state.policy.desktop_paths;
-    gents_desktop_core::test_fixtures::write_other_version_client_store(paths, true, false).await;
-    let record =
-        gents_desktop_core::test_fixtures::encrypt_client_store_without_its_record(paths).await;
+    gents::client_test_support::write_other_version_client_store(paths, true, false).await;
+    let record = gents::client_test_support::encrypt_client_store_without_its_record(paths).await;
     write(
         paths.store_encryption_path(),
         &serde_json::to_string(&record).unwrap(),
@@ -350,7 +348,7 @@ async fn the_field_state_after_an_upgrade_of_another_versions_store_is_set_aside
 async fn a_held_store_or_an_unreadable_key_is_never_set_aside() {
     let (temp, state) = orchestration_state();
     let paths = &state.policy.desktop_paths;
-    gents_desktop_core::test_fixtures::write_other_version_client_store(paths, true, true).await;
+    gents::client_test_support::write_other_version_client_store(paths, true, true).await;
     let held = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
     let before = tree(temp.path());
     let result = repair_with(&state, true, |_| async { ready() })
@@ -405,7 +403,7 @@ async fn a_removed_home_reports_the_lost_local_node_and_where_its_data_went() {
         "created_at": "2026-11-12T02:33:54Z", "updated_at": "2026-11-12T02:35:09Z"
     });
     write(
-        paths.peer_directory_path(),
+        paths.runtime_directory_path(),
         &serde_json::json!({ "peers": [peer] }).to_string(),
     );
 
@@ -417,7 +415,7 @@ async fn a_removed_home_reports_the_lost_local_node_and_where_its_data_went() {
 
     assert_eq!(result.outcome, ManagedServerRepairOutcome::NeedsSetup);
     assert!(result.local_node_lost);
-    assert!(result.saved_peers.is_empty());
+    assert!(result.saved_runtimes.is_empty());
     assert!(
         result.repaired.is_empty(),
         "a deleted folder is not reported as a repair: {:?}",

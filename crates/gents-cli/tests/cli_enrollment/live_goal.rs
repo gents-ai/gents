@@ -86,8 +86,8 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
 
     let result = server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
-        let core = ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
+        let core = ClientRuntime::start_with_paths_and_options(
+            DesktopPaths::from_root(&client_home), ClientRuntimeOptions::local_only(),
         ).await?;
         let outcome: Result<()> = async {
             let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql).await?;

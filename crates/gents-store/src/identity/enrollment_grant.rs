@@ -443,6 +443,37 @@ impl EnrollmentGrantWithdrawal {
         txn: &ConfigApplyTxn<'_>,
         node_doc_id: &str,
     ) -> Result<(), EnrollmentGrantError> {
+        self.retire_receipts_in_txn(txn).await?;
+        self.remove_node_administration_in_txn(txn, node_doc_id)
+            .await
+    }
+
+    pub async fn withdraw_as(
+        &self,
+        approver: &ConfigAccess,
+        runtime: &ConfigAccess,
+        node_doc_id: &str,
+    ) -> Result<(), EnrollmentGrantError> {
+        approver
+            .transact_write("client_access.withdraw_administration", |txn| {
+                Box::pin(async move {
+                    self.remove_node_administration_in_txn(txn, node_doc_id)
+                        .await
+                })
+            })
+            .await?;
+        self.revoke_node_permissions(runtime).await?;
+        runtime
+            .transact_write("client_access.retire_grant", |txn| {
+                Box::pin(async move { self.retire_receipts_in_txn(txn).await })
+            })
+            .await
+    }
+
+    async fn retire_receipts_in_txn(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+    ) -> Result<(), EnrollmentGrantError> {
         let withdrawn_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         for receipt_doc_id in &self.receipt_doc_ids {
             let rendered = {
@@ -468,6 +499,14 @@ impl EnrollmentGrantWithdrawal {
                 return Err(EnrollmentGrantError::RetireUnconfirmed);
             }
         }
+        Ok(())
+    }
+
+    async fn remove_node_administration_in_txn(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+        node_doc_id: &str,
+    ) -> Result<(), EnrollmentGrantError> {
         if self
             .tuples
             .contains(&EnrollmentGrantTuple::NodeAdministrator)

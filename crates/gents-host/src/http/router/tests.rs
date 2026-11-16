@@ -35,6 +35,7 @@ fn desktop_endpoint(
 fn state() -> RuntimeHttpState {
     let (activation_runtime, activation_observation) = empty_activation_state();
     RuntimeHttpState {
+        client_access_decisions: Default::default(),
         graphql: gents_store::config_client::GraphqlEndpoint::anonymous(
             "http://127.0.0.1:9181/api/v0/graphql",
         ),

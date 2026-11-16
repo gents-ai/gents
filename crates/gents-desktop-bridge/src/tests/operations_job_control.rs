@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gents_desktop_core::client::ClientCore;
+use crate::client_runtime::ClientRuntime;
 use gents_desktop_core::error::BridgeErrorCode;
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobState};
 use gents_protocol::output::rows::{
@@ -24,14 +24,14 @@ use crate::tests::support::OPERATOR;
 use crate::types::DesktopJobControlRequest;
 
 pub(super) async fn seed_admission_for_node(
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     node_did: &str,
     session_id: &str,
     row_doc_id: &str,
     call: &str,
     sequence: u32,
 ) {
-    let access = ConfigAccess::local(core.node_arc());
+    let access = core.operator_access(node_did).unwrap();
     let read = format!(
         r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#,
         escape_graphql_string(row_doc_id)
@@ -167,7 +167,7 @@ pub(super) async fn seed_admission_for_node(
 /// its client-signed GraphQL path, with a selected Agent key that answers
 /// control intents in place of the runtime's control owner.
 pub(super) struct ControlRuntime {
-    pub core: Arc<ClientCore>,
+    pub core: Arc<ClientRuntime>,
     pub runtime: Arc<gents::defra_node::Node>,
     pub node_did: String,
     pub client_did: String,
@@ -181,9 +181,9 @@ pub(super) async fn control_runtime() -> ControlRuntime {
 
     let directory = tempfile::tempdir().unwrap();
     let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
+        ClientRuntime::start_with_paths_and_options(
             gents_desktop_core::client::DesktopPaths::from_root(directory.path().join("desktop")),
-            gents_desktop_core::client::ClientCoreOptions::local_only(),
+            crate::client_test_support::file_journal_options(),
         )
         .await
         .unwrap(),
@@ -213,9 +213,16 @@ pub(super) async fn control_runtime() -> ControlRuntime {
     let agent = gents_store::identity::resolve_agent_identity(&owner, &binding).unwrap();
     let home = directory.path().join("runtime");
     std::fs::create_dir(&home).unwrap();
-    core.add_managed_enrollment_peer_for_test(owner.did(), &graphql, home.to_str().unwrap(), 1)
-        .await
-        .unwrap();
+    core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: (owner.did()).to_string(),
+        label: ("Served runtime").to_string(),
+        graphql: (&graphql).to_string(),
+        local_node_home: Some((home.to_str().unwrap()).to_string()),
+        access_request: None,
+        access_state: None,
+    })
+    .await
+    .unwrap();
     let client_did = core.node_identity().did().to_owned();
     assert_ne!(client_did, owner.did());
     ControlRuntime {

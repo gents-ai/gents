@@ -142,7 +142,7 @@ async fn assert_access_control(
         admitted.is_err(),
         "P2P admits exactly the application collections the model admits: {outcome:?}"
     );
-    let replicated = gents_store::identity::node_p2p(node)
+    let replicated = crate::node_access::operations(node)
         .expect("P2P transport")
         .get_collections()
         .await

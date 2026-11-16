@@ -61,7 +61,7 @@ async fn signed_invitation_delivers_request_without_http() {
     let issuer = EnrollmentOfferIssuer::new(
         host.node.clone(),
         host.node_identity.clone(),
-        gents_store::identity::node_p2p(&host.node).unwrap(),
+        gents_p2p::node_access::operations(&host.node).unwrap(),
         NETWORK_ID.to_owned(),
         host.node_identity.did().to_owned(),
         "client".to_owned(),

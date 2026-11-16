@@ -85,8 +85,8 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         spawn_server_with_ready_json(&runtime_home, port, &["--home", home], &owner_env)?;
     let (bindings, owned, root_doc, target_agent_doc, user_did) = server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
-        let core = ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
+        let core = ClientRuntime::start_with_paths_and_options(
+            DesktopPaths::from_root(&client_home), ClientRuntimeOptions::local_only(),
         ).await?;
         let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql).await?;
         let pending = core.request_status_enrollment_with_label(&status, Some("live delegation")).await?;
@@ -180,7 +180,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         };
         let child_reply = wait_for_complete_agent_response_with_access(&access, &child_request, &child_session).await?;
         anyhow::ensure!(!child_reply.text.trim().is_empty(), "child did not respond");
-        let child_page = gents_desktop_core::client::load_session_transcript_page_on(
+        let child_page = gents_observe::client_projection::query::load_session_transcript_page_on(
             &access, &child_session, Some(&node_did), Some(&a.agent_did), None, Some(40),
         ).await?;
         anyhow::ensure!(child_page.store.transcript_messages.iter().any(|row|

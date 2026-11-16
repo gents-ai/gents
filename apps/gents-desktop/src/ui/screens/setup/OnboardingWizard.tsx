@@ -2,13 +2,12 @@ import { useEffect, useReducer, useState } from "react";
 import { useStore } from "zustand";
 import { ArrowRight, Server, Wifi } from "lucide-react";
 import {
-  enrollmentActivationMessage,
   isSavedRemote,
 } from "@source-inc/gents-desktop-client";
 import type {
   DesktopClientSnapshot,
   ManagedServerAuthorityInput,
-  EnrollmentRequestView,
+  ClientAccessRequestView,
 } from "@source-inc/gents-desktop-client";
 import { DEFAULT_NODE_NAME } from "@source-inc/gents-desktop-fleet";
 import { Button } from "@gents/ui/components/button";
@@ -30,7 +29,7 @@ import { setupErrorMessage } from "../../../lib/setupErrors";
 import { ManagedRuntimeAuthorityPicker } from "@/components/ManagedRuntimeAuthority";
 import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAuthority";
 import { useApp } from "@/app/AppContext";
-import { useBootstrap, useEnrollmentRequests, useStartup } from "@/hooks/useClient";
+import { useBootstrap, useAccessRequests, useStartup } from "@/hooks/useClient";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { shortPath } from "@/lib/paths";
 import { Field, Frame, Nav, Option, Title } from "./parts";
@@ -186,10 +185,9 @@ export function OnboardingWizard({
     allowLocal ? "local" : "remote",
   );
   const [address, setAddress] = useState("");
-  const [candidateName, setCandidateName] = useState("");
-  const enrollmentRequests = useEnrollmentRequests();
+  const accessRequests = useAccessRequests();
   const snapshot = useStore(stores.client, (state) => state.snapshot);
-  const [enrollment, setEnrollment] = useState<EnrollmentRequestView | null>(null);
+  const [enrollment, setEnrollment] = useState<ClientAccessRequestView | null>(null);
   const existingHome = Boolean(
     bootstrap?.nodeHomeExists && bootstrap?.initNodeDid?.trim(),
   );
@@ -344,9 +342,7 @@ export function OnboardingWizard({
   const enrol = async () => {
     dispatch({ type: "requesting" });
     try {
-      const request = candidateName.trim()
-        ? await actions.requestStatusEnrollment(address.trim(), candidateName.trim())
-        : await actions.requestStatusEnrollment(address.trim());
+      const request = await actions.requestRuntimeAccess(address.trim());
       setEnrollment(request);
       dispatch({ type: "requested" });
     } catch (e) {
@@ -356,17 +352,16 @@ export function OnboardingWizard({
     }
   };
   if (step === "enrollment" && enrollment) {
-    const active = enrollmentRequests?.find(
+    const active = accessRequests?.find(
       (request) => request.requestId === enrollment.requestId,
     );
     const target = snapshot?.client?.deployments.find(
-      (deployment) => deployment.nodeDid === enrollment.ownerNode,
+      (deployment) => deployment.nodeDid === enrollment.nodeDid,
     );
-    const ready = Boolean(target?.chatSafe);
-    const activationError =
-      !ready && active ? enrollmentActivationMessage(active) : null;
-    const observed = enrollmentRequests != null;
-    const label = target?.label ?? enrollment.serverLabel ?? "your node";
+    const ready = target?.runtimeConnection === "connected";
+    const activationError = target?.runtimeConnection === "refused" ? "This device has no access. Ask the administrator to approve a new request." : null;
+    const observed = accessRequests != null;
+    const label = target?.label ?? enrollment.nodeDid;
     return (
       <Frame>
         <div role="status" aria-live="polite">
@@ -375,14 +370,14 @@ export function OnboardingWizard({
               ready
                 ? `Your secure connection to ${label} is ready.`
                 : activationError
-                  ? "Access is approved. The client will retry the secure connection automatically."
+                  ? activationError
                   : active?.state === "approved"
                     ? (target?.chatRefusal?.detail ??
                       "Approval received. Finishing your secure connection…")
                     : !observed
                       ? "Approval status is unavailable. Refresh to check again."
                       : active
-                        ? "Ask the node’s administrator to approve this device before the request expires. You can return to this request while it is active."
+                        ? "Ask the node’s administrator to approve this device."
                         : "This request is no longer listed. If the connection does not become ready, request access again."
             }
           >
@@ -409,20 +404,12 @@ export function OnboardingWizard({
         )}
         <div className="grid min-w-0 gap-3 text-sm">
           <p className="break-words">{label}</p>
-          {!ready && active?.state !== "approved" && (
-            <p className="text-muted-foreground">
-              Request expires:{" "}
-              <time dateTime={enrollment.expiresAt}>
-                {new Date(enrollment.expiresAt).toLocaleString()}
-              </time>
-            </p>
-          )}
           <details className="min-w-0 text-muted-foreground">
             <summary className="cursor-pointer">Connection details</summary>
             <dl className="mt-2 grid gap-2 break-all">
               <div>
                 <dt>Node</dt>
-                <dd>{enrollment.ownerNode}</dd>
+                <dd>{enrollment.nodeDid}</dd>
               </div>
               <div>
                 <dt>Request</dt>
@@ -441,10 +428,10 @@ export function OnboardingWizard({
             if (
               current?.client?.deployments.some(
                 (deployment) =>
-                  deployment.nodeDid === enrollment.ownerNode && deployment.chatSafe,
+                  deployment.nodeDid === enrollment.nodeDid && deployment.runtimeConnection === "connected",
               )
             )
-              onDone(current, enrollment.ownerNode);
+              onDone(current, enrollment.nodeDid);
           }}
           nextLabel="Continue"
           disabled={!ready}
@@ -484,10 +471,10 @@ export function OnboardingWizard({
         {snapshot?.client?.deployments
           .filter(
             (node) =>
-              node.chatSafe &&
+              node.runtimeConnection === "connected" &&
               (!allowLocal ||
                 Boolean(
-                  bootstrap?.savedPeers.some(
+                  bootstrap?.savedRuntimes.some(
                     (peer) =>
                       peer.nodeDid === node.nodeDid &&
                       isSavedRemote(peer, bootstrap.initNodeDid),
@@ -505,13 +492,13 @@ export function OnboardingWizard({
               <span className="truncate">Continue with {node.label}</span>
             </Button>
           ))}
-        {!allowLocal && enrollmentRequests && enrollmentRequests.length > 0 && (
+        {!allowLocal && accessRequests && accessRequests.length > 0 && (
           <div className="mb-6 grid min-w-0 gap-2">
             <p className="text-sm text-muted-foreground">
               Saved access requests. If the administrator cannot find your request,
-              enter the invitation or node address below to send it again.
+              enter the node address below to send it again.
             </p>
-            {enrollmentRequests.map((request) => (
+            {accessRequests.map((request) => (
               <Button
                 key={request.requestId}
                 className="min-w-0 w-full"
@@ -523,7 +510,7 @@ export function OnboardingWizard({
                 }}
               >
                 <span className="truncate">
-                  View request to {request.serverLabel ?? request.ownerNode}
+                  View request to {request.nodeDid}
                 </span>
               </Button>
             ))}
@@ -671,7 +658,7 @@ export function OnboardingWizard({
                   if (!busy && address.trim()) void enrol();
                 }}
               >
-                <Field label="Invitation or server address">
+                <Field label="Server address">
                   <Input
                     inputMode="url"
                     disabled={busy}
@@ -680,19 +667,12 @@ export function OnboardingWizard({
                     autoCorrect="off"
                     value={address}
                     onChange={(event) => setAddress(event.target.value)}
-                    placeholder="Paste an invitation or enter a server address"
-                  />
-                </Field>
-                <Field label="Your name (optional)">
-                  <Input
-                    disabled={busy}
-                    value={candidateName}
-                    onChange={(event) => setCandidateName(event.target.value)}
+                    placeholder="https://your-node.example"
                   />
                 </Field>
                 <button type="submit" hidden />
                 <p className="text-xs text-muted-foreground">
-                  Paste an invitation or enter the node’s status address. The node’s
+                  Enter the node’s server address. The node’s
                   administrator must approve this device’s access request.
                 </p>
               </form>

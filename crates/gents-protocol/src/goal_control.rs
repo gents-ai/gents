@@ -6,6 +6,15 @@ use crate::{
 };
 
 pub const SESSION_GOAL_CONTROL_VERSION: u8 = 1;
+pub const APPLY_GOAL_CONTROL_PATH: &str = "/goals/control/apply";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplyGoalControl {
+    pub node_did: String,
+    pub command_doc_id: String,
+    pub agent_did: String,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum GoalControlError {
@@ -507,4 +516,15 @@ mod tests {
         encoded["override"] = json!(true);
         assert!(serde_json::from_value::<SessionGoalObservation>(encoded).is_err());
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct GoalSubmissionReference {
+    pub command_id: String,
+    pub command_digest: String,
+    pub initial_request_id: Option<String>,
+    pub requester_did: String,
+    pub agent_did: String,
 }

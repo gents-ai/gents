@@ -79,7 +79,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     let issuer = crate::p2p_reconcile::EnrollmentOfferIssuer::new(
         admin_node.clone(),
         Arc::new(KeyIdentity::load_or_create(&admin_path, None)?),
-        gents_store::identity::node_p2p(admin_node).context("admin P2P unavailable")?,
+        crate::node_access::operations(admin_node).context("admin P2P unavailable")?,
         "transport-test".into(),
         admin.did().to_owned(),
         "client".into(),
@@ -90,7 +90,7 @@ async fn exact_enrollment_push_does_not_itself_propagate_native_reader_grants() 
     let addresses = wait_for_peer_info(&receiving_admin).await;
     let offer = issuer.mint().await?;
     let candidate_p2p =
-        gents_store::identity::node_p2p(candidate_node).context("candidate P2P unavailable")?;
+        crate::node_access::operations(candidate_node).context("candidate P2P unavailable")?;
     let candidate_peer = candidate_p2p
         .local_peer_id()
         .await
@@ -1044,7 +1044,7 @@ async fn embedded_filtered_replicator_refuses_runtime_local_request_collections(
         "{sender_refused:?}"
     );
     for node in [&sender, &receiver] {
-        assert!(gents_store::identity::node_p2p(node)
+        assert!(crate::node_access::operations(node)
             .unwrap()
             .get_collections()
             .await
@@ -1099,7 +1099,7 @@ async fn selected_push_refuses_app_collections_before_transport() {
     )
     .await;
     assert!(pushed.is_err(), "app collection reached the P2P transport");
-    assert!(gents_store::identity::node_p2p(sender)
+    assert!(crate::node_access::operations(sender)
         .unwrap()
         .get_collections()
         .await

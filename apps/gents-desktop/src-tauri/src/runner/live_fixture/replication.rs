@@ -3,7 +3,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use defra_p2p_adapter::P2POperations;
-use gents_desktop_core::client::{ClientCore, DesktopPaths, PeerRecord};
+use gents_desktop_bridge::client_runtime::ClientRuntime;
+use gents_desktop_core::client::DesktopPaths;
+use gents_protocol::runtime_connection::RuntimeConnection;
 
 use super::agent::LiveAgentDocs;
 
@@ -28,7 +30,7 @@ pub(super) async fn wait_for_runtime_iroh_addr(
 }
 
 pub(super) async fn connect_runtime_peer(
-    desktop_core: &ClientCore,
+    desktop_core: &ClientRuntime,
     runtime_p2p: &Arc<dyn P2POperations>,
     label: &str,
 ) -> Result<()> {
@@ -48,7 +50,7 @@ pub(super) async fn connect_runtime_peer(
 }
 
 async fn connect_peer_with_retry(
-    core: &ClientCore,
+    core: &ClientRuntime,
     addr: &str,
     peer_id: &str,
     label: &str,
@@ -77,13 +79,13 @@ async fn connect_peer_with_retry(
     }
 }
 
-async fn is_connected_peer(core: &ClientCore, peer_id: &str) -> Result<bool> {
+async fn is_connected_peer(core: &ClientRuntime, peer_id: &str) -> Result<bool> {
     let peers = core.p2p().connected_peers().await?;
     Ok(peers.iter().any(|peer| peer.contains(peer_id)))
 }
 
 pub(super) async fn wait_for_connected_peer(
-    core: &ClientCore,
+    core: &ClientRuntime,
     peer_id: &str,
     label: &str,
 ) -> Result<()> {
@@ -103,7 +105,7 @@ pub(super) async fn wait_for_connected_peer(
 }
 
 pub(super) async fn wait_for_ready_peer_status(
-    core: &ClientCore,
+    core: &ClientRuntime,
     peer_id: &str,
     label: &str,
 ) -> Result<()> {
@@ -138,14 +140,14 @@ pub(super) fn write_peer_directory_records(
     std::fs::create_dir_all(paths.root())?;
     let payload = serde_json::json!({ "peers": records });
     std::fs::write(
-        paths.peer_directory_path(),
+        paths.runtime_directory_path(),
         serde_json::to_vec_pretty(&payload)?,
     )?;
     Ok(())
 }
 
 pub(super) async fn wait_for_live_documents(
-    desktop_core: &ClientCore,
+    desktop_core: &ClientRuntime,
     node_did: &str,
     docs: &LiveAgentDocs,
 ) -> Result<()> {

@@ -7,6 +7,7 @@ use defra_core::signing::{SigningConfig, SigningKeyType};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 
 pub mod agent;
+pub mod client_access;
 mod enrollment_approval;
 mod enrollment_grant;
 mod error;
@@ -342,13 +343,6 @@ pub(crate) fn defradb_bearer_authorization_with_config(
 
 pub fn can_mint_defradb_bearer(did: &str) -> bool {
     defra_core::signing::get_identity(did).is_some_and(|config| config.has_local_private_key())
-}
-
-/// P2P administration must carry the node DID explicitly across worker boundaries.
-pub fn node_p2p(node: &defra_node::Node) -> Option<Arc<dyn defra_p2p_adapter::P2POperations>> {
-    let context = defra_core::RequestContext::default()
-        .with_identity(node.node_identity_did().map(ToOwned::to_owned));
-    node.p2p_arc().and_then(|p2p| p2p.bind_request(&context))
 }
 
 #[async_trait]

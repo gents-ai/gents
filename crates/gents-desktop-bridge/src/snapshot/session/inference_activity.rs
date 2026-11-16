@@ -1,4 +1,4 @@
-use gents_desktop_core::client::{ClientCore, InferenceActivity};
+use crate::client_runtime::{ClientRuntime, InferenceActivity};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
@@ -22,7 +22,7 @@ pub(crate) fn active_generation<'a>(
 }
 
 pub(crate) async fn read_activity(
-    core: &ClientCore,
+    core: &ClientRuntime,
     request: &AgentRequestRow,
     node: &str,
     session: &str,

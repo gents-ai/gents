@@ -24,8 +24,8 @@ export function shouldAutoStartDesktopClient(
   }
   return (
     snapshot.bootstrap.clientStateExists ||
-    snapshot.bootstrap.savedPeers.some(
-      (peer) => peer.source !== "local-standard" || localServerAvailable !== false,
+    snapshot.bootstrap.savedRuntimes.some(
+      (peer) => !peer.local || localServerAvailable !== false,
     )
   );
 }
@@ -313,7 +313,7 @@ function sessionStatusFromOperational(
 ): SessionLoadingStatus {
   return {
     layer:
-      operational.layer === "p2p" || operational.layer === "route"
+      operational.layer === "route"
         ? "p2p"
         : operational.layer === "sync"
           ? "sync"

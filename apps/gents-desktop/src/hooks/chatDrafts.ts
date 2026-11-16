@@ -28,6 +28,7 @@ export type ChatDraft = {
    * confirmed, until its question is observed closed. A draft saved by the
    * base client with its receipt (`result`) was confirmed too. */
   confirmed?: true;
+  locallyRetained?: true;
   /** The deadline (epoch ms) of the send in flight (Lean `timeout`,
    * `CHAT_SEND_DEADLINE_MS`). It is saved with the payload, so every window
    * derives the same status: pending until it passes, failed after. */
@@ -96,7 +97,8 @@ function decode(value: unknown): ChatDraft {
       summary: value.mailbox.summary,
     };
   }
-  if (value.confirmed === true || object(value.result)) draft.confirmed = true;
+  if (value.confirmed === true) draft.confirmed = true;
+  else if (value.locallyRetained === true) draft.locallyRetained = true;
   else if (
     typeof value.pendingUntil === "number" &&
     Number.isFinite(value.pendingUntil)

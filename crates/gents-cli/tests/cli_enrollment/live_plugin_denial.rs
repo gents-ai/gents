@@ -227,7 +227,7 @@ async fn live_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Result<()
             request_doc_id: "admission-preflight".into(), tool_call_doc_id: "admission-preflight".into(),
         };
         gents_toolcalls::plugin::data::admit_write(&grant, &stamps, writes).context("fixture writes must pass the installed plugin grant before native ACP")?;
-        let core = ClientCore::start_with_paths_and_options(DesktopPaths::from_root(&client), ClientCoreOptions::local_only()).await?;
+        let core = ClientRuntime::start_with_paths_and_options(DesktopPaths::from_root(&client), ClientRuntimeOptions::local_only()).await?;
         let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql).await?;
         let pending = core.request_status_enrollment_with_label(&status, Some("plugin denial")).await?;
         wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;

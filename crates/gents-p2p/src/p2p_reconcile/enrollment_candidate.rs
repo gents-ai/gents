@@ -48,7 +48,7 @@ pub async fn request_renewal_offer(
         matches!(network_admin_pins(&access, network_id).await?.as_slice(), [pin] if pin.admin_did == admin_did),
         "renewal owner is not pinned"
     );
-    let p2p = gents_store::identity::node_p2p(node).context("this node has no P2P transport")?;
+    let p2p = crate::node_access::operations(node).context("this node has no P2P transport")?;
     let (ticket_peer, _) = parse_public_peer_addr(server_ticket)?;
     anyhow::ensure!(
         ticket_peer.to_string() == server_peer,
@@ -137,7 +137,7 @@ pub async fn request_enrollment(
     identity: &dyn NodeIdentity,
     offer_token: &str,
 ) -> Result<EnrollmentRequestRecord> {
-    let p2p = gents_store::identity::node_p2p(node).context("this node has no P2P transport")?;
+    let p2p = crate::node_access::operations(node).context("this node has no P2P transport")?;
     let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
     verify_enrollment_offer(&p2p, identity, &offer).await?;
     verify_offer_live_schema(node, &offer).await?;

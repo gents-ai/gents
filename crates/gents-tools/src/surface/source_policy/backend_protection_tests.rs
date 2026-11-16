@@ -71,8 +71,7 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
         .start_node_with_projection(
             &key,
             runtime,
-            None,
-            None,
+            std::convert::identity,
             std::sync::Arc::new(crate::surface::ToolCeiling::meta_only()),
             Vec::new(),
             &gents_session::test_support::no_lifecycle_plugins(),
@@ -143,8 +142,7 @@ async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Re
             .start_node_with_projection(
                 &key,
                 runtime,
-                None,
-                None,
+                std::convert::identity,
                 std::sync::Arc::new(crate::surface::ToolCeiling::meta_only()),
                 Vec::new(),
                 &gents_session::test_support::no_lifecycle_plugins(),

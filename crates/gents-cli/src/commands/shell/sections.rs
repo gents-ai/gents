@@ -3,7 +3,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local};
-use gents_desktop_core::inference::AgentView;
+use gents_observe::client_inference::AgentView;
 use gents_pack::pack::BindAccess;
 use gents_pack::plugin::allowed::AllowedDir;
 use gents_pack::plugin::ux::{UxDoor, UxListing, UxProducer};

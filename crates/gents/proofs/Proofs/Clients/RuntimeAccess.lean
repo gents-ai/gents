@@ -19,8 +19,8 @@ structure Client where
 /-- Runtime access is the Household Node relationship. There are no client
 peer, enrollment, replicated route or local-journal grants in this decision. -/
 def admitted (state : Identity.Household.State) (client : Client)
-    (delegation : Delegation) (now : Nat) : Bool :=
-  authenticates client.did client.runtime now delegation &&
+    (delegation : Delegation) (now : Nat) (nativeRead : Bool) : Bool :=
+  nativeRead && authenticates client.did client.runtime now delegation &&
     allowed 5 state client.did "nodes" client.runtime.node "read"
 
 def administrator (client : Client) : Relation :=
@@ -43,10 +43,10 @@ def request (client : Client) : Client := { client with phase := .requesting }
 /-- An authenticated response is an observation. Every subsequent runtime
 operation still checks current ACP; a connected badge is never authority. -/
 def observe (state : Identity.Household.State) (client : Client)
-    (delegation : Delegation) (now : Nat) (reachable : Bool) : Client :=
+    (delegation : Delegation) (now : Nat) (nativeRead reachable : Bool) : Client :=
   { client with phase :=
       if !reachable then .unreachable
-      else if admitted state client delegation now then .connected
+      else if admitted state client delegation now nativeRead then .connected
       else if client.phase == .connected || client.phase == .revoked then .revoked
       else .requesting }
 
@@ -56,20 +56,20 @@ theorem request_preserves_client_binding (client : Client) :
     (request client).queued = client.queued := by simp [request]
 
 theorem observation_preserves_client_binding (state : Identity.Household.State)
-    (client : Client) (delegation : Delegation) (now : Nat) (reachable : Bool) :
-    (observe state client delegation now reachable).did = client.did ∧
-    (observe state client delegation now reachable).runtime = client.runtime ∧
-    (observe state client delegation now reachable).queued = client.queued := by
+    (client : Client) (delegation : Delegation) (now : Nat) (nativeRead reachable : Bool) :
+    (observe state client delegation now nativeRead reachable).did = client.did ∧
+    (observe state client delegation now nativeRead reachable).runtime = client.runtime ∧
+    (observe state client delegation now nativeRead reachable).queued = client.queued := by
   simp [observe]
 
 theorem requesting_does_not_grant (state : Identity.Household.State) (client : Client)
-    (delegation : Delegation) (now : Nat) :
-    admitted state (request client) delegation now = admitted state client delegation now := rfl
+    (delegation : Delegation) (now : Nat) (nativeRead : Bool) :
+    admitted state (request client) delegation now nativeRead = admitted state client delegation now nativeRead := rfl
 
 theorem observation_does_not_grant (state : Identity.Household.State) (client : Client)
-    (delegation : Delegation) (now : Nat) (reachable : Bool) :
-    admitted state (observe state client delegation now reachable) delegation now =
-      admitted state client delegation now := rfl
+    (delegation : Delegation) (now : Nat) (nativeRead reachable : Bool) :
+    admitted state (observe state client delegation now nativeRead reachable) delegation now nativeRead =
+      admitted state client delegation now nativeRead := rfl
 
 def initial : Identity.Household.State :=
   { objects := [⟨"nodes", "runtime", "owner"⟩,
@@ -81,33 +81,73 @@ def desktop : Client :=
 
 def signed : Delegation := ⟨"client", "worker", 1, 20, true⟩
 
-theorem valid_delegation_is_not_a_grant : admitted initial desktop signed 10 = false := by
+theorem valid_delegation_is_not_a_grant : admitted initial desktop signed 10 true = false := by
   native_decide
 
 theorem client_cannot_approve_itself :
-    admitted (approve initial desktop.did desktop) desktop signed 10 = false := by native_decide
+    admitted (approve initial desktop.did desktop) desktop signed 10 true = false := by native_decide
 
 theorem approval_uses_existing_node_authority :
-    admitted (approve initial "owner" desktop) desktop signed 10 = true := by native_decide
+    admitted (approve initial "owner" desktop) desktop signed 10 true = true := by native_decide
 
 theorem approval_does_not_reach_another_runtime :
     admitted (approve initial "owner" desktop)
-      { desktop with runtime := ⟨"other-runtime", "worker", 1⟩ } signed 10 = false := by
+      { desktop with runtime := ⟨"other-runtime", "worker", 1⟩ } signed 10 true = false := by
   native_decide
 
 theorem revoked_client_can_ask_but_cannot_restore_its_grant :
     let granted := approve initial "owner" desktop
-    let connected := observe granted desktop signed 10 true
+    let connected := observe granted desktop signed 10 true true
     let withdrawn := revoke granted "owner" desktop
-    let refused := observe withdrawn connected signed 10 true
+    let refused := observe withdrawn connected signed 10 true true
     refused.phase = .revoked ∧ refused.queued = desktop.queued ∧
-      admitted withdrawn (request refused) signed 10 = false ∧
-      admitted (approve withdrawn "owner" (request refused)) (request refused) signed 10 = true := by
+      admitted withdrawn (request refused) signed 10 true = false ∧
+      admitted (approve withdrawn "owner" (request refused)) (request refused) signed 10 true = true := by
   native_decide
 
 theorem unreachable_runtime_keeps_queued_intents :
-    let pending := observe initial desktop signed 10 false
+    let pending := observe initial desktop signed 10 true false
     pending.phase = .unreachable ∧ pending.queued = desktop.queued ∧
       (request pending).queued = desktop.queued := by native_decide
+
+inductive AccessRequestState where
+  | pending | approved | rejected | revoked
+  deriving BEq, DecidableEq, Repr
+
+inductive AccessDecision where
+  | approve | reject | revoke
+  deriving BEq, DecidableEq, Repr
+
+/-- A request authenticates its exact client, runtime and immutable intent.
+Replaying a retained request observes it; it never resets a withdrawn grant. -/
+def acceptsRequest (callerMatches nodeMatches signatureVerified retainedExists retainedSame fresh : Bool) : Bool :=
+  callerMatches && nodeMatches && signatureVerified && (!retainedExists || retainedSame) && (retainedSame || fresh)
+
+/-- The native grant owner records provenance before granting OperatorUser
+and Node administration. A decision reports success only after those owners
+complete; no request status itself grants authority. Rejected or revoked
+identities require a new request, never a replay of the old request. -/
+def settleRequest (before : AccessRequestState) (decision : AccessDecision)
+    (nativeAuthority effectsComplete : Bool) : AccessRequestState :=
+  if !nativeAuthority || !effectsComplete then before
+  else match before, decision with
+    | .pending, .approve => .approved
+    | .pending, .reject => .rejected
+    | .pending, .revoke => .revoked
+    | .approved, .revoke => .revoked
+    | state, _ => state
+
+def requestStateToken : AccessRequestState → String
+  | .pending => "pending" | .approved => "approved"
+  | .rejected => "rejected" | .revoked => "revoked"
+
+theorem replay_cannot_restore_revoked_access (decision : AccessDecision)
+    (authority completed : Bool) :
+    settleRequest .revoked decision authority completed = .revoked := by
+  cases decision <;> simp [settleRequest]
+
+theorem failed_effects_never_report_approval (state : AccessRequestState)
+    (decision : AccessDecision) (authority : Bool) :
+    settleRequest state decision authority false = state := by simp [settleRequest]
 
 end ClientRuntimeAccess

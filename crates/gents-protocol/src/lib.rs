@@ -1,8 +1,10 @@
 pub mod adapter_projection_kind;
 pub mod agent_identity;
+pub mod authored_submission;
 pub mod background_completion;
 pub mod canonical;
 pub mod chatgpt_oauth;
+pub mod client_access;
 pub mod client_authentication;
 pub mod client_installation;
 pub mod client_media;
@@ -40,6 +42,7 @@ pub mod request_admission;
 pub mod request_input;
 pub mod request_lifecycle;
 pub mod row;
+pub mod runtime_connection;
 pub mod schemas;
 pub mod serve_lifecycle;
 pub mod session;

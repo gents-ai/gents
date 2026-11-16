@@ -328,7 +328,7 @@ async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_autho
         .protect_http(
             gents::defra_node::HttpConfig::with_listener(listener)
                 .unwrap()
-                .with_extra_routes(runtime_routes(&endpoint, &owner)),
+                .with_authenticated_routes(runtime_routes(&endpoint, &owner)),
         );
     let node = gents::defra_node::Node::builder()
         .with_node_identity_did(owner.did())
@@ -636,7 +636,7 @@ async fn foreign_host_is_refused_on_public_private_and_independently_authenticat
         "/accounts/usage/read",
         gents_protocol::owner_staged::OWNER_STAGED_PATH,
         gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,
-        gents_desktop_core::inference::INFERENCE_SETTINGS_PATH,
+        gents_observe::client_inference::INFERENCE_SETTINGS_PATH,
         gents_protocol::file_inventory::FILE_INVENTORY_OPERATOR_PATH,
     ] {
         let response = f
@@ -654,9 +654,7 @@ async fn foreign_host_is_refused_on_public_private_and_independently_authenticat
 /// without a User signer it sends nothing rather than reading anonymously.
 #[tokio::test]
 async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
-    use gents_desktop_core::local_runtime::{
-        fetch_hosted_runtime_status, HostedRuntimeStatusError,
-    };
+    use gents::client_runtime::{fetch_hosted_runtime_status, HostedRuntimeStatusError};
     use identity::Identity as _;
     let f = Fixture::start().await;
     // A home whose init.json names a node key: reading status must not open it.
@@ -680,19 +678,17 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
         .to_string(),
     )
     .unwrap();
-    let mut record = gents_desktop_core::client::PeerRecord::local_standard(
+    let mut record = gents_protocol::runtime_connection::RuntimeConnection::local_standard(
         "Local",
         "",
         f.owner.did(),
         &graphql,
     );
     record.local_node_home = Some(home.to_string_lossy().into_owned());
-    let public = gents_desktop_core::local_runtime::fetch_runtime_connection_payload(
-        &format!("{}/status", f.endpoint),
-        None,
-    )
-    .await
-    .unwrap();
+    let public =
+        gents::client_runtime::fetch_runtime_connection_payload(&format!("{}/status", f.endpoint))
+            .await
+            .unwrap();
     assert!(public.get("tool_root").is_none());
     let calls = f.status_requests.load(std::sync::atomic::Ordering::SeqCst);
     assert_eq!(calls, 1);
@@ -742,14 +738,15 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
 
 #[tokio::test]
 async fn hosted_status_reader_is_the_home_admin_before_and_after_desktop_enrollment() {
-    use gents_desktop_core::local_runtime::{fetch_hosted_runtime_status, hosted_status_signer};
+    use gents::client_runtime::{fetch_hosted_runtime_status, hosted_status_signer};
     use gents_store::identity::NodeIdentity as _;
     let f = Fixture::start().await;
     let desktop = f.desktop();
     let node_did = f.owner.did().to_owned();
     let graphql = format!("{}/api/v0/graphql", f.endpoint);
-    let record =
-        gents_desktop_core::client::PeerRecord::local_standard("Local", "", &node_did, &graphql);
+    let record = gents_protocol::runtime_connection::RuntimeConnection::local_standard(
+        "Local", "", &node_did, &graphql,
+    );
 
     // Fresh home: no desktop key yet, nothing enrolled.
     assert!(!desktop.identity_key_path().exists());

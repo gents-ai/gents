@@ -261,8 +261,7 @@ impl PreflightProtectedBackendStore<'_> {
         self,
         key: &StoreKey,
         runtime: Arc<dyn crate::identity::NodeIdentity>,
-        http: Option<defra_node::HttpConfig>,
-        p2p: Option<defra_node::P2PConfig>,
+        configure: impl FnOnce(defra_node::NodeBuilder) -> defra_node::NodeBuilder + Send,
         policy: Arc<dyn super::ToolSourcePolicy>,
         plugins: Vec<super::ProjectedPlugin>,
         composition: &crate::node_extension::Extensions,
@@ -271,7 +270,7 @@ impl PreflightProtectedBackendStore<'_> {
             return Err(BackendProtectionError::WrongNode);
         }
         let started = self
-            .start_node_with_plugins(key, runtime, http, p2p, policy, plugins)
+            .start_node_with_plugins(key, runtime, configure, policy, plugins)
             .await?;
         if let Err(error) = crate::node_extension::attach_all(&started.0, composition) {
             let _ = started.0.shutdown().await;
@@ -284,8 +283,7 @@ impl PreflightProtectedBackendStore<'_> {
         self,
         key: &StoreKey,
         runtime: Arc<dyn crate::identity::NodeIdentity>,
-        http: Option<defra_node::HttpConfig>,
-        p2p: Option<defra_node::P2PConfig>,
+        configure: impl FnOnce(defra_node::NodeBuilder) -> defra_node::NodeBuilder + Send,
         policy: Arc<dyn super::ToolSourcePolicy>,
         plugins: Vec<super::ProjectedPlugin>,
     ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
@@ -296,12 +294,7 @@ impl PreflightProtectedBackendStore<'_> {
             .with_document_projector(projection)
             .with_node_identity_did(self.node_did)
             .with_node_acp_enabled();
-        if let Some(http) = http {
-            builder = builder.with_http(http);
-        }
-        if let Some(p2p) = p2p {
-            builder = builder.with_p2p(p2p);
-        }
+        builder = configure(builder);
         let node = Arc::new(builder.build().await?);
         if let Err(error) = validate_binding(&node).await {
             let _ = node.shutdown().await;

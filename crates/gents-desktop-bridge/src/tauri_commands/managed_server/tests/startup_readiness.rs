@@ -68,7 +68,7 @@ async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
     };
     assert!(matches!(
         cause,
-        gents_desktop_core::local_runtime::HostedRuntimeStatusError::NoUserSigner
+        gents::client_runtime::HostedRuntimeStatusError::NoUserSigner
     ));
     assert!(validate_ready_runtime(&public, &authority, &home).is_err());
     assert!(server
@@ -132,14 +132,14 @@ async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
 
 #[tokio::test]
 async fn generated_fresh_startup_preserves_enrollment_authority() {
-    use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
+    use gents_desktop_core::client::DesktopPaths;
 
     for case in gents_lean_vocab::families::enrollment_pending_requests_startup::cases() {
         let (temp, state) = orchestration_state();
         let core = Arc::new(
-            ClientCore::start_with_paths_and_options(
+            ClientRuntime::start_with_paths_and_options(
                 DesktopPaths::from_root(temp.path().join("client")),
-                ClientCoreOptions::local_only(),
+                crate::client_test_support::file_journal_options(),
             )
             .await
             .unwrap(),
@@ -175,7 +175,8 @@ async fn generated_fresh_startup_preserves_enrollment_authority() {
 
 #[tokio::test]
 async fn managed_readiness_after_desktop_enrollment_reads_the_private_status() {
-    use gents_desktop_core::client::{DesktopPaths, PeerRecord, PrincipalIdentity};
+    use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
+    use gents_protocol::runtime_connection::RuntimeConnection;
     use gents_store::identity::NodeIdentity as _;
     use identity::Identity as _;
     use wiremock::matchers::{method, path};
@@ -210,15 +211,17 @@ async fn managed_readiness_after_desktop_enrollment_reads_the_private_status() {
     )
     .unwrap();
 
-    let mut enrolled = PeerRecord::local_standard("Local", "", &did, &graphql);
-    enrolled.source = Some("enrollment".into());
-    enrolled.pairing_network_id = Some("network".into());
-    enrolled.enrollment_request_digest = Some("digest".into());
-    enrolled.enrollment_authorization_sequence = Some(1);
-    assert!(enrolled.records_completed_enrollment_into(&did));
+    let connection = RuntimeConnection {
+        node_did: did.clone(),
+        label: "Local".into(),
+        graphql: graphql.clone(),
+        local_node_home: Some(home.to_string_lossy().into_owned()),
+        access_request: None,
+        access_state: None,
+    };
     std::fs::write(
-        desktop.peer_directory_path(),
-        serde_json::json!({ "peers": [enrolled] }).to_string(),
+        desktop.runtime_directory_path(),
+        serde_json::to_vec(&serde_json::json!({"connections": [connection]})).unwrap(),
     )
     .unwrap();
 

@@ -51,9 +51,9 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
     let (bindings, requests, client_did) = server
         .capturing(async {
             wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
-            let core = ClientCore::start_with_paths_and_options(
+            let core = ClientRuntime::start_with_paths_and_options(
                 DesktopPaths::from_root(&client_home),
-                ClientCoreOptions::local_only(),
+                ClientRuntimeOptions::local_only(),
             )
             .await?;
             let (status, _) =
@@ -188,9 +188,9 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                 requests.push((receipt.request_id, session, reply));
             }
             Arc::new(core).shutdown().await?;
-            let reopened = ClientCore::start_with_paths_and_options(
+            let reopened = ClientRuntime::start_with_paths_and_options(
                 DesktopPaths::from_root(&client_home),
-                ClientCoreOptions::local_only(),
+                ClientRuntimeOptions::local_only(),
             )
             .await?;
             wait_for_chat_ready_enrollment(&reopened, &node_did).await?;

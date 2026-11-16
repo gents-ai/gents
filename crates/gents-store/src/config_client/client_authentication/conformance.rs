@@ -150,7 +150,7 @@ async fn client_held_delegations_match_the_native_verifier() -> anyhow::Result<(
             .document_acp()
             .caller_of_delegation(&token)
             .expect("the native Vera provider recognizes its delegation format")
-            .is_ok_and(|issuer| issuer.as_str() == client.did());
+            .is_ok_and(|issuer| issuer.did.as_str() == client.did());
         case.check(observed);
     }
     assert!(defra_core::signing::get_identity(client.did()).is_none());
@@ -167,6 +167,31 @@ async fn client_held_delegations_match_the_native_verifier() -> anyhow::Result<(
     assert!(
         matches!(endpoint.authorization().await, Err(crate::config_client::ConfigClientError::RuntimeAuthenticationStatus(status)) if status == reqwest::StatusCode::FOUND)
     );
+    let local = defra_node::Node::builder().build().await?;
+    for case in gents_lean_vocab::families::client_delegation_client_graph::cases() {
+        let input = &case.input;
+        let actor = if input.actor_matches {
+            client.did()
+        } else {
+            other.did()
+        }
+        .parse()?;
+        let credential = input
+            .presented
+            .then(|| {
+                super::ClientAuthorization::from_authenticated_bearer(
+                    client.did().parse().expect("client DID"),
+                    "Bearer presented",
+                )
+            })
+            .transpose()?;
+        case.check(super::client_graph_ready(
+            if input.remote { &node } else { &local },
+            credential.as_ref(),
+            &actor,
+        ));
+    }
+    local.shutdown().await?;
     server.abort();
     node.shutdown().await?;
     Ok(())

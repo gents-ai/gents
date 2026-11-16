@@ -12,7 +12,6 @@ export type OperationalStatusLayer =
   | "client"
   | "selection"
   | "sync"
-  | "p2p"
   | "route"
   | "runtime"
   | "inference"
@@ -46,7 +45,6 @@ export type NodeReadinessDecision =
     };
 
 export type DeploymentOperationalState = {
-  transport: OperationalStatus;
   connection: OperationalStatus;
   route: OperationalStatus;
   sync: OperationalStatus;
@@ -68,10 +66,6 @@ function status(
     animated: value.kind === "waiting" || value.kind === "syncing",
     ...value,
   };
-}
-
-export function isLocalRuntimeSource(source?: string | null): boolean {
-  return source === "local-standard";
 }
 
 function agentLabel(deployment: DeploymentSettings, agentDid: string): string {
@@ -277,31 +271,6 @@ export function projectAgentOperationalStatus(
   });
 }
 
-export function projectDeploymentTransportStatus(
-  connected: boolean,
-): OperationalStatus {
-  return connected
-    ? status({
-        kind: "ready",
-        layer: "p2p",
-        reason: "connected",
-        label: "Agent is connected",
-        shortLabel: "Connected",
-        detail: "The secure P2P transport is connected.",
-      })
-    : status({
-        kind: "waiting",
-        layer: "p2p",
-        reason: "disconnected",
-        label: "Agent connection is offline",
-        shortLabel: "Not connected",
-        detail: "The secure P2P connection is recovering automatically.",
-      });
-}
-
-/** The chat write route (`ClientChatReadiness`): an authenticated runtime
- * endpoint means ready, and the native fence's refusal names its cause and
- * next action. Pairing is a P2P observation and is not read here. */
 export function projectRouteOperationalStatus(
   refusal: DeploymentView["chatRefusal"],
 ): OperationalStatus {
@@ -378,10 +347,9 @@ export function projectDeploymentOperationalState(
   selectedAgentDid: string | null = null,
   syncHealth: SyncHealthView | null = null,
 ): DeploymentOperationalState {
-  const transport = projectDeploymentTransportStatus(deployment.dialSucceeded);
   const connection = projectRuntimeConnectionStatus(deployment.runtimeConnection);
 
-  const localRuntime = isLocalRuntimeSource(deployment.source);
+  const localRuntime = deployment.local;
   const route = projectRouteOperationalStatus(deployment.chatRefusal);
   const sync = projectSyncOperationalStatus(syncHealth);
 
@@ -411,7 +379,9 @@ export function projectDeploymentOperationalState(
         });
 
   const agentBlocker = agent.kind === "ready" ? null : agent;
-  const admissionBlocker =
+  const retainedOffline = deployment.chatSafe &&
+    (deployment.runtimeConnection === "disconnected" || deployment.runtimeConnection === "connecting");
+  const admissionBlocker = retainedOffline ? null :
     projectChatRefusalStatus(deployment.chatRefusal) ??
     (runtimeConnectionBlocksAdmission(deployment.runtimeConnection)
       ? connection
@@ -442,7 +412,6 @@ export function projectDeploymentOperationalState(
           })));
 
   return {
-    transport,
     connection,
     route,
     sync,
@@ -566,7 +535,7 @@ export function projectSyncOperationalStatus(
       reason: "healthy",
       label: "Connection is healthy",
       shortLabel: "Connected",
-      detail: "Every runtime is connected and enrollment is current.",
+      detail: "Every runtime is connected.",
     });
   }
   const cause = syncHealth?.cause ?? "unknown";
@@ -581,7 +550,7 @@ export function projectSyncOperationalStatus(
     reason: cause,
     label: text.label,
     shortLabel: text.shortLabel,
-    detail: syncHealth?.lastError ?? text.detail,
+    detail: text.detail,
   });
 }
 
@@ -592,9 +561,7 @@ export function syncHealthDiagnostics(
     state: syncHealthState(syncHealth),
     cause: syncHealth?.cause ?? null,
     nextAction: syncHealth?.nextAction ?? null,
-    lastError: syncHealth?.lastError ?? null,
     runtimeCount: syncHealth?.runtimeCount ?? 0,
     connectedRuntimeCount: syncHealth?.connectedRuntimeCount ?? 0,
-    activationErrorCount: syncHealth?.activationErrorCount ?? 0,
   };
 }

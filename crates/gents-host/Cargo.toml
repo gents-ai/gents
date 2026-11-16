@@ -10,6 +10,7 @@ description = "The runtime host: serving, runtime preparation and the runtime's 
 test-fixtures = ["gents-session/test-fixtures", "gents-service/test-home-guard"]
 
 [dependencies]
+gents-observe = { workspace = true, features = ["typescript"] }
 gents = { path = "../gents" }
 gents-store = { workspace = true }
 gents-documents = { workspace = true }

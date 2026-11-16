@@ -21,7 +21,7 @@ use super::status::{emit_status, project_external_status, status_from};
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{ManagedServerStartRequest, ManagedServerStatus};
-use gents_desktop_core::local_runtime::{init_standard_local_runtime, DesktopInitOptions};
+use gents::client_runtime::{init_standard_local_runtime, DesktopInitOptions};
 use gents_desktop_core::preference::StoredManagedServer;
 use gents_protocol::operations::service::ServiceLifecycleAction;
 use gents_protocol::serve_lifecycle::outdated_runtime_message;
@@ -144,7 +144,7 @@ where
             ));
         }
         if let (Some(core), Some(target)) = (current_core(state), pairing_target(&external)) {
-            core.refresh_local_standard_peer(&node_home, &target.node_name)
+            core.refresh_local_runtime(&node_home, &target.node_name)
                 .await
                 .map_err(|error| BridgeError::untyped(error.to_string()))?;
         }

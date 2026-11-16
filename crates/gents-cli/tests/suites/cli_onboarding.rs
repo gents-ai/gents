@@ -763,7 +763,7 @@ async fn desktop_first_run_in_fixture_home() -> Result<()> {
         !backends.is_empty() && backends.iter().all(|backend| !backend.enabled),
         "the node must have no enabled inference: {backends:?}"
     );
-    gents_desktop_core::client::patch_config_components_on(
+    gents::client_operations::patch_config_components_on(
         &access,
         owner,
         &[(

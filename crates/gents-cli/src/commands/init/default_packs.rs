@@ -664,7 +664,7 @@ async fn apply(
 /// The operator endpoint of the runtime serving `home` at `url`: its plugin
 /// wiring route admits only the Node's own DID, so this same-user host signs
 /// as the Node with the home's key, as the desktop's
-/// `gents_desktop_core::local_runtime::runtime_operator_endpoint` does.
+/// `gents::client_runtime::runtime_operator_endpoint` does.
 fn runtime_operator_endpoint(
     home: &Path,
     url: &str,

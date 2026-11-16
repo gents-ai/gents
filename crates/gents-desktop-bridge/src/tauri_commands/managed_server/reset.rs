@@ -27,8 +27,8 @@ pub(super) async fn unfinished_local_setup(
     };
     // Peers that cannot be read are not evidence that none exist, so an
     // unreadable directory never offers to start over.
-    let Ok(peers) = gents_desktop_core::client::load_peer_records(
-        state.policy.desktop_paths.peer_directory_path(),
+    let Ok(peers) = gents_desktop_core::client::runtime_directory::load_runtime_connections(
+        state.policy.desktop_paths.runtime_directory_path(),
     )
     .await
     else {
@@ -200,8 +200,8 @@ where
         return Ok(settled.preview());
     }
     let mut result = settled.retire(disposition, backup.as_deref())?;
-    if let Some((home, node_did)) = retiring.as_ref() {
-        result.retired_pairings = retire_desktop_pairing(state, home, node_did.as_deref()).await;
+    if let Some((home, _)) = retiring.as_ref() {
+        result.retired_pairings = retire_desktop_pairing(state, home).await;
     }
     drop(_client);
     drop(_store_lock);
@@ -237,25 +237,19 @@ where
 /// client is still excluded here, so the pairing is dropped rather than queued.
 /// A failure leaves a stale record the user can see; the retirement itself has
 /// already completed and is not undone for it.
-pub(super) async fn retire_desktop_pairing(
-    state: &DesktopAppState,
-    node_home: &Path,
-    node_did: Option<&str>,
-) -> u32 {
-    match gents_desktop_core::client::retire_local_node_records(
-        state.policy.desktop_paths.peer_directory_path(),
-        node_home,
-        node_did,
-    )
-    .await
-    {
-        Ok(retired) => retired.len() as u32,
+pub(super) async fn retire_desktop_pairing(state: &DesktopAppState, node_home: &Path) -> u32 {
+    let result = async {
+        let directory = gents_desktop_core::client::runtime_directory::RuntimeDirectory::open(
+            state.policy.desktop_paths.runtime_directory_path(),
+        )
+        .await?;
+        directory.retire_local_home(node_home, None).await
+    }
+    .await;
+    match result {
+        Ok(retired) => retired as u32,
         Err(error) => {
-            tracing::warn!(
-                target: "gents_desktop::managed_server",
-                ?error,
-                "the desktop's pairing with the retired node was left in place"
-            );
+            tracing::warn!(error = %error, "runtime connections could not be retired");
             0
         }
     }

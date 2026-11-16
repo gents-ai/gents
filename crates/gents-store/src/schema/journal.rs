@@ -91,7 +91,6 @@ mod tests {
         };
         let node = Arc::new(open().build().await?);
         ensure_journal_schemas(node.clone()).await?;
-        assert!(crate::identity::node_p2p(&node).is_none());
         let collections = node.get_all_collection_versions().await?;
         assert!(!collections.is_empty());
         assert!(collections.iter().all(|collection| {

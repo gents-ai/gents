@@ -127,7 +127,7 @@ impl PrincipalIdentity {
         &self.private_key_bytes
     }
 
-    pub(crate) fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, IdentityError> {
+    pub fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, IdentityError> {
         let identity = RawIdentity::from_bytes(crypto::KeyType::Ed25519, &self.private_key_bytes)
             .map_err(|source| IdentityError::LoadNodeIdentity {
             did: self.did.clone(),

@@ -63,7 +63,7 @@ async fn two_attachments_share_a_core_and_detaching_does_not_close_it() {
     }
     drop(clients.remove(0));
     tasks.remove(0).await.unwrap().unwrap();
-    assert!(!core.local_peer_id().is_empty());
+    assert!(!core.node_identity().did().is_empty());
     let client = &mut clients[0];
     client
         .send(Bytes::from_static(
@@ -376,7 +376,9 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
         json!({"Node": [{"_docID": "node", "node_did": did, "display_name": "Current settings"}]}),
         std::sync::Arc::new(move |collection| {
             if collection == "Node" {
-                store.replace_snapshot(gents_desktop_core::client::ClientStore::default());
+                store.replace_snapshot(
+                    gents_observe::client_projection::store::ClientStore::default(),
+                );
             }
             Box::pin(async { Ok(()) })
         }),
@@ -394,13 +396,14 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
             .to_string(),
     )
     .unwrap();
-    core.persist_local_standard_peer(
-        "Local",
-        "iroh://unavailable-runtime",
-        &did,
-        &graphql,
-        &home.to_string_lossy(),
-    )
+    core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: (&did).to_string(),
+        label: ("Local").to_string(),
+        graphql: (&graphql).to_string(),
+        local_node_home: Some((&home.to_string_lossy()).to_string()),
+        access_request: None,
+        access_state: None,
+    })
     .await
     .unwrap();
     let result = ClientHost::new(core.clone())
@@ -426,13 +429,11 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     let graphql = format!("{}/api/v0/graphql", server.uri());
     let directory = tempfile::tempdir().unwrap();
     let paths = gents_desktop_core::client::DesktopPaths::from_root(directory.path());
-    let options = gents_desktop_core::client::ClientCoreOptions {
-        operator_identity_interaction:
-            gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent,
-        ..gents_desktop_core::client::ClientCoreOptions::local_only()
+    let options = crate::client_runtime::ClientRuntimeOptions {
+        ..crate::client_test_support::file_journal_options()
     };
     let core = Arc::new(
-        gents_desktop_core::client::ClientCore::start_with_paths_and_options(paths, options)
+        crate::client_runtime::ClientRuntime::start_with_paths_and_options(paths, options)
             .await
             .unwrap(),
     );
@@ -455,13 +456,14 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
         .to_string(),
     )
     .unwrap();
-    core.persist_local_standard_peer(
-        "Local",
-        "iroh://unavailable-runtime",
-        &did,
-        &graphql,
-        &home.to_string_lossy(),
-    )
+    core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: (&did).to_string(),
+        label: ("Local").to_string(),
+        graphql: (&graphql).to_string(),
+        local_node_home: Some((&home.to_string_lossy()).to_string()),
+        access_request: None,
+        access_state: None,
+    })
     .await
     .unwrap();
     assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
@@ -514,18 +516,18 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
         assert!(claims.contains(&client), "{claims}");
         assert!(!claims.contains(&did), "{claims}");
     }
-    let settings = gents_desktop_core::inference::InferenceSetupState::project(
-        &gents_desktop_core::client::ClientStore::default(),
+    let settings = gents_observe::client_inference::InferenceSetupState::project(
+        &gents_observe::client_projection::store::ClientStore::default(),
         &did,
     );
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path(
-            gents_desktop_core::inference::INFERENCE_SETTINGS_PATH,
+            gents_observe::client_inference::INFERENCE_SETTINGS_PATH,
         ))
         .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
-            gents_desktop_core::inference::InferenceSettingsResponse {
+            gents_observe::client_inference::InferenceSettingsResponse {
                 contract_version:
-                    gents_desktop_core::inference::INFERENCE_SETTINGS_CONTRACT_VERSION,
+                    gents_observe::client_inference::INFERENCE_SETTINGS_CONTRACT_VERSION,
                 state: settings,
             },
         ))
@@ -548,7 +550,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     let settings_read = requests
         .iter()
         .find(|request| {
-            request.url.path() == gents_desktop_core::inference::INFERENCE_SETTINGS_PATH
+            request.url.path() == gents_observe::client_inference::INFERENCE_SETTINGS_PATH
         })
         .unwrap();
     assert!(settings_read

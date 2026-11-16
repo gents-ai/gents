@@ -32,7 +32,8 @@ impl Questions {
         node: &str,
         cancellation_gate: Value,
     ) -> Result<Self> {
-        let binding = gents_desktop_core::agent_identity::provision(endpoint, node).await?;
+        let binding =
+            gents_store::identity::provision_agent_identity_remote(endpoint, node).await?;
         let arguments = json!({
             "title":TITLE,
             "question":{

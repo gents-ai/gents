@@ -246,7 +246,7 @@ async fn serve(
     let mut http = gents::defra_node::HttpConfig::with_listener(listener).unwrap();
     let served = gents::runtime::embedded::ServedNode::default();
     if runtime.is_some() {
-        http = http.with_extra_routes(gents::runtime::embedded::agent_identity_routes(
+        http = http.with_authenticated_routes(gents::runtime::embedded::agent_identity_routes(
             served.clone(),
         ));
     }

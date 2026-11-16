@@ -108,7 +108,9 @@ async fn route_saved(state: &DesktopAppState, node_did: Option<&str>) -> bool {
     let Some(node_did) = node_did else {
         return false;
     };
-    gents_desktop_core::client::load_peer_records(state.policy.desktop_paths.peer_directory_path())
-        .await
-        .is_ok_and(|peers| peers.iter().any(|peer| peer.node_did == node_did))
+    gents_desktop_core::client::runtime_directory::load_runtime_connections(
+        state.policy.desktop_paths.runtime_directory_path(),
+    )
+    .await
+    .is_ok_and(|peers| peers.iter().any(|peer| peer.node_did == node_did))
 }

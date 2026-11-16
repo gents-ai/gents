@@ -152,6 +152,31 @@ impl PartialEq for BridgeError {
 impl Eq for BridgeError {}
 
 impl BridgeError {
+    pub fn runtime_http_error(error: reqwest::Error, message: String) -> anyhow::Error {
+        if error.status().is_some_and(|status| {
+            matches!(
+                status,
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+            )
+        }) {
+            anyhow::Error::from(Self::new(
+                BridgeErrorCode::PermissionDenied,
+                "Access was denied. Check this client's permissions with the runtime owner.",
+            ))
+        } else if error.is_connect() || error.is_timeout() || error.is_body() {
+            let mut bridge = match error.url() {
+                Some(url) => {
+                    Self::endpoint_unreachable(url.origin().ascii_serialization(), message.clone())
+                }
+                None => Self::new(BridgeErrorCode::EndpointUnreachable, message.clone()),
+            };
+            bridge.transport_source = Some(std::sync::Arc::new(error));
+            anyhow::Error::from(bridge).context(message)
+        } else {
+            anyhow::Error::from(error).context(message)
+        }
+    }
+
     pub fn new(code: BridgeErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
@@ -243,31 +268,6 @@ impl BridgeError {
             None => Self::new(BridgeErrorCode::EndpointUnreachable, message),
         }
     }
-
-    pub(crate) fn runtime_http_error(error: reqwest::Error, message: String) -> anyhow::Error {
-        if error.status().is_some_and(|status| {
-            matches!(
-                status,
-                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
-            )
-        }) {
-            anyhow::Error::from(Self::new(
-                BridgeErrorCode::PermissionDenied,
-                "Access was denied. Check this client's permissions with the runtime owner.",
-            ))
-        } else if error.is_connect() || error.is_timeout() || error.is_body() {
-            let mut bridge = match error.url() {
-                Some(url) => {
-                    Self::endpoint_unreachable(url.origin().ascii_serialization(), message.clone())
-                }
-                None => Self::new(BridgeErrorCode::EndpointUnreachable, message.clone()),
-            };
-            bridge.transport_source = Some(std::sync::Arc::new(error));
-            anyhow::Error::from(bridge).context(message)
-        } else {
-            anyhow::Error::from(error).context(message)
-        }
-    }
 }
 
 /// An agent operation the desktop's operations layer refused or failed, as the
@@ -310,19 +310,6 @@ pub fn inference_operation_failure(
             .trim_end_matches('.')
     );
     anyhow::Error::new(error).context(message)
-}
-
-/// The admitted answer of an operations preview, or its refusal as the
-/// message the UI shows.
-pub fn admitted_agent_preview<R>(
-    outcome: gents::operations::agent::AgentOutcome<R>,
-) -> anyhow::Result<R> {
-    match outcome {
-        gents::operations::agent::AgentOutcome::Admitted(receipt) => Ok(receipt),
-        gents::operations::agent::AgentOutcome::Refused {
-            message, next_call, ..
-        } => Err(anyhow::anyhow!(refusal_message(&message, next_call))),
-    }
 }
 
 /// A refused or failed request operation with its code and next call carried
@@ -469,28 +456,6 @@ fn refusal_message(message: &str, next_call: gents_protocol::operations::NextCal
     format!("{}. {next}", message.trim_end_matches('.'))
 }
 
-/// A verified agent rejection is a denial; every unconfirmed control keeps its
-/// intent reference in the message because the action may still take effect.
-impl From<gents_toolcalls::call::control::client::send::ControlSendError> for BridgeError {
-    fn from(error: gents_toolcalls::call::control::client::send::ControlSendError) -> Self {
-        use gents_toolcalls::call::control::client::send::ControlSendError;
-        let code = match &error {
-            ControlSendError::NotAuthorized
-            | ControlSendError::PermissionDenied
-            | ControlSendError::Rejected { .. } => BridgeErrorCode::PermissionDenied,
-            ControlSendError::NotFound => BridgeErrorCode::NotFound,
-            ControlSendError::RuntimeRequired => BridgeErrorCode::Unsupported,
-            ControlSendError::Unavailable(_) | ControlSendError::Unconfirmed { .. } => {
-                BridgeErrorCode::Unknown
-            }
-        };
-        Self::new(
-            code,
-            gents_protocol::error_chain::ErrorChain(&error).to_string(),
-        )
-    }
-}
-
 impl std::fmt::Display for BridgeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.code.as_str(), self.message)
@@ -587,9 +552,13 @@ mod tests {
         let endpoint = format!("http://{}", listener.local_addr().expect("local address"));
         drop(listener);
 
-        let error = crate::local_runtime::fetch_runtime_connection_payload(&endpoint, None)
-            .await
-            .expect_err("closed temporary port must refuse the request");
+        let error = anyhow::Error::new(
+            reqwest::Client::new()
+                .get(&endpoint)
+                .send()
+                .await
+                .expect_err("closed temporary port must refuse the request"),
+        );
         assert!(error.chain().any(|cause| cause
             .downcast_ref::<reqwest::Error>()
             .is_some_and(reqwest::Error::is_connect)));

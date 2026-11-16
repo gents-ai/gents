@@ -6,7 +6,7 @@ mod retained_reasoning;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
+use gents::client_runtime::fetch_runtime_connection_payload;
 use serde::{Deserialize, Serialize};
 
 use self::operations_snapshot::operations_snapshot_response;
@@ -42,13 +42,14 @@ use gents_desktop_bridge::tauri_commands::ux_plugins::{
 };
 use gents_desktop_bridge::types::{
     AgentSaveRequest, BackendRotationSetRequest, BackendSaveRequest, ChatSendRequest,
-    DefaultAgentSetRequest, DesktopInterruptRequest, DesktopOperationsSnapshotRequest,
-    DesktopProbeMcpServiceRequest, DesktopSessionProvenanceRequest, EnrollmentRequestView,
-    EnrollmentStatusRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
-    InferenceProfileSaveRequest, NodeConfigSaveRequest, ScheduleDeleteRequest, ScheduleRunRequest,
-    ScheduleSaveRequest, SessionRenameRequest, SessionRowsWindow, TaskRunRequest, TaskSaveRequest,
-    ToolServiceSaveRequest, ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest,
-    TriggerDeleteRequest, TriggerSaveRequest,
+    ClientAccessRequestView, DefaultAgentSetRequest, DesktopInterruptRequest,
+    DesktopOperationsSnapshotRequest, DesktopProbeMcpServiceRequest,
+    DesktopSessionProvenanceRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
+    InferenceProfileSaveRequest, NodeConfigSaveRequest, RuntimeAccessConnectRequest,
+    ScheduleDeleteRequest, ScheduleRunRequest, ScheduleSaveRequest, SessionRenameRequest,
+    SessionRowsWindow, TaskRunRequest, TaskSaveRequest, ToolServiceSaveRequest,
+    ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest,
+    TriggerSaveRequest,
 };
 use gents_server::packs;
 
@@ -420,21 +421,17 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&replicators)?))
         }
         ("POST", "/desktop/peer/enroll-status") => {
-            let request = decode::<EnrollmentStatusRequest>(
+            let request = decode::<RuntimeAccessConnectRequest>(
                 &request.body,
                 "decoding enrollment status request",
             )?;
-            let payload = fetch_runtime_connection_payload(
-                &request.server_address,
-                Some(fixture.desktop_core().node_identity()),
-            )
-            .await?;
+            let payload = fetch_runtime_connection_payload(&request.server_address).await?;
             let enrollment = fixture
                 .desktop_core()
                 .request_status_enrollment(&payload)
                 .await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(
-                &EnrollmentRequestView::from(enrollment),
+                &ClientAccessRequestView::from(enrollment),
             )?))
         }
         ("POST", "/desktop/session/snapshot") => {
@@ -647,7 +644,7 @@ pub(super) async fn handle_request(
             )?;
             let access = fixture.desktop_core().operator_access(&request.node_did)?;
             json(serde_json::to_value(
-                gents_desktop_core::workspace_root::select_agent_workspace_root(
+                gents::client_workspace::select_agent_workspace_root(
                     &access,
                     &request.node_did,
                     &request.agent_did,

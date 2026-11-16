@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use crate::client_runtime::ClientRuntime;
+use gents_desktop_core::client::DesktopPaths;
 use gents_protocol::job::JobProgress;
 use gents_store::graphql::escape_graphql_string;
 use tempfile::TempDir;
@@ -26,20 +27,23 @@ pub fn node_builder() -> gents::defra_node::NodeBuilder {
     gents::defra_node::Node::builder().with_node_identity_did(identity.did())
 }
 
-pub async fn boot_core() -> (Arc<ClientCore>, TempDir) {
+pub async fn boot_core() -> (Arc<ClientRuntime>, TempDir) {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let paths = DesktopPaths::from_root(tempdir.path());
-    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
-        .await
-        .expect("core starts");
+    let core = ClientRuntime::start_with_paths_and_options(
+        paths,
+        crate::client_test_support::file_journal_options(),
+    )
+    .await
+    .expect("core starts");
     (Arc::new(core), tempdir)
 }
 
 /// A desktop client whose own key is the User of a served runtime it routes
 /// to, with a published chat Agent: the shape a desktop reaches its runtime in.
 pub struct ServedDesktop {
-    pub core: Arc<ClientCore>,
-    pub runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    pub core: Arc<ClientRuntime>,
+    pub runtime: gents::client_test_support::ServedRuntimeHome,
     pub agent: gents_protocol::agent_identity::AgentIdentityBinding,
     _directory: TempDir,
 }
@@ -47,14 +51,14 @@ pub struct ServedDesktop {
 pub async fn served_desktop() -> ServedDesktop {
     let directory = tempfile::tempdir().unwrap();
     let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
+        ClientRuntime::start_with_paths_and_options(
             DesktopPaths::from_root(directory.path()),
-            ClientCoreOptions::local_simulated_route(),
+            crate::client_test_support::file_journal_options(),
         )
         .await
         .unwrap(),
     );
-    let (runtime, agent) = served_runtime_for(&core, ServedRoute::CoHosted).await;
+    let (runtime, agent) = served_runtime_for(&core).await;
     ServedDesktop {
         core,
         runtime,
@@ -63,52 +67,21 @@ pub async fn served_desktop() -> ServedDesktop {
     }
 }
 
-/// How a served runtime is routed from the desktop.
-#[derive(Clone, Copy)]
-pub enum ServedRoute {
-    /// The co-hosted standard peer route `ServedRuntimeHome::connect` adds.
-    CoHosted,
-    /// A managed enrollment route.
-    Enrollment,
-    /// A further standard peer listening on this port.
-    Peer(u16),
-}
-
 /// A served runtime whose User is `core`'s key, with a published chat Agent,
 /// routed from `core` by `route`.
 pub async fn served_runtime_for(
-    core: &Arc<ClientCore>,
-    route: ServedRoute,
+    core: &Arc<ClientRuntime>,
 ) -> (
-    gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    gents::client_test_support::ServedRuntimeHome,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start_unpublished_for(
-        Arc::new(core.node_identity().clone()),
-    )
+    let runtime = gents::client_test_support::ServedRuntimeHome::start_unpublished_for(Arc::new(
+        core.node_identity().clone(),
+    ))
     .await;
     runtime.publish_node(serde_json::json!({})).await;
     let agent = runtime.publish_chat_agent().await;
-    let home = runtime.home_path().display().to_string();
-    match route {
-        ServedRoute::CoHosted => runtime.connect(core).await,
-        ServedRoute::Enrollment => core
-            .add_managed_enrollment_peer_for_test(runtime.node_did(), runtime.graphql(), &home, 1)
-            .await
-            .unwrap(),
-        ServedRoute::Peer(port) => core
-            .add_local_standard_peer_route_for_test(
-                "Served peer",
-                &format!(
-                    "127.0.0.1:{port}/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb"
-                ),
-                runtime.node_did(),
-                runtime.graphql(),
-                &home,
-            )
-            .await
-            .unwrap(),
-    }
+    crate::client_test_support::connect_runtime(&runtime, core).await;
     (runtime, agent)
 }
 
@@ -116,20 +89,20 @@ pub async fn served_runtime_for(
 /// through a managed enrollment route, the second as a standard peer.
 pub async fn served_desktop_pair() -> (
     ServedDesktop,
-    gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    gents::client_test_support::ServedRuntimeHome,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
     let directory = tempfile::tempdir().unwrap();
     let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
+        ClientRuntime::start_with_paths_and_options(
             DesktopPaths::from_root(directory.path()),
-            ClientCoreOptions::local_simulated_route(),
+            crate::client_test_support::file_journal_options(),
         )
         .await
         .unwrap(),
     );
-    let (runtime, agent) = served_runtime_for(&core, ServedRoute::Enrollment).await;
-    let (second, second_agent) = served_runtime_for(&core, ServedRoute::Peer(56002)).await;
+    let (runtime, agent) = served_runtime_for(&core).await;
+    let (second, second_agent) = served_runtime_for(&core).await;
     (
         ServedDesktop {
             core,
@@ -160,8 +133,8 @@ pub const SCRIPTED_MODEL: &str = "scripted-model";
 /// scripted provider, with a lead Agent that may start and message a worker
 /// Agent. Requests, sessions and their tool calls are the runtime's own.
 pub struct RunningDesktop {
-    pub core: Arc<ClientCore>,
-    pub runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    pub core: Arc<ClientRuntime>,
+    pub runtime: gents::client_test_support::ServedRuntimeHome,
     pub lead: gents_protocol::agent_identity::AgentIdentityBinding,
     pub provider: super::streaming_backend::MockStreamingBackend,
     running: Option<gents::runtime::embedded::RunningRuntime>,
@@ -175,14 +148,14 @@ impl RunningDesktop {
                 .unwrap();
         let directory = tempfile::tempdir().unwrap();
         let core = Arc::new(
-            ClientCore::start_with_paths_and_options(
+            ClientRuntime::start_with_paths_and_options(
                 DesktopPaths::from_root(directory.path()),
-                ClientCoreOptions::local_simulated_route(),
+                crate::client_test_support::file_journal_options(),
             )
             .await
             .unwrap(),
         );
-        let runtime = gents_desktop_core::test_fixtures::ServedRuntimeHome::start_unpublished_for(
+        let runtime = gents::client_test_support::ServedRuntimeHome::start_unpublished_for(
             Arc::new(core.node_identity().clone()),
         )
         .await;
@@ -202,7 +175,7 @@ impl RunningDesktop {
                 )],
             )
             .await;
-        runtime.connect(&core).await;
+        crate::client_test_support::connect_runtime(&runtime, &core).await;
         let running = runtime.boot().await;
         Self {
             core,
@@ -454,8 +427,8 @@ pub async fn provenance_fixture() -> ProvenanceFixture {
 /// Submits `request_id` in `session_id` as `core`'s User through the client
 /// admission owner, reserving the session first. Returns its document.
 pub async fn submit_request(
-    core: &ClientCore,
-    runtime: &gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    core: &ClientRuntime,
+    runtime: &gents::client_test_support::ServedRuntimeHome,
     agent: &gents_protocol::agent_identity::AgentIdentityBinding,
     session_id: &str,
     request_id: &str,
@@ -467,8 +440,8 @@ pub async fn submit_request(
 
 /// [`submit_request`], returning the owner's refusal.
 pub async fn try_submit_request(
-    core: &ClientCore,
-    runtime: &gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    core: &ClientRuntime,
+    runtime: &gents::client_test_support::ServedRuntimeHome,
     agent: &gents_protocol::agent_identity::AgentIdentityBinding,
     session_id: &str,
     request_id: &str,
@@ -492,7 +465,7 @@ pub async fn try_submit_request(
 pub async fn submit_signed(
     access: &gents_store::config_client::ConfigAccess,
     signer: &dyn gents_store::identity::NodeIdentity,
-    runtime: &gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    runtime: &gents::client_test_support::ServedRuntimeHome,
     agent: &gents_protocol::agent_identity::AgentIdentityBinding,
     session_id: &str,
     request_id: &str,
@@ -537,7 +510,7 @@ pub async fn submit_signed(
 /// Ends the pending request `doc_id` failed with `reason`, as its working
 /// Agent rejects its admission through the request lifecycle owner.
 pub async fn reject_admission(
-    runtime: &gents_desktop_core::test_fixtures::ServedRuntimeHome,
+    runtime: &gents::client_test_support::ServedRuntimeHome,
     agent: &gents_protocol::agent_identity::AgentIdentityBinding,
     doc_id: &str,
     reason: &str,
@@ -582,7 +555,7 @@ pub fn fixture_signer(seed: u8) -> gents_store::identity::KeyIdentity {
 /// starter index at create, then the receipt `signer` signs for the created
 /// physical document, binding `source`, `parent` and `opening`.
 pub async fn create_started_session(
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     signer: &gents_store::identity::KeyIdentity,
     mut session: gents_protocol::session::AgentSession,
     source: &gents_protocol::session::SessionReference,
@@ -637,7 +610,7 @@ pub async fn create_started_session(
 }
 
 pub async fn write_provenance(
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     node_did: &str,
     session_id: &str,
     provenance: &gents_protocol::session::SessionProvenance,
@@ -723,7 +696,7 @@ impl gents_store::config_client::ConfigRead for CountingRead {
 }
 
 pub async fn refresh_request_and_assert_fresh_projection(
-    core: &ClientCore,
+    core: &ClientRuntime,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -748,23 +721,17 @@ pub async fn refresh_request_and_assert_fresh_projection(
     );
 }
 
-async fn created_doc_id(core: &Arc<ClientCore>, mutation: &str, collection: &str) -> String {
-    let response = core.node().execute(mutation).await;
-    assert!(
-        !response.has_errors(),
-        "seed {collection}: {:?}",
-        response.errors
-    );
-    gents_store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+async fn created_doc_id(core: &Arc<ClientRuntime>, mutation: &str, collection: &str) -> String {
+    let target = &core.runtime_connections()[0].node_did;
+    let access = core.operator_access(target).unwrap();
+    let response = access.write("test.fixture.create", mutation).await.unwrap();
+    gents_protocol::graphql::extract_mutation_doc_id(&response, collection)
         .expect("created document")
-        .and_then(|document| document["_docID"].as_str())
-        .expect("created document id")
-        .to_owned()
 }
 
 #[allow(clippy::too_many_arguments)]
 pub async fn create_request(
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     request_id: &str,
     node_did: &str,
     session_id: &str,
@@ -790,7 +757,7 @@ pub async fn create_request(
 }
 
 pub async fn create_session(
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     node_did: &str,
     session_id: &str,
     started_by: Option<&str>,
@@ -826,7 +793,7 @@ pub async fn create_session(
 }
 
 pub async fn seed_job_row_for_node(
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     node_did: &str,
     session_id: &str,
     tool_call_id: &str,
@@ -842,9 +809,8 @@ pub async fn seed_job_row_for_node(
         OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
         StreamDeclaration, StreamPayload,
     };
-    use gents_store::config_client::ConfigAccess;
 
-    let access = ConfigAccess::local(core.node_arc());
+    let access = core.operator_access(node_did).unwrap();
     let request_doc_id = create_request(
         core,
         &format!("req-{tool_call_id}"),

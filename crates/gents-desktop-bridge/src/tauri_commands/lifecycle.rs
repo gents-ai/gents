@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gents_desktop_core::local_runtime::{
+use gents::client_runtime::{
     dangerously_overwrite_desktop_home, init_standard_local_runtime, reset_desktop_runtime_state,
     DesktopInitOptions, DesktopInitSummary,
 };

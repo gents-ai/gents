@@ -64,17 +64,14 @@ export function createPeerActions({
     return api.reconnectNode(nodeDid);
   }
 
-  async function requestStatusEnrollment(
+  async function requestRuntimeAccess(
     serverAddress: string,
-    candidateName?: string,
   ) {
     try {
       if (!clientRuns()) {
         await ensureDesktopClientStarted();
       }
-      const request = candidateName
-        ? await api.requestStatusEnrollment(serverAddress, candidateName)
-        : await api.requestStatusEnrollment(serverAddress);
+      const request = await api.requestRuntimeAccess(serverAddress);
       await refreshSnapshot();
       return request;
     } catch (err) {
@@ -82,9 +79,9 @@ export function createPeerActions({
     }
   }
 
-  async function removePeer(peerId: string, nodeDid?: string) {
+  async function removeRuntime(nodeDid: string) {
     try {
-      const next = await mutateSnapshot(() => api.removePeer(peerId));
+      const next = await mutateSnapshot(() => api.removeRuntime(nodeDid));
       if (nodeDid && stores.selection.getState().nodeDid === nodeDid) {
         selectNode(null);
       }
@@ -96,22 +93,18 @@ export function createPeerActions({
     }
   }
 
-  function renamePeer(peerId: string, label: string) {
-    return mutateSnapshot(() => api.renamePeer(peerId, label)).catch((err) => {
+  function renameRuntime(nodeDid: string, label: string) {
+    return mutateSnapshot(() => api.renameRuntime(nodeDid, label)).catch((err) => {
       throw new Error(formatPeerConnectionError(err, "rename-peer"));
     });
   }
 
-  function dismissEndedAccess(nodeDid: string) {
-    return mutateSnapshot(() => api.dismissEndedAccess(nodeDid));
-  }
 
   return {
     reconnectNode,
-    dismissEndedAccess,
-    requestStatusEnrollment,
+    requestRuntimeAccess,
     initLocalRuntime,
-    removePeer,
-    renamePeer,
+    removeRuntime,
+    renameRuntime,
   };
 }

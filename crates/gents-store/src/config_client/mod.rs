@@ -26,6 +26,7 @@ pub mod client_authentication;
 mod client_pack_evidence;
 pub mod client_request_input;
 pub mod client_signed_agent;
+pub mod runtime_access;
 pub mod runtime_endpoints;
 pub use client_pack_evidence::{
     prepare_pack_evidence, prepare_pack_evidence_from_history, prepare_pack_evidence_in_txn,

@@ -1,4 +1,6 @@
 import Proofs.Store.Identity.ClientDelegation
+import Proofs.Clients.RuntimeAccess
+import Proofs.Clients.AuthoredOutbox
 import Proofs.Conformance.Family
 
 namespace Conformance.ClientDelegation
@@ -40,5 +42,131 @@ def requestCredential : Family CredentialInput Bool where
     [false, true].flatMap fun actorMatches =>
       [false, true].map fun ambient => { presented, actorMatches, ambient }
   model := fun i => credentialForActor i.presented i.actorMatches
+
+structure GraphInput where
+  remote : Bool
+  presented : Bool
+  actorMatches : Bool
+  deriving ToJson
+
+@[conformance_family]
+def clientGraph : Family GraphInput Bool where
+  inputs := [false, true].flatMap fun remote =>
+    [false, true].flatMap fun presented =>
+      [false, true].map fun actorMatches => { remote, presented, actorMatches }
+  model := fun i => clientGraphReady i.remote i.presented i.actorMatches
+
+structure AccessRequestInput where
+  callerMatches : Bool
+  nodeMatches : Bool
+  signatureVerified : Bool
+  retainedExists : Bool
+  retainedSame : Bool
+  fresh : Bool
+  deriving ToJson
+
+@[conformance_family]
+def accessRequest : Family AccessRequestInput Bool where
+  inputs := [false, true].flatMap fun callerMatches =>
+    [false, true].flatMap fun nodeMatches =>
+      [false, true].flatMap fun signatureVerified =>
+        [false, true].flatMap fun retainedExists =>
+        [false, true].flatMap fun retainedSame =>
+          [false, true].map fun fresh =>
+            { callerMatches, nodeMatches, signatureVerified, retainedExists, retainedSame, fresh }
+  model := fun i => ClientRuntimeAccess.acceptsRequest i.callerMatches i.nodeMatches
+    i.signatureVerified i.retainedExists i.retainedSame i.fresh
+
+structure AccessDecisionInput where
+  before : String
+  decision : String
+  nativeAuthority : Bool
+  effectsComplete : Bool
+  deriving ToJson
+
+@[conformance_family]
+def accessDecision : Family AccessDecisionInput String where
+  inputs := ["pending", "approved", "rejected", "revoked"].flatMap fun before =>
+    ["approve", "reject", "revoke"].flatMap fun decision =>
+      [false, true].flatMap fun nativeAuthority =>
+        [false, true].map fun effectsComplete => { before, decision, nativeAuthority, effectsComplete }
+  model := fun i =>
+    let before := match i.before with
+      | "approved" => ClientRuntimeAccess.AccessRequestState.approved
+      | "rejected" => .rejected | "revoked" => .revoked | _ => .pending
+    let decision := match i.decision with
+      | "approve" => ClientRuntimeAccess.AccessDecision.approve
+      | "reject" => .reject | _ => .revoke
+    ClientRuntimeAccess.requestStateToken <|
+      ClientRuntimeAccess.settleRequest before decision i.nativeAuthority i.effectsComplete
+
+
+structure OutboxReservationInput where
+  localSigner : Bool
+  bindingValid : Bool
+  retainedExists : Bool
+  same : Bool
+  deriving ToJson
+
+@[conformance_family]
+def outboxReservation : Family OutboxReservationInput String where
+  inputs := [false, true].flatMap fun localSigner =>
+    [false, true].flatMap fun bindingValid =>
+        [false, true].flatMap fun retainedExists =>
+            [false, true].map fun same =>
+                { localSigner, bindingValid, retainedExists, same }
+  model := fun i => ClientAuthoredOutbox.reservationToken <|
+    ClientAuthoredOutbox.reserve i.localSigner i.bindingValid i.retainedExists i.same
+
+structure OutboxPreparationInput where
+  bindingMatches : Bool
+  pending : Bool
+  retainedExists : Bool
+  same : Bool
+  deriving ToJson
+
+@[conformance_family]
+def outboxPreparation : Family OutboxPreparationInput String where
+  inputs := [false, true].flatMap fun bindingMatches =>
+    [false, true].flatMap fun pending =>
+        [false, true].flatMap fun retainedExists =>
+            [false, true].map fun same =>
+                { bindingMatches, pending, retainedExists, same }
+  model := fun i => ClientAuthoredOutbox.reservationToken <|
+    ClientAuthoredOutbox.prepare i.bindingMatches i.pending i.retainedExists i.same
+
+structure OutboxAcknowledgementInput where
+  bindingMatches : Bool
+  runtimeConfirmed : Bool
+  deriving ToJson
+
+@[conformance_family]
+def outboxAcknowledgement : Family OutboxAcknowledgementInput Bool where
+  inputs := [false, true].flatMap fun bindingMatches =>
+    [false, true].map fun runtimeConfirmed =>
+        { bindingMatches, runtimeConfirmed }
+  model := fun i => ClientAuthoredOutbox.acknowledge i.bindingMatches i.runtimeConfirmed
+
+structure OutboxSelectionInput where
+  pending : List String
+  steer : Option String
+  deriving ToJson
+
+@[conformance_family]
+def outboxSelection : Family OutboxSelectionInput (Option String) where
+  inputs := [[], ["first"], ["first", "second"]].flatMap fun pending =>
+    [none, some "first", some "second", some "missing"].map fun steer => { pending, steer }
+  model := fun i => ClientAuthoredOutbox.select i.pending i.steer
+
+structure OutboxSessionInput where
+  submission : String
+  session : Option String
+  deriving ToJson
+
+@[conformance_family]
+def outboxSession : Family OutboxSessionInput String where
+  inputs := ["first", "second"].flatMap fun submission =>
+    [none, some "existing", some ""].map fun session => { submission, session }
+  model := fun i => ClientAuthoredOutbox.sessionBinding i.submission i.session
 
 end Conformance.ClientDelegation

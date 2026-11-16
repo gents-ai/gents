@@ -23,7 +23,7 @@ mod operations_tests;
 
 use std::sync::Arc;
 
-use gents_desktop_core::client::ClientCore;
+use crate::client_runtime::ClientRuntime;
 use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::error::BridgeError;
@@ -33,7 +33,7 @@ use crate::types::{ClientUpdateEvent, DesktopClientSnapshot};
 
 pub(crate) async fn emit_config_update_and_snapshot<R>(
     app: &AppHandle<R>,
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     state: &State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError>
 where

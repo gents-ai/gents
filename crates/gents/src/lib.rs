@@ -6,6 +6,15 @@ extern crate self as gents;
 #[path = "../tests/support/mod.rs"]
 pub mod support;
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod client_test_support;
+
+pub mod client_admin;
+pub mod client_operations;
+pub mod client_runtime;
+pub mod client_tools;
+pub mod client_workspace;
+
 mod claude_request_context;
 pub mod eval;
 pub mod operations;

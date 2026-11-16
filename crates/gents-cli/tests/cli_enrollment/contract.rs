@@ -158,8 +158,8 @@ async fn run_contract_with_streaming_cadence(
     let result = server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, ENROLL_BUDGET).await?;
         let readiness_timestamp = seed_readiness_history(&graphql, &node_did, readiness_revisions).await?;
-        let core = Arc::new(ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
+        let core = Arc::new(ClientRuntime::start_with_paths_and_options(
+            DesktopPaths::from_root(&client_home), ClientRuntimeOptions::local_only(),
         ).await?);
         let enroll_budget = if readiness_timestamp.is_some() {
             ENROLL_BUDGET + AGED_HISTORY_RECOVERY
@@ -267,8 +267,8 @@ async fn run_contract_with_streaming_cadence(
         wait_for_complete_agent_response(&graphql, &request, &session).await?;
 
         let reconnect_started = Instant::now();
-        let core = Arc::new(ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
+        let core = Arc::new(ClientRuntime::start_with_paths_and_options(
+            DesktopPaths::from_root(&client_home), ClientRuntimeOptions::local_only(),
         ).await?);
         let client_core_ready = reconnect_started.elapsed();
         let recovered = timeout(RECONNECT_BUDGET.saturating_sub(reconnect_started.elapsed()), async {
@@ -336,7 +336,7 @@ async fn run_contract_with_streaming_cadence(
     reason = "test driver takes the turn's coordinates and stream probes"
 )]
 async fn visible_turn(
-    core: &Arc<ClientCore>,
+    core: &Arc<ClientRuntime>,
     graphql: &str,
     node_did: &str,
     agent_did: &str,
@@ -440,7 +440,7 @@ async fn visible_turn(
     Ok(())
 }
 
-async fn assert_observer_did_not_overflow(core: &ClientCore) -> Result<()> {
+async fn assert_observer_did_not_overflow(core: &ClientRuntime) -> Result<()> {
     let metrics = core.observer_metrics().await.context("observer running")?;
     anyhow::ensure!(
         metrics.drop_recoveries == 0,
@@ -450,7 +450,7 @@ async fn assert_observer_did_not_overflow(core: &ClientCore) -> Result<()> {
     Ok(())
 }
 
-async fn select_session(core: &ClientCore, session: &str, node_did: &str) -> Result<()> {
+async fn select_session(core: &ClientRuntime, session: &str, node_did: &str) -> Result<()> {
     let access = core.operator_access(node_did)?;
     let query = format!("{{ AgentSession(filter: {{ session_id: {{ _eq: \"{}\" }}, node_did: {{ _eq: \"{}\" }} }}) {{ _docID }} }}", escape_graphql_string(session), escape_graphql_string(node_did));
     let response = access.execute(&query).await?;
@@ -464,7 +464,7 @@ async fn select_session(core: &ClientCore, session: &str, node_did: &str) -> Res
 }
 
 async fn wait_for_runtime_reply(
-    core: &ClientCore,
+    core: &ClientRuntime,
     session: &str,
     agent: &str,
     request: &str,
@@ -654,13 +654,13 @@ async fn wait_for_runtime_reply(
 struct ReadinessProbe {
     node: Arc<gents::defra_node::Node>,
     p2p: Arc<dyn defra_p2p_adapter::P2POperations>,
-    stores: Arc<gents_desktop_core::client::ObservedStores>,
+    stores: Arc<gents_observe::client_projection::observe::ObservedStores>,
     graphql: String,
     agent: String,
 }
 
 impl ReadinessProbe {
-    fn of(core: &ClientCore, graphql: &str, agent: &str) -> Self {
+    fn of(core: &ClientRuntime, graphql: &str, agent: &str) -> Self {
         Self {
             node: core.node_arc(),
             p2p: core.p2p().clone(),
@@ -760,7 +760,7 @@ fn highest_commit(commits: Option<&Value>) -> Option<i64> {
         .max()
 }
 
-async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
+async fn pairing_diagnostics(core: &ClientRuntime, graphql: &str) -> String {
     let query = "{ PeerPairingDesired { peer_id template source } PeerPairingApplied { peer_id } NodeReadiness { node_did updated_at } AgentRequest { _docID request_id node_did requester_did lifecycle_state terminal_output } }";
     let client = gents_store::graphql::graphql_with_transaction_retry(
         core.node(),
@@ -831,20 +831,20 @@ async fn runtime_transcript_keys(
 }
 
 async fn local_transcript_keys(
-    core: &ClientCore,
+    core: &ClientRuntime,
     session: &str,
     agent: &str,
 ) -> Result<std::collections::BTreeSet<String>> {
     let mut keys = std::collections::BTreeSet::new();
     let mut cursor = None;
     loop {
-        let page = gents_desktop_core::client::load_session_transcript_page_on(
+        let page = gents_observe::client_projection::query::load_session_transcript_page_on(
             &core.operator_access(agent)?,
             session,
             Some(agent),
             Some(core.node_identity().did()),
             cursor.as_deref(),
-            Some(gents_desktop_core::client::MAX_SESSION_TRANSCRIPT_PAGE_SIZE),
+            Some(gents_observe::client_projection::query::MAX_SESSION_TRANSCRIPT_PAGE_SIZE),
         )
         .await?;
         for message in &page.store.transcript_messages {
@@ -862,7 +862,7 @@ async fn local_transcript_keys(
 }
 
 async fn assert_local_pagination(
-    core: &ClientCore,
+    core: &ClientRuntime,
     graphql: &str,
     session: &str,
     agent: &str,
@@ -886,7 +886,7 @@ async fn assert_local_pagination(
     let mut seen = std::collections::BTreeSet::new();
     let mut last_sequence = i64::MAX;
     loop {
-        let page = gents_desktop_core::client::load_session_transcript_page_on(
+        let page = gents_observe::client_projection::query::load_session_transcript_page_on(
             &core.operator_access(agent)?,
             session,
             Some(agent),
@@ -994,7 +994,11 @@ async fn seed_readiness_history(
 /// The app observes runtime readiness through its authenticated snapshot
 /// owner; P2P carries only discovery and enrollment, so the app's own
 /// database never holds the runtime's NodeReadiness history.
-async fn wait_for_readiness_revision(core: &ClientCore, agent: &str, expected: &str) -> Result<()> {
+async fn wait_for_readiness_revision(
+    core: &ClientRuntime,
+    agent: &str,
+    expected: &str,
+) -> Result<()> {
     let expected = chrono::DateTime::parse_from_rfc3339(expected)?;
     let mut updates = core.store_updates();
     loop {
@@ -1081,8 +1085,8 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
             let node_did = node_did.clone();
             let runtime_home = runtime_home.clone();
             async move {
-                let core = Arc::new(ClientCore::start_with_paths_and_options(
-                    DesktopPaths::from_root(path), ClientCoreOptions::local_only(),
+                let core = Arc::new(ClientRuntime::start_with_paths_and_options(
+                    DesktopPaths::from_root(path), ClientRuntimeOptions::local_only(),
                 ).await?);
                 let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql).await?;
                 let pending = core.request_status_enrollment_with_label(&status, Some("activity test")).await?;
@@ -1208,9 +1212,9 @@ async fn run_live_contract(readiness_revisions: usize) -> Result<()> {
             wait_for_runtime_ready(&graphql, &node_did, ENROLL_BUDGET).await?;
             let revision = seed_readiness_history(&graphql, &node_did, readiness_revisions).await?;
             let core = Arc::new(
-                ClientCore::start_with_paths_and_options(
+                ClientRuntime::start_with_paths_and_options(
                     DesktopPaths::from_root(&client_home),
-                    ClientCoreOptions::local_only(),
+                    ClientRuntimeOptions::local_only(),
                 )
                 .await?,
             );
@@ -1310,9 +1314,9 @@ async fn run_live_contract(readiness_revisions: usize) -> Result<()> {
             )
             .await?;
             let core = Arc::new(
-                ClientCore::start_with_paths_and_options(
+                ClientRuntime::start_with_paths_and_options(
                     DesktopPaths::from_root(&client_home),
-                    ClientCoreOptions::local_only(),
+                    ClientRuntimeOptions::local_only(),
                 )
                 .await?,
             );

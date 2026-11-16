@@ -397,7 +397,7 @@ impl GraphqlEnrollmentStore {
             "renewal intent signature is invalid"
         );
         let p2p =
-            gents_store::identity::node_p2p(&self.node).context("runtime P2P is unavailable")?;
+            crate::node_access::operations(&self.node).context("runtime P2P is unavailable")?;
         let local_peer = timeout(Duration::from_secs(20), p2p.local_peer_id())
             .await?
             .map_err(anyhow::Error::msg)?;
@@ -1151,7 +1151,7 @@ impl GraphqlEnrollmentStore {
         request: &EnrollmentRequestRecord,
     ) -> Result<DateTime<Utc>> {
         let p2p =
-            gents_store::identity::node_p2p(&self.node).context("runtime P2P is unavailable")?;
+            crate::node_access::operations(&self.node).context("runtime P2P is unavailable")?;
         let local_peer = timeout(Duration::from_secs(20), p2p.local_peer_id())
             .await
             .context("timed out reading the enrollment server peer identity")?
@@ -1332,7 +1332,7 @@ impl GraphqlEnrollmentStore {
                 "suppressed stale enrollment terminal delivery");
             return true;
         }
-        let Some(p2p) = gents_store::identity::node_p2p(&self.node) else {
+        let Some(p2p) = crate::node_access::operations(&self.node) else {
             return true;
         };
         let documents = terminal_documents(decision_doc_id, revision_doc_id, route_receipt_doc_id);

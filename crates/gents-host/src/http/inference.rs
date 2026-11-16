@@ -5,7 +5,7 @@ use axum::{
     Json,
 };
 use defra_http::ExtractIdentity;
-use gents_desktop_core::inference::{
+use gents_observe::client_inference::{
     load_inference_setup_state, InferenceSettingsResponse, INFERENCE_SETTINGS_CONTRACT_VERSION,
 };
 use gents_store::config_client::ConfigAccess;

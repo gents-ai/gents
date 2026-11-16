@@ -8,7 +8,9 @@ use gents_protocol::operations::request::{
     RequestMatches, RequestOperationError, RequestReceipt, RequestRef, RequestReissueInput,
     RequestWaitInput,
 };
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+use gents_protocol::request_admission::{
+    AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use gents_store::config_client::ConfigAccess;
@@ -119,6 +121,25 @@ pub async fn send_with<P, F>(
 where
     P: FnOnce(String, String) -> F,
     F: Future<Output = Result<MessageSendBody, RequestOperationError>>,
+{
+    send_retaining(access, signer, route, prepare, |_| {
+        std::future::ready(Ok(()))
+    })
+    .await
+}
+
+pub async fn send_retaining<P, F, R, RF>(
+    access: &ConfigAccess,
+    signer: &dyn NodeIdentity,
+    route: MessageSendRoute,
+    prepare: P,
+    retain: R,
+) -> Result<RequestReceipt, RequestOperationError>
+where
+    P: FnOnce(String, String) -> F,
+    F: Future<Output = Result<MessageSendBody, RequestOperationError>>,
+    R: FnOnce(AgentRequestCreate) -> RF,
+    RF: Future<Output = Result<(), RequestOperationError>>,
 {
     let MessageSendRoute {
         node_did,
@@ -232,16 +253,31 @@ where
     )
     .await
     .map_err(RequestOperationError::passthrough)?;
-    let held = send_client_request(access, &create)
+    retain(create.clone()).await?;
+    send_prepared(access, signer, &create).await
+}
+
+pub async fn send_prepared(
+    access: &ConfigAccess,
+    signer: &dyn NodeIdentity,
+    create: &AgentRequestCreate,
+) -> Result<RequestReceipt, RequestOperationError> {
+    let actor = target::client_actor(access, signer)?;
+    if create.admission.signer_did != actor {
+        return Err(RequestOperationError::passthrough(anyhow::anyhow!(
+            "the prepared request belongs to another client"
+        )));
+    }
+    let held = send_client_request(access, create)
         .await
-        .map_err(|error| target::submission_error(&request_id, error))?;
+        .map_err(|error| target::submission_error(&create.request_id, error))?;
     read::receipt(
         access,
-        &node_did,
-        &session_id,
-        &requester,
+        &create.node_did,
+        &create.session_id,
+        &create.requester_did,
         &held,
-        Some(&create),
+        Some(create),
     )
     .await
 }

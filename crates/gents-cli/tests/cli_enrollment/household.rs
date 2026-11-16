@@ -53,8 +53,8 @@ async fn fresh_enrolled_client_receives_node_administration_and_creates_agent() 
 
     let (client_did, new_agent_did) = server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
-        let core = ClientCore::start_with_paths_and_options(
-            DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
+        let core = ClientRuntime::start_with_paths_and_options(
+            DesktopPaths::from_root(&client_home), ClientRuntimeOptions::local_only(),
         ).await?;
         let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql).await?;
         let pending = core.request_status_enrollment_with_label(&status, Some("household client")).await?;
@@ -248,9 +248,9 @@ async fn desktop_approve_admits_the_member_and_deny_grants_nothing() -> Result<(
             wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
             let mut members = Vec::new();
             for label in ["approved", "denied", "granted then denied"] {
-                let core = ClientCore::start_with_paths_and_options(
+                let core = ClientRuntime::start_with_paths_and_options(
                     DesktopPaths::from_root(temp.path().join(label.replace(' ', "-"))),
-                    ClientCoreOptions::local_only(),
+                    ClientRuntimeOptions::local_only(),
                 )
                 .await?;
                 let (status, _) =

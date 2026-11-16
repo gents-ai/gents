@@ -43,7 +43,8 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
     use std::process::Stdio;
     use std::time::Duration;
 
-    use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+    use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
+    use gents_desktop_core::client::DesktopPaths;
     use serde_json::json;
 
     let root = tempfile::tempdir().unwrap();
@@ -293,12 +294,10 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
     assert_eq!(status["tool_ceiling"], "readwrite");
     let paths = DesktopPaths::from_root(root.path().join("client"));
     let core = std::sync::Arc::new(
-        ClientCore::start_with_paths_and_options(
+        ClientRuntime::start_with_paths_and_options(
             paths.clone(),
-            ClientCoreOptions {
-                operator_identity_interaction:
-                    gents_desktop_core::local_runtime::OperatorIdentityInteraction::Prevent,
-                ..ClientCoreOptions::local_only()
+            ClientRuntimeOptions {
+                ..ClientRuntimeOptions::local_only()
             },
         )
         .await

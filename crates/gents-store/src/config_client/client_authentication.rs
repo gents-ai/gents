@@ -74,6 +74,15 @@ impl ClientAuthorization {
     }
 }
 
+pub fn client_graph_ready(
+    node: &defra_node::Node,
+    authorization: Option<&ClientAuthorization>,
+    signer: &identity::Did,
+) -> bool {
+    node.local_zanzibar_store().is_some()
+        || authorization.is_some_and(|authorization| authorization.actor() == signer)
+}
+
 impl ConfigAccess {
     pub fn with_client_authorization(mut self, authorization: ClientAuthorization) -> Result<Self> {
         match &mut self {
@@ -120,6 +129,13 @@ impl GraphqlEndpoint {
         let actor =
             identity::Did::new(actor).map_err(ConfigClientError::RelationshipTargetIdentity)?;
         ClientAuthorization::from_authenticated_bearer(actor, &authorization).map(Some)
+    }
+
+    pub async fn requires_client_delegation(&self) -> Result<bool> {
+        Ok(matches!(
+            self.runtime_authentication().await?,
+            ClientAuthentication::Vera { .. }
+        ))
     }
 
     pub async fn authorization(&self) -> Result<Option<String>> {

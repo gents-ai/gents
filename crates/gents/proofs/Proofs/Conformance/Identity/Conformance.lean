@@ -1706,7 +1706,7 @@ def json : Json := Json.mkObj
    ("desktop_reset_cases", toJson (([false, true] : List Bool).flatMap fun full =>
      ([("cache", Configuration.DesktopResetAsset.cache),
        ("binding", .binding), ("upgrade", .upgrade), ("user_key", .userKey),
-       ("user_metadata", .userMetadata), ("p2p_key", .p2pKey),
+       ("user_metadata", .userMetadata),
        ("custody", .custody), ("peers", .peers)]).map fun (name, asset) =>
        Json.mkObj [("full", toJson full), ("asset", toJson name),
          ("retired", toJson (Configuration.desktopResetRetires full asset))])),

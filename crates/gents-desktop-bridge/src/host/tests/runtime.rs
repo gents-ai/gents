@@ -28,27 +28,31 @@ async fn runtime_location_rejects_an_unknown_node() {
 
 #[tokio::test]
 async fn runtime_location_accepts_a_paired_runtime_without_operator_access() {
-    use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+    use crate::client_runtime::ClientRuntime;
+    use gents_desktop_core::client::DesktopPaths;
 
     let directory = tempfile::tempdir().unwrap();
     let paths = DesktopPaths::from_root(directory.path());
-    let mut peer = gents_desktop_core::client::PeerRecord::local_standard(
-        "Paired runtime",
-        "iroh://remote-runtime",
-        "did:paired",
-        "http://127.0.0.1:1/api/v0/graphql",
-    );
-    peer.source = Some("enrollment".into());
-    peer.graphql = None;
+    let connection = gents_protocol::runtime_connection::RuntimeConnection {
+        node_did: "did:paired".into(),
+        label: "Remote runtime".into(),
+        graphql: "http://127.0.0.1:1/api/v0/graphql".into(),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    };
     std::fs::write(
-        paths.peer_directory_path(),
-        json!({"peers": [peer]}).to_string(),
+        paths.runtime_directory_path(),
+        json!({"connections": [connection]}).to_string(),
     )
     .unwrap();
     let core = Arc::new(
-        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
-            .await
-            .unwrap(),
+        ClientRuntime::start_with_paths_and_options(
+            paths,
+            crate::client_test_support::file_journal_options(),
+        )
+        .await
+        .unwrap(),
     );
     let host = ClientHost::new(core.clone());
     assert_eq!(
@@ -69,24 +73,21 @@ async fn runtime_location_accepts_a_paired_runtime_without_operator_access() {
 
 #[tokio::test]
 async fn paired_model_settings_use_the_authenticated_client_endpoint() {
-    use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+    use crate::client_runtime::ClientRuntime;
+    use gents_desktop_core::client::DesktopPaths;
 
     // Model settings are read as the User over the paired runtime's
     // authenticated GraphQL; the served runtime refuses any other actor.
     let directory = tempfile::tempdir().unwrap();
     let core = Arc::new(
-        ClientCore::start_with_paths_and_options(
+        ClientRuntime::start_with_paths_and_options(
             DesktopPaths::from_root(directory.path()),
-            ClientCoreOptions::local_only(),
+            crate::client_test_support::file_journal_options(),
         )
         .await
         .unwrap(),
     );
-    let (runtime, _agent) = crate::tests::support::served_runtime_for(
-        &core,
-        crate::tests::support::ServedRoute::Enrollment,
-    )
-    .await;
+    let (runtime, _agent) = crate::tests::support::served_runtime_for(&core).await;
     let node = runtime.node_did().to_owned();
     let host = ClientHost::new(core.clone());
     let result = host

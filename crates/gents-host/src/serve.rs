@@ -742,7 +742,7 @@ async fn serve_foreground(
     let streams =
         crate::http::shutdown_streams::ShutdownStreams::new(runtime.shutdown_tx.subscribe());
     let http_config = defra_node::HttpConfig::with_addr(http_addr)
-        .with_extra_routes(extra_routes)
+        .with_authenticated_routes(extra_routes)
         .with_router_transform(Arc::new(move |router| authority.wrap(streams.wrap(router))));
     anyhow::ensure!(
         server_identity.node_identity_did.as_deref() == Some(identity.did()),
@@ -894,7 +894,7 @@ async fn serve_foreground(
             let p2p_status =
                 load_local_server_p2p_status(node.as_ref(), args.p2p_transport, p2p_admission)
                     .await?;
-            if let Some(p2p) = gents_store::identity::node_p2p(&node) {
+            if let Some(p2p) = gents_p2p::node_access::operations(&node) {
                 *enrollment_offer_issuer.write().await =
                     Some(gents_p2p::p2p_reconcile::EnrollmentOfferIssuer::new(
                         node.clone(),
@@ -1574,7 +1574,7 @@ async fn load_local_server_p2p_status(
             "p2p_admission": admission,
         })),
         P2pTransportArg::Iroh => {
-            let p2p = gents_store::identity::node_p2p(node).ok_or_else(|| {
+            let p2p = gents_p2p::node_access::operations(node).ok_or_else(|| {
                 anyhow::anyhow!(
                     "P2P transport was requested but is not available on the embedded node"
                 )

@@ -28,7 +28,7 @@ pub(super) fn latest_user_text(request: &Value) -> Option<String> {
 /// input to arrive; the wait wakes on both. It has no deadline of its own and
 /// fails only when neither changes for the suite's stall ceiling.
 pub(super) async fn wait_for_visible_content(
-    core: &ClientCore,
+    core: &ClientRuntime,
     graphql: &str,
     request: &str,
     expected: &str,
@@ -98,7 +98,7 @@ pub(super) async fn wait_for_visible_content(
 /// The app reads live output from the runtime as its own User; P2P carries
 /// only discovery and enrollment, so its local database holds no transcript.
 async fn canonical_live_content(
-    core: &ClientCore,
+    core: &ClientRuntime,
     graphql: &str,
     request_id: &str,
 ) -> Result<Option<String>> {
@@ -134,7 +134,7 @@ async fn canonical_live_content(
                 gents_store::identity::NodeIdentity::client_signing_capability(app)?,
             )?,
     );
-    let canonical = gents_desktop_core::client::load_session_context_store_on(
+    let canonical = gents_observe::client_projection::query::load_session_context_store_on(
         &access,
         session_id,
         Some(node_did),
@@ -165,7 +165,7 @@ async fn canonical_live_content(
     let terminal = request
         .lifecycle_state
         .is_some_and(gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal);
-    let view = gents_desktop_core::client::canonical_output::project_canonical_live(
+    let view = gents_observe::client_projection::canonical_output::project_canonical_live(
         request_doc_id,
         session_id,
         request_doc_id,

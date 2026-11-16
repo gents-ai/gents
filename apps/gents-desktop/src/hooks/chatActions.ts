@@ -373,7 +373,7 @@ export function createChatActions({
         ? displayedGoal(node.nodeDid, selectedSessionId, accepts)
         : null;
       const current = selectedSessionId
-        ? observedGoal(
+        ? node.runtimeConnection !== "connected" ? displayed : observedGoal(
             await api.fetchSessionGoal(node.nodeDid, selectedSessionId),
             node.nodeDid,
             selectedSessionId,

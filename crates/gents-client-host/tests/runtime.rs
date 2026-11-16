@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_desktop_bridge::client_runtime::{ClientRuntime, ClientRuntimeOptions};
+use gents_desktop_core::client::DesktopPaths;
 use gents_store::identity::NodeIdentity;
 use gents_store::test_support::bounded_process::BoundedProcess;
 use serde_json::{json, Value};
@@ -833,9 +834,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         }
     } else {
         let seed = Arc::new(
-            ClientCore::start_with_paths_and_options(
+            ClientRuntime::start_with_paths_and_options(
                 paths.clone(),
-                ClientCoreOptions::local_only(),
+                ClientRuntimeOptions::local_only(),
             )
             .await?,
         );
@@ -2409,9 +2410,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         // the client's own store holds the Goal caller receipts it wrote, and
         // no Goal.
         let reopened = Arc::new(
-            ClientCore::start_with_paths_and_options(
+            ClientRuntime::start_with_paths_and_options(
                 paths.clone(),
-                ClientCoreOptions::local_only(),
+                ClientRuntimeOptions::local_only(),
             )
             .await?,
         );
@@ -2770,9 +2771,9 @@ async fn run_editor_journey(
     {
         let startup_paths = DesktopPaths::from_root(root.join("startup-client"));
         let startup = Arc::new(
-            ClientCore::start_with_paths_and_options(
+            ClientRuntime::start_with_paths_and_options(
                 startup_paths.clone(),
-                ClientCoreOptions::local_only(),
+                ClientRuntimeOptions::local_only(),
             )
             .await?,
         );

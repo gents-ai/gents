@@ -9,10 +9,9 @@ pub const DESKTOP_HOME_ENV: &str = "GENTS_DESKTOP_HOME";
 pub struct DesktopPaths {
     root: PathBuf,
     node_data_dir: PathBuf,
-    peer_directory_path: PathBuf,
+    runtime_directory_path: PathBuf,
     principal_metadata_path: PathBuf,
     identity_key_path: PathBuf,
-    iroh_secret_key_path: PathBuf,
     store_encryption_path: PathBuf,
     store_key_path: PathBuf,
 }
@@ -38,10 +37,9 @@ impl DesktopPaths {
         let root = root.into();
         let node_data_dir = root.join("node");
         Self {
-            peer_directory_path: root.join("peers.json"),
+            runtime_directory_path: root.join("connections.json"),
             principal_metadata_path: root.join("principal.json"),
             identity_key_path: root.join("principal.ed25519.key"),
-            iroh_secret_key_path: root.join("node.iroh.key"),
             store_encryption_path: root.join("store-encryption.json"),
             store_key_path: root.join("store.key"),
             node_data_dir,
@@ -73,14 +71,8 @@ impl DesktopPaths {
         &self.node_data_dir
     }
 
-    pub fn peer_directory_path(&self) -> &Path {
-        &self.peer_directory_path
-    }
-
-    /// Saved peers of a local node whose home is gone, kept until the next
-    /// archive of client state moves them into its backup.
-    pub fn retired_local_peers_path(&self) -> PathBuf {
-        self.root.join("local-peers.json")
+    pub fn runtime_directory_path(&self) -> &Path {
+        &self.runtime_directory_path
     }
 
     pub fn principal_metadata_path(&self) -> &Path {
@@ -89,10 +81,6 @@ impl DesktopPaths {
 
     pub fn identity_key_path(&self) -> &Path {
         &self.identity_key_path
-    }
-
-    pub fn iroh_secret_key_path(&self) -> &Path {
-        &self.iroh_secret_key_path
     }
 
     pub fn store_encryption_path(&self) -> &Path {
@@ -106,18 +94,16 @@ impl DesktopPaths {
     pub fn client_state_exists(&self) -> bool {
         self.principal_metadata_path.is_file()
             && self.identity_key_path.is_file()
-            && self.iroh_secret_key_path.is_file()
             && self.node_data_dir.join("MANIFEST").is_file()
     }
 
-    pub fn client_records(&self) -> [&Path; 6] {
+    pub fn client_records(&self) -> [&Path; 5] {
         [
             &self.principal_metadata_path,
             &self.identity_key_path,
-            &self.iroh_secret_key_path,
             &self.store_encryption_path,
             &self.store_key_path,
-            &self.peer_directory_path,
+            &self.runtime_directory_path,
         ]
     }
 
@@ -126,12 +112,10 @@ impl DesktopPaths {
             self.node_data_dir.clone(),
             self.store_encryption_path.clone(),
             self.store_key_path.clone(),
-            self.peer_directory_path.clone(),
-            self.peer_directory_path.with_extension("lock"),
+            self.runtime_directory_path.clone(),
+            self.runtime_directory_path.with_extension("lock"),
             self.principal_metadata_path.clone(),
             self.identity_key_path.clone(),
-            self.iroh_secret_key_path.clone(),
-            self.retired_local_peers_path(),
         ]
     }
 }
@@ -166,7 +150,6 @@ mod tests {
 
         std::fs::write(paths.principal_metadata_path(), "{}").expect("principal metadata");
         std::fs::write(paths.identity_key_path(), [0_u8; 64]).expect("principal key");
-        std::fs::write(paths.iroh_secret_key_path(), [0_u8; 32]).expect("iroh key");
 
         assert!(paths.client_state_exists());
     }

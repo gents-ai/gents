@@ -267,9 +267,15 @@ async fn drive_signed_command(node: &FixtureNode, modeled_case: &ControlCase) {
     let doc_id = persist_command(&access, &command).await;
     let identity: Arc<dyn NodeIdentity> = fixture.identity.clone();
     assert_eq!(
-        process_command(&fixture.node, &identity, &doc_id, fixture.agent.as_ref())
-            .await
-            .unwrap(),
+        process_command(
+            &fixture.node,
+            &identity,
+            &doc_id,
+            fixture.agent.as_ref(),
+            None
+        )
+        .await
+        .unwrap(),
         None,
         "{}",
         case.name
@@ -312,9 +318,15 @@ async fn drive_signed_command(node: &FixtureNode, modeled_case: &ControlCase) {
     };
     modeled_case.check(observed);
     let first_receipt = serde_json::to_value(receipt).unwrap();
-    process_command(&fixture.node, &identity, &doc_id, fixture.agent.as_ref())
-        .await
-        .unwrap();
+    process_command(
+        &fixture.node,
+        &identity,
+        &doc_id,
+        fixture.agent.as_ref(),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         serde_json::to_value(self::receipt(&access, &doc_id).await.unwrap()).unwrap(),
         first_receipt,

@@ -51,7 +51,7 @@ where
     // Subscribe before acknowledging initialization: a first snapshot can then
     // overlap updates without leaving a snapshot-to-live observation gap.
     let mut store = host.core.store_updates();
-    let mut health = host.core.sync_state_updates();
+    let mut health = host.core.runtime_connection_updates();
     frames
         .send(pack(HostMessage::Hello {
             version: PROTOCOL_VERSION,

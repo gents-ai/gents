@@ -687,10 +687,7 @@ fn plan_reset(
         let entries = if full_reset {
             canonical.client_state_entries()
         } else {
-            vec![
-                canonical.node_data_dir().to_path_buf(),
-                canonical.retired_local_peers_path(),
-            ]
+            vec![canonical.node_data_dir().to_path_buf()]
         };
         for entry in entries.into_iter().chain(std::iter::once(preference)) {
             if desktop_owned && present(&entry)? {
@@ -700,7 +697,7 @@ fn plan_reset(
     }
     if full_reset {
         let lock = crate::client::DesktopPaths::from_root(&desktop_root)
-            .peer_directory_path()
+            .runtime_directory_path()
             .with_extension("lock");
         client_entries.retain(|entry| *entry != lock);
     }
@@ -1375,7 +1372,7 @@ pub fn lock_client_state(
     use anyhow::Context;
     let store = gents_store::local::home::lock_store_at(paths.root(), paths.node_data_dir())
         .context("Quit Gents before resetting its desktop state")?;
-    let peers = paths.peer_directory_path().with_extension("lock");
+    let peers = paths.runtime_directory_path().with_extension("lock");
     reject_symlink_if_present(&peers, "peer directory lock")?;
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -1544,13 +1541,12 @@ mod tests {
             let (home, desktop, service) = fixture(&user);
             write(&desktop.node_data_dir().join("MANIFEST"), "REGOMAN");
             write(desktop.identity_key_path(), "user key");
-            write(desktop.iroh_secret_key_path(), "client p2p key");
             write(
                 desktop.store_encryption_path(),
                 r#"{"version":1,"custody":"file"}"#,
             );
             write(desktop.store_key_path(), "store key");
-            write(desktop.peer_directory_path(), "{}");
+            write(desktop.runtime_directory_path(), "{}");
             let upgrade =
                 gents_store::local::store_key::upgrade::journal_path(desktop.node_data_dir());
             write(
@@ -1579,9 +1575,8 @@ mod tests {
                 "upgrade" => &upgrade,
                 "user_key" => desktop.identity_key_path(),
                 "user_metadata" => desktop.principal_metadata_path(),
-                "p2p_key" => desktop.iroh_secret_key_path(),
                 "custody" => desktop.store_encryption_path(),
-                "peers" => desktop.peer_directory_path(),
+                "peers" => desktop.runtime_directory_path(),
                 _ => panic!("unknown modeled desktop asset"),
             };
             assert_eq!(
@@ -1606,7 +1601,6 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let user = temp.path().canonicalize().unwrap();
         let (home, desktop, service) = fixture(&user);
-        write(&desktop.retired_local_peers_path(), "[]");
         let plan = plan_full_reset(Some(&home), &desktop, &user, &service).unwrap();
         let preview = plan.preview();
         assert!(preview.delete_confirmation.is_some());
@@ -1623,7 +1617,6 @@ mod tests {
             "service definition"
         );
         assert!(backup.join("desktop/logs/client.log").is_file());
-        assert!(backup.join("desktop/local-peers.json").is_file());
         assert!(backup.join("home/init.json").is_file());
         assert!(home.join("other-node/init.json").is_file());
         assert!(home.join("keys/other.key").is_file());
@@ -1781,7 +1774,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let user = temp.path().canonicalize().unwrap();
         let (home, desktop, service) = fixture(&user);
-        let lock = desktop.peer_directory_path().with_extension("lock");
+        let lock = desktop.runtime_directory_path().with_extension("lock");
         write(&lock, "");
         let alias = user.join("user-alias");
         std::os::unix::fs::symlink(&user, &alias).unwrap();
@@ -1965,7 +1958,7 @@ mod tests {
             r#"{"version":1,"custody":"file"}"#,
         );
         write(desktop.store_key_path(), "client store key");
-        write(desktop.peer_directory_path(), "{}");
+        write(desktop.runtime_directory_path(), "{}");
         (home, desktop, service)
     }
 
@@ -1997,7 +1990,7 @@ mod tests {
             .all(|path| records.contains(&PathBuf::from(path))));
         for dependent in [
             desktop.store_key_path(),
-            desktop.peer_directory_path(),
+            desktop.runtime_directory_path(),
             &desktop.root().join(MANAGED_SERVER_CONFIG),
             &desktop.root().join("logs"),
         ] {
@@ -2153,7 +2146,7 @@ mod tests {
             .preview();
         let _process = lock_desktop_process(&desktop, false).unwrap();
         let _reservation = lock_reset(&desktop).unwrap();
-        write(&desktop.peer_directory_path().with_extension("lock"), "");
+        write(&desktop.runtime_directory_path().with_extension("lock"), "");
         let after = plan_full_reset(Some(&home), &desktop, &user, &service).unwrap();
         after
             .check_confirmation(&before.confirmation, HomeResetDisposition::Archive)

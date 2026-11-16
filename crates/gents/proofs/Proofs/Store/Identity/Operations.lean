@@ -236,6 +236,7 @@ def networkProtocolResource : String → Option String
   | "PeerPairingDesired" => some "pairing_observations"
   | "EnrollmentOperatorNonce" => some "operations"
   | "NetworkEnrollmentGrant" => some "operations"
+  | "ClientRuntimeAccessRequest" => some "operations"
   | "NetworkAdminPin" => some "operations"
   | "EnrollmentRenewalPolicy" => some "operations"
   | "OAuthCredential" => some "secret_configuration"

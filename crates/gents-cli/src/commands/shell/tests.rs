@@ -4692,7 +4692,7 @@ async fn changing_the_default_agent_enables_it() {
     let (node, work, home) = served(config).await;
     let access = work.access();
     let scout = || async {
-        let state = gents_desktop_core::inference::load_inference_setup_state(&access, OWNER);
+        let state = gents_observe::client_inference::load_inference_setup_state(&access, OWNER);
         let agents = state.await.unwrap().agents;
         let scout = agents
             .into_iter()

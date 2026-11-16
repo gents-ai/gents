@@ -364,7 +364,7 @@ pub(super) async fn run(case: &Value) {
             .unwrap()
             .iter()
             .any(|row| row["request_id"] == "replacement-first"));
-        process_command(node, &identity, &doc_id, fixture.agent.as_ref())
+        process_command(node, &identity, &doc_id, fixture.agent.as_ref(), None)
             .await
             .unwrap();
         assert!(
@@ -402,7 +402,7 @@ pub(super) async fn run(case: &Value) {
     }
     let doc_id = persist_command(&access, &command).await;
     if start["commit"] == true {
-        process_command(node, &identity, &doc_id, fixture.agent.as_ref())
+        process_command(node, &identity, &doc_id, fixture.agent.as_ref(), None)
             .await
             .unwrap();
         let result = receipt(&access, &doc_id).await;

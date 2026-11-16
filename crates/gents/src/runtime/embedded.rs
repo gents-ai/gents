@@ -418,7 +418,7 @@ async fn trial_http(
     let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();
     let config = crate::defra_node::HttpConfig::with_listener(listener.into_std()?)?
-        .with_extra_routes(agent_identity_routes(served).merge(owner_staged.router()));
+        .with_authenticated_routes(agent_identity_routes(served).merge(owner_staged.router()));
     Ok((config, endpoint, owner_staged))
 }
 
@@ -433,8 +433,33 @@ pub fn agent_identity_routes(served: ServedNode) -> axum::Router {
     let failure = |status: StatusCode, message: &str| {
         (status, axum::Json(serde_json::json!({ "error": message }))).into_response()
     };
+    let goal = served.clone();
     let admission = served.clone();
     axum::Router::new()
+        .route(
+            gents_protocol::goal_control::APPLY_GOAL_CONTROL_PATH,
+            axum::routing::post(
+                move |identity: defra_http::ExtractIdentity,
+                      headers: axum::http::HeaderMap,
+                      axum::Json(request): axum::Json<
+                    gents_protocol::goal_control::ApplyGoalControl,
+                >| {
+                    let served = goal.clone();
+                    async move {
+                        let Some((node, runtime)) = served
+                            .get()
+                            .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
+                        else {
+                            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                        };
+                        gents_automation::goal::client_application::apply_http(
+                            &node, runtime, &identity, &headers, request,
+                        )
+                        .await
+                    }
+                },
+            ),
+        )
         .route(
             gents_protocol::agent_identity::AGENT_ADMISSION_PATH,
             axum::routing::post(
