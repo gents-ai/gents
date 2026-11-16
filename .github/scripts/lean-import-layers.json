@@ -3,13 +3,21 @@
   "root": "crates/gents/proofs",
   "layers": [
     {
+      "name": "ci",
+      "crates": [],
+      "below": [],
+      "directory": "Proofs/Ci"
+    },
+    {
       "name": "shared",
       "crates": [
         "gents-protocol",
         "gents-loop",
         "gents-claude"
       ],
-      "below": [],
+      "below": [
+        "ci"
+      ],
       "directory": "Proofs/Shared"
     },
     {
@@ -156,7 +164,8 @@
     "GenerateMailboxPolicy": "conformance",
     "GoalSessionObservationConformance": "conformance",
     "MailboxAnswerCacheConformance": "conformance",
-    "Proofs": "conformance"
+    "Proofs": "conformance",
+    "TestCacheConformance": "ci"
   },
   "placements": {
     "Proofs.Automation.Hooks.GoalFence": {

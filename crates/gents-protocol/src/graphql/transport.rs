@@ -283,6 +283,9 @@ pub fn graphql_error_is_retryable(error: &(dyn std::error::Error + 'static)) -> 
 ///
 /// Auto-commit reads must use this rather than [`graphql_error_is_retryable`]:
 /// DefraDB's HTTP handler already retried their store conflicts.
+///
+/// External premise: an HTTP transport failure is a `reqwest::Error`, which
+/// callers carry erased in the chain.
 #[cfg(feature = "native")]
 pub fn graphql_transport_error_in_chain(error: &(dyn std::error::Error + 'static)) -> bool {
     crate::error_chain::find_source::<reqwest::Error>(error)

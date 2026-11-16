@@ -542,7 +542,7 @@ impl DefraSessionHook {
             Err(error) => {
                 if let gents_session::session::message::CommitError::Other(ref error) = error {
                     if let Some(BackgroundSlotRefusal::CapacityExceeded { admitted, limit }) =
-                        error.downcast_ref::<BackgroundSlotRefusal>()
+                        BackgroundSlotRefusal::in_failure(error)
                     {
                         refuse!(
                             FailureClass::ServiceUnavailable,

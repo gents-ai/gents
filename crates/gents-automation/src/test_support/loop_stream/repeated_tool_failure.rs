@@ -21,7 +21,11 @@ impl ToolDyn for RepeatProbe {
             }
         })
     }
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             use gents_loop::tool_call_lifecycle::FailureClass;
             let args: serde_json::Value = serde_json::from_str(&args).unwrap();
@@ -100,7 +104,11 @@ impl ToolDyn for EnvelopeShapedTool {
             }
         })
     }
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let hint = if self.varying_hint { call } else { 0 };

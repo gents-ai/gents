@@ -633,6 +633,16 @@ pub async fn write_trigger_delivery_with_identity(
     create: &gents_protocol::request_admission::AgentRequestCreate,
     identity: Option<&dyn gents_store::identity::NodeIdentity>,
 ) -> Result<TaskDeliveryAdmission> {
+    Ok(admit_trigger_delivery(node, actor, prepared, create, identity).await??)
+}
+
+pub(crate) async fn admit_trigger_delivery(
+    node: &std::sync::Arc<EmbeddedNode>,
+    actor: ::identity::Did,
+    prepared: &PreparedFire,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+    identity: Option<&dyn gents_store::identity::NodeIdentity>,
+) -> Result<std::result::Result<TaskDeliveryAdmission, super::MaterializeBudgetExhausted>> {
     let identity = identity.context("trigger delivery requires a managed Agent identity")?;
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
@@ -685,7 +695,7 @@ pub async fn write_trigger_delivery_with_identity(
         })
         .await?;
     match admitted {
-        Ok(admitted) => Ok(admitted),
+        Ok(admitted) => Ok(Ok(admitted)),
         Err(stop) => {
             gents_documents::stop_trigger_for_budget(
                 node,
@@ -694,7 +704,7 @@ pub async fn write_trigger_delivery_with_identity(
                 &stop.reason,
             )
             .await?;
-            Err(stop.into())
+            Ok(Err(stop))
         }
     }
 }

@@ -30,7 +30,11 @@ impl ToolDyn for SuccessfulProbe {
             }
         })
     }
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(format!("gents_exec: {{\"ok\":true,\"duration_ms\":{call},\"hint\":\"poll {call}\"}}\nstdout:\nunchanged\nstderr:\n(empty)"))

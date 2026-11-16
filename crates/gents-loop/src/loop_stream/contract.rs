@@ -30,9 +30,22 @@ pub struct ReplayEvidenceRow {
     pub evidence: ResolvedReplayEvidence,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct ReplayEvidenceViolation(pub String);
+
+impl ReplayEvidenceViolation {
+    pub fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        gents_protocol::error_chain::find_map_source(error, |cause| {
+            cause.downcast_ref::<Self>().or_else(|| {
+                match cause.downcast_ref::<ReplayEvidenceResolveError>() {
+                    Some(ReplayEvidenceResolveError::Violation(violation)) => Some(violation),
+                    _ => None,
+                }
+            })
+        })
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReplayEvidenceResolveError {
@@ -398,6 +411,9 @@ pub struct LoopConfig {
     pub output_obligation_gate: Option<Arc<dyn OutputObligationCheck>>,
     pub folded_prompts: Vec<FoldedPrompt>,
     pub authored_input: Option<AuthoredInput>,
+    /// The envelope of the request this loop runs for: the context its
+    /// foreground tool calls are derived from.
+    pub tool_context: crate::tool::ToolCallEnvelope,
 }
 
 #[derive(Clone, Debug)]

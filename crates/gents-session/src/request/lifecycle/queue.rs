@@ -82,8 +82,8 @@ use mutation::build_session_request_at_hop_with_signer;
 #[cfg(test)]
 use mutation::session_request_create_mutation;
 use mutation::SessionRequestFields;
+pub(crate) use position::effective_slots;
 pub use position::validate_position;
-pub(crate) use position::{effective_slots, InvalidQueuePosition};
 pub use submission::{prepare_user_message_input, queue_user_message_input, UserMessageInputError};
 
 #[derive(Debug)]

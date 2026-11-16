@@ -367,7 +367,7 @@ pub async fn build_responses_client(
     service_tier: Option<crate::resolved::ServiceTier>,
     client_version: Option<&str>,
 ) -> Result<
-    rig::providers::openai::Client<
+    crate::llm::rig_compat::providers::ResponsesClient<
         ChatGptCodexHttpClient<
             DbCredentialBearer,
             crate::rendered_request::RenderedRequestCapturingHttpClient<

@@ -48,6 +48,7 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> anyhow::Result<ToolCallHookAction> {
         let (session_id, request_id, deadline_at, _seq) =
             self.ensure_assistant_turn_sequence().await?;
@@ -188,7 +189,7 @@ impl DefraSessionHook {
         let mut lifecycle = match admission {
             Ok(lifecycle) => lifecycle,
             Err(error) => {
-                match error.downcast_ref::<BackgroundSlotRefusal>() {
+                match BackgroundSlotRefusal::in_failure(&error) {
                     Some(BackgroundSlotRefusal::CapacityExceeded { admitted, limit }) => {
                         return complete_spawn_process_failure(
                             self,
@@ -311,17 +312,26 @@ impl DefraSessionHook {
         let process_tool = gents_tools::native::is_bash_tool_name(target_name);
         let process_recorder =
             executions.process_recorder(&execution_call_id, &execution_tool_doc_id);
+        let envelope = crate::call::spawned_envelope::background_envelope(
+            context,
+            crate::call::spawned_envelope::BackgroundAdmission {
+                request_id: execution_request_id.clone(),
+                deadline_at: background_deadline_at,
+                cancellation_token: cancellation_token.clone(),
+                live_output: live_output_writer.clone(),
+                session_id: execution_session_id.clone(),
+            },
+            process_recorder.clone(),
+            dispatcher.clone(),
+            process_tool,
+        );
         tokio::spawn(gents_tools::plugin::approval::carry_interactive(
             async move {
                 let execution = AssertUnwindSafe(gents_session::exec::ownership::scope_process_recorder(
                 process_recorder,
-                gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
-                    requester_did,
-                    request_node_did,
-                    request_agent_did,
-                    Some(execution_request_id.clone()),
-                    async {
+                async {
                         gents_tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+                            Some(gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(requester_did, request_node_did, request_agent_did, Some(execution_request_id.clone()))),
                             Some(background_deadline_at),
                             cancellation_token.clone(),
                             workspace,
@@ -332,8 +342,9 @@ impl DefraSessionHook {
                             true,
                             async {
                                 if process_tool {
+                                    gents_tools::runtime_context::debug_assert_ambient(&envelope);
                                     gents_loop::tool_call_lifecycle::runtime::call_tool_managed_with_cleanup(
-                                        target_tool.as_ref(), target_args, |outcome| {
+                                        target_tool.as_ref(), target_args, &envelope, |outcome| {
                                             if let Some(outcome) = outcome.filter(|outcome| gents_session::exec::ownership::native_terminal_needs_confirmation(Some(outcome))) {
                                                 executions.set_stop_receipt(&execution_call_id, &execution_tool_doc_id, crate::call::hook::RetainedStopReceipt::from_outcome(outcome));
                                             }
@@ -342,14 +353,15 @@ impl DefraSessionHook {
                                         },
                                     ).await
                                 } else {
-                                    gents_loop::tool_effects::scope(dispatcher,
-                                        gents_loop::tool_call_lifecycle::runtime::call_tool_managed(target_tool.as_ref(), target_args)).await
+                                    gents_loop::tool_effects::scope(dispatcher, async {
+                                        gents_tools::runtime_context::debug_assert_ambient(&envelope);
+                                        gents_loop::tool_call_lifecycle::runtime::call_tool_managed(target_tool.as_ref(), target_args, &envelope).await
+                                    }).await
                                 }
                             },
                         )
                         .await
                     },
-                ),
             ))
             .catch_unwind()
             .await;

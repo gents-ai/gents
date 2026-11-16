@@ -158,9 +158,9 @@ fn configuration_fingerprint_reflects_lsp_configuration() {
 
 #[test]
 fn generated_probe_request_cases_preserve_startup_failure() {
-    use gents_lean_vocab::families::backend_health_admission_probe_request as family;
+    use gents_lean_vocab::families::proofs_backend_health_await_probe_request as family;
 
-    family::replay(|input: &family::ProbeRequestInput| {
+    family::replay(|input: &family::Input| {
         let unavailable = UnavailableAgent::new(
             AgentReadinessUnavailableReason::BackendTemporarilyUnavailable,
             "backend probe pending",
@@ -171,8 +171,6 @@ fn generated_probe_request_cases_preserve_startup_failure() {
             Some(&unavailable),
             input.startup_failed.then_some("executor failed"),
         );
-        family::WaitingOutput {
-            waiting: matches!(admission, EffectiveAgentAdmission::AwaitFirstProbe),
-        }
+        matches!(admission, EffectiveAgentAdmission::AwaitFirstProbe)
     });
 }

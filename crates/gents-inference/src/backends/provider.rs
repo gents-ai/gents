@@ -33,6 +33,10 @@ pub struct ModelDiscoveryHttpError {
 }
 
 impl ModelDiscoveryHttpError {
+    pub fn in_chain(error: &anyhow::Error) -> Option<&Self> {
+        error.chain().find_map(|cause| cause.downcast_ref::<Self>())
+    }
+
     pub fn is_auth(&self) -> bool {
         matches!(self.status, 401 | 403)
     }

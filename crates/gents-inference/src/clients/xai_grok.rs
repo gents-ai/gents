@@ -5,9 +5,8 @@ use bytes::Bytes;
 use defra_node::Node as EmbeddedNode;
 use futures::StreamExt as _;
 use gents_loop::provider_patches::patch_store_false;
-use rig::http_client::{
-    self, HeaderMap, HeaderValue, Request, ReqwestClient, Response, StreamingResponse,
-};
+use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest_provider::Client as ReqwestClient;
 #[cfg(test)]
 use rig::http_client::{HttpClientExt, LazyBody, MultipartForm};
 #[cfg(test)]
@@ -20,6 +19,7 @@ use crate::auth::credential::{
     classify_oauth_auth_error, DbCredentialBearer, OAuthAuthProblem, OAuthRefreshKind,
     XAI_OAUTH_PRODUCT,
 };
+use crate::llm::rig_compat::http::{self as http_client, Request, Response, StreamingResponse};
 #[cfg(test)]
 use std::future::Future;
 
@@ -318,7 +318,7 @@ pub async fn build_responses_client(
     account_ref: Option<&str>,
     endpoint: &str,
     client_version: Option<&str>,
-) -> Result<rig::providers::openai::Client<CapturingXaiGrokOAuthHttpClient>> {
+) -> Result<crate::llm::rig_compat::providers::ResponsesClient<CapturingXaiGrokOAuthHttpClient>> {
     let headers = build_xai_grok_oauth_headers(client_version)?;
     let endpoint = normalize_endpoint(endpoint);
     let http = build_authenticated_http(node, node_did, account_ref, client_version).await?;
@@ -337,7 +337,8 @@ pub async fn build_chat_completions_client(
     account_ref: Option<&str>,
     endpoint: &str,
     client_version: Option<&str>,
-) -> Result<rig::providers::openai::CompletionsClient<CapturingXaiGrokOAuthHttpClient>> {
+) -> Result<crate::llm::rig_compat::providers::ChatCompletionsClient<CapturingXaiGrokOAuthHttpClient>>
+{
     let endpoint = normalize_endpoint(endpoint);
     let http = build_authenticated_http(node, node_did, account_ref, client_version).await?;
     crate::clients::inference_http::build_openai_chat_completions_client(

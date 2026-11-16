@@ -262,6 +262,34 @@ where
                 generation: lifecycle.execution_generation()?.to_owned(),
             })
             .map(Arc::new);
+        let tool_context = gents_tools::runtime_context::entered_with_workspace_overlay(
+            &gents_loop::tool::ToolCallEnvelope::default().with_extension(
+                gents_tools::runtime_context::ToolHostContext {
+                    workspace: Default::default(),
+                    interactive: request.execution_origin.as_deref() == Some("interactive"),
+                    approval: approval_context.clone(),
+                },
+            ),
+            workspace.clone(),
+            gents_loop::tool_call_lifecycle::runtime::ToolScopeEntry {
+                identity: Some(
+                    gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
+                        request.requester_did.clone(),
+                        Some(request.node_did.clone()),
+                        Some(agent_did.to_string()),
+                        Some(request.request_id.clone()),
+                    ),
+                ),
+                deadline_at: request_deadline,
+                cancellation_token: request_token.clone(),
+                workspace_cwd: None,
+                live_output: None,
+                session_id: Some(session_id.clone()),
+                correlation: trigger_correlation.clone(),
+                source_fields: trigger_context.source_fields.clone(),
+                background: false,
+            },
+        );
         let inference = Box::pin(async {
                 let prepared = Box::pin(self.prepare_inference(
                     prepare::InferencePreparation {
@@ -296,6 +324,8 @@ where
                     loop_prompt,
                     max_turns_provenance,
                 } = prepared?;
+                let mut loop_config = loop_config;
+                loop_config.tool_context = tool_context.clone();
                 let loop_tools = gents_loop::tool::bind_request_tools(
                     self.loop_tools.clone(),
                     lifecycle.claimed_tool_context()?,
@@ -387,12 +417,16 @@ where
                 retry_attempt = false,
             )));
 
-        let outcome = gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
-            request.requester_did.clone(),
-            Some(request.node_did.clone()),
-            Some(agent_did.to_string()),
-            Some(request.request_id.clone()),
+        let outcome =
             gents_tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+                Some(
+                    gents_loop::tool_call_lifecycle::runtime::ToolRequestIdentity::new(
+                        request.requester_did.clone(),
+                        Some(request.node_did.clone()),
+                        Some(agent_did.to_string()),
+                        Some(request.request_id.clone()),
+                    ),
+                ),
                 request_deadline,
                 request_token.clone(),
                 workspace,
@@ -405,9 +439,8 @@ where
                     request.execution_origin.as_deref() == Some("interactive"),
                     gents_tools::plugin::approval::workspace::scope(approval_context, inference),
                 ),
-            ),
-        )
-        .await;
+            )
+            .await;
 
         if let Some(error) = reviewer.take_failure() {
             return Err(error);

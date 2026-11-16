@@ -189,6 +189,7 @@ impl NativeFsRunner {
             environment,
             tool_name: Some(tool_name.to_string()),
             live_output: None,
+            process_recorder: None,
         })
         .await
         {
@@ -476,6 +477,7 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
         };
         let output = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
             None,
+            None,
             tokio_util::sync::CancellationToken::new(),
             scope.clone(),
             None,
@@ -504,6 +506,7 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
             .await
             .unwrap();
         let error = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+            None,
             None,
             tokio_util::sync::CancellationToken::new(),
             scope,

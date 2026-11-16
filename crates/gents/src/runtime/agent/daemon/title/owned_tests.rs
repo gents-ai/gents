@@ -738,6 +738,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
                     "set":{"prompt_template":"Allow the requested project changes."}
                 })
                 .to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
             .unwrap();
@@ -1424,31 +1425,14 @@ impl TitleFixture {
         )
         .await
         .unwrap();
-        let session = gents_protocol::session::AgentSession {
-            session_id: parent.session_id.clone(),
-            node_did: parent.node_did.clone(),
-            requester_did: parent.requester_did.clone(),
-            agent_did: parent.agent_did.clone(),
-            created_at: parent.created_at.clone(),
-            closed_at: None,
-            archived_at: None,
-            archive_revision: 0,
-            stopped_at: None,
-            title: None,
-            tags: vec![],
-            provenance: None,
-            observation: None,
-        };
-        let input =
-            gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
-                .unwrap();
-        agent_access
-            .write(
-                "test.title_session",
-                &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
-            )
-            .await
-            .unwrap();
+        gents_session::test_support::create_agent_owned_session_at(
+            &agent_access,
+            &parent.node_did,
+            &parent.session_id,
+            parent.requester_did.as_deref(),
+            &parent.created_at,
+        )
+        .await;
         if purpose == RequestPurpose::AccessReview {
             let mut lifecycle = RequestLifecycle::new_with_execution_binding(
                 node.clone(),

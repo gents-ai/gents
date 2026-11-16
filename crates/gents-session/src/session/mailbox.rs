@@ -702,13 +702,18 @@ impl gents_loop::tool::Tool for MailboxCreateTool {
         }
     }
 
-    async fn call(&self, _args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> std::result::Result<Self::Output, Self::Error> {
         Err(anyhow::anyhow!("file_mailbox_item requires an admitted request context").into())
     }
 
     async fn call_with_request(
         &self,
         args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
         request: &gents_loop::tool::ToolRequestContext,
     ) -> std::result::Result<Self::Output, Self::Error> {
         let admitted = request

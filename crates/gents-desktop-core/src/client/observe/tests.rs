@@ -558,10 +558,12 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
     assert!(hidden["data"]["Node"].as_array().unwrap().is_empty());
     set_proxy_online(&proxy_commands, true).await;
     wait_for_name(&store, None).await;
+    // A hidden selected root is refused, not connected (Lean
+    // `missing_selected_root_is_not_connected`).
     wait_for_connection(
         &store,
         runtime_identity.did(),
-        RuntimeConnectionStatus::Connected,
+        RuntimeConnectionStatus::Refused,
     )
     .await;
     owner
@@ -577,10 +579,12 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
         .await
         .unwrap();
     wait_for_name(&store, None).await;
-    assert_eq!(
-        store.runtime_connection(runtime_identity.did()),
-        Some(RuntimeConnectionStatus::Connected)
-    );
+    wait_for_connection(
+        &store,
+        runtime_identity.did(),
+        RuntimeConnectionStatus::Refused,
+    )
+    .await;
     assert!(handle.metrics_snapshot().events_received >= 2);
     handle.shutdown().await;
     drop(proxy_commands);
