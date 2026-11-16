@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use crate::support::agent_requests::{RequestActors, RequestSeed};
 use crate::support::fixtures::bind_managed_agent_backend;
-use crate::support::fixtures::set_managed_agent_max_request_retries;
 use crate::support::fixtures::configure_agent_tools;
+use crate::support::fixtures::set_managed_agent_max_request_retries;
 use crate::support::live_inference::rows_when;
 use crate::support::{
     accepted_turn::{boot_prepared_accepted_turn, PreparedAcceptedTurn},
@@ -505,8 +505,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     .await;
     // A lineage budget above the wake's prior attempts keeps the failed wake
     // eligible, so it waits in its persisted backoff.
-    set_managed_agent_max_request_retries(&db, &actors.fixture, "wake-backoff-execution", 6)
-        .await;
+    set_managed_agent_max_request_retries(&db, &actors.fixture, "wake-backoff-execution", 6).await;
     actors
         .set_session_title(
             session_id,
