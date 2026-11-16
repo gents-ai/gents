@@ -637,15 +637,15 @@ describe("the switches for plugins' notifications", () => {
     expect(await screen.findByText("Blocked by the system")).toBeInTheDocument();
     /* on the app's own row, and again beside the packs' kinds */
     expect(screen.getAllByText(SYSTEM_BLOCKED)).toHaveLength(2);
-    view.unmount();
     permission.mockResolvedValue("granted");
-    render(<NotificationsGroup />);
+    fireEvent(window, new Event("focus"));
     await vi.waitFor(() =>
       expect(
         screen.getByRole("button", { name: "Send a test notification" }),
       ).toBeEnabled(),
     );
     expect(screen.queryByText("Blocked by the system")).toBeNull();
+    view.unmount();
     vi.restoreAllMocks();
   });
 
