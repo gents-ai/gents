@@ -312,7 +312,7 @@ async fn goal_provenance_cases() -> GoalProvenance {
             .unwrap();
         if !omit_receipt {
             // The receipt's links are staged with it, as its owner publishes
-            // them; an Agent holds no `get-collection` outside a transaction.
+            // them.
             agent_access.transact_write("goal_provenance.receipt", |txn| Box::pin(async {
                 let result = txn.execute_with_variables(
                     "mutation($input: AgentSessionGoalReceiptMutationInputArg!) { create_AgentSessionGoalReceipt(input: $input) { _docID } }",

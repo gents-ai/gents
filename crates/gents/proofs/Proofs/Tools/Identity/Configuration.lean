@@ -1554,10 +1554,25 @@ theorem projection_binding_revoked_parent_loses_inherited_control :
      Household.allowed 5 revoked "creator" "configuration" "binding" "update"] =
     [false, false, true] := by native_decide
 
+/-- The theorem above is the document policy's answer. What a read observes
+differs for one actor: `runtime` is the hosting node key, which reads past
+document ACP (`Household.nativeRead`), so revoking the binding's parent hides
+it from the Node's user and leaves it readable by the hosting runtime. The
+runtime's update stays refused by document ACP. -/
+theorem projection_binding_revoked_parent_still_read_by_hosting_runtime :
+    let revoked := apply projectionBindingFixture
+      (.revoke ⟨"configuration", "binding", "parent", .object "nodes" "node"⟩)
+    [Household.nativeRead false 5 revoked "user" "configuration" "binding",
+     Household.nativeRead true 5 revoked "runtime" "configuration" "binding",
+     Household.nativeRead false 5 revoked "outsider" "configuration" "binding",
+     Household.allowed 5 revoked "runtime" "configuration" "binding" "update"] =
+    [false, true, false, false] := by native_decide
+
 /-- An Agent-authored data-plane pairing overlay remains owned by that Agent on
 its own `application_pairings` resource. The user administers it through the
-Node parent, and the runtime reads it via the Node's explicit runtime-reader
-grant. An Agent's sibling has no access. -/
+Node parent, and document ACP grants the runtime read via the Node's explicit
+runtime-reader grant; the hosting runtime's node key reads it regardless
+(`Household.nativeRead`). An Agent's sibling has no access. -/
 def agentPairingFixture : State :=
   { objects := [⟨"nodes", "node", "user"⟩, ⟨"application_pairings", "overlay", "agent"⟩],
     relations := [⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩,
@@ -1908,8 +1923,14 @@ theorem agent_created_configuration_retains_creator (state : State)
       ⟨resource, id, agent⟩ :: state.objects := by
   simp [apply, directCreate, fresh]
 
-/-- A runtime reads the user-owned Node and its Agents through its own
-explicit reader grant. The grant conveys no administration or session access. -/
+/-- Document ACP grants a runtime read of the user-owned Node and its Agents
+through its own explicit reader grant, which conveys no administration or
+session access. That is the whole of what a runtime other than the hosting one
+reads, and it is what the hosting runtime may update. The hosting runtime's
+node key additionally reads every document on its node past document ACP
+(`Household.nativeRead`), so the three theorems below bound its writes and
+another runtime's reads, not its own reads
+(`hosting_runtime_reads_without_reader_grant`). -/
 def runtimeReadFixture : State :=
   { objects := [⟨"nodes", "node", "user"⟩, ⟨"agents", "agent", "user"⟩,
       ⟨"sessions", "session", "user"⟩],
@@ -1935,6 +1956,20 @@ theorem unlinked_agent_is_not_visible_to_runtime :
     Household.allowed 5 { runtimeReadFixture with
       relations := [⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩] }
       "runtime" "agents" "agent" "read" = false := by native_decide
+
+/-- With its reader grant revoked, the hosting runtime still reads the Node,
+its Agents and the session the grant never reached; a runtime that does not
+host the node reads none of them. -/
+theorem hosting_runtime_reads_without_reader_grant :
+    let revoked := apply runtimeReadFixture
+      (.revoke ⟨"nodes", "node", "runtime_reader", .actor "runtime"⟩)
+    [Household.nativeRead true 5 revoked "runtime" "nodes" "node",
+     Household.nativeRead true 5 revoked "runtime" "agents" "agent",
+     Household.nativeRead true 5 revoked "runtime" "sessions" "session",
+     Household.nativeRead false 5 revoked "runtime" "nodes" "node",
+     Household.nativeRead false 5 revoked "runtime" "agents" "agent",
+     Household.nativeRead false 5 revoked "runtime" "sessions" "session"] =
+    [true, true, true, false, false, false] := by native_decide
 
 /-- The desktop User, its key custody, and its P2P identity belong to the
 client, independently of a managed runtime's Node identity. A runtime or

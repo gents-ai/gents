@@ -595,8 +595,14 @@ structure ReplicaReads where
   outsiderRead : Bool
   deriving ToJson
 
+/-- `runtime` in this scenario is the receiving node's own key, which reads
+past document ACP (`Household.nativeRead`); the other actors read what document
+ACP grants. -/
+def replicaHostRead (i : ReplicaInput) (collection document : String) : Bool :=
+  nativeRead true 5 (replicaState i.name) "runtime" collection document
+
 def replicaReads (i : ReplicaInput) : ReplicaReads :=
-  { runtimeRead := replicaRead i "runtime" "enrollment_records" "remote"
+  { runtimeRead := replicaHostRead i "enrollment_records" "remote"
     userRead := replicaRead i "user" "enrollment_records" "remote"
     agentRead := replicaRead i "agent" "enrollment_records" "remote"
     outsiderRead := replicaRead i "outsider" "enrollment_records" "remote" }
@@ -625,11 +631,12 @@ structure AppRead where
   deriving ToJson
 
 /-- The replicated enrollment scenario creates a private application session
-only after the revoked parent is repaired. -/
+only after the revoked parent is repaired. Document ACP grants the receiving
+runtime nothing on it; it reads it as the hosting node key. -/
 @[conformance_family]
 def replicaGrantAppRead : Family ReplicaInput AppRead where
   inputs := replicaInputs.filter (·.name = "after-repair")
-  model := fun i => { appRead := replicaRead i "runtime" "children" "application" }
+  model := fun i => { appRead := replicaHostRead i "children" "application" }
 
 structure ReplicaPending where
   pending : Bool
@@ -669,7 +676,7 @@ def replicaGrantUnreached : Family ReplicaInput ReplicaGrant where
     { runtimeRead := (replicaReads i).runtimeRead, userRead := (replicaReads i).userRead
       userWrite := allowed 5 (replicaState i.name) "user" "enrollment_records" "remote" "update"
       agentRead := (replicaReads i).agentRead, outsiderRead := (replicaReads i).outsiderRead
-      appRead := replicaRead i "runtime" "children" "application"
+      appRead := replicaHostRead i "children" "application"
       pending := (replicaPendingRelation i).pending }
 
 end Conformance.IdentityOperations

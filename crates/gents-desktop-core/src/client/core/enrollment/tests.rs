@@ -2904,11 +2904,30 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
             })
         })
         .await?;
-    assert!(gents_protocol::graphql::graphql_rows_from_response(
-        &client.execute(&query).await?,
-        "NetworkEnrollmentDecision"
-    )
-    .is_empty());
+    // The client is its own store's node key: document ACP no longer grants it
+    // the decision, and it reads it as the hosting key
+    // (Lean `Conformance.ClientTransport.revokedReader`).
+    use gents_lean_vocab::families::client_transport_revoked_reader::RevokedReaderOutput;
+    let mut revoked_reads = std::collections::BTreeMap::new();
+    revoked_reads.insert(
+        false,
+        RevokedReaderOutput {
+            document_acp: acp
+                .check_doc_access(
+                    &AcpIdentity::Authenticated(client_did.clone()),
+                    DocumentPermission::Read,
+                    policy,
+                    "enrollment_records",
+                    &doc,
+                )
+                .await?,
+            host_read: !gents_protocol::graphql::graphql_rows_from_response(
+                &client.execute(&query).await?,
+                "NetworkEnrollmentDecision",
+            )
+            .is_empty(),
+        },
+    );
     drop(acp);
     drop(client);
     receiver.shutdown().await?;
@@ -2921,12 +2940,34 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
         .await?,
     );
     assert_eq!(reopened.node_identity().did(), client_did.as_str());
-    let reopened_access = ConfigAccess::local_as(reopened.node_arc(), client_did);
-    assert!(gents_protocol::graphql::graphql_rows_from_response(
-        &reopened_access.execute(&query).await?,
-        "NetworkEnrollmentDecision"
-    )
-    .is_empty());
+    let reopened_access = ConfigAccess::local_as(reopened.node_arc(), client_did.clone());
+    revoked_reads.insert(
+        true,
+        RevokedReaderOutput {
+            document_acp: reopened
+                .node
+                .document_acp()
+                .check_doc_access(
+                    &AcpIdentity::Authenticated(client_did),
+                    DocumentPermission::Read,
+                    policy,
+                    "enrollment_records",
+                    &doc,
+                )
+                .await?,
+            host_read: !gents_protocol::graphql::graphql_rows_from_response(
+                &reopened_access.execute(&query).await?,
+                "NetworkEnrollmentDecision",
+            )
+            .is_empty(),
+        },
+    );
+    for case in gents_lean_vocab::families::client_transport_revoked_reader::cases() {
+        let observed = revoked_reads
+            .remove(&case.input.reopened)
+            .ok_or_else(|| anyhow::anyhow!("the revoked reader was not observed"))?;
+        case.check(observed);
+    }
     assert_eq!(
         reopened
             .node

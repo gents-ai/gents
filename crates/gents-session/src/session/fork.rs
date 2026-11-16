@@ -289,10 +289,8 @@ async fn link_fork_children(
         );
         let agent = identity::Did::new(agent_did)?;
         let update = format!("update_{collection}");
-        // The creator grants and marks in one native transaction
-        // (`Identity.SessionChild.recoverSessionChild`); outside a transaction
-        // native relationship changes also require `get-collection`, which an
-        // Agent creator does not hold.
+        // The creator grants and marks in one native transaction, so neither
+        // commits without the other (`Identity.SessionChild.recoverSessionChild`).
         // Grants and the marker update guarded on parent_linked = false are all
         // in the transaction, so a confirmed conflict is rebuilt.
         access.transact_signed_conflict_rebuild("session.mark_fork_parent_linked", |txn| {
