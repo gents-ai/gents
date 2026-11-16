@@ -1,6 +1,11 @@
 pub mod acp_policies;
+#[cfg(unix)]
+mod executable_script;
 pub mod relationships;
 pub mod wire_database;
+
+#[cfg(unix)]
+pub use executable_script::write_executable_script;
 
 pub fn attach_node_extensions(
     node: &std::sync::Arc<defra_node::Node>,

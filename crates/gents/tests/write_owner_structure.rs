@@ -2084,6 +2084,205 @@ fn ambient_context_counts_statics_outside_test_items() {
     assert_eq!(ambient_context_sites(&syntax), 3);
 }
 
+/// Functions that write a file with `fs::write` and then give that path an
+/// exec bit. Linux execve refuses a file any process holds open for writing
+/// (ETXTBSY), and a concurrent test's spawn copies this process's write
+/// descriptor into its child until that child execs, even with O_CLOEXEC
+/// (`tla/ScriptFixtureExec.tla`). A static script is checked in; a generated
+/// one goes through `gents_store::test_support::write_executable_script`.
+/// Entries name why each remaining site never executes the file; the list
+/// only shrinks.
+#[rustfmt::skip]
+const EXECUTABLE_WRITE_ALLOWLIST: &[(&str, usize, &str)] = &[
+    ("crates/gents-tools/src/native/file_tools/change_capture/tests.rs", 1, "reads the mode back as an observation; never executes the file"),
+];
+
+#[derive(Default)]
+struct ExecutableWriteScan {
+    written: BTreeSet<String>,
+    permitted: Vec<String>,
+    executable_mode: bool,
+}
+
+fn path_argument_key(expression: &Expr) -> String {
+    match expression {
+        Expr::Reference(reference) => path_argument_key(&reference.expr),
+        Expr::Paren(inner) => path_argument_key(&inner.expr),
+        other => quote::ToTokens::to_token_stream(other).to_string(),
+    }
+}
+
+fn executable_literal(expression: &Expr) -> bool {
+    matches!(
+        expression,
+        Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(literal), .. })
+            if literal.base10_parse::<u32>().is_ok_and(|mode| mode & 0o111 != 0)
+    )
+}
+
+impl<'ast> Visit<'ast> for ExecutableWriteScan {
+    fn visit_item_fn(&mut self, _: &'ast ItemFn) {}
+
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if let Expr::Path(path) = call.func.as_ref() {
+            let segments = path
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>();
+            let first = call.args.first();
+            match segments.as_slice() {
+                [.., fs, write] if fs == "fs" && write == "write" => {
+                    self.written.extend(first.map(path_argument_key));
+                }
+                [.., set] if set == "set_permissions" => {
+                    self.permitted.extend(first.map(path_argument_key));
+                }
+                [.., from_mode] if from_mode == "from_mode" => {
+                    self.executable_mode |= first.is_some_and(executable_literal);
+                }
+                _ => {}
+            }
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
+        if call.method == "set_mode" {
+            self.executable_mode |= call.args.first().is_some_and(executable_literal);
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+#[derive(Default)]
+struct ExecutableWriteVisitor {
+    sites: usize,
+}
+
+impl ExecutableWriteVisitor {
+    fn scan(&mut self, block: &syn::Block) {
+        let mut scan = ExecutableWriteScan::default();
+        scan.visit_block(block);
+        if scan.executable_mode
+            && scan
+                .permitted
+                .iter()
+                .any(|path| scan.written.contains(path))
+        {
+            self.sites += 1;
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ExecutableWriteVisitor {
+    fn visit_item_fn(&mut self, function: &'ast ItemFn) {
+        self.scan(&function.block);
+        visit::visit_item_fn(self, function);
+    }
+
+    fn visit_impl_item_fn(&mut self, function: &'ast syn::ImplItemFn) {
+        self.scan(&function.block);
+        visit::visit_impl_item_fn(self, function);
+    }
+}
+
+fn executable_write_sites(syntax: &syn::File) -> usize {
+    let mut visitor = ExecutableWriteVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+#[test]
+fn executables_are_never_written_in_process() {
+    let root = repo_root();
+    let mut sources = Vec::new();
+    for directory in ["crates", "apps"] {
+        all_rust_sources(&root.join(directory), &mut sources);
+    }
+    let actual = sources
+        .into_iter()
+        .filter_map(|path| {
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            let syntax = syn::parse_file(&source)
+                .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()));
+            let sites = executable_write_sites(&syntax);
+            (sites > 0).then(|| {
+                let relative = path
+                    .strip_prefix(&root)
+                    .expect("source under repo root")
+                    .to_string_lossy()
+                    .into_owned();
+                (relative, sites)
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
+    let allowed = EXECUTABLE_WRITE_ALLOWLIST
+        .iter()
+        .map(|(path, count, _)| (path.to_string(), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let found = actual.get(path).copied().unwrap_or_default();
+        match allowed.get(path).copied() {
+            None => violations.push(format!(
+                "{path}: {found} function(s) write a file and then make it executable; check in a static script or use gents_store::test_support::write_executable_script"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{path}: {found} in-process executable writes exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{path}: {found} in-process executable writes; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "executable write ratchet failed:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn executable_write_fence_pairs_a_write_with_an_exec_bit_on_its_path() {
+    for (source, sites) in [
+        (
+            "fn f() { std::fs::write(&p, b\"x\").unwrap(); std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap(); }",
+            1,
+        ),
+        (
+            "fn f() { fs::write(&p, b\"x\")?; let mut m = fs::metadata(&p)?.permissions(); m.set_mode(0o700); fs::set_permissions(p, m)?; }",
+            1,
+        ),
+        (
+            "fn f() { let stub = |body: &str| { std::fs::write(&b, body).unwrap(); std::fs::set_permissions(&b, Permissions::from_mode(0o751)).unwrap(); }; }",
+            1,
+        ),
+        (
+            "impl S { fn f(&self) { fs::write(&p, b\"x\")?; fs::set_permissions(&p, Permissions::from_mode(0o755))?; } }",
+            1,
+        ),
+        (
+            "fn f() { std::fs::write(&p, b\"x\").unwrap(); std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap(); }",
+            0,
+        ),
+        (
+            "fn f() { std::fs::write(&p.join(\"a\"), b\"x\").unwrap(); std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap(); }",
+            0,
+        ),
+        (
+            "fn f() { write_executable_script(&p, \"#!/bin/sh\\n\").unwrap(); }",
+            0,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(executable_write_sites(&syntax), sites, "{source}");
+    }
+}
+
 /// Owner and library interfaces: the seams where callers decide behavior by
 /// which failure occurred. They return module-owned `thiserror` enums and
 /// classifiers match those enums; application code may use `anyhow`.
