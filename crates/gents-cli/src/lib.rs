@@ -708,6 +708,12 @@ async fn resolve_config_access_inner(
             .await?
         }
     };
+    let endpoint = endpoint.with_reported_delegation_audience(
+        gents_store::local::document_acp::status_reports(
+            config.document_acp,
+            gents_store::local::document_acp::node_delegation_audience(&node),
+        ),
+    )?;
     let migration_node = node.clone();
     let access = ConfigAccess::claimed_local_as(
         node.clone(),

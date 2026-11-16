@@ -189,3 +189,16 @@ fn the_reported_delegation_audience_matches_the_lean_model() {
         },
     );
 }
+
+#[test]
+fn signing_with_a_held_user_key_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_user_delegation_runtime_signs_with_held_user_key::replay::<
+        Provider,
+    >(
+        |input| match super::runtime_signs_with_held_user_key(document_acp(input.provider)) {
+            Ok(()) => true,
+            Err(DocumentAcpError::HeldUserKey) => false,
+            Err(error) => panic!("{error}"),
+        },
+    );
+}

@@ -74,6 +74,11 @@ pub enum DocumentAcpError {
     )]
     NotYetUsable,
     #[error(
+        "this home decides document access through Vera, where the runtime never signs with a \
+         User key; wire the plugin from the client that holds the key"
+    )]
+    HeldUserKey,
+    #[error(
         "this home's embedded Vera deployment was created under a different {what} than this \
          Gents build and node identity give it; open the home with the Gents version that \
          created it"
@@ -118,6 +123,7 @@ impl DocumentAcpError {
             | Self::Unavailable
             | Self::NodeKeyCannotSign { .. }
             | Self::NotYetUsable
+            | Self::HeldUserKey
             | Self::Inspect { .. } => None,
         }
     }
@@ -135,6 +141,15 @@ pub fn status_reports(
         (DocumentAcp::Local, _) => ReportedDelegationAudience::Absent,
         (DocumentAcp::Vera, Some(audience)) => ReportedDelegationAudience::Named(audience),
         (DocumentAcp::Vera, None) => ReportedDelegationAudience::Unavailable,
+    }
+}
+
+/// Whether the runtime may sign a pack's effects with a User key kept in its
+/// home (`Identity.UserDelegation.runtimeSignsWithHeldUserKey`).
+pub fn runtime_signs_with_held_user_key(provider: DocumentAcp) -> Result<()> {
+    match provider {
+        DocumentAcp::Local => Ok(()),
+        DocumentAcp::Vera => Err(DocumentAcpError::HeldUserKey),
     }
 }
 

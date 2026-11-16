@@ -273,11 +273,11 @@ pub async fn resolve_graphql_endpoint(
                 && url.fragment().is_none(),
             "GraphQL endpoint must be an HTTP URL without credentials, query or fragment"
         );
-        return client_signed_endpoint(graphql, &identity);
+        return client_signed_endpoint(graphql, &identity).await;
     }
 
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
-        return home_endpoint_as(&home_dir, runtime_state.graphql, &identity);
+        return home_endpoint_as(&home_dir, runtime_state.graphql, &identity).await;
     }
 
     anyhow::ensure!(
@@ -292,6 +292,7 @@ pub async fn resolve_graphql_endpoint(
         format!("http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql"),
         &identity,
     )
+    .await
 }
 
 /// Client document access retains the user's identity. Credentials remain bound to
@@ -309,10 +310,10 @@ async fn home_graphql_endpoint_with_paths(
     paths: &gents_desktop_core::client::DesktopPaths,
 ) -> Result<GraphqlEndpoint> {
     let identity = client_identity_in(home_dir, paths).await?;
-    home_endpoint_as(home_dir, url, &identity)
+    home_endpoint_as(home_dir, url, &identity).await
 }
 
-fn home_endpoint_as(
+async fn home_endpoint_as(
     home_dir: &Path,
     url: impl Into<String>,
     identity: &gents_desktop_core::client::PrincipalIdentity,
@@ -322,21 +323,30 @@ fn home_endpoint_as(
         endpoint_serves_home(home_dir, &url),
         "endpoint is not this home's runtime"
     );
-    client_signed_endpoint(url, identity)
+    client_signed_endpoint(url, identity).await
 }
 
-fn client_signed_endpoint(
+/// The endpoint mints for the audience its runtime's public status reports.
+/// A runtime that does not answer reports nothing, and a request to it fails
+/// before any credential is read.
+async fn client_signed_endpoint(
     url: impl Into<String>,
     identity: &gents_desktop_core::client::PrincipalIdentity,
 ) -> Result<GraphqlEndpoint> {
+    let url = url.into();
     let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         identity.private_key_bytes(),
     )?;
-    Ok(gents::runtime::lifecycle_hooks::compose_endpoint(
-        GraphqlEndpoint::as_principal(url, identity.did())
-            .with_client_signing_capability(capability)?
-            .with_client_signed_agent_creates(),
-    )?)
+    let endpoint = GraphqlEndpoint::as_principal(&url, identity.did())
+        .with_client_signing_capability(capability)?
+        .with_client_signed_agent_creates();
+    let endpoint = match crate::repair::serving_status(&url).await {
+        Some(status) => endpoint.with_reported_delegation_audience(
+            gents_protocol::delegation_audience::ReportedDelegationAudience::observe(&status),
+        )?,
+        None => endpoint,
+    };
+    Ok(gents::runtime::lifecycle_hooks::compose_endpoint(endpoint)?)
 }
 
 /// The CLI is a separate client principal, even when desktop and CLI share a user home.

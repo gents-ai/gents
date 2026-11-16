@@ -731,6 +731,10 @@ async fn serve_foreground(
         activation_rx,
         replicated_schema.clone(),
         serve_lifecycle.clone(),
+        init_config
+            .as_ref()
+            .map(|config| config.document_acp)
+            .unwrap_or_default(),
     );
     let scrape_state = runtime_routers.scrape_state;
     let owner_staged = gents_store::config_client::OwnerStagedRoute::new();

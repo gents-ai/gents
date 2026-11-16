@@ -299,9 +299,11 @@ impl GraphqlEndpoint {
         Ok(capability)
     }
 
-    /// Hold the delegation audience the endpoint's node reported, so that a
-    /// held key mints a Vera delegation for it; a node that reports none
-    /// keeps the identity token (`Identity.UserDelegation.resolve`).
+    /// Hold the delegation audience the endpoint's node reported in its
+    /// status, so that a held key mints a Vera delegation for it; a node that
+    /// reports none keeps the identity token
+    /// (`Identity.UserDelegation.resolve`). An endpoint is resolved when it
+    /// is built and again after its node refuses its credential.
     pub fn with_reported_delegation_audience(
         mut self,
         reported: gents_protocol::delegation_audience::ReportedDelegationAudience,
@@ -313,13 +315,6 @@ impl GraphqlEndpoint {
             Reported::Unavailable => return Err(DelegationError::AudienceUnavailable.into()),
         };
         Ok(self)
-    }
-
-    /// Read the node's public status and hold what it reports. An endpoint is
-    /// resolved when it is built and again after its node refuses it.
-    pub async fn resolving_delegation_audience(self) -> Result<Self> {
-        let reported = delegation::reported(&self).await?;
-        self.with_reported_delegation_audience(reported)
     }
 
     /// Bind the existing client actor to one runtime-hosted pack interpreter.

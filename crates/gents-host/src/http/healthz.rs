@@ -223,6 +223,7 @@ mod tests {
             activation_observation,
             replicated_schema: Default::default(),
             serve_lifecycle: Default::default(),
+            document_acp: Default::default(),
         }
     }
 
