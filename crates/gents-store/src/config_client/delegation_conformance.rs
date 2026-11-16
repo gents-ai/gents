@@ -41,7 +41,6 @@ enum Resolution {
 }
 
 fn held_key() -> ClientSigningCapability {
-    use crate::identity::NodeIdentity as _;
     let keys = tempfile::tempdir().unwrap();
     crate::identity::KeyIdentity::load_or_create(keys.path().join("user.key"), None)
         .unwrap()

@@ -191,7 +191,7 @@ pub struct GraphqlEndpoint {
     delegated_authorization: Option<reqwest::header::HeaderValue>,
     client_signed_agent_creates: bool,
     client_signing_capability: Option<ClientSigningCapability>,
-    delegation_audience: Option<gents_protocol::delegation_audience::DelegationAudience>,
+    delegation_audience: Option<Arc<gents_protocol::delegation_audience::DelegationAudience>>,
     pack_replay: Option<pack_effect::PackReplayHandle>,
     extensions: crate::node_extension::Extensions,
 }
@@ -311,7 +311,7 @@ impl GraphqlEndpoint {
         use gents_protocol::delegation_audience::ReportedDelegationAudience as Reported;
         self.delegation_audience = match reported {
             Reported::Absent => None,
-            Reported::Named(audience) => Some(audience),
+            Reported::Named(audience) => Some(Arc::new(audience)),
             Reported::Unavailable => return Err(DelegationError::AudienceUnavailable.into()),
         };
         Ok(self)

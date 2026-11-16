@@ -17,9 +17,10 @@ third-party = [
     { name = "defra-node", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "3e873f44600290107c8a22f0b34f46883a0f2c22" },
 ]
 
-# The Vera crates behind the opt-in `embedded-vera` feature. Left in, their
-# feature sets would be unified into every test build. The revision is the
-# DefraDB pin in Cargo.toml.
+# The Vera crates. `vera-embedded` and `vera-node` are behind the opt-in `vera`
+# feature; DefraDB's `vera` client is in every build, since a client mints its
+# delegations with it. Left in, their feature sets would be unified into every
+# test build. The revision is the DefraDB pin in Cargo.toml.
 [traversal-excludes]
 third-party = [
     { name = "vera-embedded", git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "3e873f44600290107c8a22f0b34f46883a0f2c22" },
