@@ -358,6 +358,7 @@ async fn http_non_admin_tools_writer_cannot_grant_managed_agent_schema_authority
 
 #[tokio::test]
 async fn user_signed_configuration_cannot_grant_schema_to_foreign_identity() -> anyhow::Result<()> {
+    use anyhow::Context as _;
     use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
     use serde_json::json;
 
@@ -484,13 +485,9 @@ async fn user_signed_configuration_cannot_grant_schema_to_foreign_identity() -> 
                 })
             })
         };
-        let user_create_refused = match user_create().await {
-            Ok(_) => false,
-            Err(denied) if denied.is_permission_denied() => true,
-            Err(error) => return Err(error.into()),
-        };
-        if user_create_refused {
-            if !legacy_installed {
+        let mut user_creates_refused = Vec::new();
+        for held in &input.creator_held_steps {
+            if held.iter().any(|held| held == "patch-collection") && !legacy_installed {
                 legacy_installed = true;
                 let projector = ToolPermissionProjection::new(
                     Arc::new(gents_store::identity::KeyIdentity::load_or_create(
@@ -523,19 +520,32 @@ async fn user_signed_configuration_cannot_grant_schema_to_foreign_identity() -> 
                 }
                 drop(view);
                 txn.commit().await?;
-                assert!(
-                    node.nac_manager()
-                        .check_permission(&user_did, NodePermission::CollectionPatch)
-                        .await?
-                );
                 owner
                     .grant_node_permission(&user_did, NodePermission::CollectionPatch)
                     .await?;
             }
-            let denied = user_create().await.expect_err(
-                "a non-admin cannot revoke the legacy source or grant the managed Agent",
-            );
-            assert!(denied.is_permission_denied(), "{denied:?}");
+            for permission in held {
+                let native = NodePermission::parse(permission)
+                    .with_context(|| format!("modeled creator permission {permission}"))?;
+                anyhow::ensure!(
+                    node.nac_manager()
+                        .check_permission(&user_did, native)
+                        .await?,
+                    "the creating User must hold {permission}: {input:?}"
+                );
+            }
+            let refused = match user_create().await {
+                Ok(_) => false,
+                Err(denied) if denied.is_permission_denied() => true,
+                Err(error) => return Err(error.into()),
+            };
+            user_creates_refused.push(refused);
+            if !refused {
+                break;
+            }
+        }
+        let user_create_refused = user_creates_refused.last().copied().unwrap_or_default();
+        if user_create_refused {
             assert!(projected(&subjects).await?.iter().all(|granted| !granted));
             let stored = owner
                 .execute(&format!(
@@ -574,11 +584,14 @@ async fn user_signed_configuration_cannot_grant_schema_to_foreign_identity() -> 
         case.check(
             gents_lean_vocab::families::household_managed_tool_identity::ManagedIdentityOutcome {
                 granted: uniform,
-                user_create_refused,
+                user_creates_refused,
             },
         );
     }
-    assert!(legacy_installed, "no Agent create was refused");
+    assert!(
+        legacy_installed,
+        "no modeled creator held patch-collection through the legacy source"
+    );
     assert!(
         node.nac_manager()
             .check_permission(&user_did, NodePermission::CollectionPatch)

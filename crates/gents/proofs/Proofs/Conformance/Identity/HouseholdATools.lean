@@ -114,15 +114,26 @@ structure ManagedIdentityInput where
   derivedCreation : Option String
   nodeKey : String
   creationNonce : Option String
+  /-- The native permissions the creating User holds at each of its create
+  attempts; the attempts stop at the first that commits. -/
+  creatorHeldSteps : List (List String)
   deriving ToJson
+
+/-- The creating User's direct grants in the served scenario. -/
+def creatorBaseHeld : List String := ["get-collection", "read-document", "update-document"]
+
+/-- The User first creates with its direct grants, then again once a legacy
+tool source and a direct grant also give it `patch-collection`. -/
+def servedCreatorHeldSteps : List (List String) :=
+  [creatorBaseHeld, creatorBaseHeld ++ ["patch-collection"]]
 
 def ManagedIdentityInput.ofCase : Option ClaimedDid × String × Option String → ManagedIdentityInput
   | (claimed, nodeKey, creationNonce) =>
     match claimed with
-    | some (.key name) => ⟨some name, none, none, nodeKey, creationNonce⟩
+    | some (.key name) => ⟨some name, none, none, nodeKey, creationNonce, servedCreatorHeldSteps⟩
     | some (.derived derivedNodeKey creation) =>
-      ⟨none, some derivedNodeKey, some creation, nodeKey, creationNonce⟩
-    | none => ⟨none, none, none, nodeKey, creationNonce⟩
+      ⟨none, some derivedNodeKey, some creation, nodeKey, creationNonce, servedCreatorHeldSteps⟩
+    | none => ⟨none, none, none, nodeKey, creationNonce, servedCreatorHeldSteps⟩
 
 def ManagedIdentityInput.toCase (i : ManagedIdentityInput) :
     Option ClaimedDid × String × Option String :=
@@ -139,15 +150,47 @@ def managedIdentityAllowed : Option ClaimedDid × String × Option String → Bo
 
 structure ManagedIdentityOutcome where
   granted : Bool
-  userCreateRefused : Bool
-  deriving ToJson
+  userCreatesRefused : List Bool
+  deriving ToJson, DecidableEq
 
-/-- A managed Agent needs a native tool source grant for its derived identity,
-which a non-admin User cannot make, so the User-signed create is refused
-exactly when the identity is managed. -/
+/-- The served Tools enable the schema tool, so a managed row is owed its
+permissions. -/
+def managedIdentityOwed (i : ManagedIdentityInput) : List String :=
+  match i.toCase with
+  | (claimed, nodeKey, creation) =>
+    Configuration.owedToolSourcePermissions renderedDerivation
+      ((claimed.map ClaimedDid.render).getD "") nodeKey creation Configuration.schemaToolPermissions
+
+/-- The User's create attempts, one per held set, stopping at the first that
+commits (`Configuration.agentCreateCommits`). -/
+def userCreatesRefused (owed : List String) : List (List String) → List Bool
+  | [] => []
+  | held :: rest =>
+    if Configuration.agentCreateCommits { admin := false, held } owed then [false]
+    else true :: userCreatesRefused owed rest
+
+/-- When every User attempt is refused the node owner, an administrator,
+creates the row; `granted` is whether the row's identity then holds the schema
+tool's `patch-collection` through the projection. -/
 def managedIdentityOutcome (i : ManagedIdentityInput) : ManagedIdentityOutcome :=
-  let allowed := managedIdentityAllowed i.toCase
-  { granted := allowed, userCreateRefused := allowed }
+  let owed := managedIdentityOwed i
+  let refused := userCreatesRefused owed i.creatorHeldSteps
+  let creator : GrantSets.Holder :=
+    if refused.all id then { admin := true, held := [] }
+    else { admin := false, held := (i.creatorHeldSteps.drop (refused.length - 1)).headD [] }
+  { granted := (Configuration.agentCreateGrants creator owed).contains "patch-collection"
+    userCreatesRefused := refused }
+
+/-- The served scenario's decisions: only the derived identity is owed a grant;
+its User creates are refused even once the User holds `patch-collection`,
+because adding a native relation is an administrator operation it lacks; the
+owner's create grants it. Every foreign or underived row commits on the User's
+first attempt and grants nothing. -/
+theorem managed_identity_outcomes :
+    (managedToolIdentityCases.map fun c => managedIdentityOutcome (ManagedIdentityInput.ofCase c)) =
+      [⟨true, [true, true]⟩, ⟨false, [false]⟩, ⟨false, [false]⟩, ⟨false, [false]⟩,
+       ⟨false, [false]⟩, ⟨false, [false]⟩, ⟨false, [false]⟩] := by
+  native_decide
 
 structure HealthCheckInput where
   role : String
@@ -255,8 +298,9 @@ def toolGrantorHttp : Family GrantorInput Bool where
   inputs := [⟨"writer", "writer", true⟩]
   model := grantorGrants
 
-/-- The user-signed scenario creates every refused Agent before it installs a
-legacy source for the User, so the refused cases come first. -/
+/-- The user-signed scenario installs the User's legacy source at the first
+attempt whose modeled holdings include `patch-collection`, so the rows whose
+first User attempt commits come first. -/
 @[conformance_family]
 def managedToolIdentity : Family ManagedIdentityInput ManagedIdentityOutcome where
   inputs := (managedToolIdentityCases.filter (!managedIdentityAllowed ·) ++
