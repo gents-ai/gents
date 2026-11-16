@@ -81,6 +81,7 @@ pub mod family;
 mod plugin_job_wire;
 mod session_turn_wire;
 mod title;
+pub mod tla;
 
 /// Family types generated from `families.schema.json`, which Lean emits.
 pub mod families {

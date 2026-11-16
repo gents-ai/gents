@@ -1,4 +1,5 @@
 import Proofs.Conformance.Family
+import Proofs.Session.AgentSession
 import Proofs.Session.Client.Types
 import Proofs.Session.CommandPolicy.ArtifactAuthority
 import Proofs.Session.CommandPolicy.Sandbox
@@ -14,6 +15,14 @@ deriving instance Lean.ToJson for ClientTurnState
 deriving instance Lean.ToJson for RequestState
 
 attribute [conformance_function] ClientTurnState.isTerminal
+
+namespace AgentSession
+
+deriving instance Lean.ToJson for KeyOrder
+
+attribute [conformance_function] newerByKeys
+
+end AgentSession
 
 namespace CommandPolicy
 

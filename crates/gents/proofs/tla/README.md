@@ -7,7 +7,7 @@ See `../README.md` for how this fits the broader formal-verification model.
 ## Specs
 
 - `PairingTransport` — connection establishment + replication liveness for one directed pairing edge, the transport layer below the reconciler. The Lean `PairingReconcile` model assumes the transport carries the install RPC / that `connect` succeeds; it does not model *establishing* the link, so the live #511 fleet hang was outside the modeled world. This spec closes that gap. It distinguishes the **three real failure modes** (grounded in the production code) with two independent BOOLEAN constants — `Dialable` (the connect-gate ticket form) and `ReplicatorInstallable` (whether `add_replicator` can succeed once connected) — exercised by a **three-config diagnostic**: `MCPairingTransportDialable` (both true: the shareable-address fix — all properties hold); `MCPairingTransportUndialable` (MODE A — `Dialable = FALSE`: connect-fails-first, the *literal* #511 hang, never reaches `Connected` so nothing subscribes and no applied row is written); `MCPairingTransportReplicatorStuck` (MODE B/C — `ReplicatorInstallable = FALSE`: connect OK and collections subscribe but the replicator install never succeeds — the durable "subscribed collections, `replicator_addresses` null" partial row). Companion to the Lean `PairingReconcile` `dialFailed` (MODE A) and `reconcileInstallReplicatorFailed` (MODE B/C) transitions and the `convergence_requires_successful_install` obligation.
-- `P2PBackpressure` — hub fan-in/fan-out admission **obligation** model for #630, not a multi-wave flood-safety proof. `PairingTransport` proves a single edge can connect/install; this model starts after that. Its one-wave necessity obligations say outbound timeouts release push-worker slots and inbound success acks are backed by modeled pending registration or merge. The pinned DefraDB implementation has since added bounded queue admission before worker execution, per-peer scheduling/coalescing, persisted retry handoff on overflow, and durable push-originated pending-DAG recovery. Those multi-wave and restart properties, plus Bitswap stalls, rate limits, gossip-loop health, multi-slow-peer fill, and peer-vs-CID pending, remain outside this model. Receiver-side pending-DAG slot starvation and acknowledged-DAG TTL loss belong to the defradb.rs receiver dispatch model (`proofs/tla/SyncOwnership.tla`, `MC_SyncOwnership_Dispatch` configs), not here. See `boundary.p2p-backpressure.obligation-model`. Green/red configs (`MCP2PBackpressureGreen` / `TimeoutStall` / `BadAck`) are **modeled, not yet TLC-checked**.
+- `P2PBackpressure` — hub fan-in/fan-out admission **obligation** model for #630, not a multi-wave flood-safety proof. `PairingTransport` proves a single edge can connect/install; this model starts after that. Its one-wave necessity obligations say outbound timeouts release push-worker slots and inbound success acks are backed by modeled pending registration or merge. The pinned DefraDB implementation has since added bounded queue admission before worker execution, per-peer scheduling/coalescing, persisted retry handoff on overflow, and durable push-originated pending-DAG recovery. Those multi-wave and restart properties, plus Bitswap stalls, rate limits, gossip-loop health, multi-slow-peer fill, and peer-vs-CID pending, remain outside this model. Receiver-side pending-DAG slot starvation and acknowledged-DAG TTL loss belong to the defradb.rs receiver dispatch model (`proofs/tla/SyncOwnership.tla`, `MC_SyncOwnership_Dispatch` configs), not here. See `boundary.p2p-backpressure.obligation-model`. Green/red configs: `MCP2PBackpressureGreen` / `TimeoutStall` / `BadAck`.
 - `BackgroundAdmissionContention` — concurrent writers of one request's
   `AgentRequest` document and session documents during a turn (#3592). Each
   accepted `spawn_process` call runs a dispatch start (reads the request to
@@ -219,7 +219,8 @@ See `../README.md` for how this fits the broader formal-verification model.
   `NoReadWithoutReason`, `EventualPublication` and `Convergence` hold when
   request events stay off the reload fence, a rejected load requeues without
   back-off and a rejected refresh hands its node to the observer (Lean
-  `ClientDataPublication.acceptsReload`, `ObserverResync`).
+  `ClientDataPublication.acceptsReload`, `ObserverResync`). The reload fence
+  is the generated table of `ClientDataPublication.reloadAcceptedSince`.
   `NoReadWithoutReason` bounds hosted reads by batches of reasons to read, not
   below them: with a lease renewal during every load the node is read back to
   back. `RejectDelay` restores the 250 ms wait after a rejected load and still
@@ -396,36 +397,72 @@ See `../README.md` for how this fits the broader formal-verification model.
   `Alone` (no sibling) explain why the old order passed on macOS and alone.
 - `Sanity` — toolchain smoke test; not a real model.
 
-## One-time setup
+## Checking
 
-```bash
-./scripts/install-tools.sh
+Each model config's first line states the result TLC must report for it:
+
+```
+\* expect: holds
+\* expect: deadlock
+\* expect: violates <Name>
+\* expect: violates <Name> initially
 ```
 
-Downloads `tla2tools.jar` into `.tools/` (gitignored). Requires Java 11+ on `PATH`. On macOS without a JDK, install via `brew install openjdk@17` and ensure `/opt/homebrew/opt/openjdk@17/bin` is on `PATH`. Override version via `TLA_VERSION=v1.8.0`.
+`<Name>` is one `INVARIANT` or `PROPERTY` the config checks; `initially`
+records that the initial state violates it, and a violation in the initial
+state matches no other header. `deadlock` requires deadlock checking on. TLC
+must also report at least two distinct states, or the number an optional
+second line `\* states: <N>` records, so a model whose initial predicate
+admits nothing, or that stops after its first state, does not pass.
 
-## Running
+Each spec follows its `---- MODULE X ----` line with the Lean decisions it
+reads and the crates that implement it, then optionally the Lean it restates
+by hand and the code outside any crate that it models:
 
-For Sanity (toolchain smoke test):
-```bash
-./scripts/run-tlc.sh Sanity
+```
+\* lean: none | <Lean.owner>, <Lean.owner>
+\* crates: none | <crate>, <crate>
+\* models: <Lean.declaration>, <Lean.declaration>
+\* paths: <repository path>, <repository path>
 ```
 
-For PairingTransport — the dialable model checks clean (all properties hold):
-```bash
-./scripts/run-tlc.sh MCPairingTransportDialable
-```
+A `lean:` owner is a Lean `conformance_function` over a finite domain (its key
+in `crates/gents-lean-vocab/families.schema.json`); the spec `EXTENDS` the
+generated module that holds its table. A `models:` declaration is any Lean
+definition the spec restates without a table; naming it selects the spec when
+its source changes. A crate is a workspace package; a `paths:` entry is a file
+or directory outside every crate, and a change to it or under it selects the
+spec. These headers are the
+record of expected results; `scripts/tla_check.py check-headers` and
+`scripts/ci/test_gate.py` check them: every owner is in the snapshot, every
+`models:` declaration and path exists, every crate is a package, every config has a
+header, and every `LeanDecision_*` module a spec extends exists and holds one
+of its `lean:` owners.
 
-The other two configs are diagnostics and are EXPECTED to report violations — each reproduces a distinct real failure mode. MODE A (connect-fails-first, the literal #511 hang) violates `ReplicatorLiveness` with a never-`Connected` trace:
-```bash
-./scripts/run-tlc.sh MCPairingTransportUndialable
-```
+`scripts/tla_check.py run --all` model-checks every config in breadth-first
+mode with one worker per config and a fixed fingerprint, compares each result
+with its header and prints a table; a mismatch, too few states, a missing
+header, a TLC error or a timeout (`--timeout`, seconds per config) fails it.
+`--spec`, `--config`, `--crate`, `--lean` and `--files` narrow the run. The
+pull request gate runs the specs whose headers name a changed crate or Lean
+owner, declaration or path, or whose own files or generated imports changed; main
+and the nightly `TLA+ nightly` workflow run every config.
+`scripts/tla_check.py install` installs the pinned JDK and `tla2tools.jar`
+(version and SHA-256 in the script) under `~/.cache/gents-tla`.
+`scripts/run-tlc.sh <MC config>` runs TLC with them and prints its full
+output, counterexample included.
 
-MODE B/C (connect OK, replicator install never succeeds) violates `PartialApplyHasProgress` and returns the exact "subscribed collections, null replicator" partial row:
-```bash
-./scripts/run-tlc.sh MCPairingTransportReplicatorStuck
-```
+## Generated Lean decisions
 
+`make lean-regen` writes `generated/LeanDecision_<Namespace>.tla` for every
+`lean:` owner: `<name>_table`, the decision over its whole domain keyed by the
+tuple of its arguments in Lean parameter order and written as a balanced tree
+of `@@` (a long left-nested chain overflows TLC's stack), and `<name>(...)`,
+its lookup. Regeneration fails for an owner that is not such a function. A
+spec `EXTENDS` that module instead of restating the decision, and must not
+define an operator of the same name. `generated_tla_modules_are_current` in
+`gents-lean-vocab` fails when a module is stale. The scripts put `generated/`
+on TLC's library path (`-DTLA-Library`).
 For P2PBackpressure — **modeled, not yet TLC-checked** on the reference
 runner (no recorded-runs row; TLC was not executed when this model landed).
 The configs below are the intended green/red suite; treat the prose outcomes
@@ -654,7 +691,7 @@ The two diagnostic configs each reproduce one real failure mode (the production 
 
 The key structural result: `DialSucceed` requires `Dialable` and `InstallReplicator` requires `ReplicatorInstallable`, and no fairness annotation can enable a disabled action. The reconciler's retries (SF on `Dial`/`Redial`, WF on the install) cannot make an un-dialable ticket dialable or make a non-installable replicator install — both are *transport/materialization preconditions the layer above must supply* (dial the shareable public address, not a listen-form address; resolve every replicated collection's schema so `add_replicator`'s cid lookup and filter validation pass). This is the TLA+ counterpart of the Lean `convergence_requires_successful_install` obligation: a connect/install *failure* step leaves the disagreement count unchanged and `> 0`, so convergence requires a *successful* install, which requires both a live connection and an installable replicator.
 
-Active lines from `MCP2PBackpressureGreen.cfg` (`TimeoutReleasesSlot = TRUE`, `AckWithoutPendingAllowed = FALSE`) — **modeled properties; TLC not yet run** (no recorded-runs row):
+Active lines from `MCP2PBackpressureGreen.cfg` (`TimeoutReleasesSlot = TRUE`, `AckWithoutPendingAllowed = FALSE`):
 
 - **`INVARIANT TypeOK`** — outbound states and inbound admission sets stay in their declared bounded domains.
 - **`INVARIANT PushSlotsBounded`** — in-flight outbound PushLog sends never exceed `PushWorkers`.
@@ -664,7 +701,7 @@ Active lines from `MCP2PBackpressureGreen.cfg` (`TimeoutReleasesSlot = TRUE`, `A
 - **`PROPERTY HealthyPeersDeliver`** — every responsive peer eventually reaches `Delivered`, even if the nonresponsive peer gets the first worker slot.
 - **`PROPERTY InboundSettles`** — every inbound PushLog eventually receives either success or nack.
 
-The diagnostics are **designed** to reproduce one load-bearing failure each (claims, not TLC-verified results):
+The diagnostics each reproduce one load-bearing failure:
 
 - **`MCP2PBackpressureTimeoutStall.cfg`** (`TimeoutReleasesSlot = FALSE`) — intended counterexample: start `slow` first, fill the only worker slot, leave healthy peers queued forever so `HealthyPeersDeliver` fails. This encodes **necessity** of slot release in a one-worker toy: if timeout does not free the semaphore, healthy delivery can fail even under fairness. It is **not** a sufficiency claim that Amy hub saturation is solved when the green BOOLEAN holds (production can still fail via multi-slow-peer fill, re-queue storms, Bitswap stalls, or gossip-loop death after the permit is released).
 - **`MCP2PBackpressureBadAck.cfg`** (`AckWithoutPendingAllowed = TRUE`) — intended counterexample: fill the pending-DAG map and success-ack a second inbound PushLog without merging or registering it so `SuccessAckBacked` fails. Formal counterpart of the production invariant (defradb.rs #1089 / pinned hub admission) that pending-DAG capacity overflow must return the backpressure nack, not success.

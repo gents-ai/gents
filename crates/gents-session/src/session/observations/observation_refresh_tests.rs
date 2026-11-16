@@ -404,3 +404,56 @@ async fn generated_selection_cases_drive_the_native_request_head() {
         node.shutdown().await.expect("shut down test node");
     }
 }
+
+/// Lean `AgentSession.newerByKeys`, the finite form of `newer` that TLA
+/// `SessionHeadObservation` reads, replayed against the native request order:
+/// each input says how one key of the first row compares with the second's.
+#[test]
+fn request_order_matches_the_lean_key_decision() {
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum KeyOrder {
+        Less,
+        Equal,
+        Greater,
+    }
+    fn pair(order: &KeyOrder) -> (u32, u32) {
+        match order {
+            KeyOrder::Less => (1, 2),
+            KeyOrder::Equal => (1, 1),
+            KeyOrder::Greater => (2, 1),
+        }
+    }
+    fn fact(created: u32, live: u32, terminalized: u32, id: u32) -> SessionRequestFact {
+        SessionRequestFact {
+            node_did: "did:test:order".into(),
+            session_id: "order-session".into(),
+            requester_did: None,
+            agent_did: "did:test:agent".into(),
+            created_at: format!("2030-01-01T00:00:0{created}Z"),
+            terminalized_at: Some(format!("2030-01-01T00:00:0{created}.{terminalized}Z")),
+            hop: 0,
+            observed: gents_protocol::session::SessionRequestObservation {
+                request_doc_id: format!("doc-{id}"),
+                request_id: format!("request-{id}"),
+                lifecycle_state: if live == 2 {
+                    RequestLifecycleState::Processing
+                } else {
+                    RequestLifecycleState::Completed
+                },
+            },
+        }
+    }
+    gents_lean_vocab::families::agent_session_newer_by_keys::replay(|i| {
+        let (created, live, terminalized, id) = (
+            pair(&i.created),
+            pair(&i.live),
+            pair(&i.terminalized),
+            pair(&i.id),
+        );
+        request_fact_newer(
+            &fact(created.0, live.0, terminalized.0, id.0),
+            &fact(created.1, live.1, terminalized.1, id.1),
+        )
+    });
+}
