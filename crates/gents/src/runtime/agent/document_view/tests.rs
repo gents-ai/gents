@@ -1657,21 +1657,22 @@ async fn readiness_follows_the_backend_account_reference() {
     );
 
     let original = view
-        .oauth_credentials
-        .values()
-        .next()
+        .oauth_accounts
+        .rows_mut()
+        .first()
         .expect("original row")
         .clone();
     let mut account = original.clone();
-    account.value.credential_id = format!("{}:acct-x", original.value.credential_id);
-    account.value.account_ref = Some("acct-x".to_string());
-    view.oauth_credentials
-        .insert(account.value.credential_id.clone(), account.clone());
+    account.credential_id = format!("{}:acct-x", original.credential_id);
+    account.account_ref = Some("acct-x".to_string());
+    view.oauth_accounts.rows_mut().push(account);
     assert!(ready(view.clone()).await, "an enabled acct-x row resolves");
 
-    account.value.enabled = false;
-    view.oauth_credentials
-        .insert(account.value.credential_id.clone(), account);
+    view.oauth_accounts
+        .rows_mut()
+        .last_mut()
+        .expect("acct-x row")
+        .enabled = false;
     assert!(!ready(view).await, "a disabled acct-x row never resolves");
 }
 

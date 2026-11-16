@@ -75,7 +75,7 @@ pub(crate) async fn load_document_runtime_view_as(
                         .await?,
                     backend_observations: RapidHashMap::new(),
                     unknown_kind_backends,
-                    oauth_credentials: RapidHashMap::new(),
+                    oauth_accounts: gents_inference::auth::credential::NodeOAuthAccounts::default(),
                 };
                 let visible = |id: &str| !gents_protocol::canonical::is_retired_reserved_id(id);
                 macro_rules! retain_visible {
@@ -118,31 +118,8 @@ pub(crate) async fn load_document_runtime_view_as(
     )
     .await?;
     let access = ConfigAccess::local_as(node.clone(), reader);
-    for credential in
-        gents_inference::auth::credential::list_oauth_credentials_on(&access, node_did).await?
-    {
-        let doc_id = credential
-            .doc_id
-            .clone()
-            .context("OAuthCredential missing physical ID")?;
-        anyhow::ensure!(
-            credential.node_did == node_did,
-            "OAuthCredential owner mismatch"
-        );
-        let id = credential.credential_id.clone();
-        anyhow::ensure!(
-            view.oauth_credentials
-                .insert(
-                    id.clone(),
-                    DocumentRecord {
-                        doc_id,
-                        value: credential
-                    }
-                )
-                .is_none(),
-            "duplicate OAuthCredential {id}"
-        );
-    }
+    view.oauth_accounts =
+        gents_inference::auth::credential::NodeOAuthAccounts::load(&access, node_did).await?;
     Ok(view)
 }
 
