@@ -693,20 +693,20 @@ async fn admission_workspace_validation_checks_scope_and_cwd_without_writes() {
     let before = fx.node.execute(query).await;
     assert!(!before.has_errors(), "{:?}", before.errors);
     let request = fx.owner.request().clone();
-    super::validate_request_workspace_input(&fx.node, &request, false)
+    super::validate_request_workspace_input(&fx.node, &request, false, None)
         .await
         .unwrap();
     let mut escaped = request.clone();
     escaped.input.cwd = Some(fx._dir.path().to_string_lossy().into_owned());
     assert!(
-        super::validate_request_workspace_input(&fx.node, &escaped, false)
+        super::validate_request_workspace_input(&fx.node, &escaped, false, None)
             .await
             .is_err()
     );
     let mut foreign = request;
     foreign.workspace_owner_node_did = Some("did:key:foreign".into());
     assert!(
-        super::validate_request_workspace_input(&fx.node, &foreign, false)
+        super::validate_request_workspace_input(&fx.node, &foreign, false, None)
             .await
             .is_err()
     );

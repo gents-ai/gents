@@ -15,8 +15,15 @@ const _: () =
     assert!(gents_fs_runner::MAX_RESPONSE_BYTES + 64 * 1024 < MAX_NATIVE_RUNNER_OUTPUT_BYTES);
 const RUNNER_ENV: &str = "GENTS_FS_RUNNER";
 const MAX_FS_RUNNER_SECONDS: i64 = 120;
+/// Whether the running executable dispatches the native filesystem runner and
+/// the plugin builder as its own subcommands. It describes the binary, not an
+/// agent or a runtime: each entry point that embeds those subcommands sets it
+/// once before starting its runtime, and nothing clears it, so it is a genuine
+/// process singleton.
 static SELF_RUNNER_ENABLED: AtomicBool = AtomicBool::new(false);
 
+/// Marks the running executable as its own native filesystem runner and plugin
+/// builder; called only from a binary's entry point.
 pub fn enable_self_runner() {
     SELF_RUNNER_ENABLED.store(true, Ordering::Relaxed);
 }
