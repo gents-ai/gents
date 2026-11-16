@@ -192,6 +192,55 @@ def actorGrantsOf (s : State) (actor node : String) (agents : List String) : Act
   { catalog := allowed 8 s actor "nodes" node "manage_agents"
   , configures := agents.filter fun a => allowed 8 s actor "agents" a "update" }
 
+/-! ## The names the policy tool accepts -/
+
+/-- A relation or a permission of one resource of `Identity.Household.policy`. -/
+structure PolicyName where
+  resource : String
+  name : String
+  isPermission : Bool
+  deriving DecidableEq, Repr
+
+/-- Every relation and permission the Household policy declares. The policy
+tool's `--permission` accepts each of them besides the node (NAC) permissions,
+so a refusal that names a Household grant names a word `policy check` answers
+and `policy get` lists. -/
+def policyNames : List PolicyName :=
+  policy.flatMap fun r =>
+    r.relations.map (fun rel => ⟨r.name, rel.name, false⟩) ++
+      r.permissions.map (fun p => ⟨r.name, p.name, true⟩)
+
+/-- What a word given to the policy tool names: `resource#name` is that
+resource's relation or permission, a bare name every resource's of that name.
+A word that names nothing is refused. -/
+def resolvePolicyName (word : String) : List PolicyName :=
+  match word.splitOn "#" with
+  | [name] => policyNames.filter (·.name == name)
+  | [resource, name] => policyNames.filter fun n => n.resource == resource && n.name == name
+  | _ => []
+
+/-- The words the catalog refusal (`AgentRefusal.catalogNotHeld`) gives the
+actor: the permission the `node` grouping names and the relations that confer
+it on an actor. The owner is not a word: ownership is not granted. A relation
+whose types admit no actor (`agent_manager`, the Node administrators' userset,
+`Identity.Household.agent_manager_admits_no_actor`) is not a word either: a
+grant of it to the refused actor would itself be refused. -/
+def catalogRefusalWords : List String :=
+  (categoryGroupings.filter (·.category == "node")).flatMap fun g =>
+    g.permission :: g.conferredBy.filterMap fun
+      | .relation name =>
+          if typeAdmitted policy g.resource name "actor" then some name else none
+      | _ => none
+
+/-- Every word of the catalog refusal names a relation or permission of the
+Node, so the policy tool answers it for the Node without a document. -/
+theorem catalog_refusal_words_name_the_node :
+    catalogRefusalWords = ["manage_agents", "administrator"] ∧
+    catalogRefusalWords.all (fun word =>
+      (resolvePolicyName word).any (·.resource == "nodes") &&
+        (resolvePolicyName ("nodes#" ++ word)).length == 1) = true := by
+  native_decide
+
 /-- The relations creating or cloning an Agent publishes
 (`Identity.Household.commitAgentCreation`). -/
 def creationRelations (child childDid node : String) : List Relation :=
@@ -379,6 +428,22 @@ theorem catalog_has_no_direct_holder :
       allowed 8 catalogRelationFixture actor "nodes" "node" "manage_agents" &&
         administratorPermissions.all (fun (res, id, perm) =>
           allowed 8 catalogRelationFixture actor res id perm)) = true ∧
+    ["runtime", "a", "stranger"].all (fun actor =>
+      !allowed 8 catalogRelationFixture actor "nodes" "node" "manage_agents") = true := by
+  native_decide
+
+/-- An actor refused for the catalog cannot grant it to itself: whoever may add
+an actor as `administrator` on the Node (its owner or an administrator) already
+holds `manage_agents`, and no one may add an actor as `agent_manager`
+(`catalog_has_no_direct_holder`). The refusal therefore names who grants it,
+not a grant the refused actor would be refused again. -/
+theorem catalog_is_not_self_granted :
+    ["user", "admin", "runtime", "a", "stranger"].all (fun actor =>
+      allowed 8 catalogRelationFixture actor "nodes" "node" "manage_agents" ||
+        (!grantAdmitted catalogRelationFixture actor
+            ⟨"nodes", "node", "administrator", .actor actor⟩ &&
+          !grantAdmitted catalogRelationFixture actor
+            ⟨"nodes", "node", "agent_manager", .actor actor⟩)) = true ∧
     ["runtime", "a", "stranger"].all (fun actor =>
       !allowed 8 catalogRelationFixture actor "nodes" "node" "manage_agents") = true := by
   native_decide

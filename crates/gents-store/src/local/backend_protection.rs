@@ -9,12 +9,15 @@ use tokio::io::AsyncWriteExt;
 
 use super::{home::StoreLock, store_key::StoreKey};
 
-/// The store's lineage marker. Its version names the node grants a store was
-/// created under as well as its format: v2 began when the Agent baseline
-/// gained `get-collection` (gents#3747, Lean
-/// `Identity.GrantSets.widened_baseline_blocks_actorless_reconcile`). A store
-/// without this version's marker is reported as made by an older version and
-/// is never opened, so nothing in it changes; there is no conversion.
+/// The store's lineage marker. Its version names the node grants and the
+/// Household policy a store was created under as well as its format: v2 began
+/// when the Agent baseline gained `get-collection` (gents#3747, Lean
+/// `Identity.GrantSets.widened_baseline_blocks_actorless_reconcile`) and
+/// `agent_manager` came to take only the Node administrators' userset under
+/// the same policy ID (gents#3794, `Identity.Household.catalog_restriction_keeps_policy_id`).
+/// A store without this version's marker is reported as made by an older
+/// version and is never opened, so nothing in it changes; there is no
+/// conversion.
 const MARKER: &str = ".gents-private-backend-v2";
 pub(crate) const PROVENANCE_MARKER: &str = MARKER;
 const DOMAIN: &[u8] = b"gents private backend fresh store v2\0";
