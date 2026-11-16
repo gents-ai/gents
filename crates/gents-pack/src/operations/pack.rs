@@ -84,7 +84,9 @@ pub async fn admit_edited(
     }
     let documents = crate::pack::edited_installed_documents(access, node_did, coordinate, removal)
         .await
-        .map_err(|error| PackOperationError::Passthrough(error.into()))?;
+        .map_err(|error| {
+            PackOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
+        })?;
     match edited_admission(true, !documents.is_empty(), decision) {
         EditedAdmission::Admitted => Ok(()),
         EditedAdmission::DecisionRequired => Err(PackOperationError::EditedUndecided {
@@ -227,8 +229,9 @@ pub fn admit_input(input: &PackChangeInput) -> Result<(), PackOperationError> {
         return Err(PackOperationError::PackageBlank);
     }
     if crate::pack::local::classify(package).is_none() {
-        gents_documents::pack_spec::parse_pack_spec(package)
-            .map_err(|error| PackOperationError::Passthrough(error.into()))?;
+        gents_documents::pack_spec::parse_pack_spec(package).map_err(|error| {
+            PackOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
+        })?;
     }
     if input.variables.len() > MAX_ENTRIES {
         return Err(PackOperationError::TooManyVariables);

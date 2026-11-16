@@ -729,11 +729,11 @@ mod tests {
             let error = create_agent(&access, owner, provision().await?, &input)
                 .await
                 .expect_err(label);
-            let report = format!("Error: {error:?}");
-            let report = report
-                .split_once("\n\nStack backtrace:")
-                .map_or(report.as_str(), |(report, _)| report);
-            printed.push_str(&format!("## {label}\n{}\n", named(report.to_owned())));
+            let report = format!(
+                "Error: {}",
+                gents_protocol::error_chain::ErrorReport(error.as_ref())
+            );
+            printed.push_str(&format!("## {label}\n{}\n", named(report)));
         }
         assert!(
             printed == PINNED_OUTPUT,

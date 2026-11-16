@@ -51,7 +51,7 @@ impl From<RootApplyError> for WorkspaceRootError {
         match error {
             RootApplyError::Operation(error) => error,
             RootApplyError::Other(error) => {
-                Self::Passthrough(error.reallocate_into_boxed_dyn_error_without_backtrace())
+                Self::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
             }
         }
     }
@@ -378,7 +378,7 @@ async fn read_roots(
     query: gents_protocol::document_query::Query<RootDoc>,
 ) -> std::result::Result<Vec<WorkspaceRootView>, WorkspaceRootError> {
     let passthrough = |error: anyhow::Error| {
-        WorkspaceRootError::Passthrough(error.reallocate_into_boxed_dyn_error_without_backtrace())
+        WorkspaceRootError::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
     };
     let response = access
         .read(&query.render())

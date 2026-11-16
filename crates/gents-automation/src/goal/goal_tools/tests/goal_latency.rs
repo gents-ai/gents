@@ -76,13 +76,7 @@ impl GoalLatencySession {
             HookAction::Continue
         ));
         let session = hook.session_id().await.unwrap();
-        bind_managed_hook_request(
-            &mut hook,
-            "goal-request",
-            &identity,
-            Utc::now() + chrono::Duration::minutes(30),
-        )
-        .await;
+        bind_managed_hook_request(&mut hook, "goal-request", &identity).await;
         let access = hook.actor_access().unwrap();
         let create = r#"{"objective":"ship the long session","token_budget":100000000}"#;
         accept_hook_tool_call(

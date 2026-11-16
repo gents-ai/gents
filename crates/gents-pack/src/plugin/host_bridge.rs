@@ -10,7 +10,7 @@ pub enum HostCallError {
     Stopped,
     #[error("plugin worker failed: {0}")]
     Worker(#[from] tokio::task::JoinError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Execution(#[from] anyhow::Error),
 }
 
