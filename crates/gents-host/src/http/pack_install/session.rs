@@ -400,12 +400,20 @@ async fn run_inner(
                 .collect::<Vec<_>>(),
             gents_pack::pack::InstalledVia::Operator,
             Some(&home),
+            // The client sent every value its environment gave, so the runtime
+            // plans from those alone and never from its own environment, or the
+            // two plans differ (gents#3857). Inference names are never sent as
+            // variables and keep resolving as before.
             &|name| {
-                gents_pack::operations::pack::install_value(
-                    gents_protocol::operations::pack::PackActor::User,
-                    &supplied,
-                    name,
-                )
+                if name.ends_with("_MODEL") || name.ends_with("_ENDPOINT") {
+                    gents_pack::operations::pack::install_value(
+                        gents_protocol::operations::pack::PackActor::User,
+                        &supplied,
+                        name,
+                    )
+                } else {
+                    supplied.shared.get(name).cloned()
+                }
             },
             &overrides,
         )

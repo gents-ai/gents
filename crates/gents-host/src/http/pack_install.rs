@@ -179,6 +179,19 @@ pub async fn encode_install_request(
     owner: &str,
     explicit: bool,
 ) -> Result<serde_json::Value> {
+    // The runtime plans only from what it is sent, so send the values this
+    // installer's environment gives (gents#3857).
+    let supplied = gents_pack::pack::install_flow::supplied_variables(
+        &args.dependency_variables,
+        &args.bind_agents,
+    )?;
+    let packs = std::iter::once(pack)
+        .chain(dependencies.iter())
+        .collect::<Vec<_>>();
+    let from_environment =
+        gents_pack::pack::install_flow::environment_variables(&packs, &supplied, &|name| {
+            std::env::var(name).ok()
+        })?;
     let root = pack.shared_archive();
     let root_source = pack.provenance();
     let dependency_sources = dependencies
@@ -191,7 +204,12 @@ pub async fn encode_install_request(
         .collect::<Vec<_>>();
     let node_did = owner.to_owned();
     let inference_slots = args.inference_slots.clone();
-    let dependency_variables = args.dependency_variables.clone();
+    let dependency_variables = args
+        .dependency_variables
+        .iter()
+        .cloned()
+        .chain(from_environment)
+        .collect::<Vec<_>>();
     let bind_agents = args.bind_agents.clone();
     let wire = args.wire.clone();
     let (overwrite, keep, preview, force_rebind, grant_authority) = (

@@ -657,6 +657,44 @@ pub fn supplied_variables(variables: &[String], bind_agents: &[String]) -> Resul
     Ok(supplied)
 }
 
+/// The installer's environment value of every install variable these packs'
+/// configurations read that `supplied` does not already give, as
+/// `NAME=VALUE`. A hosted install sends them with its request, so the runtime
+/// plans the same graph as the client instead of reading its own
+/// environment (gents#3857). Agent bindings, the runtime's node variable and
+/// inference names (which are never supplied as variables) stay out.
+pub fn environment_variables(
+    packs: &[&ResolvedPack],
+    supplied: &PackVariables,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<Vec<String>> {
+    let names = std::cell::RefCell::new(std::collections::BTreeSet::new());
+    for pack in packs {
+        let Some(path) = pack.manifest().config.as_deref() else {
+            continue;
+        };
+        let config: serde_json::Value = serde_json::from_slice(pack.asset(path)?)
+            .context("parsing pack config for install variables")?;
+        // Every name resolves (to nothing) here: only the names are wanted.
+        let _ = crate::pack::interpolate::inspect_install_variables(&config, &|name| {
+            names.borrow_mut().insert(name.to_owned());
+            Some(String::new())
+        });
+    }
+    Ok(names
+        .into_inner()
+        .into_iter()
+        .filter(|name| {
+            name != "GENTS_PACK_NODE_DID"
+                && !crate::pack::is_agent_binding_variable(name)
+                && !name.ends_with("_MODEL")
+                && !name.ends_with("_ENDPOINT")
+                && !supplied.shared.contains_key(name)
+        })
+        .filter_map(|name| environment(&name).map(|value| format!("{name}={value}")))
+        .collect())
+}
+
 /// `--bind-agent SLOT=AGENT_DID` as the install variables that bind those
 /// slots: the only source an agent binding is read from, never the
 /// environment ([`crate::operations::pack::install_value`]).
