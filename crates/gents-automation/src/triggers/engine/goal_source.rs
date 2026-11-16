@@ -924,9 +924,7 @@ impl GoalSource {
             |txn| Box::pin(last_failed_call_in_txn(txn, node_did, request_id)),
         )
         .await?;
-        Ok(call
-            .and_then(|call| call.usage_limit(Utc::now()))
-            .map(|limit| limit.to_string()))
+        Ok(call.and_then(|call| call.usage_limit().map(|limit| limit.reason.to_owned())))
     }
 
     async fn stop_for_unavailable_agent(

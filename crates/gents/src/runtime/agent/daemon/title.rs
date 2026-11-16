@@ -518,8 +518,10 @@ where
                     config.max_tokens =
                         title_max_tokens(config.additional_params.as_ref(), config.max_tokens);
                     config.max_turns = 1;
-                    config.retry_policy =
-                        gents_loop::completion_retry::CompletionRetryPolicy::no_retry();
+                    config.retry_policy = gents_loop::completion_retry::CompletionRetryPolicy {
+                        max_rate_limit_wait: config.retry_policy.max_rate_limit_wait,
+                        ..gents_loop::completion_retry::CompletionRetryPolicy::no_retry()
+                    };
                     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
                         self.node.clone(),
                         identity::Did::new(request.agent_did.clone())?,

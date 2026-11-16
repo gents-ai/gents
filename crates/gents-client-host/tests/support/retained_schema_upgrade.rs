@@ -80,6 +80,8 @@ pub async fn exercise() -> Result<()> {
         "reasoning_output_tokens",
         "provider_total_tokens",
         "usage_completeness",
+        "provider_limit",
+        "provider_limit_resets_at",
     ] {
         ensure!(
             after.fields.iter().any(|field| field.name == name),

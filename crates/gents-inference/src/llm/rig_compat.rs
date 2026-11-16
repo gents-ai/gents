@@ -58,6 +58,7 @@ pub struct AdmittedCompletionClient<C> {
     admission: AdmissionRegistry,
     connection: std::sync::Arc<str>,
     profile_id: Option<String>,
+    max_rate_limit_wait: std::time::Duration,
     separate_reasoning: bool,
     agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
 }
@@ -69,12 +70,14 @@ where
     type CompletionModel = AdmittedCompletionModel<C::CompletionModel>;
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn admitted_model<C>(
     client: C,
     admission: AdmissionRegistry,
     connection: String,
     model_name: &str,
     profile_id: Option<&str>,
+    max_rate_limit_wait: std::time::Duration,
     separate_reasoning: bool,
     agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
 ) -> AdmittedCompletionModel<C::CompletionModel>
@@ -86,6 +89,7 @@ where
         admission,
         connection: connection.into(),
         profile_id: profile_id.map(str::to_owned),
+        max_rate_limit_wait,
         separate_reasoning,
         agent_signer,
     }
@@ -106,6 +110,7 @@ where
             M::make(&client.inner, model.clone()),
             client.admission.clone(),
             client.connection.clone(),
+            client.max_rate_limit_wait,
         );
         admitted.model_name = Some(model);
         admitted.profile_id = client.profile_id.clone();

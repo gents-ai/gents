@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use rand::Rng;
 
 use crate::error::{ClassifiedFailure, ContextOverflow, InferenceError};
-use crate::provider_limit::{UsageLimit, LONG_RATE_LIMIT_WAIT};
+use crate::provider_limit::{ProviderLimit, UsageLimit, LONG_RATE_LIMIT_WAIT};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionRetryProfileFields {
@@ -14,6 +14,19 @@ pub struct CompletionRetryProfileFields {
     pub retry_allow_repair: Option<bool>,
     pub retry_interactive_max: Option<i64>,
     pub retry_max_rate_limit_wait_ms: Option<i64>,
+}
+
+impl CompletionRetryProfileFields {
+    /// The agent's rate-limit wait cap, whatever the execution origin. The
+    /// owned loop holds a provider throttle up to it, and every admitted model
+    /// built for the agent carries it to the call's permit.
+    pub fn max_rate_limit_wait(&self) -> Duration {
+        self.retry_max_rate_limit_wait_ms
+            .and_then(|value| u64::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .map(Duration::from_millis)
+            .unwrap_or(LONG_RATE_LIMIT_WAIT)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,12 +118,7 @@ impl CompletionRetryPolicy {
                 .unwrap_or(default.max_empty_resample),
             allow_repair: fields.retry_allow_repair.unwrap_or(default.allow_repair),
             account_hops: 0,
-            max_rate_limit_wait: fields
-                .retry_max_rate_limit_wait_ms
-                .and_then(|value| u64::try_from(value).ok())
-                .filter(|value| *value > 0)
-                .map(Duration::from_millis)
-                .unwrap_or(default.max_rate_limit_wait),
+            max_rate_limit_wait: fields.max_rate_limit_wait(),
         }
     }
 
@@ -301,32 +309,12 @@ impl CompletionRetryState {
         failure: ClassifiedFailure,
         now: DateTime<Utc>,
     ) -> ClassifiedFailure {
-        match self.unheld_usage_limit(&failure, now) {
-            Some(limit) => ClassifiedFailure {
+        match provider_limit_verdict(&failure, now, self.policy.max_rate_limit_wait) {
+            Some(ProviderLimit::UsageExhausted(limit)) => ClassifiedFailure {
                 error: InferenceError::UsageLimited(limit),
                 ..failure
             },
-            None => failure,
-        }
-    }
-
-    fn unheld_usage_limit(
-        &self,
-        failure: &ClassifiedFailure,
-        now: DateTime<Utc>,
-    ) -> Option<UsageLimit> {
-        match failure.error {
-            InferenceError::RateLimited {
-                retry_after: Some(wait),
-            } if failure_class(failure) == FailureClass::Transport
-                && wait > self.policy.max_rate_limit_wait =>
-            {
-                Some(UsageLimit::unheld_throttle(
-                    &failure.text,
-                    now.checked_add_signed(chrono_duration_from_std(wait)),
-                ))
-            }
-            _ => None,
+            _ => failure,
         }
     }
 
@@ -346,7 +334,9 @@ impl CompletionRetryState {
                 },
             },
             FailureClass::Transport => {
-                if let Some(limit) = self.unheld_usage_limit(failure, now) {
+                if let Some(ProviderLimit::UsageExhausted(limit)) =
+                    provider_limit_verdict(failure, now, self.policy.max_rate_limit_wait)
+                {
                     return PreStreamDirective::Fail {
                         reason: limit.to_string(),
                     };
@@ -518,6 +508,35 @@ impl CompletionRetryState {
     fn held_wait(&self, base_delay: Duration) -> Duration {
         let cap = self.policy.max_rate_limit_wait;
         jitter(base_delay.min(cap), &mut rand::rng()).min(cap)
+    }
+}
+
+/// A failed attempt's provider limit under a policy that holds a provider
+/// throttle for at most `max_rate_limit_wait`: a transport throttle whose wait
+/// lies beyond it is the provider's usage limit, resetting when that wait ends
+/// (Lean: `InferenceCall.ProviderLimit.verdict`). The owned loop reads every
+/// attempt failure through it, and the admission permit records it on the
+/// call's terminal row under the same cap, so the recorded verdict is the
+/// loop's.
+pub fn provider_limit_verdict(
+    failure: &ClassifiedFailure,
+    now: DateTime<Utc>,
+    max_rate_limit_wait: Duration,
+) -> Option<ProviderLimit> {
+    match &failure.error {
+        InferenceError::UsageLimited(limit) => Some(ProviderLimit::UsageExhausted(limit.clone())),
+        InferenceError::RateLimited {
+            retry_after: Some(wait),
+        } if failure_class(failure) == FailureClass::Transport && *wait > max_rate_limit_wait => {
+            Some(ProviderLimit::UsageExhausted(UsageLimit::unheld_throttle(
+                &failure.text,
+                now.checked_add_signed(chrono_duration_from_std(*wait)),
+            )))
+        }
+        InferenceError::RateLimited { retry_after } => Some(ProviderLimit::Throttled {
+            retry_after: *retry_after,
+        }),
+        _ => None,
     }
 }
 

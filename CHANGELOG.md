@@ -6,6 +6,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A failed InferenceCall records the provider-limit verdict in
+  `provider_limit` (`throttled` or `usage_limited`) and, for a usage limit with
+  a reported reset, `provider_limit_resets_at`, in the same write as its
+  `failure_reason`. The verdict uses the Agent's `max_rate_limit_wait_ms`, the
+  cap the owned loop holds, so a throttle the Agent waits out is no longer
+  recorded as a usage limit, and one beyond a lower cap is. Title, access-review
+  and compaction calls also hold the Agent's cap instead of the five-minute
+  default. Blocked turns, a Goal's usage-limit stop and its resume at the reset
+  read these fields instead of the failure text (#3923).
 - Breaking: `gents service install`, `stop`, `restart` and `uninstall`, and
   a managed update's helper, refuse to run when the service's running job is
   an ancestor of the calling process, which they observe from the service

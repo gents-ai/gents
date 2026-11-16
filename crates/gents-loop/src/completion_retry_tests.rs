@@ -459,3 +459,57 @@ fn empty_output_retries_independently_of_transport_and_resets_for_next_turn() {
         MidStreamDirective::Fail { .. }
     ));
 }
+
+#[test]
+fn provider_limit_verdicts_follow_the_executable_model() {
+    use gents_lean_vocab::families::inference_provider_limit_verdicts as wire;
+    use gents_protocol::provider_limit::ProviderLimitVerdict;
+    let at = |seconds: u64| {
+        chrono::DateTime::<Utc>::UNIX_EPOCH
+            + chrono::Duration::seconds(i64::try_from(seconds).unwrap())
+    };
+    wire::replay::<ProviderLimitVerdict>(|input: &wire::VerdictInput| {
+        let now = at(input.now);
+        let error = if input.usage_exhausted {
+            InferenceError::UsageLimited(UsageLimit {
+                resets_at: input.reported_at.map(at),
+                detail: String::new(),
+            })
+        } else {
+            InferenceError::RateLimited {
+                retry_after: input
+                    .reported_at
+                    .map(|wake| Duration::from_secs(wake.saturating_sub(input.now))),
+            }
+        };
+        let cap = input.max_wait.map_or(Duration::MAX, Duration::from_secs);
+        let recorded = provider_limit_verdict(&classified(&error, ""), now, cap)
+            .expect("a throttle or a usage exhaustion is a provider limit")
+            .recorded();
+        let read = CompletionRetryState::new(CompletionRetryPolicy {
+            max_rate_limit_wait: cap,
+            ..CompletionRetryPolicy::scheduled_default()
+        })
+        .read_failure(classified(&error, ""), now);
+        assert_eq!(
+            failure_class(&read) == FailureClass::Permanent,
+            recorded.verdict == ProviderLimitVerdict::UsageLimited,
+            "the loop retries exactly the throttles the call records"
+        );
+        wire::VerdictOutput {
+            verdict: recorded.verdict,
+            resets_at: recorded
+                .resets_at
+                .map(|reset| u64::try_from(reset.timestamp()).unwrap()),
+        }
+    });
+}
+
+#[test]
+fn provider_limit_verdict_names_follow_the_executable_model() {
+    use gents_protocol::provider_limit::ProviderLimitVerdict;
+    gents_lean_vocab::families::inference_call_provider_limit_verdict_vocabulary::replay(&[
+        ProviderLimitVerdict::Throttled,
+        ProviderLimitVerdict::UsageLimited,
+    ]);
+}

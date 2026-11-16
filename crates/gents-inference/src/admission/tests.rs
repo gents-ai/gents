@@ -6,7 +6,7 @@ use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use super::permit::{dropped_terminal, recorded_failure_reason, DroppedTerminal};
+use super::permit::{dropped_terminal, recorded_failure, DroppedTerminal};
 use super::{
     scope_call, scope_call_with_join, scope_call_with_token_and_failure_reason, scope_request,
     set_terminal_failure_reason,
@@ -86,6 +86,7 @@ impl TestRegistry {
                 super::registry::TEST_SLOT_CONNECTION,
                 None,
                 None,
+                gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
                 Some(self.signer.clone()),
             )
             .await
@@ -243,7 +244,13 @@ async fn current_session_id_reflects_request_scope() {
     assert_eq!(super::current_session_id(), None);
 
     let context = AdmissionCallContext::for_request(&request("req-x"), "default", "backend-1");
-    let pending = context.next_call("runtime-test", None, None, None);
+    let pending = context.next_call(
+        "runtime-test",
+        None,
+        None,
+        gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+        None,
+    );
     assert_eq!(pending.request_id, "req-x");
     assert_eq!(pending.request_doc_id, "doc-req-x");
     scope_request(context, async {
@@ -267,12 +274,24 @@ async fn current_call_join_reflects_the_minted_call() {
     scope_request(context, async move {
         assert!(super::current_call_join().is_none());
 
-        let first = minting_handle.next_call("runtime-test", None, None, None);
+        let first = minting_handle.next_call(
+            "runtime-test",
+            None,
+            None,
+            gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+            None,
+        );
         let join = super::current_call_join().expect("join after mint");
         assert_eq!(join.call_id, first.call_id);
         assert_eq!(join.call_seq, 1);
 
-        let second = minting_handle.next_call("runtime-test", None, None, None);
+        let second = minting_handle.next_call(
+            "runtime-test",
+            None,
+            None,
+            gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+            None,
+        );
         let join = super::current_call_join().expect("join after second mint");
         assert_eq!(join.call_id, second.call_id);
         assert_eq!(join.call_seq, 2);
@@ -288,14 +307,22 @@ async fn concurrent_call_scopes_return_their_own_exact_join() {
     let context = AdmissionCallContext::for_request(&request("req-scopes"), "default", "backend-1");
     scope_request(context, async {
         let compaction = scope_call_with_join(CallKind::Compaction, 1, async {
-            super::client::current_context()
-                .unwrap()
-                .next_call("runtime-test", None, None, None)
+            super::client::current_context().unwrap().next_call(
+                "runtime-test",
+                None,
+                None,
+                gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+                None,
+            )
         });
         let title = scope_call_with_join(CallKind::OneOff, 1, async {
-            super::client::current_context()
-                .unwrap()
-                .next_call("runtime-test", None, None, None)
+            super::client::current_context().unwrap().next_call(
+                "runtime-test",
+                None,
+                None,
+                gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+                None,
+            )
         });
         let ((compaction_call, compaction_join), (title_call, title_join)) =
             tokio::join!(compaction, title);
@@ -1143,7 +1170,12 @@ async fn dropped_permit_outcomes_match_lean_model() {
         assert_eq!(rows.len(), 1);
         if let Some(observed) = &case.input.observed {
             assert_eq!(
-                &recorded_failure_reason(observed),
+                &recorded_failure(
+                    observed,
+                    chrono::Utc::now(),
+                    gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+                )
+                .0,
                 observed,
                 "the failure-text owner records a short plain reason unchanged"
             );
@@ -1157,7 +1189,14 @@ async fn dropped_permit_outcomes_match_lean_model() {
             .input
             .observed
             .as_deref()
-            .map(recorded_failure_reason)
+            .map(|observed| {
+                recorded_failure(
+                    observed,
+                    chrono::Utc::now(),
+                    gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+                )
+                .0
+            })
             .as_deref()
             == Some(persisted_reason)
         {
@@ -1197,6 +1236,7 @@ async fn pending_call(
         request_purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         model_name: None,
         profile_id: None,
+        max_rate_limit_wait: gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
         call_id: format!("call-{request_id}"),
         runtime_instance_id: "runtime-test".to_string(),
         request_id: request_id.to_string(),
@@ -1622,6 +1662,7 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
         },
         registry.registry.clone(),
         old_connection.as_str(),
+        gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
     );
     old_model.agent_signer = Some(registry.signer.clone());
     let old_call = tokio::spawn(scope_request(
@@ -1641,6 +1682,7 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
         },
         registry.registry.clone(),
         new_connection.as_str(),
+        gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
     );
     new_model.agent_signer = Some(registry.signer.clone());
     let new_call = tokio::spawn(scope_request(

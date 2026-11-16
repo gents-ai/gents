@@ -67,9 +67,9 @@ def params (input : Input) : Option String :=
 
 /-- The longest provider rate-limit wait, in milliseconds, the loop holds when
 the retry policy leaves it unset; a longer wait fails as the provider's usage
-limit (`CompletionRetry.Budget.maxWait`). It equals `LONG_RATE_LIMIT_WAIT`, the
-wait beyond which a recorded attempt's throttle reads as usage exhaustion, so
-with the unset cap a request's verdict and its recorded attempt agree. -/
+limit (`CompletionRetry.Budget.maxWait`). It is `LONG_RATE_LIMIT_WAIT`. A
+call's recorded verdict uses the cap its agent resolves, set or not
+(`InferenceCall.ProviderLimit.verdict`), so the two agree for every cap. -/
 def defaultMaxWaitMs : Nat := 300000
 
 /-- Scheduled work has a longer transport ladder; an interactive override
