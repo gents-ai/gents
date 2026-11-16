@@ -1,7 +1,8 @@
 use thiserror::Error;
 
 use crate::provider_limit::{
-    classify_provider_limit, strip_provider_limit_marker, ProviderLimit, ProviderLimitHeaders,
+    classify_attempt_provider_limit, strip_provider_limit_marker, ProviderLimit,
+    ProviderLimitHeaders,
 };
 
 #[derive(Debug, Error)]
@@ -284,7 +285,7 @@ fn classify_cause(cause: &LoopFailureCause, report: &ProviderReport, text: &str)
         failure,
         CompletionFailure::Http { .. } | CompletionFailure::Provider(_)
     ) {
-        match classify_provider_limit(reason, chrono::Utc::now()) {
+        match classify_attempt_provider_limit(reason, chrono::Utc::now()) {
             Some(ProviderLimit::UsageExhausted(limit)) => {
                 return InferenceError::UsageLimited(limit);
             }

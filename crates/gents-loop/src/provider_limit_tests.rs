@@ -213,6 +213,12 @@ fn long_retry_after_is_a_usage_limit_reset() {
         panic!("expected usage limit");
     };
     assert_eq!(limit.resets_at, Some(now() + chrono::Duration::hours(2)));
+    assert_eq!(
+        classify_attempt_provider_limit(&text, now()),
+        Some(ProviderLimit::Throttled {
+            retry_after: Some(Duration::from_secs(7200))
+        })
+    );
 }
 
 #[test]

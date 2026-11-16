@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use rand::Rng;
 
 use crate::error::{ClassifiedFailure, ContextOverflow, InferenceError};
-use crate::provider_limit::LONG_RATE_LIMIT_WAIT;
+use crate::provider_limit::{UsageLimit, LONG_RATE_LIMIT_WAIT};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionRetryProfileFields {
@@ -63,7 +63,8 @@ pub struct CompletionRetryPolicy {
     pub account_hops: u32,
     /// Longest transport wait held before a retry
     /// (Lean: `CompletionRetry.Budget.maxWait`); a provider rate-limit wait
-    /// beyond it fails the completion.
+    /// beyond it fails the completion as the provider's usage limit, and the
+    /// policy's own backoff steps are clamped to it.
     pub max_rate_limit_wait: Duration,
 }
 
@@ -290,6 +291,45 @@ impl CompletionRetryState {
         self.empty_used = 0;
     }
 
+    /// The failure as this policy reads it: a provider rate-limit wait beyond
+    /// `max_rate_limit_wait` is the provider's usage limit, resetting when
+    /// that wait ends (Lean: `CompletionRetry.step?` fails a transport wake
+    /// beyond `Budget.maxWait` permanently). The loop reads every attempt
+    /// failure through it before choosing a lane.
+    pub fn read_failure(
+        &self,
+        failure: ClassifiedFailure,
+        now: DateTime<Utc>,
+    ) -> ClassifiedFailure {
+        match self.unheld_usage_limit(&failure, now) {
+            Some(limit) => ClassifiedFailure {
+                error: InferenceError::UsageLimited(limit),
+                ..failure
+            },
+            None => failure,
+        }
+    }
+
+    fn unheld_usage_limit(
+        &self,
+        failure: &ClassifiedFailure,
+        now: DateTime<Utc>,
+    ) -> Option<UsageLimit> {
+        match failure.error {
+            InferenceError::RateLimited {
+                retry_after: Some(wait),
+            } if failure_class(failure) == FailureClass::Transport
+                && wait > self.policy.max_rate_limit_wait =>
+            {
+                Some(UsageLimit::unheld_throttle(
+                    &failure.text,
+                    now.checked_add_signed(chrono_duration_from_std(wait)),
+                ))
+            }
+            _ => None,
+        }
+    }
+
     pub fn on_pre_stream_failure(
         &mut self,
         failure: &ClassifiedFailure,
@@ -306,6 +346,11 @@ impl CompletionRetryState {
                 },
             },
             FailureClass::Transport => {
+                if let Some(limit) = self.unheld_usage_limit(failure, now) {
+                    return PreStreamDirective::Fail {
+                        reason: limit.to_string(),
+                    };
+                }
                 match ladder_delay(&self.policy.transport_backoff, self.transport_used) {
                     None => PreStreamDirective::Fail {
                         reason: format!(
@@ -320,11 +365,7 @@ impl CompletionRetryState {
                             } => base_delay.max(*retry_after),
                             _ => base_delay,
                         };
-                        let Some(delay) = self.held_wait(base_delay) else {
-                            return PreStreamDirective::Fail {
-                                reason: max_wait_reason(base_delay, self.policy.max_rate_limit_wait),
-                            };
-                        };
+                        let delay = self.held_wait(base_delay);
                         if exceeds_deadline(now, delay, deadline) {
                             return PreStreamDirective::Fail {
                                 reason: deadline_reason(delay, deadline),
@@ -457,11 +498,7 @@ impl CompletionRetryState {
                 ),
             },
             Some(base_delay) => {
-                let Some(delay) = self.held_wait(base_delay) else {
-                    return MidStreamDirective::Fail {
-                        reason: max_wait_reason(base_delay, self.policy.max_rate_limit_wait),
-                    };
-                };
+                let delay = self.held_wait(base_delay);
                 if exceeds_deadline(now, delay, deadline) {
                     return MidStreamDirective::Fail {
                         reason: deadline_reason(delay, deadline),
@@ -477,20 +514,11 @@ impl CompletionRetryState {
         }
     }
 
-    /// The jittered transport wait, never beyond the policy's cap; none when
-    /// the base wait itself exceeds the cap.
-    fn held_wait(&self, base_delay: Duration) -> Option<Duration> {
+    /// The jittered transport wait, never beyond the policy's cap.
+    fn held_wait(&self, base_delay: Duration) -> Duration {
         let cap = self.policy.max_rate_limit_wait;
-        (base_delay <= cap).then(|| jitter(base_delay, &mut rand::rng()).min(cap))
+        jitter(base_delay.min(cap), &mut rand::rng()).min(cap)
     }
-}
-
-fn max_wait_reason(delay: Duration, cap: Duration) -> String {
-    format!(
-        "provider wait of {delay:?} exceeds max_rate_limit_wait_ms ({}); failing rather than \
-         holding the request",
-        cap.as_millis()
-    )
 }
 
 fn ladder_delay(backoff: &[Duration], used: u32) -> Option<Duration> {
