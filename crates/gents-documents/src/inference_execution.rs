@@ -89,8 +89,9 @@ pub struct InferenceRetryPolicy {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub interactive_max_transport_retries: Option<i64>,
-    /// Longest provider rate-limit wait the owned loop holds before failing
-    /// the request; default 300,000ms.
+    /// Longest provider rate-limit wait the owned loop holds; a longer wait
+    /// fails the request as the provider's usage limit. Default 300,000ms;
+    /// `backoff_ms` steps may not exceed it.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub max_rate_limit_wait_ms: Option<i64>,
@@ -209,6 +210,22 @@ impl InferenceRetryPolicy {
         {
             violations.push(format!(
                 "InferenceRetryPolicy {retry_policy_id} backoff_ms entries must be positive"
+            ));
+        }
+        let max_wait = self
+            .max_rate_limit_wait_ms
+            .filter(|value| *value > 0)
+            .unwrap_or(
+                i64::try_from(gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT.as_millis())
+                    .unwrap_or(i64::MAX),
+            );
+        if self
+            .backoff_ms
+            .as_ref()
+            .is_some_and(|values| values.iter().any(|value| *value > max_wait))
+        {
+            violations.push(format!(
+                "InferenceRetryPolicy {retry_policy_id} backoff_ms entries must not exceed max_rate_limit_wait_ms ({max_wait})"
             ));
         }
 

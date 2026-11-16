@@ -3,8 +3,12 @@ use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 
-/// Treat long provider waits as usage exhaustion so transport retries do not
-/// hold the request until a distant reset; the reset time remains observable.
+/// The wait beyond which a recorded attempt's throttle reads as usage
+/// exhaustion, and the default `max_rate_limit_wait_ms`. A recorded failure
+/// carries no retry policy, so its readers cannot know the agent's cap; a live
+/// attempt is classified without it and the owned loop's
+/// `CompletionRetryPolicy::max_rate_limit_wait` decides
+/// (Lean: `Runtime.CompletionConfig.defaultMaxWaitMs`).
 pub const LONG_RATE_LIMIT_WAIT: Duration = Duration::from_secs(5 * 60);
 
 const MARKER_OPEN: &str = " [provider-limit";
@@ -199,6 +203,18 @@ pub struct UsageLimit {
     pub detail: String,
 }
 
+impl UsageLimit {
+    /// A throttle whose wait the owned loop will not hold, read as the
+    /// provider's usage limit resetting when that wait ends.
+    pub fn unheld_throttle(text: &str, resets_at: Option<DateTime<Utc>>) -> Self {
+        let body = strip_provider_limit_marker(text);
+        Self {
+            resets_at,
+            detail: provider_detail(body, embedded_json(body).as_ref()),
+        }
+    }
+}
+
 impl fmt::Display for UsageLimit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.resets_at {
@@ -218,7 +234,23 @@ pub enum ProviderLimit {
     UsageExhausted(UsageLimit),
 }
 
+/// A recorded failure's limit: a throttle beyond `LONG_RATE_LIMIT_WAIT` reads
+/// as usage exhaustion.
 pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<ProviderLimit> {
+    classify(text, now, Some(LONG_RATE_LIMIT_WAIT))
+}
+
+/// A live attempt's limit: a throttle stays a throttle whatever its wait, and
+/// the owned loop's retry policy decides how long to hold it.
+pub fn classify_attempt_provider_limit(text: &str, now: DateTime<Utc>) -> Option<ProviderLimit> {
+    classify(text, now, None)
+}
+
+fn classify(
+    text: &str,
+    now: DateTime<Utc>,
+    longest_throttle: Option<Duration>,
+) -> Option<ProviderLimit> {
     let (body, marker) = split_provider_limit_marker(text);
     let headers = ProviderLimitHeaders::parse_marker(marker).unwrap_or_default();
     let lower = body.to_ascii_lowercase();
@@ -254,7 +286,10 @@ pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<Provide
         .retry_at
         .or_else(|| try_again_in(&lower).and_then(|wait| delay_after(now, wait.as_secs_f64())));
     let retry_after = retry_at.map(|at| (at - now).to_std().unwrap_or(Duration::ZERO));
-    if retry_after.is_some_and(|wait| wait > LONG_RATE_LIMIT_WAIT) {
+    if retry_after
+        .zip(longest_throttle)
+        .is_some_and(|(wait, longest)| wait > longest)
+    {
         return Some(ProviderLimit::UsageExhausted(UsageLimit {
             resets_at: retry_at,
             detail: provider_detail(body, body_json.as_ref()),

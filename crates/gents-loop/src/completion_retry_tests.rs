@@ -127,6 +127,73 @@ fn rate_limited_uses_provider_hint_when_larger_than_ladder() {
 }
 
 #[test]
+fn rate_limit_wait_beyond_the_cap_fails_as_usage_limited_whatever_budget_remains() {
+    let now = Utc::now();
+    let wait = crate::provider_limit::LONG_RATE_LIMIT_WAIT + Duration::from_secs(1);
+    let error = InferenceError::RateLimited {
+        retry_after: Some(wait),
+    };
+    for policy in [
+        CompletionRetryPolicy::scheduled_default(),
+        CompletionRetryPolicy::no_retry(),
+    ] {
+        let mut state = CompletionRetryState::new(policy);
+        let failure = state.read_failure(classified(&error, "rate limited"), now);
+        let InferenceError::UsageLimited(limit) = &failure.error else {
+            panic!("expected a usage limit, got {:?}", failure.error);
+        };
+        assert_eq!(
+            limit.resets_at,
+            Some(now + chrono::Duration::milliseconds(wait.as_millis() as i64))
+        );
+        match state.on_pre_stream_failure(&failure, now, None) {
+            PreStreamDirective::Fail { reason } => assert_eq!(reason, limit.to_string()),
+            other => panic!("expected Fail, got {other:?}"),
+        }
+        assert_eq!(state.retry_count(), 0);
+    }
+}
+
+#[test]
+fn raising_the_cap_holds_a_longer_rate_limit_wait() {
+    let now = Utc::now();
+    let wait = Duration::from_secs(10 * 60);
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy {
+        max_rate_limit_wait: Duration::from_secs(15 * 60),
+        ..CompletionRetryPolicy::scheduled_default()
+    });
+    let error = InferenceError::RateLimited {
+        retry_after: Some(wait),
+    };
+    let failure = state.read_failure(classified(&error, "rate limited"), now);
+    assert!(matches!(failure.error, InferenceError::RateLimited { .. }));
+    match state.on_pre_stream_failure(&failure, now, None) {
+        PreStreamDirective::RetryAfter { delay, kind } => {
+            assert_eq!(kind, RetryKind::Transport);
+            assert_in_range(delay, 450_000, 750_000);
+        }
+        other => panic!("expected RetryAfter, got {other:?}"),
+    }
+}
+
+#[test]
+fn default_backoff_steps_are_clamped_to_a_lower_cap() {
+    let now = Utc::now();
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy {
+        max_rate_limit_wait: Duration::from_secs(10),
+        ..CompletionRetryPolicy::scheduled_default()
+    });
+    for _ in 0..3 {
+        match state.on_mid_stream_failure(false, now, None) {
+            MidStreamDirective::RetractAndResample { delay } => {
+                assert!(delay <= Duration::from_secs(10), "{delay:?}");
+            }
+            other => panic!("expected RetractAndResample, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn fresh_parse_400_deadline_overshoot_fails_immediately_not_repair() {
     let policy = CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(30)],

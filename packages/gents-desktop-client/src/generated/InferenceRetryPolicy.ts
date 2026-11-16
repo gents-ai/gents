@@ -11,7 +11,8 @@ export type InferenceRetryPolicy = { node_did: string, retry_policy_id: string, 
  */
 interactive_max_transport_retries?: number | null,
 /**
- * Longest provider rate-limit wait the owned loop holds before failing
- * the request; default 300,000ms.
+ * Longest provider rate-limit wait the owned loop holds; a longer wait
+ * fails the request as the provider's usage limit. Default 300,000ms;
+ * `backoff_ms` steps may not exceed it.
  */
 max_rate_limit_wait_ms?: number | null, tags?: Array<string> | null, };
