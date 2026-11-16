@@ -15,8 +15,10 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   merge_group:
     types: [checks_requested]
-  # A daily run of main's archived test groups that ignores the test-result
-  # cache, so a cache defect cannot hide a regression for longer than a day.
+  # A daily run of main: the archived test groups ignoring the test-result
+  # cache, so a cache defect cannot hide a regression for longer than a day,
+  # and the portable groups that have a macOS role on macOS, uncached, so a
+  # platform difference the Linux runs cannot see surfaces within a day.
   schedule:
     - cron: "23 7 * * *"
   workflow_dispatch:
@@ -166,8 +168,8 @@ jobs:
           GATE_EVERYTHING: >-
             ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group')
             && 'true' || env.GATE_EVERYTHING }}
-          # The scheduled run is the full test-cache run of the archived groups.
-          GATE_ONLY: ${{ github.event_name == 'schedule' && 'build:portable' || inputs.only }}
+          # gate.py selects the scheduled run's jobs itself (resolve_plan).
+          GATE_ONLY: ${{ inputs.only }}
           # scripts/ci/gate.py test_cache_mode reads these.
           GATE_EVENT: ${{ github.event_name }}
           GATE_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
@@ -285,6 +287,11 @@ jobs:
       - name: Check runner build-space reclamation
         run: python3 .github/scripts/test-rust-build-space.py
 
+      - name: Check the runner-local Lean cache link
+        run: |
+          shellcheck .github/scripts/setup-lean-build-cache.sh
+          python3 .github/scripts/test-setup-lean-build-cache.py
+
       - name: Run Harbor agent adapter tests
         run: python3 scripts/harbor/test_gents_agent.py
 
@@ -359,7 +366,43 @@ jobs:
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
     steps:
-      - uses: actions/checkout@v7
+      # actions/checkout runs `git submodule` about ten times per job (status,
+      # then foreach to set and remove credentials, again in its post step). On
+      # some Studio runner processes every command that the Xcode bundle's
+      # git-submodule shell script spawns stalls about 6 s, so each call takes
+      # about 100 s: 12 minutes in the step and 5 more in its post step. The
+      # repository has no submodules, so a self-hosted macOS runner fetches and
+      # checks out the commit with plain git, the same depth-1 fetch, forced
+      # checkout and `git clean -ffdx` as actions/checkout, and persists no
+      # credentials. Every other runner keeps actions/checkout.
+      - &checkout-self-hosted-macos
+        name: Check out the commit with plain git
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        env:
+          CHECKOUT_REPOSITORY: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init --quiet "${GITHUB_WORKSPACE}"
+          cd "${GITHUB_WORKSPACE}"
+          git config --local remote.origin.url "https://github.com/${CHECKOUT_REPOSITORY}"
+          git config --local gc.auto 0
+          # The token reaches git through its environment: never argv or .git/config.
+          basic="$(printf 'x-access-token:%s' "${CHECKOUT_TOKEN}" | base64 | tr -d '\n')"
+          echo "::add-mask::${basic}"
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic}" \
+            git -c protocol.version=2 fetch --no-tags --no-recurse-submodules --depth=1 \
+            origin "+${CHECKOUT_SHA}:refs/remotes/origin/ci-checkout"
+          git checkout --quiet --force --detach "${CHECKOUT_SHA}"
+          git clean -ffdx
+          test "$(git rev-parse HEAD)" = "${CHECKOUT_SHA}"
+
+      - &checkout-elsewhere
+        if: runner.os != 'macOS' || runner.environment != 'self-hosted'
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -422,9 +465,8 @@ jobs:
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *checkout-self-hosted-macos
+      - *checkout-elsewhere
 
       - name: Record the host's live Gents node
         if: runner.os == 'macOS' && runner.environment == 'self-hosted'
@@ -452,6 +494,7 @@ jobs:
       # proofs' Lean toolchain and dependencies, which a cold guard runner
       # spent its whole 10 minutes fetching.
       - name: Check the test-result cache against its Lean model
+        if: fromJSON(needs.plan.outputs.plan).contract.test_cache_model
         run: .github/scripts/check-test-cache-model.sh
 
       - name: Show Rust build cache stats
@@ -465,9 +508,10 @@ jobs:
 
   # One job per group of crates that holds a changed crate or a dependent.
   # Each job starts from an empty RUNNER_TEMP target tree; the host sccache
-  # service supplies cached rlibs, so parallel jobs share compilation.
+  # service supplies cached rlibs, so parallel jobs share compilation. A role's
+  # `jobs` in .github/ci-runners.json bound the job's compile and test parallelism.
   test:
-    name: test (${{ matrix.group }})
+    name: ${{ matrix.job }}
     needs: [plan, repository-guard]
     if: >-
       (github.event_name != 'pull_request' ||
@@ -480,10 +524,11 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
+      CARGO_BUILD_JOBS: ${{ matrix.build_jobs || vars.CARGO_BUILD_JOBS || '12' }}
+      RUST_TEST_THREADS: ${{ matrix.test_threads || vars.RUST_TEST_THREADS || vars.CARGO_BUILD_JOBS || '12' }}
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *checkout-self-hosted-macos
+      - *checkout-elsewhere
 
       - name: Record the host's live Gents node
         if: runner.os == 'macOS' && runner.environment == 'self-hosted'
@@ -492,7 +537,7 @@ jobs:
       # Enable only after provisioning a separate OS account and runner. The
       # configured path must be the running fleet node's actual gents home.
       - name: Verify isolated runtime runner
-        if: matrix.group == 'runtime' && vars.GENTS_CI_RUNTIME_ISOLATED == 'true'
+        if: matrix.role == 'runtime-isolated'
         env:
           GENTS_CI_FLEET_HOME: ${{ vars.GENTS_CI_FLEET_HOME }}
           GENTS_CI_FLEET_USER: ${{ vars.GENTS_CI_FLEET_USER }}
@@ -507,8 +552,8 @@ jobs:
           afterburner: ${{ matrix.go }}
           role: ${{ matrix.role }}
 
-      - name: Run tests for ${{ matrix.packages }}
-        run: make gate-run JOB="test:${{ matrix.group }}"
+      - name: Run ${{ matrix.job }}
+        run: make gate-run JOB="${{ matrix.job }}"
 
       - name: Collect migration lens diagnostics on failure
         if: failure() && matrix.group == 'foundation'
@@ -549,10 +594,11 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.archives) }}
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
+      CARGO_BUILD_JOBS: ${{ matrix.build_jobs || vars.CARGO_BUILD_JOBS || '12' }}
+      RUST_TEST_THREADS: ${{ matrix.test_threads || vars.RUST_TEST_THREADS || vars.CARGO_BUILD_JOBS || '12' }}
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *checkout-self-hosted-macos
+      - *checkout-elsewhere
 
       - name: Record the host's live Gents node
         if: runner.os == 'macOS' && runner.environment == 'self-hosted'
@@ -564,6 +610,7 @@ jobs:
       - uses: ./.github/actions/rust-runner
         with:
           lean: ${{ matrix.run && 'true' || 'false' }}
+          afterburner: ${{ matrix.run && matrix.go && 'true' || 'false' }}
 
       - name: Install cargo-nextest
         run: .github/scripts/setup-nextest.sh
@@ -617,10 +664,11 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.shards) }}
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
+      CARGO_BUILD_JOBS: ${{ matrix.build_jobs || vars.CARGO_BUILD_JOBS || '12' }}
+      RUST_TEST_THREADS: ${{ matrix.test_threads || vars.RUST_TEST_THREADS || vars.CARGO_BUILD_JOBS || '12' }}
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *checkout-self-hosted-macos
+      - *checkout-elsewhere
 
       - name: Record the host's live Gents node
         if: runner.os == 'macOS' && runner.environment == 'self-hosted'
@@ -629,6 +677,7 @@ jobs:
       - uses: ./.github/actions/rust-runner
         with:
           lean: "true"
+          afterburner: ${{ matrix.go && 'true' || 'false' }}
 
       - name: Install cargo-nextest
         run: .github/scripts/setup-nextest.sh
@@ -800,9 +849,8 @@ jobs:
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *checkout-self-hosted-macos
+      - *checkout-elsewhere
 
       - name: Record the host's live Gents node
         if: runner.os == 'macOS' && runner.environment == 'self-hosted'
@@ -870,9 +918,8 @@ jobs:
     runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.macos }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
+      - *checkout-self-hosted-macos
+      - *checkout-elsewhere
 
       - name: Run notarization control tests
         run: |
@@ -918,7 +965,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          sparse-checkout: scripts/ci
+          sparse-checkout: |
+            scripts/ci
+            crates/gents/proofs/tla/scripts
 
       - name: Require every selected job
         env:

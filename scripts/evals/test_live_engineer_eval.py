@@ -286,9 +286,14 @@ class LiveEngineerEvalTests(unittest.TestCase):
     def test_requires_a_fresh_home(self):
         home = self.root / "home"
         home.mkdir()
+        # An earlier run's passing result in the same directory (run 43879119845).
+        self.out.mkdir(parents=True)
+        (self.out / "result.json").write_text(json.dumps({"outcome": "pass", "reason": "3 of 3 trials passed"}))
         result = self.drive("run", "--out", str(self.out), "--gents", str(self.gents), "--home", str(home), CLASSES="pass")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("fresh home", result.stderr)
+        self.assertEqual(self.result()["outcome"], "error")
+        self.assertIn("fresh home", self.result()["reason"])
 
     def test_rejects_a_threshold_above_the_trials(self):
         result = self.drive("probe", "--out", str(self.out), "--trials", "2", "--required", "3")

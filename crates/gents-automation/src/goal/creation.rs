@@ -215,7 +215,7 @@ pub enum CreateGoalForSessionError {
     InvalidBudget,
     #[error("the current session already has a goal with a different objective or budget")]
     Conflict,
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Storage(#[from] anyhow::Error),
 }
 

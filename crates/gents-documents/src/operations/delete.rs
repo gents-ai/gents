@@ -57,7 +57,7 @@ fn removal_plan(
         }
     }
     let passthrough = |error: anyhow::Error| {
-        DocumentDeleteError::Passthrough(error.reallocate_into_boxed_dyn_error_without_backtrace())
+        DocumentDeleteError::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
     };
     DesiredStateApplyPlan::new(Vec::new())
         .map_err(passthrough)?

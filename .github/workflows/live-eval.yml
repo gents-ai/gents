@@ -76,13 +76,16 @@ jobs:
       - name: Prepare job directories
         working-directory: ${{ runner.temp }}
         run: |
-          # The runner empties RUNNER_TEMP around every job, so the build
-          # leaves nothing on the host's disk.
+          # RUNNER_TEMP is not reliably emptied between jobs on this runner:
+          # run 43879119845 found an earlier eval's home and result.json. Each
+          # attempt gets its own directory, and earlier ones are removed.
+          dir="${RUNNER_TEMP}/live-eval-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          find "${RUNNER_TEMP}" -maxdepth 1 -name 'live-eval*' -exec rm -rf {} + || true
           {
             echo "JOB_STARTED=$(date +%s)"
-            echo "LIVE_EVAL_DIR=${RUNNER_TEMP}/live-eval"
-            echo "LIVE_EVAL_OUT=${RUNNER_TEMP}/live-eval/out"
-            echo "CARGO_TARGET_DIR=${RUNNER_TEMP}/live-eval/target"
+            echo "LIVE_EVAL_DIR=${dir}"
+            echo "LIVE_EVAL_OUT=${dir}/out"
+            echo "CARGO_TARGET_DIR=${dir}/target"
           } >> "${GITHUB_ENV}"
 
       - uses: actions/checkout@v7
