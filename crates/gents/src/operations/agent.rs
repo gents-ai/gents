@@ -243,7 +243,11 @@ pub async fn put_in_txn(
         .map_err(|error| {
             error.finish(gents_protocol::operations::document::DocumentOperationError::Passthrough)
         })
-        .map_err(|error| AgentOperationError::Passthrough(Box::new(error)))?;
+        .map_err(|error| {
+            AgentOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::error(
+                error,
+            ))
+        })?;
     }
     gents_tools::builtin::self_config::apply_agent_in_txn(
         txn,

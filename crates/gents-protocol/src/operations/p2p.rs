@@ -1,5 +1,3 @@
-use std::error::Error;
-
 use serde::{Deserialize, Serialize};
 
 use super::NextCall;
@@ -135,7 +133,7 @@ pub enum RegistryError {
     UnknownTemplate(String),
     /// Another owner's failure (the store, ACP), unchanged.
     #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    Passthrough(crate::error_chain::PassedThrough),
 }
 
 impl RegistryError {
@@ -264,5 +262,5 @@ pub enum ApplicationPairingError {
     #[error("an application pairing status is malformed")]
     Malformed(#[source] serde_json::Error),
     #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    Passthrough(crate::error_chain::PassedThrough),
 }

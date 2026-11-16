@@ -10,9 +10,9 @@ pub enum ConfigurationVisibilityError {
     Unavailable,
     #[error("configuration visibility query returned an invalid response")]
     InvalidResponse,
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Version(#[from] gents_store::graphql::GraphqlResponseError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] ConfigClientError),
 }
 
@@ -20,6 +20,7 @@ impl TransactionFailure for ConfigurationVisibilityError {
     fn config_client_error(&self) -> Option<&ConfigClientError> {
         match self {
             Self::Access(error) => Some(error),
+            Self::Version(error) => error.config_client_error(),
             _ => None,
         }
     }

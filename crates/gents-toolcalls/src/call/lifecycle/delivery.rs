@@ -78,7 +78,7 @@ fn take_terminal_failure_for_test(tool_call_doc_id: &str) -> bool {
 
 /// Why a terminal's transaction did not commit.
 #[derive(Debug, thiserror::Error)]
-enum TerminalWriteError {
+pub(crate) enum TerminalWriteError {
     /// A deferred plugin write was refused or failed inside the terminal's
     /// transaction, which rolled back whole.
     #[error("{refusal}")]
@@ -87,9 +87,9 @@ enum TerminalWriteError {
         #[source]
         source: anyhow::Error,
     },
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] gents_store::config_client::ConfigClientError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

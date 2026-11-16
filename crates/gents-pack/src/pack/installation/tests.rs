@@ -235,8 +235,8 @@ fn pack_change_errors_keep_conflict_retry() {
         assert!(is_classified_transaction_conflict(&error.into_anyhow()));
     }
     assert!(
-        !is_classified_transaction_conflict(&anyhow::Error::from(other())),
-        "a transparent wrapper hides its inner error from the chain"
+        is_classified_transaction_conflict(&anyhow::Error::from(other())),
+        "Other sources its application error, so the conflict stays on the chain"
     );
     let edited = PackChangeError::Edited {
         coordinate: "acme/demo".into(),
@@ -258,12 +258,14 @@ fn pack_change_errors_keep_conflict_retry() {
 
 #[test]
 fn other_renders_as_its_anyhow_error() {
+    use gents_protocol::error_chain::ErrorChain;
     let error = anyhow::anyhow!("root").context("ctx");
     let rendered = format!("{error:#}");
-    assert_eq!(
-        format!("{:#}", anyhow::Error::from(PackChangeError::Other(error))),
-        rendered
-    );
+    let other = PackChangeError::Other(error);
+    assert_eq!(format!("{other:#}"), rendered);
+    let other = anyhow::Error::from(other);
+    assert_eq!(other.to_string(), "ctx");
+    assert_eq!(ErrorChain(other.as_ref()).to_string(), rendered);
 }
 
 #[test]
