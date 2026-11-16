@@ -68,11 +68,7 @@ fn capture_native(
         .collect::<Vec<_>>();
     // Inactive homes may have a different configuration schema. Their standard
     // credential paths do not require decoding configuration or walking data.
-    for home in homes.iter().map(|account| account.join(".gents")).chain(
-        std::env::var_os("GENTS_HOME")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from),
-    ) {
+    for home in inactive_runtime_homes(&homes) {
         paths.extend(standard_runtime_credentials(&home));
     }
     if let Some(config) = std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
@@ -87,6 +83,30 @@ fn capture_native(
         paths.extend(runtime_credentials(&home)?);
     }
     CredentialProtection::capture(paths)
+}
+
+#[cfg(not(any(test, feature = "test-home-guard")))]
+fn inactive_runtime_homes(homes: &[PathBuf]) -> Vec<PathBuf> {
+    homes
+        .iter()
+        .map(|home| home.join(".gents"))
+        .chain(
+            std::env::var_os("GENTS_HOME")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from),
+        )
+        .collect()
+}
+
+#[cfg(any(test, feature = "test-home-guard"))]
+fn inactive_runtime_homes(_homes: &[PathBuf]) -> Vec<PathBuf> {
+    static NAMESPACE: std::sync::LazyLock<tempfile::TempDir> = std::sync::LazyLock::new(|| {
+        tempfile::Builder::new()
+            .prefix("gents-test-credentials-")
+            .tempdir()
+            .unwrap()
+    });
+    vec![NAMESPACE.path().join("runtime")]
 }
 
 fn runtime_credentials(home: &Path) -> Result<Vec<PathBuf>> {
