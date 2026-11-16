@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::{ensure, Context, Result};
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_store::identity::NodeIdentity;
+use gents_store::test_support::bounded_process::BoundedProcess;
 use serde_json::{json, Value};
 #[cfg(unix)]
 use tokio::process::Child;
@@ -59,8 +60,6 @@ mod editor_workspace;
 mod fake_llm;
 #[path = "support/goal_delivery.rs"]
 mod goal_delivery;
-#[path = "support/initialization.rs"]
-mod initialization;
 #[path = "support/live_runtime.rs"]
 mod live_runtime;
 #[path = "support/passive_settings.rs"]
@@ -765,9 +764,17 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if matches!(journey, Journey::EditorQuestions) {
         init.args(["--engineer", "--no-default-packs"]);
     }
-    let output = initialization::Initialization::spawn(&mut init, root)?
+    let capture = root.to_owned();
+    let output = tokio::task::spawn_blocking(move || {
+        BoundedProcess::spawn(
+            init.as_std_mut(),
+            &capture,
+            "init",
+            "fixture initialization",
+        )?
         .wait(Duration::from_secs(30))
-        .await?;
+    })
+    .await??;
     let init_stages = std::fs::read_to_string(root.join("init.stderr"))?;
     ensure!(
         init_stages.contains(r#""embedded_node_drained""#),
