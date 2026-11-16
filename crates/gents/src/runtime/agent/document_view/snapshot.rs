@@ -399,6 +399,10 @@ fn append_inference_selection(
                 .ok_or_else(|| anyhow!("resolved inference document disappeared"))?;
             documents.push(SelectedConfigurationDocument {
                 collection: $collection,
+                version: record
+                    .version
+                    .clone()
+                    .ok_or_else(|| anyhow!("resolved configuration has no composite version"))?,
                 doc_id: record.doc_id.clone(),
                 logical_id: None,
             });

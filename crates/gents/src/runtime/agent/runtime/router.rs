@@ -317,7 +317,7 @@ where
                             session_id = %request.session_id,
                             agent_did = %resolution.agent_did,
                             generation = routed_snapshot.generation,
-                            "routed generation's selected configuration is not visible to its agent; deferring request to a newer generation"
+                            "routed configuration is unavailable or superseded; deferring request to a newer generation"
                         );
                         deferred.defer(routed_snapshot.generation, request);
                         continue;

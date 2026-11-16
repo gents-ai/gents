@@ -45,7 +45,7 @@ pub async fn interrupt_request(
     let owner = escape_graphql_string(agent.did());
     let filter = format!("request_id:{{_eq:\"{logical}\"}},agent_did:{{_eq:\"{owner}\"}}");
     access
-        .transact_write("interrupt.latch_request", |txn| {
+        .transact_signed_conflict_rebuild("interrupt.latch_request", |txn| {
             let filter = &filter;
             Box::pin(async move { interrupt_request_matching_in_txn(txn, filter).await })
         })
@@ -112,6 +112,8 @@ fn scoped_request_filter(
     ))
 }
 
+/// The latch and session-halt effects are transaction-only. A confirmed
+/// conflict rebuilds them from fresh rows instead of replaying signed writes.
 pub async fn interrupt_request_by_doc_id_with_access(
     access: &gents_store::config_client::ConfigAccess,
     request_doc_id: &str,
