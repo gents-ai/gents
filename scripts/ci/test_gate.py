@@ -116,6 +116,18 @@ class Selection(unittest.TestCase):
         self.assertNotIn("lint", selection["jobs"])
         self.assertTrue(selection["contract"]["ts_lean"])
 
+    def test_the_test_cache_model_check_runs_only_for_the_caches_own_files(self):
+        for path in ("crates/gents/proofs/Proofs/Ci/TestCache.lean", "scripts/ci/test_cache.py",
+                     ".github/scripts/check-test-cache-model.sh", "crates/gents/proofs/lean-toolchain"):
+            with self.subTest(path=path):
+                selection = select(path)
+                self.assertIn("contract", selection["jobs"])
+                self.assertTrue(selection["contract"]["test_cache_model"])
+        for path in ("crates/gents/proofs/Proofs/Request/CausalHop.lean", "scripts/ci/gate.py",
+                     "crates/gents-store/src/graphql.rs", "Cargo.lock"):
+            with self.subTest(path=path):
+                self.assertFalse(select(path)["contract"]["test_cache_model"])
+
     def test_a_draft_tests_what_it_changes_and_lints_what_depends_on_it(self):
         selection = select("crates/gents-store/src/graphql.rs", tier="draft")
         self.assertEqual(groups(selection), {"store": ["gents-store"]})
