@@ -8,6 +8,9 @@ pub(crate) const MAX_CONFIGURED_FILE_CHARS: usize = 1_000_000;
 /// Limit configured list and search results so path collections cannot consume
 /// unbounded model context or result storage.
 pub(crate) const MAX_CONFIGURED_FILE_RESULTS: usize = 5_000;
+/// Limit the workspace instruction text a Host document can place in provider
+/// context. The unset default is `gents_session::workspace::INSTRUCTION_TEXT_BUDGET`.
+pub(crate) const MAX_CONFIGURED_INSTRUCTION_CHARS: usize = 256 * 1024;
 pub const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 120;
 
 /// Default wait when neither the call nor the Tools group sets one; the
