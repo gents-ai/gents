@@ -752,7 +752,9 @@ jobs:
     # Bombadil's exact Linux failure trace passes on macOS, so this smoke
     # stays on macOS while the portable UI suite runs on Linux.
     runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.macos }}
-    timeout-minutes: 10
+    # A runner's first checkout is a full clone; the smoke itself keeps its
+    # 10-minute bound on its own step.
+    timeout-minutes: 30
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
     steps:
@@ -777,6 +779,7 @@ jobs:
         run: npx playwright install chromium
 
       - name: Run desktop Bombadil smoke
+        timeout-minutes: 10
         run: make gate-run JOB=ts-fuzz
 
       # Bombadil has no --seed; the recorded trace is the only exact-replay
