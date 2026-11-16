@@ -80,10 +80,8 @@ class Group:
 # `native` group (`macos_only_tests`), and the scheduled run also runs the
 # groups that have `macos` there, uncached, so filesystem and path differences
 # between the platforms still surface daily. `native` holds the crates that need
-# macOS: the service manager owner, whose tests drive the real one, and every
-# crate that links Tauri (fixture-domain-plugin directly, gents-client-host
-# through gents-desktop-bridge), which needs GTK and WebKitGTK on Linux and the
-# portable hosts do not install them.
+# macOS: the service manager owner, whose tests drive the real one, and the
+# Tauri crates, which need WebKitGTK on Linux.
 GROUPS = [
     Group("foundation", "portable", [
         "gents-protocol", "gents-schemas", "gents-loop", "gents-lean-contract",
@@ -104,11 +102,10 @@ GROUPS = [
     Group("cli", "portable", ["gents-cli", "gents-host"],
           nocapture=True, isolate_target=True, timeout=180, macos="cli"),
     Group("desktop", "portable", [
-        "gents-desktop-core", "gents-desktop", "gents-media-host",
+        "gents-desktop-core", "gents-desktop", "gents-client-host", "gents-media-host", "fixture-domain-plugin",
     ], timeout=150, macos="desktop"),
     Group("native", "desktop", [
         "gents-service", "gents-desktop-bridge", "gents-fixture-host", "gents-desktop-tauri",
-        "gents-client-host", "fixture-domain-plugin",
     ], nocapture=True, isolate_target=True, timeout=150),
 ]
 NATIVE = "native"
