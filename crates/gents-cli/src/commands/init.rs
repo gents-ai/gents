@@ -1529,6 +1529,7 @@ fn tools_for_package(
         ToolPackageArg::Readonly | ToolPackageArg::Write | ToolPackageArg::Yolo => {
             Some(HostTools {
                 root: tool_root.map(|path| path.to_string_lossy().to_string()),
+                max_instruction_chars: None,
                 files: Some(FileTools {
                     mode: match tool_package {
                         ToolPackageArg::Readonly => FileToolMode::ReadOnly,

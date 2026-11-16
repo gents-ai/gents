@@ -35,6 +35,7 @@ pub fn prepare_workspace_reservation(
     invocation: &str,
     correlation: &str,
     route: &gents_protocol::trigger_delivery::HandoffRoute,
+    max_instruction_chars: usize,
 ) -> Result<super::super::documents::IsolatedWorkspaceDoc> {
     anyhow::ensure!(
         repository.enabled
@@ -50,7 +51,11 @@ pub fn prepare_workspace_reservation(
     )?;
     let mut identity = action.identity();
     identity.base_sha = resolve_base_sha(&repository.host_path, &action.base_sha)?;
-    let manifest = capture_instruction_manifest(&repository.host_path, &identity.base_sha)?;
+    let manifest = capture_instruction_manifest(
+        &repository.host_path,
+        &identity.base_sha,
+        max_instruction_chars,
+    )?;
     Ok(new_isolated_workspace(
         &identity,
         action.creation_policy,
@@ -370,6 +375,7 @@ fn persist_docs(
         &identity.workspace_id,
         &ctx.repository.host_path,
         &identity.base_sha,
+        ctx.max_instruction_chars,
     )?;
     let workspace = new_isolated_workspace(
         identity,
@@ -414,6 +420,7 @@ fn instruction_manifest_for_persist(
     workspace_id: &str,
     source: &Path,
     base_sha: &str,
+    max_instruction_chars: Option<usize>,
 ) -> Result<String> {
     if let Some(existing) = documents.load_isolated_workspace(workspace_id)? {
         if normalize_workspace_lifecycle_state(&existing.lifecycle_state) == Some("provisioning")
@@ -422,7 +429,9 @@ fn instruction_manifest_for_persist(
             return Ok(existing.instruction_manifest);
         }
     }
-    capture_instruction_manifest(source, base_sha)
+    let max_instruction_chars = max_instruction_chars
+        .ok_or_else(|| anyhow!("workspace creation requires the writer's max_instruction_chars"))?;
+    capture_instruction_manifest(source, base_sha, max_instruction_chars)
 }
 
 fn load_written_docs(

@@ -53,6 +53,9 @@ pub struct ResolvedToolSelection {
     pub timeouts: super::ToolTimeouts,
     /// `host.files` per-call limits; unset fields keep the toolset defaults.
     pub file_limits: crate::native::FileToolLimits,
+    /// `host.max_instruction_chars`; unset keeps
+    /// `gents_session::workspace::INSTRUCTION_TEXT_BUDGET`.
+    pub max_instruction_chars: usize,
     pub enable_meta_tools: bool,
     pub enable_goal_tools: bool,
     pub enable_goal_creation: bool,
@@ -96,6 +99,7 @@ impl Default for ResolvedToolSelection {
             command_output_limits: CommandOutputLimits::default(),
             timeouts: super::ToolTimeouts::default(),
             file_limits: crate::native::FileToolLimits::default(),
+            max_instruction_chars: gents_session::workspace::INSTRUCTION_TEXT_BUDGET,
             enable_meta_tools: true,
             enable_goal_tools: true,
             enable_goal_creation: false,
@@ -234,6 +238,10 @@ impl ResolvedToolSelection {
             command_output_limits,
             timeouts: super::ToolTimeouts::from_document(tools),
             file_limits: file_limits_from_document(files),
+            max_instruction_chars: host
+                .and_then(|host| host.max_instruction_chars)
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or(gents_session::workspace::INSTRUCTION_TEXT_BUDGET),
             enable_meta_tools,
             enable_goal_tools,
             enable_goal_creation,

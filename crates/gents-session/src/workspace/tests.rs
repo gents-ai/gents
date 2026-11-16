@@ -823,8 +823,12 @@ fn already_sealed_repairs_placement_hash_and_receipt() {
 #[test]
 fn instruction_manifest_fails_closed_on_git_show_error() {
     let fx = Fixture::new();
-    let err = super::adapter::capture_instruction_manifest(&fx.repo, "not-a-commit")
-        .expect_err("invalid base_sha must not become empty files");
+    let err = super::adapter::capture_instruction_manifest(
+        &fx.repo,
+        "not-a-commit",
+        crate::workspace::INSTRUCTION_TEXT_BUDGET,
+    )
+    .expect_err("invalid base_sha must not become empty files");
     assert!(err.to_string().contains("git show"), "{err:#}");
 }
 

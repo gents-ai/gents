@@ -131,6 +131,7 @@ pub(super) fn render_request_context_message(
         frozen_instruction_manifest,
         gents_session::workspace::request_workspace_cwd(request).as_deref(),
         tool_config.host_tools().read_root(),
+        tool_config.max_instruction_chars(),
     ))
 }
 
@@ -138,11 +139,13 @@ fn assemble_request_context_message(
     frozen_instruction_manifest: Option<&str>,
     live_cwd: Option<&std::path::Path>,
     live_tool_root: Option<&std::path::Path>,
+    max_instruction_chars: usize,
 ) -> Option<Message> {
     gents_session::workspace::instruction_body_for_request(
         frozen_instruction_manifest,
         live_cwd,
         live_tool_root,
+        max_instruction_chars,
     )
     .map(|body| Message::user(format!("<context>\n{body}\n</context>")))
 }

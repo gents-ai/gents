@@ -76,6 +76,11 @@ pub struct HostTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub root: Option<String>,
+    /// UTF-8 bytes of workspace instruction text (AGENTS.md) placed in provider
+    /// context. Unset uses 32 KiB. Must be between 1 and 262,144.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_instruction_chars: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub files: Option<FileTools>,
@@ -759,6 +764,12 @@ impl Tools {
         }
         let mut errors = Vec::new();
         if let Some(host) = &self.host {
+            at_most(
+                &mut errors,
+                "host.max_instruction_chars",
+                host.max_instruction_chars,
+                crate::tool_limits::MAX_CONFIGURED_INSTRUCTION_CHARS,
+            );
             if let Some(files) = &host.files {
                 at_most(
                     &mut errors,
