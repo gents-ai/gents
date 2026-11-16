@@ -114,6 +114,61 @@ async fn install_source_is_recorded_and_retained_across_updates() {
     assert_eq!(read.source, listed[0].source);
 }
 
+#[tokio::test]
+async fn foreign_pack_install_cannot_take_over_or_orphan_owned_documents() {
+    for coordinate in ["other/demo", "acme/other"] {
+        for label in ["Original", "Replacement"] {
+            let access = access().await;
+            install(
+                &access,
+                "1",
+                &config(&[("shared", "Original")]),
+                DriftPolicy::Refuse,
+            )
+            .await
+            .unwrap();
+            let before = access
+                .execute("{ Tools { tools_id display_name tags } PackInstallation { coordinate digest documents } }")
+                .await
+                .unwrap();
+            let mut foreign = identity("1");
+            foreign.coordinate = coordinate.into();
+            foreign.plugins.clear();
+            let mut desired = config(&[("shared", label)]);
+            desired.tools[0].tags = vec![format!("gents:pack:{coordinate}")];
+            let result = super::super::install_pack_documents(
+                &access,
+                OWNER,
+                &foreign,
+                &desired,
+                DriftPolicy::Refuse,
+                &gents_inference::resolved::ProviderProfilePolicy,
+            )
+            .await;
+            assert!(result.is_err(), "{coordinate}: {label}");
+            let after = access
+                .execute("{ Tools { tools_id display_name tags } PackInstallation { coordinate digest documents } }")
+                .await
+                .unwrap();
+            assert_eq!(after, before, "{coordinate}: {label}");
+            assert!(read_installed_pack(&access, OWNER, coordinate)
+                .await
+                .unwrap()
+                .is_none());
+            remove_pack(
+                &access,
+                OWNER,
+                "acme/demo",
+                DriftPolicy::Refuse,
+                &gents_inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .unwrap();
+            assert!(tools_ids(&access).await.is_empty());
+        }
+    }
+}
+
 #[test]
 fn install_source_selection_matches_lean() {
     let raw = gents_lean_contract::run_prepared_generator(
