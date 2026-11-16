@@ -489,7 +489,13 @@ impl ToolDyn for ComposingParent {
                 let arguments = arguments
                     .replace(SPAWNED_PROCESS, &spawned)
                     .replace(NEW_SESSION, &session);
-                let outcome = dispatcher.call(context, *ordinal, name, &arguments).await;
+                // A child runs without the parent's dispatcher, as the plugin
+                // host's `tool_calls` service runs it (`children_cannot_delegate`).
+                let outcome = gents_loop::tool_effects::scope(
+                    None,
+                    dispatcher.call(context, *ordinal, name, &arguments),
+                )
+                .await;
                 assert!(
                     !matches!(
                         outcome,
@@ -735,7 +741,7 @@ impl ToolDyn for StoppingParent {
             // A script that exhausts its own allowance drops the child call it awaits.
             let stopped = tokio::time::timeout(
                 std::time::Duration::from_millis(200),
-                dispatcher.call(context, 1, "stall", "{}"),
+                gents_loop::tool_effects::scope(None, dispatcher.call(context, 1, "stall", "{}")),
             )
             .await;
             assert!(stopped.is_err(), "the child outlives the script");
