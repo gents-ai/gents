@@ -6,6 +6,14 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Every Goal a Task creates now pins the Task's `goal_blocked_audit_threshold`
+  and `goal_max_infrastructure_retries`, including Task messages to an Agent.
+  A Task that sets either without a goal objective is rejected. Goals a person
+  starts or the model creates keep the defaults. Goal snapshots report both.
+- InferenceRetryPolicy `max_rate_limit_wait_ms` is now the live threshold
+  between a provider throttle and its usage limit: a provider wait beyond it
+  fails the request as usage-limited (with its reset time) even when transport
+  retries remain, and `backoff_ms` steps may not exceed it.
 - Tools `host.max_background_tool_calls` (1 to 8, default 8) bounds the background
   calls one request holds at once: bash runs, remote service calls and plugin jobs
   together. A call past it is refused with `background_tool_budget_exceeded`, which
