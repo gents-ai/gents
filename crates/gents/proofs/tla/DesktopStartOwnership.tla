@@ -1,7 +1,7 @@
 ---------------------- MODULE DesktopStartOwnership ----------------------
-\* Start disposition is ServiceLifecycle.startDisposition in Lean;
-\* ObservePending selects its starting=true case, or the replaced-owner defect.
-EXTENDS Naturals
+\* lean: ServiceLifecycle.startDisposition
+\* crates: gents-desktop-core
+EXTENDS Naturals, LeanDecision_ServiceLifecycle
 CONSTANT ObservePending
 VARIABLES owner, service, cancelled, starts
 vars == <<owner, service, cancelled, starts>>
@@ -10,7 +10,7 @@ FirstStart == /\ owner = 0 /\ starts = 0
               /\ owner' = 1 /\ service' = "booting" /\ starts' = 1
               /\ UNCHANGED cancelled
 RepeatedStart == /\ owner = 1 /\ starts = 1
-                 /\ IF ObservePending
+                 /\ IF ObservePending /\ startDisposition(owner # 0) = "observe"
                        THEN /\ UNCHANGED <<owner, service, cancelled>>
                        ELSE /\ owner' = 2 /\ cancelled' = {1} /\ UNCHANGED service
                  /\ starts' = 2
