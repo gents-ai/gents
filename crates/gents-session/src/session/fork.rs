@@ -191,8 +191,11 @@ pub(super) async fn commit_fork(
     params: ForkParams<'_>,
 ) -> Result<ForkPublication, ForkError> {
     let child = uuid::Uuid::new_v4().to_string();
+    // The child identity is fixed before the first attempt and fork_in_txn
+    // re-reads its source and stays inside the transaction, so a confirmed
+    // conflict is rebuilt and creates the child once.
     access
-        .transact_write("session.fork", |txn| {
+        .transact_signed_conflict_rebuild("session.fork", |txn| {
             let child = child.clone();
             let params = params.clone();
             Box::pin(async move { fork_in_txn(txn, &params, &child, None).await })
@@ -364,8 +367,11 @@ pub async fn fork_edit_on(
         parent,
         message_key: message_key.to_owned(),
     };
+    // Each attempt re-reads the retained child and decides on that read
+    // (decide_edit_fork), so a confirmed conflict is rebuilt and a child a
+    // concurrent attempt created is reused.
     let publication = access
-        .transact_write::<_, ForkError, _>("session.edit_fork", |txn| {
+        .transact_signed_conflict_rebuild::<_, ForkError, _>("session.edit_fork", |txn| {
             let requested = requested.clone();
             let params = params.clone();
             let child = child.clone();

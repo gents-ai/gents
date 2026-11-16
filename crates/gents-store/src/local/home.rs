@@ -11,8 +11,9 @@ pub use init_config::{
     write_init_config, StoredInitConfig, SECURE_ENCLAVE_IDENTITY_BACKEND,
 };
 pub use lock::{
-    lock_home_store, lock_store, lock_store_at, reserve_runtime_startup, wait_for_store_release,
-    RuntimeStartupReservation, StoreLock, StoreLockHeld,
+    acquire_store, lock_home_store, lock_store, lock_store_at, reserve_runtime_startup, try_store,
+    wait_for_store_release, RuntimeStartupReservation, StoreAttempt, StoreLock, StoreLockHeld,
+    StoreRelease,
 };
 pub use retire::{
     archive_preflight, home_entries, retire_entries, HomeEntries, RetireDisposition, RetireGroup,
@@ -219,15 +220,11 @@ impl HomeError {
 pub fn store_lock_held<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a StoreLockHeld> {
+    use gents_protocol::error_chain::as_owner;
     gents_protocol::error_chain::find_map_source(error, |cause| {
-        cause
-            .downcast_ref::<StoreLockHeld>()
-            .or_else(|| cause.downcast_ref::<HomeError>()?.lock_held())
-            .or_else(|| {
-                cause
-                    .downcast_ref::<crate::local::store_key::StoreKeyError>()?
-                    .lock_held()
-            })
+        as_owner::<StoreLockHeld>(cause)
+            .or_else(|| as_owner::<HomeError>(cause)?.lock_held())
+            .or_else(|| as_owner::<crate::local::store_key::StoreKeyError>(cause)?.lock_held())
     })
 }
 

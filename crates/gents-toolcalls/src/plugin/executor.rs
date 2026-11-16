@@ -112,7 +112,7 @@ pub struct PluginCall {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RunError {
     /// The call failed before it ran.
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Refused(#[from] anyhow::Error),
     /// The call ran and failed; `receipt` records the attempt.
     #[error("{source:#}")]

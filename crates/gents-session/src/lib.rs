@@ -12,3 +12,6 @@ pub mod workspace;
 
 #[cfg(test)]
 mod documents_task_selection_tests;
+
+#[cfg(test)]
+mod access_classification_tests;

@@ -210,8 +210,11 @@ pub async fn save_whole<T>(
 where
     T: serde::Serialize + serde::de::DeserializeOwned,
 {
-    let value = serde_json::to_value(document)
-        .map_err(|error| DocumentOperationError::Passthrough(error.into()))?;
+    let value = serde_json::to_value(document).map_err(|error| {
+        DocumentOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::error(
+            error,
+        ))
+    })?;
     let field = |name: &str| {
         value
             .get(name)
@@ -226,8 +229,9 @@ where
             source: "node_did is required".into(),
         });
     }
-    let patch = whole_document_patch(target, document)
-        .map_err(|error| DocumentOperationError::Passthrough(error.into()))?;
+    let patch = whole_document_patch(target, document).map_err(|error| {
+        DocumentOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
+    })?;
     let write = &DocumentWrite {
         target,
         owner: &owner,

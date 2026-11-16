@@ -870,7 +870,7 @@ pub struct CaptureStoreReadError(pub anyhow::Error);
 pub enum CaptureReadError {
     #[error(transparent)]
     Store(#[from] CaptureStoreReadError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Unverified(#[from] anyhow::Error),
 }
 

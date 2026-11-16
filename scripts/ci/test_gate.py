@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -461,6 +462,29 @@ class Verdict(unittest.TestCase):
         self.assertEqual(set(workflow_jobs(CI)) - {"gate"}, needs)
         self.assertEqual(gate.verdict({name: {"result": "success"} for name in needs - {"lint"}}),
                          ["lint: missing from the gate job's needs", "plan: produced no plan"])
+
+    def test_a_cache_extract_directory_starts_empty(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(os.environ, {"GATE_ARCHIVE_DIR": str(Path(directory) / "archive"),
+                                             "GITHUB_RUN_ID": "7"}):
+            first = gate.extract_dir("plan")
+            (first / "stale").write_text("left by an earlier slice")
+            again = gate.extract_dir("plan")
+            self.assertEqual(again, Path(directory) / "extract-7-plan")
+            self.assertEqual(list(again.iterdir()), [])
+
+    def test_verdict_runs_from_a_checkout_of_scripts_ci_alone(self):
+        # The gate job's sparse checkout; it also holds the TLA+ runner, which
+        # verdict must not need.
+        with tempfile.TemporaryDirectory() as directory:
+            sparse = Path(directory) / "scripts/ci"
+            sparse.parent.mkdir()
+            shutil.copytree(gate.ROOT / "scripts/ci", sparse, ignore=shutil.ignore_patterns("__pycache__"))
+            needs = self.needs(select("crates/gents-cli/src/lib.rs"))
+            result = subprocess.run([sys.executable, str(sparse / "gate.py"), "verdict"], capture_output=True,
+                                    text=True, env={**os.environ, "NEEDS": json.dumps(needs), "GATE_FORK": "false"},
+                                    timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_every_event_passes_when_its_jobs_pass(self):
         plans = {

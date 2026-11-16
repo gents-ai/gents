@@ -266,7 +266,7 @@ pub(super) enum StartError {
     },
     #[error(transparent)]
     Bridge(#[from] BridgeError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

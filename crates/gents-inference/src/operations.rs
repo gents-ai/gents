@@ -34,8 +34,8 @@ use gents_store::config_client::{ConfigClientError, TransactionFailure};
 pub enum OperationFailure {
     #[error(transparent)]
     Operation(InferenceOperationError),
-    #[error(transparent)]
-    Other(anyhow::Error),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Other(#[source] anyhow::Error),
 }
 
 impl From<InferenceOperationError> for OperationFailure {
@@ -61,7 +61,7 @@ impl From<OperationFailure> for InferenceOperationError {
         match failure {
             OperationFailure::Operation(error) => error,
             OperationFailure::Other(error) => {
-                Self::Passthrough(error.reallocate_into_boxed_dyn_error_without_backtrace())
+                Self::Passthrough(gents_protocol::error_chain::PassedThrough::new(error))
             }
         }
     }
