@@ -154,6 +154,13 @@ CONTRACT_PATHS = (
     ".github/scripts/check-canonical-output-map.py", ".github/scripts/test-canonical-output-map.py",
     ".github/scripts/check-test-cache-model.sh",
 )
+# The test-result cache's own files: the contract job runs its model check
+# (.github/scripts/check-test-cache-model.sh) only when one of them changes.
+TEST_CACHE_MODEL_PATHS = (
+    PROOFS + "/Proofs/Ci/TestCache.lean", PROOFS + "/TestCacheConformance.lean", PROOFS + "/lakefile.lean",
+    PROOFS + "/lean-toolchain", PROOFS + "/lake-manifest.json", "scripts/ci/test_cache.py",
+    "scripts/ci/test_cache_broker.py", "scripts/ci/test_test_cache.py", ".github/scripts/check-test-cache-model.sh",
+)
 TS_PATHS = (
     "apps/", "packages/", "package.json", "package-lock.json", "scripts/check-desktop-package-boundaries.mjs",
     "scripts/clean-desktop-package-dist.mjs", "scripts/pack-desktop-packages.sh",
@@ -678,6 +685,7 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
             # gents test target, which the runtime group runs when selected.
             "ratchets": rust and "gents" not in tested,
             "ts_lean": ts or proofs,
+            "test_cache_model": any(under(path, TEST_CACHE_MODEL_PATHS) for path in files),
             # TLA+ specs whose header names a changed crate or Lean owner, or
             # whose own files or imported generated modules changed.
             "tla": tla,

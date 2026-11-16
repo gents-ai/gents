@@ -287,6 +287,11 @@ jobs:
       - name: Check runner build-space reclamation
         run: python3 .github/scripts/test-rust-build-space.py
 
+      - name: Check the runner-local Lean cache link
+        run: |
+          shellcheck .github/scripts/setup-lean-build-cache.sh
+          python3 .github/scripts/test-setup-lean-build-cache.py
+
       - name: Run Harbor agent adapter tests
         run: python3 scripts/harbor/test_gents_agent.py
 
@@ -454,6 +459,7 @@ jobs:
       # proofs' Lean toolchain and dependencies, which a cold guard runner
       # spent its whole 10 minutes fetching.
       - name: Check the test-result cache against its Lean model
+        if: fromJSON(needs.plan.outputs.plan).contract.test_cache_model
         run: .github/scripts/check-test-cache-model.sh
 
       - name: Show Rust build cache stats

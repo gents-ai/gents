@@ -363,10 +363,15 @@ class Broker(unittest.TestCase):
         shim = test_cache_broker.shim(str(directory / "bin"), socket_path, "sh-via-broker")
         result = subprocess.run([shim, "-c", 'read line; echo "$line in $(pwd) $GATE_PROBE"; echo err >&2; exit 3'],
                                 input="hello\n", capture_output=True, text=True, cwd=str(directory),
-                                env={**os.environ, "GATE_PROBE": "env"})
+                                env={**os.environ, "GATE_PROBE": "env"}, timeout=20)
         self.assertEqual(result.returncode, 3)
         self.assertEqual(result.stdout.strip(), f"hello in {os.path.realpath(directory)} env")
         self.assertEqual(result.stderr.strip(), "err")
+        # A CI job's environment (its gate plan) spans many socket reads.
+        large = "x" * (1 << 18)
+        result = subprocess.run([shim, "-c", 'printf %s "${#GATE_LARGE}"'], capture_output=True, text=True,
+                                env={**os.environ, "GATE_LARGE": large}, timeout=20)
+        self.assertEqual((result.returncode, result.stdout), (0, str(len(large))), result.stderr)
         # Many concurrent calls each return: a reply must not wait for the broker's watcher.
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(16) as pool:
