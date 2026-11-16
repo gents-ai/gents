@@ -35,7 +35,7 @@ pub(super) async fn receipt(
 
 /// Fixtures sharing a node slow down as it accumulates their documents, so
 /// the cases run on a small pool of nodes, a few at a time.
-const CASES_PER_NODE: usize = 32;
+const CASES_PER_NODE: usize = 8;
 const NODES_AT_ONCE: usize = 4;
 
 #[tokio::test]

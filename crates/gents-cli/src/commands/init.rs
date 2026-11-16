@@ -374,7 +374,8 @@ pub(crate) async fn init_home_with_core_packs(
         &store_key,
         document_acp,
         &initialized_identity.identity,
-    )?;
+    )
+    .map_err(gents_store::local::backend_protection::BackendProtectionError::from)?;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let graphql_url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
     // Init publishes through this loopback endpoint as the client, so its

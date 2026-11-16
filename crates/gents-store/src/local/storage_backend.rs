@@ -6,7 +6,7 @@ use gents_protocol::error_chain::{find_map_source, find_source};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageBackendError {
-    #[error(transparent)]
+    #[error("{0}")]
     Incompatible(#[from] IncompatibleStore),
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -164,28 +164,17 @@ pub fn incompatible_store(
             data_path: key.path.clone(),
         });
     }
-    if matches!(
-        find_source::<super::backend_protection::BackendProtectionError>(error),
-        Some(super::backend_protection::BackendProtectionError::MissingProvenance)
-    ) {
-        return Some(IncompatibleStore {
-            kind: IncompatibleStoreKind::UnknownLineage,
-            data_path: data_path.to_path_buf(),
+    let protection = find_source::<super::backend_protection::BackendProtectionError>(error)
+        .and_then(|error| match error {
+            super::backend_protection::BackendProtectionError::MissingProvenance => {
+                Some(IncompatibleStoreKind::UnknownLineage)
+            }
+            super::backend_protection::BackendProtectionError::DocumentAcp(refused) => {
+                refused.refusal()
+            }
+            _ => None,
         });
-    }
-    if let Some(kind) = find_map_source(error, |cause| {
-        cause
-            .downcast_ref::<super::document_acp::DocumentAcpError>()
-            .or_else(|| {
-                match cause.downcast_ref::<super::backend_protection::BackendProtectionError>()? {
-                    super::backend_protection::BackendProtectionError::DocumentAcp(refused) => {
-                        Some(refused)
-                    }
-                    _ => None,
-                }
-            })?
-            .refusal()
-    }) {
+    if let Some(kind) = protection {
         return Some(IncompatibleStore {
             kind,
             data_path: data_path.to_path_buf(),
@@ -217,7 +206,6 @@ fn find_incompatible<'a>(
     find_map_source(error, |cause| {
         cause
             .downcast_ref::<IncompatibleStore>()
-            .or_else(|| cause.downcast_ref::<StorageBackendError>()?.incompatible())
             .or_else(|| {
                 cause
                     .downcast_ref::<crate::local::store_key::StoreKeyError>()?
