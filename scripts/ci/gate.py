@@ -137,12 +137,14 @@ TS_JOBS = {
         "npm --prefix apps/gents-desktop run typecheck",
         "npm --prefix apps/gents-desktop run build",
         "npm --prefix apps/gents-desktop test",
+        # the interaction budgets drive Chromium; they run here, beside the
+        # browser lane's shards, rather than after one of them
+        "npm --prefix apps/gents-desktop run perf:mobile -- --runs=3 --output=test-results/mobile-performance/ci",
     ],
     "ts-browser": [
         "npm run build:packages",
         "npm --prefix apps/gents-desktop run build",
         "npm --prefix apps/gents-desktop run test:ui:e2e",
-        "npm --prefix apps/gents-desktop run perf:mobile -- --runs=3 --output=test-results/mobile-performance/ci",
     ],
     "ts-fuzz": [
         "npm run build:packages",
