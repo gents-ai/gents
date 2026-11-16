@@ -533,6 +533,10 @@ struct TaskFire {
     goal_objective: Option<String>,
     goal_token_budget: Option<i64>,
     #[serde(default)]
+    goal_blocked_audit_threshold: Option<i64>,
+    #[serde(default)]
+    goal_max_infrastructure_retries: Option<i64>,
+    #[serde(default)]
     goal_assignment_applied: bool,
 }
 
@@ -617,6 +621,8 @@ impl TaskGoalAssignment {
             budget.is_none_or(|budget| budget > 0),
             "Task Goal budget must be positive"
         );
+        let blocked_audit_threshold = fire.goal_blocked_audit_threshold;
+        let max_infrastructure_retries = fire.goal_max_infrastructure_retries;
         let baseline = || {
             usage
                 .first()
@@ -657,6 +663,8 @@ impl TaskGoalAssignment {
                     "objective": objective,
                     "status": GoalStatus::Active.as_str(),
                     "token_budget": budget,
+                    "blocked_audit_threshold": blocked_audit_threshold,
+                    "max_infrastructure_retries": max_infrastructure_retries,
                     "continuation_sequence": 0,
                     "assignment_root_request_doc_id": request.doc_id,
                     "auto_resume_at_reset": null,
@@ -714,6 +722,8 @@ impl TaskGoalAssignment {
                         "objective": objective,
                         "status": GoalStatus::Active.as_str(),
                         "token_budget": budget,
+                        "blocked_audit_threshold": blocked_audit_threshold,
+                        "max_infrastructure_retries": max_infrastructure_retries,
                         "assignment_root_request_doc_id": request.doc_id,
                         "continuation_sequence": next_sequence,
                         "updated_at": at,

@@ -19,6 +19,18 @@ pub(super) fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Re
                     task.task_id
                 );
             }
+            if task.goal_blocked_audit_threshold.is_some() {
+                bail!(
+                    "Task {} sets goal_blocked_audit_threshold without goal_objective_template",
+                    task.task_id
+                );
+            }
+            if task.goal_max_infrastructure_retries.is_some() {
+                bail!(
+                    "Task {} sets goal_max_infrastructure_retries without goal_objective_template",
+                    task.task_id
+                );
+            }
             continue;
         };
         if objective.trim().is_empty() {
@@ -31,6 +43,24 @@ pub(super) fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Re
             if budget <= 0 {
                 bail!("Task {} goal_token_budget must be positive", task.task_id);
             }
+        }
+        if task
+            .goal_blocked_audit_threshold
+            .is_some_and(|threshold| threshold <= 0)
+        {
+            bail!(
+                "Task {} goal_blocked_audit_threshold must be positive",
+                task.task_id
+            );
+        }
+        if task
+            .goal_max_infrastructure_retries
+            .is_some_and(|retries| retries < 0)
+        {
+            bail!(
+                "Task {} goal_max_infrastructure_retries must not be negative",
+                task.task_id
+            );
         }
 
         let agent = manifest

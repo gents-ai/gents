@@ -3146,6 +3146,9 @@ export function createDesktopUiHarness(
             emitOutcome: document.emit_outcome,
             goalObjectiveTemplate: document.goal_objective_template ?? null,
             goalTokenBudget: document.goal_token_budget ?? null,
+            goalBlockedAuditThreshold: document.goal_blocked_audit_threshold ?? null,
+            goalMaxInfrastructureRetries:
+              document.goal_max_infrastructure_retries ?? null,
             enabled: document.enabled ?? true,
             outputSchemaRef: document.output_schema_ref ?? null,
             hooks: document.hooks ?? [],
@@ -3626,6 +3629,9 @@ export function createDesktopUiHarness(
           emitOutcome: document.emit_outcome,
           goalObjectiveTemplate: document.goal_objective_template ?? null,
           goalTokenBudget: document.goal_token_budget ?? null,
+          goalBlockedAuditThreshold: document.goal_blocked_audit_threshold ?? null,
+          goalMaxInfrastructureRetries:
+            document.goal_max_infrastructure_retries ?? null,
           enabled: document.enabled ?? true,
           outputSchemaRef: document.output_schema_ref ?? null,
           hooks: document.hooks ?? [],
@@ -4950,6 +4956,8 @@ function createDeployment(): DeploymentView {
         promptTemplate: "Inspect this host and report health.",
         goalObjectiveTemplate: null,
         goalTokenBudget: null,
+        goalBlockedAuditThreshold: null,
+        goalMaxInfrastructureRetries: null,
         emitOutcome: false,
         enabled: true,
         outputSchemaRef: null,

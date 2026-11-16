@@ -619,6 +619,8 @@ impl TriggerEngine {
             emit_outcome: intent.task.emit_outcome,
             goal_objective: None,
             goal_token_budget: intent.task.goal_token_budget,
+            goal_blocked_audit_threshold: intent.task.goal_blocked_audit_threshold,
+            goal_max_infrastructure_retries: intent.task.goal_max_infrastructure_retries,
             goal_assignment_applied: false,
             queued_serial: intent.concurrency == gents_documents::ConcurrencyMode::QueuedSerial,
             source_handoff_id: source_string("handoff_id"),
