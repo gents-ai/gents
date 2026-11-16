@@ -795,6 +795,9 @@ Next: gents config agent create --help
 ## create with an unpublished root
 Error: Tools.host.root "/pinned/unpublished" is not admitted by published WorkspaceRoot policy: nonexistent path is outside the allowed roots
 Next: gents config agent create --help
+
+Caused by:
+    Tools.host.root "/pinned/unpublished" is not admitted by published WorkspaceRoot policy: nonexistent path is outside the allowed roots
 ## clone with a preset
 Error: clone inherits its source tools; edit the cloned Tools to change grants
 Next: gents config agent --help
