@@ -1,0 +1,51 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "label",
+        "type": "text"
+      },
+      {
+        "name": "city",
+        "type": "text"
+      }
+    ],
+    "markdown": "| label | city |\n| --- | --- |\n| first | Oslo |\n| second | Bergen |",
+    "offset": 0,
+    "order": "query",
+    "row_count": 2,
+    "rows": [
+      [
+        "first",
+        "Oslo"
+      ],
+      [
+        "second",
+        "Bergen"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT e.label, s.city FROM extra e JOIN semi s ON s.id = e.id ORDER BY e.label",
+    "tables": {
+      "extra": {
+        "columns": [
+          "id",
+          "label"
+        ],
+        "rows": [
+          [
+            1,
+            "first"
+          ],
+          [
+            2,
+            "second"
+          ]
+        ]
+      }
+    }
+  }
+}

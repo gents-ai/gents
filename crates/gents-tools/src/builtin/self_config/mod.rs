@@ -1,0 +1,333 @@
+//! Raw API keys cannot be changed or returned.
+
+pub mod agent;
+pub mod agent_management;
+mod agent_queries;
+pub use agent_management::holds_agent_catalog;
+use agent_management::load_agent_catalog;
+pub use agent_management::ObservedAdmission;
+pub use agent_management::{
+    apply_agent, apply_agent_in_txn, create_agent, observe_admission, preview_agent,
+};
+pub use agent_management::{configure_agent, grant_own_self_configuration};
+use agent_queries::{agent_inspect, agent_list, guard_agent_profile_choice};
+use gents_protocol::tool_names::CONFIG_TOOL_NAME;
+pub mod command;
+pub use command::{is_help_call, ConfigCommandParams};
+pub mod configuration_discovery;
+mod execution;
+pub use execution::ConfigExecutionReceipt;
+pub mod ops;
+mod pack_catalog;
+mod pack_documents;
+pub mod pack_installer;
+use gents_pack::pack::node_packs::{
+    self, Distribution, HomePackRemovalError, LocalPackError, NodePacks, PluginPinConflict,
+};
+use gents_protocol::operations::pack::{
+    EditedDocuments, PackActor, PackChangeInput, PackOperation, PackOperationError,
+};
+use pack_installer::{pin_edit, pin_move_call, PackInstaller};
+mod pack_plugins;
+mod pack_wiring;
+mod read;
+mod requests;
+pub mod tools_operation;
+use requests::{
+    anchored_request, automation_request, automation_target, backend_request,
+    local_backend_create_request, outcome_text, profile_create_request, profile_target_request,
+    protect_working_agent, refuse_unadmitted_tools_save, tools_request,
+};
+#[cfg(test)]
+mod tests;
+
+/// Request builders and admission helpers that the root crate's self-config
+/// tests drive through the same owners production uses.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod test_support {
+    pub use super::agent_management::agent_mutate;
+    pub use super::agent_queries::{agent_inspect, node_default_agent};
+    pub use super::ops::ApplyRequest;
+    pub use super::requests::{
+        agent_request, anchored_request, backend_request, profile_create_request, profile_request,
+        profile_target_request, protect_working_agent, tools_request,
+    };
+}
+
+pub use ops::{
+    apply_tool_grant_selection, guard_agent_keeps_reach, guard_tools_keep_control,
+    guard_tools_keep_grants, reselection_keeps_grants, validate_tool_network_selection,
+    OperatorGrants, PatchOutcome, SelfConfigCore, EFFECT_TIMING_NOTE,
+};
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+use anyhow::{anyhow, bail, Context, Result};
+use serde_json::{json, Value};
+
+use crate::surface::presets::{builtin_preset_names, preset_fields};
+use crate::surface::SelfConfigToolConfig;
+use defra_node::Node as EmbeddedNode;
+use gents_documents::patch::{SelfConfigPatch, SelfConfigTarget};
+use gents_loop::tool::{Tool, ToolDefinition, ToolDyn};
+use gents_protocol::operations::StringUpdate;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
+use ops::{decode_merged, validate_merged_selection, ApplyRequest};
+
+pub const ENGINEER_AGENT_TAG: &str = "gents:engineer";
+
+pub fn engineer_self_config() -> gents_documents::SelfConfigTools {
+    serde_json::from_str(gents_protocol::ENGINEER_SELF_CONFIG_JSON)
+        .expect("bundled Engineer grant must match canonical SelfConfigTools")
+}
+
+const EFFECTIVE_ORDER: &[&str] = &[
+    "execution_settings",
+    "agent_did",
+    "agent",
+    "context",
+    "inference_profile",
+    "documents",
+    "automation",
+    "skills",
+    "runtime_effective",
+    "tool_grants",
+    "self_config",
+    "effect_timing",
+];
+
+#[derive(Debug)]
+pub struct SelfConfigError(anyhow::Error);
+
+impl std::fmt::Display for SelfConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.0)
+    }
+}
+
+impl std::error::Error for SelfConfigError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.root_cause())
+    }
+}
+
+impl From<anyhow::Error> for SelfConfigError {
+    fn from(error: anyhow::Error) -> Self {
+        Self(error)
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigureAgentParams {
+    pub action: String,
+    #[serde(default)]
+    pub identity_binding: Option<gents_protocol::agent_identity::AgentIdentityBinding>,
+    #[serde(default)]
+    pub operation: Option<String>,
+    #[serde(default)]
+    pub display_name: StringUpdate,
+    #[serde(default)]
+    pub description: StringUpdate,
+    #[serde(default)]
+    pub system_prompt: StringUpdate,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub clone_from: Option<String>,
+    #[serde(default)]
+    pub root: StringUpdate,
+    #[serde(default)]
+    pub preset: StringUpdate,
+    #[serde(default)]
+    pub profile_id: StringUpdate,
+    /// `Clear` selects no Context. On create it selects an existing Context
+    /// instead of generating one.
+    #[serde(default)]
+    pub context_id: StringUpdate,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// Replaces the whole list; an empty list clears it.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub make_default: bool,
+    #[serde(default)]
+    pub enable_lsp: Option<bool>,
+    #[serde(default)]
+    pub network_mode: Option<crate::native::CommandNetworkMode>,
+    /// A whole Agent document to write (`operations::agent::put`): the edit
+    /// of its changed writable fields when it exists, else a create.
+    #[serde(skip)]
+    pub put: Option<Box<gents_documents::Agent>>,
+}
+
+pub fn build_self_config_tools(
+    usage_cache: Arc<gents_inference::usage_observation::UsageCache>,
+    node: Arc<EmbeddedNode>,
+    node_did: String,
+    identity: Option<Arc<dyn NodeIdentity>>,
+    config: &SelfConfigToolConfig,
+    plugins: Arc<dyn crate::plugin_host::PluginHost>,
+    tasks: Arc<dyn crate::task_run::TaskRunService>,
+) -> Vec<Box<dyn ToolDyn>> {
+    build_self_config_tools_with_runtime(
+        usage_cache,
+        node,
+        node_did,
+        identity,
+        None,
+        config,
+        plugins,
+        tasks,
+        None,
+    )
+}
+
+/// The physical Node that self-configuration publishes creates under, as the
+/// runtime observes it through its own native read grant. It travels with the
+/// Agent's operation and never changes that operation's actor.
+pub(crate) async fn runtime_node_binding(
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+    runtime_identity: &dyn NodeIdentity,
+) -> Result<gents_documents::ConfigurationNodeBinding> {
+    anyhow::ensure!(
+        runtime_identity.did() == node_did && node.node_identity_did() == Some(node_did),
+        "self-configuration runtime identity does not match the Node"
+    );
+    let actor = identity::Did::new(runtime_identity.did())?;
+    let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let (record, default_agent_did) = access
+        .transact_readonly("self_config.node_binding", |txn| {
+            Box::pin(async move {
+                let record = gents_documents::read_desired_state_record_in_txn(
+                    txn,
+                    gents_store::collection::Collection::Node,
+                    node_did,
+                    node_did,
+                )
+                .await?;
+                let default_agent_did =
+                    gents_documents::load_default_agent_did_in_txn(txn, node_did).await?;
+                Ok::<_, anyhow::Error>((record, default_agent_did))
+            })
+        })
+        .await?;
+    let (doc_id, node_record) =
+        record.context("runtime cannot observe its Node for self-configuration")?;
+    Ok(gents_documents::ConfigurationNodeBinding {
+        node_did: actor,
+        doc_id,
+        enabled: node_record
+            .get("enabled")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        default_agent_did,
+    })
+}
+
+/// The config tool as the runtime tool surface registers it: the Agent acts
+/// through its managed signer, and creates publish under the Node binding the
+/// runtime observes with its own identity.
+pub async fn build_runtime_self_config_tools(
+    usage_cache: Arc<gents_inference::usage_observation::UsageCache>,
+    node: Arc<EmbeddedNode>,
+    agent_identity: Arc<dyn NodeIdentity>,
+    runtime_identity: Arc<dyn NodeIdentity>,
+    config: &SelfConfigToolConfig,
+    plugins: Arc<dyn crate::plugin_host::PluginHost>,
+    tasks: Arc<dyn crate::task_run::TaskRunService>,
+) -> Result<Vec<Box<dyn ToolDyn>>> {
+    let node_did = runtime_identity.did().to_owned();
+    let binding = runtime_node_binding(&node, &node_did, runtime_identity.as_ref()).await?;
+    Ok(build_self_config_tools_with_runtime(
+        usage_cache,
+        node,
+        node_did,
+        Some(agent_identity),
+        Some(runtime_identity),
+        config,
+        plugins,
+        tasks,
+        Some(binding),
+    ))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "runtime and physical Node binding are explicit capabilities"
+)]
+pub fn build_self_config_tools_with_runtime(
+    usage_cache: Arc<gents_inference::usage_observation::UsageCache>,
+    node: Arc<EmbeddedNode>,
+    node_did: String,
+    identity: Option<Arc<dyn NodeIdentity>>,
+    runtime_identity: Option<Arc<dyn NodeIdentity>>,
+    config: &SelfConfigToolConfig,
+    plugins: Arc<dyn crate::plugin_host::PluginHost>,
+    tasks: Arc<dyn crate::task_run::TaskRunService>,
+    node_binding: Option<gents_documents::ConfigurationNodeBinding>,
+) -> Vec<Box<dyn ToolDyn>> {
+    if !config.enabled {
+        return Vec::new();
+    }
+    let core = match SelfConfigCore::new(node.clone(), node_did.clone(), config.agent_did.clone()) {
+        Ok(core) => core
+            .with_agent_signer(
+                identity
+                    .as_deref()
+                    .and_then(|actor| actor.managed_agent_signer()),
+            )
+            .with_runtime_identity(runtime_identity)
+            .with_node_binding(node_binding)
+            .with_no_lockout(config.no_lockout)
+            .with_process_ceiling(config.process_ceiling.clone())
+            .with_held_grants(OperatorGrants {
+                pack_install: config.enable_pack_install,
+                policy: config.categories.contains("policy"),
+                pack_authority: config.enable_pack_authority,
+            }),
+        Err(error) => {
+            tracing::warn!(
+                agent_did = %config.agent_did,
+                %error,
+                "self-config tools requested but not registrable; failing closed"
+            );
+            return Vec::new();
+        }
+    };
+
+    let mut tools: Vec<Box<dyn ToolDyn>> = Vec::new();
+    if !config.enabled {
+        return tools;
+    }
+    tools.push(Box::new(command::ConfigCommandTool {
+        usage_cache,
+        node,
+        node_did,
+        identity,
+        core,
+        categories: config.categories.clone(),
+        no_lockout: config.no_lockout,
+        preview: config.preview,
+        process_ceiling: config.process_ceiling.clone(),
+        execution: Arc::new(execution::ExecutionObservation::default()),
+        plugins,
+        tasks,
+        selected_plugins: config.selected_plugins.clone(),
+        ceiling_plugins: config.ceiling_plugins.clone(),
+    }));
+    tools
+}
+
+pub fn self_config_tool_names(config: &SelfConfigToolConfig) -> Vec<String> {
+    let mut names = Vec::new();
+    if !config.enabled {
+        return names;
+    }
+    names.push(CONFIG_TOOL_NAME.to_string());
+    names
+}

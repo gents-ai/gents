@@ -3,13 +3,13 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local};
-use gents::pack::BindAccess;
-use gents::plugin::allowed::AllowedDir;
-use gents::plugin::ux::{UxDoor, UxListing, UxProducer};
-use gents::Collection;
 use gents_desktop_core::inference::AgentView;
+use gents_pack::pack::BindAccess;
+use gents_pack::plugin::allowed::AllowedDir;
+use gents_pack::plugin::ux::{UxDoor, UxListing, UxProducer};
 use gents_shell::sample::{empty, MenuId, Tone};
 use gents_shell::source::{Doc, FormRef, MenuAct, MenuRow};
+use gents_store::collection::Collection;
 use serde_json::Value;
 
 use super::menus::row;
@@ -177,7 +177,7 @@ where
     for document in documents {
         let tags: Vec<String> =
             serde_json::from_value(document["tags"].clone()).unwrap_or_default();
-        let group = match gents::pack::pack_origin_from_tags(&tags) {
+        let group = match gents_pack::pack::pack_origin_from_tags(&tags) {
             Ok(Some(pack)) => packs.entry(pack.to_string()).or_default(),
             Ok(None) | Err(_) => &mut rows,
         };

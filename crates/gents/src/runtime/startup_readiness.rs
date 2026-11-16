@@ -68,3 +68,11 @@ impl BuildStanding {
         }
     }
 }
+
+pub async fn claim_startup_readiness(
+    node: &std::sync::Arc<defra_node::Node>,
+    node_did: &str,
+) -> anyhow::Result<()> {
+    crate::runtime::node_readiness_publisher::claim_node_readiness_for_new_process(node, node_did)
+        .await
+}

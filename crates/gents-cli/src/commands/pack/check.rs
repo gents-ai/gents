@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use gents::pack::archive::{pack_dir, PackArchive};
-use gents::NodeIdentity;
+use gents_pack::pack::archive::{pack_dir, PackArchive};
+use gents_store::identity::NodeIdentity;
 use serde::Serialize;
 use serde_json::json;
 
@@ -42,7 +42,7 @@ pub(crate) async fn check(args: PackCheckArgs) -> Result<()> {
 }
 
 pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
-    let shared = gents::pack::authoring::check_dir(dir).await;
+    let shared = gents_pack::pack::authoring::check_dir(dir).await;
     let mut report = CheckReport {
         dir: shared.dir,
         pack: shared.pack,
@@ -54,7 +54,7 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
         return report;
     }
 
-    let manifest = match read_manifest(dir) {
+    let manifest = match gents_pack::pack::authoring::read_manifest(dir) {
         Ok(manifest) => manifest,
         Err(error) => {
             report.problems.push(format!("{error:#}"));
@@ -68,10 +68,11 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
             return report;
         }
     };
-    if manifest.metadata.kind == gents::pack::PackKind::Documents {
-        match load_config(&archive) {
+    if manifest.metadata.kind == gents_pack::pack::PackKind::Documents {
+        match gents_pack::pack::authoring::load_config(&archive) {
             Ok(config) => {
-                report.warnings = gents::pack::authoring::self_write_warnings(&config.documents);
+                report.warnings =
+                    gents_pack::pack::authoring::self_write_warnings(&config.documents);
                 if let Err(error) =
                     check_filters(dir, &config.documents, &mut report.problems).await
                 {
@@ -89,17 +90,9 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
     report
 }
 
-fn read_manifest(dir: &Path) -> Result<gents::pack::PackManifest> {
-    gents::pack::authoring::read_manifest(dir)
-}
-
-fn load_config(archive: &PackArchive) -> Result<gents::pack::AuthoredPackConfig> {
-    gents::pack::authoring::load_config(archive)
-}
-
 async fn check_filters(
     dir: &Path,
-    config: &gents::documents::PackConfig,
+    config: &gents_documents::PackConfig,
     problems: &mut Vec<String>,
 ) -> Result<()> {
     if config
@@ -110,16 +103,19 @@ async fn check_filters(
         return Ok(());
     }
     let directory = tempfile::tempdir()?;
-    let identity = gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
+    let identity = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("node.key"),
+        None,
+    )?;
     let node = std::sync::Arc::new(
         gents::defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await?,
     );
-    gents::ensure_runtime_schemas(node.as_ref()).await?;
-    let access = gents::store::config_client::ConfigAccess::local(node.clone());
-    crate::commands::schema::apply_pack_schemas_if_present(&access, dir).await?;
+    gents_store::schema::ensure_runtime_schemas(node.as_ref()).await?;
+    let access = gents_store::config_client::ConfigAccess::local(node.clone());
+    gents_pack::pack::schema_apply::apply_pack_schemas_if_present(&access, dir).await?;
     for source in &config.event_sources {
         let Some(filter) = source.filter.as_deref() else {
             continue;
@@ -149,7 +145,7 @@ mod tests {
         let directory = super::super::test_support::fixture_dir("documents_fixture");
         let (bytes, _) = pack_dir(&directory).unwrap();
         let archive = PackArchive::from_bytes(&bytes).unwrap();
-        let config = load_config(&archive).unwrap();
+        let config = gents_pack::pack::authoring::load_config(&archive).unwrap();
         let mut problems = Vec::new();
         check_filters(&directory, &config.documents, &mut problems)
             .await
@@ -163,7 +159,7 @@ mod tests {
         assert!(!dirs.is_empty());
         for dir in dirs {
             let copy = copy_pack(&dir);
-            let manifest = read_manifest(copy.path()).unwrap();
+            let manifest = gents_pack::pack::authoring::read_manifest(copy.path()).unwrap();
             super::super::test_support::build_unbuilt_plugins(copy.path(), &manifest);
             let report = check_dir(copy.path()).await;
             assert!(
@@ -186,7 +182,7 @@ mod tests {
         let dir = copy_pack(&super::super::test_support::fixture_dir(
             "documents_fixture",
         ));
-        let manifest = read_manifest(dir.path()).unwrap();
+        let manifest = gents_pack::pack::authoring::read_manifest(dir.path()).unwrap();
         let dropped = manifest.metadata.assets[0].clone();
         std::fs::remove_file(dir.path().join(&dropped)).unwrap();
         std::fs::write(dir.path().join("notes.md"), "stray").unwrap();

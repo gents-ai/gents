@@ -5,7 +5,7 @@ use anyhow::Result;
 
 use super::{refused, RunRequest};
 use crate::scoring::PILOT_PURPOSE;
-use gents::documents::EvalDefinition;
+use gents_documents::EvalDefinition;
 
 pub(super) fn validate_purpose(purpose: &str) -> Result<()> {
     if purpose == "eval" || purpose == PILOT_PURPOSE {

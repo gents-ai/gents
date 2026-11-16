@@ -1,5 +1,5 @@
-import Proofs.ClientShell.PresentationAgreement
-import Proofs.ClientShell.Projection
+import Proofs.Clients.ClientShell.PresentationAgreement
+import Proofs.Clients.ClientShell.Projection
 import Proofs.Conformance.ClientSyncHealthCases
 
 namespace Conformance.ClientPresentationAgreement

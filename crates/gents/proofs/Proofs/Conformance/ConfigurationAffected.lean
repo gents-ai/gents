@@ -1,4 +1,4 @@
-import Proofs.Configuration.Affected
+import Proofs.Documents.Configuration.Affected
 import Lean
 
 namespace Conformance.ConfigurationAffected

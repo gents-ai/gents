@@ -1,5 +1,5 @@
-import Proofs.ClientShell
-import Proofs.ClientShell.SessionTurn
+import Proofs.Clients.ClientShell
+import Proofs.Clients.ClientShell.SessionTurn
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.ClientShellContracts
@@ -87,10 +87,6 @@ def jsonNatOption : Option Nat → String
 
 def jsonStringOption : Option String → String
   | some value => jsonString value
-  | none       => "null"
-
-def jsonBoolOption : Option Bool → String
-  | some value => boolJson value
   | none       => "null"
 
 def interruptPhaseName : ClientShell.InterruptControl.Phase → String

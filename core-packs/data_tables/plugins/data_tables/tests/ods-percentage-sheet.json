@@ -1,0 +1,29 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "kind",
+        "type": "text"
+      },
+      {
+        "name": "rate",
+        "type": "float64"
+      }
+    ],
+    "markdown": "| kind | rate |\n| --- | --- |\n| tax | 0.2 |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 1,
+    "rows": [
+      [
+        "tax",
+        0.2
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT * FROM book_Rates"
+  }
+}

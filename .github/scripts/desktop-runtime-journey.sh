@@ -15,7 +15,9 @@ common=(
   --features gents-client-host/runtime-e2e
 )
 
-cargo build "${common[@]}" --bins --test runtime
+cargo build "${common[@]}" --bins --test integration
 if [[ "${mode}" == run ]]; then
-  cargo test "${common[@]}" --test runtime
+  # Libtest filters match substrings: the CLI's integration binary is selected
+  # too, and its cli_runtime:: suite would otherwise match runtime::.
+  cargo test "${common[@]}" --test integration -- runtime:: --skip cli_runtime::
 fi

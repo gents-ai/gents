@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 /// The shell's own client-local choices.
 fn keys_path(home: &Path) -> std::path::PathBuf {
-    home.join(gents::store::local::home::SHELL_CONFIG_FILE_NAME)
+    home.join(gents_store::local::home::SHELL_CONFIG_FILE_NAME)
 }
 
 /// The saved key set, or Regular when the file is missing, unreadable or invalid.
@@ -22,6 +22,6 @@ pub(super) fn read_keys(home: &Path) -> KeySet {
 
 pub(super) fn save_keys(home: &Path, keys: KeySet) -> std::io::Result<()> {
     let contents = json!({ "keys": keys.name() }).to_string();
-    crate::native_service::atomic_write(&keys_path(home), contents.as_bytes())
+    gents_service::native_service::atomic_write(&keys_path(home), contents.as_bytes())
         .map_err(|error| std::io::Error::other(format!("{error:#}")))
 }

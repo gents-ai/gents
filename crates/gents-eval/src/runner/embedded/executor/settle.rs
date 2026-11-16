@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::evidence::session_requests_with_access;
 use crate::runner::embedded::observe::RequestEvidence;
-use gents::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
 
 /// How long every request must stay terminal before the home counts as quiet:
 /// a trigger fire, a queued delivery or a goal continuation writes its request

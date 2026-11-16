@@ -1,4 +1,3 @@
-import { attachmentMetadata } from "./attachmentMetadata";
 import { splitSkillLines } from "@/lib/skillLines";
 import type {
   RequestAttachment,
@@ -35,6 +34,8 @@ import { heldFor, readSession } from "./sessionStore";
 import type { ShellProjection, ShellStores } from "./shellProjection";
 import { ChatViewUpdateError, createChatDelivery } from "./chatDelivery";
 import { chatDraftRequest, type ChatDraft } from "./chatDrafts";
+import { drawnInTranscript } from "./chatDeliveryView";
+import type { SendAttachmentStore } from "./sendAttachments";
 import { createGoalDelivery } from "./goalDelivery";
 import { goalDraftCommand, type GoalDraft } from "./goalDrafts";
 import { GOAL_CHANGED, GOAL_NEXT_STEP, GOAL_NOT_CURRENT } from "./goalState";
@@ -48,26 +49,8 @@ type ChatActionParams = {
   ) => Promise<DesktopSessionSnapshot | null>;
   refreshSnapshot: () => Promise<void>;
   reportFailure: (message: string) => void;
+  sendAttachments: SendAttachmentStore;
 };
-
-export function sessionShowsRequest(
-  session: DesktopSessionSnapshot | null,
-  requestId: string,
-): boolean {
-  if (!session) return false;
-  return (
-    session.latestRequestId === requestId ||
-    session.pendingTurn?.requestId === requestId ||
-    session.queuedTurns.some((turn) => turn.requestId === requestId) ||
-    session.foldedInputs.some((input) => input.requestId === requestId) ||
-    (session.pendingQueue ?? []).some((entry) => entry.requestId === requestId) ||
-    session.timelineItems.some(
-      (item) =>
-        item.kind === "userMessage" &&
-        (item.requestId === requestId || item.inputRequestId === requestId),
-    )
-  );
-}
 
 function queueEditFailure(
   after: DesktopSessionSnapshot | null,
@@ -130,12 +113,13 @@ export function createChatActions({
   refreshSession,
   refreshSnapshot,
   reportFailure,
+  sendAttachments,
 }: ChatActionParams) {
   const store = stores.selection;
   let submissionInFlight = false;
   const forkDestinations = new Map<string, string>();
   const goalDelivery = createGoalDelivery(api, stores);
-  const chatDelivery = createChatDelivery(api, stores);
+  const chatDelivery = createChatDelivery(api, stores, sendAttachments);
 
   const selectedNode = () => nodeOf(stores.fleet.getState(), store.getState().nodeDid);
   const folderFor = (nodeDid: string | null | undefined, sessionId: string | null) =>
@@ -213,10 +197,7 @@ export function createChatActions({
     try {
       request = chatDraftRequest(draft);
     } catch {}
-    const attachmentViews = request?.attachments?.length
-      ? await Promise.all(request.attachments.map(attachmentMetadata))
-      : [];
-    if (!showing()) return false;
+    const attachmentViews = request?.attachments ?? [];
     if (draft.selectedSessionId === null) {
       if (request)
         writeChatFolders(stores.chat, (folders) =>
@@ -225,15 +206,7 @@ export function createChatActions({
       selection.adoptSession(store, result.sessionId);
     }
     const sent = splitSkillLines(request?.content ?? "");
-    if (
-      request &&
-      !stores.chat
-        .getState()
-        .sentTurns.some(
-          (turn) =>
-            turn.requestId === result.requestId && turn.sessionId === result.sessionId,
-        )
-    )
+    if (request)
       chat.showPendingTurn(
         stores.chat,
         {
@@ -247,7 +220,8 @@ export function createChatActions({
           lifecycleState: "pending",
           foldedIntoRequestId: null,
           origin: null,
-          createdAt: new Date().toISOString(),
+
+          createdAt: new Date(draft.composedAt ?? Date.now()).toISOString(),
         },
         draft.queued,
       );
@@ -265,6 +239,8 @@ export function createChatActions({
     attachments: RequestAttachment[] = [],
     followUp?: QueueDelivery,
     acceptsView: () => boolean = () => true,
+
+    saved?: () => void,
   ): Promise<ChatSendResult | null> {
     if (submissionInFlight) return null;
     const node = nodeOrFirst(stores.fleet.getState(), store.getState().nodeDid);
@@ -273,12 +249,14 @@ export function createChatActions({
     const callerDid = stores.client.getState().snapshot?.client?.clientDid;
     const cwd = folderFor(node.nodeDid, selectedSessionId);
     const intent = selection.captureIntent(store);
+    let savedRequestId: string | undefined;
     const reportSendFailure = (message: string) => {
       stores.chat.setState({
         submissionError: {
           nodeDid: node.nodeDid,
           sessionId: selectedSessionId,
           message,
+          requestId: savedRequestId,
         },
       });
       reportFailure(message);
@@ -322,6 +300,17 @@ export function createChatActions({
         selectedSessionId,
         status.kind === "queue",
         (result, draft) => applyChatResult(result, draft, intent, acceptsView),
+        undefined,
+        (draft) => {
+          savedRequestId = draft.requestId;
+          if (drawnInTranscript(draft, draft.nodeDid, draft.sessionId))
+            chat.noteSentTurn(stores.chat, {
+              sessionId: draft.sessionId,
+              requestId: draft.requestId,
+              queued: false,
+            });
+          saved?.();
+        },
       );
       return result;
     } catch (error) {
@@ -716,6 +705,8 @@ export function createChatActions({
 
   return {
     sendMessage,
+
+    tookSentTurn: (key: string) => chat.tookSentTurn(stores.chat, key),
     editPendingQueue,
     steerPendingMessage,
     retryMessage,
@@ -778,6 +769,10 @@ export function createChatActions({
     backgroundTool: (request: Parameters<DesktopApiAdapter["backgroundTool"]>[0]) =>
       api.backgroundTool(request),
     controlJob: (request: DesktopJobControlRequest) => api.jobControl(request),
+    listJobs: (request: Parameters<DesktopApiAdapter["listJobs"]>[0]) =>
+      api.listJobs(request),
+    getJobView: (request: Parameters<DesktopApiAdapter["getJobView"]>[0]) =>
+      api.getJobView(request),
     controlProcess: (request: OperatorProcessControlRequest) =>
       api.processControl(request),
     setChatFolder,

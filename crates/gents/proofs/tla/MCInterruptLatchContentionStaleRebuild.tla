@@ -1,0 +1,4 @@
+---- MODULE MCInterruptLatchContentionStaleRebuild ----
+EXTENDS InterruptLatchContention
+
+====

@@ -1,21 +1,16 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use gents::store::graphql::escape_graphql_string;
-use gents::{
-    run_health_check_cycle_for_actor, tools::mcp::health::HealthCheckerOptions, HealthStatus,
-    McpHealthCheckService, McpPool, ServiceHealthMap,
-};
+use gents_protocol::operations::mcp_service::McpProbeReceipt;
+use gents_tools::mcp::pool::McpPool;
 use serde::Serialize;
 
 use crate::cli::args::{McpCommand, McpProbeArgs, McpRegisterArgs};
 use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
-use crate::{
-    graphql_rows_or_empty_if_collection_missing, normalize_optional_string, parse_duration_suffix,
-    print_json, resolve_config_access,
-};
+use crate::{parse_duration_suffix, print_json, resolve_config_access};
+use gents_host::http_client::normalize_optional_string;
 
 pub(crate) async fn dispatch(command: McpCommand) -> Result<()> {
     match command {
@@ -25,95 +20,55 @@ pub(crate) async fn dispatch(command: McpCommand) -> Result<()> {
 }
 
 async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
-    let service_id = args.service.trim();
-    if service_id.is_empty() {
-        anyhow::bail!("SERVICE must be a non-empty service id");
-    }
-    let endpoint = gents::documents::ToolServiceRegistry::parse_endpoint_url(&args.endpoint)
-        .map_err(|error| anyhow::anyhow!("--endpoint: {error}"))?;
-    let host = endpoint
-        .host_str()
-        .filter(|host| !host.trim().is_empty())
-        .context("--endpoint must contain a host")?;
-    // HTTPS cannot be rebuilt from address fields (TLS names the host), so it is
-    // stored verbatim; plain HTTP keeps address selection across LAN and tailnet.
-    let endpoint_url = (endpoint.scheme() == "https").then(|| endpoint.to_string());
-    let port = match endpoint_url {
-        Some(_) => None,
-        None => Some(
-            endpoint
-                .port_or_known_default()
-                .context("--endpoint must contain a port")?,
-        ),
-    };
-    let path = match (&endpoint_url, endpoint.path().trim()) {
-        (Some(_), _) => None,
-        (None, "" | "/") => Some("/mcp"),
-        (None, path) => Some(path),
-    };
-    let (hostname, lan_ip) = if endpoint_url.is_some() {
-        (None, None)
-    } else if host.parse::<std::net::Ipv4Addr>().is_ok() {
-        (None, Some(host))
-    } else {
-        (Some(host), None)
-    };
-    let display_name = args.display_name.as_deref().unwrap_or(service_id);
-    let description = args.description.as_deref().unwrap_or("");
+    use gents_protocol::operations::mcp_service::{McpRegisterInput, Toggle};
+    use gents_protocol::operations::StringUpdate;
+
     if args.version.trim() != "unversioned" {
         anyhow::bail!("--version is not supported by the MCP service configuration");
     }
-    let node_did = crate::resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
-    let send_node_did = args.send_node_did;
+    let node_did = gents_service::home_state::resolve_node_did(
+        args.home.as_deref(),
+        args.node_did.as_deref(),
+    )?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     if matches!(&access, ConfigAccess::Local(_)) {
         anyhow::bail!("MCP registration requires a running runtime or --graphql for client-signed publication");
     }
-    access
-        .transact_write("cli.mcp.register", |txn| {
-            let node_did = &node_did;
-            let endpoint_url = &endpoint_url;
-            Box::pin(async move {
-                use gents::documents::apply_desired_state_plan;
-                use gents::store::config_client::{
-                    read_desired_state_record_in_txn, DesiredStateApplyDocument,
-                    DesiredStateApplyPlan,
-                };
-                let collection = gents::Collection::ToolServiceRegistry;
-                let current =
-                    read_desired_state_record_in_txn(txn, collection, node_did, service_id)
-                        .await?
-                        .map(|(_, value)| value)
-                        .unwrap_or_else(
-                            || serde_json::json!({"node_did": node_did, "service_id": service_id}),
-                        );
-                let mut value = current
-                    .as_object()
-                    .context("invalid MCP service configuration")?
-                    .clone();
-                value.insert("display_name".into(), serde_json::json!(display_name));
-                value.insert("description".into(), serde_json::json!(description));
-                value.insert("hostname".into(), serde_json::json!(hostname));
-                value.insert("tailscale_ip".into(), serde_json::Value::Null);
-                value.insert("lan_ip".into(), serde_json::json!(lan_ip));
-                value.insert("mcp_port".into(), serde_json::json!(port));
-                value.insert("mcp_path".into(), serde_json::json!(path));
-                value.insert("endpoint_url".into(), serde_json::json!(endpoint_url));
-                value.insert("send_node_did".into(), serde_json::json!(send_node_did));
-                value.insert("enabled".into(), serde_json::json!(true));
-                let value = serde_json::Value::Object(value);
-                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection,
-                    add: value.clone(),
-                    update: value,
-                }])?;
-                apply_desired_state_plan(txn, &plan).await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        })
+    let toggle = |flag: Option<bool>| match flag {
+        None => Toggle::Omitted,
+        Some(true) => Toggle::On,
+        Some(false) => Toggle::Off,
+    };
+    let text = |value: &Option<String>| match value {
+        Some(value) => StringUpdate::Set(value.clone()),
+        None => StringUpdate::Omitted,
+    };
+    let input = McpRegisterInput {
+        service_id: args.service.clone(),
+        endpoint: args.endpoint.clone(),
+        display_name: text(&args.display_name),
+        description: text(&args.description),
+        send_node_did: toggle(args.send_node_did),
+        enabled: toggle(args.enabled),
+    };
+    let receipt = gents::operations::mcp_service::register(&access, &node_did, &input)
         .await
+        .map_err(|error| {
+            use crate::commands::refusal::Refusal;
+            use gents_protocol::operations::mcp_service::McpServiceOperationError;
+            let next = error.recovery();
+            match error {
+                McpServiceOperationError::Endpoint { source } => {
+                    anyhow::anyhow!(
+                        "--endpoint: {source}\nNext: {}",
+                        crate::next_call::command(next, None)
+                    )
+                }
+                other => Refusal::new(other, next).into(),
+            }
+        })
         .context("registering MCP service")?;
-    println!("registered {service_id} -> {}", args.endpoint.trim());
+    println!("registered {} -> {}", receipt.id, args.endpoint.trim());
     Ok(())
 }
 
@@ -125,8 +80,14 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
     }
 
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let node_did = crate::resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
-    let services = load_mcp_services(&access, &node_did, target.service_id()).await?;
+    let node_did = gents_service::home_state::resolve_node_did(
+        args.home.as_deref(),
+        args.node_did.as_deref(),
+    )?;
+    let services =
+        gents_tools::mcp::probe::enabled_services(&access, &node_did, target.service_id())
+            .await
+            .context("loading MCP service registry rows")?;
     if matches!(target, ProbeTarget::Single(_)) && services.is_empty() {
         anyhow::bail!(
             "no enabled MCP service matched {}",
@@ -159,185 +120,45 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
     }
 }
 
-async fn load_mcp_services(
-    access: &ConfigAccess,
-    node_did: &str,
-    service_id: Option<&str>,
-) -> Result<Vec<McpHealthCheckService>> {
-    let registry_args = match service_id {
-        Some(service_id) => format!(
-            r#"filter: {{ node_did: {{ _eq: "{}" }}, service_id: {{ _eq: "{}" }} }}"#,
-            escape_graphql_string(node_did),
-            escape_graphql_string(service_id)
-        ),
-        None => format!(
-            r#"filter: {{ node_did: {{ _eq: "{}" }} }}, order: {{ service_id: ASC }}"#,
-            escape_graphql_string(node_did)
-        ),
-    };
-    let query = format!(
-        r#"{{
-            ToolServiceRegistry({registry_args}) {{
-                service_id
-                enabled
-                hostname
-                tailscale_ip
-                lan_ip
-                mcp_port
-                mcp_path
-                endpoint_url
-                send_node_did
-                updated_at
-            }}
-        }}"#
-    );
-    let rows = graphql_rows_or_empty_if_collection_missing(access, "ToolServiceRegistry", &query)
-        .await
-        .context("loading MCP service registry rows")?;
-    rows.into_iter()
-        .filter(|row| {
-            row.get("enabled")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(true)
-        })
-        .map(|row| serde_json::from_value(row).context("parsing ToolServiceRegistry row"))
-        .collect()
-}
-
 async fn probe_services(
     access: &ConfigAccess,
     node_did: &str,
-    services: Vec<McpHealthCheckService>,
+    services: Vec<gents_documents::ToolServiceRegistry>,
     timeout: Duration,
     local_hostname: &str,
     local_subnet: Option<&str>,
 ) -> Vec<McpProbeSnapshot> {
-    let pool = McpPool::new();
-    let mut handles = Vec::with_capacity(services.len());
-    for service in services {
-        let service_id = service.service_id.clone();
-        let requested_service = service_id.clone();
-        let access = access.clone();
-        let node_did = node_did.to_owned();
-        let pool = pool.clone();
-        let local_hostname = local_hostname.to_string();
-        let local_subnet = local_subnet.map(ToOwned::to_owned);
-        handles.push((
-            service_id,
-            tokio::spawn(async move {
-                let Some(actor) = access.actor_did() else {
-                    return McpProbeSnapshot {
-                        service: requested_service,
-                        health_state: HealthStatus::Unreachable.to_string(),
-                        latency_ms: 0,
-                        last_error: Some("authenticated probe actor is unavailable".to_owned()),
-                    };
-                };
-                let service =
-                    match load_mcp_services(&access, &node_did, Some(&requested_service)).await {
-                        Ok(mut services) if services.len() == 1 => services.remove(0),
-                        Ok(_) => {
-                            return McpProbeSnapshot {
-                                service: requested_service,
-                                health_state: HealthStatus::Unreachable.to_string(),
-                                latency_ms: 0,
-                                last_error: Some(
-                                    "service is unavailable, disabled, or ambiguous".to_owned(),
-                                ),
-                            }
-                        }
-                        Err(error) => {
-                            return McpProbeSnapshot {
-                                service: requested_service,
-                                health_state: HealthStatus::Unreachable.to_string(),
-                                latency_ms: 0,
-                                last_error: Some(format!("service recheck failed: {error:#}")),
-                            }
-                        }
-                    };
-                probe_service(
-                    service,
-                    &pool,
-                    timeout,
-                    &local_hostname,
-                    local_subnet.as_deref(),
-                    &actor,
-                )
-                .await
-            }),
-        ));
-    }
-
-    let mut snapshots = Vec::with_capacity(handles.len());
-    for (service_id, handle) in handles {
-        match handle.await {
-            Ok(snapshot) => snapshots.push(snapshot),
-            Err(error) => snapshots.push(McpProbeSnapshot {
-                service: service_id,
-                health_state: HealthStatus::Unreachable.to_string(),
+    let Some(actor) = access.actor_did() else {
+        return services
+            .into_iter()
+            .map(|service| McpProbeSnapshot {
+                service: service.service_id,
+                health_state: gents_tools::mcp::health::HealthStatus::Unreachable.to_string(),
                 latency_ms: 0,
-                last_error: Some(format!("probe task failed: {error}")),
-            }),
-        }
-    }
-    snapshots
-}
-
-async fn probe_service(
-    service: McpHealthCheckService,
-    pool: &McpPool,
-    timeout: Duration,
-    local_hostname: &str,
-    local_subnet: Option<&str>,
-    actor: &str,
-) -> McpProbeSnapshot {
-    let service_id = service.service_id.clone();
-    let health_map = ServiceHealthMap::new();
-    let started = Instant::now();
-    let result = tokio::time::timeout(
-        timeout,
-        run_health_check_cycle_for_actor(
-            vec![service],
-            Utc::now(),
-            pool,
-            &health_map,
-            local_hostname,
-            local_subnet,
-            &one_shot_probe_options(timeout),
-            actor,
-        ),
-    )
-    .await;
-    let latency_ms = elapsed_ms(started);
-
-    match result {
-        Ok(Ok(())) => match health_map.get(&service_id).await {
-            Some(health) => McpProbeSnapshot {
-                service: service_id,
-                health_state: health.status.to_string(),
-                latency_ms,
-                last_error: health.last_error,
+                last_error: Some("authenticated probe actor is unavailable".to_owned()),
+            })
+            .collect();
+    };
+    let pool = McpPool::new();
+    let probes = services.iter().map(|service| {
+        gents_tools::mcp::probe::probe(
+            access,
+            node_did,
+            &service.service_id,
+            &pool,
+            gents_tools::mcp::probe::ProbeOptions {
+                actor: &actor,
+                timeout,
+                local_hostname,
+                local_subnet,
             },
-            None => McpProbeSnapshot {
-                service: service_id,
-                health_state: HealthStatus::Unreachable.to_string(),
-                latency_ms,
-                last_error: Some("probe produced no health snapshot".to_string()),
-            },
-        },
-        Ok(Err(error)) => McpProbeSnapshot {
-            service: service_id,
-            health_state: HealthStatus::Unreachable.to_string(),
-            latency_ms,
-            last_error: Some(error.to_string()),
-        },
-        Err(_) => McpProbeSnapshot {
-            service: service_id,
-            health_state: HealthStatus::Unreachable.to_string(),
-            latency_ms,
-            last_error: Some("probe timed out".to_string()),
-        },
-    }
+        )
+    });
+    futures_util::future::join_all(probes)
+        .await
+        .into_iter()
+        .map(McpProbeSnapshot::from)
+        .collect()
 }
 
 fn print_probe_table(rows: &[McpProbeSnapshot]) {
@@ -385,20 +206,8 @@ fn print_table_row<const N: usize>(cells: &[String; N], widths: &[usize; N]) {
     println!("{line}");
 }
 
-fn elapsed_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-}
-
 fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-}
-
-fn one_shot_probe_options(timeout: Duration) -> HealthCheckerOptions {
-    HealthCheckerOptions {
-        probe_timeout: timeout,
-        failure_threshold_k: 1,
-        ..HealthCheckerOptions::default()
-    }
 }
 
 enum ProbeTarget {
@@ -442,78 +251,13 @@ struct McpProbeSnapshot {
     last_error: Option<String>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-
-    #[tokio::test]
-    async fn exact_service_read_uses_the_requested_node_scope() {
-        use gents::documents::apply_desired_state_plan;
-        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-        use gents::NodeIdentity;
-        let directory = tempfile::tempdir().unwrap();
-        let root =
-            gents::KeyIdentity::load_or_create(directory.path().join("runtime"), None).unwrap();
-        let other =
-            gents::KeyIdentity::load_or_create(directory.path().join("other"), None).unwrap();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .with_node_identity_did(root.did())
-                .with_node_acp_owner(root.did().to_owned())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did()).unwrap());
-        let did = escape_graphql_string(root.did());
-        access
-            .write(
-                "test.mcp.node",
-                &format!(r#"mutation {{ create_Node(input: {{node_did: "{did}"}}) {{_docID}} }}"#),
-            )
-            .await
-            .unwrap();
-        let value = serde_json::json!({"node_did":root.did(),"service_id":"svc-1","hostname":"real-host","mcp_port":1,"enabled":true});
-        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: gents::Collection::ToolServiceRegistry,
-            add: value.clone(),
-            update: value,
-        }])
-        .unwrap();
-        access
-            .transact_write("test.mcp.service", |txn| {
-                let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
-            })
-            .await
-            .unwrap();
-        let services = load_mcp_services(&access, root.did(), Some("svc-1"))
-            .await
-            .unwrap();
-        assert_eq!(services.len(), 1);
-        assert_eq!(services[0].hostname, "real-host");
-        assert!(load_mcp_services(&access, other.did(), Some("svc-1"))
-            .await
-            .unwrap()
-            .is_empty());
-        access.write("test.mcp.disable", r#"mutation { update_ToolServiceRegistry(filter:{service_id:{_eq:"svc-1"}}, input:{enabled:false}) {_docID} }"#).await.unwrap();
-        let snapshots = probe_services(
-            &access,
-            root.did(),
-            services,
-            Duration::from_secs(1),
-            "local",
-            None,
-        )
-        .await;
-        assert_eq!(snapshots.len(), 1);
-        assert_eq!(
-            snapshots[0].last_error.as_deref(),
-            Some("service is unavailable, disabled, or ambiguous")
-        );
-        assert_eq!(snapshots[0].latency_ms, 0);
-        node.shutdown().await.unwrap();
+impl From<McpProbeReceipt> for McpProbeSnapshot {
+    fn from(receipt: McpProbeReceipt) -> Self {
+        Self {
+            service: receipt.service_id,
+            health_state: receipt.health_state,
+            latency_ms: receipt.latency_ms,
+            last_error: receipt.last_error,
+        }
     }
 }

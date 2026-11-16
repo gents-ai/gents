@@ -1,20 +1,19 @@
-use gents::store::config_client::GraphqlEndpoint;
 use std::hash::{Hash, Hasher};
 use std::io::{self, IsTerminal, Write};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
-use gents_protocol::row::AgentRequestRow;
+use gents_protocol::operations::request::{RequestReceipt, RequestRef};
+use gents_protocol::row::AgentToolCallRow;
+use gents_protocol::session::SessionScope;
+use gents_session::views::transcript::ToolCallRows;
+use gents_store::config_client::ConfigAccess;
 use serde_json::Value;
+use tokio::sync::Mutex;
 
-use crate::{
-    observe_canonical_request_output, post_graphql, request_diagnostic_hint,
-    request_output_envelope, RequestOutputEnvelope,
-};
-
-use crate::SubmittedRequest;
+use crate::operation_failure::OperationFailure;
+use crate::request_helpers::wait_for_request;
+use crate::RequestOutputEnvelope;
 
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
@@ -27,17 +26,6 @@ pub(super) struct ToolCallProgress {
     pub(super) status: String,
     pub(super) arguments: String,
     pub(super) result: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ChatProgressMarker {
-    request_lifecycle_state: Option<RequestLifecycleState>,
-    request_failure_reason: Option<String>,
-    request_lease_expires_at: Option<String>,
-    request_interrupt_requested_at: Option<String>,
-    request_valid_until: Option<String>,
-    canonical_output: Option<ChatOutputProgress>,
-    tools: Vec<ChatToolProgressMarker>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,89 +43,14 @@ struct ChatToolProgressMarker {
     completed_at: Option<String>,
 }
 
-/// The exact `_docID` request read carries no `order`: DefraDB plans an
-/// ordered read as an index scan and applies `limit` before the `_docID`
-/// filter, so later rows in the collection would hide this request.
-pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
-    let request_doc_id = &request.request_doc_id;
-    let scope = gents_protocol::session::session_scope_filter(
-        &request.node_did,
-        &request.session_id,
-        request.requester_did.as_deref(),
-    );
-    format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ {scope}, _docID: {{ _eq: "{request_doc_id}" }} }},
-                limit: 2
-            ) {{
-                _docID node_did requester_did session_id
-                request_id agent_did
-                lifecycle_state
-                failure_reason
-                superseded_by_request
-                superseded_by_request_doc_id
-                execution_generation
-                execution_lease_secs
-                execution_lease_expires_at
-                terminal_output
-                terminalized_at
-                interrupt_requested_at
-                valid_until
-            }}
-            AgentToolCall(
-                filter: {{
-                    {scope},
-                    request_doc_id: {{ _eq: "{request_doc_id}" }}
-                }},
-                order: {{ started_at: ASC }}
-            ) {{
-                _docID
-                tool_call_key
-                tool_name
-                status
-                started_at
-                completed_at
-            }}
-        }}"#,
-        request_doc_id = escape_graphql_string(request_doc_id),
-    )
-}
-
-pub(crate) async fn load_existing_tool_call_keys(
-    graphql: &GraphqlEndpoint,
-    session_id: &str,
-) -> Result<std::collections::BTreeMap<String, String>> {
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }}
-            ) {{
-                tool_call_key
-                status
-            }}
-        }}"#,
-        session_id = escape_graphql_string(session_id),
-    );
-    let response = post_graphql(graphql, &query).await?;
-    let rows = response
-        .pointer("/data/AgentToolCall")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| {
-            Some((
-                row.get("tool_call_key")?.as_str()?.to_string(),
-                row.get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-            ))
-        })
-        .collect())
+/// What the turn's progress lines have shown so far. The request owner's wait
+/// does not read tool calls or the live answer, so the stream reads them itself
+/// on each of its polls.
+struct Shown {
+    known_tool_calls: std::collections::BTreeMap<String, String>,
+    tool_output_fingerprints: std::collections::BTreeMap<String, Option<(usize, u64)>>,
+    tool_markers: Vec<ChatToolProgressMarker>,
+    thinking_printed: bool,
 }
 
 /// Whether ANSI styling should be applied: only on a real terminal, and only
@@ -156,298 +69,199 @@ fn dim(text: &str, colors: bool) -> String {
 }
 
 fn folded_input_completed(state: RequestLifecycleState, reason: &str) -> bool {
-    state == RequestLifecycleState::Superseded && reason == gents::request::lifecycle::FOLDED_REASON
+    state == RequestLifecycleState::Superseded
+        && reason == gents_session::request::lifecycle::FOLDED_REASON
+}
+
+/// Prints the tool lines and the thinking indicator that changed since the
+/// last poll; true when the turn showed progress.
+async fn show_progress(
+    access: &ConfigAccess,
+    receipt: &RequestReceipt,
+    request: &RequestRef,
+    shown: &Mutex<Shown>,
+    verbose: bool,
+    colors: bool,
+) -> Result<bool> {
+    let mut shown = shown.lock().await;
+    let tool_rows = access
+        .read_view(&ToolCallRows::for_request(
+            SessionScope {
+                node_did: receipt.node_did.clone(),
+                session_id: receipt.session_id.clone(),
+                requester_did: receipt.requester_did.clone(),
+            },
+            &receipt.request_doc_id,
+        ))
+        .await?;
+    let mut progressed = false;
+    for mut tool in tool_rows.iter().filter_map(tool_call_progress) {
+        let terminal = matches!(tool.status.as_str(), "completed" | "error");
+        let presentation = gents_session::session::load_tool_call_presentation(
+            access,
+            &tool.tool_call_doc_id,
+            &receipt.node_did,
+            &receipt.session_id,
+            receipt.requester_did.as_deref(),
+        )
+        .await
+        .context("loading canonical tool presentation")?;
+        tool.arguments = presentation.arguments;
+        let published = terminal.then_some(presentation.result).flatten();
+        if terminal && published.is_none() {
+            tool.result = presentation.live_output;
+            let output_fingerprint = tool.result.as_deref().map(text_fingerprint);
+            let previous_fingerprint = shown
+                .tool_output_fingerprints
+                .get(&tool.tool_call_key)
+                .copied()
+                .flatten();
+            if previous_fingerprint != output_fingerprint {
+                shown
+                    .tool_output_fingerprints
+                    .insert(tool.tool_call_key.clone(), output_fingerprint);
+                progressed = true;
+                println!("{}", render_live_tool_line(&tool, verbose, colors));
+                io::stdout().flush()?;
+            }
+            continue;
+        }
+        tool.result = published.or(presentation.live_output);
+        let output_fingerprint = tool.result.as_deref().map(text_fingerprint);
+        let previous_status = shown.known_tool_calls.get(&tool.tool_call_key).cloned();
+        let previous_fingerprint = shown
+            .tool_output_fingerprints
+            .get(&tool.tool_call_key)
+            .copied()
+            .flatten();
+        if previous_status.as_deref() == Some(tool.status.as_str())
+            && previous_fingerprint == output_fingerprint
+        {
+            continue;
+        }
+        shown
+            .tool_output_fingerprints
+            .insert(tool.tool_call_key.clone(), output_fingerprint);
+        shown
+            .known_tool_calls
+            .insert(tool.tool_call_key.clone(), tool.status.clone());
+        progressed = true;
+        if previous_status.is_none() && terminal {
+            println!("{}", render_tool_start_line(&tool, verbose, colors));
+        }
+        println!("{}", render_tool_line(&tool, verbose, colors));
+        io::stdout().flush()?;
+    }
+    let markers: Vec<_> = tool_rows.iter().map(chat_tool_progress_marker).collect();
+    if markers != shown.tool_markers {
+        shown.tool_markers = markers;
+        progressed = true;
+    }
+    if !shown.thinking_printed {
+        let row = gents_session::operations::request::get(access, request)
+            .await
+            .map_err(OperationFailure::from)?;
+        let output = gents_session::session::observe_request_output(access, &row).await?;
+        if should_print_thinking(row.lifecycle_state, &output) {
+            println!("{}", dim("[thinking]", colors));
+            io::stdout().flush()?;
+            shown.thinking_printed = true;
+        }
+    }
+    Ok(progressed)
 }
 
 pub(crate) async fn stream_turn_progress(
-    graphql: &GraphqlEndpoint,
-    submitted: &SubmittedRequest,
-    mut known_tool_calls: std::collections::BTreeMap<String, String>,
+    access: &ConfigAccess,
+    receipt: &RequestReceipt,
+    known_tool_calls: std::collections::BTreeMap<String, String>,
     timeout_secs: u64,
     poll_secs: u64,
     verbose: bool,
     render_folded_output: bool,
 ) -> Result<RequestOutputEnvelope> {
-    let idle_timeout = Duration::from_secs(timeout_secs);
-    let mut last_progress_at = tokio::time::Instant::now();
-    let mut latest_progress_marker: Option<ChatProgressMarker> = None;
-    let mut thinking_printed = false;
-    let mut tool_output_fingerprints = std::collections::BTreeMap::new();
     let colors = colors_enabled();
+    let request = RequestRef {
+        node_did: receipt.node_did.clone(),
+        requester_did: receipt.requester_did.clone(),
+        request_id: receipt.request_id.clone(),
+    };
+    let shown = Mutex::new(Shown {
+        known_tool_calls,
+        tool_output_fingerprints: std::collections::BTreeMap::new(),
+        tool_markers: Vec::new(),
+        thinking_printed: false,
+    });
+    let envelope = wait_for_request(access, request.clone(), timeout_secs, poll_secs, || {
+        show_progress(access, receipt, &request, &shown, verbose, colors)
+    })
+    .await?;
+    show_progress(access, receipt, &request, &shown, verbose, colors).await?;
 
-    loop {
-        let query = chat_progress_query(submitted);
-        let response = post_graphql(graphql, &query).await?;
-        let rows = response
-            .pointer("/data/AgentRequest")
-            .and_then(Value::as_array)
-            .context("chat request query omitted rows")?;
-        anyhow::ensure!(
-            rows.len() == 1,
-            "committed chat physical request missing or ambiguous"
-        );
-        let request_row = rows.first().cloned();
-        let request = request_row
-            .as_ref()
-            .map(|row| {
-                serde_json::from_value::<AgentRequestRow>(row.clone())
-                    .context("decoding chat progress AgentRequest row")
-            })
-            .transpose()?;
-
-        if let Some(request) = request.as_ref() {
-            anyhow::ensure!(
-                request.node_did.as_deref() == Some(submitted.node_did.as_str())
-                    && request.requester_did == submitted.requester_did
-                    && request.session_id.as_deref() == Some(submitted.session_id.as_str()),
-                "chat request scope differs from committed receipt"
-            );
-        }
-
-        let folded = request
-            .as_ref()
-            .is_some_and(|row| gents::request::lifecycle::folded_into(row).is_some());
-        if folded
-            || request
-                .as_ref()
-                .is_some_and(|row| gents::request::lifecycle::replaced_by(row).is_some())
-        {
-            let envelope = crate::request_helpers::wait_for_terminal_response_with_progress(
-                graphql,
-                &submitted.request_id,
-                timeout_secs,
-                poll_secs,
-                || async { Ok(false) },
-            )
-            .await?;
-            if render_folded_output {
-                if let crate::CliOutputObservation::TerminalMessage { presentation, .. } =
-                    &envelope.output
-                {
-                    if !presentation.body_markdown.trim().is_empty() {
-                        println!("{}", presentation.body_markdown);
-                    }
-                }
-                if let Some(reason) = envelope
-                    .request
-                    .failure_reason
-                    .as_deref()
-                    .filter(|reason| !reason.trim().is_empty())
-                {
-                    println!("[agent error] {reason}");
-                }
-            }
-            if folded {
-                println!("[input applied to the active turn]");
-            }
-            io::stdout().flush()?;
-            return Ok(envelope);
-        }
-
-        let mut observed_output = match request.as_ref() {
-            Some(request) => Some(observe_canonical_request_output(graphql, request).await?),
-            None => None,
-        };
-
-        let tool_rows = response
-            .pointer("/data/AgentToolCall")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let mut terminal_tool_dependency_pending = false;
-        for mut tool in tool_rows.iter().filter_map(decode_tool_call_progress) {
-            let terminal = matches!(tool.status.as_str(), "completed" | "error");
-            let presentation = crate::load_canonical_tool_presentation(
-                graphql,
-                &tool.tool_call_doc_id,
-                submitted,
-                terminal,
-            )
-            .await?;
-            tool.arguments = presentation.arguments;
-            if terminal && presentation.result.is_none() {
-                terminal_tool_dependency_pending = true;
-                tool.result = presentation.live_output;
-                let output_fingerprint = tool.result.as_deref().map(text_fingerprint);
-                let previous_fingerprint = tool_output_fingerprints
-                    .get(&tool.tool_call_key)
-                    .copied()
-                    .flatten();
-                if previous_fingerprint != output_fingerprint {
-                    tool_output_fingerprints.insert(tool.tool_call_key.clone(), output_fingerprint);
-                    last_progress_at = tokio::time::Instant::now();
-                    println!("{}", render_live_tool_line(&tool, verbose, colors));
-                    io::stdout().flush()?;
-                }
-                continue;
-            }
-            tool.result = presentation.result.or(presentation.live_output);
-            let output_fingerprint = tool.result.as_deref().map(text_fingerprint);
-            let previous_status = known_tool_calls.get(&tool.tool_call_key).cloned();
-            let previous_fingerprint = tool_output_fingerprints
-                .get(&tool.tool_call_key)
-                .copied()
-                .flatten();
-            if previous_status.as_deref() == Some(tool.status.as_str())
-                && previous_fingerprint == output_fingerprint
+    if envelope.request.request_id != receipt.request_id {
+        let original = gents_session::operations::request::get(access, &request)
+            .await
+            .map_err(OperationFailure::from)?;
+        if render_folded_output {
+            if let crate::CliOutputObservation::TerminalMessage { presentation, .. } =
+                &envelope.output
             {
-                continue;
+                if !presentation.body_markdown.trim().is_empty() {
+                    println!("{}", presentation.body_markdown);
+                }
             }
-            tool_output_fingerprints.insert(tool.tool_call_key.clone(), output_fingerprint);
-            known_tool_calls.insert(tool.tool_call_key.clone(), tool.status.clone());
-            last_progress_at = tokio::time::Instant::now();
-            if previous_status.is_none() && matches!(tool.status.as_str(), "completed" | "error") {
-                println!("{}", render_tool_start_line(&tool, verbose, colors));
+            if let Some(reason) = envelope
+                .request
+                .failure_reason
+                .as_deref()
+                .filter(|reason| !reason.trim().is_empty())
+            {
+                println!("[agent error] {reason}");
             }
-            println!("{}", render_tool_line(&tool, verbose, colors));
+        }
+        if gents_session::request::lifecycle::folded_into(&original).is_some() {
+            println!("[input applied to the active turn]");
+        }
+        io::stdout().flush()?;
+        return Ok(envelope);
+    }
+
+    if let crate::CliOutputObservation::TerminalMessage { presentation, .. } = &envelope.output {
+        if !presentation.body_markdown.trim().is_empty() {
+            println!("{}", presentation.body_markdown);
             io::stdout().flush()?;
         }
-
-        if terminal_tool_dependency_pending {
-            if last_progress_at.elapsed() >= idle_timeout {
-                anyhow::bail!(
-                    "timed out waiting for canonical tool output for request {} after {}s of inactivity\n{}",
-                    submitted.request_id,
-                    timeout_secs,
-                    request_diagnostic_hint(&submitted.request_id)
-                );
-            }
-            tokio::time::sleep(Duration::from_secs(poll_secs)).await;
-            continue;
-        }
-
-        let lifecycle_state = request.as_ref().and_then(|row| row.lifecycle_state);
-        let failure_reason = request
-            .as_ref()
-            .and_then(|row| row.failure_reason.as_deref())
-            .unwrap_or("");
-        let marker = chat_progress_marker(request.as_ref(), observed_output.as_ref(), &tool_rows);
-        if latest_progress_marker.as_ref() != Some(&marker) {
-            latest_progress_marker = Some(marker);
-            last_progress_at = tokio::time::Instant::now();
-        }
-        if let Some(output) = observed_output.as_ref() {
-            if !thinking_printed && should_print_thinking(lifecycle_state, output) {
-                println!("{}", dim("[thinking]", colors));
-                io::stdout().flush()?;
-                thinking_printed = true;
-            }
-        }
-
-        let terminal_by_request = lifecycle_state.is_some_and(RequestLifecycleState::is_terminal);
-        if terminal_by_request {
-            let request = request
-                .as_ref()
-                .context("terminal chat request lost its row before exact selection")?;
-            let output = observed_output
-                .take()
-                .context("terminal chat request output observation is missing")?;
-            match output {
-                gents::session::CanonicalRequestOutput::Loading => {
-                    if last_progress_at.elapsed() >= idle_timeout {
-                        anyhow::bail!(
-                            "timed out waiting for materialized AgentMessage {} after {}s of inactivity\n{}",
-                            submitted.request_id,
-                            timeout_secs,
-                            request_diagnostic_hint(&submitted.request_id)
-                        );
-                    }
-                    tokio::time::sleep(Duration::from_secs(poll_secs)).await;
-                    continue;
-                }
-                gents::session::CanonicalRequestOutput::Denied => {
-                    anyhow::bail!(
-                        "canonical terminal output for request {} is denied",
-                        submitted.request_id
-                    )
-                }
-                gents::session::CanonicalRequestOutput::Conflicted => anyhow::bail!(
-                    "canonical terminal output for request {} is conflicted",
-                    submitted.request_id
-                ),
-                gents::session::CanonicalRequestOutput::Invalid => {
-                    anyhow::bail!(
-                        "canonical terminal output for request {} is invalid",
-                        submitted.request_id
-                    )
-                }
-                gents::session::CanonicalRequestOutput::Retracted => anyhow::bail!(
-                    "canonical terminal output for request {} is retracted",
-                    submitted.request_id
-                ),
-                gents::session::CanonicalRequestOutput::RetainedPartial(_) => anyhow::bail!(
-                    "canonical terminal output for request {} resolved only to retained partial diagnostics",
-                    submitted.request_id
-                ),
-                gents::session::CanonicalRequestOutput::TerminalNoMessage
-                | gents::session::CanonicalRequestOutput::TerminalMessage { .. } => {
-                    let envelope = request_output_envelope(request, output)?;
-                    let presentation = match &envelope.output {
-                        crate::CliOutputObservation::TerminalMessage { presentation, .. } => {
-                            Some(presentation)
-                        }
-                        crate::CliOutputObservation::TerminalNoMessage => None,
-                        _ => unreachable!("exact terminal selection produced another variant"),
-                    };
-                    if let Some(presentation) = presentation {
-                        if !presentation.body_markdown.trim().is_empty() {
-                            println!("{}", presentation.body_markdown);
-                            io::stdout().flush()?;
-                        }
-                    }
-
-                    let error_message = failure_reason.trim();
-                    if folded_input_completed(envelope.request.lifecycle_state, error_message) {
-                        println!("[input applied to the active turn]");
-                    } else if !error_message.is_empty() {
-                        println!("[agent error] {error_message}");
-                        let agent_did = request.agent_did.as_deref();
-                        for line in
-                            account_problems(graphql, submitted, agent_did, error_message).await
-                        {
-                            println!("[account] {line}");
-                        }
-                        println!("[inspect] gents utils debug response show {}", submitted.request_id);
-                        io::stdout().flush()?;
-                    } else if matches!(
-                        envelope.request.lifecycle_state,
-                        RequestLifecycleState::Failed | RequestLifecycleState::Dead
-                    ) {
-                        println!("[inspect] gents utils debug response show {}", submitted.request_id);
-                        io::stdout().flush()?;
-                    }
-
-                    return Ok(envelope);
-                }
-                gents::session::CanonicalRequestOutput::Absent
-                | gents::session::CanonicalRequestOutput::Live(_)
-                | gents::session::CanonicalRequestOutput::Settling(_)
-                | gents::session::CanonicalRequestOutput::Published { .. } => {
-                    if last_progress_at.elapsed() >= idle_timeout {
-                        anyhow::bail!(
-                            "timed out waiting for terminal canonical selection for request {} after {}s of inactivity\n{}",
-                            submitted.request_id,
-                            timeout_secs,
-                            request_diagnostic_hint(&submitted.request_id)
-                        );
-                    }
-                    tokio::time::sleep(Duration::from_secs(poll_secs)).await;
-                    continue;
-                }
-            }
-        }
-
-        if last_progress_at.elapsed() >= idle_timeout {
-            anyhow::bail!(
-                "timed out waiting for canonical output for request {} after {}s of inactivity\n{}",
-                submitted.request_id,
-                timeout_secs,
-                request_diagnostic_hint(&submitted.request_id)
-            );
-        }
-
-        tokio::time::sleep(Duration::from_secs(poll_secs)).await;
     }
+    let error_message = envelope
+        .request
+        .failure_reason
+        .as_deref()
+        .unwrap_or("")
+        .trim();
+    if folded_input_completed(envelope.request.lifecycle_state, error_message) {
+        println!("[input applied to the active turn]");
+    } else if !error_message.is_empty() {
+        println!("[agent error] {error_message}");
+        let agent_did = envelope.request.agent_did.as_deref();
+        for line in account_problems(access, &receipt.node_did, agent_did, error_message).await {
+            println!("[account] {line}");
+        }
+        println!(
+            "[inspect] gents utils debug response show {}",
+            receipt.request_id
+        );
+        io::stdout().flush()?;
+    } else if matches!(
+        envelope.request.lifecycle_state,
+        RequestLifecycleState::Failed | RequestLifecycleState::Dead
+    ) {
+        println!(
+            "[inspect] gents utils debug response show {}",
+            receipt.request_id
+        );
+        io::stdout().flush()?;
+    }
+    Ok(envelope)
 }
 
 fn render_tool_line(tool: &ToolCallProgress, verbose: bool, colors: bool) -> String {
@@ -492,12 +306,12 @@ fn render_tool_start_line(tool: &ToolCallProgress, verbose: bool, colors: bool) 
 }
 
 fn chat_output_progress(
-    output: &gents::session::CanonicalRequestOutput,
+    output: &gents_session::session::CanonicalRequestOutput,
 ) -> Option<ChatOutputProgress> {
     let (kind, presentation) = match output {
-        gents::session::CanonicalRequestOutput::Live(value) => ("live", value),
-        gents::session::CanonicalRequestOutput::Settling(value) => ("settling", value),
-        gents::session::CanonicalRequestOutput::Published { presentation, .. } => {
+        gents_session::session::CanonicalRequestOutput::Live(value) => ("live", value),
+        gents_session::session::CanonicalRequestOutput::Settling(value) => ("settling", value),
+        gents_session::session::CanonicalRequestOutput::Published { presentation, .. } => {
             ("published", presentation)
         }
         _ => return None,
@@ -509,36 +323,18 @@ fn chat_output_progress(
     })
 }
 
-fn chat_progress_marker(
-    request_row: Option<&AgentRequestRow>,
-    output: Option<&gents::session::CanonicalRequestOutput>,
-    tool_rows: &[Value],
-) -> ChatProgressMarker {
-    ChatProgressMarker {
-        request_lifecycle_state: request_row.and_then(|row| row.lifecycle_state),
-        request_failure_reason: request_row.and_then(|row| row.failure_reason.clone()),
-        request_lease_expires_at: request_row
-            .and_then(|row| row.execution_lease_expires_at.clone()),
-        request_interrupt_requested_at: request_row
-            .and_then(|row| row.interrupt_requested_at.clone()),
-        request_valid_until: request_row.and_then(|row| row.valid_until.clone()),
-        canonical_output: output.and_then(chat_output_progress),
-        tools: tool_rows.iter().map(chat_tool_progress_marker).collect(),
-    }
-}
-
-fn chat_tool_progress_marker(row: &Value) -> ChatToolProgressMarker {
+fn chat_tool_progress_marker(row: &AgentToolCallRow) -> ChatToolProgressMarker {
     ChatToolProgressMarker {
-        tool_call_key: scalar_marker(Some(row), "tool_call_key"),
-        status: scalar_marker(Some(row), "status"),
-        started_at: scalar_marker(Some(row), "started_at"),
-        completed_at: scalar_marker(Some(row), "completed_at"),
+        tool_call_key: Some(row.tool_call_key.clone()),
+        status: row.status.clone(),
+        started_at: row.started_at.clone(),
+        completed_at: row.completed_at.clone(),
     }
 }
 
 fn should_print_thinking(
     lifecycle_state: Option<RequestLifecycleState>,
-    output: &gents::session::CanonicalRequestOutput,
+    output: &gents_session::session::CanonicalRequestOutput,
 ) -> bool {
     let (body, reasoning) = match chat_output_progress(output) {
         Some(progress) => (progress.body_markdown, progress.reasoning_markdown),
@@ -551,25 +347,12 @@ fn should_print_thinking(
             .unwrap_or(false)
 }
 
-fn scalar_marker(row: Option<&Value>, field: &str) -> Option<String> {
-    let value = row?.get(field)?;
-    if value.is_null() {
-        return None;
-    }
-    value
-        .as_str()
-        .map(ToOwned::to_owned)
-        .or_else(|| value.as_i64().map(|value| value.to_string()))
-        .or_else(|| value.as_u64().map(|value| value.to_string()))
-        .or_else(|| value.as_bool().map(|value| value.to_string()))
-}
-
-pub(super) fn decode_tool_call_progress(row: &Value) -> Option<ToolCallProgress> {
+fn tool_call_progress(row: &AgentToolCallRow) -> Option<ToolCallProgress> {
     Some(ToolCallProgress {
-        tool_call_doc_id: row.get("_docID")?.as_str()?.to_string(),
-        tool_call_key: row.get("tool_call_key")?.as_str()?.to_string(),
-        tool_name: row.get("tool_name")?.as_str()?.to_string(),
-        status: row.get("status")?.as_str()?.to_string(),
+        tool_call_doc_id: row.doc_id.clone()?,
+        tool_call_key: row.tool_call_key.clone(),
+        tool_name: row.tool_name.clone()?,
+        status: row.status.clone()?,
         arguments: String::new(),
         result: None,
     })
@@ -798,8 +581,8 @@ fn text_fingerprint(value: &str) -> (usize, u64) {
 
 fn account_problem_lines(
     failure_reason: &str,
-    accounts: &[(String, gents::inference::auth::credential::ServingAccount)],
-    all: &[gents::inference::auth::credential::AccountSummary],
+    accounts: &[(String, gents_inference::auth::credential::ServingAccount)],
+    all: &[gents_inference::auth::credential::AccountSummary],
 ) -> Vec<String> {
     if !gents_protocol::node_readiness::is_behavior_unavailable_rejection(failure_reason.trim()) {
         return Vec::new();
@@ -807,7 +590,7 @@ fn account_problem_lines(
     accounts
         .iter()
         .filter(|(_, account)| {
-            account.state != gents::inference::auth::credential::AccountState::Enabled
+            account.state != gents_inference::auth::credential::AccountState::Enabled
         })
         .filter_map(|(profile, account)| {
             let provider = account.provider?;
@@ -816,15 +599,15 @@ fn account_problem_lines(
                  set-account {profile} <account> ({})",
                 account.label,
                 account.state.as_str(),
-                gents::inference::auth::credential::enabled_accounts_note(provider, all),
+                gents_inference::auth::credential::enabled_accounts_note(provider, all),
             ))
         })
         .collect()
 }
 
 async fn account_problems(
-    graphql: &GraphqlEndpoint,
-    submitted: &SubmittedRequest,
+    access: &ConfigAccess,
+    did: &str,
     agent_did: Option<&str>,
     failure_reason: &str,
 ) -> Vec<String> {
@@ -835,11 +618,9 @@ async fn account_problems(
         return Vec::new();
     };
     let read = async {
-        let access = gents::store::config_client::ConfigAccess::Graphql(graphql.clone());
-        let did = submitted.node_did.as_str();
         anyhow::Ok((
-            gents::inference::auth::credential::agent_accounts(&access, did, agent_did).await?,
-            gents::inference::auth::credential::list_accounts(&access, did).await?,
+            gents_inference::auth::credential::agent_accounts(access, did, agent_did).await?,
+            gents_inference::auth::credential::list_accounts(access, did).await?,
         ))
     };
     match read.await {
@@ -856,32 +637,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chat_progress_query_omits_retired_tool_payload_fields() {
-        let submitted = SubmittedRequest {
-            request_id: "request-one".to_string(),
-            session_id: "session-one".to_string(),
-            node_did: "did:key:agent".to_string(),
-            agent_did: None,
-            request_doc_id: "doc-one".to_string(),
-            requester_did: Some("did:key:requester".to_string()),
-            input: None,
-        };
-
-        let query = chat_progress_query(&submitted);
-
-        assert!(!query.contains(" args"));
-        assert!(!query.contains(" result"));
-        assert!(query.contains("tool_call_key"));
-        assert!(query.contains("_docID"));
-        assert!(query.contains("tool_name"));
-        assert!(query.contains("status"));
-        assert!(query.contains("started_at"));
-        assert!(query.contains("completed_at"));
-        assert!(query.contains("terminalized_at"));
-        assert!(query.contains("terminal_output"));
-    }
-
-    #[test]
     fn compact_preview_is_unicode_safe_and_bounded() {
         let preview = preview_compact_text(&"考".repeat(121)).expect("nonempty preview");
         assert_eq!(preview.chars().count(), 123);
@@ -890,12 +645,13 @@ mod tests {
 
     #[test]
     fn thinking_indicator_follows_active_lifecycle_and_projected_reasoning() {
-        let reasoning_only =
-            gents::session::CanonicalRequestOutput::Live(gents::session::CanonicalPresentation {
+        let reasoning_only = gents_session::session::CanonicalRequestOutput::Live(
+            gents_session::session::CanonicalPresentation {
                 body_markdown: String::new(),
                 reasoning_markdown: Some("pondering the request".to_string()),
                 selected_source: None,
-            });
+            },
+        );
         assert!(should_print_thinking(
             Some(RequestLifecycleState::Processing),
             &reasoning_only
@@ -906,51 +662,34 @@ mod tests {
             &reasoning_only
         ));
 
-        let with_content =
-            gents::session::CanonicalRequestOutput::Live(gents::session::CanonicalPresentation {
+        let with_content = gents_session::session::CanonicalRequestOutput::Live(
+            gents_session::session::CanonicalPresentation {
                 body_markdown: "answer body".to_string(),
                 reasoning_markdown: Some("pondering the request".to_string()),
                 selected_source: None,
-            });
+            },
+        );
         assert!(!should_print_thinking(
             Some(RequestLifecycleState::Processing),
             &with_content
         ));
 
-        let no_reasoning =
-            gents::session::CanonicalRequestOutput::Live(gents::session::CanonicalPresentation {
+        let no_reasoning = gents_session::session::CanonicalRequestOutput::Live(
+            gents_session::session::CanonicalPresentation {
                 body_markdown: String::new(),
                 reasoning_markdown: None,
                 selected_source: None,
-            });
+            },
+        );
         assert!(!should_print_thinking(
             Some(RequestLifecycleState::Processing),
             &no_reasoning
         ));
         assert!(!should_print_thinking(
             Some(RequestLifecycleState::Processing),
-            &gents::session::CanonicalRequestOutput::Loading
+            &gents_session::session::CanonicalRequestOutput::Loading
         ));
         assert!(!should_print_thinking(None, &reasoning_only));
-    }
-
-    #[test]
-    fn progress_marker_ignores_retained_partial_diagnostics() {
-        let absent = chat_progress_marker(
-            None,
-            Some(&gents::session::CanonicalRequestOutput::Absent),
-            &[],
-        );
-        let retained = chat_progress_marker(
-            None,
-            Some(&gents::session::CanonicalRequestOutput::RetainedPartial(
-                Vec::new(),
-            )),
-            &[],
-        );
-
-        assert_eq!(absent.canonical_output, retained.canonical_output);
-        assert_eq!(retained.canonical_output, None);
     }
 
     fn bash_tool(status: &str, result: Option<&str>) -> ToolCallProgress {
@@ -1138,7 +877,7 @@ mod tests {
 
     mod account_problem {
         use super::*;
-        use gents::inference::auth::credential::{AccountState, AccountSummary, ServingAccount};
+        use gents_inference::auth::credential::{AccountState, AccountSummary, ServingAccount};
         use gents_protocol::row::AgentReadinessUnavailableReason as Reason;
 
         const CLAUDE: &str = "claude-subscription";
@@ -1252,7 +991,7 @@ mod folded_input_tests {
 
     #[test]
     fn only_owned_fold_supersession_is_an_informational_completion() {
-        let reason = gents::request::lifecycle::FOLDED_REASON;
+        let reason = gents_session::request::lifecycle::FOLDED_REASON;
         assert!(folded_input_completed(
             RequestLifecycleState::Superseded,
             reason

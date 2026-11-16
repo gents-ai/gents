@@ -23,7 +23,8 @@ pub const BEST: &str = catalog_data::BEST;
 pub const LATEST_PER_FAMILY: &[(&str, &str)] = &catalog_data::LATEST_PER_FAMILY;
 
 /// A provider the catalog carries model ids for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CatalogProvider {
     /// The first-party Anthropic API.
     FirstParty,

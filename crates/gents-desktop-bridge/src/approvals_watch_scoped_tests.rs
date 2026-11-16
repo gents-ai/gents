@@ -1,5 +1,5 @@
 use super::*;
-use gents::plugin::approval::workspace::{self, Mode, Settings, WorkspaceKey};
+use gents_tools::plugin::approval::workspace::{self, Mode, Settings, WorkspaceKey};
 
 struct Workspace {
     root: tempfile::TempDir,
@@ -10,6 +10,10 @@ struct Workspace {
 
 impl Workspace {
     fn new() -> Self {
+        Self::for_session(None)
+    }
+
+    fn for_session(session: Option<&str>) -> Self {
         let root = tempfile::tempdir().unwrap();
         let home = root.path().join("home");
         let project = root.path().join("project");
@@ -17,11 +21,14 @@ impl Workspace {
         let path = project.join("document.txt");
         std::fs::write(&path, b"document").unwrap();
         let path = path.canonicalize().unwrap();
-        let key = WorkspaceKey::canonical("node", "requester", "agent", &project).unwrap();
+        let key = WorkspaceKey::canonical("node", "requester", "agent", &project)
+            .unwrap()
+            .with_session(session)
+            .unwrap();
         let settings = workspace::save_mode(&home, &key, 0, Mode::Ask, None).unwrap();
         let request = Request::new(
             "team/files",
-            &gents::plugin::allowed::Resolved {
+            &gents_pack::plugin::allowed::Resolved {
                 target: path.clone(),
                 is_dir: false,
             },
@@ -81,7 +88,7 @@ impl Workspace {
             "kind": "command", "argv": ["echo", "approved"],
             "cwd": self.settings.workspace.path,
             "root": self.root.path().canonicalize().unwrap(),
-            "policy": gents::tools::native::CommandExecutionPolicy::write_capable(),
+            "policy": gents_tools::native::CommandExecutionPolicy::write_capable(),
         });
         serde_json::from_value(value).unwrap()
     }
@@ -119,14 +126,44 @@ async fn changing_workspace_permissions_removes_an_orphaned_prompt_immediately()
     until_pending_changes(&fixture.home, &mut pending, &mut receive).await;
     assert!(pending.seen.is_empty());
     assert!(approval::decide(&fixture.home, &fixture.request.id, Answer::AlwaysFolder).is_err());
-    assert!(gents::plugin::allowed::list(&fixture.home)
+    assert!(gents_pack::plugin::allowed::list(&fixture.home)
         .unwrap()
         .is_empty());
-    assert!(workspace::get(&fixture.home, &fixture.settings.workspace)
-        .unwrap()
-        .unwrap()
-        .dirs
-        .is_empty());
+    assert!(
+        workspace::resolve(&fixture.home, &fixture.settings.workspace, None)
+            .unwrap()
+            .unwrap()
+            .dirs
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn choosing_another_chats_permissions_keeps_this_chats_prompt() {
+    let fixture = Workspace::for_session(Some("chat"));
+    let (send, mut receive) = mpsc::channel(1);
+    let _watch = QueueWatch::start(&fixture.home, send).unwrap();
+    let mut pending = PendingQueue::default();
+    assert!(!pending.refresh(&fixture.home).unwrap());
+    fixture.file();
+    until_pending_changes(&fixture.home, &mut pending, &mut receive).await;
+    assert_eq!(pending.seen.len(), 1);
+    while receive.try_recv().is_ok() {}
+    let sibling = fixture
+        .settings
+        .workspace
+        .base()
+        .with_session(Some("another-chat"))
+        .unwrap();
+    workspace::save_mode(&fixture.home, &sibling, 0, Mode::FullAccess, None).unwrap();
+    assert!(!pending.refresh(&fixture.home).unwrap());
+    assert_eq!(pending.seen.len(), 1);
+    let mut reattached = PendingQueue::default();
+    assert!(reattached.refresh(&fixture.home).unwrap());
+    assert_eq!(reattached.seen, pending.seen);
+    fixture.change_mode();
+    until_pending_changes(&fixture.home, &mut pending, &mut receive).await;
+    assert!(pending.seen.is_empty());
 }
 
 #[tokio::test]
@@ -154,7 +191,7 @@ async fn atomic_permission_replacements_remain_observable_without_queue_activity
         Duration::from_secs(3_600),
         subscribed,
         move |_| {
-            let revision = workspace::get(&observing_home, &observing_key)
+            let revision = workspace::resolve(&observing_home, &observing_key, None)
                 .unwrap()
                 .unwrap()
                 .selection
@@ -190,10 +227,10 @@ async fn remembered_workspace_access_reaches_the_waiter_without_widening_global_
     let (allowed, ()) = tokio::join!(waiting, answer);
     assert!(allowed.unwrap());
     assert!(!fixture.question_file().exists());
-    assert!(gents::plugin::allowed::list(&fixture.home)
+    assert!(gents_pack::plugin::allowed::list(&fixture.home)
         .unwrap()
         .is_empty());
-    let settings = workspace::get(&fixture.home, &fixture.settings.workspace)
+    let settings = workspace::resolve(&fixture.home, &fixture.settings.workspace, None)
         .unwrap()
         .unwrap();
     assert_eq!(settings.dirs.len(), 1);
@@ -205,7 +242,9 @@ async fn remembered_workspace_access_reaches_the_waiter_without_widening_global_
     let other = fixture.root.path().join("other");
     std::fs::create_dir_all(&other).unwrap();
     let other = WorkspaceKey::canonical("node", "requester", "agent", &other).unwrap();
-    assert!(workspace::get(&fixture.home, &other).unwrap().is_none());
+    assert!(workspace::resolve(&fixture.home, &other, None)
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]
@@ -230,7 +269,7 @@ async fn changing_permissions_cancels_the_waiting_question() {
 #[test]
 fn command_question_reports_execution_network_without_changing_approval_policy() {
     use crate::plugin_access::{ApprovalSubjectView, PluginApprovalView};
-    use gents::tools::native::{CommandExecutionMode as Mode, CommandNetworkMode as Network};
+    use gents_tools::native::{CommandExecutionMode as Mode, CommandNetworkMode as Network};
 
     let fixture = Workspace::new();
     for mode in [
@@ -240,7 +279,7 @@ fn command_question_reports_execution_network_without_changing_approval_policy()
         Mode::Unrestricted,
     ] {
         for network in [Network::Inherit, Network::Enabled, Network::Disabled] {
-            let policy = gents::tools::native::CommandExecutionPolicy::write_capable()
+            let policy = gents_tools::native::CommandExecutionPolicy::write_capable()
                 .with_mode(mode)
                 .with_network_mode(network);
             let mut wire = serde_json::to_value(fixture.command()).unwrap();
@@ -285,14 +324,16 @@ async fn command_questions_resume_once_without_granting_filesystem_access() {
     let (allowed, ()) = tokio::join!(waiting, answer);
     assert!(allowed.unwrap());
     assert!(!fixture.question_file().exists());
-    assert!(gents::plugin::allowed::list(&fixture.home)
+    assert!(gents_pack::plugin::allowed::list(&fixture.home)
         .unwrap()
         .is_empty());
-    assert!(workspace::get(&fixture.home, &fixture.settings.workspace)
-        .unwrap()
-        .unwrap()
-        .dirs
-        .is_empty());
+    assert!(
+        workspace::resolve(&fixture.home, &fixture.settings.workspace, None)
+            .unwrap()
+            .unwrap()
+            .dirs
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -311,7 +352,7 @@ async fn an_unscoped_listener_cannot_keep_a_workspace_question_waiting() {
         .unwrap_err();
     assert!(error.to_string().contains("updated client"));
     assert!(!fixture.question_file().exists());
-    assert!(gents::plugin::allowed::list(&fixture.home)
+    assert!(gents_pack::plugin::allowed::list(&fixture.home)
         .unwrap()
         .is_empty());
 }
@@ -323,7 +364,7 @@ fn duplicate_question_ids_across_scopes_cannot_be_answered() {
     file_question(&fixture.home, &fixture.request.id);
     assert!(approval::pending_requests(&fixture.home).is_err());
     assert!(approval::decide(&fixture.home, &fixture.request.id, Answer::AlwaysFolder).is_err());
-    assert!(gents::plugin::allowed::list(&fixture.home)
+    assert!(gents_pack::plugin::allowed::list(&fixture.home)
         .unwrap()
         .is_empty());
 }
@@ -341,7 +382,7 @@ fn workspace_questions_cannot_be_answered_through_the_unscoped_queue() {
     .unwrap();
     assert!(approval::pending_requests(&fixture.home).is_err());
     assert!(approval::decide(&fixture.home, &fixture.request.id, Answer::AlwaysFolder).is_err());
-    assert!(gents::plugin::allowed::list(&fixture.home)
+    assert!(gents_pack::plugin::allowed::list(&fixture.home)
         .unwrap()
         .is_empty());
 }
@@ -377,12 +418,16 @@ fn a_changed_folder_cannot_receive_a_remembered_workspace_grant() {
     .unwrap();
     std::os::unix::fs::symlink(&other, fixture.request.filesystem().unwrap().folder).unwrap();
     assert!(approval::decide(&fixture.home, &fixture.request.id, Answer::AlwaysFolder).is_err());
-    assert!(workspace::get(&fixture.home, &fixture.settings.workspace)
-        .unwrap()
-        .unwrap()
-        .dirs
-        .is_empty());
-    assert!(gents::plugin::allowed::list(&fixture.home)
+    assert!(workspace::resolve(
+        &fixture.home,
+        &fixture.settings.workspace.base(),
+        fixture.settings.workspace.session_id.as_deref()
+    )
+    .unwrap()
+    .unwrap()
+    .dirs
+    .is_empty());
+    assert!(gents_pack::plugin::allowed::list(&fixture.home)
         .unwrap()
         .is_empty());
 }
@@ -410,9 +455,11 @@ fn a_file_replaced_by_a_directory_cannot_receive_the_file_approval() {
     std::fs::remove_file(fixture.request.filesystem().unwrap().path).unwrap();
     std::fs::create_dir(fixture.request.filesystem().unwrap().path).unwrap();
     assert!(approval::decide(&fixture.home, &fixture.request.id, Answer::AlwaysPath).is_err());
-    assert!(workspace::get(&fixture.home, &fixture.settings.workspace)
-        .unwrap()
-        .unwrap()
-        .dirs
-        .is_empty());
+    assert!(
+        workspace::resolve(&fixture.home, &fixture.settings.workspace, None)
+            .unwrap()
+            .unwrap()
+            .dirs
+            .is_empty()
+    );
 }

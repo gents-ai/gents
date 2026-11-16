@@ -131,101 +131,105 @@ where
 mod tests {
     use super::*;
 
-    #[derive(Deserialize)]
-    struct Snapshot {
-        access_review_cases: Vec<Case>,
+    use gents_lean_vocab::families::{
+        access_review_denial_trace as trace, access_review_review_route as route,
+    };
+    use policy::Scope;
+
+    fn wire<T>(value: &T) -> String
+    where
+        T: serde::Serialize,
+    {
+        serde_json::to_value(value)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned()
     }
 
-    #[derive(Deserialize)]
-    #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-    enum Case {
-        Context {
-            required: u64,
-            limit: u64,
-            costs: Vec<u64>,
-            expected: Option<usize>,
-        },
-        Reply {
-            action: String,
-            raw: String,
-            expected: Review,
-        },
-        Trace {
-            steps: Vec<Step>,
-        },
-        Completion {
-            purpose: gents_protocol::request_admission::RequestPurpose,
-            #[serde(rename = "hasTools")]
-            has_tools: bool,
-            expected: bool,
-        },
-        Route {
-            input: Input<u64, u64>,
-            history: Vec<Review>,
-            verdict: Review,
-            grant: Grant<u64, u64>,
-            expected: Route,
-            #[serde(rename = "expectedHistory")]
-            expected_history: Vec<Review>,
-        },
+    fn parsed<T>(wire: &str) -> T
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        serde_json::from_value(serde_json::Value::String(wire.to_owned())).unwrap()
     }
 
-    #[derive(Deserialize)]
-    struct Step {
-        verdict: Review,
-        history: Vec<Review>,
-        blocked: bool,
+    fn grant(wire: &route::WireGrant) -> Grant<u64, u64> {
+        Grant {
+            scope: Scope {
+                workspace: wire.scope.workspace,
+                revision: wire.scope.revision,
+            },
+            action: wire.action,
+        }
     }
 
     #[test]
-    fn generated_access_review_cases_drive_native_reply_and_routing() {
-        let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
-        assert!(!snapshot.access_review_cases.is_empty());
-        for case in snapshot.access_review_cases {
-            match case {
-                Case::Context {
-                    required,
-                    limit,
-                    costs,
-                    expected,
-                } => {
-                    assert_eq!(select_context(required, limit, costs), expected);
-                }
-                Case::Reply {
-                    action,
-                    raw,
-                    expected,
-                } => assert_eq!(decode_reply(&action, &raw), expected),
-                Case::Trace { steps } => {
-                    let mut history = History::default();
-                    for step in steps {
-                        history.record(step.verdict);
-                        assert_eq!(history.verdicts, step.history);
-                        assert_eq!(history.blocked(), step.blocked);
+    fn generated_access_review_replies_match_the_native_decoder() {
+        gents_lean_vocab::families::access_review_reply_decision::replay(|i| {
+            wire(&decode_reply(&i.action, &i.raw))
+        });
+    }
+
+    #[test]
+    fn generated_access_review_traces_match_the_native_history() {
+        gents_lean_vocab::families::access_review_denial_trace::replay(|i| {
+            let mut history = History::default();
+            i.verdicts
+                .iter()
+                .map(|verdict| {
+                    history.record(parsed(verdict));
+                    trace::TraceStep {
+                        history: history.verdicts.iter().map(wire).collect(),
+                        blocked: history.blocked(),
                     }
-                }
-                Case::Completion {
-                    purpose,
-                    has_tools,
-                    expected,
-                } => {
-                    assert_eq!(accepts_completion(purpose, has_tools), expected);
-                }
-                Case::Route {
-                    input,
-                    history,
-                    verdict,
-                    grant,
-                    expected,
-                    expected_history,
-                } => {
-                    let mut history = History { verdicts: history };
-                    assert_eq!(evaluate(&input, &history, verdict, &grant), expected);
-                    assert_eq!(apply(&input, &mut history, verdict, &grant), expected);
-                    assert_eq!(history.verdicts, expected_history);
-                }
+                })
+                .collect()
+        });
+    }
+
+    #[test]
+    fn generated_access_review_routes_match_the_native_evaluation() {
+        gents_lean_vocab::families::access_review_review_route::replay(|i| {
+            let input = Input {
+                current: Scope {
+                    workspace: i.input.current.workspace,
+                    revision: i.input.current.revision,
+                },
+                configured_workspace: i.input.configured_workspace,
+                mode: parsed(&i.input.mode),
+                action: i.input.action,
+                ceiling_allows: i.input.ceiling_allows,
+                crosses_boundary: i.input.crosses_boundary,
+                grant: i.input.grant.as_ref().map(grant),
+            };
+            let mut history = History {
+                verdicts: i.history.iter().map(|verdict| parsed(verdict)).collect(),
+            };
+            let verdict: Review = parsed(&i.verdict);
+            let reviewed = grant(&i.grant);
+            let evaluated = evaluate(&input, &history, verdict, &reviewed);
+            let applied = apply(&input, &mut history, verdict, &reviewed);
+            route::RouteOutput {
+                evaluated: wire(&evaluated),
+                applied: wire(&applied),
+                history: history.verdicts.iter().map(wire).collect(),
             }
-        }
+        });
+    }
+
+    #[test]
+    fn generated_access_review_completions_match_the_native_gate() {
+        gents_lean_vocab::families::access_review_completion_acceptance::replay(|i| {
+            accepts_completion(parsed(&i.purpose), i.has_tools)
+        });
+    }
+
+    #[test]
+    fn generated_access_review_contexts_match_the_native_selection() {
+        gents_lean_vocab::families::access_review_context_selection::replay(|i| {
+            select_context(i.required, i.limit, i.costs.iter().copied()).map(|count| count as u64)
+        });
     }
 
     #[test]

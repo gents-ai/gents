@@ -2,7 +2,8 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use crate::cli::args::GrokAuthProbeArgs;
-use crate::{resolve_config_access, resolve_node_did};
+use crate::resolve_config_access;
+use gents_service::home_state::resolve_node_did;
 
 #[derive(Deserialize)]
 struct ModelsResponse {
@@ -66,7 +67,7 @@ pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let node_did = resolve_node_did(Some(&home_dir), args.node_did.as_deref())?;
-    let provider = gents::inference::clients::xai_grok::normalize_provider(&args.provider);
+    let provider = gents_inference::clients::xai_grok::normalize_provider(&args.provider);
     let blocks = crate::commands::accounts::probe_each_account(
         &access,
         &node_did,
@@ -77,10 +78,10 @@ pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
     if blocks.is_empty() {
         bail!(
             "{}",
-            gents::inference::clients::xai_grok::classify_xai_auth_error(
+            gents_inference::clients::xai_grok::classify_xai_auth_error(
                 &node_did,
                 &provider,
-                &gents::inference::auth::credential::OAuthAuthProblem::Missing,
+                &gents_inference::auth::credential::OAuthAuthProblem::Missing,
             )
         );
     }
@@ -92,19 +93,19 @@ pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
 }
 
 async fn probe_account(
-    credential: gents::inference::auth::credential::OAuthCredential,
+    credential: gents_inference::auth::credential::OAuthCredential,
     node_did: &str,
     provider: &str,
     max_models: usize,
 ) -> Result<String> {
     use std::fmt::Write;
     let mut out = String::new();
-    let backend_url = gents::inference::clients::xai_grok::default_backend_endpoint();
+    let backend_url = gents_inference::clients::xai_grok::default_backend_endpoint();
     let models_url = format!("{}/models-v2", backend_url.trim_end_matches('/'));
     let mut request = reqwest::Client::new()
         .get(&models_url)
         .bearer_auth(&credential.access_token);
-    for (name, value) in gents::inference::clients::xai_grok::build_xai_grok_oauth_headers()? {
+    for (name, value) in gents_inference::clients::xai_grok::build_xai_grok_oauth_headers()? {
         if let Some(name) = name {
             request = request.header(name, value);
         }
@@ -122,25 +123,25 @@ async fn probe_account(
     if !status.is_success() {
         let body = String::from_utf8_lossy(&body);
         if status.as_u16() == 401 {
-            let guidance = gents::inference::clients::xai_grok::classify_xai_auth_error(
+            let guidance = gents_inference::clients::xai_grok::classify_xai_auth_error(
                 node_did,
                 provider,
-                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
+                &gents_inference::auth::credential::OAuthAuthProblem::Expired,
             );
             bail!("models request failed with HTTP {status}: {body}\n{guidance}");
         }
         if status.as_u16() == 403 {
-            let guidance = gents::inference::clients::xai_grok::classify_xai_auth_error(
+            let guidance = gents_inference::clients::xai_grok::classify_xai_auth_error(
                 node_did,
                 provider,
-                &gents::inference::auth::credential::OAuthAuthProblem::NotEntitled,
+                &gents_inference::auth::credential::OAuthAuthProblem::NotEntitled,
             );
             bail!("models request failed with HTTP {status}: {body}\n{guidance}");
         }
         if status.as_u16() == 426 {
             bail!(
                 "models request failed with HTTP {status}: {body}\n{}",
-                gents::inference::clients::xai_grok::grok_client_version_gate_guidance()
+                gents_inference::clients::xai_grok::grok_client_version_gate_guidance()
             );
         }
         bail!("models request failed with HTTP {status}: {body}");
@@ -155,7 +156,7 @@ async fn probe_account(
         "Access token expires: {}",
         credential.access_token_expires_at
     )?;
-    if !gents::inference::auth::credential::token_is_fresh(credential.access_token_expires_at) {
+    if !gents_inference::auth::credential::token_is_fresh(credential.access_token_expires_at) {
         writeln!(
             out,
             "Note: access token is within the refresh skew window; the owner runtime will refresh on next use."

@@ -117,7 +117,7 @@ describe("the plugin page route", () => {
 describe("the area vocabulary", () => {
   it("is one list on both sides of the bridge", () => {
     const rust = readFileSync(
-      join(__dirname, "../../../crates/gents/src/pack/ux.rs"),
+      join(__dirname, "../../../crates/gents-pack/src/pack/ux.rs"),
       "utf8",
     );
     const block = /pub const UX_PLUGIN_AREAS: &\[&str\] = &\[([^\]]*)\];/.exec(rust);

@@ -68,6 +68,7 @@ async fn a_slow_booting_runtime_is_waited_on_until_it_publishes_readiness() {
             }
         },
         || async { Ok(NativeProgress::Loaded) },
+        || async { None },
     )
     .await
     .expect("a loaded job that is still booting is waited on");
@@ -131,6 +132,7 @@ async fn a_booting_runtime_is_waited_on_until_it_reports_ready() {
             }
         },
         || async { Ok(NativeProgress::Loaded) },
+        || async { None },
     )
     .await
     .expect("a bound runtime that is still starting is waited on");
@@ -151,6 +153,7 @@ async fn a_runtime_that_predates_readiness_fails_the_wait_at_once() {
                 })
             },
             || async { Ok(NativeProgress::Loaded) },
+            || async { None },
         ),
     )
     .await
@@ -196,6 +199,7 @@ async fn a_booting_runtime_past_the_bound_is_left_running() {
             }
         },
         || async { Ok(NativeProgress::Loaded) },
+        || async { None },
     )
     .await
     .expect_err("the wait is bounded");
@@ -218,6 +222,7 @@ async fn a_booting_runtime_past_the_bound_is_left_running() {
             }
         },
         || async { Ok(NativeProgress::Loaded) },
+        || async { None },
     )
     .await
     .expect("binding restarts the bound");
@@ -289,6 +294,7 @@ async fn readiness_wait_fails_as_soon_as_the_service_stops() {
         Duration::from_millis(5),
         || async { Ok(PortReadiness::NotListening) },
         || async { Ok(NativeProgress::Stopped) },
+        || async { None },
     )
     .await
     .expect_err("an exited service must not be waited on");
@@ -308,26 +314,24 @@ async fn a_crash_looping_service_fails_with_its_exit_reason() {
             let seen = observations.fetch_add(1, Ordering::SeqCst) as u64;
             async move { Ok(NativeProgress::Exited(service_exit(1 + seen / 4))) }
         },
+        || async { None },
     )
     .await
     .expect_err("a crash loop must not be waited out");
-    assert!(error.to_string().contains("exited with code 78"), "{error}");
-    assert!(
-        error.to_string().contains("restarted 2 times in a row"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("exit code 78"), "{error}");
+    assert!(error.to_string().contains("keeps exiting"), "{error}");
     assert_eq!(observations.load(Ordering::SeqCst), 9);
 }
 
-fn refused_store_exit(restarts: u64) -> gents_server::native_service::ServiceExit {
-    gents_server::native_service::ServiceExit {
+fn refused_store_exit(restarts: u64) -> gents_service::native_service::ServiceExit {
+    gents_service::native_service::ServiceExit {
         reason: format!(
             "exited with code {}",
-            gents_server::native_service::INCOMPATIBLE_STORE_EXIT_CODE
+            gents_service::native_service::INCOMPATIBLE_STORE_EXIT_CODE
         ),
         restarts,
         clean: false,
-        code: Some(gents_server::native_service::INCOMPATIBLE_STORE_EXIT_CODE),
+        code: Some(gents_service::native_service::INCOMPATIBLE_STORE_EXIT_CODE),
     }
 }
 
@@ -338,6 +342,7 @@ async fn a_refused_store_fails_the_start_typed_on_its_first_exit() {
         Duration::from_millis(5),
         || async { Ok(PortReadiness::NotListening) },
         || async { Ok(NativeProgress::Exited(refused_store_exit(0))) },
+        || async { None },
     )
     .await
     .expect_err("a refused store is final");
@@ -350,9 +355,9 @@ async fn a_refused_store_fails_the_start_typed_on_its_first_exit() {
 #[tokio::test]
 async fn a_refused_store_fails_typed_even_while_status_reports_booting() {
     for code in [
-        gents_server::native_service::INCOMPATIBLE_STORE_EXIT_CODE,
-        gents_server::native_service::INSECURE_KEY_EXIT_CODE,
-        gents_server::native_service::FOREIGN_STORE_EXIT_CODE,
+        gents_service::native_service::INCOMPATIBLE_STORE_EXIT_CODE,
+        gents_service::native_service::INSECURE_KEY_EXIT_CODE,
+        gents_service::native_service::FOREIGN_STORE_EXIT_CODE,
     ] {
         let error = await_runtime_readiness(
             Duration::from_secs(60),
@@ -360,7 +365,7 @@ async fn a_refused_store_fails_typed_even_while_status_reports_booting() {
             || async { Ok(PortReadiness::Booting) },
             || async move {
                 Ok(NativeProgress::Exited(
-                    gents_server::native_service::ServiceExit {
+                    gents_service::native_service::ServiceExit {
                         reason: format!("exited with code {code}"),
                         restarts: 0,
                         clean: false,
@@ -368,6 +373,7 @@ async fn a_refused_store_fails_typed_even_while_status_reports_booting() {
                     },
                 ))
             },
+            || async { None },
         )
         .await
         .expect_err("a refused store is final");
@@ -382,7 +388,7 @@ async fn a_refused_store_fails_typed_even_while_status_reports_booting() {
 
 #[test]
 fn a_refused_store_exit_reports_an_incompatible_home_not_a_crash_loop() {
-    let native = gents_server::native_service::NativeServiceStatus {
+    let native = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: false,
         job_loaded: true,
@@ -411,7 +417,7 @@ fn a_refused_store_exit_reports_an_incompatible_home_not_a_crash_loop() {
     assert!(status
         .error
         .as_deref()
-        .is_some_and(|error| error.contains("/tmp/.gents/data")));
+        .is_some_and(|error| error.contains("/tmp/.gents")));
 
     let starting = ManagedServerRuntimeState {
         starting: true,
@@ -470,6 +476,7 @@ async fn a_single_exit_between_respawns_is_not_a_crash_loop() {
                 })
             }
         },
+        || async { None },
     )
     .await
     .expect("an exit that waits out the respawn throttle keeps waiting");
@@ -483,6 +490,7 @@ async fn readiness_hands_a_blocked_job_to_the_approval_wait() {
         Duration::from_millis(5),
         || async { Ok(PortReadiness::NotListening) },
         || async { Ok(NativeProgress::AwaitingApproval) },
+        || async { None },
     )
     .await
     .unwrap();
@@ -496,10 +504,35 @@ async fn readiness_wait_is_bounded() {
         Duration::from_millis(5),
         || async { Ok(PortReadiness::NotListening) },
         || async { Ok(NativeProgress::Loaded) },
+        || async { None },
     )
     .await
     .expect_err("a runtime that never becomes ready must time out");
     assert!(error
         .to_string()
         .contains("did not publish runtime readiness"));
+}
+
+#[tokio::test]
+async fn a_missing_store_key_exit_is_not_an_incompatible_home() {
+    let error = await_runtime_readiness(
+        Duration::from_secs(60),
+        Duration::from_millis(5),
+        || async { Ok(PortReadiness::NotListening) },
+        || async {
+            Ok(NativeProgress::Failed(
+                gents_service::native_service::ServiceExit {
+                    reason: "exited with code 72".to_string(),
+                    restarts: 1,
+                    clean: false,
+                    code: Some(gents_service::native_service::MISSING_STORE_KEY_EXIT_CODE),
+                },
+            ))
+        },
+        || async { None },
+    )
+    .await
+    .expect_err("the start fails");
+    assert!(error.downcast_ref::<BridgeError>().is_none(), "{error}");
+    assert!(refused_kind(&error).is_none(), "{error}");
 }

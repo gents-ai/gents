@@ -1,5 +1,5 @@
-import Proofs.Triggers
-import Proofs.Request
+import Proofs.Automation.Triggers
+import Proofs.Session.Request
 
 def materializedTriggerRequest
     (state : SystemState)

@@ -2,7 +2,7 @@ use gents_fs_runner::execute_request_with_base;
 use gents_fs_runner::protocol::{GrepArgs, NativeFsRunnerRequest};
 use serde_json::Value;
 
-mod support;
+use crate::support;
 use support::{run_grep, unique_root};
 
 #[test]

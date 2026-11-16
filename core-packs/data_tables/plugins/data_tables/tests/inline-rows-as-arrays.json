@@ -1,0 +1,50 @@
+{
+  "expect": {
+    "columns": [
+      {
+        "name": "k",
+        "type": "text"
+      },
+      {
+        "name": "s",
+        "type": "int64"
+      }
+    ],
+    "markdown": "| k | s |\n| --- | --- |\n| a | 4 |\n| b | 2 |",
+    "offset": 0,
+    "order": "columns",
+    "row_count": 2,
+    "rows": [
+      [
+        "a",
+        4
+      ],
+      [
+        "b",
+        2
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT column_2 AS k, sum(column_1) AS s FROM t GROUP BY column_2",
+    "tables": {
+      "t": {
+        "rows": [
+          [
+            1,
+            "a"
+          ],
+          [
+            2,
+            "b"
+          ],
+          [
+            3,
+            "a"
+          ]
+        ]
+      }
+    }
+  }
+}

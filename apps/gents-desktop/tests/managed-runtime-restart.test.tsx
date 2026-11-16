@@ -97,7 +97,7 @@ describe("managed runtime restart settings", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Keep triggers, schedules and sync running after quitting/),
+      screen.getByText(/Keep triggers and schedules running after quitting/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Start with the app/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Supervised by the desktop/i)).not.toBeInTheDocument();

@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::store::local::file_lock::FileLock;
+use gents_store::local::file_lock::FileLock;
 
 use crate::support::process::ServeProcess;
 
@@ -52,6 +52,10 @@ impl FailureArtifacts {
     pub fn attach_server(&mut self, server: ServeProcess) {
         assert!(self.server.is_none(), "fixture already has a server");
         self.server = Some(server);
+    }
+
+    pub fn take_server(&mut self) -> Option<ServeProcess> {
+        self.server.take()
     }
 
     pub fn captured_output(&self) -> Result<(String, String)> {

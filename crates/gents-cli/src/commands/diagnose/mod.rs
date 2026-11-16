@@ -7,11 +7,15 @@ use anyhow::Result;
 use gents_protocol::row::{project_node_readiness_summary, ProjectedNodeReadinessSummary};
 use serde_json::{json, Value};
 
-use crate::cli::args::{DiagnoseArgs, P2pTransportArg};
+use crate::cli::args::DiagnoseArgs;
 use crate::{
-    build_config_export_bundle, graphql_endpoint_available, print_json, read_init_config,
-    read_runtime_state, resolve_config_access, resolve_home_dir, resolve_node_did,
+    build_config_export_bundle, graphql_endpoint_available, print_json, resolve_config_access,
 };
+use gents_host::args::P2pTransportArg;
+use gents_service::home_state::read_init_config;
+use gents_service::home_state::read_runtime_state;
+use gents_service::home_state::resolve_home_dir;
+use gents_service::home_state::resolve_node_did;
 
 use backends::diagnose_backends;
 use plugin_jobs::diagnose_plugin_jobs;
@@ -33,11 +37,16 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
-    let schema_checks = diagnose_schema_presence(&access).await;
-    let bundle_result = build_config_export_bundle(&access, &node_did).await;
+    let (schema_checks, bundle_result, runtime_row, readiness_row, accounts) = tokio::join!(
+        diagnose_schema_presence(&access),
+        build_config_export_bundle(&access, &node_did),
+        load_runtime_row(&access, &node_did),
+        gents_host::readiness::load_node_readiness(&access, &node_did),
+        gents_inference::auth::credential::list_accounts(&access, &node_did),
+    );
     let config_load_error = bundle_result.as_ref().err().map(ToString::to_string);
     let bundle = bundle_result.ok();
-    let runtime_row = match load_runtime_row(&access, &node_did).await {
+    let runtime_row = match runtime_row {
         Ok(Some(row)) => row,
         Ok(None) => Value::Null,
         Err(error) => json!({
@@ -45,7 +54,6 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
     let live_runtime = graphql_reachable && runtime_row.get("node_did").is_some();
-    let readiness_row = crate::commands::status::load_node_readiness(&access, &node_did).await;
     let (runtime_node_readiness, runtime_node_readiness_check) = match readiness_row {
         Ok(row) => match project_node_readiness_summary(row.as_ref(), &node_did) {
             ProjectedNodeReadinessSummary::Observed(summary) => {
@@ -62,7 +70,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
                         })
                     })
                     .collect::<Vec<_>>();
-                let observed_ready = unavailable.is_empty();
+                let observed_ready = summary.is_ready();
                 (
                     serde_json::to_value(&summary.snapshot).unwrap_or(Value::Null),
                     json!({
@@ -107,7 +115,8 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         .collect::<std::collections::BTreeSet<_>>();
     let default_agent_did = bundle
         .as_ref()
-        .and_then(|bundle| bundle.config.node.default_agent_did.as_deref());
+        .and_then(|bundle| bundle.config.default_agent_selection.as_ref())
+        .and_then(|selection| selection.selected());
     let default_agent_check = match default_agent_did {
         Some(agent_did) if agent_dids.contains(agent_did) => json!({
             "ok": true,
@@ -120,13 +129,12 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
         None => json!({
             "ok": false,
-            "error": format!("Node {} is missing or has no default_agent_did", node_did),
+            "error": format!("Node {} is missing or has no default agent selection", node_did),
         }),
     };
     let tool_ceiling_check = diagnose_tool_ceiling(init_config.as_ref());
-    let accounts = gents::inference::auth::credential::list_accounts(&access, &node_did).await;
     let runtime_probes = match &access {
-        gents::store::config_client::ConfigAccess::Graphql(endpoint) => {
+        gents_store::config_client::ConfigAccess::Graphql(endpoint) => {
             crate::commands::status::load_runtime_backend_probes(endpoint, &node_did).await
         }
         _ => Default::default(),
@@ -150,10 +158,14 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     });
     let p2p_status = match graphql.as_deref().filter(|_| graphql_reachable) {
         Some(endpoint) => {
-            let endpoint = crate::resolve_graphql_endpoint(Some(endpoint), args.home.as_deref())?;
-            crate::commands::p2p::load_live_http_p2p_status(args.home.as_deref(), &endpoint).await
+            let endpoint = gents_service::home_state::resolve_graphql_endpoint(
+                Some(endpoint),
+                args.home.as_deref(),
+            )
+            .await?;
+            gents_host::p2p_status::load_live_http_p2p_status(Some(&home_dir), &endpoint).await
         }
-        None => crate::commands::p2p::persisted_p2p_status(matching_runtime_state),
+        None => gents_host::p2p_status::persisted_p2p_status(matching_runtime_state),
     };
     let p2p_transport = p2p_status
         .get("p2p_transport")
@@ -199,17 +211,25 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         .unwrap_or(false);
     let principal_present = bundle.is_some();
 
-    let chatgpt_provider = gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-    let mut chatgpt_auth_check = match gents::inference::auth::credential::resolve_oauth_credential(
-        &access,
-        &node_did,
-        chatgpt_provider,
-        gents::inference::auth::credential::AccountPick::ProviderDefault,
-    )
-    .await
-    {
+    let chatgpt_provider = gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
+    let xai_provider = gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
+    let claude_provider = gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+    let credential = |provider| {
+        gents_inference::auth::credential::resolve_oauth_credential(
+            &access,
+            &node_did,
+            provider,
+            gents_inference::auth::credential::AccountPick::ProviderDefault,
+        )
+    };
+    let (chatgpt_credential, xai_credential, claude_credential) = tokio::join!(
+        credential(chatgpt_provider),
+        credential(xai_provider),
+        credential(claude_provider),
+    );
+    let mut chatgpt_auth_check = match chatgpt_credential {
         Ok(Some(credential))
-            if gents::inference::auth::credential::token_is_fresh(
+            if gents_inference::auth::credential::token_is_fresh(
                 credential.access_token_expires_at,
             ) =>
         {
@@ -227,19 +247,19 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "credential_id": credential.credential_id,
             "provider": credential.provider,
             "expires_at": credential.access_token_expires_at,
-            "guidance": gents::inference::auth::credential::classify_chatgpt_auth_error(
+            "guidance": gents_inference::auth::credential::classify_chatgpt_auth_error(
                 &node_did,
                 chatgpt_provider,
-                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
+                &gents_inference::auth::credential::OAuthAuthProblem::Expired,
             ),
         }),
         Ok(None) => json!({
             "ok": false,
             "provider": chatgpt_provider,
-            "guidance": gents::inference::auth::credential::classify_chatgpt_auth_error(
+            "guidance": gents_inference::auth::credential::classify_chatgpt_auth_error(
                 &node_did,
                 chatgpt_provider,
-                &gents::inference::auth::credential::OAuthAuthProblem::Missing,
+                &gents_inference::auth::credential::OAuthAuthProblem::Missing,
             ),
         }),
         Err(error) => json!({
@@ -249,17 +269,9 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
 
-    let xai_provider = gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
-    let mut xai_auth_check = match gents::inference::auth::credential::resolve_oauth_credential(
-        &access,
-        &node_did,
-        xai_provider,
-        gents::inference::auth::credential::AccountPick::ProviderDefault,
-    )
-    .await
-    {
+    let mut xai_auth_check = match xai_credential {
         Ok(Some(credential))
-            if gents::inference::auth::credential::token_is_fresh(
+            if gents_inference::auth::credential::token_is_fresh(
                 credential.access_token_expires_at,
             ) =>
         {
@@ -275,19 +287,19 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "credential_id": credential.credential_id,
             "provider": credential.provider,
             "expires_at": credential.access_token_expires_at,
-            "guidance": gents::inference::clients::xai_grok::classify_xai_auth_error(
+            "guidance": gents_inference::clients::xai_grok::classify_xai_auth_error(
                 &node_did,
                 xai_provider,
-                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
+                &gents_inference::auth::credential::OAuthAuthProblem::Expired,
             ),
         }),
         Ok(None) => json!({
             "ok": false,
             "provider": xai_provider,
-            "guidance": gents::inference::clients::xai_grok::classify_xai_auth_error(
+            "guidance": gents_inference::clients::xai_grok::classify_xai_auth_error(
                 &node_did,
                 xai_provider,
-                &gents::inference::auth::credential::OAuthAuthProblem::Missing,
+                &gents_inference::auth::credential::OAuthAuthProblem::Missing,
             ),
         }),
         Err(error) => json!({
@@ -297,17 +309,9 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
 
-    let claude_provider = gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
-    let mut claude_auth_check = match gents::inference::auth::credential::resolve_oauth_credential(
-        &access,
-        &node_did,
-        claude_provider,
-        gents::inference::auth::credential::AccountPick::ProviderDefault,
-    )
-    .await
-    {
+    let mut claude_auth_check = match claude_credential {
         Ok(Some(credential))
-            if gents::inference::auth::credential::token_is_fresh(
+            if gents_inference::auth::credential::token_is_fresh(
                 credential.access_token_expires_at,
             ) =>
         {
@@ -323,19 +327,19 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "credential_id": credential.credential_id,
             "provider": credential.provider,
             "expires_at": credential.access_token_expires_at,
-            "guidance": gents::inference::auth::claude::classify_claude_auth_error(
+            "guidance": gents_inference::auth::claude::classify_claude_auth_error(
                 &node_did,
                 claude_provider,
-                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
+                &gents_inference::auth::credential::OAuthAuthProblem::Expired,
             ),
         }),
         Ok(None) => json!({
             "ok": false,
             "provider": claude_provider,
-            "guidance": gents::inference::auth::claude::classify_claude_auth_error(
+            "guidance": gents_inference::auth::claude::classify_claude_auth_error(
                 &node_did,
                 claude_provider,
-                &gents::inference::auth::credential::OAuthAuthProblem::Missing,
+                &gents_inference::auth::credential::OAuthAuthProblem::Missing,
             ),
         }),
         Err(error) => json!({
@@ -349,18 +353,18 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         (
             &mut chatgpt_auth_check,
             chatgpt_provider,
-            gents::inference::auth::credential::classify_chatgpt_auth_error
-                as fn(&str, &str, &gents::inference::auth::credential::OAuthAuthProblem) -> String,
+            gents_inference::auth::credential::classify_chatgpt_auth_error
+                as fn(&str, &str, &gents_inference::auth::credential::OAuthAuthProblem) -> String,
         ),
         (
             &mut xai_auth_check,
             xai_provider,
-            gents::inference::clients::xai_grok::classify_xai_auth_error,
+            gents_inference::clients::xai_grok::classify_xai_auth_error,
         ),
         (
             &mut claude_auth_check,
             claude_provider,
-            gents::inference::auth::claude::classify_claude_auth_error,
+            gents_inference::auth::claude::classify_claude_auth_error,
         ),
     ] {
         check["accounts"] = match &accounts {
@@ -379,9 +383,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
 
     let chatgpt_backend_configured = backend_reports.iter().any(|report| {
         report.get("provider_kind").and_then(Value::as_str)
-            == Some(
-                gents::inference::backends::provider::BackendProviderKind::ChatGptCodex.as_str(),
-            )
+            == Some(gents_inference::backends::provider::BackendProviderKind::ChatGptCodex.as_str())
             && report.get("enabled").and_then(Value::as_bool) == Some(true)
     });
     let chatgpt_auth_ok = !chatgpt_backend_configured
@@ -389,9 +391,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
 
     let xai_backend_configured = backend_reports.iter().any(|report| {
         report.get("provider_kind").and_then(Value::as_str)
-            == Some(
-                gents::inference::backends::provider::BackendProviderKind::XaiGrokOAuth.as_str(),
-            )
+            == Some(gents_inference::backends::provider::BackendProviderKind::XaiGrokOAuth.as_str())
             && report.get("enabled").and_then(Value::as_bool) == Some(true)
     });
     let xai_auth_ok =
@@ -400,7 +400,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let claude_backend_configured = backend_reports.iter().any(|report| {
         report.get("provider_kind").and_then(Value::as_str)
             == Some(
-                gents::inference::backends::provider::BackendProviderKind::ClaudeCliSubscription
+                gents_inference::backends::provider::BackendProviderKind::ClaudeCliSubscription
                     .as_str(),
             )
             && report.get("enabled").and_then(Value::as_bool) == Some(true)
@@ -459,27 +459,27 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             },
         },
         "config_counts": bundle.as_ref().map(|bundle| {
-            gents::Collection::ALL.into_iter().map(|collection| {
+            gents_store::collection::Collection::ALL.into_iter().map(|collection| {
                 let count = bundle.docs_for_collection(collection)?.len();
-                Ok((collection.dir_name().unwrap_or("node").to_owned(), count))
+                Ok((collection.to_string(), count))
             }).collect::<Result<std::collections::BTreeMap<_, _>>>()
         }).transpose()?,
     });
     if let Some(map) = output.as_object_mut() {
         let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
-        crate::commands::p2p::flatten_p2p_fields(map, &p2p_value);
+        gents_host::p2p_status::flatten_p2p_fields(map, &p2p_value);
     }
     print_json(&output)?;
     Ok(())
 }
 
 fn accounts_json(
-    accounts: &[&gents::inference::auth::credential::AccountSummary],
+    accounts: &[&gents_inference::auth::credential::AccountSummary],
     node_did: &str,
     provider: &str,
-    classify: fn(&str, &str, &gents::inference::auth::credential::OAuthAuthProblem) -> String,
+    classify: fn(&str, &str, &gents_inference::auth::credential::OAuthAuthProblem) -> String,
 ) -> Value {
-    use gents::inference::auth::credential::OAuthAuthProblem;
+    use gents_inference::auth::credential::OAuthAuthProblem;
     accounts
         .iter()
         .map(|account| {
@@ -487,7 +487,7 @@ fn accounts_json(
                 Some(OAuthAuthProblem::WrongMode {
                     found_mode: "disabled".into(),
                 })
-            } else if !gents::inference::auth::credential::token_is_fresh(
+            } else if !gents_inference::auth::credential::token_is_fresh(
                 account.access_token_expires_at,
             ) {
                 Some(OAuthAuthProblem::Expired)
@@ -513,7 +513,7 @@ mod tests {
     use serde_json::json;
 
     use super::{accounts_json, claude_auth_gate};
-    use gents::inference::auth::credential::AccountSummary;
+    use gents_inference::auth::credential::AccountSummary;
 
     fn account(label: &str, enabled: bool, expires_in_minutes: i64) -> AccountSummary {
         AccountSummary {
@@ -536,7 +536,7 @@ mod tests {
             &accounts.iter().collect::<Vec<_>>(),
             "did:key:z6MkT",
             "claude-subscription",
-            gents::inference::auth::claude::classify_claude_auth_error,
+            gents_inference::auth::claude::classify_claude_auth_error,
         )
     }
 

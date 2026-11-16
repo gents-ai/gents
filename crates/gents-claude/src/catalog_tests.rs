@@ -297,6 +297,17 @@ fn gateway_falls_back_to_the_first_party_id() {
 }
 
 #[test]
+fn eager_input_streaming_matches_the_lean_model() {
+    gents_lean_vocab::families::eager_streaming_enabled::replay::<CatalogProvider>(|i| {
+        EagerStreaming {
+            bedrock: i.bedrock,
+            vertex: i.vertex,
+        }
+        .enabled(i.provider, i.default_endpoint)
+    });
+}
+
+#[test]
 fn eager_input_streaming_is_read_on_vertex_and_bedrock_default_endpoints() {
     let providers = [
         CatalogProvider::FirstParty,

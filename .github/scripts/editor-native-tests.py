@@ -26,7 +26,7 @@ def artifacts(log, root, target):
         if event.get('reason') != 'compiler-artifact' or not event.get('executable'):
             continue
         source = Path(event['target']['src_path']).resolve()
-        package = next((name for name in ('gents-client-host', 'gents-desktop-bridge', 'gents-cli', 'gents')
+        package = next((name for name in ('gents-client-host', 'gents-desktop-bridge', 'gents-cli', 'gents-session')
                         if source.is_relative_to((root / 'crates' / name).resolve())), None)
         testing = event.get('profile', {}).get('test')
         name = event['target']['name']
@@ -39,7 +39,7 @@ def artifacts(log, root, target):
             role = 'host'
         elif testing and package == 'gents-desktop-bridge' and 'lib' in kind:
             role = 'bridge'
-        elif testing and package == 'gents' and 'lib' in kind:
+        elif testing and package == 'gents-session' and 'lib' in kind:
             role = 'process'
         elif testing and package == 'gents-cli' and name == 'port_allocation' and 'test' in kind:
             role = 'cli'
@@ -50,7 +50,7 @@ def artifacts(log, root, target):
         found.append({'role': role, 'name': name, 'path': str(binary), 'cwd': str(root / 'crates' / package), 'sha256': digest(binary)})
     if (sum(item['role'] == 'process' for item in found) != 1
             or sum(item['role'] == 'bridge' for item in found) != 1
-            or not any(item['role'] == 'host' and item['name'] == 'runtime' for item in found)
+            or not any(item['role'] == 'host' and item['name'] == 'integration' for item in found)
             or not any(item['role'] == 'cli' for item in found)
             or sorted(item['name'] for item in found if item['role'] == 'binary') != ['gents', 'gents-client-host']
             or len({item['path'] for item in found}) != len(found)):
@@ -64,8 +64,8 @@ def transport_targets(root):
     package = next(item for item in json.loads(metadata.stdout)['packages'] if item['name'] == 'gents-client-host')
     targets = sorted(item['name'] for item in package['targets']
                      if 'test' in item['kind'] and set(item.get('required-features') or ()) <= {'runtime-e2e'})
-    if 'runtime' not in targets:
-        raise ValueError('native runtime test target is missing')
+    if 'integration' not in targets:
+        raise ValueError('native host integration test target is missing')
     return targets
 
 
@@ -75,15 +75,15 @@ def compile_tests(root, manifest, profile='test'):
     targets = [flag for name in ['port_allocation', *transport_targets(root)] for flag in ('--test', name)]
     with log.open('w') as output:
         subprocess.run(['cargo', 'test', '--locked', '-p', 'gents-client-host',
-                        '-p', 'gents-desktop-bridge', '-p', 'gents-cli', '-p', 'gents', '--no-default-features',
+                        '-p', 'gents-desktop-bridge', '-p', 'gents-cli', '-p', 'gents-session', '--no-default-features',
                         '--features', 'gents-client-host/runtime-e2e', '--profile', profile, '--lib', *targets, '--no-run',
                         '--message-format=json-render-diagnostics', '--timings', '--target-dir', str(root / 'target')], cwd=root, stdout=output, check=True)
     manifest.write_text(json.dumps(artifacts(log, root, root / 'target'), indent=2) + '\n')
 
 
 PROCESS_TESTS = (
-    'tools::exec::tests::managed_exec_deadline_kills_job_object',
-    'tools::exec::tests::managed_exec_cancellation_kills_job_object',
+    'exec::tests::managed_exec_deadline_kills_job_object',
+    'exec::tests::managed_exec_cancellation_kills_job_object',
 )
 
 
@@ -95,7 +95,7 @@ def check_result(item, status, content):
     summary = re.findall(r'test result: ok\. (\d+) passed; 0 failed;', content)
     if status != 0 or len(summary) != 1:
         raise RuntimeError('native transport tests failed')
-    if (item['role'] in ('bridge', 'cli', 'process') or item['name'] == 'runtime') and int(summary[0]) == 0:
+    if (item['role'] in ('bridge', 'cli', 'process') or item['name'] == 'integration') and int(summary[0]) == 0:
         raise RuntimeError('required native transport cases did not execute')
 
 

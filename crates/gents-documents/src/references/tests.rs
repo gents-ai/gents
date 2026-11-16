@@ -1,0 +1,265 @@
+use super::*;
+use serde_json::json;
+
+#[test]
+fn modeled_affected_validation_preserves_visible_dependencies() {
+    let case = gents_lean_vocab::lean_identity_household_cases()
+        .iter()
+        .find(|case| case.name == "configuration-explicit-grants")
+        .expect("configuration contract");
+    let document = |key: &str| match key {
+        "agent" => (
+            Collection::Agent,
+            json!({"node_did":"owner", "agent_did":"agent",
+            "creation_nonce":"nonce", "inference_profile_id":"profile"}),
+        ),
+        "task" => (
+            Collection::Task,
+            json!({"node_did":"owner", "task_id":"task",
+            "agent_did":"agent", "prompt_template":"work"}),
+        ),
+        "trigger" => (
+            Collection::Trigger,
+            json!({"node_did":"owner", "trigger_id":"trigger",
+            "task_id":"task", "source":{"kind":"schedule", "schedule_id":"schedule"}}),
+        ),
+        "schedule" => (
+            Collection::Schedule,
+            json!({"node_did":"owner", "schedule_id":"schedule",
+            "cadence":{"kind":"interval", "interval_secs":60}}),
+        ),
+        "tools" => (
+            Collection::Tools,
+            json!({"node_did":"owner", "tools_id":"tools"}),
+        ),
+        "tools-collision" => (
+            Collection::Tools,
+            json!({"node_did":"owner", "tools_id":"collision",
+            "datastore":{"datastore_tool_surface_ids":["a", "b"]}}),
+        ),
+        "surface-a" | "surface-b" => (
+            Collection::DatastoreToolSurface,
+            json!({"node_did":"owner",
+            "surface_id": if key == "surface-a" { "a" } else { "b" },
+            "entries":[{"kind":"query", "tool_name":"duplicate", "collection":"Records",
+                "fields":["name"], "description":"Read records"}]}),
+        ),
+        "default-node" => (
+            Collection::DefaultAgentSelection,
+            json!({"node_did":"owner", "default_agent_did":"disabled-agent"}),
+        ),
+        "disabled-agent" => (
+            Collection::Agent,
+            json!({"node_did":"owner", "agent_did":"disabled-agent",
+            "creation_nonce":"nonce", "inference_profile_id":"profile", "enabled":false}),
+        ),
+        "profile" => (
+            Collection::InferenceProfile,
+            json!({"node_did":"owner", "profile_id":"profile",
+            "backend_id":"backend", "model_name":"model"}),
+        ),
+        _ => panic!("unknown modeled document {key}"),
+    };
+    for modeled in &case.configuration_affected_cases {
+        let documents = modeled["documents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|key| document(key.as_str().unwrap()))
+            .collect::<Vec<_>>();
+        let changed = modeled["changed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|key| {
+                let (collection, value) = document(key.as_str().unwrap());
+                (
+                    collection,
+                    value[collection.unique_field()]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                )
+            })
+            .collect();
+        let snapshot = ConfigReferences::from_documents("owner", documents).unwrap();
+        let actual = snapshot.validate_affected(&changed);
+        assert_eq!(
+            actual.is_ok(),
+            modeled["expected"].as_bool().unwrap(),
+            "{}: {actual:?}",
+            modeled["name"]
+        );
+    }
+}
+
+#[test]
+fn candidate_tools_reuse_surface_expansion_and_collision_guards() {
+    let tools = json!({"tools_id":"tools", "node_did":"owner",
+        "datastore":{"datastore_tool_surface_ids":["a", "b"]}});
+    let surface = |id: &str, name: &str| {
+        json!({"surface_id":id, "node_did":"owner",
+        "entries":[{"kind":"query", "tool_name":name, "collection":"Records",
+            "fields":["name"], "description":"Read records"}]})
+    };
+    let validate = |tools, a, b| {
+        ConfigReferences::from_documents(
+            "owner",
+            [
+                (Collection::Tools, tools),
+                (Collection::DatastoreToolSurface, a),
+                (Collection::DatastoreToolSurface, b),
+            ],
+        )
+        .and_then(|refs| refs.validate())
+    };
+    validate(
+        tools.clone(),
+        surface("a", "inspect_a"),
+        surface("b", "inspect_b"),
+    )
+    .unwrap();
+    assert!(validate(
+        tools.clone(),
+        surface("a", "inspect"),
+        surface("b", "inspect")
+    )
+    .is_err());
+    let mut disabled = surface("b", "inspect_b");
+    disabled["enabled"] = json!(false);
+    assert!(validate(tools.clone(), surface("a", "inspect_a"), disabled).is_err());
+    let mut collision = tools.clone();
+    collision["host"] = json!({"cli":[{"name":"inspect_a"}]});
+    assert!(validate(
+        collision,
+        surface("a", "inspect_a"),
+        surface("b", "inspect_b")
+    )
+    .is_err());
+    let mut duplicate = tools;
+    duplicate["datastore"]["datastore_tool_surface_ids"] = json!(["a", "a"]);
+    assert!(validate(
+        duplicate,
+        surface("a", "inspect_a"),
+        surface("b", "inspect_b")
+    )
+    .is_err());
+}
+
+#[test]
+fn candidate_installation_uses_existing_endpoint_and_path_requirements() {
+    let validate = |collection, value| {
+        ConfigReferences::from_documents("owner", [(collection, value)])
+            .and_then(|refs| refs.validate())
+    };
+    let service = json!({"service_id":"service", "node_did":"owner", "hostname":"localhost", "mcp_port":8000});
+    validate(Collection::ToolServiceRegistry, service.clone()).unwrap();
+    for (field, value) in [
+        ("mcp_port", json!(null)),
+        ("mcp_port", json!(0)),
+        ("hostname", json!(" ")),
+    ] {
+        let mut bad = service.clone();
+        bad[field] = value;
+        assert!(validate(Collection::ToolServiceRegistry, bad).is_err());
+    }
+    for address in ["hostname", "tailscale_ip", "lan_ip"] {
+        let mut valid = service.clone();
+        valid["hostname"] = json!(null);
+        valid[address] = json!("host");
+        validate(Collection::ToolServiceRegistry, valid).unwrap();
+    }
+    let remote = json!({"service_id":"remote", "node_did":"owner",
+        "endpoint_url":"https://mcp.linear.app/mcp"});
+    validate(Collection::ToolServiceRegistry, remote.clone()).unwrap();
+    for bad_url in [
+        "ftp://host/mcp",
+        "https://user:pw@host/mcp",
+        "https://host/mcp?key=1",
+    ] {
+        let mut bad = remote.clone();
+        bad["endpoint_url"] = json!(bad_url);
+        assert!(validate(Collection::ToolServiceRegistry, bad).is_err());
+    }
+    let placement = json!({"repository_id":"repo", "node_did":"owner", "host_path":"./checkout"});
+    validate(Collection::RepositoryPlacement, placement.clone()).unwrap();
+    let mut bad = placement;
+    bad["host_path"] = json!(" ");
+    assert!(validate(Collection::RepositoryPlacement, bad).is_err());
+}
+
+#[test]
+fn trigger_scope_checks_use_bound_task_and_source_for_both_templates() {
+    use gents_store::identity::NodeIdentity;
+    let directory = tempfile::tempdir().unwrap();
+    let runtime =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("runtime"), None)
+            .unwrap();
+    let binding = gents_store::identity::provision_agent_identity(&runtime).unwrap();
+    let owner = runtime.did();
+    let base = json!({
+        "node":{"node_did":owner},
+        "agents":[{"node_did":owner,"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"profile"}],
+        "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
+        "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible",
+            "endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
+        "tasks":[{"node_did":owner,"task_id":"task","agent_did":binding.agent_did,"prompt_template":"{{ ctx.now }}"}],
+        "schedules":[{"node_did":owner,"schedule_id":"schedule","cadence":{"kind":"interval","interval_secs":10}}],
+        "event_sources":[{"node_did":owner,"event_source_id":"event","source_collection":"Records"}],
+        "triggers":[{"node_did":owner,"trigger_id":"trigger","task_id":"task","source":{"kind":"schedule","schedule_id":"schedule"}}]
+    });
+    let validate = |value| {
+        let config = serde_json::from_value::<super::super::PackConfig>(value).unwrap();
+        let plan = crate::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+        ConfigReferences::from_documents(
+            owner,
+            plan.documents()
+                .iter()
+                .map(|doc| (doc.collection, doc.add.clone())),
+        )?
+        .validate()
+    };
+    validate(base.clone()).unwrap();
+    let mut outcome = base.clone();
+    outcome["triggers"][0]["source"] = json!({"kind":"event","event_source_id":"event"});
+    outcome["event_sources"][0]["source_collection"] = json!("FireOutcome");
+    validate(outcome.clone()).unwrap();
+    outcome["tasks"][0]["emit_outcome"] = json!(true);
+    let error = validate(outcome.clone()).unwrap_err();
+    assert!(error.to_string().contains("sources FireOutcome"));
+    outcome["event_sources"][0]["source_collection"] = json!("Records");
+    validate(outcome).unwrap();
+
+    for field in ["prompt_template", "goal_objective_template"] {
+        for template in ["{{ doc.name }}", "{{ args.name }}", "{{ group.documents }}"] {
+            let mut invalid = base.clone();
+            invalid["tasks"][0][field] = json!(template);
+            assert!(
+                validate(invalid).is_err(),
+                "schedule accepted {field} {template}"
+            );
+        }
+        let mut event = base.clone();
+        event["triggers"][0]["source"] = json!({"kind":"event","event_source_id":"event"});
+        event["tasks"][0][field] = json!("{{ doc.name }}");
+        validate(event.clone()).unwrap();
+        event["tasks"][0][field] = json!("{{ group.documents }}");
+        assert!(validate(event.clone()).is_err());
+        event["event_sources"][0]["correlation_field"] = json!("job");
+        event["event_sources"][0]["group"] = json!({"expected_count":2});
+        validate(event.clone()).unwrap();
+        for grouped in [false, true] {
+            let mut invalid = event.clone();
+            if !grouped {
+                invalid["event_sources"][0]["group"] = json!(null);
+            }
+            invalid["tasks"][0][field] = json!("{{ args.name }}");
+            assert!(
+                validate(invalid.clone()).is_err(),
+                "event accepted caller args"
+            );
+            invalid["triggers"] = json!([]);
+            validate(invalid).unwrap();
+        }
+    }
+}

@@ -1,6 +1,8 @@
+import type { AgentWorkspaceRoot } from "@source-inc/gents-desktop-client/generated/AgentWorkspaceRoot";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type { BackendHealth } from "@source-inc/gents-desktop-client";
 import type {
+  AgentIdentityBinding,
   AgentSaveRequest,
   ChatSendResult,
   DesktopClientSnapshot,
@@ -57,7 +59,16 @@ export function createBridgeHttpAdapter(
       throw new Error("Native picker is unavailable in the live browser bridge");
     },
     requestAttachments: unsupported("requestAttachments"),
-    provisionAgentIdentity: unsupported("provisionAgentIdentity"),
+    provisionAgentIdentity: (nodeDid) =>
+      client.postJson<AgentIdentityBinding>("/desktop/agent/identity", {
+        node_did: nodeDid,
+      }),
+    selectAgentWorkspaceRoot: (nodeDid, agentDid, path) =>
+      client.postJson<AgentWorkspaceRoot>("/desktop/agent/workspace-root", {
+        nodeDid,
+        agentDid,
+        path,
+      }),
     removePeer: unsupported("removePeer"),
     renamePeer: unsupported("renamePeer"),
     dismissEndedAccess: unsupported("dismissEndedAccess"),
@@ -134,8 +145,6 @@ export function createBridgeHttpAdapter(
     setSelectedNode: async (nodeDid) => {
       await client.postJson("/desktop/selected-node", { nodeDid });
     },
-    fetchPeerStatus: async (peerId) =>
-      client.postJson("/desktop/peer/status", { peerId }),
     requestStatusEnrollment: async (serverAddress) =>
       client.postJson("/desktop/peer/enroll-status", { serverAddress }),
     fetchSessionSnapshot: async (sessionId, nodeDid, requestId, timelinePage) =>
@@ -279,6 +288,8 @@ export function createBridgeHttpAdapter(
       throw new Error("desktop_job_control is not served by the live bridge runner");
     },
     processControl: unsupported("processControl"),
+    listJobs: unsupported("listJobs"),
+    getJobView: unsupported("getJobView"),
   };
 }
 

@@ -1,5 +1,5 @@
 /// Reserve invalid-call budget before dispatch and stop at any duplicate,
-/// because repeated-failure decisions depend on preceding results.
+/// because repetition decisions depend on preceding results.
 pub(super) fn read_prefix<'a>(
     calls: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
     limit: usize,
@@ -362,7 +362,7 @@ mod tests {
             inputs.push(serde_json::json!({"limit": limit, "calls": modeled, "accepted": accepted, "settled": settled, "stop": stop, "actions": []}));
             actual.push(serde_json::json!({"length": read_prefix(calls, limit), "complete": complete, "ordered": ordered, "admitted": []}));
         }
-        let proof_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/proofs");
+        let proof_dir = gents_lean_contract::proofs_dir().expect("Lean proofs directory");
         gents_lean_contract::run_lake_build(&proof_dir).expect("build Lean contract");
         let mut lean = Command::new("lake")
             .args([
@@ -755,27 +755,55 @@ mod control_tests {
     }
 
     #[tokio::test]
-    async fn batch_dispatch_respects_hook_cancellation_token() {
-        let hook = Arc::new(Hook {
-            actions: vec!["run", "run"],
-            settled: tokio::sync::Mutex::new(Vec::new()),
-            terminate_id: None,
-            cancelled_terminates: false,
-            cancel_token: true,
-            request_tokens: Default::default(),
-        });
-        let count = Arc::new(AtomicUsize::new(0));
-        let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(Probe {
-            calls: count.clone(),
-            pending_second: false,
-        })]);
-        let (results, termination) =
-            run_batch(calls(2), tools, Some(hook.clone()), None, false, None).await;
-        assert!(termination.is_none());
-        assert_eq!(count.load(Ordering::SeqCst), 0);
-        assert_eq!(results.len(), 2);
-        let mut settled = hook.settled.lock().await.clone();
-        settled.sort_unstable();
-        assert_eq!(settled, vec![(0, true), (1, true)]);
+    async fn hook_dispatch_matches_the_lean_model() {
+        for case in gents_lean_vocab::families::parallel_dispatch_hook_dispatch::cases::<String>() {
+            let actions: Vec<&'static str> = case
+                .input
+                .actions
+                .iter()
+                .map(|action| match action.as_str() {
+                    "run" => "run",
+                    "skip" => "skip",
+                    "terminate" => "terminate",
+                    other => panic!("unknown admission {other}"),
+                })
+                .collect();
+            let hook = Arc::new(Hook {
+                actions: actions.clone(),
+                settled: tokio::sync::Mutex::new(Vec::new()),
+                terminate_id: None,
+                cancelled_terminates: false,
+                cancel_token: case.input.hook_cancelled,
+                request_tokens: Default::default(),
+            });
+            let count = Arc::new(AtomicUsize::new(0));
+            let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(Probe {
+                calls: count.clone(),
+                pending_second: false,
+            })]);
+            let (results, termination) = run_batch(
+                calls(actions.len()),
+                tools,
+                Some(hook.clone()),
+                None,
+                false,
+                None,
+            )
+            .await;
+            let mut settled = hook.settled.lock().await.clone();
+            settled.sort_unstable();
+            case.check(gents_lean_vocab::families::parallel_dispatch_hook_dispatch::HookBatch {
+                started: count.load(Ordering::SeqCst) as u64,
+                results: results.len() as u64,
+                settled: settled
+                    .into_iter()
+                    .map(|(call, cancelled)| gents_lean_vocab::families::parallel_dispatch_hook_dispatch::SettledCall {
+                        call: call as u64,
+                        cancelled,
+                    })
+                    .collect(),
+                terminated: termination.is_some(),
+            });
+        }
     }
 }

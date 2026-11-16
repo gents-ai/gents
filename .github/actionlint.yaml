@@ -1,15 +1,25 @@
 self-hosted-runner:
+  # The labels of .github/ci-runners.json (test_gate.py keeps them equal).
   labels:
     - macOS
     - ARM64
-    - studio
-    - studio-1
-    - studio-2
-    - ci-runtime
-    - ci-support
-    - ci-desktop
-    - ci-cli
     - Linux
     - X64
-    - spark
-    - workstation-1
+    - ci-browser
+    - ci-cli
+    - ci-desktop
+    - ci-docker
+    - ci-inference
+    - ci-linux
+    - ci-macos
+    - ci-notary
+    - ci-portable
+    - ci-release
+    - ci-release-candidate
+    - ci-runtime
+    - ci-runtime-isolated
+    - ci-support
+paths:
+  .github/workflows/release-macos.yml:
+    ignore:
+      - 'SC2129'

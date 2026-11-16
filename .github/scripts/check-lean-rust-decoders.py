@@ -8,37 +8,8 @@ import sys
 from pathlib import Path
 
 GROUPS = {
-    "current_input_cases": "LeanCurrentInputCase",
     "canonical_execution_gate_cases": "LeanCanonicalExecutionCase",
     "canonical_dispatch_observation_cases": "LeanDispatchObservationCase",
-    "canonical_spawned_target_rejection_cases": "LeanSpawnedTargetRejectionCase",
-    "interrupt_queue_cases": "LeanInterruptQueueCase",
-    "canonical_payload_presentation_cases": "LeanPayloadPresentationCase",
-    "terminal_diagnostic_presentation_cases": "LeanTerminalDiagnosticPresentationCase",
-    "terminal_diagnostic_replay_cases": "LeanTerminalDiagnosticReplayCase",
-    "canonical_output_projection_cases": "LeanCanonicalOutputProjectionCase",
-    "reasoning_audit_cases": "LeanReasoningAuditCase",
-    "reasoning_signature_cases": "LeanReasoningSignatureCase",
-    "auxiliary_output_cases": "LeanAuxiliaryOutputCase",
-    "prompt_assembly_claude_wire_start_cases": "LeanPromptAssemblyClaudeWireStartCase",
-    "prompt_assembly_responses_storage_cases": "LeanPromptAssemblyResponsesStorageCase",
-    "prompt_assembly_responses_effort_cases": "LeanPromptAssemblyResponsesEffortCase",
-    "prompt_assembly_claude_thinking_stream_cases": "LeanPromptAssemblyClaudeThinkingStreamCase",
-    "prompt_assembly_reasoning_suffix_cases": "LeanPromptAssemblyReasoningSuffixCase",
-    "prompt_assembly_replay_shape_cases": "LeanPromptAssemblyReplayShapeCase",
-    "prompt_assembly_replay_prefix_cases": "LeanPromptAssemblyReplayPrefixCase",
-    "title_request_admission_cases": "LeanTitleRequestAdmissionCase",
-    "title_request_purpose_wire_cases": "LeanTitleRequestPurposeWireCase",
-    "title_usage_cases": "LeanTitleUsageCase",
-    "title_admission_join_cases": "LeanTitleAdmissionJoinCase",
-    "compaction_projection_join_cases": "LeanCompactionProjectionJoinCase",
-    "compaction_canonical_projection_cases": "LeanCanonicalCompactionCase",
-    "repaired_projection_admission_cases": "LeanRepairedProjectionCase",
-    "protected_replay_compaction_cases": "LeanProtectedReplayCompactionCase",
-    "request_execution_lease_cases": "LeanRequestExecutionLeaseCase",
-    "request_execution_lease_trace_cases": "LeanRequestExecutionLeaseTraceCase",
-    "queued_steering_trace_cases": "LeanQueuedSteeringTraceCase",
-    "queued_steering_guard_cases": "LeanQueuedSteeringGuardCase",
 }
 INT_RANGES = {
     "u8": (0, 2**8 - 1), "u16": (0, 2**16 - 1),
@@ -104,7 +75,7 @@ def parse_fields(body):
         joined = ",".join(attrs)
         rename = re.search(r'rename\s*=\s*"([^"]+)"', joined)
         required_nullable = bool(re.search(
-            r'deserialize_with\s*=\s*"(?:crate::lean_vocab_test::)?required_nullable"', joined))
+            r'deserialize_with\s*=\s*"(?:crate::)?required_nullable"', joined))
         fields.append({
             "name": rename.group(1) if rename else name,
             "type": ty,
@@ -112,7 +83,7 @@ def parse_fields(body):
             "required_nullable": required_nullable,
             "unsupported": unsupported_serde(attrs, [
                 r'default', r'rename\s*=\s*"[^"]+"',
-                r'deserialize_with\s*=\s*"(?:crate::lean_vocab_test::)?required_nullable"',
+                r'deserialize_with\s*=\s*"(?:crate::)?required_nullable"',
             ]) + unsupported_non_serde(all_attrs) + (
                 ["required_nullable on non-Option field"]
                 if required_nullable and not ty.startswith("Option<") else []),
@@ -340,7 +311,7 @@ def main():
                         help="saved generator stdout; omitted, the contract is generated after lake build")
     args = parser.parse_args()
     items = {}
-    for source in sorted((args.root / "crates/gents/src/lean_vocab_test").glob("*.rs")):
+    for source in sorted((args.root / "crates/gents-lean-vocab/src").glob("*.rs")):
         items.update(parse_items(source.read_text()))
     try:
         if args.contract:

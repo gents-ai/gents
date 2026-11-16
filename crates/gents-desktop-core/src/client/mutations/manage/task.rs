@@ -1,25 +1,40 @@
-use super::super::graphql::{escape_graphql_string, normalize_required};
-use anyhow::{anyhow, bail, Context, Result};
-use chrono::{SecondsFormat, Utc};
-#[cfg(test)]
-use defra_node::Node as EmbeddedNode;
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{EventSource, Schedule, Task, Trigger};
-use gents::store::collection::Collection;
-use gents::store::config_client::read_desired_state_record_in_txn;
-use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::task_session_title;
-use serde::de::DeserializeOwned;
-use serde_json::Value;
+use anyhow::Result;
+use gents_documents::apply_desired_state_plan;
+use gents_documents::patch::SelfConfigTarget;
+use gents_documents::read_desired_state_record_in_txn;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_documents::{EventSource, Schedule, Task, Trigger};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 
 pub async fn upsert_task_on(access: &ConfigAccess, document: &Task) -> Result<()> {
-    let value = serde_json::to_value(document)?;
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::Task,
-        add: value.clone(),
-        update: value,
-    }])?;
-    super::apply_plan(access, "desktop.task.save", plan).await
+    save_document(
+        access,
+        "desktop.task.save",
+        SelfConfigTarget::Task,
+        document,
+    )
+    .await
+}
+
+async fn save_document<T>(
+    access: &ConfigAccess,
+    operation: &'static str,
+    target: SelfConfigTarget,
+    document: &T,
+) -> Result<()>
+where
+    T: serde::Serialize + serde::de::DeserializeOwned,
+{
+    gents_documents::operations::write::save_whole(
+        access,
+        operation,
+        target,
+        document,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
+    Ok(())
 }
 
 pub async fn prepare_access_review_task_on(
@@ -27,8 +42,8 @@ pub async fn prepare_access_review_task_on(
     node: &str,
     agent: &str,
     preferred: Option<&str>,
-) -> Result<gents::plugin::approval::workspace::ReviewTaskSelection> {
-    use gents::plugin::approval::workspace::{default_review_task, review_task_policy};
+) -> Result<gents_tools::plugin::approval::workspace::ReviewTaskSelection> {
+    use gents_tools::plugin::approval::workspace::{default_review_task, review_task_policy};
 
     let default = default_review_task(node, agent);
     let task_id = preferred.unwrap_or(&default.task_id);
@@ -49,13 +64,13 @@ pub async fn prepare_access_review_task_on(
                         add: value.clone(),
                         update: value,
                     }])?;
-                    apply_desired_state_plan(txn, &plan).await?;
+                    apply_desired_state_plan(txn, &plan, &gents_inference::resolved::ProviderProfilePolicy).await?;
                     default.clone()
                 }
                 None => anyhow::bail!("The configured access reviewer is missing. Restore its Task in Runtime Settings."),
             };
             review_task_policy(&task, node, task_id, agent, "access-review")?;
-            Ok(gents::plugin::approval::workspace::ReviewTaskSelection::for_task(&task))
+            Ok(gents_tools::plugin::approval::workspace::ReviewTaskSelection::for_task(&task))
         })
     }).await
 }
@@ -72,13 +87,13 @@ pub async fn delete_task_on(access: &ConfigAccess, node_did: &str, id: &str) -> 
 }
 
 pub async fn upsert_schedule_on(access: &ConfigAccess, document: &Schedule) -> Result<()> {
-    let value = serde_json::to_value(document)?;
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::Schedule,
-        add: value.clone(),
-        update: value,
-    }])?;
-    super::apply_plan(access, "desktop.schedule.save", plan).await
+    save_document(
+        access,
+        "desktop.schedule.save",
+        SelfConfigTarget::Schedule,
+        document,
+    )
+    .await
 }
 
 pub async fn delete_schedule_on(access: &ConfigAccess, node_did: &str, id: &str) -> Result<usize> {
@@ -93,13 +108,13 @@ pub async fn delete_schedule_on(access: &ConfigAccess, node_did: &str, id: &str)
 }
 
 pub async fn upsert_trigger_on(access: &ConfigAccess, document: &Trigger) -> Result<()> {
-    let value = serde_json::to_value(document)?;
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::Trigger,
-        add: value.clone(),
-        update: value,
-    }])?;
-    super::apply_plan(access, "desktop.trigger.save", plan).await
+    save_document(
+        access,
+        "desktop.trigger.save",
+        SelfConfigTarget::Trigger,
+        document,
+    )
+    .await
 }
 
 pub async fn delete_trigger_on(access: &ConfigAccess, node_did: &str, id: &str) -> Result<usize> {
@@ -114,13 +129,13 @@ pub async fn delete_trigger_on(access: &ConfigAccess, node_did: &str, id: &str) 
 }
 
 pub async fn upsert_event_source_on(access: &ConfigAccess, document: &EventSource) -> Result<()> {
-    let value = serde_json::to_value(document)?;
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::EventSource,
-        add: value.clone(),
-        update: value,
-    }])?;
-    super::apply_plan(access, "desktop.event_source.save", plan).await
+    save_document(
+        access,
+        "desktop.event_source.save",
+        SelfConfigTarget::EventSource,
+        document,
+    )
+    .await
 }
 
 pub async fn delete_event_source_on(
@@ -138,360 +153,11 @@ pub async fn delete_event_source_on(
     .await
 }
 
-async fn execute_config_rows<T>(
-    access: &ConfigAccess,
-    root: &str,
-    query: &str,
-    operation: &str,
-) -> Result<Vec<T>>
-where
-    T: DeserializeOwned,
-{
-    let body = access
-        .execute(query)
-        .await
-        .with_context(|| operation.to_string())?;
-    if body
-        .get("errors")
-        .and_then(Value::as_array)
-        .is_some_and(|errors| !errors.is_empty())
-    {
-        bail!(
-            "{operation} returned errors: {}",
-            body.get("errors").unwrap_or(&Value::Null)
-        );
-    }
-    let rows = body
-        .get("data")
-        .and_then(|data| data.get(root))
-        .and_then(Value::as_array)
-        .with_context(|| format!("{operation} returned no {root} rows"))?;
-    rows.iter()
-        .cloned()
-        .map(|row| {
-            serde_json::from_value(row)
-                .with_context(|| format!("deserialize {root} for {operation}"))
-        })
-        .collect()
-}
-
-async fn load_task_on(
-    access: &ConfigAccess,
-    node_did: &str,
-    task_id: &str,
-) -> Result<(String, Task)> {
-    let query = format!(
-        r#"query {{
-            Task(filter: {{
-                node_did: {{ _eq: "{node_did}" }},
-                task_id: {{ _eq: "{task_id}" }}
-            }}, limit: 2) {{
-                _docID
-                task_id
-                node_did
-                display_name
-                description
-                agent_did
-                prompt_template
-                emit_outcome
-                goal_objective_template
-                goal_token_budget
-                hooks
-                enabled
-                output_schema_ref
-                created_at
-                updated_at
-                tags
-            }}
-        }}"#,
-        node_did = escape_graphql_string(node_did),
-        task_id = escape_graphql_string(task_id),
-    );
-    let mut rows =
-        execute_config_rows::<Value>(access, "Task", &query, "load canonical manual task")
-            .await?
-            .into_iter();
-    let mut row = rows
-        .next()
-        .ok_or_else(|| anyhow!("task {task_id} was not found for {node_did}"))?;
-    if rows.next().is_some() {
-        bail!("task {task_id} is ambiguous for {node_did}");
-    }
-    let doc_id = row
-        .as_object_mut()
-        .and_then(|row| row.remove("_docID"))
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .context("Task has no physical document ID")?;
-    Ok((doc_id, serde_json::from_value(row)?))
-}
-
-async fn ensure_agent_enabled_on(
-    access: &ConfigAccess,
-    node_did: &str,
-    agent_did: &str,
-) -> Result<()> {
-    let query = format!(
-        r#"query {{
-            Agent(filter: {{
-                node_did: {{ _eq: "{node_did}" }},
-                agent_did: {{ _eq: "{agent_did}" }}
-            }}, limit: 2) {{
-                node_did
-                agent_did: agent_did
-                enabled
-            }}
-        }}"#,
-        node_did = escape_graphql_string(node_did),
-        agent_did = escape_graphql_string(agent_did),
-    );
-    #[derive(serde::Deserialize)]
-    struct AgentState {
-        node_did: String,
-        agent_did: String,
-        enabled: bool,
-    }
-    let mut rows =
-        execute_config_rows::<AgentState>(access, "Agent", &query, "load canonical task agent")
-            .await?
-            .into_iter();
-    let row = rows
-        .next()
-        .ok_or_else(|| anyhow!("no Agent with agent_did = {agent_did} for {node_did}"))?;
-    if rows.next().is_some() {
-        bail!("Agent {agent_did} is ambiguous for {node_did}");
-    }
-    if row.node_did != node_did || row.agent_did != agent_did {
-        bail!("Agent {agent_did} belongs to a different node");
-    }
-    if !row.enabled {
-        bail!("Agent {agent_did} is disabled");
-    }
-    Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ManualTaskInvocation {
-    pub fire: gents_protocol::trigger_delivery::TriggerFire,
-    pub node_did: String,
-    pub task_id: String,
-    pub agent_did: String,
-    pub content: String,
-    pub goal_objective: Option<String>,
-    pub goal_token_budget: Option<i64>,
-    pub session_title: String,
-}
-
-fn render_task_invocation(
-    task: &Task,
-    task_doc_id: &str,
-    args: serde_json::Value,
-) -> Result<ManualTaskInvocation> {
-    let task_id = normalize_required("task_id", &task.task_id)?;
-    let node_did = normalize_required("node_did", &task.node_did)?;
-    let agent_did = normalize_required("agent_did", &task.agent_did)?;
-    let prompt_template = normalize_required("prompt_template", &task.prompt_template)?;
-    if !task.enabled {
-        bail!("task {task_id} is disabled");
-    }
-    gents::goal::validate_task_goal_declaration(
-        task.goal_objective_template.as_deref(),
-        task.goal_token_budget,
-    )?;
-    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let (node_scope, ctx_scope) =
-        gents::documents::template::task_node_ctx(node_did, agent_did, &now);
-    let invocation_key = uuid::Uuid::new_v4().to_string();
-    let identity = gents_protocol::trigger_delivery::FireIdentity {
-        owner_did: node_did.into(),
-        trigger_id: format!("manual:{task_id}:{invocation_key}"),
-        source_collection: "Task".into(),
-        source_doc_id: task_doc_id.into(),
-    };
-    let fire_key = gents::request::lifecycle::task_fire_key(&identity);
-    let session_id = format!("trigger-session:{fire_key}");
-    let request_id = format!("trigger-request:{fire_key}");
-    let scope = gents::TemplateScope {
-        session: Some(serde_json::json!({"session_id": session_id})),
-        request: Some(serde_json::json!({"request_id": request_id})),
-        event: serde_json::json!({
-            "fired_at": now,
-            "trigger_id": serde_json::Value::Null,
-            "trigger_kind": "manual",
-        }),
-        doc: None,
-        args: Some(args),
-        group: None,
-        node: node_scope,
-        ctx: ctx_scope,
-    };
-    let content = gents::render_manual_template(task_id, prompt_template, &scope)?;
-    let goal_objective = task
-        .goal_objective_template
-        .as_deref()
-        .map(str::trim)
-        .filter(|template| !template.is_empty())
-        .map(|template| {
-            gents::render_template(template, &scope)
-                .map_err(|error| anyhow!("render goal template for task {task_id}: {error}"))
-        })
-        .transpose()?;
-    if goal_objective
-        .as_deref()
-        .is_some_and(|objective| objective.trim().is_empty())
-    {
-        bail!("task {task_id} rendered an empty goal objective");
-    }
-    let task_label = task
-        .display_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(task_id);
-    let fire = gents_protocol::trigger_delivery::TriggerFire {
-        fire_key,
-        identity,
-        task_id: task_id.into(),
-        request_id,
-        session_id: session_id.clone(),
-        goal_id: goal_objective
-            .as_ref()
-            .map(|_| gents_protocol::goal::deterministic_goal_id(node_did, &session_id)),
-        goal_objective: goal_objective.clone(),
-        goal_token_budget: task.goal_token_budget,
-        goal_assignment_applied: false,
-        emit_outcome: task.emit_outcome,
-        queued_serial: false,
-        source_handoff_id: Some(invocation_key),
-        reply_session_id: None,
-        shard_id: None,
-        attempt: None,
-        created_at: now,
-    };
-    Ok(ManualTaskInvocation {
-        fire,
-        node_did: node_did.to_string(),
-        task_id: task_id.to_string(),
-        agent_did: agent_did.to_string(),
-        content,
-        goal_objective,
-        goal_token_budget: task.goal_token_budget,
-        session_title: task_session_title(task_label),
-    })
-}
-
-/// Resolve operator-owned task configuration from its canonical control plane;
-/// the caller submits through the ordinary client request authority so
-/// requester-scoped P2P filters admit it.
-pub async fn resolve_task_now_on(
-    config_access: &ConfigAccess,
-    node_did: &str,
-    task_id: &str,
-    args: serde_json::Value,
-) -> Result<ManualTaskInvocation> {
-    let node_did = normalize_required("node_did", node_did)?;
-    let task_id = normalize_required("task_id", task_id)?;
-    let (task_doc_id, task) = load_task_on(config_access, node_did, task_id).await?;
-    if !task.enabled {
-        bail!("task {task_id} is disabled");
-    }
-    let agent_did = normalize_required("agent_did", &task.agent_did)?;
-    ensure_agent_enabled_on(config_access, node_did, agent_did).await?;
-    render_task_invocation(&task, &task_doc_id, args)
-}
-
-pub async fn resolve_schedule_now_on(
-    config_access: &ConfigAccess,
-    node_did: &str,
-    schedule_id: &str,
-) -> Result<ManualTaskInvocation> {
-    let node_did = normalize_required("node_did", node_did)?;
-    let schedule_id = normalize_required("schedule_id", schedule_id)?;
-    let schedule_query = format!(
-        r#"query {{
-            Schedule(filter: {{
-                node_did: {{ _eq: "{node_did}" }},
-                schedule_id: {{ _eq: "{schedule_id}" }}
-            }}, limit: 2) {{
-                node_did
-                schedule_id
-                cadence
-            }}
-        }}"#,
-        node_did = escape_graphql_string(node_did),
-        schedule_id = escape_graphql_string(schedule_id),
-    );
-    let schedules = execute_config_rows::<Schedule>(
-        config_access,
-        "Schedule",
-        &schedule_query,
-        "load canonical manual schedule",
-    )
-    .await?;
-    if schedules.len() != 1 {
-        bail!(
-            "schedule {schedule_id} was {} for {node_did}",
-            if schedules.is_empty() {
-                "not found"
-            } else {
-                "ambiguous"
-            }
-        );
-    }
-
-    let trigger_query = format!(
-        r#"query {{
-            Trigger(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{
-                node_did
-                trigger_id
-                task_id
-                display_name
-                description
-                source
-                enabled
-                concurrency
-                created_at
-                updated_at
-                tags
-            }}
-        }}"#,
-        node_did = escape_graphql_string(node_did),
-    );
-    let triggers = execute_config_rows::<Trigger>(
-        config_access,
-        "Trigger",
-        &trigger_query,
-        "load canonical schedule triggers",
-    )
-    .await?;
-    let mut matching = triggers.into_iter().filter(|trigger| {
-        trigger.enabled
-            && matches!(
-                &trigger.source,
-                gents::documents::TriggerSource::Schedule { schedule_id: id }
-                    if id == schedule_id
-            )
-    });
-    let trigger = matching
-        .next()
-        .ok_or_else(|| anyhow!("schedule {schedule_id} has no enabled Trigger"))?;
-    if matching.next().is_some() {
-        bail!("schedule {schedule_id} has multiple enabled Triggers; run a Trigger explicitly");
-    }
-    let (task_doc_id, task) = load_task_on(config_access, node_did, &trigger.task_id).await?;
-    if !task.enabled {
-        bail!("task {} is disabled", task.task_id);
-    }
-    let agent_did = normalize_required("agent_did", &task.agent_did)?;
-    ensure_agent_enabled_on(config_access, node_did, agent_did).await?;
-    render_task_invocation(&task, &task_doc_id, serde_json::json!({}))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_fixtures::ServedRuntimeHome;
-    use serde_json::json;
-    use std::sync::Arc;
+    use serde_json::{json, Value};
 
     #[tokio::test]
     async fn access_reviewer_setup_preserves_policy_and_rejects_task_side_effects() -> Result<()> {
@@ -499,7 +165,7 @@ mod tests {
         let owner = runtime.node_did();
         let binding = runtime.provision_agent().await;
         let agent = binding.agent_did.as_str();
-        let config: gents::documents::PackConfig = serde_json::from_value(json!({
+        let config: gents_documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":owner},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Fixture","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -517,7 +183,7 @@ mod tests {
             prepare_access_review_task_on(&access, owner, agent, None).await?,
             id
         );
-        let mut task = gents::plugin::approval::workspace::default_review_task(owner, agent);
+        let mut task = gents_tools::plugin::approval::workspace::default_review_task(owner, agent);
         assert_eq!(task.task_id, id.task_id);
         task.prompt_template = "Ask about changes outside the requested project.".into();
         upsert_task_on(&access, &task).await?;
@@ -563,209 +229,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn canonical_task_resolution_ignores_stale_desktop_revision() -> Result<()> {
-        use gents::NodeIdentity as _;
-        let home = tempfile::tempdir()?;
-        let identity = gents::KeyIdentity::load_or_create(home.path().join("owner.key"), None)?;
-        let binding = gents::store::identity::provision_agent_identity(&identity)?;
-        let operator = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await?,
-        );
-        let desktop = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(identity.did())
-                .build()
-                .await?,
-        );
-        gents::ensure_runtime_schemas(operator.as_ref()).await?;
-        gents::ensure_runtime_schemas(&desktop).await?;
-        let owner = identity.did();
-        let config: gents::documents::PackConfig = serde_json::from_value(json!({
-            "node":{"node_did":owner},
-            "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
-            "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
-            "agents":[{"node_did":owner,"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"profile"}]
-        }))?;
-        let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
-        for node in [Arc::clone(&operator), Arc::clone(&desktop)] {
-            ConfigAccess::transact_local_write(
-                &node,
-                Some(identity::Did::new(owner)?),
-                "desktop.canonical_task.seed",
-                |txn| {
-                    let plan = &plan;
-                    Box::pin(async move {
-                        apply_desired_state_plan(txn, plan).await?;
-                        Ok::<_, anyhow::Error>(())
-                    })
-                },
-            )
-            .await?;
-        }
-
-        let canonical: Task = serde_json::from_value(json!({
-            "node_did":owner,
-            "task_id":"task",
-            "agent_did":binding.agent_did,
-            "prompt_template":"Canonical {{ args.item }}",
-            "goal_objective_template":"Finish {{ args.item }}",
-            "goal_token_budget":10000,
-            "enabled":true
-        }))?;
-        let operator_access =
-            ConfigAccess::local_as(Arc::clone(&operator), identity::Did::new(owner)?);
-        let desktop_access =
-            ConfigAccess::local_as(Arc::clone(&desktop), identity::Did::new(owner)?);
-        upsert_task_on(&operator_access, &canonical).await?;
-        let mut stale = canonical.clone();
-        stale.enabled = false;
-        stale.prompt_template = "Stale {{ args.item }}".into();
-        upsert_task_on(&desktop_access, &stale).await?;
-
-        let invocation =
-            resolve_task_now_on(&operator_access, owner, "task", json!({"item":"truth"})).await?;
-        assert_eq!(invocation.content, "Canonical truth");
-        assert_eq!(invocation.node_did, owner);
-        assert_eq!(invocation.agent_did, binding.agent_did);
-        assert_eq!(
-            invocation.fire.goal_objective.as_deref(),
-            Some("Finish truth")
-        );
-        assert_eq!(invocation.fire.goal_token_budget, Some(10000));
-        assert!(!invocation.fire.goal_assignment_applied);
-
-        let operator_response = operator
-            .execute("query { AgentRequest { request_id } }")
-            .await;
-        assert!(
-            !operator_response.has_errors(),
-            "{:?}",
-            operator_response.errors
-        );
-        assert_eq!(
-            operator_response
-                .data
-                .as_ref()
-                .and_then(|data| data.get("AgentRequest"))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(0)
-        );
-        let desktop_response = desktop
-            .execute("query { AgentRequest { request_id } }")
-            .await;
-        assert!(
-            !desktop_response.has_errors(),
-            "{:?}",
-            desktop_response.errors
-        );
-        assert_eq!(
-            desktop_response
-                .data
-                .as_ref()
-                .and_then(|data| data.get("AgentRequest"))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(0)
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn schedule_manual_fire_never_selects_another_nodes_same_named_task() -> Result<()> {
-        use gents::NodeIdentity as _;
-
-        let identity_home = tempfile::tempdir()?;
-        let identity = gents::KeyIdentity::load_or_create(
-            identity_home.path().join("schedule-actor.key"),
-            None,
-        )?;
-        let local_node_did = identity.did();
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .with_node_identity_did(local_node_did)
-                .build()
-                .await?,
-        );
-        gents::ensure_runtime_schemas(&node).await?;
-        ConfigAccess::write_local(
-            &node,
-            "test.schedule_task_scope.seed",
-            r#"mutation {
-                create_Task(input: {
-                    node_did: "did:test:foreign", task_id: "shared-task",
-                    agent_did: "agent", prompt_template: "foreign", enabled: false
-                }) { _docID }
-                create_Trigger(input: {
-                    node_did: "did:test:local", trigger_id: "trigger", task_id: "shared-task",
-                    source: { kind: "schedule", schedule_id: "schedule" }, enabled: true
-                }) { _docID }
-            }"#
-            .replace("did:test:local", &escape_graphql_string(local_node_did))
-            .as_str(),
-        )
-        .await?;
-        let schedule: Schedule = serde_json::from_value(json!({
-            "node_did": local_node_did, "schedule_id": "schedule",
-            "cadence": {"kind": "interval", "interval_secs": 60}
-        }))?;
-        let access =
-            ConfigAccess::local_as(node.clone(), identity::Did::new(local_node_did.to_owned())?);
-        access.transact_write("test.schedule_task_scope.schedule", |txn| {
-            let schedule = &schedule;
-            Box::pin(async move {
-                txn.execute_with_variables(
-                    "mutation($input: ScheduleMutationInputArg!) { create_Schedule(input: $input) { _docID } }",
-                    &json!({"input": schedule}),
-                ).await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        }).await?;
-        let error = resolve_schedule_now_on(&access, local_node_did, &schedule.schedule_id)
-            .await
-            .unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            format!("task shared-task was not found for {local_node_did}")
-        );
-        ConfigAccess::write_local(
-            &node,
-            "test.schedule_task_scope.local",
-            r#"mutation { create_Task(input: {
-                node_did: "did:test:local", task_id: "shared-task",
-                agent_did: "agent", prompt_template: "local", enabled: false
-            }) { _docID } }"#
-                .replace("did:test:local", &escape_graphql_string(local_node_did))
-                .as_str(),
-        )
-        .await?;
-        let error = resolve_schedule_now_on(&access, local_node_did, &schedule.schedule_id)
-            .await
-            .unwrap_err();
-        assert_eq!(error.to_string(), "task shared-task is disabled");
-        let response = gents::store::graphql::graphql_with_transaction_retry(
-            &node,
-            "query { AgentRequest { _docID } }",
-            "test.schedule_task_scope.requests",
-        )
-        .await?;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        assert_eq!(
-            response
-                .data
-                .as_ref()
-                .and_then(|data| data.get("AgentRequest"))
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(0)
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn automation_replacements_preserve_scoped_references_and_goal_hook_rules() -> Result<()>
     {
         let runtime = ServedRuntimeHome::start().await;
@@ -775,7 +238,7 @@ mod tests {
         let agent_a = runtime.provision_agent().await;
         let agent_b = runtime.provision_agent().await;
         for (owner, binding) in [(&automation_a, &agent_a), (&automation_b, &agent_b)] {
-            let config: gents::documents::PackConfig = serde_json::from_value(json!({
+            let config: gents_documents::PackConfig = serde_json::from_value(json!({
                 "node":{"node_did":owner},
                 "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
                 "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -786,7 +249,12 @@ mod tests {
                 .transact_write("desktop.automation.seed", |txn| {
                     let plan = &plan;
                     Box::pin(async move {
-                        apply_desired_state_plan(txn, plan).await?;
+                        apply_desired_state_plan(
+                            txn,
+                            plan,
+                            &gents_inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await?;
                         Ok::<_, anyhow::Error>(())
                     })
                 })
@@ -828,7 +296,7 @@ mod tests {
             json!({"node_did":owner,"schedule_id":"schedule","cadence":{"kind":"interval","interval_secs":60}}),
         )?;
         upsert_schedule_on(&access, &schedule).await?;
-        trigger.source = gents::documents::TriggerSource::Schedule {
+        trigger.source = gents_documents::TriggerSource::Schedule {
             schedule_id: "schedule".into(),
         };
         upsert_trigger_on(&access, &trigger).await?;

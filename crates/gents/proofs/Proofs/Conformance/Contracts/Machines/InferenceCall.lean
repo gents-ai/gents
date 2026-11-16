@@ -1,4 +1,4 @@
-import Proofs.InferenceCall
+import Proofs.Runtime.InferenceCall
 import Proofs.Conformance.ContractTypes
 import Proofs.Conformance.ContractCases.Types
 

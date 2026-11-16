@@ -1,4 +1,6 @@
-use crate::runtime::snapshot::{ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot};
+use gents_automation::triggers::runtime_snapshot::{
+    ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SnapshotDiffCounts {
@@ -37,6 +39,15 @@ pub(super) fn diff_counts(
                 .get(*agent_did)
                 .expect("intersection must exist in proposed agents");
             format!("{current_agent:?}") != format!("{proposed_agent:?}")
+                || match (
+                    current.tool_configs.get(*agent_did),
+                    proposed.tool_configs.get(*agent_did),
+                ) {
+                    (Some(current_config), Some(proposed_config)) => {
+                        format!("{current_config:?}") != format!("{proposed_config:?}")
+                    }
+                    _ => true,
+                }
                 || match (
                     current.tool_surfaces.get(*agent_did),
                     proposed.tool_surfaces.get(*agent_did),

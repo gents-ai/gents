@@ -31,6 +31,7 @@ export type {
   UxContribution,
   UxData,
   UxDataCallResult,
+  UxNotifyOutcome,
   UxOs,
   UxShell,
   UxStorage,

@@ -1,0 +1,51 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "a",
+        "type": "int64"
+      },
+      {
+        "name": "b",
+        "type": "text"
+      },
+      {
+        "name": "b_is_null",
+        "type": "bool"
+      },
+      {
+        "name": "b_is_empty",
+        "type": "bool"
+      }
+    ],
+    "markdown": "| a | b | b_is_null | b_is_empty |\n| --- | --- | --- | --- |\n| 1 |  | false | true |\n| 2 | NULL | true | NULL |\n| 3 | x | false | false |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 3,
+    "rows": [
+      [
+        1,
+        "",
+        false,
+        true
+      ],
+      [
+        2,
+        null,
+        true,
+        null
+      ],
+      [
+        3,
+        "x",
+        false,
+        false
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT a, b, b IS NULL AS b_is_null, b = '' AS b_is_empty FROM nulls"
+  }
+}

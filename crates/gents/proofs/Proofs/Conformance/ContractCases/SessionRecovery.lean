@@ -1,6 +1,8 @@
-import Proofs.Request
-import Proofs.SessionRecovery
+import Proofs.Session.Request
+import Proofs.Session.SessionRecovery
 import Proofs.Conformance.ContractCases.Types
+import Proofs.Conformance.Family
+import Proofs.Conformance.Functions.Session
 
 namespace Conformance.ContractCases
 
@@ -137,102 +139,139 @@ def recoveryCaseFromStep
       , originPreserved := false
       }
 
+deriving instance Lean.ToJson for ExecutionOrigin, AdmissionState
+
+structure RecoveryRequest where
+  state : RequestState
+  origin : ExecutionOrigin
+  admission : AdmissionState
+  retryCount : Nat
+  maxRetries : Nat
+  deadline : Nat
+  currentTime : Nat
+  deriving Lean.ToJson
+
+def RecoveryRequest.toModel (r : RecoveryRequest) : SessionRetry.Request :=
+  recoveryContextWith r.origin r.state r.admission r.retryCount r.maxRetries r.deadline
+    r.currentTime
+
+def recoveryRequest (state : RequestState) (admission : AdmissionState)
+    (retryCount currentTime : Nat) (origin : ExecutionOrigin := .interactive) : RecoveryRequest :=
+  { state, origin, admission, retryCount, maxRetries := 3, deadline := 10, currentTime }
+
+inductive RecoveryAction where
+  | reissueFailed
+  deriving Lean.ToJson
+
+def RecoveryAction.toContract : RecoveryAction → String
+  | .reissueFailed => "reissueFailed"
+
+attribute [conformance_vocabulary] RecoveryAction.toContract
+
+def RecoveryAction.toModel (failedId newId : RequestId) : RecoveryAction → SessionState.Action
+  | .reissueFailed => .reissueFailed failedId newId
+
+structure RecoveryInput where
+  name : String
+  action : RecoveryAction := .reissueFailed
+  failed : RecoveryRequest
+  latest : RecoveryRequest
+  latestId : Nat
+  requestIds : List Nat
+  failedId : Nat
+  newId : Nat
+  deriving Lean.ToJson
+
+def RecoveryInput.pre (i : RecoveryInput) : SessionState :=
+  recoveryPre i.failed.toModel i.latest.toModel i.latestId i.requestIds.toFinset
+
+structure RecoveryPost where
+  latestState : RequestState
+  failedState : RequestState
+  newState : RequestState
+  latestAdmission : AdmissionState
+  failedAdmission : AdmissionState
+  newAdmission : AdmissionState
+  newOrigin : ExecutionOrigin
+  latestId : Nat
+  sessionId : Nat
+  agentDid : Nat
+  requestCount : Nat
+  retryCount : Nat
+  deadlineExceeded : Bool
+  failedIsLatest : Bool
+  newIsLatest : Bool
+  oldRequestRetained : Bool
+  newRequestInserted : Bool
+  originPreserved : Bool
+  deriving Lean.ToJson
+
+structure RecoveryOutcome where
+  legal : Bool
+  post : Option RecoveryPost
+  deriving Lean.ToJson
+
+def recoveryInputs : List RecoveryInput :=
+  let initialFailed := recoveryRequest .failed .released 0 5
+  let openFailed := recoveryRequest .failed .released 1 5
+  let pendingLatest := recoveryRequest .pending .released 1 5
+  let recoveryCase (name : String) (failed latest : RecoveryRequest) (latestId : Nat := 1)
+      (requestIds : List Nat := [1, 3]) (newId : Nat := 2) : RecoveryInput :=
+    { name, failed, latest, latestId, requestIds, failedId := 1, newId }
+  [ recoveryCase "legal_initial_retry_slot" initialFailed initialFailed
+  , let f := recoveryRequest .failed .released 1 5 .scheduled
+    recoveryCase "illegal_automated_origin" f f
+  , let f := recoveryRequest .failed .released 2 5
+    recoveryCase "legal_last_retry_slot" f f
+  , let f := recoveryRequest .failed .released 3 5
+    recoveryCase "illegal_retry_budget_exhausted" f f
+  , let f := recoveryRequest .failed .released 1 11
+    recoveryCase "illegal_deadline_closed" f f
+  , recoveryCase "illegal_non_latest_failed_request" openFailed initialFailed (latestId := 3)
+  , recoveryCase "illegal_non_latest_failed_with_pending_latest" openFailed pendingLatest (latestId := 3)
+  , recoveryCase "illegal_new_request_id_already_exists" openFailed openFailed (newId := 3)
+  , recoveryCase "illegal_new_request_id_matches_failed_id" openFailed openFailed (newId := 1)
+  , recoveryCase "illegal_source_not_failed" pendingLatest pendingLatest
+  , let f := recoveryRequest .completed .released 1 5
+    recoveryCase "illegal_source_completed_terminal" f f
+  , let f := recoveryRequest .dead .released 1 5
+    recoveryCase "illegal_source_dead_stale_terminal" f f
+  , let f := recoveryRequest .superseded .released 1 5
+    recoveryCase "illegal_source_superseded_terminal" f f
+  , let f := recoveryRequest .interrupted .released 1 5
+    recoveryCase "illegal_source_interrupted_terminal" f f
+  , let f := recoveryRequest .processing .executing 1 5
+    recoveryCase "illegal_source_processing_active_runtime" f f
+  , recoveryCase "illegal_missing_failed_request" openFailed pendingLatest (requestIds := [3]) ]
+
 def sessionRecoveryCases : List SessionRecoveryCase :=
-  let initialFailed := recoveryContext .failed .released 0 3 10 5
-  let openFailed := recoveryContext .failed .released 1 3 10 5
-  let scheduledOpenFailed :=
-    recoveryContextWith .scheduled .failed .released 1 3 10 5
-  let lastBudgetFailed := recoveryContext .failed .released 2 3 10 5
-  let exhaustedFailed := recoveryContext .failed .released 3 3 10 5
-  let deadlineClosedFailed := recoveryContext .failed .released 1 3 10 11
-  let nonLatestFailed := recoveryContext .failed .released 1 3 10 5
-  let latestFailed := recoveryContext .failed .released 0 3 10 5
-  let pendingLatest := recoveryContext .pending .released 1 3 10 5
-  let completedLatest := recoveryContext .completed .released 1 3 10 5
-  let deadLatest := recoveryContext .dead .released 1 3 10 5
-  let supersededLatest := recoveryContext .superseded .released 1 3 10 5
-  let interruptedLatest := recoveryContext .interrupted .released 1 3 10 5
-  let processingLatest := recoveryContext .processing .executing 1 3 10 5
-  [ recoveryCaseFromStep
-      "legal_initial_retry_slot"
-      (recoveryPre initialFailed initialFailed 1)
-      1
-      2
-  , recoveryCaseFromStep
-      "illegal_automated_origin"
-      (recoveryPre scheduledOpenFailed scheduledOpenFailed 1)
-      1
-      2
-  , recoveryCaseFromStep
-      "legal_last_retry_slot"
-      (recoveryPre lastBudgetFailed lastBudgetFailed 1)
-      1
-      2
-  , recoveryCaseFromStep
-      "illegal_retry_budget_exhausted"
-      (recoveryPre exhaustedFailed exhaustedFailed 1)
-      1
-      2
-  , recoveryCaseFromStep
-      "illegal_deadline_closed"
-      (recoveryPre deadlineClosedFailed deadlineClosedFailed 1)
-      1
-      2
-  , recoveryCaseFromStep
-      "illegal_non_latest_failed_request"
-      (recoveryPre nonLatestFailed latestFailed 3)
-      1
-      2
-  , recoveryCaseFromStep
-      "illegal_non_latest_failed_with_pending_latest"
-      (recoveryPre nonLatestFailed pendingLatest 3)
-      1
-      2
-  , recoveryCaseFromStep
-      "illegal_new_request_id_already_exists"
-      (recoveryPre openFailed openFailed 1)
-      1
-      3
-  , recoveryCaseFromStep
-      "illegal_new_request_id_matches_failed_id"
-      (recoveryPre openFailed openFailed 1)
-      1
-      1
-  , recoveryCaseFromStep
-      "illegal_source_not_failed"
-      (recoveryPre pendingLatest pendingLatest 1)
-      1
-      2
-  , recoveryCaseFromStep
-      "illegal_source_completed_terminal"
-      (recoveryPre completedLatest completedLatest 1)
-      1
-      2
-  , recoveryCaseFromStep
-      "illegal_source_dead_stale_terminal"
-      (recoveryPre deadLatest deadLatest 1)
-      1
-      2
-  , recoveryCaseFromStep
-      "illegal_source_superseded_terminal"
-      (recoveryPre supersededLatest supersededLatest 1)
-      1
-      2
-  , recoveryCaseFromStep
-      "illegal_source_interrupted_terminal"
-      (recoveryPre interruptedLatest interruptedLatest 1)
-      1
-      2
-  , recoveryCaseFromStep
-      "illegal_source_processing_active_runtime"
-      (recoveryPre processingLatest processingLatest 1)
-      1
-      2
-  , recoveryCaseFromStep
-      "illegal_missing_failed_request"
-      (recoveryPre openFailed pendingLatest 1 {3})
-      1
-      2
-  ]
+  recoveryInputs.map fun i => recoveryCaseFromStep i.name i.pre i.failedId i.newId
+
+/-- model-production-gap: the model reissues over a session whose requests each
+carry an admission lease and a deadline clock; production `reissue` in
+gents-session publishes a successor from persisted request rows on a served
+node and records no per-request admission, so no production path takes these
+session states as an input. The eligibility decision itself is replayed by
+`session_operations_reissue_decision`. -/
+@[conformance_family]
+def sessionRecoveryUnreached : Family RecoveryInput RecoveryOutcome where
+  inputs := recoveryInputs
+  model := fun i =>
+    let pre := i.pre
+    let step := SessionState.step? pre (i.action.toModel i.failedId i.newId)
+    { legal := step.isSome, post := step.map fun post =>
+      let failed := post.ctx i.failedId
+      let fresh := post.ctx i.newId
+      let latest := post.ctx post.latest
+      { latestState := latest.state, failedState := failed.state, newState := fresh.state
+        latestAdmission := latest.admission, failedAdmission := failed.admission
+        newAdmission := fresh.admission, newOrigin := fresh.origin, latestId := post.latest
+        sessionId := post.sessionId, agentDid := post.agentDid
+        requestCount := post.requestIds.card, retryCount := fresh.retryCount
+        deadlineExceeded := decide fresh.deadlineExceeded
+        failedIsLatest := i.failedId == post.latest, newIsLatest := i.newId == post.latest
+        oldRequestRetained := decide (i.failedId ∈ post.requestIds)
+        newRequestInserted := decide (i.newId ∈ post.requestIds)
+        originPreserved := decide (fresh.origin = (pre.ctx i.failedId).origin) } }
 
 end Conformance.ContractCases

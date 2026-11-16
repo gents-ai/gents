@@ -10,12 +10,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use gents::pack::interpolate::{interpolate_with, SUBSTITUTION_PATTERN};
-use gents::pack::{
+use gents_pack::pack::interpolate::{interpolate_with, SUBSTITUTION_PATTERN};
+use gents_pack::pack::{
     authored_document_schema, authored_pack_config_schema, decode_pack_config,
     load_pack_authoring_config, PackInstallOptions, PackManifest,
 };
-use gents::Collection;
+use gents_store::collection::Collection;
 use schemars::{schema_for, Schema};
 use serde_json::{json, Value};
 

@@ -21,7 +21,7 @@ const defaults: Preferences = {
   navWidth: 304,
   zoom: 1,
   sentTurn: "follow",
-  followUp: "steer",
+  followUp: "queue",
   pinnedSessions: [],
   flags: {},
   navLayout: { order: [], shown: {} },
@@ -65,7 +65,7 @@ describe("preferences read back from storage", () => {
       navWidth: 304,
       zoom: 1,
       sentTurn: "follow",
-      followUp: "steer",
+      followUp: "queue",
       pinnedSessions: [],
       flags: {},
       navLayout: { order: [], shown: {} },
@@ -80,8 +80,8 @@ describe("preferences read back from storage", () => {
       "anchor",
     );
     expect(restorePreferences({ sentTurn: "top" }, defaults).sentTurn).toBe("follow");
-    expect(restorePreferences({ followUp: "queue" }, defaults).followUp).toBe("queue");
-    expect(restorePreferences({ followUp: "later" }, defaults).followUp).toBe("steer");
+    expect(restorePreferences({ followUp: "steer" }, defaults).followUp).toBe("steer");
+    expect(restorePreferences({ followUp: "later" }, defaults).followUp).toBe("queue");
   });
 
   it("keeps a hidden sidebar, and a width only within the sidebar's range", () => {

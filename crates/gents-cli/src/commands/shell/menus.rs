@@ -1,22 +1,23 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use gents::documents::InferenceProfile;
-use gents::pack::BindAccess;
-use gents::plugin::store::{list_records, InstalledPlugin};
-use gents::plugin::{allowed, ux};
-use gents::session::mailbox::{MailboxItem, MailboxKind};
-use gents::store::config_client::patch::SelfConfigTarget;
-use gents::store::config_client::ConfigAccess;
-use gents::tools::background::job::promote::{list_promotions, PromotionRecord};
 use gents_desktop_core::client::{
     delete_event_source_on, delete_schedule_on, delete_skill_on, delete_tool_service_registry_on,
     delete_trigger_on, patch_config_components_on, set_default_agent_on, upsert_event_source_on,
     upsert_schedule_on, upsert_skill_on, upsert_trigger_on,
 };
 use gents_desktop_core::inference::{load_inference_setup_state, AgentView, InferenceSetupState};
+use gents_documents::mailbox_write_decl::MailboxKind;
+use gents_documents::patch::SelfConfigTarget;
+use gents_documents::InferenceProfile;
+use gents_pack::pack::BindAccess;
+use gents_pack::plugin::store::{list_records, InstalledPlugin};
+use gents_pack::plugin::{allowed, ux};
+use gents_session::session::mailbox::MailboxItem;
 use gents_shell::sample::{MenuId, Tone};
 use gents_shell::source::{Doc, MenuAct, MenuRow, PackAct};
+use gents_store::config_client::ConfigAccess;
+use gents_toolcalls::background::job::promote::{list_promotions, PromotionRecord};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
@@ -29,7 +30,6 @@ use crate::commands::config::crud::{
     SCHEDULE_SPEC, SKILL_SPEC, TOOLS_SPEC, TRIGGER_SPEC,
 };
 use crate::commands::config::task_run::{enqueue_task_run_on, TaskRunOutput};
-use crate::commands::mailbox::served_items;
 use crate::commands::status::load_runtime_status_output;
 use crate::commands::task::load_task_inventory;
 
@@ -81,12 +81,13 @@ pub(super) async fn read_menu(
         MenuId::RemoteTools => query_collection_sorted(&access, MCP_SPEC, node_did)
             .await
             .map(|documents| sections::remote_tools(&documents)),
-        MenuId::Tasks => load_task_inventory(&access, None)
+        MenuId::Tasks => load_task_inventory(&access, node_did, None)
             .await
             .map(|inventory| tasks(&inventory.tasks)),
-        MenuId::Mailbox => served_items(&access, false)
+        MenuId::Mailbox => gents_session::operations::mailbox::list(&access, &Default::default())
             .await
-            .map(|items| mailbox(&items)),
+            .map(|items| mailbox(&items))
+            .map_err(crate::commands::mailbox::failure),
         MenuId::Status => load_runtime_status_output(Some(home), &work.endpoint, node_did)
             .await
             .map(|output| status(&output)),
@@ -148,15 +149,31 @@ pub(super) async fn act(
             label,
             enabled,
         } => {
+            let state = if *enabled { "on" } else { "off" };
             let target = match doc {
                 Doc::Task => SelfConfigTarget::Task,
-                Doc::Skill => SelfConfigTarget::Skill,
+                Doc::Skill => {
+                    use gents_protocol::operations::document::WriteMode;
+                    use gents_protocol::operations::skill::SkillEdit;
+                    return gents::operations::skill::save(
+                        &access,
+                        &gents::operations::skill::SkillWrite {
+                            owner: node_did,
+                            skill_id: id,
+                            mode: WriteMode::Update,
+                            patch: &SkillEdit::enabled(*enabled).patch(),
+                            node_binding: None,
+                        },
+                    )
+                    .await
+                    .map(|_| format!("{label} is {state}"))
+                    .map_err(|error| format!("Couldn’t turn it {state}: {error}"));
+                }
                 Doc::Trigger => SelfConfigTarget::Trigger,
                 Doc::Schedule | Doc::EventSource | Doc::RemoteTool => {
                     return Err(NOT_WIRED.to_string())
                 }
             };
-            let state = if *enabled { "on" } else { "off" };
             let patch = vec![("enabled".to_string(), Some(json!(enabled)))];
             patch_config_components_on(&access, node_did, &[(target, id.clone(), patch)])
                 .await
@@ -175,16 +192,21 @@ pub(super) async fn act(
                 Doc::RemoteTool => delete_tool_service_registry_on(&access, node_did, id).await,
                 Doc::Task => return Err(NOT_WIRED.to_string()),
             };
-            deleted
-                .map(|_| format!("Deleted {label}"))
-                .map_err(|error| format!("Couldn’t delete {label}: {error:#}"))
+            match deleted {
+                Ok(0) => Err(format!("Couldn’t delete {label}: it no longer exists")),
+                Ok(_) => Ok(format!("Deleted {label}")),
+                Err(error) => Err(format!("Couldn’t delete {label}: {error:#}")),
+            }
         }
-        MenuAct::Dismiss { item } => {
-            gents::session::mailbox::dismiss_mailbox_item_on(&access, item)
-                .await
-                .map(|_| "dismissed".to_string())
-                .map_err(|error| format!("could not dismiss it: {error:#}"))
-        }
+        MenuAct::Dismiss { item } => gents_session::operations::mailbox::dismiss(&access, item)
+            .await
+            .map(|_| "dismissed".to_string())
+            .map_err(|error| {
+                format!(
+                    "could not dismiss it: {:#}",
+                    crate::commands::mailbox::failure(error)
+                )
+            }),
         MenuAct::SetFolderAccess { path, access } => grant(home, path, access)
             .await
             .map_err(|error| format!("{error:#}")),
@@ -273,7 +295,7 @@ pub(super) async fn trigger_sources(
     access: &ConfigAccess,
     node_did: &str,
 ) -> anyhow::Result<(Vec<Value>, Sources)> {
-    let inventory = load_task_inventory(access, None).await?;
+    let inventory = load_task_inventory(access, node_did, None).await?;
     let owned = |rows: Vec<Value>| -> Vec<Value> {
         rows.into_iter()
             .filter(|row| row["node_did"] == node_did)
@@ -918,10 +940,11 @@ mod tests {
 
     #[tokio::test]
     async fn setting_the_default_and_turning_a_task_off_notice_what_changed() {
-        const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
-        let did = |name| crate::shared::test_support::fixture_agent_named(name).agent_did;
-        let served = crate::shared::test_support::served_config(json!({
-            "node": { "node_did": OWNER, "default_agent_did": "engineer" },
+        const OWNER: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
+        let did = |name| gents_host::test_support::fixture_agent_named(name).agent_did;
+        let served = gents_host::test_support::served_config(json!({
+            "node": { "node_did": OWNER },
+            "default_agent_selection": { "node_did": OWNER, "default_agent_did": "engineer" },
             "inference_backends": [{
                 "node_did": OWNER,
                 "backend_id": "backend",

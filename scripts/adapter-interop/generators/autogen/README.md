@@ -31,7 +31,7 @@ Validate the generated fixture with the shared external adapter harness:
 
 ```sh
 GENTS_ADAPTER_INTEROP_FIXTURES=/tmp/gents-autogen-fixtures \
-  cargo test -p gents --test e2e_runtime adapter_projection_external_fixtures -- --ignored --nocapture
+  cargo test -p gents-observe external_adapter_projection_fixtures_validate_against_contracts -- --ignored --nocapture
 ```
 
 The generator avoids live inference by using custom deterministic agents, but

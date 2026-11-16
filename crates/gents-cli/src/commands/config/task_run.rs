@@ -1,38 +1,39 @@
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-pub(crate) use gents::request::task_run::TaskRunOutput;
-use gents::request::task_run::{
-    enqueue_task_run as enqueue_task_run_owner, read_runnable_task, TaskRunOptions,
-};
 #[cfg(test)]
-use gents::request::task_run::{
+use gents_automation::triggers::task_run::{
     lookup_request_by_retry_key, prepare_task_run_goal_id, prepare_task_run_input,
     resolve_invocation_key,
 };
-#[cfg(test)]
-use gents::store::graphql::escape_graphql_string;
+use gents_protocol::operations::task::{TaskOperationError, TaskRunInput};
 #[cfg(test)]
 use gents_protocol::request_input::RequestInput;
 #[cfg(test)]
 use gents_protocol::row::AgentRequestRow;
+#[cfg(test)]
+use gents_store::graphql::escape_graphql_string;
+pub(crate) use gents_tools::task_run::TaskRunOutput;
 use serde_json::Value;
 
 use crate::cli::ConfigTaskRunArgs;
 use crate::config_writes::ConfigAccess;
-use crate::request_helpers::wait_for_terminal_response;
-use crate::{print_json, resolve_config_access, resolve_graphql_endpoint};
+use crate::request_helpers::{request_ref, wait_for_request};
+use crate::{print_json, resolve_config_access};
+use gents_service::home_state::resolve_graphql_endpoint;
 
 pub(crate) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
     let output = enqueue_task_run(&args).await?;
     let mut value = serde_json::to_value(&output)?;
     if args.wait {
-        let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-        let response = wait_for_terminal_response(
-            &graphql,
-            &output.request_id,
+        let graphql =
+            resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
+        let response = wait_for_request(
+            &gents_store::config_client::ConfigAccess::Graphql(graphql),
+            request_ref(&output.node_did, &output.request_id),
             args.timeout_secs,
             args.poll_secs,
+            || async { Ok(false) },
         )
         .await?;
         if let Some(object) = value.as_object_mut() {
@@ -56,9 +57,6 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
 
     let args_value: Value =
         serde_json::from_str(&args.args).map_err(|e| anyhow!("--args is not valid JSON: {e}"))?;
-    if !args_value.is_object() {
-        anyhow::bail!("--args must be a JSON object (got: {args_value})");
-    }
 
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     enqueue_task_run_on(
@@ -80,24 +78,30 @@ pub(crate) async fn enqueue_task_run_on(
     session_id: Option<&str>,
     continue_session: Option<&str>,
 ) -> Result<TaskRunOutput> {
-    let node_did = crate::resolve_node_did(home, None)?;
+    let node_did = gents_service::home_state::resolve_node_did(home, None)?;
     let actor_did = access
         .actor_did()
         .context("Task invocation requires an authenticated client identity")?;
-    let signer = gents::store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
-    let task = read_runnable_task(access, &node_did, task_id).await?;
-    enqueue_task_run_owner(
+    let signer = gents_store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
+    gents_automation::operations::task::run(
         access,
         &node_did,
         &signer,
-        task,
-        &TaskRunOptions {
+        &TaskRunInput {
+            task_id: task_id.to_owned(),
             args,
             session_id: session_id.map(str::to_owned),
             continue_session: continue_session.map(str::to_owned),
         },
     )
     .await
+    .map_err(failure)
+}
+
+/// A refused Task operation, shown with the command that corrects it.
+pub(crate) fn failure(error: TaskOperationError) -> anyhow::Error {
+    let next = error.recovery();
+    crate::commands::refusal::Refusal::new(error, next).into()
 }
 
 pub(crate) fn resolve_task_id_for(
@@ -126,7 +130,7 @@ pub(crate) fn resolve_task_id_for(
 mod tests {
     use super::*;
     use crate::request_helpers::goal_input_tests::{authored_input, fixture, reference};
-    use gents::NodeIdentity;
+    use gents_store::identity::NodeIdentity;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -137,21 +141,22 @@ mod tests {
         input: RequestInput,
     ) -> Result<Value> {
         let user = source.user();
-        let create = gents::request::lifecycle::build_signed_client_request(
+        let create = gents_session::request::lifecycle::build_signed_client_request(
             &source.home.access,
-            gents::RequestSpec {
+            gents_session::request::lifecycle::RequestSpec {
                 input,
                 retry_key: Some("manual-fire".into()),
-                ..gents::RequestSpec::new(
+                ..gents_session::request::lifecycle::RequestSpec::new(
                     gents_protocol::request_admission::RequestPurpose::Normal,
-                    gents::RequestIdentity {
+                    gents_session::request::lifecycle::RequestIdentity {
                         request_id: "manual-task".into(),
                         node_did: source.node_did.clone(),
                         requester_did: Some(source.agent_did.clone()),
                         agent_did: source.agent_did.clone(),
                         session_id: "chat".into(),
                         content: "Continue the Task".into(),
-                        execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
+                        execution_origin:
+                            gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                         created_at: "2026-10-21T00:00:00Z".into(),
                     },
                     gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
@@ -159,7 +164,7 @@ mod tests {
                     ),
                 )
             },
-            gents::RequestSigner::Identity(user),
+            gents_session::request::lifecycle::RequestSigner::Identity(user),
         )
         .await?;
         let mut row = serde_json::to_value(&create)?;
@@ -167,20 +172,17 @@ mod tests {
         row["admission_kind"] = json!("client");
         row["admission_signer_did"] = json!(create.admission.signer_did);
         row["admission_signature"] = json!(bs58::encode(create.admission.signature).into_string());
-        gents::verify_request_receipt_signature(&serde_json::from_value(row.clone())?)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(
+            &serde_json::from_value(row.clone())?,
+        )?;
         Ok(row)
     }
 
     #[tokio::test]
     async fn generated_manual_task_goal_input_preserves_signed_receipts() -> Result<()> {
-        let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
-        let cases = snapshot["goal_delivery_input_cases"].as_array().unwrap();
-        let mut covered = 0;
-        for case in cases
-            .iter()
-            .filter(|case| case["plugin"] == false && case["owned"] == true)
-        {
-            covered += 1;
+        use gents_lean_vocab::families::goal_delivery_input_manual_task_run as wire;
+        for modeled in gents_lean_vocab::families::goal_delivery_input_manual_task_run::cases() {
+            let case = &serde_json::to_value(&modeled.input)?;
             let source = fixture(
                 case["existing"].as_bool().unwrap(),
                 true,
@@ -205,7 +207,7 @@ mod tests {
             let before = source.exchanges();
             let actual = prepare_task_run_input(
                 &access,
-                &gents::store::identity::RegisteredIdentity::from_registered_did(
+                &gents_store::identity::RegisteredIdentity::from_registered_did(
                     access.actor_did().context("test actor")?,
                     None,
                 )?,
@@ -217,19 +219,37 @@ mod tests {
                 input,
             )
             .await?;
-            expected.goal_assignment = reference(&case["expected"]["reference"]);
-            assert_eq!(actual, expected, "{case}");
+            let mut unchanged = actual.clone();
+            unchanged.goal_assignment = expected.goal_assignment.clone();
+            assert_eq!(
+                unchanged, expected,
+                "{case}: only the assignment is prepared"
+            );
+            let number = |value: &str, prefix: &str| -> u64 {
+                value.strip_prefix(prefix).unwrap().parse().unwrap()
+            };
+            let prepared = wire::PreparedWire {
+                kind: "prepared".into(),
+                reference: actual.goal_assignment.as_ref().map(|goal| wire::Reference {
+                    goal: number(&goal.goal_id, "goal:"),
+                    root: goal
+                        .root_request_doc_id
+                        .as_deref()
+                        .map(|root| number(root, "request-document:")),
+                }),
+            };
             if admitted.is_some() || case["captured"].is_object() || case["existing"] == false {
                 assert_eq!(source.exchanges(), before, "{case}");
             }
+            modeled.check(Some(prepared));
         }
-        assert_eq!(covered, 7);
         Ok(())
     }
 
     #[tokio::test]
     async fn manual_task_goal_input_rejects_tampered_admitted_receipts() -> Result<()> {
-        use crate::shared::test_support::{ForwardingProxy, ProxyDecision};
+        use gents_host::test_support::ForwardingProxy;
+        use gents_host::test_support::ProxyDecision;
         let source = fixture(true, true, None, None).await?;
         source.admit(authored_input()).await?;
         let access = ConfigAccess::Graphql(source.graphql.clone());
@@ -255,7 +275,7 @@ mod tests {
             }) as futures_util::future::BoxFuture<'static, ProxyDecision>
         });
         let proxy = ForwardingProxy::spawn(source.home.graphql(), hook).await;
-        let tampering = ConfigAccess::Graphql(crate::shared::test_support::user_endpoint(
+        let tampering = ConfigAccess::Graphql(gents_host::test_support::user_endpoint(
             &proxy.graphql,
             source.user(),
         ));
@@ -271,10 +291,10 @@ mod tests {
     #[tokio::test]
     async fn run_now_uses_the_access_it_is_given() -> Result<()> {
         let home = tempfile::tempdir()?;
-        let did = crate::caused_sessions::fixtures::FIXTURE_DID.to_string();
-        crate::home_state::write_init_config(
+        let did = gents_session::test_support::lineage_fixtures::FIXTURE_DID.to_string();
+        gents_service::home_state::write_init_config(
             home.path(),
-            &crate::shared::StoredInitConfig {
+            &gents_service::state::StoredInitConfig {
                 home: home.path().to_string_lossy().into_owned(),
                 node_name: "fixture".into(),
                 node_did: did.clone(),
@@ -283,13 +303,14 @@ mod tests {
                 keychain_label: None,
                 secure_enclave_label: None,
                 tool_package: None,
-                tool_ceiling: crate::cli::args::ToolCeilingArg::MetaOnly,
+                tool_ceiling: gents_service::args::ToolCeilingArg::MetaOnly,
                 tool_root: None,
                 store_encryption: None,
             },
         )?;
-        let served = crate::shared::test_support::served_config(json!({
-            "node": { "node_did": did, "default_agent_did": "engineer" },
+        let served = gents_host::test_support::served_config(json!({
+            "node": { "node_did": did },
+            "default_agent_selection": { "node_did": did, "default_agent_did": "engineer" },
             "inference_backends": [{
                 "node_did": did,
                 "backend_id": "backend",
@@ -336,7 +357,7 @@ mod tests {
         );
         assert_eq!(output.status, "pending");
         assert!(
-            !crate::home_state::default_data_dir(home.path()).exists(),
+            !gents_service::home_state::default_data_dir(home.path()).exists(),
             "the home's store is never opened"
         );
         served.node.shutdown().await.expect("node shutdown");

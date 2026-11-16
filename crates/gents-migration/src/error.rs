@@ -114,4 +114,11 @@ impl Error {
     pub fn is_foreign_version(&self) -> bool {
         matches!(self, Self::ForeignVersion { .. })
     }
+
+    pub fn is_other_version_schema(&self) -> bool {
+        matches!(
+            self,
+            Self::RuntimeLocalityMismatch { .. } | Self::IncompatibleIdentityPolicy { .. }
+        )
+    }
 }

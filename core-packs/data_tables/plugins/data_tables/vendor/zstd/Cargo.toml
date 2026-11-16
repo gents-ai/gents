@@ -1,0 +1,12 @@
+[package]
+name = "zstd"
+version = "0.13.3"
+edition = "2021"
+description = "Pure Rust stand-in for the zstd crate: the calls parquet and arrow-ipc make, on ruzstd, so the plugin links no C code."
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+ruzstd = { version = "0.8", default-features = false, features = ["std"] }
+
+[workspace]

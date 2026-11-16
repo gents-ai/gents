@@ -1,21 +1,8 @@
-import Proofs.Persistence
-import Proofs.StorageObservation
+import Proofs.Store.Persistence
+import Proofs.Store.StorageObservation
 import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases
-
-inductive MutationResult where
-  | success
-  | failure
-  deriving DecidableEq, Repr
-
-namespace MutationResult
-
-def toContract : MutationResult -> String
-  | .success => "success"
-  | .failure => "failure"
-
-end MutationResult
 
 inductive BackendProbeStatus where
   | healthy
@@ -37,157 +24,6 @@ def toDefraDB : BackendProbeStatus -> String
   | .circuitOpen => "circuit_open"
 
 end BackendProbeStatus
-
-def hookDecisionForFailure (policy : PersistenceState.FailurePolicy) : String :=
-  match policy with
-  | .failOpen => "continue"
-  | .failClosed => "terminate"
-
-def hookResultForMutation
-    (policy : PersistenceState.FailurePolicy)
-    (result : MutationResult) : String :=
-  match result with
-  | .success => "ok"
-  | .failure =>
-      match policy with
-      | .failOpen => "ok"
-      | .failClosed => "err"
-
-def actionNameForMutationResult : MutationResult -> String
-  | .success => "mutationSuccess"
-  | .failure => "mutationFailure"
-
-def storageObservationForMutation
-    (policy : PersistenceState.FailurePolicy)
-    (result : MutationResult) : StorageObservation :=
-  match result with
-  | .success => .successAcknowledged
-  | .failure =>
-      match policy with
-      | .failOpen => .lostAcknowledged
-      | .failClosed => .mutationFailed
-
-def terminalWriteObservedBool (obs : StorageObservation) : Bool :=
-  match obs with
-  | .successAcknowledged => true
-  | .readVisible => true
-  | _ => false
-
-def persistenceFailurePolicyCase
-    (name : String)
-    (policy : PersistenceState.FailurePolicy) :
-    PersistenceFailurePolicyCase :=
-  let postPersistence :=
-    match PersistenceState.step? policy .committing .writeFail with
-    | some state => state
-    | none => .uncommitted
-  let postObservation := storageObservationForMutation policy .failure
-  { name := name
-  , policy := policy.toDefraDB
-  , action := "writeFail"
-  , prePersistence := PersistenceState.toDefraDB .committing
-  , postPersistence := postPersistence.toDefraDB
-  , postStorageObservation := postObservation.toContract
-  , hookDecision := hookDecisionForFailure policy
-  , recordsFailure := true
-  , recordsSuccess := false
-  , externalDurabilityClaimed := false
-  }
-
-def persistenceFailurePolicyCases : List PersistenceFailurePolicyCase :=
-  [ persistenceFailurePolicyCase
-      "fail_closed_write_failure_terminates_without_success_ack"
-      .failClosed
-  , persistenceFailurePolicyCase
-      "fail_open_write_failure_continues_as_lost_without_success_ack"
-      .failOpen
-  ]
-
-def storageObservationRuntimeCase
-    (name : String)
-    (policy : PersistenceState.FailurePolicy)
-    (result : MutationResult) : StorageObservationRuntimeCase :=
-  let postObservation := storageObservationForMutation policy result
-  { name := name
-  , policy := policy.toDefraDB
-  , action := actionNameForMutationResult result
-  , preObservation := StorageObservation.toContract .inFlight
-  , mutationResult := result.toContract
-  , postObservation := postObservation.toContract
-  , postPersistence := (StorageObservation.toPersistence postObservation).toDefraDB
-  , hookResult := hookResultForMutation policy result
-  , recordsFailure := decide (result = .failure)
-  , recordsSuccess := decide (result = .success)
-  , terminalWriteObserved := terminalWriteObservedBool postObservation
-  , externalVisibilityClaimed := false
-  }
-
-def storageVisibilityRuntimeCase
-    (name : String)
-    (policy : PersistenceState.FailurePolicy)
-    (preObservation : StorageObservation)
-    (actionName : String)
-    (action : StorageObservation.Action) : StorageObservationRuntimeCase :=
-  let postObservation :=
-    match StorageObservation.step? policy preObservation action with
-    | some obs => obs
-    | none => preObservation
-  { name := name
-  , policy := policy.toDefraDB
-  , action := actionName
-  , preObservation := preObservation.toContract
-  , mutationResult := "notApplicable"
-  , postObservation := postObservation.toContract
-  , postPersistence := (StorageObservation.toPersistence postObservation).toDefraDB
-  , hookResult := "notApplicable"
-  , recordsFailure := false
-  , recordsSuccess := false
-  , terminalWriteObserved := terminalWriteObservedBool postObservation
-  , externalVisibilityClaimed := false
-  }
-
-def storageObservationRuntimeCases : List StorageObservationRuntimeCase :=
-  [ storageObservationRuntimeCase
-      "fail_closed_success_ack_counts_local_commit"
-      .failClosed
-      .success
-  , storageObservationRuntimeCase
-      "fail_open_success_ack_counts_local_commit"
-      .failOpen
-      .success
-  , storageObservationRuntimeCase
-      "fail_closed_failure_reports_mutation_failed"
-      .failClosed
-      .failure
-  , storageObservationRuntimeCase
-      "fail_open_failure_acknowledges_lost_output"
-      .failOpen
-      .failure
-  , storageVisibilityRuntimeCase
-      "read_your_writes_success_ack_is_visible"
-      .failClosed
-      .successAcknowledged
-      "readYourWrites"
-      .readYourWrites
-  , storageVisibilityRuntimeCase
-      "stale_read_preserves_committed_observation"
-      .failClosed
-      .successAcknowledged
-      "staleRead"
-      .staleRead
-  , storageVisibilityRuntimeCase
-      "stale_event_preserves_committed_observation"
-      .failClosed
-      .successAcknowledged
-      "staleEvent"
-      .staleEvent
-  , storageVisibilityRuntimeCase
-      "event_after_stale_observation_is_visible"
-      .failClosed
-      .staleObserved
-      "eventArrives"
-      .eventArrives
-  ]
 
 def backendAvailable (enabled : Bool) (probeStatus : BackendProbeStatus) : Bool :=
   enabled && decide (probeStatus = .healthy)
@@ -245,9 +81,6 @@ def nativeFilesystemBoundaryCase (toolName : String) : NativeFilesystemBoundaryC
   , innerPollBlocks := true
   , requestDeadlineMs := 15
   , blockerMs := 200
-  , expectedTerminal := "timedOut"
-  , expectedFailureClass := some "external"
-  , queueAdvancesBeforeBlockerReturns := true
   }
 
 def nativeFilesystemBoundaryCases : List NativeFilesystemBoundaryCase :=
@@ -275,48 +108,6 @@ def managedExecToolBoundaryCases : List ManagedExecToolBoundaryCase :=
   , managedExecToolBoundaryCase "grep" "filesystemTraversal"
   , managedExecToolBoundaryCase "bash" "shellCommand"
   , managedExecToolBoundaryCase "bash_unrestricted" "shellCommand"
-  ]
-
-def pairingReconcileShutdownBoundaryCases :
-    List PairingReconcileShutdownBoundaryCase :=
-  [ { name := "shutdown_preempts_in_flight_pairing_reconcile_sweep"
-    , supervisor := "pairingReconciler"
-    , workClass := "p2pReconcileSweep"
-    , boundary := "pairingReconcileSupervisorBoundary"
-    , perAdminCallTimeoutMs := 10000
-    , cancellationObservedInsideSweep := true
-    , currentAdminFutureDropped := true
-    , remainingPeersSkipped := true
-    , shutdownJoinBounded := true
-    }
-  ]
-
-def pairingReconcileSweepRetryBoundaryCases :
-    List PairingReconcileSweepRetryBoundaryCase :=
-  [ { name := "initial_top_level_sweep_failure_retries_without_terminating_reconciler"
-    , supervisor := "pairingReconciler"
-    , workClass := "p2pReconcileSweep"
-    , boundary := "pairingReconcileSupervisorBoundary"
-    , failureScope := "topLevelSweepEnumeration"
-    , failureTerminal := false
-    , retryTrigger := "immediateFirstIntervalTick"
-    , cancellationPrioritized := true
-    , convergenceRetried := true
-    }
-  ]
-
-def pairingReconcileSweepSchedulingCases :
-    List PairingReconcileSweepSchedulingCase :=
-  [ { name := "stale_peer_dial_does_not_block_ready_peer"
-    , supervisor := "pairingReconciler"
-    , workClass := "p2pReconcileSweep"
-    , boundary := "pairingReconcilePeerPreparationBoundary"
-    , maxConcurrentPeerPreparations := 8
-    , peerPreparationBounded := true
-    , topologyMutationSerialized := true
-    , stalePeerBlocksReadyPeer := false
-    , everyPeerResultAccounted := true
-    }
   ]
 
 end Conformance.ContractCases

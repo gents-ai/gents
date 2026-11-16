@@ -272,16 +272,11 @@ pub(crate) struct PackStarterArgs {
         long,
         value_name = "PACK",
         action = clap::ArgAction::Append,
-        help = "Install this starter pack for the Engineer, approving the permissions it requests; repeat for each pack. The runtime must be stopped"
+        help = "Turn on this core pack for the Engineer, installing it from this release when the home lacks it; repeat for each pack. The runtime must be stopped"
     )]
-    pub(crate) approve: Vec<String>,
+    pub(crate) enable: Vec<String>,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
-    #[arg(
-        long,
-        help = "Pack registry to resolve a pack the home's store does not hold"
-    )]
-    pub(crate) registry: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -365,14 +360,12 @@ pub(crate) struct PackDriftArgs {
 }
 
 impl PackDriftArgs {
-    pub(crate) fn policy(self) -> gents::pack::DriftPolicy {
-        if self.overwrite {
-            gents::pack::DriftPolicy::Overwrite
-        } else if self.keep {
-            gents::pack::DriftPolicy::Keep
-        } else {
-            gents::pack::DriftPolicy::Refuse
-        }
+    pub(crate) fn edited(self) -> gents_protocol::operations::pack::EditedDocuments {
+        gents_protocol::operations::pack::EditedDocuments::of_switches(self.overwrite, self.keep)
+    }
+
+    pub(crate) fn policy(self) -> gents_pack::pack::DriftPolicy {
+        gents_pack::operations::pack::drift_policy(self.edited())
     }
 }
 

@@ -49,7 +49,18 @@ if [ -d "$dest/target" ]; then
     find "$dest/target" -type d \( -name deps -o -name build -o -name incremental \) -prune -o \
         -type d -name .fingerprint -prune -exec sh -c '
             for fingerprint do
-                rm -rf "${fingerprint%/.fingerprint}/incremental"
+                profile="${fingerprint%/.fingerprint}"
+                rm -rf "$profile/incremental"
+                # CMake embeds absolute build paths. Removing its run fingerprint
+                # makes Cargo regenerate the output in this worktree.
+                for output in "$profile"/build/*/out; do
+                    [ -d "$output" ] || continue
+                    build="${output%/out}"
+                    owner="${build##*/}"
+                    [ -d "$fingerprint/$owner" ] || continue
+                    [ -n "$(find "$output" -type f -name CMakeCache.txt -print -quit)" ] || continue
+                    rm -rf "$build" "$fingerprint/$owner"
+                done
             done
         ' sh {} +
 fi

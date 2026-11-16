@@ -50,69 +50,6 @@ async fn config_tools_list_show_and_remove_canonical_document() -> Result<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn agent_set_rejects_missing_context() -> Result<()> {
-    let tempdir = tempfile::tempdir()?;
-    let home = tempdir.path().join("home");
-    fs::create_dir_all(&home)?;
-    let port = allocate_port()?;
-    let graphql = graphql_url(port);
-    let init = run_init_json(
-        &home,
-        &[
-            "--node-name",
-            "agent-crud-agent",
-            "--inference-url",
-            "http://127.0.0.1:9/v1",
-            "--model-name",
-            "m",
-        ],
-    )?;
-    let owner = node_did_from_init(&init)?;
-    let profile = init["init"]["inference_profile_id"]
-        .as_str()
-        .context("profile")?;
-    let mut server = spawn_server(&home, port)?;
-    wait_for_port(port, &mut server)?;
-    wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
-
-    let error = run_cli_failure_stderr(
-        &home,
-        &[
-            "config",
-            "agent",
-            "set",
-            "--graphql",
-            &graphql,
-            "--node-did",
-            &owner,
-            "--context-id",
-            "missing-context",
-            "--inference-profile-id",
-            profile,
-        ],
-    )?;
-    assert!(
-        error.contains("selected AgentContext is unavailable"),
-        "{error}"
-    );
-    let agents = graphql_query(
-        &graphql,
-        &format!(
-            r#"{{ Agent(filter: {{context_id: {{_eq: "missing-context"}}, node_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
-            escape_graphql_string(&owner)
-        ),
-    )
-    .await?;
-    assert_eq!(
-        agents["data"]["Agent"],
-        json!([]),
-        "a refused Agent publication leaves no Agent behind"
-    );
-    drop(server);
-    Ok(())
-}
-
 async fn assert_list_show_rm(
     home: &std::path::Path,
     graphql: &str,

@@ -2,7 +2,7 @@
 
 export type DefaultPackFailureView = { pack: string, error: string,
 /**
- * The pack is installed, with its permissions granted, and a later
- * step failed: approving it again finishes it.
+ * The pack is installed and a later step failed: enabling it again
+ * finishes it.
  */
 installed: boolean, };

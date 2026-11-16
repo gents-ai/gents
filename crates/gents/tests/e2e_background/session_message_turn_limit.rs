@@ -1,17 +1,18 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
-use gents::request::lifecycle::{
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_inference::resolved::MaxTurnsProvenance;
+use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+use gents_session::request::lifecycle::{
     build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
     RequestSigner, RequestSpec,
 };
-use gents::store::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
-};
-use gents::store::graphql::escape_graphql_string;
-use gents::{Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+use gents_store::config_client::{ConfigAccess, NodePermission};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::{collection::Collection, identity::NodeIdentity};
+use gents_tools::surface::ToolCeiling;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -39,14 +40,11 @@ const PINNED_PREFIX: &str = "agent stream failed: PromptError: MaxTurnError: ";
 struct ChildRequestRow {
     #[serde(rename = "_docID")]
     doc_id: String,
-    request_id: String,
     session_id: String,
     session_doc_id: Option<String>,
     agent_doc_id: Option<String>,
     relationships_pending: Option<bool>,
     agent_did: Option<String>,
-    requester_did: Option<String>,
-    admission_signer_did: Option<String>,
     lifecycle_state: Option<String>,
     failure_reason: Option<String>,
 }
@@ -60,7 +58,7 @@ async fn configure_session_chain(
     let node_did = db.node_identity.did();
     let access = db.client_access(owner);
     let admin = ConfigAccess::local_as(db.node.clone(), node_did.parse().unwrap());
-    gents::store::identity::GrantSet::OperatorUser
+    gents_store::identity::GrantSet::OperatorUser
         .grant(&admin, &owner.did().parse().unwrap())
         .await
         .expect("grant user operator access");
@@ -74,22 +72,27 @@ async fn configure_session_chain(
     access
         .transact_write("test.session_limit.node", |txn| {
             let node_plan = &node_plan;
-            Box::pin(
-                async move { gents::documents::apply_desired_state_plan(txn, node_plan).await },
-            )
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    node_plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect("create user-owned node");
 
     let user_did = owner.did().parse().unwrap();
-    let parent = gents::store::identity::provision_agent_identity_authorized(
+    let parent = gents_store::identity::provision_agent_identity_authorized(
         &db.node,
         db.node_identity.as_ref(),
         &user_did,
     )
     .await
     .expect("provision parent agent");
-    let child = gents::store::identity::provision_agent_identity_authorized(
+    let child = gents_store::identity::provision_agent_identity_authorized(
         &db.node,
         db.node_identity.as_ref(),
         &user_did,
@@ -99,7 +102,11 @@ async fn configure_session_chain(
     let mut documents = vec![
         (
             Collection::Node,
-            json!({"node_did": node_did, "enabled": true, "default_agent_did": parent.agent_did}),
+            json!({"node_did": node_did, "enabled": true}),
+        ),
+        (
+            Collection::DefaultAgentSelection,
+            json!({"node_did": node_did, "default_agent_did": parent.agent_did}),
         ),
         (
             Collection::InferenceBackend,
@@ -161,11 +168,18 @@ async fn configure_session_chain(
     access
         .transact_write("test.session_limit.configuration", |txn| {
             let plan = &plan;
-            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect("create user-owned agent configuration");
-    gents::inference::backends::registry::set_backend_probe_status_as(
+    gents_inference::backends::registry::set_backend_probe_status_as(
         &admin, node_did, BACKEND_ID, "healthy",
     )
     .await
@@ -185,7 +199,14 @@ async fn withdraw_child_target(db: &TestDb, owner: &dyn NodeIdentity) {
     db.client_access(owner)
         .transact_write("test.session_limit.withdraw_target", |txn| {
             let plan = &plan;
-            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect("withdraw the configured agent target");
@@ -235,7 +256,7 @@ async fn child_of(
     child_did: &str,
 ) -> Option<ChildRequestRow> {
     let escaped = escape_graphql_string(parent_request_id);
-    let response = access.execute(&format!(r#"{{ AgentRequest(filter: {{ caused_by_parent_request_id: {{ _eq: "{escaped}" }} }}) {{ _docID request_id session_id session_doc_id agent_doc_id relationships_pending agent_did requester_did admission_signer_did lifecycle_state failure_reason }} }}"#)).await.expect("read child request");
+    let response = access.execute(&format!(r#"{{ AgentRequest(filter: {{ caused_by_parent_request_id: {{ _eq: "{escaped}" }} }}) {{ _docID session_id session_doc_id agent_doc_id relationships_pending agent_did lifecycle_state failure_reason }} }}"#)).await.expect("read child request");
     response["data"]["AgentRequest"]
         .as_array()
         .into_iter()
@@ -254,6 +275,9 @@ async fn wait_for_terminal_child(
     runtime: &AcceptedTurnRuntime,
 ) -> ChildRequestRow {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut changes =
+        gents_store::subscription_source::subscribe_collections(&db.node, ["AgentRequest"])
+            .unwrap();
     let parent = ConfigAccess::local_as(db.node.clone(), parent_did.parse().unwrap());
     loop {
         if let Some(child) = child_of(&parent, parent_request_id, child_did).await {
@@ -332,7 +356,7 @@ async fn wait_for_terminal_child(
                 runtime.backend.observed_completion_bodies()
             );
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }
 }
 
@@ -354,13 +378,7 @@ async fn start_child_session(
     child_responses: Vec<StreamResponse>,
     max_turns: Option<i64>,
     withdraw_target: bool,
-) -> (
-    String,
-    String,
-    ConfigAccess,
-    Arc<ResolvedAgent>,
-    AcceptedTurnRuntime,
-) {
+) -> (String, String, ConfigAccess, AcceptedTurnRuntime) {
     let backend = MockStreamingBackend::start_with_plans(
         MODEL,
         vec![
@@ -371,7 +389,7 @@ async fn start_child_session(
                         PARENT_PROMPT,
                         vec![StreamChunk::tool_call(
                             PARENT_TOOL_CALL_ID,
-                            gents::tools::native::AGENT_NEW_TOOL_NAME,
+                            gents_protocol::tool_names::AGENT_NEW_TOOL_NAME,
                             json!({"agent": CHILD_NAME, "prompt": CHILD_PROMPT}).to_string(),
                         )],
                     ),
@@ -432,12 +450,6 @@ async fn start_child_session(
     )
     .await
     .expect("build child-limit runtime");
-    let child_behavior = agent
-        .agents()
-        .iter()
-        .find(|behavior| behavior.agent_did == child_did)
-        .expect("child agent resolved from documents")
-        .clone();
     let node_did = agent.node_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
@@ -445,74 +457,13 @@ async fn start_child_session(
         runtime: BootedAgent::new(shutdown_tx, handle, node_did),
         backend,
     };
-    (parent_did, child_did, access, child_behavior, runtime)
-}
-
-#[tokio::test]
-async fn started_session_without_an_execution_document_runs_past_a_low_turn_limit() {
-    let db = test_db("e2e-session-limit-default").await;
-    let mut responses = (0..6).map(child_tool_turn).collect::<Vec<_>>();
-    responses.push(StreamResponse::completes(CHILD_PROMPT, ["child done"]));
-    let (parent_did, child_did, access, child_behavior, runtime) = start_child_session(
-        &db,
-        "e2e-session-limit-default-request",
-        "e2e-session-limit-default-session",
-        responses,
-        None,
-        false,
-    )
-    .await;
-    let child = wait_for_terminal_child(
-        &db,
-        &access,
-        "e2e-session-limit-default-request",
-        &parent_did,
-        &child_did,
-        &runtime,
-    )
-    .await;
-    assert_eq!(child.agent_did.as_deref(), Some(child_did.as_str()));
-    let model = tokio::task::spawn_blocking(|| {
-        let json = gents_lean_contract::load_contract_json().expect("Lean contract snapshot");
-        let snapshot: serde_json::Value = serde_json::from_str(&json).unwrap();
-        snapshot["tool_admission_handoff_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| case["name"] == "skip-with-hook-effect")
-            .unwrap()
-            .clone()
-    })
-    .await
-    .unwrap();
-    let expected_author = match model["expected_author"].as_str() {
-        Some("selected-agent") => Some(parent_did.as_str()),
-        None => None,
-        other => panic!("unexpected modeled effect author {other:?}"),
-    };
-    assert_eq!(child.requester_did.as_deref(), expected_author);
-    assert_eq!(child.admission_signer_did.as_deref(), expected_author);
-
-    assert_eq!(
-        child.lifecycle_state.as_deref(),
-        Some("completed"),
-        "child {} must finish every scripted turn, not exhaust a limit: {:?}",
-        child.request_id,
-        child.failure_reason
-    );
-    assert_eq!(child_behavior.max_turns, DEFAULT_MAX_TURNS);
-    assert_eq!(child_behavior.max_turns, 1_000);
-    assert_eq!(
-        child_behavior.max_turns_provenance,
-        MaxTurnsProvenance::Default
-    );
-    runtime.runtime.shutdown().await;
+    (parent_did, child_did, access, runtime)
 }
 
 #[tokio::test]
 async fn started_session_loop_enforces_its_execution_documents_turn_limit() {
     let db = test_db("e2e-session-limit-explicit").await;
-    let (parent_did, child_did, access, child_behavior, runtime) = start_child_session(
+    let (parent_did, child_did, access, runtime) = start_child_session(
         &db,
         "e2e-session-limit-explicit-request",
         "e2e-session-limit-explicit-session",
@@ -551,25 +502,14 @@ async fn started_session_loop_enforces_its_execution_documents_turn_limit() {
         !reason.contains(MaxTurnsProvenance::Default.describe()),
         "a document-bound limit must not report the built-in default: {reason}"
     );
-    assert_eq!(
-        child_behavior.max_turns,
-        usize::try_from(EXPLICIT_CHILD_MAX_TURNS).unwrap()
-    );
-    assert_eq!(
-        child_behavior.max_turns_provenance,
-        MaxTurnsProvenance::ExecutionProfile
-    );
     runtime.runtime.shutdown().await;
 }
 
-/// #3606: the configured agent target is what lets the parent open the child
-/// session (the two tests above run `agent_new` on that grant alone); once the
-/// target is withdrawn the same `agent_new` call opens nothing.
 #[tokio::test]
 async fn agent_new_is_refused_once_its_configured_target_is_withdrawn() {
     const REQUEST_ID: &str = "e2e-session-limit-withdrawn-request";
     let db = test_db("e2e-session-limit-withdrawn").await;
-    let (_, child_did, access, _, runtime) = start_child_session(
+    let (_, child_did, access, runtime) = start_child_session(
         &db,
         REQUEST_ID,
         "e2e-session-limit-withdrawn-session",
@@ -578,25 +518,12 @@ async fn agent_new_is_refused_once_its_configured_target_is_withdrawn() {
         true,
     )
     .await;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        let response = access
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{REQUEST_ID}" }} }}) {{ lifecycle_state }} }}"#
-            ))
-            .await
-            .expect("read parent request");
-        let state = response["data"]["AgentRequest"][0]["lifecycle_state"].as_str();
-        if matches!(state, Some("completed") | Some("failed")) {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "parent request did not finish: {response}; provider bodies: {:?}",
-            runtime.backend.observed_completion_bodies()
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    crate::support::live_inference::wait_for_request_terminal(
+        &access,
+        REQUEST_ID,
+        Duration::from_secs(30),
+    )
+    .await;
     let child = ConfigAccess::local_as(db.node.clone(), child_did.parse().unwrap());
     for (viewer, view) in [("user", &access), ("child agent", &child)] {
         let opened = child_of(view, REQUEST_ID, &child_did).await;

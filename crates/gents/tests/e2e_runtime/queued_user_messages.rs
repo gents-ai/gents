@@ -1,144 +1,174 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::NodeIdentity;
+use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use tokio::sync::{watch, Notify};
 
-use crate::support::accepted_turn::boot_prepared_accepted_turn;
-use crate::support::signed_mailbox::{
-    prepare_signed_mailbox_turn, request_state_on, wait_for_request_terminal_on, SignedMailboxTurn,
+use crate::support::agent_requests::{submit_user_request, RequestActors};
+use crate::support::interrupt::{spawn_runtime, BootedAgent};
+use crate::support::live_inference::{
+    bind_target, live_target, wait_for_request_terminal, InferenceTarget,
 };
-use crate::support::streaming_backend::{StreamChunk, StreamResponse};
-use crate::support::test_db;
+use crate::support::{test_db, TestDb};
 
-async fn queue_user_message(
-    turn: &SignedMailboxTurn,
-    session_id: &str,
-    request_id: &str,
-    content: &str,
-    active: &str,
-) {
-    let mut create = turn.request(request_id, session_id, content);
-    create.input.queue = Some(gents_protocol::request_input::RequestQueue {
-        delivery: Default::default(),
-        position: None,
-        source: gents_protocol::request_input::QueueSource::User,
-        policy: gents_protocol::request_input::QueuePolicy::Append,
-        key: None,
-        queued_after_request_id: Some(active.into()),
-        interrupted_request_id: None,
-        background_completion_wake_version: None,
-    });
-    turn.submit(create).await.unwrap();
+#[derive(Clone)]
+struct Gate {
+    entered: Arc<Notify>,
+    release: watch::Sender<bool>,
 }
 
-/// Lean `Session.ordinary_queued_input_never_folds` and the
-/// `ordinary_queued_inputs_run_in_order` fold case: ordinary messages queued
-/// behind a busy turn are not folded; each is claimed and answered as its own
-/// turn, in queue order, after the busy turn ends.
+impl ToolDyn for Gate {
+    fn name(&self) -> String {
+        "hold_turn".into()
+    }
+    fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async {
+            ToolDefinition {
+                name: "hold_turn".into(),
+                description: "Wait for the user to finish submitting messages.".into(),
+                parameters: serde_json::json!({"type":"object","properties":{},"additionalProperties":false}),
+            }
+        })
+    }
+    fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move {
+            self.entered.notify_one();
+            self.release
+                .subscribe()
+                .wait_for(|open| *open)
+                .await
+                .expect("queue gate owner");
+            Ok("The user has finished submitting messages. Acknowledge briefly; do not call hold_turn again.".into())
+        })
+    }
+}
+
+pub(crate) struct HeldTurn {
+    entered: Arc<Notify>,
+    release: watch::Sender<bool>,
+}
+impl HeldTurn {
+    pub(crate) async fn wait(&self) {
+        tokio::time::timeout(Duration::from_secs(120), self.entered.notified())
+            .await
+            .expect("live model did not reach the held tool");
+    }
+    pub(crate) fn release(&self) {
+        self.release.send_replace(true);
+    }
+}
+impl Drop for HeldTurn {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+pub(crate) async fn boot_held_turn(
+    db: &TestDb,
+    actors: &RequestActors,
+    target: &InferenceTarget,
+) -> (BootedAgent, HeldTurn) {
+    gents_inference::backends::registry::set_backend_probe_status_as(
+        &actors.fixture.access,
+        actors.node_did(),
+        target.backend_id(),
+        "healthy",
+    )
+    .await
+    .unwrap();
+    let entered = Arc::new(Notify::new());
+    let (release, _) = watch::channel(false);
+    let built = gents::Gents::builder()
+        .node(db.node.clone())
+        .identity(db.node_identity.clone())
+        .backend_admission(db.home.backend_admission())
+        .default_agent_did(actors.agent_did())
+        .agent(actors.agent_did())
+        .identity_binding(actors.fixture.binding.clone())
+        .backend_id(target.backend_id())
+        .model_name(target.model())
+        .system_prompt(
+            "Answer briefly. Call hold_turn only when the user explicitly asks you to call it.",
+        )
+        .custom_tool(Gate {
+            entered: entered.clone(),
+            release: release.clone(),
+        })
+        .done()
+        .build()
+        .await
+        .unwrap();
+    let runtime = spawn_runtime(db, built).await;
+    (runtime, HeldTurn { entered, release })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn messages_queued_behind_a_busy_turn_run_as_separate_turns_in_order() {
-    let db = test_db("queued-user-messages").await;
-    let session_id = "queued-user-messages-session";
-    let asking = "queued-user-messages-active";
-    let prompt = "queued-user-messages-prompt";
-    let (prepared, turn) = prepare_signed_mailbox_turn(
-        &db,
-        "queued-user-messages-backend",
-        "queued-user-messages-model",
-        asking,
-        session_id,
-        prompt,
-        vec![StreamChunk::tool_call(
-            "queued-user-messages-call",
-            gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
-            serde_json::json!({"title":"Status", "summary":"working"}).to_string(),
-        )],
-        Vec::new(),
-        None,
-    )
-    .await
-    .unwrap();
-    prepared.backend.enable_dynamic_followups(prompt);
-    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
-    let agent = gents::Gents::from_default_agent_documents(
-        db.node.clone(),
-        identity,
-        gents::DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    let runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    while runtime.backend.observed_requests(prompt) < 2 {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "active turn never reached its held follow-up"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-
-    let first = "queued-user-messages-first";
-    let second = "queued-user-messages-second";
-    queue_user_message(&turn, session_id, first, "how are we looking", asking).await;
-    queue_user_message(&turn, session_id, second, "we should move faster", asking).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    for request in [first, second] {
-        assert_eq!(
-            request_state_on(&turn.client, request)
-                .await
-                .unwrap()
-                .as_deref(),
-            Some("pending")
-        );
-    }
-    let before = runtime.backend.observed_completion_requests();
-
-    runtime
-        .backend
-        .enqueue_response(prompt, StreamResponse::completes(prompt, ["active done"]));
-    let active_final = wait_for_request_terminal_on(&turn.client, asking, Duration::from_secs(60))
-        .await
-        .unwrap();
-    let first_final = wait_for_request_terminal_on(&turn.client, first, Duration::from_secs(60))
-        .await
-        .unwrap();
-    let second_final = wait_for_request_terminal_on(&turn.client, second, Duration::from_secs(60))
-        .await
-        .unwrap();
-    assert_eq!(active_final, "completed");
-    assert_eq!(first_final, "completed");
-    assert_eq!(second_final, "completed");
-    let escaped = gents::store::graphql::escape_graphql_string(second);
-    let queued = turn.client.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{superseded_by_request admission_signature}}}}"#)).await.unwrap();
-    let queued = &queued["data"]["AgentRequest"][0];
-    assert!(queued["superseded_by_request"].is_null());
-    assert!(queued["admission_signature"]
-        .as_str()
-        .is_some_and(|signature| !signature.is_empty()));
-
-    let bodies = runtime
-        .backend
-        .observed_completion_bodies()
-        .split_off(before)
-        .into_iter()
-        .filter(|body| body["stream"] == true)
-        .map(|body| body.to_string())
-        .collect::<Vec<_>>();
-    let first_turn = bodies
-        .iter()
-        .position(|body| body.contains("how are we looking"))
-        .expect("the first queued message reaches the provider");
-    assert!(
-        !bodies[first_turn].contains("we should move faster"),
-        "an ordinary queued message is not folded into an earlier turn"
+    let target = live_target().await;
+    let db = test_db("live-queued-user-messages").await;
+    let actors = bind_target(&db, &target).await;
+    let (runtime, held) = boot_held_turn(&db, &actors, &target).await;
+    let mut documents = Vec::new();
+    documents.push(
+        submit_user_request(
+            actors.node_did(),
+            &actors.fixture,
+            "live-queue",
+            "active",
+            "Call hold_turn now. After it returns, acknowledge briefly.",
+            Default::default(),
+        )
+        .await,
     );
-    let second_turn = bodies
+    held.wait().await;
+    for (id, prompt) in [
+        ("first", "Acknowledge the first queued message briefly."),
+        ("second", "Acknowledge the second queued message briefly."),
+    ] {
+        documents.push(
+            submit_user_request(
+                actors.node_did(),
+                &actors.fixture,
+                "live-queue",
+                id,
+                prompt,
+                Default::default(),
+            )
+            .await,
+        );
+    }
+    held.release();
+    for id in ["active", "first", "second"] {
+        assert_eq!(
+            wait_for_request_terminal(&actors.fixture.access, id, Duration::from_secs(120)).await,
+            "completed"
+        );
+    }
+    let response = actors.fixture.access.execute(r#"{ AgentRequest { _docID request_id superseded_by_request_doc_id }
+        AgentMessage(filter: {role: {_eq: "assistant"}}, order: {sequence: ASC}) {request_doc_id sequence} }"#).await.unwrap();
+    for doc in &documents {
+        let row = response["data"]["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["_docID"] == *doc)
+            .unwrap();
+        assert!(row["superseded_by_request_doc_id"].is_null());
+    }
+    let rows = response["data"]["AgentMessage"].as_array().unwrap();
+    let sequences = documents
         .iter()
-        .position(|body| body.contains("we should move faster"))
-        .expect("the second queued message reaches the provider");
-    assert!(first_turn < second_turn, "queued turns keep queue order");
+        .map(|doc| {
+            rows.iter()
+                .filter(|row| row["request_doc_id"] == *doc)
+                .filter_map(|row| row["sequence"].as_u64())
+                .min()
+                .expect("request has a retained assistant response")
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        sequences.windows(2).all(|pair| pair[0] < pair[1]),
+        "queued replies are out of order: {sequences:?}"
+    );
     runtime.shutdown().await;
 }

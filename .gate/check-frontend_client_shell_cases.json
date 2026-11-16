@@ -1,0 +1,14 @@
+{
+ "ok": true,
+ "problems": [],
+ "per_key": {
+  "frontend_client_shell_cases": [],
+  "frontend_client_shell_case_count": []
+ },
+ "notes": [
+  "frontend_client_shell_cases: declared dropped fields (justified): {'input': 'the scenario step label (inputName); no reader compared it: the word matched only TypeScript identifiers named input'}",
+  "client_shell_contracts_frontend: consumer packages/gents-desktop-chat/src/chat-shell.test.ts",
+  "client_shell_contracts_desktop: consumer crates/gents-desktop-bridge/src/snapshot/tests/session_state.rs",
+  "frontend_client_shell_case_count: no --families given; value parity is checked against every family added on this branch (2)"
+ ]
+}

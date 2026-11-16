@@ -255,19 +255,36 @@ describe("the order of a burst", () => {
 });
 
 describe("background results", () => {
-  const completion = (id: string) =>
-    `<tool-completion tool_call_id="${id}" tool_name="bash" status="completed">\n  <result>ok</result>\n</tool-completion>`;
-  const result = (n: number, content: string): RenderedTimelineItem => ({
+  type Origin = Extract<RenderedTimelineItem, { kind: "automatedInput" }>["origin"];
+  type Fixture = { content: string; origin: Origin };
+  const completion = (id: string): Fixture => ({
+    content: "The rendered model-facing wrapper may change.",
+    origin: {
+      kind: "backgroundCompletion",
+      notification: true,
+      toolCallId: id,
+      toolCallDocId: `physical-${id}`,
+      toolName: "bash",
+      statusKind: "completed",
+      reason: null,
+      resultRange: null,
+    },
+  });
+  const result = (n: number, input: string | Fixture): RenderedTimelineItem => ({
     kind: "automatedInput",
     itemKey: `b${n}`,
     sequence: n,
-    origin: {
-      kind: "backgroundCompletion",
-      notification: !content
-        .trim()
-        .startsWith("Review the new background completion results"),
-    },
-    content,
+    origin:
+      typeof input === "string"
+        ? {
+            kind: "backgroundCompletion",
+            notification: true,
+            toolCallId: null,
+            reason: null,
+            resultRange: null,
+          }
+        : input.origin,
+    content: typeof input === "string" ? input : input.content,
     timestamp: null,
     reconstruction: { state: "ready" },
   });
@@ -278,8 +295,16 @@ describe("background results", () => {
         : e.key,
     );
 
-  const WAKE =
-    "Review the new background completion results and continue the task if needed.";
+  const WAKE: Fixture = {
+    content: "A runtime wake with changed wording.",
+    origin: {
+      kind: "backgroundCompletion",
+      notification: false,
+      toolCallId: null,
+      reason: null,
+      resultRange: null,
+    },
+  };
   const prompts = (entries: ReturnType<typeof groupTranscript>) =>
     entries.flatMap((e) =>
       e.kind === "item" && e.background
@@ -317,7 +342,7 @@ describe("background results", () => {
       result(4, WAKE),
       said(5, "Both finished."),
       result(6, completion("z")),
-      result(7, `  ${WAKE}\n`),
+      result(7, { ...WAKE, content: "Another rendering of the wake" }),
     ];
     const out = groupTranscript(items);
     expect(background(out)).toEqual(["u1", "b2{b2,b3}", "a5", "b6{b6}"]);
@@ -337,10 +362,9 @@ describe("background results", () => {
     expect(background(out)).toEqual(["a1", "b2", "b3{b3}"]);
   });
 
-  it("knows the wake prompt only by the runtime's exact words", () => {
-    expect(isWakePrompt(WAKE)).toBe(true);
-    expect(isWakePrompt(`${WAKE} Also do this.`)).toBe(false);
-    expect(isWakePrompt("Review the new background completion results.")).toBe(false);
+  it("uses the native wake flag independently of rendered wording", () => {
+    expect(isWakePrompt(WAKE.origin)).toBe(true);
+    expect(isWakePrompt(completion("call").origin)).toBe(false);
     expect(isWakePrompt(null)).toBe(false);
   });
 
@@ -356,7 +380,11 @@ describe("background results", () => {
   });
 
   it("finds the call a result reports on among the drawn calls", () => {
-    const call = { ...tool("command"), toolCallId: "call-1" };
+    const call = {
+      ...tool("command"),
+      toolCallId: "call-1",
+      toolCallDocId: "physical-call-1",
+    };
     const out = groupTranscript([
       group(1, call),
       result(2, completion("call-1")),
@@ -369,13 +397,14 @@ describe("background results", () => {
     ]);
   });
 
-  it("reads the call from the runtime's wrapper, and nothing else", () => {
-    expect(
-      completionOf(
-        '<tool-completion tool_call_id="a&quot;b" tool_name="bash" status="failed">\n</tool-completion>',
-      ),
-    ).toEqual({ toolCallId: 'a"b', toolName: "bash", status: "failed" });
-    expect(completionOf('quoting <tool-completion tool_call_id="x"')).toBeNull();
+  it("uses completion fields without interpreting model-facing text", () => {
+    expect(completionOf(completion('a"b').origin)).toEqual({
+      toolCallId: 'a"b',
+      toolCallDocId: 'physical-a"b',
+      toolName: "bash",
+      status: "completed",
+    });
+    expect(completionOf(WAKE.origin)).toBeNull();
     expect(completionOf(null)).toBeNull();
   });
 });

@@ -45,7 +45,7 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
             )?;
             let config_path = root.join("pack_config.json");
             let mut config = read_json_file(&config_path)?;
-            let agent_did = config["node"]
+            let agent_did = config["default_agent_selection"]
                 .get("default_agent_did")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("missing default_agent_did after export"))?

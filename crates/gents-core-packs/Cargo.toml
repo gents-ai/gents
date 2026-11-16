@@ -1,0 +1,10 @@
+[package]
+name = "gents-core-packs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The core pack archives a Gents release carries"
+build = "build.rs"
+
+[dependencies]
