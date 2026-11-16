@@ -414,7 +414,9 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|p| p.as_str().unwrap().to_owned())
+                /* a permission with a scope is an object naming it */
+                .filter_map(|p| p.as_str().or_else(|| p["identifier"].as_str()))
+                .map(str::to_owned)
                 .collect()
         };
         let page = grants("plugin-window");
