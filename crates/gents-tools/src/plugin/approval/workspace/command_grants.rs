@@ -4,8 +4,8 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 use super::{
-    lock, policy, read, save, Binding, BindingAction, Grant, Scope, SelectionChanged, Settings,
-    WorkspaceKey,
+    lock, policy, read, save, Binding, BindingAction, BindingError, Grant, Scope, SelectionChanged,
+    Settings, WorkspaceKey,
 };
 
 /// Only the invocation digest is retained: command arguments can contain credentials.
@@ -90,7 +90,10 @@ pub(in crate::plugin::approval) fn remember_command(home: &Path, binding: &Bindi
     if !policy::approval_scope_matches(&[settings.scope()], &binding.scope) {
         return Err(SelectionChanged.into());
     }
-    binding.action.validate()?;
+    binding
+        .action
+        .validate()
+        .map_err(BindingError::into_anyhow)?;
     if !has_command_grant(settings, binding)? {
         settings.command_grants.push(grant);
     }

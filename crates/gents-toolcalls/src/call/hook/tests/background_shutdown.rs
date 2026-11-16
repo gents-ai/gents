@@ -70,6 +70,7 @@ async fn shutdown_terminates_a_live_background_process_group() {
                     environment: None,
                     tool_name: Some("gents-shutdown-probe".to_owned()),
                     live_output: None,
+                    process_recorder: None,
                 })
                 .await;
             drop(reservation);

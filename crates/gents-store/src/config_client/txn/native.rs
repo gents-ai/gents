@@ -10,6 +10,12 @@ use super::{retry, ConfigClientError, Result, EMBEDDED_TRANSACTION_STORAGE_STEP_
 use crate::config_client::write_telemetry::{record_slow_native_phase, WriteOperation};
 
 tokio::task_local! {
+    /// The operation whose embedded transaction callback is running on this
+    /// task. Not request context: the callback is handed its transaction
+    /// explicitly, and this exists to refuse a canonical write that ignores
+    /// that handle, which would wait on the single embedded writer its own
+    /// transaction holds. Such a write has by definition not been passed
+    /// anything, so only the task can tell it where it is.
     pub(super) static ACTIVE_EMBEDDED_TRANSACTION: &'static str;
 }
 

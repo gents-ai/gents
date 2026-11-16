@@ -239,6 +239,13 @@ pub struct OutcomeSourceSchemaError {
     message: String,
 }
 
+impl OutcomeSourceSchemaError {
+    /// The outcome-source schema refusal an erased error carries as its root or as a context value.
+    pub fn in_error(error: &anyhow::Error) -> Option<&Self> {
+        error.downcast_ref::<Self>()
+    }
+}
+
 pub(super) async fn validate_outcome_source_fields(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,

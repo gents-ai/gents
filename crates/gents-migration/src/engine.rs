@@ -127,7 +127,7 @@ pub async fn ensure_migrations_with_registry(
             .materialization
             .parked_unique_conflicts
             .iter()
-            .cloned(),
+            .map(|conflict| conflict.detail.clone()),
     );
 
     info!(

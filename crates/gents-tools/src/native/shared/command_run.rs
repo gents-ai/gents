@@ -68,6 +68,7 @@ pub async fn run_command(
         environment: Some(launch.environment),
         tool_name: Some(tool_name.to_string()),
         live_output: live_output.clone(),
+        process_recorder: None,
     })
     .await;
     let duration_ms = elapsed_ms(started);
