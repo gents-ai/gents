@@ -320,11 +320,11 @@ fn passthrough<E>(error: E) -> MailboxOperationError
 where
     E: Into<anyhow::Error>,
 {
-    MailboxOperationError::Passthrough(
+    MailboxOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(Into::<
+        anyhow::Error,
+    >::into(
         error
-            .into()
-            .reallocate_into_boxed_dyn_error_without_backtrace(),
-    )
+    )))
 }
 
 enum ApplyError {
@@ -335,9 +335,7 @@ enum ApplyError {
 impl From<MailboxOperationError> for ApplyError {
     fn from(error: MailboxOperationError) -> Self {
         match error {
-            MailboxOperationError::Passthrough(error) => {
-                Self::Other(anyhow::Error::from_boxed(error))
-            }
+            MailboxOperationError::Passthrough(error) => Self::Other(anyhow::Error::new(error)),
             error => Self::Operation(error),
         }
     }

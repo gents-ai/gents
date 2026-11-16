@@ -22,6 +22,8 @@ mod intake;
 mod management;
 pub mod mutation;
 mod position;
+#[cfg(test)]
+pub(crate) use position::PositionError;
 mod submission;
 
 pub use atomic_inputs::background_completion_gate;

@@ -108,7 +108,7 @@ pub enum TaskOperationError {
     /// Another owner's failure (templates, request signing, Task delivery,
     /// the store), unchanged.
     #[error(transparent)]
-    Passthrough(Box<dyn std::error::Error + Send + Sync>),
+    Passthrough(crate::error_chain::PassedThrough),
 }
 
 impl TaskOperationError {
@@ -138,7 +138,7 @@ impl TaskOperationError {
 
     pub fn passthrough(&self) -> Option<&(dyn std::error::Error + Send + Sync + 'static)> {
         match self {
-            Self::Passthrough(error) => Some(error.as_ref()),
+            Self::Passthrough(error) => Some(error.get()),
             _ => None,
         }
     }

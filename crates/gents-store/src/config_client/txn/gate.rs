@@ -26,7 +26,7 @@ pub(super) const MUTATION_WRITE_GATE_CAPACITY: usize = 64;
 
 pub(super) struct StoreClaim {
     pub(super) node: Arc<EmbeddedNode>,
-    _lock: crate::local::home::StoreLock,
+    lock: crate::local::home::StoreLock,
 }
 
 /// Embedded access plus a node-scoped store claim held across Gents-owned native operations.
@@ -153,6 +153,19 @@ impl LocalConfigAccess {
 
     pub fn node(&self) -> &Arc<EmbeddedNode> {
         &self.node
+    }
+
+    /// Declares the store claim releasing (see
+    /// [`crate::local::home::StoreLock::declare_releasing`]) and returns the
+    /// notice of its release. The claim is released when the last owner of
+    /// this node's write gate drops it, which may be a native operation that
+    /// outlives the caller's own access. `None` for an access without a claim.
+    pub fn begin_store_release(&self) -> Option<crate::local::home::StoreRelease> {
+        let claim = self.gate.store_claim()?;
+        if let Err(error) = claim.lock.declare_releasing() {
+            tracing::warn!(%error, "declaring the store release failed; an opener meanwhile is refused");
+        }
+        Some(claim.lock.release_notice())
     }
 
     pub(crate) async fn run_owned<T, E, F, Fut>(&self, operation: F) -> Result<T, E>
@@ -333,7 +346,7 @@ impl MutationWriteGate {
         if claim.is_some() {
             return Err(ConfigClientError::StoreClaimHeld);
         }
-        *claim = Some(Arc::new(StoreClaim { node, _lock: lock }));
+        *claim = Some(Arc::new(StoreClaim { node, lock }));
         Ok(())
     }
 

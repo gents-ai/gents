@@ -150,12 +150,7 @@ async fn agent_new_inherits_the_signed_caller_directory() {
     hook.actor = Some(identity::Did::new(agent_signer.did()).unwrap());
     hook = hook.with_managed_identity(&agent_signer).unwrap();
     enable_agents_tools(&node, &did, agent_signer.did()).await;
-    bind_claimed_hook_request(
-        &hook,
-        lifecycle,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_claimed_hook_request(&hook, lifecycle).await;
     hook.on_completion_call(&user_text_message("start agents"), &[])
         .await;
     let (_, caused) = dispatch_with_lost_receipt(
@@ -197,12 +192,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
     hook.actor = Some(identity::Did::new(agent_signer.did()).unwrap());
     hook = hook.with_managed_identity(&agent_signer).unwrap();
     enable_agents_tools(&node, &did, agent_signer.did()).await;
-    bind_claimed_hook_request(
-        &hook,
-        lifecycle,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_claimed_hook_request(&hook, lifecycle).await;
     hook.on_completion_call(&user_text_message("start agents"), &[])
         .await;
 
