@@ -19,6 +19,12 @@ max_invalid_tool_calls?: number | null,
  */
 repeated_tool_failure_limit?: number | null,
 /**
+ * Successors (operator reissues, background wake redrives) one request
+ * lineage may take; the first claim pins it on the request. Zero allows
+ * none; default 3.
+ */
+max_request_retries?: number | null,
+/**
  * Persistence batching cadence, not provider latency; default 1,000ms.
  */
 stream_batch_ms?: number | null,
