@@ -11,6 +11,12 @@ pub const FOLDED_REASON: &str = "folded into claimed request";
 #[error("pending input was changed before it was consumed")]
 pub(crate) struct PendingInputChanged;
 
+impl PendingInputChanged {
+    pub(crate) fn occurs_in(error: &anyhow::Error) -> bool {
+        error.is::<Self>()
+    }
+}
+
 pub fn folded_input_key(folded_request_doc_id: &str) -> String {
     format!("folded:{folded_request_doc_id}")
 }

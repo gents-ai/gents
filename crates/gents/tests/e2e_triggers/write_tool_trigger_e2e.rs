@@ -426,6 +426,7 @@ async fn declared_write_tool_call_fires_event_trigger() {
             "status": "open",
         }))
         .expect("decode write-tool args"),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect("request_action write tool call");

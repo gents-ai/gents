@@ -1,4 +1,5 @@
 use anyhow::Result;
+use gents_inference::rendered_request::CaptureReadError;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::access::{rows_value, ReadAccess};
@@ -157,14 +158,8 @@ pub(super) async fn replay_capture_from_row(
     .await
     {
         Ok(verified) => Ok(verified),
-        Err(error)
-            if error
-                .downcast_ref::<gents_inference::rendered_request::CaptureStoreReadError>()
-                .is_some() =>
-        {
-            Err(error)
-        }
-        Err(error) => {
+        Err(CaptureReadError::Store(error)) => Err(error.into()),
+        Err(CaptureReadError::Unverified(error)) => {
             warn_unverifiable_replay_capture(capture_key, &error);
             Ok(None)
         }
@@ -217,7 +212,7 @@ async fn verify_replay_capture(
     request_commits: &BTreeSet<String>,
     coordinate: CanonicalProviderCoordinate,
     cache: &mut gents_inference::rendered_request::CaptureReadCache,
-) -> Result<Option<CanonicalReplayCapture>> {
+) -> std::result::Result<Option<CanonicalReplayCapture>, CaptureReadError> {
     let CanonicalProviderCoordinate {
         scope: capture_scope,
         turn_index,
@@ -232,23 +227,28 @@ async fn verify_replay_capture(
         .as_u64()
         .and_then(|value| u32::try_from(value).ok())
         .unwrap_or_default();
-    replay_ensure!(
-        required_row_str(capture, "capture_key")? == capture_key
-            && required_row_str(capture, "request_doc_id")? == request_doc_id
-            && required_row_str(capture, "request_id")? == request_id
-            && required_row_str(capture, "session_id")? == session_id
-            && required_row_str(capture, "node_did")? == node_did
-            && required_row_str(capture, "requester_did")? == requester_did.unwrap_or("")
-            && required_row_str(capture, "capture_scope")? == capture_scope_label
-            && REPLAY_CAPTURE_VERSIONS.contains(&capture_version)
-            && capture["turn_index"].as_u64() == Some(u64::from(turn_index))
-            && capture["attempt"].as_u64() == Some(u64::from(attempt)),
-        "canonical replay capture disagrees with its exact provider close coordinate"
-    );
-    replay_ensure!(
-        request_commits.contains(required_row_str(capture, "request_commit_cid")?),
-        "canonical replay capture request CID is not a commit of its physical request"
-    );
+    let coordinate_matches = required_row_str(capture, "capture_key")? == capture_key
+        && required_row_str(capture, "request_doc_id")? == request_doc_id
+        && required_row_str(capture, "request_id")? == request_id
+        && required_row_str(capture, "session_id")? == session_id
+        && required_row_str(capture, "node_did")? == node_did
+        && required_row_str(capture, "requester_did")? == requester_did.unwrap_or("")
+        && required_row_str(capture, "capture_scope")? == capture_scope_label
+        && REPLAY_CAPTURE_VERSIONS.contains(&capture_version)
+        && capture["turn_index"].as_u64() == Some(u64::from(turn_index))
+        && capture["attempt"].as_u64() == Some(u64::from(attempt));
+    if !coordinate_matches {
+        return Err(replay_violation(
+            "canonical replay capture disagrees with its exact provider close coordinate",
+        )
+        .into());
+    }
+    if !request_commits.contains(required_row_str(capture, "request_commit_cid")?) {
+        return Err(replay_violation(
+            "canonical replay capture request CID is not a commit of its physical request",
+        )
+        .into());
+    }
     let source: gents_protocol::rendered_request::RenderedRequestSource = serde_json::from_value(
         capture
             .get("source")
