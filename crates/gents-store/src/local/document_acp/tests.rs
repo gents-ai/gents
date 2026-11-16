@@ -160,3 +160,32 @@ fn the_choice_round_trips_through_the_init_config() {
     assert_eq!(config.document_acp, DocumentAcp::Vera);
     assert_eq!(serde_json::to_value(&config).unwrap(), recorded);
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Reported {
+    Absent,
+    Named,
+    Unavailable,
+}
+
+#[test]
+fn the_reported_delegation_audience_matches_the_lean_model() {
+    use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
+    gents_lean_vocab::families::identity_user_delegation_status_reports::replay::<Provider, Reported>(
+        |input| {
+            let audience = input.node_reports_audience.then(|| DelegationAudience {
+                worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
+                deployment: 7,
+            });
+            match super::status_reports(document_acp(input.provider), audience.clone()) {
+                ReportedDelegationAudience::Absent => Reported::Absent,
+                ReportedDelegationAudience::Named(named) => {
+                    assert_eq!(Some(named), audience);
+                    Reported::Named
+                }
+                ReportedDelegationAudience::Unavailable => Reported::Unavailable,
+            }
+        },
+    );
+}

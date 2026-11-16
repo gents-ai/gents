@@ -1,8 +1,10 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+use gents_store::config_client::{ClientSigningCapability, ConfigAccess, GraphqlEndpoint};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use gents_store::local::backend_protection::{
     BackendProtectionError, FreshBackendStore, ProtectedBackendStore,
@@ -312,5 +314,230 @@ async fn an_opted_in_home_is_refused_under_another_deployment_identity() -> anyh
             .map(|store| store.kind),
         Some(IncompatibleStoreKind::OtherVersionSchema)
     );
+    Ok(())
+}
+
+const TASK_RESOURCE: &str = "configuration";
+
+async fn serve(
+    home: &Home,
+    document_acp: DocumentAcp,
+) -> anyhow::Result<(Arc<defra_node::Node>, String)> {
+    let (listener, address) = tokio::task::spawn_blocking(|| -> std::io::Result<_> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        Ok((listener, address))
+    })
+    .await??;
+    let (node, _admission) = ProtectedBackendStore::open(&home.data, &home.key, &home.lock)
+        .await?
+        .preflight(&home.key, &home.node, document_acp)
+        .await?
+        .start_node_with_projection(
+            &home.key,
+            home.node.clone(),
+            Some(defra_node::HttpConfig::with_listener(listener)?),
+            None,
+            Arc::new(crate::surface::ToolCeiling::meta_only()),
+            Vec::new(),
+            &gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await?;
+    Ok((node, format!("http://{address}/api/v0/graphql")))
+}
+
+/// A User whose key this process holds only in the capability: it is never
+/// registered where DefraDB could sign with it.
+async fn client_key(root: &Path, name: &str) -> anyhow::Result<ClientSigningCapability> {
+    let path = root.join(name);
+    let raw = tokio::task::spawn_blocking(move || {
+        gents_store::identity::load_or_create_file_identity(&path)
+    })
+    .await??;
+    Ok(ClientSigningCapability::from_ed25519_key(
+        &raw.private_key_bytes(),
+    )?)
+}
+
+fn as_user(
+    url: &str,
+    user: &ClientSigningCapability,
+    reported: ReportedDelegationAudience,
+) -> anyhow::Result<ConfigAccess> {
+    Ok(ConfigAccess::Graphql(
+        GraphqlEndpoint::as_principal(url, user.did())
+            .with_client_signing_capability(user.clone())?
+            .with_reported_delegation_audience(reported)?,
+    ))
+}
+
+async fn create_task(access: &ConfigAccess, task: &str) -> anyhow::Result<String> {
+    let created = access
+        .write_with_variables(
+            "test.embedded_vera.create_task",
+            "mutation($task: String) { create_Task(input: {task_id: $task}) { _docID } }",
+            &serde_json::json!({ "task": task }),
+        )
+        .await?;
+    Ok(gents_store::graphql::created_doc_id(&created, "Task")?)
+}
+
+async fn tasks(node: &Arc<defra_node::Node>) -> anyhow::Result<Vec<String>> {
+    let read = ConfigAccess::local(node.clone())
+        .execute("{ Task { task_id } }")
+        .await?;
+    Ok(read["data"]["Task"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|task| task["task_id"].as_str().map(str::to_owned))
+        .collect())
+}
+
+/// The owner Vera itself records, beneath the registrations DefraDB still owes.
+async fn owner_on_vera(
+    node: &defra_node::Node,
+    document: &str,
+) -> anyhow::Result<Option<identity::Did>> {
+    use acp::DocumentACP as _;
+    Ok(node
+        .vera_acp()
+        .expect("the node decides document access through Vera")
+        .get_doc_owner(AGENT_OWNERSHIP_POLICY_ID, TASK_RESOURCE, document)
+        .await?)
+}
+
+async fn reads_task(
+    node: &defra_node::Node,
+    actor: &identity::Did,
+    document: &str,
+) -> anyhow::Result<bool> {
+    Ok(node
+        .document_acp()
+        .check_doc_access(
+            &acp::Identity::Authenticated(actor.clone()),
+            acp::DocumentPermission::Read,
+            AGENT_OWNERSHIP_POLICY_ID,
+            TASK_RESOURCE,
+            document,
+        )
+        .await?)
+}
+
+#[tokio::test]
+async fn a_user_writes_over_http_under_a_delegation_its_client_minted() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let home = home(directory.path(), "opted-in").await?;
+    FreshBackendStore::observe(&home.data, &home.lock)
+        .await?
+        .initialize(&home.key, &home.node, DocumentAcp::Vera)
+        .await?;
+    let (node, url) = serve(&home, DocumentAcp::Vera).await?;
+    let user = client_key(directory.path(), "user.key").await?;
+    let stranger = client_key(directory.path(), "stranger.key").await?;
+    let user_did = identity::Did::new(user.did())?;
+    let stranger_did = identity::Did::new(stranger.did())?;
+    assert!(defra_core::signing::get_identity(user.did()).is_none());
+    ConfigAccess::local_as(node.clone(), identity::Did::new(home.node.did())?)
+        .grant_node_admin(&user_did)
+        .await?;
+
+    let audience = gents_store::local::document_acp::node_delegation_audience(&node)
+        .expect("a Vera node names its delegation audience");
+    let reported =
+        gents_store::local::document_acp::status_reports(DocumentAcp::Vera, Some(audience.clone()));
+
+    let elsewhere = ReportedDelegationAudience::Named(DelegationAudience {
+        worker: stranger.did().to_owned(),
+        deployment: audience.deployment,
+    });
+    assert!(
+        create_task(&as_user(&url, &user, elsewhere)?, "other-worker")
+            .await
+            .is_err()
+    );
+
+    let another_deployment = ReportedDelegationAudience::Named(DelegationAudience {
+        worker: audience.worker.clone(),
+        deployment: audience.deployment + 1,
+    });
+    assert!(create_task(
+        &as_user(&url, &user, another_deployment)?,
+        "other-deployment"
+    )
+    .await
+    .is_err());
+
+    let short = std::time::Duration::from_secs(1);
+    let expiring =
+        gents_store::config_client::mint_with_lifetime_for_test(&user, &audience, short)?;
+    let expired = std::time::SystemTime::now() + short + std::time::Duration::from_secs(1);
+    while std::time::SystemTime::now() <= expired {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let stale = ConfigAccess::Graphql(GraphqlEndpoint::with_delegated_authorization(
+        &url,
+        &format!("Bearer {expiring}"),
+    )?);
+    assert!(create_task(&stale, "expired").await.is_err());
+
+    assert_eq!(tasks(&node).await?, Vec::<String>::new());
+
+    let created = create_task(&as_user(&url, &user, reported)?, "delegated").await?;
+    assert_eq!(tasks(&node).await?, ["delegated"]);
+    assert_eq!(
+        owner_on_vera(&node, &created).await?,
+        Some(user_did.clone())
+    );
+    assert!(reads_task(&node, &user_did, &created).await?);
+    assert!(!reads_task(&node, &stranger_did, &created).await?);
+
+    let node_did = identity::Did::new(home.node.did())?;
+    let as_node = ConfigAccess::Graphql(
+        GraphqlEndpoint::as_principal(&url, home.node.did())
+            .with_client_signing_capability(home.node.client_signing_capability()?)?,
+    );
+    let by_node = create_task(&as_node, "by-node").await?;
+    assert_eq!(owner_on_vera(&node, &by_node).await?, Some(node_did));
+    assert!(!reads_task(&node, &stranger_did, &by_node).await?);
+
+    let unregistered = create_task(
+        &as_user(&url, &user, ReportedDelegationAudience::Absent)?,
+        "identity-token",
+    )
+    .await?;
+    assert_eq!(owner_on_vera(&node, &unregistered).await?, None);
+
+    node.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_user_writes_over_http_on_the_node_store_as_before() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let home = home(directory.path(), "local").await?;
+    FreshBackendStore::observe(&home.data, &home.lock)
+        .await?
+        .initialize(&home.key, &home.node, DocumentAcp::Local)
+        .await?;
+    let (node, url) = serve(&home, DocumentAcp::Local).await?;
+    let user = client_key(directory.path(), "user.key").await?;
+    let stranger = client_key(directory.path(), "stranger.key").await?;
+    let user_did = identity::Did::new(user.did())?;
+    ConfigAccess::local_as(node.clone(), identity::Did::new(home.node.did())?)
+        .grant_node_admin(&user_did)
+        .await?;
+
+    let audience = gents_store::local::document_acp::node_delegation_audience(&node);
+    assert_eq!(audience, None);
+    let reported = gents_store::local::document_acp::status_reports(DocumentAcp::Local, audience);
+    assert_eq!(reported, ReportedDelegationAudience::Absent);
+
+    let created = create_task(&as_user(&url, &user, reported)?, "identity-token").await?;
+    assert_eq!(tasks(&node).await?, ["identity-token"]);
+    assert!(reads_task(&node, &user_did, &created).await?);
+    assert!(!reads_task(&node, &identity::Did::new(stranger.did())?, &created).await?);
+
+    node.shutdown().await?;
     Ok(())
 }

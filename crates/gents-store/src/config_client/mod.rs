@@ -42,6 +42,9 @@ pub mod agent_session;
 #[cfg(test)]
 mod client_signed_agent_conformance;
 mod common;
+mod delegation;
+#[cfg(test)]
+mod delegation_conformance;
 mod destructive_decision;
 pub mod document_decide;
 #[cfg(test)]
@@ -155,6 +158,10 @@ pub use txn::{
     TransactionFinalityError,
 };
 
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub use delegation::mint_with_lifetime_for_test;
+pub use delegation::{DelegationError, VERA_DELEGATION_LIFETIME};
 pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
 pub use error::{ConfigClientError, RerunNote, RerunRequest, TransactionConflict};
 pub use relationships::ConfigRelationshipGrant;
@@ -184,6 +191,7 @@ pub struct GraphqlEndpoint {
     delegated_authorization: Option<reqwest::header::HeaderValue>,
     client_signed_agent_creates: bool,
     client_signing_capability: Option<ClientSigningCapability>,
+    delegation_audience: Option<gents_protocol::delegation_audience::DelegationAudience>,
     pack_replay: Option<pack_effect::PackReplayHandle>,
     extensions: crate::node_extension::Extensions,
 }
@@ -196,6 +204,7 @@ impl GraphqlEndpoint {
             delegated_authorization: None,
             client_signed_agent_creates: false,
             client_signing_capability: None,
+            delegation_audience: None,
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
         }
@@ -208,6 +217,7 @@ impl GraphqlEndpoint {
             delegated_authorization: None,
             client_signed_agent_creates: false,
             client_signing_capability: None,
+            delegation_audience: None,
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
         }
@@ -230,6 +240,7 @@ impl GraphqlEndpoint {
             delegated_authorization: Some(header),
             client_signed_agent_creates: false,
             client_signing_capability: None,
+            delegation_audience: None,
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
         })
@@ -286,6 +297,29 @@ impl GraphqlEndpoint {
             return Err(ConfigClientError::ClientSignerMismatch);
         }
         Ok(capability)
+    }
+
+    /// Hold the delegation audience the endpoint's node reported, so that a
+    /// held key mints a Vera delegation for it; a node that reports none
+    /// keeps the identity token (`Identity.UserDelegation.resolve`).
+    pub fn with_reported_delegation_audience(
+        mut self,
+        reported: gents_protocol::delegation_audience::ReportedDelegationAudience,
+    ) -> Result<Self> {
+        use gents_protocol::delegation_audience::ReportedDelegationAudience as Reported;
+        self.delegation_audience = match reported {
+            Reported::Absent => None,
+            Reported::Named(audience) => Some(audience),
+            Reported::Unavailable => return Err(DelegationError::AudienceUnavailable.into()),
+        };
+        Ok(self)
+    }
+
+    /// Read the node's public status and hold what it reports. An endpoint is
+    /// resolved when it is built and again after its node refuses it.
+    pub async fn resolving_delegation_audience(self) -> Result<Self> {
+        let reported = delegation::reported(&self).await?;
+        self.with_reported_delegation_audience(reported)
     }
 
     /// Bind the existing client actor to one runtime-hosted pack interpreter.
@@ -357,15 +391,16 @@ impl GraphqlEndpoint {
         let Some(did) = self.principal_did.as_deref() else {
             return Ok(None);
         };
-        let audience = self.audience()?;
-        let authorization = if let Some(capability) = &self.client_signing_capability {
-            crate::identity::defradb_bearer_authorization_with_config(
-                did,
-                &audience,
-                &capability.config,
-            )?
-        } else {
+        let Some(capability) = &self.client_signing_capability else {
             return Err(ConfigClientError::ClientAgentSignerRequired);
+        };
+        let authorization = match &self.delegation_audience {
+            Some(node) => format!("Bearer {}", delegation::mint(capability, node)?),
+            None => crate::identity::defradb_bearer_authorization_with_config(
+                did,
+                &self.audience()?,
+                &capability.config,
+            )?,
         };
         Ok(Some(authorization))
     }
