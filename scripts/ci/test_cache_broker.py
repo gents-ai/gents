@@ -35,10 +35,34 @@ def serve(path, program):
         threading.Thread(target=handle, args=(connection, program), daemon=True).start()
 
 
+def receive_request(connection):
+    """The caller's descriptors and its newline-terminated request. A stream socket
+    delivers the request in chunks (a CI environment exceeds one), and the
+    descriptors arrive with the first."""
+    message, fds, _, _ = socket.recv_fds(connection, 1 << 16, 3)
+    try:
+        while not message.endswith(b"\n"):
+            chunk = connection.recv(1 << 16)
+            if not chunk:
+                raise ValueError("the caller closed before its request ended")
+            message += chunk
+        if len(fds) != 3:
+            raise ValueError(f"expected 3 descriptors, received {len(fds)}")
+        return json.loads(message), fds
+    except BaseException:
+        # A descriptor kept open here holds the caller's pipes open and its reader waits forever.
+        for fd in fds:
+            os.close(fd)
+        raise
+
+
 def handle(connection, program):
     with connection:
-        message, fds, _, _ = socket.recv_fds(connection, 1 << 20, 3)
-        request = json.loads(message)
+        try:
+            request, fds = receive_request(connection)
+        except (OSError, ValueError) as error:
+            connection.sendall(json.dumps({"status": 127, "error": f"bad request: {error}"}).encode() + b"\n")
+            return
         try:
             child = subprocess.Popen([program, *request["arguments"]], cwd=request["cwd"], env=request["env"],
                                      stdin=fds[0], stdout=fds[1], stderr=fds[2], start_new_session=True)
@@ -76,7 +100,9 @@ def call(path, arguments):
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     connection.connect(path)
     request = {"arguments": arguments, "cwd": os.getcwd(), "env": dict(os.environ)}
-    socket.send_fds(connection, [json.dumps(request).encode()], [0, 1, 2])
+    message = json.dumps(request).encode() + b"\n"
+    sent = socket.send_fds(connection, [message], [0, 1, 2])
+    connection.sendall(message[sent:])
     reply = b""
     while not reply.endswith(b"\n") and (chunk := connection.recv(4096)):
         reply += chunk
