@@ -337,7 +337,6 @@ fn connect_this_desktop_joins_a_terminal_node_and_reads_its_settings() {
     std::fs::create_dir_all(path("user/.local/share")).unwrap();
     std::fs::create_dir_all(path("user/.config")).unwrap();
     std::env::set_var("HOME", path("user"));
-    std::env::set_var("GENTS_HOME", path("default-home"));
     std::env::set_var(
         gents_desktop_core::client::DESKTOP_HOME_ENV,
         path("desktop"),

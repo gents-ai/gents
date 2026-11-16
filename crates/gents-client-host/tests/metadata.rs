@@ -11,7 +11,6 @@ fn artifact_description_does_not_open_a_client_store() {
         .arg("--describe")
         .envs(homes.env())
         .env("GENTS_DESKTOP_HOME", &home)
-        .env("GENTS_HOME", &home)
         .current_dir(temp.path())
         .output()
         .unwrap();

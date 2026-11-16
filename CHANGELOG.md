@@ -6,6 +6,9 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Breaking: `GENTS_HOME` is no longer read. `--home` is the only way to choose a
+  node home; without it commands use the folder chosen at setup, then `~/.gents`.
+  The macOS uninstall script takes `--home DIR` instead.
 - Task `goal_blocked_audit_threshold` (positive, default 3) and
   `goal_max_infrastructure_retries` (non-negative, default 2) replace the fixed
   Goal limits for the Goals a Task creates. Every Goal a Task creates pins them,

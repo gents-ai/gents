@@ -29,10 +29,9 @@ impl ProcessHomes {
         DesktopPaths::from_root(self.root.join("desktop").join("cli"))
     }
 
-    pub fn env(&self) -> [(&'static str, PathBuf); 5] {
+    pub fn env(&self) -> [(&'static str, PathBuf); 4] {
         let user = self.root.join("user");
         [
-            ("GENTS_HOME", self.root.join("runtime")),
             (
                 gents_desktop_core::client::DESKTOP_HOME_ENV,
                 self.root.join("desktop"),
