@@ -5,6 +5,7 @@ use serde_json::Value;
 use super::render::render_filter;
 use gents_store::config_client::schema_introspection::validate_identifier;
 
+/// Rows a query returns when the call omits `limit`; the model chooses the limit per call, up to `MAX_LIMIT`.
 pub const DEFAULT_LIMIT: u32 = 50;
 /// Caps database rows per query to bound result allocation and provider input.
 pub const MAX_LIMIT: u32 = 1000;

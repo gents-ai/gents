@@ -12,6 +12,7 @@ use super::CallbackEngine;
 #[cfg(test)]
 mod saturation_tests;
 
+/// Concurrent callback plugin invocations in this process. Claimed invocations beyond it wait for a permit, so the cap trades latency for bounded CPU and memory and never drops work.
 pub(super) const PLUGIN_CALLBACK_CONCURRENCY: usize = 32;
 
 /// Process-local execution accounting is separate from the durable claim:
