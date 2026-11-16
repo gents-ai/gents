@@ -98,6 +98,14 @@ impl GoalDocument {
         self.max_infrastructure_retries
             .unwrap_or(MAX_INFRASTRUCTURE_RETRIES)
     }
+
+    /// The limits as stored: unset stays unset, as on the creation claim.
+    pub fn pinned_limits(&self) -> gents_protocol::goal::GoalLimits {
+        gents_protocol::goal::GoalLimits {
+            blocked_audit_threshold: self.blocked_audit_threshold,
+            max_infrastructure_retries: self.max_infrastructure_retries,
+        }
+    }
 }
 
 pub fn snapshot(goal: &GoalDocument, now: DateTime<Utc>) -> GoalSnapshot {
