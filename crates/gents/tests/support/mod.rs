@@ -1313,7 +1313,7 @@ pub async fn complete_pending_request_with_canonical_output(
     live_inference::wait_for_request_terminal(
         db.node.as_ref(),
         &row.request_id,
-        std::time::Duration::from_secs(20),
+        live_inference::STALL_CEILING,
     )
     .await;
     runtime.shutdown().await;
