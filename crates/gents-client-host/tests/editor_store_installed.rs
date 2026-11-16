@@ -1,5 +1,3 @@
-#![cfg(all(target_os = "macos", feature = "editor-e2e"))]
-
 use anyhow::{ensure, Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
@@ -12,8 +10,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio_util::codec::LengthDelimitedCodec;
 
-#[path = "support/homes.rs"]
-mod homes;
+use crate::support::homes;
 
 async fn script(extension: &Path, root: &Path, name: &str) -> Result<()> {
     let mut command = Command::new("node");

@@ -453,6 +453,39 @@ impl ConfigApplyTxn<'_> {
         (output, fired)
     }
 
+    /// Runs `write` after the first successful mutation of `future`'s
+    /// transactions and before that transaction commits, so `write` commits
+    /// first and the paused commit meets DefraDB's own conflict when `write`
+    /// touched a document the transaction read. Returns whether the pause was
+    /// reached; `write` never runs if `future` settles without mutating.
+    pub async fn with_concurrent_write_before_commit<F, W>(future: F, write: W) -> (F::Output, bool)
+    where
+        F: Future,
+        W: Future<Output = ()>,
+    {
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let paused = std::pin::pin!(Self::with_successful_mutation_pause_at(
+            1,
+            reached.clone(),
+            release.clone(),
+            future,
+        ));
+        let driver = std::pin::pin!(async move {
+            reached.notified().await;
+            write.await;
+            release.notify_one();
+        });
+        let (mut paused, mut driver) = (paused, driver);
+        let mut driven = false;
+        loop {
+            tokio::select! {
+                output = &mut paused => return output,
+                () = &mut driver, if !driven => driven = true,
+            }
+        }
+    }
+
     pub async fn with_successful_mutation_pause_and_count<F>(
         after: usize,
         reached: Arc<tokio::sync::Notify>,

@@ -1,0 +1,4 @@
+---- MODULE MCInterruptPartialOutputNoDrainFlush ----
+EXTENDS InterruptPartialOutput
+
+====

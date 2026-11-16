@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, gotoHarness, test } from "./desktopTest";
+import { expect, gotoHarness, scrollAtRest, test } from "./desktopTest";
 
 type Frame = { gap: number; offset: number | null };
 declare global {
@@ -107,19 +107,39 @@ test("a session opens and returns to the reader's place without a frame out of p
     await page.mouse.wheel(0, -1500);
     await page.waitForTimeout(150);
   }
-  await page.waitForTimeout(800);
-  const saved = await page.evaluate(() => {
-    const stored = JSON.parse(localStorage.getItem("gents-session-views") ?? "{}") as {
-      state?: {
-        places?: { session: string; place: { key: string; offset: number } }[];
-      };
-    };
-    return (
-      stored.state?.places?.find((entry) => entry.session === "session-large")?.place ??
-      null
-    );
-  });
-  expect(saved).not.toBeNull();
+  /* the place is saved a while after the view last moved, and a page landing
+     after the last wheel moves it again: read it once the view rests where
+     the saved place says the reader is */
+  const scroller = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+  let saved = null as { key: string; offset: number } | null;
+  await expect
+    .poll(async () => {
+      await scrollAtRest(scroller);
+      saved = await page.evaluate(() => {
+        const stored = JSON.parse(
+          localStorage.getItem("gents-session-views") ?? "{}",
+        ) as {
+          state?: {
+            places?: { session: string; place: { key: string; offset: number } }[];
+          };
+        };
+        return (
+          stored.state?.places?.find((entry) => entry.session === "session-large")
+            ?.place ?? null
+        );
+      });
+      return (
+        !!saved &&
+        (await scroller.evaluate((view, { key, offset }) => {
+          const row = view.querySelector(`[data-row-key="${CSS.escape(key)}"]`);
+          if (!row) return false;
+          const top =
+            row.getBoundingClientRect().top - view.getBoundingClientRect().top;
+          return Math.abs(top - offset) <= 2;
+        }, saved))
+      );
+    })
+    .toBe(true);
 
   await page.getByRole("button", { name: "Back" }).first().click();
   await session.waitFor();

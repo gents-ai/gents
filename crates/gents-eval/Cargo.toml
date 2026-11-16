@@ -5,11 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Evaluation and optimization drivers for Gents"
+autotests = false
 
 [[test]]
-name = "optimization_live"
-path = "tests/optimization_live.rs"
-required-features = ["live-e2e"]
+name = "integration"
+path = "tests/integration.rs"
 
 [features]
 live-e2e = ["gents/live-e2e"]

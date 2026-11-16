@@ -1,6 +1,6 @@
 import { expect, gotoHarness, test } from "./desktopTest";
 
-test("wheeling up past an open activity box keeps the transcript moving", async ({
+test("wheeling up past an open activity box keeps the transcript moving @own-viewport", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -35,7 +35,7 @@ test("wheeling up past an open activity box keeps the transcript moving", async 
     .toBeLessThan(before - 200);
 });
 
-test("a group with a failed command says so and opens its first failure", async ({
+test("a group with a failed command says so and opens its first failure @own-viewport", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -57,7 +57,9 @@ test("a group with a failed command says so and opens its first failure", async 
   await expect(passed).not.toHaveAttribute("data-open");
 });
 
-test("a command's long output scrolls inside its own box", async ({ page }) => {
+test("a command's long output scrolls inside its own box @own-viewport", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await gotoHarness(page, "mobile-performance");
   await page.locator('[data-testid="session-session-large"]').click();

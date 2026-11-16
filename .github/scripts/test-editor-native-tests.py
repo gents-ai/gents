@@ -36,7 +36,7 @@ class ArtifactTests(unittest.TestCase):
     def required(self):
         return [self.event('gents-session', 'gents_session'),
                 self.event('gents-desktop-bridge', 'gents_desktop_bridge'),
-                self.event('gents-client-host', 'runtime', 'test'),
+                self.event('gents-client-host', 'integration', 'test'),
                 self.event('gents-cli', 'port_allocation', 'test'),
                 self.event('gents-cli', 'gents', 'bin', False),
                 self.event('gents-client-host', 'gents-client-host', 'bin', False)]
@@ -65,18 +65,18 @@ class ArtifactTests(unittest.TestCase):
         targets = [{'name': 'gents-client-host', 'kind': ['bin']},
                    {'name': 'metadata', 'kind': ['test']},
                    {'name': 'runtime_cli', 'kind': ['test']},
-                   {'name': 'runtime', 'kind': ['test'], 'required-features': ['runtime-e2e']},
+                   {'name': 'integration', 'kind': ['test'], 'required-features': ['runtime-e2e']},
                    {'name': 'editor', 'kind': ['test'], 'required-features': ['editor-e2e']}]
         metadata = {'packages': [{'name': 'gents-client-host', 'targets': targets}]}
         with patch.object(e.subprocess, 'run') as run:
             run.return_value.stdout = json.dumps(metadata)
-            self.assertEqual(e.transport_targets(self.root), ['metadata', 'runtime', 'runtime_cli'])
+            self.assertEqual(e.transport_targets(self.root), ['integration', 'metadata', 'runtime_cli'])
             self.assertIn('--no-deps', run.call_args.args[0])
 
     def test_compile_uses_one_feature_graph_and_no_test_execution(self):
         manifest = self.root / 'manifest.json'
         with patch.object(e.subprocess, 'run') as run, patch.object(e, 'artifacts', return_value=[]), \
-                patch.object(e, 'transport_targets', return_value=['metadata', 'runtime', 'runtime_cli']):
+                patch.object(e, 'transport_targets', return_value=['integration', 'metadata', 'runtime_cli']):
             e.compile_tests(self.root, manifest)
         command = run.call_args.args[0]
         self.assertIn('--no-run', command)
@@ -85,7 +85,7 @@ class ArtifactTests(unittest.TestCase):
         self.assertIn('gents-cli', command)
         self.assertIn('gents-session', command)
         targets = [command[i + 1] for i, value in enumerate(command[:-1]) if value == '--test']
-        self.assertEqual(targets, ['port_allocation', 'metadata', 'runtime', 'runtime_cli'])
+        self.assertEqual(targets, ['port_allocation', 'integration', 'metadata', 'runtime_cli'])
         self.assertIn('--no-default-features', command)
         self.assertIn('--message-format=json-render-diagnostics', command)
         self.assertNotIn('--all-features', command)
@@ -94,7 +94,7 @@ class ArtifactTests(unittest.TestCase):
     def test_compile_forwards_the_native_ci_profile_without_changing_targets(self):
         manifest = self.root / 'manifest.json'
         with patch.object(e.subprocess, 'run') as run, patch.object(e, 'artifacts', return_value=[]), \
-                patch.object(e, 'transport_targets', return_value=['runtime']):
+                patch.object(e, 'transport_targets', return_value=['integration']):
             e.compile_tests(self.root, manifest, profile='ci-native')
         command = run.call_args.args[0]
         self.assertEqual(command[command.index('--profile') + 1], 'ci-native')
@@ -103,7 +103,7 @@ class ArtifactTests(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
 
     def test_result_rejects_false_green_and_zero_required_cases(self):
-        runtime = {'role': 'host', 'name': 'runtime'}
+        runtime = {'role': 'host', 'name': 'integration'}
         output = 'test result: ok. 2 passed; 0 failed; 0 ignored;'
         e.check_result(runtime, 0, output)
         for status, content in [(1, output), (0, ''), (0, output + output),

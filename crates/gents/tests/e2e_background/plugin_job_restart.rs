@@ -6,7 +6,7 @@ use gents_toolcalls::background::job::job::{JobChildState, JobState};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::plugin_job_support::{
+use super::plugin_job_support::{
     boot_job_harness, effects, guest_pin, job_call, job_row, reboot_job_harness, result, spawn,
     wait_job, JobHarness, PlanEntry,
 };
@@ -187,7 +187,7 @@ async fn plugin_job_survives_a_restart_mid_panel() {
     let listener = tokio::net::UnixListener::bind(&ready_path).unwrap();
     let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
         .arg("--exact")
-        .arg("plugin_job_restart::plugin_job_survives_a_restart_mid_panel")
+        .arg("e2e_background::plugin_job_restart::plugin_job_survives_a_restart_mid_panel")
         .arg("--nocapture")
         .env(JOB_CRASH_WORKER_READY, &ready_path)
         .kill_on_drop(true)

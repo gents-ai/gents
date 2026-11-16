@@ -12,9 +12,11 @@ fn fixture_pack_dir(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
 }
 
 fn fixture_manifest_dir(name: &str) -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../gents/tests/fixtures/packs")
-        .join(name)
+    std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("../gents/tests/fixtures/packs")
+    .join(name)
 }
 
 fn fixture_manifest(name: &str) -> crate::pack::PackManifest {

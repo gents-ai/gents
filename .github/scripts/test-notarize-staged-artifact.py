@@ -1076,7 +1076,7 @@ class WorkflowStaticTests(unittest.TestCase):
         self.assertIn('rm -rf "${RUN_DIR}"', self.steps()[-1]["run"])
         self.assertEqual(
             self.wf["jobs"]["notarize"]["runs-on"],
-            ["self-hosted", "macOS", "ARM64", "studio", "studio-1", "ci-support"],
+            ["self-hosted", "macOS", "ARM64", "ci-notary"],
         )
         env = self.wf["env"]
         self.assertEqual(env["EXPECTED_TEAM_ID"], "4LPKFKCXDA")

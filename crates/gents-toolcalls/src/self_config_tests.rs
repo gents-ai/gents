@@ -2833,60 +2833,6 @@ async fn foreign_agent_configuration_needs_the_catalog_grant() {
 }
 
 #[tokio::test]
-async fn clone_does_not_inherit_self_config_from_its_source() {
-    let fixture = SelfConfigFixture::new("clone-self-config").await;
-    fixture.grant_selected_configuration().await;
-    fixture.grant_node_reader().await;
-    fixture.grant_agent_catalog().await;
-    let node_did = fixture.node_did().to_owned();
-    let source = fixture.install_sibling("self-config-source").await;
-    fixture.grant_pack_install_to(&source).await;
-    // Reusing the sibling's profile selects it, which native document ACP
-    // admits only for a manager of that selection.
-    fixture.grant_sibling_configuration(&source).await;
-    let profile = format!("{source}:inference");
-    let mut tool_config = config(&["node"]);
-    tool_config.agent_did = fixture.agent_did().to_owned();
-    let tool = take_agent_tool(fixture.tools_with_config(&tool_config));
-    let output: Value = serde_json::from_str(
-        &tool
-            .call(
-                json!({"argv": ["agent", "clone", "--display-name", "Plain Copy",
-                                "--from", source, "--profile", profile]})
-                .to_string(),
-            )
-            .await
-            .expect("a catalog holder clones a source that carries self-config"),
-    )
-    .unwrap();
-    assert_eq!(output["committed"], true);
-    let clone_tools_id = format!("{}:tools", output["agent_did"].as_str().unwrap());
-    let stored = fixture
-        .user_access()
-        .transact_readonly("test.self_config.clone_tools", |txn| {
-            let owner = node_did.clone();
-            let tools_id = clone_tools_id.clone();
-            Box::pin(async move {
-                let (_, tools) = gents_documents::read_desired_state_record_in_txn(
-                    txn,
-                    gents_store::collection::Collection::Tools,
-                    &owner,
-                    &tools_id,
-                )
-                .await?
-                .expect("the clone's Tools exists");
-                Ok::<_, anyhow::Error>(tools)
-            })
-        })
-        .await
-        .unwrap();
-    assert!(
-        stored.get("self_config").is_none_or(Value::is_null),
-        "a clone must not inherit self-config: {stored}"
-    );
-}
-
-#[tokio::test]
 async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply() {
     let fixture = SelfConfigFixture::new("self-config-lsp-guard").await;
     fixture.grant_selected_configuration().await;

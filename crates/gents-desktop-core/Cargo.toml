@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Reusable desktop client runtime for Gents"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [dependencies]
 anyhow.workspace = true
@@ -60,6 +65,7 @@ test-fixtures = []
 [dev-dependencies]
 gents-workspace-hack = { workspace = true }
 gents-automation = { workspace = true, features = ["test-fixtures"] }
+gents-store = { workspace = true, features = ["test-fixtures"] }
 # Enables the served-runtime fixture for this crate's integration tests.
 gents-desktop-core = { path = ".", features = ["test-fixtures", "typescript"] }
 gents = { path = "../gents", features = ["test-fixtures", "typescript"] }

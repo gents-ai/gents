@@ -162,9 +162,10 @@ pub fn spawn_server(home_dir: &Path, port: u16) -> Result<ServeProcess> {
     spawn_server_with_env(home_dir, port, &[], &[])
 }
 
-/// Spawn a `gents runtime server` and wait for its readiness JSON. Never replaces a
-/// raced-away port: a caller holding this signature cannot observe a port
-/// change, so moving the server would strand it on a dead port.
+/// Spawn a `gents runtime server` and wait for its readiness JSON, failing only
+/// when the process exits or writes nothing for the suite's stall ceiling.
+/// Never replaces a raced-away port: a caller holding this signature cannot
+/// observe a port change, so moving the server would strand it on a dead port.
 pub fn spawn_server_with_ready_json(
     home_dir: &Path,
     port: u16,
@@ -205,8 +206,9 @@ fn spawn_server_with_ready_json_inner(
     } else {
         0
     };
-    let deadline = Instant::now() + Duration::from_secs(30);
     'attempt: loop {
+        let mut progress = (0, 0);
+        let mut progressed_at = Instant::now();
         let stdout_log = tempfile::NamedTempFile::new().context("creating gents stdout log")?;
         let stderr_log = tempfile::NamedTempFile::new().context("creating gents stderr log")?;
         let stdout = stdout_log.reopen().context("opening gents stdout log")?;
@@ -237,11 +239,19 @@ fn spawn_server_with_ready_json_inner(
                 )?;
                 return Ok((serve, port, value));
             }
+            let output = (
+                stdout_so_far.len(),
+                read_captured_log(serve.stderr_log.as_ref())?.len(),
+            );
+            if output != progress {
+                progress = output;
+                progressed_at = Instant::now();
+            }
             let exited = serve
                 .child
                 .try_wait()
                 .context("checking serve child status")?;
-            let timed_out = Instant::now() >= deadline;
+            let timed_out = progressed_at.elapsed() >= super::waits::STALL_CEILING;
             if exited.is_some() || timed_out {
                 let (stdout, stderr) = serve.captured_output()?;
                 let addr = format!("127.0.0.1:{port}");
@@ -264,7 +274,8 @@ fn spawn_server_with_ready_json_inner(
                     );
                 }
                 bail!(
-                    "timed out waiting for gents server readiness JSON\nstdout:\n{}\nstderr:\n{}",
+                    "gents server wrote nothing for {:?} before its readiness JSON\nstdout:\n{}\nstderr:\n{}",
+                    super::waits::STALL_CEILING,
                     stdout,
                     stderr
                 );
