@@ -17,6 +17,11 @@ source consistency checks, not a separate runtime compatibility version.
   shell no longer posts "Runtime update complete" or "Runtime update failed"
   to the submitting session; read `gents service update-status` instead.
   Update receipts no longer carry `session_id` or `request_id` (#3922).
+- On macOS, setup and repair no longer report the service log as out of date
+  after a managed update, so they no longer rewrite the LaunchAgent (and
+  possibly restart the runtime) for it. A lifecycle refusal for a caller whose ancestry
+  cannot be read now says so instead of claiming the action would end the
+  caller's runtime.
 - Breaking: `GENTS_HOME` is no longer read. `--home` is the only way to choose a
   node home; without it commands use the folder chosen at setup, then `~/.gents`.
   The macOS uninstall script takes `--home DIR` instead.

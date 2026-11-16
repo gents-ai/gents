@@ -490,6 +490,29 @@ mod tests {
         }
     }
     #[test]
+    fn a_managed_update_leaves_the_definition_log_current() {
+        for platform in [NativeServicePlatform::Macos, NativeServicePlatform::Linux] {
+            let dir = tempfile::tempdir().unwrap();
+            let old = config(dir.path());
+            let installed = render(platform, &old).unwrap();
+            let mut next = old;
+            next.executable = dir.path().join("next binary");
+            let manager =
+                NativeServiceManager::with_runner(next.clone(), platform, Runner::default());
+            let updated = manager
+                .update_definition(installed.as_bytes(), None)
+                .unwrap();
+            fs::write(next.definition_path(platform), &updated).unwrap();
+            assert!(manager.definition_log_current().unwrap(), "{platform:?}");
+            assert!(!manager.refresh_definition_file().unwrap(), "{platform:?}");
+            assert_eq!(
+                fs::read(next.definition_path(platform)).unwrap(),
+                updated,
+                "{platform:?}"
+            );
+        }
+    }
+    #[test]
     fn updater_is_a_separate_supervisor_job_with_fixed_argv() {
         for platform in [NativeServicePlatform::Macos, NativeServicePlatform::Linux] {
             let dir = tempfile::tempdir().unwrap();
