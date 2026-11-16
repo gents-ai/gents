@@ -290,6 +290,18 @@ jobs:
           shellcheck .github/scripts/setup-lean-build-cache.sh
           python3 .github/scripts/test-setup-lean-build-cache.py
 
+      # A merge once dropped gate.py's `import shutil`; only the cache path,
+      # which no pull request ran, reached the missing name.
+      - name: Check the CI scripts for undefined names
+        env:
+          RUFF_VERSION: 0.17.3
+        run: |
+          set -euo pipefail
+          python3 -m venv "${RUNNER_TEMP}/ruff"
+          "${RUNNER_TEMP}/ruff/bin/pip" install --quiet "ruff==${RUFF_VERSION}"
+          "${RUNNER_TEMP}/ruff/bin/ruff" check --no-cache --select F821,F822,F823 \
+            scripts/ci .github/scripts scripts/evals
+
       - name: Run Harbor agent adapter tests
         run: python3 scripts/harbor/test_gents_agent.py
 
