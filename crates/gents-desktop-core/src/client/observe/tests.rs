@@ -1459,13 +1459,6 @@ async fn peer_without_an_endpoint_shows_no_endpoint_until_it_has_one() {
     stalled_task.abort();
 }
 
-/// External premise for `RuntimeConnectionObservation.SnapshotOutcome`: the
-/// pinned served runtime does not refuse a User whose household grant was
-/// revoked. The SSE handshake is accepted and the open and new streams stay
-/// silent, and a read answers without errors and without the selected roots,
-/// so neither surface the access owner classifies (HTTP 401/403, a
-/// `PERMISSION_DENIED` envelope) is produced. That is native ACP hiding what
-/// the User may not read: the snapshot owner reads it as an empty snapshot.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn revoked_user_is_answered_with_omitted_roots() {
     let home = crate::test_fixtures::ServedRuntimeHome::start().await;
@@ -1498,78 +1491,44 @@ async fn revoked_user_is_answered_with_omitted_roots() {
     }
     let hidden = crate::client::load_node_snapshot_on(&access, home.node_did())
         .await
-        .expect("an omitted root is an empty read, not a failure");
-    assert_eq!(
-        hidden.row_count(),
-        0,
-        "nothing is visible to the revoked User"
-    );
+        .unwrap_err();
+    assert!(matches!(
+        hidden,
+        crate::client::SnapshotReadError::NodeUnavailable
+    ));
     home.shutdown().await;
 }
 
-/// Regression for the revoked-User retry storm: the served runtime shows a
-/// revoked User an empty view at the resnapshot after its next renewal. The
-/// observer reads it as connected with nothing visible, never shows an
-/// outage or a denial, and never reconnects; a restored grant is read at the
-/// next renewal.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn revoked_user_sees_connected_with_nothing_and_never_reconnects() {
+async fn revoked_user_sees_access_unavailable_and_recovers_after_approval() {
     let home = crate::test_fixtures::ServedRuntimeHome::start().await;
     let (_directory, store, handle) = served_observer(&home).await;
     wait_for_connection(&store, home.node_did(), RuntimeConnectionStatus::Connected).await;
     assert!(!store.snapshot(home.node_did()).nodes.is_empty());
-    let before = handle.metrics_snapshot();
     let user = ::identity::Did::new(home.user().did()).unwrap();
     gents_store::identity::GrantSet::HouseholdOwner
         .revoke(&home.runtime_access(), &user)
         .await
         .unwrap();
-    let mut shown = vec![RuntimeConnectionStatus::Connected];
     let mut changes = store.subscribe();
-    let renewal = gents_store::config_client::SUBSCRIPTION_RENEWAL_PERIOD;
-    tokio::time::timeout(renewal + Duration::from_secs(15), async {
-        loop {
-            if let Some(status) = store.runtime_connection(home.node_did()) {
-                if shown.last() != Some(&status) {
-                    shown.push(status);
-                }
+    tokio::time::timeout(
+        gents_store::config_client::SUBSCRIPTION_RENEWAL_PERIOD + Duration::from_secs(15),
+        async {
+            while store.runtime_connection(home.node_did())
+                != Some(RuntimeConnectionStatus::Refused)
+            {
+                changes.changed().await.unwrap();
             }
-            if store.snapshot(home.node_did()).nodes.is_empty() {
-                break;
-            }
-            changes.changed().await.unwrap();
-        }
-    })
+        },
+    )
     .await
-    .unwrap_or_else(|_| panic!("the renewal resnapshot shows the empty view; shown {shown:?}"));
-    let after = handle.metrics_snapshot();
-    assert_eq!(shown, vec![RuntimeConnectionStatus::Connected], "{shown:?}");
-    assert_eq!(
-        store.runtime_connection(home.node_did()),
-        Some(RuntimeConnectionStatus::Connected)
-    );
-    assert_eq!(
-        after.reconnects, before.reconnects,
-        "an empty view never reconnects"
-    );
-    assert_eq!(after.transport_failures, before.transport_failures);
-
+    .expect("renewal reports unavailable access to the selected Node");
     gents_store::identity::GrantSet::HouseholdOwner
         .grant(&home.runtime_access(), &user)
         .await
         .unwrap();
-    tokio::time::timeout(renewal + Duration::from_secs(15), async {
-        while store.snapshot(home.node_did()).nodes.is_empty() {
-            changes.changed().await.unwrap();
-        }
-    })
-    .await
-    .expect("the next renewal resnapshot shows the restored grant");
-    assert_eq!(
-        store.runtime_connection(home.node_did()),
-        Some(RuntimeConnectionStatus::Connected)
-    );
-    assert_eq!(handle.metrics_snapshot().reconnects, before.reconnects);
+    wait_for_connection(&store, home.node_did(), RuntimeConnectionStatus::Connected).await;
+    assert!(!store.snapshot(home.node_did()).nodes.is_empty());
     handle.shutdown().await;
     home.shutdown().await;
 }

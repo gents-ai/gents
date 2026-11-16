@@ -442,5 +442,70 @@ fn connect_this_desktop_joins_a_terminal_node_and_reads_its_settings() {
         agents_before,
         "the node's agents are untouched"
     );
+    let desktop = path("revoked-desktop");
+    copy_cli_client(&path("desktop"), &desktop);
+    let app = desktop_app(&desktop, &served_home);
+    connect(&app).unwrap();
+    let core = current_core(&app.state::<DesktopAppState>()).unwrap();
+    let member = core.node_identity().did().to_owned();
+    let (before, _) = node_records(&served_home, Some(&served), Some(&member));
+    let old_request = before.iter().next().unwrap();
+    run(gents_service::enrollment_admin::submit_enrollment_decision(
+        &served_home,
+        &served.graphql,
+        old_request,
+        gents_protocol::enrollment::EnrollmentOperatorAction::Revoke,
+        0,
+    ))
+    .unwrap();
+    let access = core.operator_access(&served.node_did).unwrap();
+    let unavailable = run(gents_desktop_core::client::load_node_snapshot_on(
+        &access,
+        &served.node_did,
+    ))
+    .unwrap_err();
+    assert!(unavailable.refused());
+    assert!(run(core.refresh_node(&served.node_did)).is_err());
+    let blocked = run(lifecycle::desktop_client_snapshot(
+        app.state::<DesktopAppState>(),
+    ))
+    .unwrap();
+    assert!(!blocked
+        .client
+        .unwrap()
+        .operator_config_authoritative_node_dids
+        .unwrap_or_default()
+        .contains(&served.node_did));
+    let status = run(async {
+        reqwest::get(served.graphql.replace("/api/v0/graphql", "/status"))
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()
+    });
+    let pending = run(core.request_status_enrollment_with_label(&status, Some("Anvil"))).unwrap();
+    assert!(!before.contains(&pending.request_id));
+    let requests = run(gents_service::server_host::pending_managed_enrollments(
+        &served_home,
+        &served.graphql,
+    ))
+    .unwrap();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.request_id == pending.request_id
+                && request.candidate_did == member)
+    );
+    connect(&app).unwrap();
+    let restored = settings_as_the_desktop(&app, &served.node_did);
+    assert!(restored
+        .client
+        .unwrap()
+        .operator_config_authoritative_node_dids
+        .unwrap_or_default()
+        .contains(&served.node_did));
+    assert_eq!(core.node_identity().did(), member);
+    shut_down(app);
     stop(served);
 }

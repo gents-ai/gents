@@ -560,7 +560,7 @@ impl ClientCore {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 self.observe_refresh_failure(node_did, &error);
-                return Err(error);
+                return Err(error.into());
             }
         };
         let rows = snapshot.row_count();
@@ -581,9 +581,9 @@ impl ClientCore {
 
     /// The observer owns runtime connection state: a refusal clears the
     /// node's rows and asks it to confirm with its own authenticated read.
-    fn observe_refresh_failure(&self, node_did: &str, error: &anyhow::Error) {
+    fn observe_refresh_failure(&self, node_did: &str, error: &super::SnapshotReadError) {
         let store = self.stores.ensure(node_did);
-        if gents_store::config_client::TransactionFailure::permission_denied(error) {
+        if error.refused() {
             store.clear_after_refused_read();
         } else {
             store.request_resync();

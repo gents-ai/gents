@@ -32,7 +32,7 @@ namespace RuntimeConnectionObservation
 
 deriving instance Lean.ToJson for Event, SnapshotOutcome, Origin
 
-attribute [conformance_function] armedEvent armedAfter snapshotEvent failedSnapshot reconnects
+attribute [conformance_function] armedEvent armedAfter snapshotEvent selectedRootSnapshot failedSnapshot reconnects
 
 end RuntimeConnectionObservation
 
