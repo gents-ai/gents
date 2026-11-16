@@ -1097,6 +1097,7 @@ async fn background_claim_keeps_fork_imports_out_of_notification_input() {
             .unwrap(),
     )
     .unwrap();
+    gents_lean_vocab::snapshot().await;
     let [contract] = gents_lean_vocab::families::contracts_wake_input_claimed_keys::cases()
         .try_into()
         .unwrap_or_else(|_| panic!("the imported-notification scenario replays one modeled wake"));
