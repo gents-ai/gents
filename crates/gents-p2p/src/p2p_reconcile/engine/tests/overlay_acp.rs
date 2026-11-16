@@ -214,3 +214,142 @@ async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Res
     reopened.shutdown().await?;
     Ok(())
 }
+
+/// The prepared read and the read before the teardown name the application
+/// collection; the read before the install, after the teardown ran, no longer
+/// does (`MCPairingGrantRevocationNoRecheck`).
+struct WithdrawnBeforeInstall {
+    reads: Mutex<std::collections::VecDeque<PairingDesired>>,
+    applied: Mutex<PairingApplied>,
+}
+
+#[async_trait]
+impl PairingStateStore for WithdrawnBeforeInstall {
+    async fn load_desired(&self, _peer_id: &str) -> Result<Option<PairingDesired>> {
+        let mut reads = self.reads.lock().unwrap();
+        let read = if reads.len() > 1 {
+            reads.pop_front()
+        } else {
+            reads.front().cloned()
+        };
+        Ok(read)
+    }
+
+    async fn load_applied(&self, _peer_id: &str) -> Result<LoadedPairingApplied> {
+        Ok(LoadedPairingApplied {
+            state: self.applied.lock().unwrap().clone(),
+            ..Default::default()
+        })
+    }
+
+    async fn persist_applied(&self, _peer_id: &str, applied: &LoadedPairingApplied) -> Result<()> {
+        *self.applied.lock().unwrap() = applied.state.clone();
+        Ok(())
+    }
+
+    async fn list_peer_ids(&self) -> Result<BTreeSet<String>> {
+        Ok(set(&["peer-a"]))
+    }
+}
+
+#[tokio::test]
+async fn an_install_takes_its_scope_from_authority_read_after_the_teardown() {
+    let address = "stable-peer@127.0.0.1:4100";
+    let route = |collections: &[&str]| PairingDesired {
+        replicator_addresses: set(&[address]),
+        replicator_collections: set(collections),
+        ..Default::default()
+    };
+    let store = WithdrawnBeforeInstall {
+        reads: Mutex::new(
+            [
+                route(&["AgentRequest", "ChangeProposed"]),
+                route(&["AgentRequest", "ChangeProposed"]),
+                route(&["AgentRequest"]),
+            ]
+            .into(),
+        ),
+        applied: Mutex::new(PairingApplied {
+            replicator_addresses: set(&[address]),
+            ..Default::default()
+        }),
+    };
+    let admin = MockAdmin {
+        active: Mutex::new(vec!["stable-peer".into()]),
+        ..Default::default()
+    };
+    admin.replicators.lock().unwrap().insert(
+        address.into(),
+        RemoteReplicator {
+            id: Some("stable-peer".into()),
+            collections: vec![mock_collection_id("AgentRequest")],
+            address: Some(address.into()),
+            filters: Some(Default::default()),
+        },
+    );
+
+    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+        .await
+        .expect("reconcile");
+
+    assert_eq!(
+        outcome.ops_applied,
+        vec![
+            DiffOp::TeardownReplicator(address.to_string()),
+            DiffOp::InstallReplicator(address.to_string()),
+        ]
+    );
+    let carried = admin
+        .replicators
+        .lock()
+        .unwrap()
+        .values()
+        .flat_map(|replicator| replicator.collections.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(carried, vec![mock_collection_id("AgentRequest")]);
+    assert!(outcome.live_route_matches);
+}
+
+#[tokio::test]
+async fn a_reinstall_undone_before_its_teardown_leaves_the_route_standing() {
+    let address = "stable-peer@127.0.0.1:4100";
+    let route = |collections: &[&str]| PairingDesired {
+        replicator_addresses: set(&[address]),
+        replicator_collections: set(collections),
+        ..Default::default()
+    };
+    let store = WithdrawnBeforeInstall {
+        reads: Mutex::new(
+            [
+                route(&["AgentRequest", "ChangeProposed"]),
+                route(&["AgentRequest"]),
+            ]
+            .into(),
+        ),
+        applied: Mutex::new(PairingApplied {
+            replicator_addresses: set(&[address]),
+            ..Default::default()
+        }),
+    };
+    let admin = MockAdmin {
+        active: Mutex::new(vec!["stable-peer".into()]),
+        ..Default::default()
+    };
+    admin.replicators.lock().unwrap().insert(
+        address.into(),
+        RemoteReplicator {
+            id: Some("stable-peer".into()),
+            collections: vec![mock_collection_id("AgentRequest")],
+            address: Some(address.into()),
+            filters: Some(Default::default()),
+        },
+    );
+
+    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+        .await
+        .expect("reconcile");
+
+    assert!(outcome.ops_applied.is_empty(), "{:?}", outcome.ops_applied);
+    assert!(admin.emitted.lock().unwrap().is_empty());
+    assert!(outcome.live_route_matches);
+}
