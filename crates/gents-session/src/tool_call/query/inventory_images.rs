@@ -131,21 +131,21 @@ mod tests {
 
     #[test]
     fn image_read_scope_matches_lean() {
-        use gents_lean_vocab::families::file_inventory_contracts_image_read_scope as model;
-        fn scope(value: &model::Scope) -> SessionScope {
+        use gents_lean_vocab::families::file_inventory_contracts_image_read_scope as family;
+        fn scope(value: &family::Scope) -> SessionScope {
             SessionScope {
                 node_did: value.node.clone(),
                 session_id: value.session.clone(),
                 requester_did: Some(value.requester.clone()),
             }
         }
-        model::replay(|input| {
+        family::replay(|input| {
             read_scope(
                 &scope(&input.selected),
                 scope(&input.source),
                 input.binding_matches,
             )
-            .map(|scope| model::Scope {
+            .map(|scope| family::Scope {
                 requester: scope.requester_did.unwrap(),
                 node: scope.node_did,
                 session: scope.session_id,

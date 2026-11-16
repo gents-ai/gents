@@ -1135,6 +1135,123 @@ async fn fork_rolls_back_at_every_mutation_position() {
     node.shutdown().await.expect("shut down test node");
 }
 
+/// Another linker marking the child between the signed marker and its commit
+/// aborts that commit with DefraDB's own conflict; the rebuilt marker re-reads,
+/// grants again and accepts the child as linked (signed-conflict rebuild).
+#[tokio::test]
+async fn fork_child_marker_rebuilds_after_a_concurrent_child_write() {
+    use gents_store::identity::NodeIdentity;
+    const SOURCE: &str = "fork-marker-race-source";
+    let (db, user, client, binding) = fork_reader_node("fork-marker-race").await;
+    let node_did = db.node_identity.did();
+    let agent_did = binding.agent_did.as_str();
+    let messages = (1..=3)
+        .map(|sequence| format!("turn {sequence}"))
+        .collect::<Vec<_>>();
+    publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
+    let publication = super::fork::commit_fork(
+        &client,
+        ForkParams {
+            source_session_id: SOURCE,
+            boundary: ForkBoundary::UserTurn(3),
+            caller_node_did: node_did,
+            caller_requester_did: Some(user.did()),
+            target_agent_did: None,
+        },
+    )
+    .await
+    .unwrap();
+    let child = publication.outcome.session_id.clone();
+    let child_doc = session_doc_id(&client, &child).await;
+    let agent_doc = client
+        .transact_readonly("test.fork_marker_race.agent", |txn| {
+            Box::pin(async move {
+                let record = gents_documents::read_desired_state_record_in_txn(
+                    txn,
+                    gents_store::collection::Collection::Agent,
+                    node_did,
+                    agent_did,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(record)
+            })
+        })
+        .await
+        .unwrap()
+        .expect("the fork Agent is visible")
+        .0;
+    super::sessions::grant_created_session_relationships(
+        &client, &child_doc, &agent_doc, agent_did,
+    )
+    .await
+    .unwrap();
+    let children = format!(
+        r#"{{ AgentOutputSegment(filter: {{session_id: {{_eq: "{session}"}}}}) {{ _docID parent_linked }} AgentMessage(filter: {{session_id: {{_eq: "{session}"}}}}) {{ _docID parent_linked }} }}"#,
+        session = escape_graphql_string(&child)
+    );
+    let unlinked = client.execute(&children).await.unwrap();
+    assert!(
+        !unlinked["data"]["AgentMessage"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "the fork copied messages"
+    );
+
+    let first = publication
+        .intent
+        .segment_doc_ids
+        .last()
+        .cloned()
+        .expect("the fork copied output segments");
+    let rewrite = async {
+        let doc = escape_graphql_string(&first);
+        let mutation = format!(
+            r#"mutation($input: AgentOutputSegmentMutationInputArg!) {{ update_AgentOutputSegment(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: $input) {{ _docID }} }}"#
+        );
+        client
+            .transact_write("test.fork_marker_race.other_linker", |txn| {
+                let mutation = &mutation;
+                Box::pin(async move {
+                    txn.execute_client_signed_update(
+                        mutation,
+                        &serde_json::json!({"input": {"parent_linked": true}}),
+                        gents_protocol::schemas::AGENT_OUTPUT_SEGMENT,
+                    )
+                    .await
+                })
+            })
+            .await
+            .expect("another linker marks the child before the marker commits");
+    };
+    let (published, paused) =
+        gents_store::config_client::ConfigApplyTxn::with_concurrent_write_before_commit(
+            super::fork::publish_fork_relationships(&client, publication.intent),
+            rewrite,
+        )
+        .await;
+    assert!(
+        paused,
+        "the first child marker paused after its signed update"
+    );
+    published.unwrap();
+    let linked = client.execute(&children).await.unwrap();
+    for collection in ["AgentOutputSegment", "AgentMessage"] {
+        assert_eq!(
+            linked["data"][collection].as_array().unwrap().len(),
+            unlinked["data"][collection].as_array().unwrap().len()
+        );
+        for row in linked["data"][collection].as_array().unwrap() {
+            assert_eq!(
+                row["parent_linked"], true,
+                "{collection} {} is linked to the fork",
+                row["_docID"]
+            );
+        }
+    }
+    db.node.shutdown().await.expect("shut down test node");
+}
+
 #[tokio::test]
 async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     use gents_store::identity::NodeIdentity;

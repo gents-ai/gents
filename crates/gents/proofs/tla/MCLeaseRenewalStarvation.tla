@@ -1,0 +1,4 @@
+---- MODULE MCLeaseRenewalStarvation ----
+EXTENDS LeaseRenewalStarvation
+
+====
