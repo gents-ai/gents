@@ -103,6 +103,24 @@ describe("canonical tool selections", () => {
     ).toBe(1_000_000);
   });
 
+  it("saves a background call limit no higher than the host ceiling", async () => {
+    const { api, app } = harness();
+    const user = userEvent.setup();
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
+    const limit = screen.getByRole("textbox", {
+      name: "Concurrent background calls per request",
+    });
+    fireEvent.change(limit, { target: { value: "9" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("at most 8");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveToolsConfig).not.toHaveBeenCalled();
+    fireEvent.change(limit, { target: { value: "3" } });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      api.saveToolsConfig.mock.calls[0][0].document.host.max_background_tool_calls,
+    ).toBe(3);
+  });
+
   it("rejects file tool limits above their server ceilings before saving", async () => {
     const { api, app } = harness();
     const user = userEvent.setup();

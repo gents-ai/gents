@@ -344,8 +344,9 @@ structure AdmissionObservation where
   maxBackgrounded : Nat
   deriving Lean.ToJson
 
-def liveAfter (admissions : Nat) : Nat :=
-  (List.range admissions).foldl (fun live _ => (Background.admitBackground live).getD live) 0
+def liveAfter (limit admissions : Nat) : Nat :=
+  (List.range admissions).foldl
+    (fun live _ => (Background.admitBackground limit live).getD live) 0
 
 end BackgroundBudget
 
@@ -353,18 +354,21 @@ end BackgroundBudget
 def backgroundAdmissionBound : Family BackgroundBudget.Bound BackgroundBudget.AdmissionObservation where
   inputs := [{ theoremName := "Background.admitted_background_count_bounded"
                scenario := "background_tool_admission_respects_max_backgrounded_per_parent"
-               numericBound := Background.maxBackgroundedPerParent }]
+               numericBound := Background.backgroundLimit none },
+             { theoremName := "Background.admitted_background_within_ceiling"
+               scenario := "background_tool_admission_respects_configured_max_background_tool_calls"
+               numericBound := Background.backgroundLimit (some 3) }]
   model := fun i =>
-    let live := BackgroundBudget.liveAfter i.numericBound
+    let live := BackgroundBudget.liveAfter i.numericBound i.numericBound
     let refusal :=
-      if (Background.admitBackground live).isNone then
+      if (Background.admitBackground i.numericBound live).isNone then
         PluginJob.Refusal.backgroundBudgetExceeded.code
       else none
     { kindFields :=
         ⟨"await_mode", ToolExecution.AwaitMode.background.toDefraDB⟩ ::
           refusal.toList.map fun code => ⟨"error_code_on_violation", code⟩
       currentBackgrounded := live
-      maxBackgrounded := Background.maxBackgroundedPerParent }
+      maxBackgrounded := i.numericBound }
 
 @[conformance_family]
 def backgroundReceiptContention : Family BackgroundBudget.Bound Bool where

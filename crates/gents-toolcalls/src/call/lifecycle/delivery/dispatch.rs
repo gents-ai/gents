@@ -40,6 +40,7 @@ impl ToolCallLifecycle {
             name: self.tool_name.clone(),
             selected_tool_fields: self.selected_tool_fields_fragment(),
             await_mode: self.await_mode.as_str(),
+            max_background_tool_calls: self.max_background_tool_calls(),
             effect: self.plugin_effect_terminal()?,
             deadline: self.deadline_at,
         })
@@ -93,6 +94,7 @@ pub struct DispatchStart {
     name: String,
     selected_tool_fields: String,
     await_mode: &'static str,
+    max_background_tool_calls: usize,
     effect: Option<super::super::plugin_effect::PluginEffectTerminal>,
     deadline: DateTime<Utc>,
 }
@@ -235,6 +237,7 @@ pub(crate) async fn start_running_in_txn(
             txn,
             &start.request,
             crate::call::hook::persistence::BackgroundSlot::Requested,
+            start.max_background_tool_calls,
             "",
         )
         .await?;

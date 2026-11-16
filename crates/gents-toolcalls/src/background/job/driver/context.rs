@@ -149,6 +149,7 @@ pub(in crate::background::job) async fn step_context_for(
             .map(|target| (target.target_id.clone(), key(target)))
             .collect(),
         live_background: 0,
+        background_limit: u32::try_from(lifecycle.max_background_tool_calls()).unwrap_or(u32::MAX),
         started_by_job: false,
         cwd_allowed,
         within,

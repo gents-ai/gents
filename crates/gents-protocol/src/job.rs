@@ -357,6 +357,10 @@ pub struct JobRowView {
     pub resume_of: Option<String>,
 }
 
+/// Lean `Background.maxBackgroundedPerParent`: the host ceiling on background
+/// calls one parent request holds. An Agent's `host.max_background_tool_calls`
+/// only lowers it; it is not configurable itself because the store's sibling
+/// contention retries (`REQUEST_SIBLING_MAX_ATTEMPTS`) are sized from it.
 pub const MAX_BACKGROUNDED_TOOLS_PER_PARENT: usize = 8;
 
 #[cfg(test)]
