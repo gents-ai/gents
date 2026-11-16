@@ -524,7 +524,16 @@ impl Step0 {
 
     async fn call_as(&self, call_id: &str, args: &str) -> Value {
         accept_hook_tool_call(&self.hook, call_id, TOOL, args, None).await;
-        let action = self.hook.on_tool_call(TOOL, None, call_id, args).await;
+        let action = self
+            .hook
+            .on_tool_call(
+                TOOL,
+                None,
+                call_id,
+                args,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await;
         let ToolCallHookAction::Skip { reason } = action else {
             panic!("a job tool call is answered by its hook: {action:?}");
         };
@@ -1130,7 +1139,16 @@ async fn refused_dispatches_name_their_policy_and_next_help() {
                 .await
                 .unwrap();
                 assert!(input.ceiling.targets.is_empty());
-                let action = step.hook.on_tool_call(TOOL, None, "call-1", args).await;
+                let action = step
+                    .hook
+                    .on_tool_call(
+                        TOOL,
+                        None,
+                        "call-1",
+                        args,
+                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    )
+                    .await;
                 let ToolCallHookAction::Skip { reason } = action else {
                     panic!("job call must return its admission result: {action:?}");
                 };
@@ -1417,7 +1435,16 @@ async fn pinned_step0_terminal_adopts_and_settles_in_one_transaction() {
     let row = step.row().await;
     let doc = row["_docID"].as_str().unwrap().to_owned();
     crate::call::lifecycle::delivery::fail_next_terminal_for_test(&doc);
-    let action = step.hook.on_tool_call(TOOL, None, "call-1", ARGS).await;
+    let action = step
+        .hook
+        .on_tool_call(
+            TOOL,
+            None,
+            "call-1",
+            ARGS,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await;
     let ToolCallHookAction::Skip { reason } = action else {
         panic!("a job tool call is answered by its hook: {action:?}");
     };

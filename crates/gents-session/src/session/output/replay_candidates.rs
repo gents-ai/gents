@@ -268,9 +268,10 @@ pub(super) async fn load_canonical_assistant_candidates_using(
             // request and must not silently strip reasoning, so it propagates.
             Err(error)
                 if candidate.request_doc_id != scope.request_doc_id
-                    && error
-                        .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
-                        .is_some() =>
+                    && gents_loop::loop_stream::ReplayEvidenceViolation::in_chain(
+                        error.as_ref(),
+                    )
+                    .is_some() =>
             {
                 tracing::warn!(
                     header_doc_id = %candidate.header_doc_id,

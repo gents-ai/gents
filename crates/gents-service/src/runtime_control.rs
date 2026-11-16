@@ -28,6 +28,14 @@ pub enum ControlFailure {
 }
 
 impl ControlFailure {
+    pub fn reason_in(
+        error: &(dyn std::error::Error + 'static),
+    ) -> Option<RuntimePreparationRefusal> {
+        gents_protocol::error_chain::find_map_source(error, |cause| {
+            cause.downcast_ref::<Self>().and_then(Self::reason)
+        })
+    }
+
     pub fn reason(&self) -> Option<RuntimePreparationRefusal> {
         match self {
             Self::Refused { reason, .. } => Some(*reason),

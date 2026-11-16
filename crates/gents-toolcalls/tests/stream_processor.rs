@@ -338,6 +338,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await;
     assert!(
@@ -499,6 +500,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
             Some("call-1".to_string()),
             "internal-1",
             r#"{"path":"/work/entry.c"}"#,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await,
         gents_inference::llm::ToolCallHookAction::Continue
@@ -706,8 +708,14 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         let call_id = format!("call-{index}");
         let args = format!(r#"{{"path":"/work/file-{index}.c"}}"#);
         assert!(matches!(
-            hook.on_tool_call("read_file", Some(call_id.clone()), &internal_id, &args,)
-                .await,
+            hook.on_tool_call(
+                "read_file",
+                Some(call_id.clone()),
+                &internal_id,
+                &args,
+                &gents_loop::tool::ToolCallEnvelope::ambient()
+            )
+            .await,
             gents_inference::llm::ToolCallHookAction::Continue
         ));
         assert!(matches!(
@@ -816,7 +824,13 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
         .await
         .unwrap();
     let action = hook
-        .on_tool_call("discover_tools", None, "call-1", args)
+        .on_tool_call(
+            "discover_tools",
+            None,
+            "call-1",
+            args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await;
     assert!(
         matches!(action, gents_inference::llm::ToolCallHookAction::Continue),
@@ -1135,6 +1149,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
             Some("call-1".to_string()),
             "internal-1",
             gents_store::test_support::CORRUPT_TOOL_ARGS_589,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await,
         gents_inference::llm::ToolCallHookAction::Continue

@@ -2,7 +2,7 @@ use gents_protocol::operations::install_repair::{IncompatibleStore, Incompatible
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use gents_protocol::error_chain::{as_owner, find_map_source, find_source};
+use gents_protocol::error_chain::{as_owner, find_map_source};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageBackendError {
@@ -165,7 +165,7 @@ pub fn incompatible_store(
         });
     }
     if matches!(
-        find_source::<super::backend_protection::BackendProtectionError>(error),
+        super::backend_protection::BackendProtectionError::in_chain(error),
         Some(super::backend_protection::BackendProtectionError::MissingProvenance)
     ) {
         return Some(IncompatibleStore {
@@ -173,7 +173,7 @@ pub fn incompatible_store(
             data_path: data_path.to_path_buf(),
         });
     }
-    find_source::<gents_migration::Error>(error)
+    gents_migration::Error::in_chain(error)
         .and_then(|cause| {
             if cause.is_unknown_lineage() {
                 Some(IncompatibleStoreKind::UnknownLineage)
@@ -197,7 +197,7 @@ pub(crate) fn find_incompatible<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a IncompatibleStore> {
     find_map_source(error, |cause| {
-        as_owner::<IncompatibleStore>(cause)
+        IncompatibleStore::of(cause)
             .or_else(|| as_owner::<StorageBackendError>(cause)?.incompatible())
             .or_else(|| as_owner::<crate::local::store_key::StoreKeyError>(cause)?.incompatible())
             .or_else(|| {

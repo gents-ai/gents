@@ -64,14 +64,27 @@ impl ToolDyn for PendingTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(std::future::pending())
     }
 }
 
 async fn invoke(hook: &DefraSessionHook, id: &str, name: &str, args: &str) -> serde_json::Value {
     accept_hook_tool_call(hook, id, name, args, None).await;
-    let ToolCallHookAction::Skip { reason } = hook.on_tool_call(name, None, id, args).await else {
+    let ToolCallHookAction::Skip { reason } = hook
+        .on_tool_call(
+            name,
+            None,
+            id,
+            args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+    else {
         panic!("accepted {name} must return a tool result")
     };
     serde_json::from_str(&reason).expect("canonical process-control result JSON")
@@ -200,7 +213,13 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
     let waiting_hook = hook.clone();
     let wait = tokio::spawn(async move {
         waiting_hook
-            .on_tool_call("wait_process", None, wait_id, &args)
+            .on_tool_call(
+                "wait_process",
+                None,
+                wait_id,
+                &args,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
     });
     tokio::time::timeout(std::time::Duration::from_secs(10), async {

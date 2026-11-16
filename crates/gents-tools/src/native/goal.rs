@@ -72,7 +72,11 @@ impl Tool for CreateGoalTool {
         }
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         Err(anyhow::anyhow!("create_goal is executed by the session persistence hook").into())
     }
 }
@@ -95,7 +99,11 @@ impl Tool for GetGoalTool {
         }
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         Err(anyhow::anyhow!("get_goal is executed by the session persistence hook").into())
     }
 }
@@ -138,7 +146,11 @@ impl Tool for UpdateGoalTool {
         }
     }
 
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        _args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         Err(anyhow::anyhow!("update_goal is executed by the session persistence hook").into())
     }
 }

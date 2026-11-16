@@ -25,6 +25,10 @@ import threading
 import time
 from pathlib import Path
 
+# Other checks load this file by path (test-rust-build-space.py), without its directory on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import test_cache  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 PROOFS = "crates/gents/proofs"
 TLA_CHECK = ROOT / PROOFS / "tla/scripts/tla_check.py"
@@ -131,6 +135,7 @@ CONTRACT_PATHS = (
     "contracts/", ".github/scripts/check-lean-", ".github/scripts/test-lean-",
     ".github/scripts/lean-import-layers.json", ".github/scripts/report-lean-import-layers.py",
     ".github/scripts/check-canonical-output-map.py", ".github/scripts/test-canonical-output-map.py",
+    ".github/scripts/check-test-cache-model.sh",
 )
 TS_PATHS = (
     "apps/", "packages/", "package.json", "package-lock.json", "scripts/check-desktop-package-boundaries.mjs",
@@ -302,6 +307,39 @@ def runner(role, roles=None, fork=None, fallback=None):
     return entry["labels"]
 
 
+def test_cache_mode(single):
+    """The test-result cache mode for the archived slices (scripts/ci/test_cache.py).
+
+    `off` runs every test and records nothing. `on` skips a test a trusted run
+    saw pass with the same inputs and records new passes. `full` runs every
+    test, records, and reports any recorded pass a failure contradicts.
+
+    GATE_TEST_CACHE (the repository's setting) turns the cache on; while it is
+    on, pushes to main run `full` unless GATE_TEST_CACHE_MAIN says `on`, and the
+    scheduled run and a pull request labelled `test-cache: full` run `full`.
+    GATE_TEST_CACHE_INPUT (a dispatch's choice) overrides all of that. The
+    cache needs the single slice that runs inside the build job: one job
+    decides, runs and records on one host, so answers about host files hold.
+    """
+    explicit = os.environ.get("GATE_TEST_CACHE_INPUT", "").strip()
+    configured = explicit or os.environ.get("GATE_TEST_CACHE", "").strip() or "off"
+    main = os.environ.get("GATE_TEST_CACHE_MAIN", "").strip() or "full"
+    for name, value in (("GATE_TEST_CACHE", configured), ("GATE_TEST_CACHE_MAIN", main)):
+        if value not in ("off", "on", "full"):
+            fail(f"{name} must be off, on or full, got {value!r}")
+    if configured == "off" or not single:
+        return "off"
+    if explicit:
+        return explicit
+    event = os.environ.get("GATE_EVENT", "")
+    labels = json.loads(os.environ.get("GATE_LABELS") or "[]") or []
+    if event == "schedule" or "test-cache: full" in labels:
+        return "full"
+    if event == "push":
+        return main
+    return configured
+
+
 def tla_specs(files, members, everything):
     """The TLA+ specs a change selects by their headers: every spec when it
     changes everything or a header does not parse (the runner then reports it)."""
@@ -389,7 +427,8 @@ def plan(files, members, everything=False, only=None, tier="full"):
             # up, 14 min down in dispatch 43775099812).
             single = count == 1
             archives.append({"archive": ARCHIVE, "runs_on": runner("portable"), "run": single,
-                             "packages": " ".join(archived), "timeout": 90 if single else 60})
+                             "packages": " ".join(archived), "timeout": 90 if single else 60,
+                             "test_cache": test_cache_mode(single)})
             shards = [] if single else [
                 {"archive": ARCHIVE, "index": index, "count": count, "runs_on": runner("portable"),
                  "timeout": 60} for index in range(1, count + 1)]
@@ -446,6 +485,9 @@ def resolve_plan(arguments):
     else:
         files = changed_files(arguments.base)
     tier = "draft" if os.environ.get("GATE_TIER") == "draft" else "full"
+    if os.environ.get("GATE_EVENT") == "schedule" and test_cache_mode(True) == "off":
+        # The scheduled run exists for the test cache; without it there is nothing to do.
+        only = {"none"}
     return plan(files, workspace(), everything, only, tier)
 
 
@@ -685,10 +727,34 @@ def archive_dir():
     return ROOT / "target" / "gents-tests"
 
 
-def nextest(arguments, cwd=ROOT, label=None, expect=None):
+def reproducible_paths(source):
+    """Rust flags that make a test binary's bytes independent of where it was built.
+
+    Each runner keeps its own Cargo target tree and builds in its own checkout,
+    and code compiled under a build script's OUT_DIR (Rust, and C through the
+    cc crate) carries that absolute path into the binary: dispatches 43768686550 and 43775883331 built
+    the same commit on two runners of one host and 19 of 45 test binaries
+    differed, so the test cache, keyed by binary bytes, missed every test.
+    Linux targets set no other rustflags (.cargo/config.toml), so the
+    target-specific variable replaces nothing.
+    """
+    if sys.platform != "linux":
+        return None
+    target = os.path.realpath(os.environ.get("CARGO_TARGET_DIR") or str(Path(source) / "target"))
+    source = os.path.realpath(source)
+    rust = f"--remap-path-prefix={target}=/target --remap-path-prefix={source}=/source"
+    # C compiled by build scripts (rquickjs-sys's QuickJS) keeps __FILE__ under OUT_DIR.
+    c = f"-ffile-prefix-map={target}=/target -ffile-prefix-map={source}=/source"
+    return {"CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS": rust,
+            "CFLAGS_x86_64_unknown_linux_gnu": c, "CXXFLAGS_x86_64_unknown_linux_gnu": c}
+
+
+def nextest(arguments, cwd=ROOT, label=None, expect=None, prefix=(), path_prefix=None, extra_env=None):
     """`cargo nextest`, recording the summary's counts; `expect` checks the listed tests per package."""
-    command = ["cargo", "nextest", *arguments]
-    env = dict(os.environ)
+    command = [*prefix, "cargo", "nextest", *arguments]
+    env = {**os.environ, **(extra_env or {})}
+    if path_prefix:
+        env["PATH"] = path_prefix + os.pathsep + env.get("PATH", "")
     env.setdefault("RUST_MIN_STACK", "16777216")
     print(f"\n$ {shlex.join(command)}", flush=True)
     started = time.time()
@@ -708,12 +774,18 @@ def nextest(arguments, cwd=ROOT, label=None, expect=None):
     return verdict == "ok"
 
 
-def listed_tests(archive, workspace):
+def archive_listing(archive, workspace, extract=None):
+    arguments = ["cargo", "nextest", "list", "--archive-file", str(archive), "--workspace-remap",
+                 str(workspace), "--message-format", "json", "--run-ignored", "all"]
+    if extract:
+        arguments += ["--extract-to", str(extract), "--extract-overwrite"]
+    raw = subprocess.run(arguments, cwd=workspace, check=True, stdout=subprocess.PIPE).stdout
+    return json.loads(raw)
+
+
+def listed_tests(archive, workspace, listing=None):
     """Package -> (tests, ignored) in an archive, and the paths of its test binaries."""
-    raw = subprocess.run(["cargo", "nextest", "list", "--archive-file", str(archive), "--workspace-remap",
-                          str(workspace), "--message-format", "json", "--run-ignored", "all"],
-                         cwd=workspace, check=True, stdout=subprocess.PIPE).stdout
-    listing = json.loads(raw)
+    listing = listing or archive_listing(archive, workspace)
     tests, binaries = {}, []
     for suite in listing["rust-suites"].values():
         binaries.append(Path(suite["binary-path"]))
@@ -722,6 +794,56 @@ def listed_tests(archive, workspace):
         cases = suite["testcases"].values()
         tests[package] = (total + len(cases), ignored + sum(1 for case in cases if case.get("ignored")))
     return tests, binaries
+
+
+def runnable(listing):
+    """Binary id -> the names of its tests a slice runs (ignored ones are not)."""
+    return {suite["binary-id"]: sorted(name for name, case in suite["testcases"].items() if not case.get("ignored"))
+            for suite in listing["rust-suites"].values()}
+
+
+def nextest_version():
+    return subprocess.run(["cargo", "nextest", "--version"], cwd=ROOT, stdout=subprocess.PIPE,
+                          text=True).stdout.strip().splitlines()[0]
+
+
+def extract_dir(label):
+    """A fresh directory the archive extracts into, so the tracer knows its paths."""
+    base = archive_dir().parent
+    directory = base / f"extract-{os.environ.get('GITHUB_RUN_ID', 'local')}-{label}"
+    shutil.rmtree(directory, ignore_errors=True)
+    directory.mkdir(parents=True)
+    return directory
+
+
+def plan_test_cache(entry, archive, source, output, name):
+    """Decide which tests the slices run and write the decisions beside the archive."""
+    started = time.time()
+    extract = extract_dir("plan")
+    listing = archive_listing(archive, source, extract)
+    tests = runnable(listing)
+    binaries = {"nextest": nextest_version(), "binaries": {
+        suite["binary-id"]: {"relative": os.path.relpath(os.path.realpath(suite["binary-path"]),
+                                                          os.path.realpath(extract))}
+        for suite in listing["rust-suites"].values()}}
+    answers = test_cache.Answers(source, extract)
+    plan = test_cache.plan_run(tests, binaries, answers, entry["test_cache"])
+    plan["listing"] = tests
+    plan["binaries"] = binaries["binaries"]
+    plan["sha"] = subprocess.run(["git", "rev-parse", "HEAD"], cwd=source, stdout=subprocess.PIPE,
+                                 text=True).stdout.strip()
+    (output / f"{name}.cache.json").write_text(json.dumps(plan, sort_keys=True))
+    shutil.rmtree(extract, ignore_errors=True)
+    total = sum(len(names) for names in tests.values())
+    skipped = sum(1 for decision in plan["decisions"].values() if "skip" in decision)
+    results.append((f"test cache ({entry['test_cache']})", "ok", f"{skipped} of {total} tests skipped",
+                    time.time() - started))
+    summary = test_cache.summarize(plan)
+    print("\n" + summary, flush=True)
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as handle:
+            handle.write(f"### Test cache: {name}\n\n{summary}\n\n")
+    return plan
 
 
 def unrelocatable(binaries, source):
@@ -783,7 +905,8 @@ def run_build(selection, name):
     if profile:
         arguments += ["--cargo-profile", profile]
     arguments += ["--archive-file", str(archive)]
-    if not nextest(arguments, cwd=source, label=f"build {name}: {len(packages)} crates"):
+    if not nextest(arguments, cwd=source, label=f"build {name}: {len(packages)} crates",
+                   extra_env=reproducible_paths(source) if entry.get("test_cache", "off") != "off" else None):
         return
     started = time.time()
     try:
@@ -817,7 +940,11 @@ def run_build(selection, name):
         arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci"]
         if os.environ.get("RUST_TEST_THREADS"):
             arguments += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
-        nextest(arguments, label=f"run {name}")
+        if entry.get("test_cache", "off") == "off":
+            nextest(arguments, label=f"run {name}")
+            return
+        plan = plan_test_cache(entry, archive, source, output, name)
+        run_cached_slice(plan, arguments, f"run {name}")
 
 
 def run_shard(selection, name, index=None):
@@ -840,6 +967,97 @@ def run_shard(selection, name, index=None):
     # Tests that would otherwise `cargo build` a helper binary use the archived one.
     os.environ["GENTS_TEST_BINARIES_PREBUILT"] = "1"
     nextest(arguments, label=label)
+
+
+def run_cached_slice(plan, arguments, label):
+    """Run the tests the build's cache plan selected, traced, and record their results."""
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, stdout=subprocess.PIPE, text=True).stdout.strip()
+    if head != plan["sha"]:
+        fail(f"the cache plan is for {plan['sha']} but this checkout is {head}")
+    extract = extract_dir("run")
+    arguments = [*arguments, "--extract-to", str(extract), "--extract-overwrite", "--no-tests", "pass",
+                 *test_cache.filters(plan, plan["listing"])]
+    trusted = os.environ.get("GATE_TEST_CACHE_TRUSTED") == "true"
+    tracer = test_cache.tracer()
+    trace_dir = extract.parent / f"{extract.name}.strace"
+    shutil.rmtree(trace_dir, ignore_errors=True)
+    trace_dir.mkdir()
+    prefix = [*tracer, "-o", str(trace_dir / "t")] if tracer and trusted else []
+    skipped = sum(1 for decision in plan["decisions"].values() if "skip" in decision)
+    print(f"gate: test cache {plan['mode']}: {skipped} tests skipped for this run; "
+          f"{'tracing' if prefix else 'not recording (' + ('untrusted run' if not trusted else 'no tracer') + ')'}",
+          flush=True)
+    junit = ROOT / "target" / "nextest" / "ci" / "junit.xml"
+    junit.unlink(missing_ok=True)
+    broker, shims = None, None
+    if prefix and shutil.which("lake") and os.environ.get("GATE_TEST_CACHE_TRACE_LAKE") != "true":
+        broker, shims = start_lake_broker(extract)
+    try:
+        nextest(arguments, label=f"{label} (cache {plan['mode']})", prefix=prefix,
+                path_prefix=str(shims) if shims else None)
+    finally:
+        if broker:
+            broker.kill()
+    started = time.time()
+    outcomes = test_cache.junit_outcomes(junit)
+    binary_ids = {binary_id: os.path.realpath(extract / info["relative"]) for binary_id, info in plan["binaries"].items()}
+    traces, written = {}, {}
+    if prefix:
+        derived = lean_derived() + ([(str(shims), PROOFS)] if shims else [])
+        context = test_cache.Context(ROOT, extract, derived=derived, refused=kept_target())
+        # Lake reads tens of thousands of build files per test: the prefilter
+        # drops them, and each process that touched them queries the proofs' sources.
+        markers = [prefix_path + "/" for prefix_path, _ in derived] + [os.path.expanduser("~/.elan/")]
+        lake_pids = set().union(*(test_cache.pids_matching(trace_dir, marker) for marker in markers))
+        drop = test_cache.scratch_drop(["/tmp/", "/proc/", "/sys/", "/dev/", *markers])
+        traces, written = test_cache.parse_trace(test_cache.trace_directory(trace_dir, drop), context,
+                                                 set(binary_ids.values()), lake_pids, PROOFS)
+    answers = test_cache.Answers(ROOT, extract)
+    notes, dirty = test_cache.record_run(plan, outcomes, traces, written, answers, binary_ids, trusted and bool(prefix))
+    summary = test_cache.summarize(plan, notes, dirty)
+    recorded = sum(1 for note in notes.values() if note == "recorded")
+    results.append((f"{label}: record", "ok", f"{recorded} of {len(notes)} recorded", time.time() - started))
+    print("\n" + summary, flush=True)
+    report_path = os.environ.get("GATE_TEST_CACHE_REPORT") or str(extract.parent / f"{extract.name}.report.json")
+    Path(report_path).write_text(json.dumps({"decisions": plan["decisions"], "notes": notes, "dirty": dirty},
+                                            sort_keys=True, indent=1))
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as handle:
+            handle.write(f"### Test cache: {label}\n\n{summary}\n\n")
+    if not os.environ.get("GATE_TEST_CACHE_KEEP_TRACE"):
+        shutil.rmtree(trace_dir, ignore_errors=True)
+    shutil.rmtree(extract, ignore_errors=True)
+
+
+def start_lake_broker(extract):
+    """Start scripts/ci/test_cache_broker.py outside the tracer and a `lake` shim for the slice's PATH."""
+    import tempfile
+    import test_cache_broker
+    socket_path = os.path.join(tempfile.mkdtemp(prefix="gate-lake-"), "socket")
+    broker = subprocess.Popen([sys.executable, str(ROOT / "scripts/ci/test_cache_broker.py"), "serve", socket_path,
+                               shutil.which("lake")], start_new_session=True)
+    for _ in range(100):
+        if os.path.exists(socket_path):
+            break
+        time.sleep(0.05)
+    shims = extract.parent / f"{extract.name}.bin"
+    test_cache_broker.shim(str(shims), socket_path)
+    return broker, shims
+
+
+def lean_derived():
+    """Lake build output a test reads is keyed by the proofs' sources: the
+    checkout's .lake and the runner's persistent Lake cache it links to."""
+    proofs = ROOT / PROOFS
+    derived = [(str(proofs / ".lake"), PROOFS)]
+    if os.environ.get("LEAN_CACHE_ROOT"):
+        derived.append((os.environ["LEAN_CACHE_ROOT"], PROOFS))
+    return derived
+
+
+def kept_target():
+    """A kept Cargo target tree holds other commits' binaries; a test reading it is not keyed."""
+    return [os.environ["CARGO_TARGET_DIR"]] if os.environ.get("CARGO_TARGET_DIR") else []
 
 
 def run(selection, job):

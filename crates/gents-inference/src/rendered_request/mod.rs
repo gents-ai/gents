@@ -513,10 +513,9 @@ mod tests {
                     Err(error) => (
                         None,
                         Some(
-                            if error.downcast_ref::<CaptureStoreReadError>().is_some() {
-                                "store_read"
-                            } else {
-                                "unverified"
+                            match error {
+                                CaptureReadError::Store(_) => "store_read",
+                                CaptureReadError::Unverified(_) => "unverified",
                             }
                             .to_owned(),
                         ),
@@ -707,13 +706,11 @@ mod tests {
             }
             encode_turn(&entries)
         };
-        let outcome_of = |decoded: Result<Value>| -> String {
+        let outcome_of = |decoded: std::result::Result<Value, CaptureReadError>| -> String {
             match decoded {
                 Ok(value) if value == body => "verbatim".into(),
                 Ok(_) => "altered".into(),
-                Err(error) if error.downcast_ref::<CaptureStoreReadError>().is_some() => {
-                    "store_failure".into()
-                }
+                Err(CaptureReadError::Store(_)) => "store_failure".into(),
                 Err(error)
                     if error
                         .to_string()
@@ -869,6 +866,26 @@ pub fn decode_inline_capture_json(capture_version: u32, stored: &str) -> Result<
 #[error("reading a rendered-request capture dependency from the store: {0:#}")]
 pub struct CaptureStoreReadError(pub anyhow::Error);
 
+#[derive(Debug, thiserror::Error)]
+pub enum CaptureReadError {
+    #[error(transparent)]
+    Store(#[from] CaptureStoreReadError),
+    #[error(transparent)]
+    Unverified(#[from] anyhow::Error),
+}
+
+impl CaptureReadError {
+    /// `?` into `anyhow::Error` would keep this enum as the root, and its
+    /// transparent variants hide the wrapped error from a downcast and from
+    /// `source()`; this returns the wrapped error itself.
+    pub fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::Store(error) => anyhow::Error::new(error),
+            Self::Unverified(error) => error,
+        }
+    }
+}
+
 #[async_trait::async_trait]
 pub trait CaptureBaseReader {
     async fn execute_capture_query(&self, query: &str) -> Result<Value>;
@@ -926,7 +943,9 @@ where
     let encoding::DecodedRecord::Tree(tree) = encoding::decode_record(stored)? else {
         anyhow::bail!("shared JSON is not a pinned manifest tree");
     };
-    read_manifest_tree(reader, &tree, &mut cache.blocks).await?;
+    read_manifest_tree(reader, &tree, &mut cache.blocks)
+        .await
+        .map_err(CaptureReadError::into_anyhow)?;
     let value = encoding::resolve_tree(tree, |entry| {
         let block = cache
             .blocks
@@ -947,7 +966,7 @@ pub async fn decode_capture_json_from_cached<R>(
     stored: &str,
     kind: CapturePayloadKind,
     cache: &mut CaptureReadCache,
-) -> Result<Value>
+) -> std::result::Result<Value, CaptureReadError>
 where
     R: CaptureBaseReader + Sync,
 {
@@ -978,7 +997,7 @@ where
                     let response = reader
                         .execute_capture_query(&query)
                         .await
-                        .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?;
+                        .map_err(CaptureStoreReadError)?;
                     let rows = response
                         .get("data")
                         .and_then(|data| data.get("RenderedRequest"))
@@ -987,10 +1006,13 @@ where
                             "reading witnessed rendered-request base returned an unexpected shape",
                         )?;
                     let [row] = rows.as_slice() else {
-                        anyhow::bail!("rendered-request delta base did not resolve uniquely");
+                        return Err(anyhow::anyhow!(
+                            "rendered-request delta base did not resolve uniquely"
+                        )
+                        .into());
                     };
                     let actual = commits::select_field_commit(&response, "request_json")
-                        .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?
+                        .map_err(CaptureStoreReadError)?
                         .context("rendered-request delta base lacks field commit")?
                         .cid;
                     cache
@@ -1008,10 +1030,12 @@ where
                     ("source", base.source.as_str()),
                     ("capture_scope", base.capture_scope.as_str()),
                 ] {
-                    anyhow::ensure!(
-                        row.get(name).and_then(Value::as_str) == Some(expected),
-                        "rendered-request delta base changed {name} scope"
-                    );
+                    if row.get(name).and_then(Value::as_str) != Some(expected) {
+                        return Err(anyhow::anyhow!(
+                            "rendered-request delta base changed {name} scope"
+                        )
+                        .into());
+                    }
                 }
                 let version = row
                     .get("capture_version")
@@ -1023,10 +1047,12 @@ where
                     .and_then(Value::as_str)
                     .context("rendered-request delta base lacks encoded field")?
                     .to_owned();
-                anyhow::ensure!(
-                    encoding::capture_record_depth(version, &encoded, kind)? == base.depth,
-                    "rendered-request delta base depth witness is inconsistent"
-                );
+                if encoding::capture_record_depth(version, &encoded, kind)? != base.depth {
+                    return Err(anyhow::anyhow!(
+                        "rendered-request delta base depth witness is inconsistent"
+                    )
+                    .into());
+                }
                 bases.insert(
                     (base.doc_id.clone(), base.field_commit_cid.clone()),
                     (version, encoded.clone(), actual.clone()),
@@ -1036,7 +1062,7 @@ where
             }
         }
     }
-    encoding::resolve_capture_with(
+    Ok(encoding::resolve_capture_with(
         capture_version,
         stored,
         kind,
@@ -1057,14 +1083,14 @@ where
             );
             Ok((block.bytes.clone(), block.field_commit_cid.clone()))
         },
-    )
+    )?)
 }
 
 async fn read_manifest_tree<R>(
     reader: &R,
     tree: &encoding::ManifestTree,
     cache: &mut std::collections::BTreeMap<String, CachedCaptureBlock>,
-) -> Result<()>
+) -> std::result::Result<(), CaptureReadError>
 where
     R: CaptureBaseReader + Sync,
 {
@@ -1076,7 +1102,7 @@ pub async fn manifest_tree_leaves<R>(
     reader: &R,
     tree: &encoding::ManifestTree,
     cache: &mut std::collections::BTreeMap<String, CachedCaptureBlock>,
-) -> Result<Vec<encoding::ManifestEntry>>
+) -> std::result::Result<Vec<encoding::ManifestEntry>, CaptureReadError>
 where
     R: CaptureBaseReader + Sync,
 {
@@ -1084,18 +1110,16 @@ where
     let mut entries = vec![tree.root.clone()];
     let mut remaining = encoding::TREE_RESOLUTION_FUEL;
     for _ in 0..tree.height {
-        anyhow::ensure!(
-            entries.len() <= remaining,
-            "capture manifest exhausted resolution fuel"
-        );
+        if entries.len() > remaining {
+            return Err(anyhow::anyhow!("capture manifest exhausted resolution fuel").into());
+        }
         remaining -= entries.len();
         read_manifest_blocks(reader, &entries, cache).await?;
         entries = manifest_children_cached(&entries, cache)?;
     }
-    anyhow::ensure!(
-        entries.len() == tree.leaves && entries.len() <= remaining,
-        "capture manifest leaf count mismatch"
-    );
+    if entries.len() != tree.leaves || entries.len() > remaining {
+        return Err(anyhow::anyhow!("capture manifest leaf count mismatch").into());
+    }
     Ok(entries)
 }
 
@@ -1122,16 +1146,18 @@ async fn read_manifest_blocks<R>(
     reader: &R,
     entries: &[encoding::ManifestEntry],
     cache: &mut std::collections::BTreeMap<String, CachedCaptureBlock>,
-) -> Result<()>
+) -> std::result::Result<(), CaptureReadError>
 where
     R: CaptureBaseReader + Sync,
 {
-    anyhow::ensure!(
-        entries.len() <= encoding::MAX_MANIFEST_BLOCKS,
-        "capture manifest names {} blocks, above the {} the reader resolves",
-        entries.len(),
-        encoding::MAX_MANIFEST_BLOCKS
-    );
+    if entries.len() > encoding::MAX_MANIFEST_BLOCKS {
+        return Err(anyhow::anyhow!(
+            "capture manifest names {} blocks, above the {} the reader resolves",
+            entries.len(),
+            encoding::MAX_MANIFEST_BLOCKS
+        )
+        .into());
+    }
     let mut unread = std::collections::BTreeMap::new();
     for entry in entries {
         if !cache.contains_key(&entry.doc_id) {
@@ -1159,7 +1185,7 @@ where
     let response = reader
         .execute_capture_query(&query)
         .await
-        .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?;
+        .map_err(CaptureStoreReadError)?;
     let rows = response
         .get("data")
         .and_then(|data| data.get("RenderedRequestBlock"))
@@ -1179,18 +1205,22 @@ where
             .and_then(Value::as_str)
             .context("capture manifest block row lacks payload")?;
         if let Some(byte_len) = row.get("byte_len").and_then(Value::as_u64) {
-            anyhow::ensure!(
-                byte_len == entry.byte_len,
-                "capture manifest block {} stores byte_len {byte_len}, manifest pins {}",
-                entry.doc_id,
-                entry.byte_len
-            );
+            if byte_len != entry.byte_len {
+                return Err(anyhow::anyhow!(
+                    "capture manifest block {} stores byte_len {byte_len}, manifest pins {}",
+                    entry.doc_id,
+                    entry.byte_len
+                )
+                .into());
+            }
         }
-        anyhow::ensure!(
-            encoding::block_content_key(payload.as_bytes()) == entry.content_key,
-            "capture manifest block {} stores a payload that does not hash to its content key",
-            entry.doc_id
-        );
+        if encoding::block_content_key(payload.as_bytes()) != entry.content_key {
+            return Err(anyhow::anyhow!(
+                "capture manifest block {} stores a payload that does not hash to its content key",
+                entry.doc_id
+            )
+            .into());
+        }
         found.push((entry, payload.as_bytes().to_vec()));
     }
     let found_doc_ids = found
@@ -1201,7 +1231,7 @@ where
         reader.execute_capture_query(&query).await
     })
     .await
-    .map_err(|error| anyhow::Error::new(CaptureStoreReadError(error)))?;
+    .map_err(CaptureStoreReadError)?;
     for ((entry, bytes), commit) in found.into_iter().zip(witnesses) {
         let commit = commit.with_context(|| {
             format!(
@@ -1304,7 +1334,9 @@ where
     match record {
         encoding::DecodedRecord::Manifest { blocks } => Ok(blocks),
         encoding::DecodedRecord::Tree(tree) => {
-            manifest_tree_leaves(reader, &tree, &mut Default::default()).await
+            manifest_tree_leaves(reader, &tree, &mut Default::default())
+                .await
+                .map_err(CaptureReadError::into_anyhow)
         }
         _ => Ok(Vec::new()),
     }
@@ -1313,23 +1345,23 @@ where
 async fn preload_isolate_verification_failures<R>(
     reader: &R,
     manifests: &[Vec<encoding::ManifestEntry>],
-    error: anyhow::Error,
+    error: CaptureReadError,
     cache: &mut CaptureReadCache,
 ) -> Result<()>
 where
     R: CaptureBaseReader + Sync,
 {
-    if error.downcast_ref::<CaptureStoreReadError>().is_some() {
-        return Err(error);
+    if let CaptureReadError::Store(error) = error {
+        return Err(error.into());
     }
     for entries in manifests {
         if entries.len() > encoding::MAX_MANIFEST_BLOCKS {
             continue;
         }
-        if let Err(error) = read_manifest_blocks(reader, entries, &mut cache.blocks).await {
-            if error.downcast_ref::<CaptureStoreReadError>().is_some() {
-                return Err(error);
-            }
+        if let Err(CaptureReadError::Store(error)) =
+            read_manifest_blocks(reader, entries, &mut cache.blocks).await
+        {
+            return Err(error.into());
         }
     }
     Ok(())
@@ -1340,7 +1372,7 @@ async fn decode_capture_json_from<R>(
     capture_version: u32,
     stored: &str,
     kind: CapturePayloadKind,
-) -> Result<Value>
+) -> std::result::Result<Value, CaptureReadError>
 where
     R: CaptureBaseReader + Sync,
 {
@@ -1374,7 +1406,8 @@ where
                 CapturePayloadKind::RequestBody,
                 &mut cache,
             )
-            .await?,
+            .await
+            .map_err(CaptureReadError::into_anyhow)?,
         )
     } else {
         None
@@ -1388,7 +1421,8 @@ where
                 CapturePayloadKind::ProvenancePayload,
                 &mut cache,
             )
-            .await?,
+            .await
+            .map_err(CaptureReadError::into_anyhow)?,
         )
     } else {
         None
@@ -1426,7 +1460,9 @@ pub async fn decode_capture_json(
     stored: &str,
     kind: CapturePayloadKind,
 ) -> Result<Value> {
-    decode_capture_json_from(access, capture_version, stored, kind).await
+    decode_capture_json_from(access, capture_version, stored, kind)
+        .await
+        .map_err(CaptureReadError::into_anyhow)
 }
 
 pub async fn decode_capture_pair_embedded(
@@ -1443,7 +1479,9 @@ pub async fn decode_capture_json_embedded(
     stored: &str,
     kind: CapturePayloadKind,
 ) -> Result<Value> {
-    decode_capture_json_from(node, capture_version, stored, kind).await
+    decode_capture_json_from(node, capture_version, stored, kind)
+        .await
+        .map_err(CaptureReadError::into_anyhow)
 }
 
 #[cfg(test)]

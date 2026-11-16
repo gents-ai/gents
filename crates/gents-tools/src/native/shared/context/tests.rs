@@ -143,6 +143,7 @@ async fn request_workspace_overlays_resolve_as_the_tool_root_model() {
         };
         let outcome = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
             None,
+            None,
             tokio_util::sync::CancellationToken::new(),
             crate::runtime_context::ToolWorkspaceScope {
                 workspace_cwd: input.cwd.as_ref().map(|cwd| at(cwd)),

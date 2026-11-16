@@ -5,9 +5,13 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 async fn call(tool: &P2pTool, value: Value) -> Value {
-    let output = Tool::call(tool, serde_json::from_value(value).unwrap())
-        .await
-        .unwrap();
+    let output = Tool::call(
+        tool,
+        serde_json::from_value(value).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .unwrap();
     serde_json::from_str(&output).unwrap()
 }
 
@@ -45,7 +49,8 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
     );
     assert!(Tool::call(
         &server_readonly,
-        serde_json::from_value(json!({"action":"enrollment_offer"})).unwrap()
+        serde_json::from_value(json!({"action":"enrollment_offer"})).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap_err()
@@ -54,7 +59,8 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
     assert!(Tool::call(
         &server_readonly,
         serde_json::from_value(json!({"action":"enrollment_renewal_policy", "auto_renew":true}))
-            .unwrap()
+            .unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap_err()
@@ -81,13 +87,15 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
         None,
         false,
     );
-    assert!(
-        Tool::call(&readonly, serde_json::from_value(request.clone()).unwrap())
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("mutations are disabled")
-    );
+    assert!(Tool::call(
+        &readonly,
+        serde_json::from_value(request.clone()).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient()
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("mutations are disabled"));
     let requested = call(&candidate_tool, request.clone()).await;
     let request_id = requested["outcome"]["request_id"]
         .as_str()
@@ -121,6 +129,7 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
                 "action": "enrollment_approve", "request_id": request_id, "lease_seconds": invalid
             }))
             .unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .unwrap_err()
@@ -129,10 +138,14 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
     }
     let mut approve = approve;
     approve["lease_seconds"] = json!(7_776_000);
-    let refused = Tool::call(&server_tool, serde_json::from_value(approve).unwrap())
-        .await
-        .unwrap_err()
-        .to_string();
+    let refused = Tool::call(
+        &server_tool,
+        serde_json::from_value(approve).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
     assert!(refused.contains("no Agent identity"), "{refused}");
     gents_p2p::p2p_reconcile::GraphqlEnrollmentStore::new(
         server.node.clone(),
@@ -173,6 +186,7 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
         serde_json::from_value(json!({"action":"pairings_preview","peer_id":candidate_peer,
             "peer_did":candidate.node_identity.did(),"collections":["DeploymentNote"]}))
         .unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap_err()
@@ -219,7 +233,13 @@ async fn p2p_administration_admits_as_the_lean_model() {
             "network_get" => json!({"argv":["network","get"],"options":{"peer_id":peer}}),
             other => panic!("unknown command {other}"),
         };
-        let outcome = match Tool::call(&tool, serde_json::from_value(arguments).unwrap()).await {
+        let outcome = match Tool::call(
+            &tool,
+            serde_json::from_value(arguments).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        {
             Ok(_) => "answered",
             Err(error) => {
                 let text = error.to_string();
@@ -247,17 +267,25 @@ async fn help_scopes_pairing_to_explicit_application_opt_in() {
     let db = gents_session::test_support::test_p2p_db("engineer-p2p-discovery").await;
     let tool = P2pTool::new(db.node.clone(), Some(db.node_identity.clone()), None, false);
     for argv in [json!(["help", "sync"]), json!(["help", "documents"])] {
-        let error = Tool::call(&tool, serde_json::from_value(json!({"argv":argv})).unwrap())
-            .await
-            .unwrap_err()
-            .to_string();
+        let error = Tool::call(
+            &tool,
+            serde_json::from_value(json!({"argv":argv})).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("\"topic\":\"scope\""), "{error}");
     }
     for argv in [json!(["replicators", "list"]), json!(["sync", "documents"])] {
-        let unknown = Tool::call(&tool, serde_json::from_value(json!({"argv":argv})).unwrap())
-            .await
-            .unwrap_err()
-            .to_string();
+        let unknown = Tool::call(
+            &tool,
+            serde_json::from_value(json!({"argv":argv})).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(
             unknown.contains("next call: p2p {\"action\":\"help\"}"),
             "{unknown}"
@@ -346,10 +374,14 @@ async fn typed_actions_are_the_closed_schema_and_argv_remains_accepted() {
             "request_id must be a nonempty string",
         ),
     ] {
-        let error = Tool::call(&tool, serde_json::from_value(args.clone()).unwrap())
-            .await
-            .unwrap_err()
-            .to_string();
+        let error = Tool::call(
+            &tool,
+            serde_json::from_value(args.clone()).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
         assert!(error.contains(expected), "{args}: {error}");
         assert!(
             error.contains("next call: p2p {\"action\":\"help\""),
@@ -398,6 +430,7 @@ async fn deny_is_signed_and_a_shared_offer_names_the_single_use_rule() {
                 json!({"action":"enrollment_offer","valid_for_secs":valid_for_secs}),
             )
             .unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .unwrap_err()
@@ -461,6 +494,7 @@ async fn deny_is_signed_and_a_shared_offer_names_the_single_use_rule() {
             &server_tool,
             serde_json::from_value(json!({"action":"enrollment_approve","request_id":ids[1]}))
                 .unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .unwrap_err()

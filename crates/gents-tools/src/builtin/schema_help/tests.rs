@@ -89,7 +89,13 @@ fn argument_recovery_does_not_choose_between_conflicting_sdl_inputs() {
 }
 
 async fn call(tool: &SchemaTool, value: Value) -> Value {
-    serde_json::from_str(&tool.call(args(value)).await.unwrap()).unwrap()
+    serde_json::from_str(
+        &tool
+            .call(args(value), &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .unwrap(),
+    )
+    .unwrap()
 }
 async fn apply(tool: &SchemaTool, mut value: Value) -> Value {
     value["argv"]
@@ -214,7 +220,12 @@ async fn contracts_runtime_schema_publication_matches_lean() {
         .await
         .unwrap();
         let mut intent = json!({"argv":["collection","preview","create"],"options":{"sdl":"type Probe { value: String }"}});
-        let preview = tool.call(args(intent.clone())).await;
+        let preview = tool
+            .call(
+                args(intent.clone()),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await;
         intent["argv"].as_array_mut().unwrap().remove(1);
         intent["options"]["digest"] = if artifact {
             preview
@@ -227,7 +238,9 @@ async fn contracts_runtime_schema_publication_matches_lean() {
             json!("wrong")
         };
         let accepted = if surface.tool_names().contains(&SCHEMA_TOOL_NAME.to_owned()) {
-            tool.call(args(intent)).await.is_ok()
+            tool.call(args(intent), &gents_loop::tool::ToolCallEnvelope::ambient())
+                .await
+                .is_ok()
         } else {
             false
         };
@@ -298,9 +311,12 @@ async fn schema_publication_uses_agent_native_authority() {
         )
         .unwrap();
         assert!(
-            tool.call(args(json!({"argv":["collection","list"]})))
-                .await
-                .is_err(),
+            tool.call(
+                args(json!({"argv":["collection","list"]})),
+                &gents_loop::tool::ToolCallEnvelope::ambient()
+            )
+            .await
+            .is_err(),
             "collection discovery must honor the agent's native node permission"
         );
         let admin =
@@ -343,7 +359,12 @@ async fn schema_publication_uses_agent_native_authority() {
             .await
             .unwrap();
         let mut intent = json!({"argv":["collection","preview","create"],"options":{"sdl":"type AgentSchemaProbe { value: String }"}});
-        let preview = tool.call(args(intent.clone())).await;
+        let preview = tool
+            .call(
+                args(intent.clone()),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await;
         intent["argv"].as_array_mut().unwrap().remove(1);
         intent["options"]["digest"] = if case.input.artifact {
             preview
@@ -356,7 +377,9 @@ async fn schema_publication_uses_agent_native_authority() {
             json!("wrong")
         };
         let accepted = if surface.tool_names().contains(&SCHEMA_TOOL_NAME.to_owned()) {
-            tool.call(args(intent)).await.is_ok()
+            tool.call(args(intent), &gents_loop::tool::ToolCallEnvelope::ambient())
+                .await
+                .is_ok()
         } else {
             false
         };
@@ -543,7 +566,10 @@ async fn additive_recovery_preserves_documents_and_rejects_stale_preview() {
     let applied = call(&tool, preview["next_call"]["args"].clone()).await;
     assert_eq!(applied["committed"], true);
     assert!(tool
-        .call(args(preview["next_call"]["args"].clone()))
+        .call(
+            args(preview["next_call"]["args"].clone()),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
         .await
         .unwrap_err()
         .to_string()
@@ -600,7 +626,10 @@ async fn schema_recovery_help_and_grant_are_independent_of_config() {
         vec!["help", "indexes", "vector", "hnsw"],
     ] {
         assert!(!tool
-            .call(args(json!({"argv":path})))
+            .call(
+                args(json!({"argv":path})),
+                &gents_loop::tool::ToolCallEnvelope::ambient()
+            )
             .await
             .unwrap()
             .is_empty());
@@ -609,10 +638,16 @@ async fn schema_recovery_help_and_grant_are_independent_of_config() {
         json!({"argv":["collection","preview","create"],"options":{"sdl":"type Bad { value: Bool }"}}),
         json!({"argv":["collection","get"],"target_id":"Missing"}),
     ] {
-        let error = tool.call(args(intent)).await.unwrap_err();
+        let error = tool
+            .call(args(intent), &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .unwrap_err();
         let body: Value = serde_json::from_str(&error.to_string()).unwrap();
         assert!(tool
-            .call(args(body["recovery"]["args"].clone()))
+            .call(
+                args(body["recovery"]["args"].clone()),
+                &gents_loop::tool::ToolCallEnvelope::ambient()
+            )
             .await
             .is_ok());
     }
@@ -636,7 +671,7 @@ async fn schema_recovery_help_and_grant_are_independent_of_config() {
     .await
     .unwrap();
     assert!(!surface.tool_names().contains(&SCHEMA_TOOL_NAME.to_owned()));
-    let error=tool.call(args(json!({"argv":["collection","preview","update"],"target_id":"Tools","options":{"patch":[{"op":"add","path":"/Tools/Fields/-","value":{"Name":"bad","Kind":"String"}}]}}))).await.unwrap_err();
+    let error=tool.call(args(json!({"argv":["collection","preview","update"],"target_id":"Tools","options":{"patch":[{"op":"add","path":"/Tools/Fields/-","value":{"Name":"bad","Kind":"String"}}]}})), &gents_loop::tool::ToolCallEnvelope::ambient()).await.unwrap_err();
     assert!(error.to_string().contains("Gents-managed"));
 }
 
@@ -720,9 +755,10 @@ async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
         defra_node::LensModule::from_path("/tmp/forbidden.wasm"),
     );
     assert!(tool
-        .call(args(
-            json!({"argv":["migration","preview","set"],"options":{"config":path_lens}})
-        ))
+        .call(
+            args(json!({"argv":["migration","preview","set"],"options":{"config":path_lens}})),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
         .await
         .unwrap_err()
         .to_string()
@@ -750,7 +786,7 @@ async fn batch_retains_prior_commit_and_does_not_attempt_later_calls() {
     let access = ConfigAccess::local(node);
     let first=call(&tool,json!({"argv":["collection","preview","create"],"options":{"sdl":"type BatchFirst { title: String }"}})).await;
     let last=call(&tool,json!({"argv":["collection","preview","create"],"options":{"sdl":"type BatchLast { title: String }"}})).await;
-    let result=tool.call(args(json!({"argv":["batch"],"options":{"operations":[first["next_call"]["args"],{"argv":["collection","get"],"target_id":"Missing"},last["next_call"]["args"]]}}))).await.unwrap_err();
+    let result=tool.call(args(json!({"argv":["batch"],"options":{"operations":[first["next_call"]["args"],{"argv":["collection","get"],"target_id":"Missing"},last["next_call"]["args"]]}})), &gents_loop::tool::ToolCallEnvelope::ambient()).await.unwrap_err();
     let failure: Value = serde_json::from_str(&result.to_string()).unwrap();
     assert_eq!(failure["unattempted"], 1);
     assert_eq!(failure["results"][0]["ok"], true);
@@ -785,11 +821,17 @@ async fn malformed_schema_previews_return_executable_help_without_publication() 
         json!({"argv":["collection","preview","update"],"target_id":"Shape","options":{"patch":[{"op":"add","path":"/Shape/Fields/-"}]}}),
         json!({"argv":["unknown","create"]}),
     ] {
-        let error = tool.call(args(value)).await.unwrap_err();
-        let error: Value = serde_json::from_str(&error.0).unwrap();
-        tool.call(args(error["recovery"]["args"].clone()))
+        let error = tool
+            .call(args(value), &gents_loop::tool::ToolCallEnvelope::ambient())
             .await
-            .unwrap();
+            .unwrap_err();
+        let error: Value = serde_json::from_str(&error.0).unwrap();
+        tool.call(
+            args(error["recovery"]["args"].clone()),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap();
     }
     assert_eq!(
         before,
@@ -807,24 +849,42 @@ async fn config_shaped_schema_calls_preview_then_apply_without_rewriting_the_rec
     let tool = SchemaTool::new(node.clone());
     let access = ConfigAccess::local(node);
     let help = tool
-        .call(args(json!({"argv":["collection","create","--help"]})))
+        .call(
+            args(json!({"argv":["collection","create","--help"]})),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert_eq!(
         help,
-        tool.call(args(json!({"argv":["help","collection","create"]})))
-            .await
-            .unwrap()
+        tool.call(
+            args(json!({"argv":["help","collection","create"]})),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await
+        .unwrap()
     );
     let request = json!({"argv":["collection","create"],"options":{"sdl":"type CallShape { value: String }"}});
-    let error: Value =
-        serde_json::from_str(&tool.call(args(request)).await.unwrap_err().0).unwrap();
+    let error: Value = serde_json::from_str(
+        &tool
+            .call(
+                args(request),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap_err()
+            .0,
+    )
+    .unwrap();
     assert_eq!(
         error["recovery"]["args"]["argv"],
         json!(["collection", "preview", "create"])
     );
     let text = tool
-        .call(args(error["recovery"]["args"].clone()))
+        .call(
+            args(error["recovery"]["args"].clone()),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert!(text.find("\"effect\"").unwrap() < text.find("\"next_call\"").unwrap());
@@ -845,9 +905,10 @@ async fn config_shaped_schema_calls_preview_then_apply_without_rewriting_the_rec
     .await;
     assert_eq!(positional, named);
     assert!(tool
-        .call(args(
-            json!({"argv":["collection","get","CallShape"],"target_id":"Other"})
-        ))
+        .call(
+            args(json!({"argv":["collection","get","CallShape"],"target_id":"Other"})),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
         .await
         .unwrap_err()
         .0
@@ -860,8 +921,17 @@ async fn misplaced_preview_returns_the_corrected_call_without_publishing() {
     let node = db.node.clone();
     let tool = SchemaTool::new(node.clone());
     let request = json!({"argv":["collection","create"],"options":{"preview":true,"sdl":"type RecoveryShape { value: String }"}});
-    let error: Value =
-        serde_json::from_str(&tool.call(args(request)).await.unwrap_err().0).unwrap();
+    let error: Value = serde_json::from_str(
+        &tool
+            .call(
+                args(request),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap_err()
+            .0,
+    )
+    .unwrap();
     assert_eq!(
         error["recovery"]["args"]["argv"],
         json!(["collection", "preview", "create"])
@@ -893,7 +963,13 @@ async fn schema_argument_recovery_preserves_intent_without_publishing() {
         json!({"argv":["collection","create","SyntaxProbe"],"options":{"schema":sdl}}),
         json!({"argv":["collection","create"],"target_id":"SyntaxProbe","options":{"sdl":sdl,"digest":"old"}}),
     ] {
-        let error = tool.call(args(request)).await.unwrap_err();
+        let error = tool
+            .call(
+                args(request),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap_err();
         let error: Value = serde_json::from_str(&error.to_string()).unwrap();
         let next = &error["recovery"]["args"];
         assert_eq!(next["argv"], json!(["collection", "preview", "create"]));
@@ -915,12 +991,13 @@ async fn schema_help_with_command_context_does_not_mutate() {
     let db = node().await;
     let node = db.node.clone();
     let tool = SchemaTool::new(node.clone());
-    let help = tool.call(args(json!({"argv":["collection","update","--help"],"target_id":"Absent","options":{"patch":[{"op":"remove","path":"/Absent/Fields/0"}]}}))).await.unwrap();
+    let help = tool.call(args(json!({"argv":["collection","update","--help"],"target_id":"Absent","options":{"patch":[{"op":"remove","path":"/Absent/Fields/0"}]}})), &gents_loop::tool::ToolCallEnvelope::ambient()).await.unwrap();
     assert!(help.starts_with("collection preview update"));
     let error = tool
-        .call(args(
-            json!({"argv":["help","indexes","vector","imaginary"]}),
-        ))
+        .call(
+            args(json!({"argv":["help","indexes","vector","imaginary"]})),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap_err();
     let error: Value = serde_json::from_str(&error.to_string()).unwrap();
@@ -928,9 +1005,12 @@ async fn schema_help_with_command_context_does_not_mutate() {
         error["recovery"]["args"]["argv"],
         json!(["help", "indexes", "vector"])
     );
-    tool.call(args(error["recovery"]["args"].clone()))
-        .await
-        .unwrap();
+    tool.call(
+        args(error["recovery"]["args"].clone()),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .unwrap();
     assert!(ConfigAccess::local(node)
         .collection_version("Absent")
         .await
@@ -954,15 +1034,19 @@ async fn invalid_sdl_points_to_its_concept_without_rewriting_it() {
         ),
     ] {
         let error = tool
-            .call(args(
-                json!({"argv":["collection","preview","create"],"options":{"sdl":sdl}}),
-            ))
+            .call(
+                args(json!({"argv":["collection","preview","create"],"options":{"sdl":sdl}})),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap_err();
         let error: Value = serde_json::from_str(&error.to_string()).unwrap();
         assert_eq!(error["recovery"]["args"]["argv"], json!(expected));
         let page = tool
-            .call(args(error["recovery"]["args"].clone()))
+            .call(
+                args(error["recovery"]["args"].clone()),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap();
         assert!(page.contains("```graphql"));
@@ -977,7 +1061,14 @@ async fn invalid_sdl_points_to_its_concept_without_rewriting_it() {
 }
 
 async fn refusal(tool: &SchemaTool, value: Value) -> Value {
-    serde_json::from_str(&tool.call(args(value)).await.unwrap_err().0).unwrap()
+    serde_json::from_str(
+        &tool
+            .call(args(value), &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .unwrap_err()
+            .0,
+    )
+    .unwrap()
 }
 
 async fn scratch_rows(node: &Arc<EmbeddedNode>) -> usize {
@@ -1038,7 +1129,10 @@ async fn collection_cleanup_empties_removes_and_frees_the_name() {
 
     seed_scratch(&node, "three").await;
     assert!(tool
-        .call(args(preview["next_call"]["args"].clone()))
+        .call(
+            args(preview["next_call"]["args"].clone()),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
         .await
         .unwrap_err()
         .to_string()
