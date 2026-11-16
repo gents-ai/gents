@@ -212,14 +212,11 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
                 let (node_did, agent_did, now) =
                     (node_did.as_str(), agent_did.as_str(), now.as_str());
                 Box::pin(async move {
-                    crate::session::ensure_session_in_txn(
+                    crate::test_support::stage_agent_owned_session_in_txn(
                         txn,
-                        "generated-owned-steering-session",
                         node_did,
-                        agent_did,
+                        "generated-owned-steering-session",
                         Some(agent_did),
-                        None,
-                        None,
                         now,
                     )
                     .await?;

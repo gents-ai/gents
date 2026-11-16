@@ -402,19 +402,20 @@ pub(crate) async fn ensure_managed_fixture_session(
         agent.as_ref(),
     )
     .unwrap();
-    let agent_did = gents_store::graphql::escape_graphql_string(agent.did());
-    let node_did = gents_store::graphql::escape_graphql_string(root.did());
     let requester_did = if requester_did == Some(root.did()) {
         Some(agent.did())
     } else {
         requester_did
     };
-    let requester = requester_did.map_or_else(
-        || "null".to_owned(),
-        |did| format!("\"{}\"", gents_store::graphql::escape_graphql_string(did)),
-    );
-    let created = gents_store::graphql::escape_graphql_string(created_at);
-    access.write("fixture.create_managed_session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{node_did}", requester_did: {requester}, agent_did: "{agent_did}", created_at: "{created}" }}) {{ _docID }} }}"#)).await.expect("create managed fixture session");
+    gents_session::test_support::create_agent_owned_session_at(
+        &access,
+        root.did(),
+        session_id,
+        requester_did,
+        created_at,
+    )
+    .await;
+
     agent
 }
 

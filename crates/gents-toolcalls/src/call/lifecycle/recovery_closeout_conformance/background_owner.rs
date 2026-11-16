@@ -420,19 +420,15 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     );
 
     let other_session = format!("unrelated-{}", uuid::Uuid::new_v4());
-    let other_agent = tool.actor().as_ref().to_owned();
     tool.access()
         .unwrap()
         .transact_write("fixture.session.create_unrelated", |txn| {
-            let (other_session, node_did, other_agent) = (&other_session, &node_did, &other_agent);
+            let (other_session, node_did) = (&other_session, &node_did);
             Box::pin(async move {
-                gents_session::session::ensure_session_in_txn(
+                gents_session::test_support::stage_agent_owned_session_in_txn(
                     txn,
-                    other_session,
                     node_did,
-                    other_agent,
-                    None,
-                    None,
+                    other_session,
                     None,
                     &chrono::Utc::now().to_rfc3339(),
                 )
