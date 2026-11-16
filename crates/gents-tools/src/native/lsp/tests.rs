@@ -2513,12 +2513,10 @@ fn requested_result_limit_applies_to_diagnostics_symbols_and_references() {
 #[cfg(unix)]
 #[tokio::test]
 async fn linter_fallback_obeys_its_total_deadline() {
-    use std::os::unix::fs::PermissionsExt;
-
     let workspace = tempfile::tempdir().unwrap();
     let host = tempfile::tempdir().unwrap();
     let linter_path = host.path().join("hung-biome");
-    std::fs::write(
+    gents_store::test_support::write_executable_script(
         &linter_path,
         r#"#!/bin/sh
 : > "$0.started"
@@ -2526,9 +2524,6 @@ exec sleep 30
 "#,
     )
     .unwrap();
-    let mut permissions = std::fs::metadata(&linter_path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&linter_path, permissions).unwrap();
     let source = workspace.path().join("source.js");
     std::fs::write(&source, "const x = 1;\n").unwrap();
     std::fs::write(workspace.path().join("package.json"), "{}").unwrap();
