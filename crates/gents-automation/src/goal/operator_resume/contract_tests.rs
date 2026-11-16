@@ -339,6 +339,15 @@ async fn overlapping_resume_and_native_goal_write_conflict_atomically() {
                 .count(),
             usize::from(resume_first)
         );
+        let visible = request_rows(&f.user_access()).await;
+        assert_eq!(
+            visible
+                .iter()
+                .filter(|row| row.request_id == receipt.request_id)
+                .count(),
+            usize::from(resume_first),
+            "the session's user observes exactly the committed continuation",
+        );
         f.node.shutdown().await.expect("node shutdown");
     }
 }

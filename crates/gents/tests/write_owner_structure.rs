@@ -3212,3 +3212,91 @@ fn integration_test_layout_flags_extra_and_uncompiled_targets() {
         ["member/tests/stray.rs", "member/tests/suite/main.rs"]
     );
 }
+
+#[derive(Default)]
+struct RuntimeRequestWriteSites(Vec<String>);
+
+impl<'ast> Visit<'ast> for RuntimeRequestWriteSites {
+    fn visit_item_mod(&mut self, item: &'ast ItemMod) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_item_mod(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_item_fn(self, item);
+        }
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_item_impl(self, item);
+        }
+    }
+
+    fn visit_lit_str(&mut self, literal: &'ast syn::LitStr) {
+        if literal
+            .value()
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>()
+            .contains("create_AgentRequest(")
+        {
+            self.0.push("raw AgentRequest create".to_owned());
+        }
+    }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        let tokens = syn::buffer::TokenBuffer::new2(invocation.tokens.clone());
+        let mut strings = String::new();
+        macro_strings(tokens.begin(), &mut strings);
+        if strings
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect::<String>()
+            .contains("create_AgentRequest(")
+        {
+            self.0.push("raw AgentRequest create in macro".to_owned());
+        }
+        visit::visit_macro(self, invocation);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
+        if matches!(
+            call.method.to_string().as_str(),
+            "graphql_mutation" | "graphql_mutation_selecting"
+        ) {
+            self.0
+                .push("unowned AgentRequest mutation builder".to_owned());
+        }
+        visit::visit_expr_method_call(self, call);
+    }
+}
+
+#[test]
+fn runtime_requests_have_one_publication_owner() {
+    let root = repo_root();
+    let mut violations = Vec::new();
+    for (path, syntax) in parse_production(&root, production_sources(&root)) {
+        if path == "crates/gents-session/src/request/lifecycle/client.rs" {
+            continue;
+        }
+        if !path.starts_with("crates/gents-session/src/request/lifecycle/")
+            && !path.starts_with("crates/gents-automation/src/")
+            && !path.starts_with("crates/gents/src/runtime/")
+        {
+            continue;
+        }
+        let mut sites = RuntimeRequestWriteSites::default();
+        sites.visit_file(&syntax);
+        violations.extend(sites.0.into_iter().map(|site| format!("{path}: {site}")));
+    }
+    assert!(
+        violations.is_empty(),
+        "runtime requests bypass their publication owner: {violations:?}"
+    );
+    let mut probe = RuntimeRequestWriteSites::default();
+    probe.visit_file(&syn::parse_file(r#"async fn bare(txn: &Txn) { txn.execute("mutation { create_AgentRequest(input: $input) { _docID } }").await; }"#).unwrap());
+    assert!(!probe.0.is_empty(), "a new bare create must fail the guard");
+}

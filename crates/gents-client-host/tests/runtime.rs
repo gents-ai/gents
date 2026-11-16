@@ -220,7 +220,6 @@ async fn managed_runtime_replacement_preserves_running_input_enrollment_and_tran
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "drives a local model; run through `make live-client`"]
 async fn enrolled_client_resumes_a_durable_goal_and_observes_completion() -> Result<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::Goal)
@@ -470,9 +469,6 @@ async fn installed_editor_refreshes_models_and_reconnects_without_the_runtime_ke
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if matches!(journey, Journey::Conversation) {
         return live_runtime::exercise(root, false).await;
-    }
-    if matches!(journey, Journey::Goal) {
-        return live_runtime::exercise(root, true).await;
     }
     if matches!(journey, Journey::RuntimeReplacement) {
         return live_runtime::exercise_replacement(root).await;

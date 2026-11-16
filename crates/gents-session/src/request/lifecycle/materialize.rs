@@ -68,39 +68,6 @@ fn validate_trigger_provenance(
     Ok(())
 }
 
-pub async fn resolve_created_agent_request_doc_id(
-    access: &gents_store::config_client::ConfigAccess,
-    mutation_response: &defra_node::QueryResponse,
-    mutation_field: &str,
-    escaped_request_id: &str,
-    lookup_error: &str,
-    missing_doc_id_error: &str,
-) -> Result<String> {
-    if let Some(doc_id) = extract_single_doc_id(mutation_response, mutation_field) {
-        return Ok(doc_id);
-    }
-
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 2) {{ _docID request_id }} }}"#
-    );
-    let query_resp = access
-        .execute(&query)
-        .await
-        .context(lookup_error.to_owned())?;
-    let rows: Vec<gents_protocol::row::AgentRequestRow> =
-        serde_json::from_value(query_resp["data"]["AgentRequest"].clone())?;
-    if rows.len() != 1 {
-        anyhow::bail!(
-            "{missing_doc_id_error}: request_id lookup returned {} documents",
-            rows.len()
-        );
-    }
-    rows.first()
-        .and_then(|row| row.doc_id.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("{missing_doc_id_error}"))
-        .map(str::to_string)
-}
-
 #[allow(clippy::too_many_arguments)]
 pub async fn write_pending_agent_request_with_lineage_workspace_and_conversation_title(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -186,30 +153,16 @@ pub async fn write_pending_agent_request_with_identity(
     )?;
     let create = build_signed_request(spec, RequestSigner::Identity(identity)).await?;
     refuse_retired_reserved_cause(&create)?;
-    let escaped_request_id = escape_graphql_string(&request_id);
-    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-    let mutation = &mutation;
-
-    let (node_did_ref, request_id_ref) = (node_did, request_id.as_str());
-    let response = access
+    let doc_id = access
         .transact_write("lifecycle.materialize_pending", |txn| {
+            let create = &create;
             Box::pin(async move {
-                let response = txn.execute_local_response(mutation).await?;
-                publish_request_session_in_txn(txn, node_did_ref, request_id_ref).await?;
-                Ok::<_, anyhow::Error>(response)
+                super::runtime_publication::publish(txn, create)
+                    .await
+                    .map_err(anyhow::Error::from)
             })
         })
         .await?;
-
-    let doc_id = resolve_created_agent_request_doc_id(
-        &access,
-        &response,
-        "create_AgentRequest",
-        &escaped_request_id,
-        "querying created pending AgentRequest doc id failed",
-        "pending AgentRequest create returned no _docID",
-    )
-    .await?;
 
     Ok(EnqueuedAgentRequest {
         doc_id,
@@ -570,21 +523,32 @@ pub async fn write_pending_auxiliary_request(
         "auxiliary signer differs from parent Agent"
     );
     let create = build_signed_request(spec, RequestSigner::Identity(signer)).await?;
-    let mutation = create
-        .graphql_mutation_selecting(gents_protocol::row::AGENT_REQUEST_FIELDS)
-        .map_err(anyhow::Error::msg)?;
-    let response = gents_store::config_client::ConfigAccess::local_with_agent_signer(
+    let access = gents_store::config_client::ConfigAccess::local_with_agent_signer(
         node.clone(),
         identity::Did::new(parent.agent_did.clone())?,
         signer.clone(),
-    )?
-    .write("lifecycle.materialize_auxiliary", &mutation)
-    .await?;
-    crate::request::watcher::agent_request_from_mutation_response(
-        &serde_json::from_value(response)?,
-        "create_AgentRequest",
-    )?
-    .context("auxiliary request creation omitted its exact durable request")
+    )?;
+    access
+        .transact_write("lifecycle.materialize_auxiliary", |txn| {
+            let create = &create;
+            Box::pin(async move {
+                let doc = super::runtime_publication::publish(txn, create).await?;
+                let response = txn
+                    .execute(&format!(
+                        "{{ AgentRequest(docIDs: [\"{}\"]) {{ {} }} }}",
+                        escape_graphql_string(&doc),
+                        gents_protocol::row::AGENT_REQUEST_FIELDS,
+                    ))
+                    .await?;
+                let rows: Vec<gents_protocol::row::AgentRequestRow> =
+                    serde_json::from_value(response["data"]["AgentRequest"].clone())?;
+                let [row] = rows.as_slice() else {
+                    anyhow::bail!("auxiliary publication omitted its request")
+                };
+                Ok(AgentRequest::try_from(row.clone())?)
+            })
+        })
+        .await
 }
 
 /// A same-node session message is signed by the operator's own DID, so this
@@ -1139,53 +1103,6 @@ fn task_for_opening<'a>(
     let [fire] = fires else { return None };
     (fire.valid && fire.node == node && fire.session == session && fire.request == request)
         .then_some(fire.task)
-}
-
-/// Publish the session of the request just written in `txn`, owned by the
-/// transaction's Agent, in the request's own transaction (Lean
-/// `RuntimeState.materializedSessionVisible`): the router selects only a
-/// session its Agent can read and waits on an absent one, so a request
-/// published without its session would never be claimed. Returns whether the
-/// session was created.
-pub async fn publish_request_session_in_txn(
-    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    node_did: &str,
-    request_id: &str,
-) -> Result<bool> {
-    let query = {
-        use gents_protocol::document_query::{
-            fields::agent_request as fields, Filter, Query, Selection,
-        };
-        Query::select(Selection::owned(gents_protocol::row::AGENT_REQUEST_FIELDS))
-            .filter(Filter::eq(fields::NODE_DID, node_did))
-            .filter(Filter::eq(fields::REQUEST_ID, request_id))
-            .limit(2)
-            .render()
-    };
-    let response = txn.run(&query).await?;
-    let rows = response
-        .pointer("/data/AgentRequest")
-        .and_then(serde_json::Value::as_array)
-        .context("published request query omitted rows")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "a published request must be uniquely visible to its Agent"
-    );
-    let request = AgentRequest::try_from(serde_json::from_value::<
-        gents_protocol::row::AgentRequestRow,
-    >(rows[0].clone())?)?;
-    let provenance = created_session_provenance_in_txn(txn, &request).await?;
-    session::ensure_session_in_txn(
-        txn,
-        &request.session_id,
-        &request.node_did,
-        &request.agent_did,
-        request.requester_did.as_deref(),
-        request.input.initial_title.clone(),
-        provenance,
-        &request.created_at,
-    )
-    .await
 }
 
 pub async fn created_session_provenance_in_txn(
