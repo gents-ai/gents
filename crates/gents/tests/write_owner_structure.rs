@@ -2135,7 +2135,6 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-lean-contract/src/lib.rs", 2, "CARGO_MANIFEST_DIR and CARGO_MANIFEST_PATH: Cargo-supplied anchor for the Lean contract source in test runs"),
     ("crates/gents-lean-vocab/src/family.rs", 1, "GENTS_FAMILY_MUTATION: mutation-testing switch for conformance families; test seam in production code: move behind a test fixture"),
     ("crates/gents-lean-vocab/src/lib.rs", 1, "GENTS_SNAPSHOT_MUTATION: mutation-testing switch for the Lean snapshot; test seam in production code: move behind a test fixture"),
-    ("crates/gents-p2p/src/p2p_reconcile/registry.rs", 1, "GENTS_NETWORK_ID partitions the P2P registry; changes behaviour and belongs on a serve flag"),
     ("crates/gents-pack/src/operations/pack.rs", 2, "pack variables whose declared source is the operator's environment"),
     ("crates/gents-pack/src/pack/install_flow.rs", 1, "pack variables whose declared source is the operator's environment"),
     ("crates/gents-pack/src/pack/interpolate.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables"),

@@ -652,6 +652,7 @@ async fn serve_foreground(
 
     let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
     let p2p_intervals = resolve_p2p_intervals(&args)?;
+    let p2p_network_id = resolve_p2p_network_id(&args)?;
     if let Some(config) = p2p_config.as_ref() {
         crate::p2p_relay::log_relay_mode_diagnostics(
             args.p2p_relay_mode
@@ -844,6 +845,7 @@ async fn serve_foreground(
                 plugin_home: Some(home_dir.clone()),
                 backend_health: Some(backend_health.clone()),
                 p2p_intervals,
+                p2p_network_id,
                 process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
                 runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
                     configuration_tx,
@@ -1569,6 +1571,19 @@ fn resolve_p2p_intervals(args: &ServeArgs) -> Result<P2pIntervals> {
     ))
 }
 
+fn resolve_p2p_network_id(args: &ServeArgs) -> Result<Option<String>> {
+    match args.p2p_network_id.as_deref() {
+        None => Ok(None),
+        Some(raw) => {
+            let network_id = raw.trim();
+            if network_id.is_empty() {
+                anyhow::bail!("--p2p-network-id must not be blank");
+            }
+            Ok(Some(network_id.to_owned()))
+        }
+    }
+}
+
 fn log_p2p_admission_config(config: &defra_node::P2PConfig) {
     tracing::info!(
         max_pending_dags = config.sync.max_pending_dags,
@@ -1699,6 +1714,19 @@ mod server_key_tests {
         assert!(error
             .to_string()
             .contains("--p2p-pairing-sweep-ms must be > 0"));
+    }
+
+    #[test]
+    fn p2p_network_id_is_trimmed_and_rejects_blank() {
+        assert_eq!(resolve_p2p_network_id(&parse_server(&[])).unwrap(), None);
+        assert_eq!(
+            resolve_p2p_network_id(&parse_server(&["--p2p-network-id", " lab "])).unwrap(),
+            Some("lab".to_owned())
+        );
+        let error = resolve_p2p_network_id(&parse_server(&["--p2p-network-id", "  "])).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("--p2p-network-id must not be blank"));
     }
 
     #[test]
