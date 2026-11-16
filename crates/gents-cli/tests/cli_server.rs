@@ -2735,7 +2735,10 @@ async fn trace_of_a_served_home_reads_only_as_its_user() -> Result<()> {
     let request = ["--request-id", "home-trace-req"];
     // Every CLI caller holds its own User key: the served node admits only its own.
     let foreign = run_cli_failure_stderr(&caller_dir, &[&trace[..], &request[..]].concat())?;
-    assert!(foreign.contains("does not admit this identity"), "{foreign}");
+    assert!(
+        foreign.contains("does not admit this identity"),
+        "{foreign}"
+    );
     assert!(!foreign.contains("gents init"), "{foreign}");
 
     let served_home = home_dir.join(".gents");
