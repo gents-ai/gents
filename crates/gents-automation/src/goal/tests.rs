@@ -816,3 +816,183 @@ async fn goal_and_claim_publication_links_match_lean() {
         );
     }
 }
+
+/// The creator's write of the Goal being marked, landing between the repair's
+/// signed marker and its commit, aborts that commit with DefraDB's own
+/// conflict; the repair re-selects the unlinked row and re-signs
+/// (signed-conflict rebuild), committing the marker and both grants together.
+#[tokio::test]
+async fn signed_relationship_repair_rebuilds_after_a_concurrent_goal_write() {
+    use gents_store::config_client::{ConfigAccess, ConfigApplyTxn, NodePermission};
+    use gents_store::identity::{KeyIdentity, NodeIdentity};
+    use serde_json::json;
+
+    let (db, user, user_access, binding) =
+        crate::test_support::signed_test_node("goal-repair-race").await;
+    let node = db.node.clone();
+    let runtime = db.node_identity.clone();
+    let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let reader = KeyIdentity::load_or_create(home.path().join("reader"), None).unwrap();
+    let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
+    for permission in [
+        NodePermission::DacRelationAdd,
+        NodePermission::DacRelationDelete,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::CollectionGet,
+    ] {
+        admin
+            .grant_node_permission(&identity::Did::new(agent.did()).unwrap(), permission)
+            .await
+            .unwrap();
+    }
+    for permission in [NodePermission::CollectionGet, NodePermission::DocumentRead] {
+        admin
+            .grant_node_permission(&identity::Did::new(reader.did()).unwrap(), permission)
+            .await
+            .unwrap();
+    }
+    let agent_access = ConfigAccess::local_managed_agent(
+        node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let reader_access =
+        ConfigAccess::local_as(node.clone(), identity::Did::new(reader.did()).unwrap());
+    let agent_doc = crate::goal::client_control::agent_document_for_test(
+        &user_access,
+        runtime.did(),
+        agent.did(),
+    )
+    .await;
+    user_access
+        .transact_write("test.goal_repair_race.session", |txn| {
+            let runtime = &runtime;
+            let agent = &agent;
+            let user = &user;
+            Box::pin(async move {
+                gents_session::session::ensure_session_in_txn(
+                    txn,
+                    "repair-session",
+                    runtime.did(),
+                    agent.did(),
+                    Some(user.did()),
+                    None,
+                    None,
+                    "2026-11-04T00:00:00Z",
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        })
+        .await
+        .unwrap();
+    let session_doc = user_access
+        .transact_readonly("test.goal_repair_race.session_document", |txn| {
+            let runtime = &runtime;
+            Box::pin(async move {
+                gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    txn,
+                    runtime.did(),
+                    "repair-session",
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap()
+        .unwrap()
+        .doc_id;
+    gents_session::session::grant_created_session_relationships(
+        &user_access,
+        &session_doc,
+        &agent_doc,
+        agent.did(),
+    )
+    .await
+    .unwrap();
+    user_access
+        .add_actor_relationship(
+            "AgentSession",
+            &session_doc,
+            "reader",
+            &identity::Did::new(reader.did()).unwrap(),
+        )
+        .await
+        .unwrap();
+    let input = json!({"goal_id": "race-goal", "creation_key": "race-claim", "node_did": runtime.did(),
+        "session_id": "repair-session", "session_doc_id": session_doc, "requester_did": user.did(),
+        "agent_did": agent.did(), "creator_did": user.did(), "parent_linked": false,
+        "objective": "Finish work", "created_at": "2026-11-04T00:00:00Z"});
+    let goal_doc = user_access
+        .transact_write("test.goal_repair_race.unlinked", |txn| {
+            let input = &input;
+            Box::pin(async move {
+                let written = txn
+                    .execute_client_signed_create(
+                        "mutation($input: GoalMutationInputArg!) { create_Goal(input: $input) { _docID } }",
+                        &json!({"input": input}),
+                        gents_protocol::schemas::GOAL,
+                    )
+                    .await?;
+                let doc = gents_store::graphql::created_doc_id(&written, "Goal")?;
+                Ok::<_, anyhow::Error>(doc)
+            })
+        })
+        .await
+        .unwrap();
+    let query = format!(
+        r#"{{ Goal(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID parent_linked objective}} }}"#,
+        escape_graphql_string(&goal_doc)
+    );
+
+    let rewrite = async {
+        user_access
+            .transact_write("test.goal_repair_race.rewrite", |txn| {
+                let goal_doc = &goal_doc;
+                Box::pin(async move {
+                    txn.execute_client_signed_update(
+                        "mutation($id: ID!, $input: GoalMutationInputArg!) { update_Goal(filter: { _docID: { _eq: $id } }, input: $input) { _docID } }",
+                        &json!({"id": goal_doc, "input": {"objective": "Finish rewritten work"}}),
+                        gents_protocol::schemas::GOAL,
+                    )
+                    .await
+                })
+            })
+            .await
+            .expect("the creator rewrites the Goal between the repair's mark and commit");
+    };
+    let (repaired, paused) = ConfigApplyTxn::with_concurrent_write_before_commit(
+        crate::goal::creation::finish_goal_relationships(
+            &user_access,
+            runtime.did(),
+            "repair-session",
+        ),
+        rewrite,
+    )
+    .await;
+    assert!(paused, "the repair paused after its signed marker");
+    repaired.unwrap();
+    let rows = user_access.execute(&query).await.unwrap();
+    let rows = rows["data"]["Goal"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["parent_linked"], true);
+    assert_eq!(rows[0]["objective"], "Finish rewritten work");
+    assert!(
+        !reader_access.execute(&query).await.unwrap()["data"]["Goal"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "the session reader sees the Goal through its parent grant"
+    );
+    assert!(
+        !agent_access.execute(&query).await.unwrap()["data"]["Goal"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "the working Agent sees the Goal through its grant"
+    );
+    node.shutdown().await.expect("node shutdown");
+}

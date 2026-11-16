@@ -1,0 +1,4 @@
+---- MODULE MCInterruptLatchContentionSingleAttempt ----
+EXTENDS InterruptLatchContention
+
+====

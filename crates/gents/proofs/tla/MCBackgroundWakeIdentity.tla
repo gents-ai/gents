@@ -1,0 +1,4 @@
+---- MODULE MCBackgroundWakeIdentity ----
+EXTENDS BackgroundWakeIdentity
+
+====
