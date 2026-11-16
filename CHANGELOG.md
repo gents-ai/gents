@@ -11,7 +11,10 @@ source consistency checks, not a separate runtime compatibility version.
   Goal limits for the Goals a Task creates. Every Goal a Task creates pins them,
   including Task messages to an Agent. A Task that sets either without a goal
   objective is rejected. Goals a person starts or the model creates keep the
-  defaults. Goal snapshots report both, and the desktop Tasks panel edits them.
+  defaults. Goal snapshots and the desktop's Goal view report both, and the
+  desktop Tasks panel edits them. A Goal's creation claim records both beside
+  its token budget, so a replayed creation that asks for other limits
+  conflicts, as one with another budget does.
 - InferenceExecution `max_invalid_tool_calls` (positive, default 8) and
   `repeated_tool_failure_limit` (positive, default 3) replace the fixed loop
   guards that end a turn after invalid or repeatedly failing tool calls. The
