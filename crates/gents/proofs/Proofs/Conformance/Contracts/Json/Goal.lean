@@ -398,29 +398,41 @@ def taskGoalPublicationCases : List TaskGoalPublicationCase :=
   let taskId := "feature-implementation"
   let fireKey := "schedule:2026-09-02T12:00:00Z"
   [ { name := "absent_goal_uses_ordinary_publication", nodeDid, taskId, fireKey
-      declaration := ⟨none, none⟩ }
+      declaration := ⟨none, none, none, none⟩ }
   , { name := "objective_uses_atomic_goal_publication", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", none⟩ }
+      declaration := ⟨some "implement feature", none, none, none⟩ }
   , { name := "positive_budget_uses_atomic_goal_publication", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", some 1000⟩ }
+      declaration := ⟨some "implement feature", some 1000, none, none⟩ }
   , { name := "maximum_budget_uses_atomic_goal_publication", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", some GoalAutomation.maxTokenBudget⟩ }
+      declaration := ⟨some "implement feature", some GoalAutomation.maxTokenBudget, none, none⟩ }
   , { name := "same_task_fire_is_scoped_to_other_node",
       nodeDid := "did:key:z-other-feature-owner", taskId, fireKey
-      declaration := ⟨some "implement feature", none⟩ }
+      declaration := ⟨some "implement feature", none, none, none⟩ }
   , { name := "blank_objective_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨some "", none⟩ }
+      declaration := ⟨some "", none, none, none⟩ }
   , { name := "whitespace_objective_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨some "   ", none⟩ }
+      declaration := ⟨some "   ", none, none, none⟩ }
   , { name := "budget_without_objective_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨none, some 1000⟩ }
+      declaration := ⟨none, some 1000, none, none⟩ }
   , { name := "zero_budget_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", some 0⟩ }
+      declaration := ⟨some "implement feature", some 0, none, none⟩ }
   , { name := "negative_budget_cannot_publish", nodeDid, taskId, fireKey
-      declaration := ⟨some "implement feature", some (-1)⟩ }
+      declaration := ⟨some "implement feature", some (-1), none, none⟩ }
   , { name := "overflow_budget_cannot_publish", nodeDid, taskId, fireKey
       declaration := ⟨some "implement feature",
-        some (GoalAutomation.maxTokenBudget + 1)⟩ }
+        some (GoalAutomation.maxTokenBudget + 1), none, none⟩ }
+  , { name := "goal_limits_use_atomic_goal_publication", nodeDid, taskId, fireKey
+      declaration := ⟨some "implement feature", none, some 5, some 4⟩ }
+  , { name := "zero_retry_limit_uses_atomic_goal_publication", nodeDid, taskId, fireKey
+      declaration := ⟨some "implement feature", none, none, some 0⟩ }
+  , { name := "threshold_without_objective_cannot_publish", nodeDid, taskId, fireKey
+      declaration := ⟨none, none, some 5, none⟩ }
+  , { name := "retry_limit_without_objective_cannot_publish", nodeDid, taskId, fireKey
+      declaration := ⟨none, none, none, some 4⟩ }
+  , { name := "zero_threshold_cannot_publish", nodeDid, taskId, fireKey
+      declaration := ⟨some "implement feature", none, some 0, none⟩ }
+  , { name := "negative_retry_limit_cannot_publish", nodeDid, taskId, fireKey
+      declaration := ⟨some "implement feature", none, none, some (-1)⟩ }
   ]
 
 def budgetWire (budget : Option Int) : Option Lean.Json := budget.map Lean.toJson
@@ -496,6 +508,8 @@ structure TaskGoalDeclarationInput where
   name : String
   goalObjective : Option String
   goalTokenBudget : Option Lean.Json
+  goalBlockedAuditThreshold : Option Int
+  goalMaxInfrastructureRetries : Option Int
   deriving Lean.ToJson
 
 structure TaskGoalDeclarationOutput where
@@ -506,10 +520,13 @@ structure TaskGoalDeclarationOutput where
 def taskGoalDeclaration : Family TaskGoalDeclarationInput TaskGoalDeclarationOutput where
   inputs := taskGoalPublicationCases.map fun w =>
     { name := w.name, goalObjective := w.declaration.goalObjective
-    , goalTokenBudget := budgetWire w.declaration.goalTokenBudget }
+    , goalTokenBudget := budgetWire w.declaration.goalTokenBudget
+    , goalBlockedAuditThreshold := w.declaration.goalBlockedAuditThreshold
+    , goalMaxInfrastructureRetries := w.declaration.goalMaxInfrastructureRetries }
   model := fun i =>
     { declarationValid := GoalAutomation.validTaskGoalDeclaration
-        ⟨i.goalObjective, budgetOfWire i.goalTokenBudget⟩ }
+        ⟨i.goalObjective, budgetOfWire i.goalTokenBudget, i.goalBlockedAuditThreshold,
+          i.goalMaxInfrastructureRetries⟩ }
 
 structure TaskGoalPublicationInput where
   name : String
@@ -518,16 +535,22 @@ structure TaskGoalPublicationInput where
   fireKey : String
   goalObjective : Option String
   goalTokenBudget : Option Lean.Json
+  goalBlockedAuditThreshold : Option Int
+  goalMaxInfrastructureRetries : Option Int
   deriving Lean.ToJson
 
 def TaskGoalPublicationInput.ofCase (w : TaskGoalPublicationCase) : TaskGoalPublicationInput :=
   { name := w.name, nodeDid := w.nodeDid, taskId := w.taskId, fireKey := w.fireKey
   , goalObjective := w.declaration.goalObjective
-  , goalTokenBudget := budgetWire w.declaration.goalTokenBudget }
+  , goalTokenBudget := budgetWire w.declaration.goalTokenBudget
+  , goalBlockedAuditThreshold := w.declaration.goalBlockedAuditThreshold
+  , goalMaxInfrastructureRetries := w.declaration.goalMaxInfrastructureRetries }
 
 def TaskGoalPublicationInput.publication (i : TaskGoalPublicationInput) :
     GoalAutomation.TaskPublication :=
-  GoalAutomation.decideTaskPublication ⟨i.goalObjective, budgetOfWire i.goalTokenBudget⟩
+  GoalAutomation.decideTaskPublication
+    ⟨i.goalObjective, budgetOfWire i.goalTokenBudget, i.goalBlockedAuditThreshold,
+      i.goalMaxInfrastructureRetries⟩
     i.nodeDid i.taskId i.fireKey
 
 structure TaskGoalPublicationIdentity where
