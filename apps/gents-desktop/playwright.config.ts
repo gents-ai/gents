@@ -2,12 +2,16 @@ import { defineConfig, devices } from "@playwright/test";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
+import { OWN_VIEWPORT } from "./tests/playwright/ownViewport";
+
 const viteBin = join(
   dirname(createRequire(import.meta.url).resolve("vite/package.json")),
   "bin/vite.js",
 );
 
 const port = Number(process.env.DESKTOP_UI_E2E_PORT ?? 1421);
+/* CI splits the journeys across runners: "1/3" runs the first third */
+const shard = /^(\d+)\/(\d+)$/.exec(process.env.DESKTOP_UI_E2E_SHARD ?? "");
 const baseURL = process.env.DESKTOP_UI_E2E_BASE_URL ?? `http://127.0.0.1:${port}`;
 
 export default defineConfig({
@@ -16,7 +20,10 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  /* the journeys are CPU-bound: on a four-core hosted runner two workers
+     took 24-26 min against 52 at one, and four workers were no faster */
+  workers: process.env.CI ? 2 : undefined,
+  shard: shard ? { current: Number(shard[1]), total: Number(shard[2]) } : null,
   reporter: process.env.CI
     ? [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]]
     : "list",
@@ -48,6 +55,9 @@ export default defineConfig({
     },
     {
       name: "chromium-laptop",
+      /* a test that sets its own window size is the same test here as on
+         chromium-desktop (tests/playwright/ownViewport.ts) */
+      grepInvert: new RegExp(OWN_VIEWPORT),
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1280, height: 800 },
@@ -61,6 +71,14 @@ export default defineConfig({
          checkout folder named transcript-… does not match every spec */
       testMatch:
         /(?:^|[\\/])(?:transcript-[^\\/]*|turn-changes|editor-sheet-wheel|sessions-window|ux-sandbox|attachments|composer-chips|composer-history|mobile-interactions|onboarding-layout|mailbox-stack)\.spec\.ts$/,
+      /* one WebKit page at a time. Playwright's Linux WebKit (WPE) crashes in
+         its compositor thread (a segfault in libWPEWebKit, the page closes)
+         when two WebKit processes share four cores: turn-changes.spec.ts:180
+         alone crashed in 11 of 150 runs that way and 0 of 90 with one. Its
+         wheel- and frame-paced journeys also slow past their budget when a
+         second WebKit draws beside them. A Chromium worker still runs
+         alongside it */
+      workers: 1,
       use: {
         ...devices["Desktop Safari"],
         viewport: { width: 1280, height: 900 },
@@ -68,6 +86,7 @@ export default defineConfig({
     },
     {
       name: "chromium-narrow",
+      grepInvert: new RegExp(OWN_VIEWPORT),
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 390, height: 844 },

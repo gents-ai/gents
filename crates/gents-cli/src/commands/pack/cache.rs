@@ -1,93 +1,15 @@
-use std::path::Path;
-
 use anyhow::{Context, Result};
 use serde_json::json;
 
-use gents::pack::materialize::{
-    cache_root, cache_root_disposition, lock_exclusive, prune_stale_asset_cache, CacheRelease,
-};
-use gents::pack::{HomePackInstall, PackKind};
-use gents::store::local::file_lock::FileLock;
+use gents_pack::pack::materialize::{lock_exclusive, prune_stale_asset_cache};
+use gents_pack::pack::PackKind;
 
 use crate::cli::PackPruneArgs;
 
-pub(super) struct PreparedCacheRelease {
-    root: std::path::PathBuf,
-    disposition: CacheRelease,
-    _lock: Option<FileLock>,
-}
-
-impl PreparedCacheRelease {
-    pub(super) fn finish(self) -> Result<CacheRelease> {
-        match self.disposition {
-            CacheRelease::Removed => {
-                std::fs::remove_dir_all(&self.root)
-                    .with_context(|| format!("removing {}", self.root.display()))?;
-                Ok(CacheRelease::Removed)
-            }
-            CacheRelease::Retained(reason) => Ok(CacheRelease::Retained(reason)),
-        }
-    }
-}
-
-pub(super) fn prepare_recorded_cache(
-    home: &Path,
-    coordinate: &str,
-    record: &HomePackInstall,
-) -> Result<PreparedCacheRelease> {
-    anyhow::ensure!(
-        record.coordinate == coordinate,
-        "pack receipt coordinate mismatch"
-    );
-    let (namespace, name) = super::split_namespace(coordinate);
-    let expected = cache_root(Path::new(""), namespace, name, &record.digest)?;
-    let recorded = Path::new(&record.assets);
-    let unscoped = Path::new(gents::store::local::home::PACKS_DIR_NAME)
-        .join(name)
-        .join(gents::pack::archive::digest_hex(&record.digest)?);
-    anyhow::ensure!(
-        recorded == expected || recorded == unscoped,
-        "{coordinate}'s recorded asset path {} does not match {}",
-        recorded.display(),
-        expected.display()
-    );
-    let root = home.join(recorded);
-    let Some(parent) = root.parent().filter(|parent| parent.is_dir()) else {
-        return Ok(PreparedCacheRelease {
-            root,
-            disposition: CacheRelease::Retained("already absent"),
-            _lock: None,
-        });
-    };
-    let lock = lock_exclusive(parent)?;
-    let disposition = cache_root_disposition(&root, || {
-        if recorded == unscoped {
-            let archive = gents::pack::store::PackStore::new(home).open(&record.digest)?;
-            anyhow::ensure!(
-                archive.manifest().metadata.namespace == namespace
-                    && archive.manifest().name == name,
-                "{coordinate}'s recorded asset digest belongs to a different pack"
-            );
-            for path in gents::pack::declared_paths(archive.manifest()) {
-                anyhow::ensure!(
-                    std::fs::read(root.join(&path))? == archive.asset(&path)?,
-                    "{coordinate}'s recorded asset {path} does not match {}",
-                    record.digest
-                );
-            }
-        }
-        Ok(())
-    })?;
-    Ok(PreparedCacheRelease {
-        root,
-        disposition,
-        _lock: Some(lock),
-    })
-}
-
 pub(super) async fn prune(args: PackPruneArgs) -> Result<()> {
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
-    let pack = super::resolve_pack_source(&args.package, None, &home).await?;
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
+    let pack =
+        gents_pack::pack::resolved_pack::resolve_pack_source(&args.package, None, &home).await?;
     anyhow::ensure!(
         pack.manifest().metadata.kind == PackKind::Assets
             || pack
@@ -121,7 +43,8 @@ pub(super) async fn prune(args: PackPruneArgs) -> Result<()> {
 mod tests {
     use super::super::test_support::{assets_pack_dir, local_pack_source};
     use super::*;
-    use gents::pack::materialize::{cache_lock, write_cache_marker};
+    use gents_pack::pack::materialize::{cache_lock, write_cache_marker};
+    use gents_store::local::file_lock::FileLock;
 
     #[tokio::test]
     async fn pruning_keeps_other_namespaces_and_recorded_unscoped_assets() {
@@ -130,7 +53,9 @@ mod tests {
         for (namespace, version) in [("acme", "1.0.0"), ("acme", "2.0.0"), ("zeta", "1.0.0")] {
             let dir = assets_pack_dir(namespace, "tools", version);
             let pack = local_pack_source(dir.path(), home.path());
-            let (root, _lease) = super::super::materialize_cached_pack(home.path(), &pack).unwrap();
+            let (root, _lease) =
+                gents_pack::pack::resolved_pack::materialize_cached_pack(home.path(), &pack)
+                    .unwrap();
             sources.push((pack, root));
         }
         let unscoped = home.path().join("packs/tools").join("a".repeat(64));
@@ -148,7 +73,7 @@ mod tests {
 
         assert_eq!(
             report["removed_digests"],
-            json!([gents::pack::archive::digest_hex(sources[0].0.digest()).unwrap()])
+            json!([gents_pack::pack::archive::digest_hex(sources[0].0.digest()).unwrap()])
         );
         assert!(!sources[0].1.exists());
         assert!(sources[1].1.exists());
@@ -159,16 +84,20 @@ mod tests {
     #[test]
     fn infrastructure_names_materialize_outside_store_and_unpack_directories() {
         let home = tempfile::tempdir().unwrap();
-        assert!(!gents::pack::is_valid_pack_name(".materialized"));
+        assert!(!gents_documents::pack_spec::is_valid_pack_name(
+            ".materialized"
+        ));
         for name in ["store", "unpacked", "materialized"] {
             let dir = assets_pack_dir("acme", name, "1.0.0");
             let pack = local_pack_source(dir.path(), home.path());
-            let (root, _lease) = super::super::materialize_cached_pack(home.path(), &pack).unwrap();
+            let (root, _lease) =
+                gents_pack::pack::resolved_pack::materialize_cached_pack(home.path(), &pack)
+                    .unwrap();
             assert_eq!(
                 root.parent().unwrap(),
                 home.path().join("packs/.materialized/acme").join(name)
             );
-            assert!(gents::pack::store::PackStore::new(home.path())
+            assert!(gents_pack::pack::store::PackStore::new(home.path())
                 .open(pack.digest())
                 .is_ok());
         }
@@ -187,7 +116,7 @@ mod tests {
         assert!(error.to_string().contains("no materialized asset cache"));
         assert!(!home
             .path()
-            .join(gents::store::local::home::PACKS_DIR_NAME)
+            .join(gents_store::local::home::PACKS_DIR_NAME)
             .join(".materialized")
             .exists());
     }

@@ -537,7 +537,6 @@ pub(super) fn conservative_status(record: &PeerRecord) -> ClientPeerStatus {
         addr: record.addr.clone(),
         dial_succeeded: false,
         last_error: None,
-        pairing: Vec::new(),
         routes: Vec::new(),
     }
 }

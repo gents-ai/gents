@@ -10,7 +10,7 @@ import type { NodeView } from "../../../hooks/fleetStore";
 import { Hint } from "../Hint";
 import { useMinute, when } from "../time";
 import { AutomationMenu } from "./AutomationMenu";
-import { MANUAL, runsOf, type Automation } from "./model";
+import { MANUAL, runInWords, runsOf, type Automation } from "./model";
 
 /* a template that names {{placeholders}} needs values Run now can't give */
 const placeholdersIn = (a: Automation) => [
@@ -140,16 +140,14 @@ export function AutomationDetail({
                 <span className="w-16 shrink-0 text-muted-foreground tabular-nums">
                   {when(r.createdAt, now)} ago
                 </span>
-                <span className="min-w-0 flex-1 truncate">
-                  {r.causedByTriggerKind
-                    ? `By its ${r.causedByTriggerKind}`
-                    : "By hand"}
-                  {" · "}
-                  {(r.lifecycleState ?? "unknown").replace(/_/g, " ")}
-                </span>
+                <span className="min-w-0 flex-1 truncate">{runInWords(r)}</span>
                 {r.sessionId && (
                   <a
-                    href={href({ name: "session", sessionId: r.sessionId })}
+                    href={href({
+                      name: "session",
+                      nodeDid: r.nodeDid ?? node.nodeDid,
+                      sessionId: r.sessionId,
+                    })}
                     className="shrink-0 text-xs underline-offset-2 hover:underline"
                   >
                     Open session

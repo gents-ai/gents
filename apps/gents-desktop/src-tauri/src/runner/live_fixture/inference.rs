@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use gents::documents::{InferenceExecution, InferenceProfile, InferenceSampling};
-use gents::inference::resolved::ReasoningEffort;
+use gents_documents::inference_defaults::ReasoningEffort;
+use gents_documents::{InferenceExecution, InferenceProfile, InferenceSampling};
 use serde::Deserialize;
 use serde_json::{json, Value};
 

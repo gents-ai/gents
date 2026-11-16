@@ -10,6 +10,15 @@ export const nodeOfSession = (session: SessionSummary): NodeDid => session.nodeD
 export type NodeLike = Pick<NodeView, "nodeDid" | "source">;
 export const isWorkingNode = (node: NodeLike, homeDid: string | null | undefined) =>
   isLocalNode(node, homeDid);
+
+export const joinedPeerId = (
+  node: NodeLike & Pick<NodeView, "peerId">,
+  homeDid: string | null | undefined,
+): string | null =>
+  node.source === "enrollment" && !isLocalNode(node, homeDid) && node.peerId
+    ? node.peerId
+    : null;
+
 export const workingNode = <N extends NodeLike>(
   nodes: readonly N[],
   homeDid: string | null | undefined,

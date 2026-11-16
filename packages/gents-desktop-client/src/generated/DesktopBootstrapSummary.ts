@@ -2,4 +2,9 @@
 import type { InitConfigStatus } from "./InitConfigStatus.js";
 import type { SavedPeerView } from "./SavedPeerView.js";
 
-export type DesktopBootstrapSummary = { defaultNodeHome: string, initNodeName: string | null, initNodeDid: string | null, initConfigStatus?: InitConfigStatus | null, initToolCeiling: string | null, initToolRoot: string | null, desktopHome: string, diagnosticsHint: string, nodeHomeExists: boolean, clientStateExists: boolean, savedPeers: Array<SavedPeerView>, };
+export type DesktopBootstrapSummary = { defaultNodeHome: string, initNodeName: string | null, initNodeDid: string | null, initConfigStatus?: InitConfigStatus | null, initToolCeiling: string | null, initToolRoot: string | null, desktopHome: string, diagnosticsHint: string, nodeHomeExists: boolean, clientStateExists: boolean,
+/**
+ * The configured home holds a committed node name but never served or
+ * paired, so setup can offer to continue it or start over.
+ */
+localSetupUnfinished: boolean, savedPeers: Array<SavedPeerView>, };

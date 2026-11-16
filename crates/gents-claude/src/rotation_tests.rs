@@ -1,143 +1,63 @@
 use super::*;
+use gents_lean_vocab::families;
+use gents_lean_vocab::family::recode;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use serde_json::Value;
-
-fn family(v: &Value) -> Family {
-    match v.as_str().unwrap() {
-        "opus" => Family::Opus,
-        "sonnet" => Family::Sonnet,
-        "other" => Family::Other,
-        other => panic!("family {other}"),
-    }
-}
-
-fn overage(v: &Value) -> Overage {
-    match v.as_str().unwrap() {
-        "absent" => Overage::Absent,
-        "allowed" => Overage::Allowed,
-        "allowed_warning" => Overage::Warning,
-        "rejected" => Overage::Rejected,
-        other => panic!("overage {other}"),
-    }
-}
-
-fn limit(v: &Value) -> Limit {
-    let claim = Claim::parse(v["claim"].as_str().unwrap());
-    assert_ne!(claim, Claim::Unknown);
-    Limit {
-        claim,
-        severity: match v["severity"].as_str().unwrap() {
-            "allowed_warning" => Severity::Warning,
-            "rejected" => Severity::Rejected,
-            other => panic!("severity {other}"),
-        },
-        reset_at: v["reset_at"].as_u64().unwrap(),
-    }
-}
-
-fn account(v: &Value) -> Account {
-    Account {
-        enabled: v["enabled"].as_bool().unwrap(),
-        limits: v["limits"].as_array().unwrap().iter().map(limit).collect(),
-        overage: overage(&v["overage"]),
-        blocked_until: v["blocked_until"].as_u64().unwrap(),
-    }
-}
-
-fn pool(v: &Value) -> Vec<Account> {
-    v["pool"].as_array().unwrap().iter().map(account).collect()
-}
-
-fn current(v: &Value) -> Option<usize> {
-    v["current"].as_u64().map(|c| c as usize)
-}
-
-fn cases(key: &str) -> Vec<Value> {
-    let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let list = contract[key].as_array().unwrap().clone();
-    assert!(!list.is_empty(), "{key} is empty");
-    list
-}
 
 #[test]
 fn generated_rotation_select_cases_choose_the_account() {
-    for c in cases("account_rotation_select_cases") {
-        let policy = Policy {
-            allow_overage: c["allow_overage"].as_bool().unwrap(),
-        };
-        let got = select(
-            &policy,
-            c["now"].as_u64().unwrap(),
-            family(&c["family"]),
-            &pool(&c),
-            current(&c),
-            c["cursor"].as_u64().unwrap() as usize,
-        );
-        assert_eq!(
-            got,
-            c["expected"].as_u64().map(|e| e as usize),
-            "{}",
-            c["name"]
-        );
-    }
+    families::account_rotation_contracts_selection::replay::<Claim, Family, Overage, Severity>(
+        |i| {
+            let pool: Vec<Account> = recode(&i.pool);
+            select(
+                &recode(&i.policy),
+                i.now,
+                i.family,
+                &pool,
+                i.current.map(|current| current as usize),
+                i.cursor as usize,
+            )
+            .map(|account| account as u64)
+        },
+    );
 }
 
 #[test]
 fn generated_rotation_attempt_cases_walk_the_pool() {
-    for c in cases("account_rotation_attempt_cases") {
-        let policy = Policy {
-            allow_overage: c["allow_overage"].as_bool().unwrap(),
-        };
-        let rejects: Vec<(usize, u64)> = c["rejects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|r| {
-                (
-                    r["account"].as_u64().unwrap() as usize,
-                    r["reset_at"].as_u64().unwrap(),
-                )
-            })
-            .collect();
-        let mut accounts = pool(&c);
-        let got = attempt(
-            &policy,
-            c["now"].as_u64().unwrap(),
-            family(&c["family"]),
-            &mut accounts,
-            current(&c),
-            c["cursor"].as_u64().unwrap() as usize,
-            |i| rejects.iter().find(|(a, _)| *a == i).map(|(_, r)| *r),
-        );
-        let expected: Vec<usize> = c["expected"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|e| e.as_u64().unwrap() as usize)
-            .collect();
-        assert_eq!(got, expected, "{}", c["name"]);
-    }
+    families::account_rotation_contracts_attempts::replay::<Claim, Family, Overage, Severity>(
+        |i| {
+            let mut pool: Vec<Account> = recode(&i.pool);
+            attempt(
+                &recode(&i.policy),
+                i.now,
+                i.family,
+                &mut pool,
+                i.current.map(|current| current as usize),
+                i.cursor as usize,
+                |account| {
+                    i.rejects
+                        .iter()
+                        .find(|reject| reject.account as usize == account)
+                        .map(|reject| reject.reset_at)
+                },
+            )
+            .into_iter()
+            .map(|account| account as u64)
+            .collect()
+        },
+    );
 }
 
 #[test]
 fn generated_rotation_observe_cases_fold_limits() {
-    for c in cases("account_rotation_observe_cases") {
-        let mut acc = account(&c["account"]);
-        let reported: Vec<Limit> = c["reported"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(limit)
-            .collect();
-        observe(
-            family(&c["family"]),
-            &reported,
-            overage(&c["overage"]),
-            &mut acc,
-        );
-        assert_eq!(acc, account(&c["expected"]), "{}", c["name"]);
-    }
+    families::account_rotation_contracts_observation::replay::<Claim, Family, Overage, Severity>(
+        |i| {
+            let mut account: Account = recode(&i.account);
+            let reported: Vec<Limit> = recode(&i.reported);
+            observe(i.family, &reported, i.overage, &mut account);
+            recode(&account)
+        },
+    );
 }
 
 const NOW: u64 = 1000;

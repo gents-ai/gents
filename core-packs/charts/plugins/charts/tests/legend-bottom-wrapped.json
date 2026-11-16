@@ -1,0 +1,150 @@
+{
+  "input": {
+    "chart": "line",
+    "legend": "bottom",
+    "title": "Many series",
+    "output": "svg",
+    "width": 520,
+    "height": 360,
+    "data": {
+      "columns": [
+        "x",
+        "north",
+        "south",
+        "east",
+        "west",
+        "central",
+        "overseas",
+        "online",
+        "retail"
+      ],
+      "rows": [
+        [
+          1,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          2
+        ],
+        [
+          2,
+          4,
+          5,
+          4,
+          7,
+          6,
+          9,
+          8,
+          3
+        ],
+        [
+          3,
+          5,
+          4,
+          6,
+          8,
+          7,
+          10,
+          9,
+          4
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "response": {
+      "alt": "Line chart titled \"Many series\". X axis: x, from 1 to 3. Y axis from 0 to 12. 8 series. \"north\": 3 points, lowest 3 at 1, highest 5 at 3. \"south\": 3 points, lowest 4 at 1, highest 5 at 2. \"east\": 3 points, lowest 4 at 2, highest 6 at 3. \"west\": 3 points, lowest 6 at 1, highest 8 at 3. \"central\": 3 points, lowest 6 at 2, highest 7 at 1. \"overseas\": 3 points, lowest 8 at 1, highest 10 at 3. \"online\": 3 points, lowest 8 at 2, highest 9 at 1. \"retail\": 3 points, lowest 2 at 1, highest 4 at 3.",
+      "chart": "line",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "line",
+          "max": 5.0,
+          "min": 3.0,
+          "name": "north",
+          "points": 3
+        },
+        {
+          "axis": "left",
+          "color": "#e69f00",
+          "gaps": 0,
+          "mark": "line",
+          "max": 5.0,
+          "min": 4.0,
+          "name": "south",
+          "points": 3
+        },
+        {
+          "axis": "left",
+          "color": "#009e73",
+          "gaps": 0,
+          "mark": "line",
+          "max": 6.0,
+          "min": 4.0,
+          "name": "east",
+          "points": 3
+        },
+        {
+          "axis": "left",
+          "color": "#d55e00",
+          "gaps": 0,
+          "mark": "line",
+          "max": 8.0,
+          "min": 6.0,
+          "name": "west",
+          "points": 3
+        },
+        {
+          "axis": "left",
+          "color": "#56b4e9",
+          "gaps": 0,
+          "mark": "line",
+          "max": 7.0,
+          "min": 6.0,
+          "name": "central",
+          "points": 3
+        },
+        {
+          "axis": "left",
+          "color": "#cc79a7",
+          "gaps": 0,
+          "mark": "line",
+          "max": 10.0,
+          "min": 8.0,
+          "name": "overseas",
+          "points": 3
+        },
+        {
+          "axis": "left",
+          "color": "#f0e442",
+          "gaps": 0,
+          "mark": "line",
+          "max": 9.0,
+          "min": 8.0,
+          "name": "online",
+          "points": 3
+        },
+        {
+          "axis": "left",
+          "color": "#999999",
+          "gaps": 0,
+          "mark": "line",
+          "max": 4.0,
+          "min": 2.0,
+          "name": "retail",
+          "points": 3
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"520\" height=\"360\" viewBox=\"0 0 520 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Many series</title><desc id=\"chart-desc\">Line chart titled &quot;Many series&quot;. X axis: x, from 1 to 3. Y axis from 0 to 12. 8 series. &quot;north&quot;: 3 points, lowest 3 at 1, highest 5 at 3. &quot;south&quot;: 3 points, lowest 4 at 1, highest 5 at 2. &quot;east&quot;: 3 points, lowest 4 at 2, highest 6 at 3. &quot;west&quot;: 3 points, lowest 6 at 1, highest 8 at 3. &quot;central&quot;: 3 points, lowest 6 at 2, highest 7 at 1. &quot;overseas&quot;: 3 points, lowest 8 at 1, highest 10 at 3. &quot;online&quot;: 3 points, lowest 8 at 2, highest 9 at 1. &quot;retail&quot;: 3 points, lowest 2 at 1, highest 4 at 3.</desc><rect x=\"0\" y=\"0\" width=\"520\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Many series</text><line x1=\"37.24\" y1=\"223.5\" x2=\"496.35\" y2=\"223.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"37.24\" y1=\"188.5\" x2=\"496.35\" y2=\"188.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"37.24\" y1=\"154.5\" x2=\"496.35\" y2=\"154.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"37.24\" y1=\"119.5\" x2=\"496.35\" y2=\"119.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"37.24\" y1=\"85.5\" x2=\"496.35\" y2=\"85.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"152.5\" y1=\"50\" x2=\"152.5\" y2=\"257\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"267.5\" y1=\"50\" x2=\"267.5\" y2=\"257\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"382.5\" y1=\"50\" x2=\"382.5\" y2=\"257\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><path d=\"M 37.24,205.25 L 266.79,188 L 496.35,170.75\" fill=\"none\" stroke=\"#0072b2\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"37.24\" cy=\"205.25\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>north: 1, 3</title></circle><circle cx=\"266.79\" cy=\"188\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>north: 2, 4</title></circle><circle cx=\"496.35\" cy=\"170.75\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>north: 3, 5</title></circle><path d=\"M 37.24,188 L 266.79,170.75 L 496.35,188\" fill=\"none\" stroke=\"#e69f00\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"37.24\" cy=\"188\" r=\"3\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>south: 1, 4</title></circle><circle cx=\"266.79\" cy=\"170.75\" r=\"3\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>south: 2, 5</title></circle><circle cx=\"496.35\" cy=\"188\" r=\"3\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>south: 3, 4</title></circle><path d=\"M 37.24,170.75 L 266.79,188 L 496.35,153.5\" fill=\"none\" stroke=\"#009e73\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"37.24\" cy=\"170.75\" r=\"3\" fill=\"#009e73\" stroke=\"#ffffff\" stroke-width=\"1\"><title>east: 1, 5</title></circle><circle cx=\"266.79\" cy=\"188\" r=\"3\" fill=\"#009e73\" stroke=\"#ffffff\" stroke-width=\"1\"><title>east: 2, 4</title></circle><circle cx=\"496.35\" cy=\"153.5\" r=\"3\" fill=\"#009e73\" stroke=\"#ffffff\" stroke-width=\"1\"><title>east: 3, 6</title></circle><path d=\"M 37.24,153.5 L 266.79,136.25 L 496.35,119\" fill=\"none\" stroke=\"#d55e00\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"37.24\" cy=\"153.5\" r=\"3\" fill=\"#d55e00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>west: 1, 6</title></circle><circle cx=\"266.79\" cy=\"136.25\" r=\"3\" fill=\"#d55e00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>west: 2, 7</title></circle><circle cx=\"496.35\" cy=\"119\" r=\"3\" fill=\"#d55e00\" stroke=\"#ffffff\" stroke-width=\"1\"><title>west: 3, 8</title></circle><path d=\"M 37.24,136.25 L 266.79,153.5 L 496.35,136.25\" fill=\"none\" stroke=\"#56b4e9\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"37.24\" cy=\"136.25\" r=\"3\" fill=\"#56b4e9\" stroke=\"#ffffff\" stroke-width=\"1\"><title>central: 1, 7</title></circle><circle cx=\"266.79\" cy=\"153.5\" r=\"3\" fill=\"#56b4e9\" stroke=\"#ffffff\" stroke-width=\"1\"><title>central: 2, 6</title></circle><circle cx=\"496.35\" cy=\"136.25\" r=\"3\" fill=\"#56b4e9\" stroke=\"#ffffff\" stroke-width=\"1\"><title>central: 3, 7</title></circle><path d=\"M 37.24,119 L 266.79,101.75 L 496.35,84.5\" fill=\"none\" stroke=\"#cc79a7\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"37.24\" cy=\"119\" r=\"3\" fill=\"#cc79a7\" stroke=\"#ffffff\" stroke-width=\"1\"><title>overseas: 1, 8</title></circle><circle cx=\"266.79\" cy=\"101.75\" r=\"3\" fill=\"#cc79a7\" stroke=\"#ffffff\" stroke-width=\"1\"><title>overseas: 2, 9</title></circle><circle cx=\"496.35\" cy=\"84.5\" r=\"3\" fill=\"#cc79a7\" stroke=\"#ffffff\" stroke-width=\"1\"><title>overseas: 3, 10</title></circle><path d=\"M 37.24,101.75 L 266.79,119 L 496.35,101.75\" fill=\"none\" stroke=\"#f0e442\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"37.24\" cy=\"101.75\" r=\"3\" fill=\"#f0e442\" stroke=\"#ffffff\" stroke-width=\"1\"><title>online: 1, 9</title></circle><circle cx=\"266.79\" cy=\"119\" r=\"3\" fill=\"#f0e442\" stroke=\"#ffffff\" stroke-width=\"1\"><title>online: 2, 8</title></circle><circle cx=\"496.35\" cy=\"101.75\" r=\"3\" fill=\"#f0e442\" stroke=\"#ffffff\" stroke-width=\"1\"><title>online: 3, 9</title></circle><path d=\"M 37.24,222.5 L 266.79,205.25 L 496.35,188\" fill=\"none\" stroke=\"#999999\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"37.24\" cy=\"222.5\" r=\"3\" fill=\"#999999\" stroke=\"#ffffff\" stroke-width=\"1\"><title>retail: 1, 2</title></circle><circle cx=\"266.79\" cy=\"205.25\" r=\"3\" fill=\"#999999\" stroke=\"#ffffff\" stroke-width=\"1\"><title>retail: 2, 3</title></circle><circle cx=\"496.35\" cy=\"188\" r=\"3\" fill=\"#999999\" stroke=\"#ffffff\" stroke-width=\"1\"><title>retail: 3, 4</title></circle><line x1=\"37.24\" y1=\"257.5\" x2=\"496.35\" y2=\"257.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"36.74\" y1=\"50\" x2=\"36.74\" y2=\"257\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"37.5\" y1=\"257\" x2=\"37.5\" y2=\"261\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"37.24\" y=\"273\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">1.0</text><line x1=\"152.5\" y1=\"257\" x2=\"152.5\" y2=\"261\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"152.02\" y=\"273\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">1.5</text><line x1=\"267.5\" y1=\"257\" x2=\"267.5\" y2=\"261\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"266.79\" y=\"273\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">2.0</text><line x1=\"382.5\" y1=\"257\" x2=\"382.5\" y2=\"261\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"381.57\" y=\"273\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">2.5</text><line x1=\"496.5\" y1=\"257\" x2=\"496.5\" y2=\"261\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"496.35\" y=\"273\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">3.0</text><line x1=\"33.24\" y1=\"257.5\" x2=\"37.24\" y2=\"257.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"29.24\" y=\"261\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"33.24\" y1=\"223.5\" x2=\"37.24\" y2=\"223.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"29.24\" y=\"226.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">2</text><line x1=\"33.24\" y1=\"188.5\" x2=\"37.24\" y2=\"188.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"29.24\" y=\"192\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">4</text><line x1=\"33.24\" y1=\"154.5\" x2=\"37.24\" y2=\"154.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"29.24\" y=\"157.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">6</text><line x1=\"33.24\" y1=\"119.5\" x2=\"37.24\" y2=\"119.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"29.24\" y=\"123\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">8</text><line x1=\"33.24\" y1=\"85.5\" x2=\"37.24\" y2=\"85.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"29.24\" y=\"88.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">10</text><line x1=\"33.24\" y1=\"50.5\" x2=\"37.24\" y2=\"50.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"29.24\" y=\"54\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">12</text><text x=\"266.79\" y=\"294\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">x</text><line x1=\"38.6\" y1=\"317\" x2=\"52.6\" y2=\"317\" fill=\"none\" stroke=\"#0072b2\" stroke-width=\"2.5\"/><text x=\"58.6\" y=\"321\" font-size=\"12\" fill=\"#1f2328\">north</text><line x1=\"99.95\" y1=\"317\" x2=\"113.95\" y2=\"317\" fill=\"none\" stroke=\"#e69f00\" stroke-width=\"2.5\"/><text x=\"119.95\" y=\"321\" font-size=\"12\" fill=\"#1f2328\">south</text><line x1=\"163.31\" y1=\"317\" x2=\"177.31\" y2=\"317\" fill=\"none\" stroke=\"#009e73\" stroke-width=\"2.5\"/><text x=\"183.31\" y=\"321\" font-size=\"12\" fill=\"#1f2328\">east</text><line x1=\"219.99\" y1=\"317\" x2=\"233.99\" y2=\"317\" fill=\"none\" stroke=\"#d55e00\" stroke-width=\"2.5\"/><text x=\"239.99\" y=\"321\" font-size=\"12\" fill=\"#1f2328\">west</text><line x1=\"278.66\" y1=\"317\" x2=\"292.66\" y2=\"317\" fill=\"none\" stroke=\"#56b4e9\" stroke-width=\"2.5\"/><text x=\"298.66\" y=\"321\" font-size=\"12\" fill=\"#1f2328\">central</text><line x1=\"348.68\" y1=\"317\" x2=\"362.68\" y2=\"317\" fill=\"none\" stroke=\"#cc79a7\" stroke-width=\"2.5\"/><text x=\"368.68\" y=\"321\" font-size=\"12\" fill=\"#1f2328\">overseas</text><line x1=\"431.37\" y1=\"317\" x2=\"445.37\" y2=\"317\" fill=\"none\" stroke=\"#f0e442\" stroke-width=\"2.5\"/><text x=\"451.37\" y=\"321\" font-size=\"12\" fill=\"#1f2328\">online</text><line x1=\"238\" y1=\"335\" x2=\"252\" y2=\"335\" fill=\"none\" stroke=\"#999999\" stroke-width=\"2.5\"/><text x=\"258\" y=\"339\" font-size=\"12\" fill=\"#1f2328\">retail</text></svg>",
+      "warnings": [],
+      "width": 520
+    }
+  }
+}

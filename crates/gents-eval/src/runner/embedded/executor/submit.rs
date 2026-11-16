@@ -11,11 +11,11 @@ use super::{Reconciled, POLL};
 use crate::runner::embedded::home::{EmbeddedHome, RUNTIME_READY_TIMEOUT};
 use crate::runner::executor::{StageSpec, TrialLocator};
 use crate::OutcomeKind;
-use gents::request::lifecycle::{
+use gents_session::request::lifecycle::{
     build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
 };
-use gents::store::graphql::escape_graphql_string;
-use gents::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 
 /// How long a seed stage without its own deadline waits for a trigger to fire
 /// a request. No request exists yet, so no turn is bounded by it; a subject
@@ -61,7 +61,7 @@ pub(super) async fn submit_stage(
         RequestSigner::Identity(identity),
     )
     .await?;
-    gents::request::lifecycle::submit_client_request(&access, &create)
+    gents_session::request::lifecycle::submit_client_request(&access, &create)
         .await
         .context("submitting the evaluator's stage request")?;
     Ok(())

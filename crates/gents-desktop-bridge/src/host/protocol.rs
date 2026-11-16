@@ -4,8 +4,8 @@ use ts_rs::TS;
 
 use crate::error::BridgeError;
 use crate::types::{
-    ChatSendRequest, DesktopInterruptRequest, EnrollmentStatusRequest, PendingMessageSteerRequest,
-    PendingQueueEditRequest, SessionRenameRequest,
+    ChatSendRequest, DesktopInterruptRequest, EnrollmentInviteRequest, EnrollmentStatusRequest,
+    PendingMessageSteerRequest, PendingQueueEditRequest, SessionRenameRequest,
 };
 
 /// Change the version for incompatible framing or operation semantics.
@@ -260,6 +260,8 @@ pub enum ClientCommand {
     Snapshot {},
     #[serde(rename = "desktop_peer_enroll_status")]
     Enroll { request: EnrollmentStatusRequest },
+    #[serde(rename = "desktop_peer_enroll_invite")]
+    EnrollInvite { request: EnrollmentInviteRequest },
     #[serde(rename = "desktop_session_snapshot")]
     SessionSnapshot(SessionSnapshotArgs),
     #[serde(rename = "desktop_session_context_details")]
@@ -368,6 +370,7 @@ impl ClientCommand {
         "client_plugin_approval_decide",
         "desktop_client_snapshot",
         "desktop_peer_enroll_status",
+        "desktop_peer_enroll_invite",
         "desktop_session_snapshot",
         "desktop_session_context_details",
         "desktop_session_live_delta",
@@ -522,6 +525,12 @@ mod editor_contract_tests {
             "args": { "request": { "nodeDid": "did:key:node", "agentDid": "did:key:agent", "workspacePath": "/workspace" } }
         });
         assert!(serde_json::from_value::<ClientCommand>(command.clone()).is_ok());
+        let mut scoped = command.clone();
+        scoped["args"]["request"]
+            .as_object_mut()
+            .unwrap()
+            .insert("sessionId".into(), "chat-1".into());
+        assert!(serde_json::from_value::<ClientCommand>(scoped).is_ok());
         let mut rejected = command;
         let scope = rejected["args"]["request"].as_object_mut().unwrap();
         scope.remove("agentDid");

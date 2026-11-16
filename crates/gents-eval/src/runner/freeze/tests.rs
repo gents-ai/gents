@@ -1,5 +1,5 @@
 use anyhow::Context;
-use gents::NodeIdentity;
+use gents_store::identity::NodeIdentity;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -9,9 +9,9 @@ use super::*;
 use crate::invalidate_run;
 use crate::runner::embedded::EmbeddedHome;
 use crate::scoring::PILOT_PURPOSE;
-use gents::documents::apply_desired_state_plan;
-use gents::documents::EvalSplit;
-use gents::store::config_client::{
+use gents_documents::apply_desired_state_plan;
+use gents_documents::EvalSplit;
+use gents_documents::{
     read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 
@@ -28,7 +28,7 @@ impl Launching {
         let evaluator_path = dirs.path().join("evaluator.key");
         let evaluator = Arc::new(
             tokio::task::spawn_blocking(move || {
-                gents::store::identity::KeyIdentity::load_or_create(evaluator_path, None)
+                gents_store::identity::KeyIdentity::load_or_create(evaluator_path, None)
             })
             .await
             .unwrap()
@@ -101,7 +101,15 @@ impl Launching {
         access
             .transact_write("freeze.test_fixture", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
             })
             .await
             .unwrap();
@@ -115,7 +123,7 @@ impl Launching {
                         read_desired_state_record_in_txn(txn, collection, self.owner(), id)
                             .await?
                             .context("document to delete")?;
-                    gents::test_support::delete_configuration_document(
+                    gents_store::test_support::delete_configuration_document(
                         txn,
                         collection.graphql_type(),
                         &doc_id,
@@ -131,7 +139,7 @@ impl Launching {
     pub(crate) async fn grant_node_permissions(
         &self,
         actor: &str,
-        permissions: &[gents::store::config_client::NodePermission],
+        permissions: &[gents_store::config_client::NodePermission],
     ) -> anyhow::Result<()> {
         let admin =
             ConfigAccess::local_as(self.home.node.clone(), identity::Did::new(self.owner())?);
@@ -155,7 +163,7 @@ impl Launching {
     }
 
     pub(crate) fn provision_agent(&self) -> gents_protocol::agent_identity::AgentIdentityBinding {
-        gents::store::identity::provision_agent_identity(self.home.identity.as_ref()).unwrap()
+        gents_store::identity::provision_agent_identity(self.home.identity.as_ref()).unwrap()
     }
 
     pub(crate) fn pack(&self, name: &str, bash_mode: &str) -> PathBuf {
@@ -222,13 +230,13 @@ async fn launching_fixture_commits_user_signed_node_and_denies_ungranted_client(
 
     let stranger_path = launching.dirs.path().join("ungranted.key");
     let stranger = tokio::task::spawn_blocking(move || {
-        gents::store::identity::KeyIdentity::load_or_create(stranger_path, None)
+        gents_store::identity::KeyIdentity::load_or_create(stranger_path, None)
     })
     .await
     .unwrap()
     .unwrap();
     let outsider = ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(
+        gents_store::config_client::GraphqlEndpoint::as_principal(
             launching.home.graphql_endpoint().unwrap(),
             stranger.did(),
         )
@@ -247,7 +255,12 @@ async fn launching_fixture_commits_user_signed_node_and_denies_ungranted_client(
                     add: node.clone(),
                     update: node,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
             })
         })
         .await;
@@ -274,7 +287,9 @@ fn frozen_files_preserve_complete_snapshots_for_existing_readers() {
         breaker_threshold: 5,
         captures: Vec::new(),
     };
-    let runtime = gents::KeyIdentity::load_or_create(dir.path().join("runtime.key"), None).unwrap();
+    let runtime =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("runtime.key"), None)
+            .unwrap();
     let original: EvalDefinition = serde_json::from_value(definition(runtime.did())).unwrap();
     write_sidecar(dir.path(), &before).unwrap();
     write_frozen_definition(dir.path(), &original).unwrap();

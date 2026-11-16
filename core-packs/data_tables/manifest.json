@@ -1,0 +1,189 @@
+{
+  "assets": [
+    "README.md",
+    "agent_behaviors/data_analyst/system_prompt.md",
+    "notice.md",
+    "pack_config.json",
+    "plugins/data_tables.afb",
+    "plugins/data_tables/TOOL.md",
+    "schemas/data_job.graphql",
+    "schemas/data_result.graphql",
+    "schemas/data_row.graphql",
+    "schemas/data_table.graphql",
+    "tests/graph_query.json",
+    "tests/graph_tables.json",
+    "tests/install.json",
+    "tests/pack_content.json"
+  ],
+  "authors": [
+    "gents contributors"
+  ],
+  "config": "pack_config.json",
+  "dependencies": [],
+  "description": "Runs SQL over CSV, TSV, JSON, NDJSON, Parquet, XLSX and ODS files, a folder of them, or rows sent inline, with exact types, and saves a result as CSV or Parquet, as a Data analyst agent and one plugin.",
+  "inference_slots": [
+    {
+      "agents": [
+        "data-analyst"
+      ],
+      "description": "Explores the data files the user names with the data_tables tool and answers from SQL results. Any capable profile.",
+      "name": "data_analyst"
+    }
+  ],
+  "kind": "documents",
+  "manifest_version": 1,
+  "name": "data_tables",
+  "namespace": "gents",
+  "plugins": [
+    {
+      "artifact": "plugins/data_tables.afb",
+      "bind_dir": {
+        "access": "read_write",
+        "description": "The folder holding the data files, or the one data file to query; a call that sets output also writes the result file into the folder",
+        "input_field": "path",
+        "original_field": "path_original",
+        "write_fields": [
+          "output"
+        ]
+      },
+      "description": "Runs SQL (Apache DataFusion) over CSV, TSV, JSON, NDJSON, Parquet, XLSX and ODS files, a folder of them, or inline rows: lists tables, describes columns with statistics, returns query results with exact types, stable paging and a Markdown table, and with output writes the whole result as a CSV or Parquet file in the folder.",
+      "input_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "description": "For describe: the columns to report, at most 200; default the first 200.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "type": "array"
+          },
+          "cursor": {
+            "description": "The next.cursor value of the previous call, to continue it. Repeat every other field unchanged (max_rows may change).",
+            "type": "string"
+          },
+          "delimiter": {
+            "description": "The CSV field delimiter, one character or tab; detected when omitted.",
+            "type": "string"
+          },
+          "files": {
+            "description": "Relative paths inside the folder path to use as tables, in this order; without it every readable file below path is a table.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "minItems": 1,
+            "type": "array"
+          },
+          "header": {
+            "description": "Whether the first CSV row is a header; detected when omitted.",
+            "type": "boolean"
+          },
+          "markdown_rows": {
+            "default": 50,
+            "description": "The most rows shown in the Markdown table.",
+            "maximum": 1000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_bytes": {
+            "default": 1000000,
+            "description": "The most bytes of row data one page returns; the whole result stays under 3.5 MB, so a page may hold fewer rows and then carries next.cursor.",
+            "maximum": 3000000,
+            "minimum": 4096,
+            "type": "integer"
+          },
+          "max_rows": {
+            "default": 200,
+            "description": "The most rows one page returns.",
+            "maximum": 100000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mode": {
+            "description": "tables lists the tables and their columns; describe adds statistics and sample rows; query runs sql. Default: query with sql, else tables.",
+            "enum": [
+              "tables",
+              "describe",
+              "query"
+            ],
+            "type": "string"
+          },
+          "path": {
+            "description": "Path of the data file or folder; a relative path starts at the working folder. Without it only inline tables are available.",
+            "type": "string"
+          },
+          "path_original": {
+            "description": "Set by the host to the real path of the file or folder named in path; leave it out.",
+            "type": "string"
+          },
+          "sample_rows": {
+            "default": 100000,
+            "description": "For describe: how many rows the statistics read.",
+            "maximum": 10000000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "sql": {
+            "description": "One SELECT to run (at most 64 KiB). Names keep their case; quote names with spaces.",
+            "type": "string"
+          },
+          "table": {
+            "description": "For tables and describe: only this table.",
+            "type": "string"
+          },
+          "tables": {
+            "description": "Rows sent inline: a list of {name, columns, rows} tables, one such table, or an object of name to rows. Rows are lists or objects; columns may declare types.",
+            "type": [
+              "array",
+              "object"
+            ]
+          },
+          "format": {
+            "description": "The file format; taken from output when it ends in .csv or .parquet.",
+            "enum": [
+              "csv",
+              "parquet"
+            ],
+            "type": "string"
+          },
+          "output": {
+            "description": "Write the whole result of sql to this file in the folder path instead of returning rows, such as result.csv: a plain name, no folders, not starting with a dot. Only a call with output writes.",
+            "type": "string"
+          },
+          "overwrite": {
+            "default": false,
+            "description": "Replace output when it already exists; otherwise an existing file is an error.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "instructions": "plugins/data_tables/TOOL.md",
+      "language": "rust",
+      "limits": {
+        "max_output_mib": 4,
+        "memory_mib": 3072,
+        "wall_clock_secs": 900
+      },
+      "name": "data_tables",
+      "source": "plugins/data_tables"
+    }
+  ],
+  "schemas": [
+    "schemas/data_job.graphql",
+    "schemas/data_row.graphql",
+    "schemas/data_result.graphql",
+    "schemas/data_table.graphql"
+  ],
+  "tags": [
+    "data",
+    "sql",
+    "csv",
+    "parquet",
+    "xlsx",
+    "plugin"
+  ],
+  "version": "1.0.2",
+  "plugin_interface": 1
+}

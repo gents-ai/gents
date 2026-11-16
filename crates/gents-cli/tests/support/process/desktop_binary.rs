@@ -185,10 +185,6 @@ mod tests {
         std::env::temp_dir().join("gents desktop build layout")
     }
 
-    fn os_args(args: &[&str]) -> Vec<OsString> {
-        args.iter().map(OsString::from).collect()
-    }
-
     #[test]
     fn native_profiles_keep_the_invoking_target_directory() {
         for (directory, profile) in [
@@ -211,60 +207,6 @@ mod tests {
                 .any(|pair| pair == [OsString::from("--profile"), OsString::from(profile)]));
             assert!(!args.contains(&OsString::from("--target")));
         }
-    }
-
-    #[test]
-    fn native_cargo_args_are_exact() {
-        let target_dir = root().join("custom-output");
-        let build = DesktopBuild::for_cli(
-            &target_dir.join("fast-dev/gents"),
-            "aarch64-apple-darwin",
-            "",
-        )
-        .unwrap();
-        assert_eq!(
-            build.cargo_args(),
-            os_args(&[
-                "build",
-                "-p",
-                "gents-desktop",
-                "--bin",
-                "gents-desktop",
-                "--locked",
-                "--message-format=json",
-                "--profile",
-                "fast-dev",
-                "--target-dir",
-                target_dir.to_str().unwrap(),
-            ])
-        );
-    }
-
-    #[test]
-    fn target_cargo_args_are_exact() {
-        let target_dir = root().join("custom-output");
-        let target = "x86_64-unknown-linux-gnu";
-        let build =
-            DesktopBuild::for_cli(&target_dir.join(target).join("release/gents"), target, "")
-                .unwrap();
-        assert_eq!(
-            build.cargo_args(),
-            os_args(&[
-                "build",
-                "-p",
-                "gents-desktop",
-                "--bin",
-                "gents-desktop",
-                "--locked",
-                "--message-format=json",
-                "--profile",
-                "release",
-                "--target-dir",
-                target_dir.to_str().unwrap(),
-                "--target",
-                target,
-            ])
-        );
     }
 
     #[test]

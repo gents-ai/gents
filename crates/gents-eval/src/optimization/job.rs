@@ -8,9 +8,9 @@ use crate::optimization::policy::{Decision, Mode, PolicyV2};
 use crate::optimization::target::{FrozenDocument, Target};
 use crate::runner::Capture;
 use crate::{DefinitionRef, SubjectRef};
-use gents::documents::EvalSplit;
-use gents::store::config_client::{ConfigAccess, ConfigApplyTxn};
-use gents::store::graphql::escape_graphql_string;
+use gents_documents::EvalSplit;
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents_store::graphql::escape_graphql_string;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Budgets {
@@ -255,7 +255,7 @@ pub async fn create_job(
                     gents_protocol::schemas::OPTIMIZATION_JOB,
                 ).await?;
                 let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "OptimizationJob")?;
-                gents::store::config_client::publish_node_child_in_txn(txn, "OptimizationJob", &doc_id, owner).await?;
+                gents_documents::publish_node_child_in_txn(txn, "OptimizationJob", &doc_id, owner).await?;
                 Ok::<(), anyhow::Error>(())
             })
         })

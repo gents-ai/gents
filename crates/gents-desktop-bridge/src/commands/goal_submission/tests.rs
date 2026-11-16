@@ -1,6 +1,6 @@
 use super::*;
 use crate::host::protocol::ClientCommand;
-use gents::store::config_client::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 #[test]
@@ -50,7 +50,7 @@ async fn missing_goal_preparation_never_allocates_or_resubmits_work() -> Result<
         let query = GoalSubmissionQuery {
             client_did:client.clone(), node_did:"did:fixture:runtime".into(), command_id:"original-command".into(),
         };
-        core.store().set_focused_request_id(Some("another-chat".into()));
+        core.stores().ensure("did:fixture:runtime").set_focused_request_id(Some("another-chat".into()));
         let recovered = serde_json::to_value(recover_goal_submission(&core, query.clone()).await?)?;
         assert_eq!(recovered,json!({"kind":"unconfirmed","nodeDid":query.node_did,"commandId":query.command_id}));
         let mut foreign = query;
@@ -73,7 +73,7 @@ async fn missing_goal_preparation_never_allocates_or_resubmits_work() -> Result<
         receipt["clientDid"] = json!(client);
         let error = resume_goal_submission(&core, request, serde_json::from_value(receipt)?).await.unwrap_err();
         assert!(error.to_string().contains("preparation is unavailable"), "{error}");
-        assert_eq!(core.store().focused_request_id().as_deref(),Some("another-chat"));
+        assert_eq!(core.stores().ensure("did:fixture:runtime").focused_request_id().as_deref(),Some("another-chat"));
         let rows=ConfigAccess::local(core.node_arc()).execute("{AgentSession {session_id} AgentRequest {request_id} PendingChatSubmission {request_id}}").await?;
         for name in ["AgentSession","AgentRequest","PendingChatSubmission"] {
             assert_eq!(rows["data"][name],json!([]),"{name}");

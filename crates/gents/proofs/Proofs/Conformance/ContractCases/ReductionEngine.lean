@@ -1,27 +1,10 @@
+import Proofs.Conformance.Family
 import Proofs.Conformance.ContractCases.Types
-import Proofs.Compaction.ReductionEngine
+import Proofs.Session.Compaction.ReductionEngine
 
 namespace Conformance.ContractCases
 
 open Compaction.ReductionEngine
-
-structure ReductionEngineCase where
-  name : String
-  source : List Nat
-  inputTokens : Nat
-  effectiveInputBudget : Nat
-  canFit : Bool
-  prefixLength : Nat
-  checkpoint : Nat
-  thresholdDecision : String
-  decision : String
-  outcome : String
-  notNeededMessages : List Nat
-  compactedPrefix : List Nat
-  retainedSuffix : List Nat
-  outcomeCheckpoint : Option Nat
-  exact : Bool
-  deriving Repr
 
 private def thresholdDecisionName : ThresholdDecision → String
   | .notNeeded => "not_needed"
@@ -53,7 +36,7 @@ private def outcomeCheckpoint : Outcome → Option Nat
   | .reduced _ _ checkpoint => some checkpoint
   | _ => none
 
-private structure ReductionWitness where
+structure ReductionInput where
   name : String
   source : List Nat
   inputTokens : Nat
@@ -61,8 +44,20 @@ private structure ReductionWitness where
   canFit : Bool
   prefixLength : Nat
   checkpoint : Nat
+  deriving Lean.ToJson
 
-private def reductionWitnesses : List ReductionWitness :=
+structure ReductionOutput where
+  thresholdDecision : String
+  decision : String
+  outcome : String
+  notNeededMessages : List Nat
+  compactedPrefix : List Nat
+  retainedSuffix : List Nat
+  outcomeCheckpoint : Option Nat
+  exact : Bool
+  deriving Lean.ToJson
+
+private def reductionInputs : List ReductionInput :=
   [ { name := "below-threshold-is-not-needed", source := [10, 20, 30]
     , inputTokens := 4, effectiveInputBudget := 5, canFit := true
     , prefixLength := 1, checkpoint := 90 }
@@ -89,29 +84,22 @@ private def reductionWitnesses : List ReductionWitness :=
     , prefixLength := 1, checkpoint := 97 }
   ]
 
-private def reductionCase (witness : ReductionWitness) : ReductionEngineCase :=
-  let threshold := decideThreshold witness.inputTokens witness.effectiveInputBudget
-  let decision := reductionDecision witness.inputTokens witness.effectiveInputBudget
-    witness.canFit witness.prefixLength witness.checkpoint
-  let result := applyDecision witness.source decision
-  { name := witness.name
-  , source := witness.source
-  , inputTokens := witness.inputTokens
-  , effectiveInputBudget := witness.effectiveInputBudget
-  , canFit := witness.canFit
-  , prefixLength := witness.prefixLength
-  , checkpoint := witness.checkpoint
-  , thresholdDecision := thresholdDecisionName threshold
-  , decision := decisionName decision
-  , outcome := outcomeName result
-  , notNeededMessages := notNeededMessages result
-  , compactedPrefix := compactedPrefix result
-  , retainedSuffix := retainedSuffix result
-  , outcomeCheckpoint := outcomeCheckpoint result
-  , exact := decide (ExactOutcome witness.source result)
-  }
-
-def reductionEngineCases : List ReductionEngineCase :=
-  reductionWitnesses.map reductionCase
+@[conformance_family]
+def reductionEngineOutcome : Conformance.Family ReductionInput ReductionOutput where
+  inputs := reductionInputs
+  model := fun i =>
+    let threshold := decideThreshold i.inputTokens i.effectiveInputBudget
+    let decision := reductionDecision i.inputTokens i.effectiveInputBudget
+      i.canFit i.prefixLength i.checkpoint
+    let result := applyDecision i.source decision
+    { thresholdDecision := thresholdDecisionName threshold
+    , decision := decisionName decision
+    , outcome := outcomeName result
+    , notNeededMessages := notNeededMessages result
+    , compactedPrefix := compactedPrefix result
+    , retainedSuffix := retainedSuffix result
+    , outcomeCheckpoint := outcomeCheckpoint result
+    , exact := decide (ExactOutcome i.source result)
+    }
 
 end Conformance.ContractCases

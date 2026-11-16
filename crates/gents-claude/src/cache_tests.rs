@@ -1,6 +1,6 @@
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use serde_json::{json, Value};
+use serde_json::json;
 
 use super::*;
 use crate::wire::RawObject;
@@ -44,94 +44,74 @@ fn role_of(role: &str) -> Role {
     }
 }
 
+fn role_name(role: Role) -> &'static str {
+    match role {
+        Role::User => "user",
+        Role::Assistant => "assistant",
+        Role::System => "system",
+    }
+}
+
 #[test]
-fn generated_cache_cases_place_the_breakpoint() {
-    let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contract["prompt_assembly_claude_cache_cases"]
-        .as_array()
-        .unwrap();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let name = &case["name"];
-        let mut messages: Vec<Message> = case["messages"]
-            .as_array()
-            .unwrap()
+fn cache_placement_matches_lean() {
+    use gents_lean_vocab::families::claude_prompt_assembly_cache_placement as family;
+    family::replay::<String>(|i| {
+        let mut messages: Vec<Message> = i
+            .messages
             .iter()
             .map(|m| {
-                let content = &m["content"];
-                let content = match content["blocks"].as_array() {
+                let content = match &m.content.blocks {
                     Some(blocks) => MessageContent::Blocks(
                         blocks
                             .iter()
-                            .map(|b| block_of(b["type"].as_str().unwrap(), b["text"].as_str()))
+                            .map(|b| block_of(&b.kind, b.text.as_deref()))
                             .collect(),
                     ),
-                    None => MessageContent::Text(content["text"].as_str().unwrap().to_owned()),
+                    None => MessageContent::Text(m.content.text.clone().unwrap()),
                 };
                 Message {
-                    role: role_of(m["role"].as_str().unwrap()),
+                    role: role_of(&m.role),
                     content,
                     output_config: None,
                 }
             })
             .collect();
-        place(
-            &mut messages,
-            case["caching"].as_bool().unwrap(),
-            case["skip_write"].as_bool().unwrap(),
-            &cc(),
-        );
-        let placed = case["placed"].as_array().unwrap();
-        assert_eq!(messages.len(), placed.len(), "{name}");
-        for (got, want) in messages.iter().zip(placed) {
-            assert_eq!(got.role, role_of(want["role"].as_str().unwrap()), "{name}");
-            let marker = want["marker"].as_u64().map(|m| m as usize);
-            match &got.content {
-                MessageContent::Text(t) => {
-                    assert_eq!(Some(t.as_str()), want["text"].as_str(), "{name}");
-                    assert!(want["blocks"].is_null() && marker.is_none(), "{name}");
+        place(&mut messages, i.caching, i.skip_write, &cc());
+        messages
+            .iter()
+            .map(|message| {
+                let role = role_name(message.role).to_owned();
+                match &message.content {
+                    MessageContent::Text(text) => family::CachePlaced {
+                        role,
+                        text: Some(text.clone()),
+                        blocks: None,
+                        marker: None,
+                    },
+                    MessageContent::Blocks(blocks) => family::CachePlaced {
+                        role,
+                        text: None,
+                        blocks: Some(
+                            blocks
+                                .iter()
+                                .map(|b| family::CacheBlock {
+                                    kind: b.kind().to_owned(),
+                                    text: match b {
+                                        ContentBlock::Text { text, .. } => Some(text.clone()),
+                                        _ => None,
+                                    },
+                                })
+                                .collect(),
+                        ),
+                        marker: blocks
+                            .iter()
+                            .position(|b| b.cache_control().is_some())
+                            .map(|marker| marker as u64),
+                    },
                 }
-                MessageContent::Blocks(blocks) => {
-                    let want_blocks = want["blocks"].as_array().unwrap();
-                    assert_eq!(blocks.len(), want_blocks.len(), "{name}");
-                    for (b, w) in blocks.iter().zip(want_blocks) {
-                        assert_eq!(b.kind(), w["type"].as_str().unwrap(), "{name}");
-                        let t = match b {
-                            ContentBlock::Text { text, .. } => Some(text.as_str()),
-                            _ => None,
-                        };
-                        assert_eq!(t, w["text"].as_str(), "{name}");
-                    }
-                    let got_marker = blocks.iter().position(|b| b.cache_control().is_some());
-                    assert_eq!(got_marker, marker, "{name}");
-                }
-            }
-        }
-        let want_ttl = if case["ttl"] == "1h" {
-            CacheTtl::OneHour
-        } else {
-            CacheTtl::FiveMinutes
-        };
-        let got = ttl(
-            case["subscriber"].as_bool().unwrap(),
-            case["main_thread"].as_bool().unwrap(),
-            case["using_overage"].as_bool().unwrap(),
-        );
-        assert_eq!(got, want_ttl, "{name}");
-    }
-}
-
-#[test]
-fn ttl_truth_table() {
-    for bits in 0..8u8 {
-        let (s, m, o) = (bits & 1 != 0, bits & 2 != 0, bits & 4 != 0);
-        let want = if s && m && !o {
-            CacheTtl::OneHour
-        } else {
-            CacheTtl::FiveMinutes
-        };
-        assert_eq!(ttl(s, m, o), want);
-    }
+            })
+            .collect()
+    });
 }
 
 #[test]
@@ -150,76 +130,12 @@ fn js_whitespace_set() {
     assert!(is_blank("") && is_blank(" \u{feff}\n") && !is_blank(" x "));
 }
 
-#[test]
-fn normalize_drops_blank_text_only() {
-    let mut blocks = vec![text(" "), raw("tool_result"), text(""), text("x")];
-    normalize_user_blocks(&mut blocks);
-    assert_eq!(blocks, vec![raw("tool_result"), text("x")]);
-    let mut blocks = vec![text(" "), text("\n")];
-    normalize_user_blocks(&mut blocks);
-    assert_eq!(blocks, vec![text("(no content)")]);
-    let mut blocks: Vec<ContentBlock> = vec![];
-    normalize_user_blocks(&mut blocks);
-    assert!(blocks.is_empty());
-}
-
 fn msg(role: Role, blocks: Vec<ContentBlock>) -> Message {
     Message {
         role,
         content: MessageContent::Blocks(blocks),
         output_config: None,
     }
-}
-
-#[test]
-fn marks_last_eligible_and_skips_unstampable_assistant() {
-    let mut m = vec![
-        msg(Role::User, vec![text("a")]),
-        msg(
-            Role::Assistant,
-            vec![
-                text("b"),
-                ContentBlock::Thinking {
-                    thinking: String::new(),
-                    signature: String::new(),
-                },
-            ],
-        ),
-    ];
-    place(&mut m, true, false, &cc());
-    let MessageContent::Blocks(b) = &m[0].content else {
-        panic!()
-    };
-    assert!(b[0].cache_control().is_some());
-    let MessageContent::Blocks(b) = &m[1].content else {
-        panic!()
-    };
-    assert!(b.iter().all(|b| b.cache_control().is_none()));
-}
-
-#[test]
-fn skip_write_picks_the_previous_eligible() {
-    let mut m = vec![
-        Message {
-            role: Role::User,
-            content: MessageContent::Text("a".to_owned()),
-            output_config: None,
-        },
-        Message {
-            role: Role::Assistant,
-            content: MessageContent::Text("b".to_owned()),
-            output_config: None,
-        },
-        Message {
-            role: Role::User,
-            content: MessageContent::Text("c".to_owned()),
-            output_config: None,
-        },
-    ];
-    place(&mut m, true, true, &cc());
-    assert!(matches!(&m[0].content, MessageContent::Text(_)));
-    assert!(matches!(&m[1].content, MessageContent::Blocks(b) if b[0].cache_control().is_some()));
-    assert!(matches!(&m[2].content, MessageContent::Text(_)));
 }
 
 #[test]

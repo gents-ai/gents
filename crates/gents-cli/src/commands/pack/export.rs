@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
-use gents::pack::authoring::{export_pack, selectable_kind, ExportSelection, SELECTABLE_KINDS};
+use gents_pack::pack::authoring::{
+    export_pack, selectable_kind, ExportSelection, SELECTABLE_KINDS,
+};
 
 use crate::cli::PackExportArgs;
 
@@ -28,7 +30,7 @@ pub(crate) async fn export(args: PackExportArgs) -> Result<()> {
     }
     let dir = args
         .out
-        .unwrap_or_else(|| gents::pack::authoring::pack_name(&args.name).into());
+        .unwrap_or_else(|| gents_pack::pack::authoring::pack_name(&args.name).into());
     let (access, owner) = super::resolve_scope_owner(&args.scope).await?;
     let report = export_pack(
         &access,

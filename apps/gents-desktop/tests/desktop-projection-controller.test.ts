@@ -315,6 +315,71 @@ describe("createProjectionController", () => {
     }
   });
 
+  it("refreshes the index on a store update and paces the shown session's read", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const refreshSnapshot = vi.fn(async () => {});
+      const readSessionUpdate = vi.fn(async (): Promise<number | null> => 700);
+      const refreshSession = vi.fn(
+        async () => ({ turnState: "completed" }) as DesktopSessionSnapshot,
+      );
+      const projection = controller({
+        refreshSnapshot,
+        readSessionUpdate,
+        refreshSession,
+      });
+
+      for (let i = 0; i < 5; i++) await projection.request("storeUpdate");
+      expect(refreshSnapshot).toHaveBeenCalledTimes(5);
+      expect(readSessionUpdate).toHaveBeenCalledTimes(5);
+      expect(refreshSession).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(700);
+      expect(refreshSession).toHaveBeenCalledExactlyOnceWith("session-1");
+      /* the update refreshed the index already; a terminal session read
+         owes it no second refresh */
+      expect(refreshSnapshot).toHaveBeenCalledTimes(5);
+
+      readSessionUpdate.mockResolvedValue(0);
+      await projection.request("storeUpdate");
+      expect(refreshSession).toHaveBeenCalledTimes(2);
+      expect(refreshSnapshot).toHaveBeenCalledTimes(6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defers a store update's session read while the caller holds it, but not the index", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let deferred = false;
+      const refreshSnapshot = vi.fn(async () => {});
+      const readSessionUpdate = vi.fn(async (): Promise<number | null> => 700);
+      const refreshSession = vi.fn(async () => null);
+      const projection = controller({
+        refreshSnapshot,
+        readSessionUpdate,
+        refreshSession,
+        defersUpdates: () => deferred,
+      });
+
+      await projection.request("storeUpdate");
+      expect(readSessionUpdate).toHaveBeenCalledTimes(1);
+      deferred = true;
+      await projection.request("storeUpdate");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(readSessionUpdate).toHaveBeenCalledTimes(1);
+      expect(refreshSession).not.toHaveBeenCalled();
+      expect(refreshSnapshot).toHaveBeenCalledTimes(2);
+
+      deferred = false;
+      await projection.request("full");
+      expect(refreshSession).toHaveBeenCalledExactlyOnceWith("session-1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clears the bounded React session projection when selection is empty", async () => {
     const refreshSession = vi.fn(async () => null);
     const refreshSnapshot = vi.fn(async () => {});
@@ -342,8 +407,14 @@ describe("desktopUpdateRefreshScope", () => {
     expect(desktopUpdateRefreshScope("store", "session-1", "request-1")).toBe(
       "sessionDelta",
     );
-    expect(desktopUpdateRefreshScope("store", "session-1", null)).toBe("full");
+    expect(desktopUpdateRefreshScope("store", "session-1", null)).toBe("storeUpdate");
+    expect(desktopUpdateRefreshScope("store", null, null)).toBe("full");
+    expect(desktopUpdateRefreshScope("config", "session-1", null)).toBe("full");
     expect(desktopUpdateRefreshScope("config", null, null)).toBe("full");
+  });
+
+  it("reads a store change for a session not shown yet at once", () => {
+    expect(desktopUpdateRefreshScope("store", "session-1", null, true)).toBe("full");
   });
 
   it("re-reads a session waiting on its node when its pairing changes", () => {

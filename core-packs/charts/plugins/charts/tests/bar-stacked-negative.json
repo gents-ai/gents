@@ -1,0 +1,74 @@
+{
+  "input": {
+    "chart": "stacked_bar",
+    "title": "Profit and loss",
+    "format": "{,.1f}",
+    "legend": "bottom",
+    "output": "svg",
+    "width": 560,
+    "height": 360,
+    "data": {
+      "columns": [
+        "quarter",
+        "profit",
+        "loss"
+      ],
+      "rows": [
+        [
+          "Q1",
+          12.5,
+          -4.2
+        ],
+        [
+          "Q2",
+          8.1,
+          -6.0
+        ],
+        [
+          "Q3",
+          15.3,
+          -2.1
+        ],
+        [
+          "Q4",
+          3.2,
+          -9.9
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "response": {
+      "alt": "Stacked bar chart titled \"Profit and loss\". 4 categories of quarter, from Q1 to Q4. Value axis from -15 to 20. 2 series. \"profit\" (bar): highest 15.3 at Q3, lowest 3.2 at Q4. \"loss\" (bar): highest -2.1 at Q3, lowest -9.9 at Q4.",
+      "chart": "bar",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "bar",
+          "max": 15.3,
+          "min": 3.2,
+          "name": "profit",
+          "points": 4,
+          "sum": 39.1
+        },
+        {
+          "axis": "left",
+          "color": "#e69f00",
+          "gaps": 0,
+          "mark": "bar",
+          "max": -2.1,
+          "min": -9.9,
+          "name": "loss",
+          "points": 4,
+          "sum": -22.2
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Profit and loss</title><desc id=\"chart-desc\">Stacked bar chart titled &quot;Profit and loss&quot;. 4 categories of quarter, from Q1 to Q4. Value axis from -15 to 20. 2 series. &quot;profit&quot; (bar): highest 15.3 at Q3, lowest 3.2 at Q4. &quot;loss&quot; (bar): highest -2.1 at Q3, lowest -9.9 at Q4.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Profit and loss</text><line x1=\"50.07\" y1=\"243.5\" x2=\"544\" y2=\"243.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"50.07\" y1=\"211.5\" x2=\"544\" y2=\"211.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"50.07\" y1=\"179.5\" x2=\"544\" y2=\"179.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"50.07\" y1=\"146.5\" x2=\"544\" y2=\"146.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"50.07\" y1=\"114.5\" x2=\"544\" y2=\"114.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"50.07\" y1=\"82.5\" x2=\"544\" y2=\"82.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><rect x=\"67.36\" y=\"98.21\" width=\"88.91\" height=\"80.36\" fill=\"#0072b2\"><title>profit, Q1: 12.5</title></rect><rect x=\"190.84\" y=\"126.5\" width=\"88.91\" height=\"52.07\" fill=\"#0072b2\"><title>profit, Q2: 8.1</title></rect><rect x=\"314.32\" y=\"80.21\" width=\"88.91\" height=\"98.36\" fill=\"#0072b2\"><title>profit, Q3: 15.3</title></rect><rect x=\"437.81\" y=\"158\" width=\"88.91\" height=\"20.57\" fill=\"#0072b2\"><title>profit, Q4: 3.2</title></rect><rect x=\"67.36\" y=\"178.57\" width=\"88.91\" height=\"27\" fill=\"#e69f00\"><title>loss, Q1: -4.2</title></rect><rect x=\"190.84\" y=\"178.57\" width=\"88.91\" height=\"38.57\" fill=\"#e69f00\"><title>loss, Q2: -6.0</title></rect><rect x=\"314.32\" y=\"178.57\" width=\"88.91\" height=\"13.5\" fill=\"#e69f00\"><title>loss, Q3: -2.1</title></rect><rect x=\"437.81\" y=\"178.57\" width=\"88.91\" height=\"63.64\" fill=\"#e69f00\"><title>loss, Q4: -9.9</title></rect><line x1=\"50.07\" y1=\"179.5\" x2=\"544\" y2=\"179.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"50.07\" y1=\"275.5\" x2=\"544\" y2=\"275.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"49.57\" y1=\"50\" x2=\"49.57\" y2=\"275\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"112.5\" y1=\"275\" x2=\"112.5\" y2=\"279\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"111.81\" y=\"291\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Q1</text><line x1=\"235.5\" y1=\"275\" x2=\"235.5\" y2=\"279\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"235.3\" y=\"291\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Q2</text><line x1=\"359.5\" y1=\"275\" x2=\"359.5\" y2=\"279\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"358.78\" y=\"291\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Q3</text><line x1=\"482.5\" y1=\"275\" x2=\"482.5\" y2=\"279\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"482.26\" y=\"291\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Q4</text><line x1=\"46.07\" y1=\"275.5\" x2=\"50.07\" y2=\"275.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"42.07\" y=\"279\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">-15.0</text><line x1=\"46.07\" y1=\"243.5\" x2=\"50.07\" y2=\"243.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"42.07\" y=\"246.86\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">-10.0</text><line x1=\"46.07\" y1=\"211.5\" x2=\"50.07\" y2=\"211.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"42.07\" y=\"214.71\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">-5.0</text><line x1=\"46.07\" y1=\"179.5\" x2=\"50.07\" y2=\"179.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"42.07\" y=\"182.57\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0.0</text><line x1=\"46.07\" y1=\"146.5\" x2=\"50.07\" y2=\"146.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"42.07\" y=\"150.43\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">5.0</text><line x1=\"46.07\" y1=\"114.5\" x2=\"50.07\" y2=\"114.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"42.07\" y=\"118.29\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">10.0</text><line x1=\"46.07\" y1=\"82.5\" x2=\"50.07\" y2=\"82.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"42.07\" y=\"86.14\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">15.0</text><line x1=\"46.07\" y1=\"50.5\" x2=\"50.07\" y2=\"50.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"42.07\" y=\"54\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">20.0</text><text x=\"297.04\" y=\"312\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">quarter</text><rect x=\"229.99\" y=\"329\" width=\"12\" height=\"12\" fill=\"#0072b2\"/><text x=\"249.99\" y=\"339\" font-size=\"12\" fill=\"#1f2328\">profit</text><rect x=\"290.67\" y=\"329\" width=\"12\" height=\"12\" fill=\"#e69f00\"/><text x=\"310.67\" y=\"339\" font-size=\"12\" fill=\"#1f2328\">loss</text></svg>",
+      "warnings": [],
+      "width": 560
+    }
+  }
+}

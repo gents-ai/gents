@@ -370,3 +370,85 @@ impl ExactReduction<'_> {
         })
     }
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn reduction_engine_outcome_matches_lean() {
+        use gents_lean_vocab::families::contract_cases_reduction_engine_outcome as family;
+
+        family::replay(|i| {
+            let threshold =
+                threshold_decision(i.input_tokens as usize, i.effective_input_budget as usize);
+            let threshold_name = match threshold {
+                ThresholdDecision::NotNeeded => "not_needed",
+                ThresholdDecision::ReduceEligible => "reduce_eligible",
+            };
+            let decision =
+                reduction_decision(threshold, i.can_fit, i.prefix_length as usize, i.checkpoint);
+            let decision_name = match &decision {
+                ReductionDecision::NotNeeded => "not_needed",
+                ReductionDecision::CannotFit => "cannot_fit",
+                ReductionDecision::Reduce { .. } => "reduce",
+            };
+            let mut output = family::ReductionOutput {
+                threshold_decision: threshold_name.into(),
+                decision: decision_name.into(),
+                outcome: String::new(),
+                not_needed_messages: Vec::new(),
+                compacted_prefix: Vec::new(),
+                retained_suffix: Vec::new(),
+                outcome_checkpoint: None,
+                exact: true,
+            };
+            match apply_reduction_decision(i.source.clone(), decision) {
+                ReductionOutcome::NotNeeded { messages } => {
+                    output.outcome = "not_needed".into();
+                    output.exact = messages == i.source;
+                    output.not_needed_messages = messages;
+                }
+                ReductionOutcome::CannotFit => {
+                    output.outcome = "cannot_fit".into();
+                }
+                ReductionOutcome::Reduced {
+                    compacted_prefix,
+                    retained_suffix,
+                    checkpoint,
+                } => {
+                    output.outcome = "reduced".into();
+                    output.exact = compacted_prefix
+                        .iter()
+                        .chain(retained_suffix.iter())
+                        .eq(i.source.iter());
+                    output.compacted_prefix = compacted_prefix;
+                    output.retained_suffix = retained_suffix;
+                    output.outcome_checkpoint = Some(checkpoint);
+                }
+            }
+            output
+        });
+    }
+
+    #[test]
+    fn rolling_compaction_commit_matches_lean() {
+        use gents_lean_vocab::families::contract_cases_rolling_compaction_commit as family;
+
+        family::replay(|i| {
+            let messages: Vec<usize> = i.chunks.iter().map(|c| c.messages as usize).collect();
+            let pair_closed: Vec<bool> = i.chunks.iter().map(|c| c.pair_closed).collect();
+            let can_dispatch: Vec<bool> = i.chunks.iter().map(|c| c.can_dispatch).collect();
+            family::RollingOutput {
+                plan_valid: rolling_plan_is_valid(
+                    i.target_messages as usize,
+                    &messages,
+                    &pair_closed,
+                    &can_dispatch,
+                    i.checkpoint_covered as usize,
+                ),
+                step_input: rolling_step_input(i.prior_payload, i.next_chunk.clone()),
+            }
+        });
+    }
+}

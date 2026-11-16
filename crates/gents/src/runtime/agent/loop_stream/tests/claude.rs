@@ -50,8 +50,13 @@ async fn signed_claude_tool_round_trip_with_scope(
     assert_eq!(collected.final_text.as_deref(), Some("done"));
 
     let request_doc_id = lifecycle.request().doc_id.clone();
-    let sends =
-        captured_claude_sends(&lifecycle.access().unwrap(), &request_doc_id, &request_commit_cid, scope_kind).await;
+    let sends = captured_claude_sends(
+        &lifecycle.access().unwrap(),
+        &request_doc_id,
+        &request_commit_cid,
+        scope_kind,
+    )
+    .await;
     let captured_body = &sends[1];
     let messages = captured_body["messages"].as_array().expect("Messages body");
     let assistant = messages
@@ -86,7 +91,11 @@ async fn signed_claude_tool_round_trip_with_scope(
         "second send must include the accepted tool result"
     );
 
-    let resp = agent_response(&lifecycle.access().unwrap(), "query { AgentToolCall { _docID tool_name lifecycle_state } }").await;
+    let resp = agent_response(
+        &lifecycle.access().unwrap(),
+        "query { AgentToolCall { _docID tool_name lifecycle_state } }",
+    )
+    .await;
     assert!(
         !resp.has_errors(),
         "AgentToolCall query failed: {:?}",
@@ -107,12 +116,12 @@ async fn signed_claude_tool_round_trip_with_scope(
     let tool_doc_id = echo["_docID"].as_str().expect("_docID").to_string();
     let session_id = lifecycle.request().session_id.clone();
 
-    let held = crate::store::config_client::ConfigApplyTxn::begin_local(&node, None)
+    let held = gents_store::config_client::ConfigApplyTxn::begin_local(&node, None)
         .await
         .unwrap();
     let accepted = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        crate::tools::call::lifecycle::ToolCallLifecycle::load_accepted_for_dispatch_as(
+        gents_toolcalls::call::lifecycle::ToolCallLifecycle::load_accepted_for_dispatch_as(
             &node,
             lifecycle.actor_did().unwrap(),
             &tool_doc_id,
@@ -131,7 +140,7 @@ async fn signed_claude_tool_round_trip_with_scope(
         "accepted binding must not cross physical request identity"
     );
 
-    let arguments = crate::session::load_canonical_payload_from_access(
+    let arguments = gents_session::session::load_canonical_payload_from_access(
         &lifecycle.access().unwrap(),
         &accepted.request_doc_id,
         &lifecycle.request().node_did,
@@ -151,7 +160,7 @@ async fn signed_claude_tool_round_trip_with_scope(
         "streamed arguments must persist exactly as emitted"
     );
 
-    let native = crate::session::load_tool_call_result(
+    let native = gents_session::session::load_tool_call_result(
         &lifecycle.access().unwrap(),
         &tool_doc_id,
         &lifecycle.request().node_did,
@@ -161,36 +170,24 @@ async fn signed_claude_tool_round_trip_with_scope(
     .await
     .expect("delivered tool result");
     assert_eq!(
-        crate::tools::call::lifecycle::query::render_tool_result(&native).unwrap(),
+        gents_session::tool_call::query::result::render_tool_result(&native).unwrap(),
         "ECHOED",
     );
 }
 
 #[tokio::test]
 async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop() {
-    let case = crate::lean_vocab_test::lean_prompt_assembly_claude_replay_cases()
-        .iter()
-        .find(|case| case.name == "streamed-signed-redacted-tool")
-        .expect("Lean streamed signed/redacted/tool replay case");
-    assert_eq!(case.outcome, "ok", "{}", case.name);
-    let expected_content = crate::lean_vocab_test::native_claude_replay_content(&case.blocks);
+    let [case] =
+        gents_lean_vocab::families::contracts_prompt_assembly_claude_replay_round_trip::cases()
+            .try_into()
+            .unwrap_or_else(|_| panic!("the owned-loop round trip replays one modeled turn"));
+    let expected_content =
+        gents_lean_vocab::claude_replay::assistant_content(&gents_lean_vocab::family::recode::<
+            _,
+            Vec<gents_lean_vocab::claude_replay::InputBlock>,
+        >(&case.input.blocks));
     let blocks = gents_loop::claude_messages_body::encode_assistant_content(&expected_content)
         .expect("modeled canonical blocks render as Messages input");
-    let expected = case
-        .replay
-        .iter()
-        .map(crate::lean_vocab_test::LeanClaudeReplayBlock::native_json)
-        .collect::<Vec<_>>();
-    let kinds = expected
-        .iter()
-        .map(|block| block["type"].as_str().expect("block type"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        kinds,
-        ["thinking", "redacted_thinking", "tool_use"],
-        "{}: the model case must keep its ordered shape",
-        case.name
-    );
     let first_turn = claude_sse_for_blocks(&blocks);
 
     let scope_kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
@@ -209,7 +206,7 @@ async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop(
         &lifecycle.access().unwrap(),
         &format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }}, role: {{ _eq: "assistant" }} }}, order: {{ sequence: ASC }}) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(&request.doc_id),
+            gents_store::graphql::escape_graphql_string(&request.doc_id),
         ),
     )
     .await;
@@ -217,8 +214,8 @@ async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop(
         .as_array()
         .expect("assistant headers");
     assert_eq!(headers.len(), 2, "both provider turns were persisted");
-    let (_, stored) = crate::session::load_canonical_message(
-                    &lifecycle.access().unwrap(),
+    let (_, stored) = gents_session::session::load_canonical_message(
+        &lifecycle.access().unwrap(),
         headers[0]["_docID"]
             .as_str()
             .expect("provider message document"),
@@ -258,9 +255,19 @@ async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop(
             .remove("cache_control");
     }
     assert_eq!(
-        replayed, expected,
+        replayed
+            .iter()
+            .map(|block| block["type"].as_str().expect("block type"))
+            .collect::<Vec<_>>(),
+        ["thinking", "redacted_thinking", "tool_use"],
         "the continuation must replay signed, redacted, and tool blocks in stream order"
     );
+    case.check(gents_lean_vocab::family::recode(
+        &replayed
+            .iter()
+            .map(gents_lean_vocab::claude_replay::Block::of_native_json)
+            .collect::<Vec<_>>(),
+    ));
 }
 
 fn claude_sse_for_blocks(blocks: &[serde_json::Value]) -> String {
@@ -316,7 +323,7 @@ fn claude_sse_for_blocks(blocks: &[serde_json::Value]) -> String {
 
 struct ClaudeFixtureRun {
     node: Arc<defra_node::Node>,
-    lifecycle: crate::request::lifecycle::RequestLifecycle,
+    lifecycle: gents_session::request::lifecycle::RequestLifecycle,
     collected: CollectedScriptedStream,
     request_commit_cid: String,
 }
@@ -325,15 +332,16 @@ async fn run_claude_fixture_turns(
     first_turn: String,
     scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
 ) -> ClaudeFixtureRun {
-    use crate::inference::clients::claude_messages::{
+    use gents_inference::clients::claude_messages::{
         install_messages_sse_fixtures, lock_fixtures_for_test, sse_fixture_final_text,
     };
-    use crate::inference::clients::claude_subscription::{ClaudeSubscriptionClient, StaticBearer};
+    use gents_inference::clients::claude_subscription::{ClaudeSubscriptionClient, StaticBearer};
     use rig::client::CompletionClient;
 
     let _guard = lock_fixtures_for_test().await;
     install_messages_sse_fixtures(vec![first_turn, sse_fixture_final_text("done")]);
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let node = db.node.clone();
 
     let model =
         ClaudeSubscriptionClient::with_bearer(Arc::new(StaticBearer::failing("no credential")))
@@ -341,11 +349,11 @@ async fn run_claude_fixture_turns(
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![echo_tool()]);
     let mut config = owned_config(4);
     config.on_rendered_request =
-        Some(crate::inference::rendered_request::scope::ambient_arming_sink(scope_kind));
+        Some(gents_inference::rendered_request::scope::ambient_arming_sink(scope_kind));
     config.provider_input_counter =
         Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
-            crate::BackendProviderKind::ClaudeCliSubscription,
-            crate::OpenAiWireApi::ChatCompletions,
+            gents_inference::backends::provider::BackendProviderKind::ClaudeCliSubscription,
+            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
             "claude-sonnet-5",
         ));
     config.replay = crate::turn::provider_input::replay::owned_replay_input(
@@ -356,7 +364,7 @@ async fn run_claude_fixture_turns(
             .expect("claimed request commit CID")
             .to_owned(),
         scope_kind,
-        crate::inference::llm::backend_client::claude_subscription_replay_issuer()
+        gents_inference::llm::backend_client::claude_subscription_replay_issuer()
             .expect("Claude Messages route"),
         crate::turn::provider_input::ProviderInputProfile::ClaudeMessages,
     );
@@ -365,18 +373,20 @@ async fn run_claude_fixture_turns(
         .expect("claimed request commit CID")
         .to_owned();
     let capture_factory =
-        crate::inference::rendered_request::defra_rendered_request_capture_factory_for_signer(
+        gents_inference::rendered_request::defra_rendered_request_capture_factory_for_signer(
             node.clone(),
-            lifecycle.managed_agent_signer().expect("claimed Agent signer"),
+            lifecycle
+                .managed_agent_signer()
+                .expect("claimed Agent signer"),
         )
         .unwrap();
-    let capture_scope = crate::inference::rendered_request::scope_from_factory(
-        crate::inference::rendered_request::context_for_claimed_request(
+    let capture_scope = gents_inference::rendered_request::scope_from_factory(
+        gents_inference::rendered_request::context_for_claimed_request(
             lifecycle.request(),
             &request_commit_cid,
             "claude-sonnet-5".to_owned(),
             Some(
-                crate::BackendProviderKind::ClaudeCliSubscription
+                gents_inference::backends::provider::BackendProviderKind::ClaudeCliSubscription
                     .as_str()
                     .to_owned(),
             ),
@@ -412,10 +422,10 @@ async fn run_claude_fixture_turns(
 
 #[test]
 fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
-    use crate::inference::clients::claude_messages::{
+    use gents_inference::clients::claude_messages::{
         blocking_lock_fixtures_for_test, install_messages_sse_fixtures, sse_fixture_final_text,
     };
-    use crate::inference::llm::backend_client::{build_backend_client, BackendClient};
+    use gents_inference::llm::backend_client::{build_backend_client, BackendClient};
     use rig::client::CompletionClient;
 
     let _guard = blocking_lock_fixtures_for_test();
@@ -425,9 +435,10 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
         .expect("runtime")
         .block_on(async {
             install_messages_sse_fixtures(vec![sse_fixture_final_text("done")]);
-            let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+            let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
+            let node = db.node.clone();
 
-            let identity = crate::store::identity::KeyIdentity::load_or_create(
+            let identity = gents_store::identity::KeyIdentity::load_or_create(
                 std::env::temp_dir()
                     .join(format!("anthropic-key-turn-{}.key", uuid::Uuid::new_v4())),
                 None,
@@ -435,11 +446,11 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
             .unwrap();
             let mut behavior = crate::runtime::agent::PendingAgent::new("anthropic-key-turn")
                 .build_with_identity_for_test(identity);
-            behavior.backend_provider_kind = crate::BackendProviderKind::AnthropicApiKey;
+            Arc::make_mut(&mut behavior.agent).backend_provider_kind = gents_inference::backends::provider::BackendProviderKind::AnthropicApiKey;
             let client = build_backend_client(
                 std::sync::Arc::default(),
                 node.clone(),
-                &behavior,
+                &behavior.agent,
                 "placeholder-key",
                 std::time::Duration::from_secs(1),
             )
@@ -454,13 +465,13 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
             let mut config = owned_config(2);
             config.provider_input_counter =
                 Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
-                    crate::BackendProviderKind::AnthropicApiKey,
-                    crate::OpenAiWireApi::ChatCompletions,
+                    gents_inference::backends::provider::BackendProviderKind::AnthropicApiKey,
+                    gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
                     "claude-sonnet-5",
                 ));
             let scope_kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
             config.on_rendered_request =
-                Some(crate::inference::rendered_request::scope::ambient_arming_sink(scope_kind));
+                Some(gents_inference::rendered_request::scope::ambient_arming_sink(scope_kind));
             let request_commit_cid = lifecycle
                 .request_commit_cid()
                 .expect("claimed request commit CID")
@@ -474,13 +485,13 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
                 crate::turn::provider_input::ProviderInputProfile::ClaudeMessages,
             );
             let capture_factory =
-                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_signer(
+                gents_inference::rendered_request::defra_rendered_request_capture_factory_for_signer(
             node.clone(),
             lifecycle.managed_agent_signer().expect("claimed Agent signer"),
         )
         .unwrap();
-            let capture_scope = crate::inference::rendered_request::scope_from_factory(
-                crate::inference::rendered_request::context_for_claimed_request(
+            let capture_scope = gents_inference::rendered_request::scope_from_factory(
+                gents_inference::rendered_request::context_for_claimed_request(
                     lifecycle.request(),
                     &request_commit_cid,
                     "claude-sonnet-5".to_owned(),
@@ -512,7 +523,7 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
 }
 
 async fn captured_claude_sends(
-    reader: &crate::ConfigAccess,
+    reader: &gents_store::config_client::ConfigAccess,
     request_doc_id: &str,
     request_commit_cid: &str,
     scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
@@ -521,7 +532,7 @@ async fn captured_claude_sends(
         reader,
         &format!(
             r#"{{ RenderedRequest(filter: {{ request_doc_id: {{ _eq: "{}" }} }}, order: {{ turn_index: ASC }}) {{ turn_index capture_scope source request_commit_cid capture_version request_json }} }}"#,
-            crate::store::graphql::escape_graphql_string(request_doc_id),
+            gents_store::graphql::escape_graphql_string(request_doc_id),
         ),
     )
     .await;
@@ -548,7 +559,7 @@ async fn captured_claude_sends(
         );
         assert_eq!(row["source"], expected_source, "Claude origin is physical");
         assert_eq!(row["request_commit_cid"].as_str(), Some(request_commit_cid));
-        let (body, _) = crate::inference::rendered_request::decode_capture_pair(
+        let (body, _) = gents_inference::rendered_request::decode_capture_pair(
             reader,
             u32::try_from(row["capture_version"].as_u64().expect("capture version"))
                 .expect("version fits u32"),

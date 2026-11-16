@@ -1,4 +1,5 @@
-import Proofs.Compaction.ReductionEngine
+import Proofs.Session.Compaction.ReductionEngine
+import Proofs.Conformance.Family
 
 namespace Conformance.ContractCases.CompactionProjectionJoin
 open Compaction.ReductionEngine
@@ -113,5 +114,85 @@ theorem expected_results : cases.map (fun w => resultName (result w)) =
 theorem expected_committed_reductions : cases.map committedReductions =
     [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0] := by
   native_decide
+
+structure JoinInput where
+  name : String
+  source : List Nat
+  contextWindow : Nat
+  thresholdBasisPoints : Nat
+  configuredMaxOutputTokens : Nat
+  canFit : Bool
+  prefixLength : Nat
+  checkpoint : Nat
+  initialProjectionSucceeds : Bool
+  initialEstimateTokens : Option Nat
+  rebuildSucceeds : Bool
+  rebuiltEstimateTokens : Option Nat
+  deriving Lean.ToJson
+
+def JoinInput.ofCase (w : Case) : JoinInput :=
+  { name := w.name, source := w.source, contextWindow := w.contextWindow
+    thresholdBasisPoints := w.thresholdBasisPoints
+    configuredMaxOutputTokens := w.configuredMaxOutputTokens, canFit := w.canFit
+    prefixLength := w.prefixLength, checkpoint := w.checkpoint
+    initialProjectionSucceeds := w.initialProjectionSucceeds
+    initialEstimateTokens := w.initialEstimateTokens, rebuildSucceeds := w.rebuildSucceeds
+    rebuiltEstimateTokens := w.rebuiltEstimateTokens }
+
+def JoinInput.toCase (i : JoinInput) : Case :=
+  { name := i.name, source := i.source, contextWindow := i.contextWindow
+    thresholdBasisPoints := i.thresholdBasisPoints
+    configuredMaxOutputTokens := i.configuredMaxOutputTokens, canFit := i.canFit
+    prefixLength := i.prefixLength, checkpoint := i.checkpoint
+    initialProjectionSucceeds := i.initialProjectionSucceeds
+    initialEstimateTokens := i.initialEstimateTokens, rebuildSucceeds := i.rebuildSucceeds
+    rebuiltEstimateTokens := i.rebuiltEstimateTokens }
+
+structure RebuiltInput where
+  checkpoint : Nat
+  retainedSuffix : List Nat
+  deriving Lean.ToJson
+
+structure JoinOutput where
+  initialProjectionInput : List Nat
+  rebuiltProjectionInput : Option RebuiltInput
+  result : String
+  outputTokens : Option Nat
+  committedReductions : Nat
+  deriving Lean.ToJson
+
+/-- model-production-gap: no native adapter drives the projection join with
+injected projection, rebuild and estimate observations, so no production path
+replays these cases; `stagedTurnReduction` replays the three outcomes the
+per-turn staged reduction reaches. -/
+@[conformance_family]
+def projectionJoin : Family JoinInput JoinOutput where
+  inputs := cases.map JoinInput.ofCase
+  model := fun i =>
+    let w := i.toCase
+    { initialProjectionInput := w.source
+      rebuiltProjectionInput := (rebuiltInput w).map fun (checkpoint, retainedSuffix) =>
+        { checkpoint, retainedSuffix }
+      result := resultName (result w)
+      outputTokens := outputTokens w
+      committedReductions := committedReductions w }
+
+structure StagedTurnOutput where
+  result : String
+  committedReductions : Nat
+  deriving Lean.ToJson
+
+/-- The served per-turn staged reduction builds a request whose rebuilt
+projection still exceeds the threshold, one with no output capacity, and one
+that dispatches; it observes the loop's outcome and the durable reduction rows,
+not the injected projection and estimate observations. -/
+@[conformance_family]
+def stagedTurnReduction : Family JoinInput StagedTurnOutput where
+  inputs := (cases.filter fun w =>
+    w.name ∈ ["threshold_plus_one", "rebuilt_still_over", "zero_output_capacity"]).map
+      JoinInput.ofCase
+  model := fun i =>
+    let w := i.toCase
+    { result := resultName (result w), committedReductions := committedReductions w }
 
 end Conformance.ContractCases.CompactionProjectionJoin

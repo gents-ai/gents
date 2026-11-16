@@ -1,0 +1,231 @@
+[
+ {
+  "file": "crates/gents-store/src/config_client/txn/apply_txn.rs",
+  "from_crate": "gents-documents",
+  "kind": "method",
+  "name": "pack_timestamp",
+  "user": "crates/gents-documents/src/desired_state/apply.rs:205"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/execute.rs",
+  "from_crate": "gents-documents",
+  "kind": "method",
+  "name": "execute_desired_state_mutation",
+  "user": "crates/gents-documents/src/desired_state/apply.rs:227"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/pack_interpreter.rs",
+  "from_crate": "gents-documents",
+  "kind": "method",
+  "name": "has_pack_interpreter",
+  "user": "crates/gents-documents/src/desired_state/apply.rs:278"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/apply_txn.rs",
+  "from_crate": "gents-documents",
+  "kind": "method",
+  "name": "queue_relationship_grant",
+  "user": "crates/gents-documents/src/desired_state/apply.rs:287"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/apply_txn.rs",
+  "from_crate": "gents-documents",
+  "kind": "method",
+  "name": "managed_agent_signer",
+  "user": "crates/gents-documents/src/desired_state/apply.rs:340"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/execute.rs",
+  "from_crate": "gents-documents",
+  "kind": "method",
+  "name": "delete_configuration_document",
+  "user": "crates/gents-documents/src/desired_state/apply.rs:437"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/execute.rs",
+  "from_crate": "gents-documents",
+  "kind": "method",
+  "name": "destructive_authority",
+  "user": "crates/gents-documents/src/desired_state/selection.rs:121"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/execute.rs",
+  "from_crate": "gents-documents",
+  "kind": "method",
+  "name": "document_owner_registration",
+  "user": "crates/gents-documents/src/node_document_publication.rs:36"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/auto_commit.rs",
+  "from_crate": "gents-p2p",
+  "kind": "method",
+  "name": "write_local_response",
+  "user": "crates/gents-p2p/src/p2p_reconcile/endpoint.rs:256"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/execute.rs",
+  "from_crate": "gents-p2p",
+  "kind": "method",
+  "name": "execute_local_response",
+  "user": "crates/gents-p2p/src/p2p_reconcile/engine/store.rs:58"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/execute.rs",
+  "from_crate": "gents-p2p",
+  "kind": "method",
+  "name": "run_local_response",
+  "user": "crates/gents-p2p/src/p2p_reconcile/engine/store.rs:236"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/retry.rs",
+  "from_crate": "gents-documents",
+  "kind": "method",
+  "name": "is_missing_or_denied_write",
+  "user": "crates/gents-documents/src/desired_state/apply.rs:237"
+ },
+ {
+  "from_crate": "gents-documents",
+  "kind": "field",
+  "name": "doc_id",
+  "owner": "OwnerRegistrationObservation",
+  "user": "crates/gents-documents/src/node_document_publication.rs:40"
+ },
+ {
+  "from_crate": "gents-documents",
+  "kind": "field",
+  "name": "visible",
+  "owner": "OwnerRegistrationObservation",
+  "user": "crates/gents-documents/src/node_document_publication.rs:41"
+ },
+ {
+  "from_crate": "gents-documents",
+  "kind": "field",
+  "name": "registered",
+  "owner": "OwnerRegistrationObservation",
+  "user": "crates/gents-documents/src/node_document_publication.rs:42"
+ },
+ {
+  "from_crate": "gents-documents",
+  "kind": "type",
+  "name": "OwnerRegistrationObservation",
+  "user": "crates/gents-documents/src/node_document_publication.rs:35"
+ },
+ {
+  "file": "crates/gents-store/src/identity.rs",
+  "from_crate": "gents-inference",
+  "kind": "method",
+  "name": "node_did",
+  "user": "crates/gents-inference/src/admission/registry.rs:170"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/execute.rs",
+  "from_crate": "gents-inference",
+  "kind": "method",
+  "name": "execute_runtime_account_metadata_query",
+  "user": "crates/gents-inference/src/auth/credential/runtime_account.rs:64"
+ },
+ {
+  "file": "crates/gents-documents/src/backend_credential.rs",
+  "from_crate": "gents-inference",
+  "kind": "method",
+  "name": "matches_binding",
+  "user": "crates/gents-inference/src/auth/credential/static_backend.rs:34"
+ },
+ {
+  "file": "crates/gents-documents/src/backend_credential.rs",
+  "from_crate": "gents-inference",
+  "kind": "method",
+  "name": "into_backend_auth",
+  "user": "crates/gents-inference/src/auth/credential/static_backend.rs:55"
+ },
+ {
+  "file": "crates/gents-documents/src/references.rs",
+  "from_crate": "gents-inference",
+  "kind": "method",
+  "name": "agents_on_profile",
+  "user": "crates/gents-inference/src/profile_switch.rs:109"
+ },
+ {
+  "file": "crates/gents-documents/src/references.rs",
+  "from_crate": "gents-inference",
+  "kind": "method",
+  "name": "profile_with_backend",
+  "user": "crates/gents-inference/src/profile_switch.rs:281"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/mod.rs",
+  "from_crate": "gents-inference",
+  "kind": "method",
+  "name": "local_with_agent_signer",
+  "user": "crates/gents-inference/src/admission/persistence.rs:34"
+ },
+ {
+  "file": "crates/gents-documents/src/references.rs",
+  "from_crate": "gents-inference",
+  "kind": "method",
+  "name": "agent_profiles",
+  "user": "crates/gents-inference/src/profile_switch.rs:310"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/gate.rs",
+  "from_crate": "gents-pack",
+  "kind": "method",
+  "name": "node",
+  "user": "crates/gents-pack/src/pack/agent_bindings.rs:360"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/gate.rs",
+  "from_crate": "gents-pack",
+  "kind": "method",
+  "name": "identity",
+  "user": "crates/gents-pack/src/pack/agent_bindings.rs:371"
+ },
+ {
+  "from_crate": "gents-pack",
+  "kind": "field",
+  "name": "enabled",
+  "owner": "ConfigurationNodeBinding",
+  "user": "crates/gents-pack/src/pack/inference.rs:149"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/execute.rs",
+  "from_crate": "gents-pack",
+  "kind": "method",
+  "name": "stage_plugin_delete_roots",
+  "user": "crates/gents-pack/src/pack/installation/documents.rs:2128"
+ },
+ {
+  "file": "crates/gents-store/src/config_client/txn/verified_pack.rs",
+  "from_crate": "gents-pack",
+  "kind": "method",
+  "name": "interpreter",
+  "user": "crates/gents-pack/src/pack/installation/hosted.rs:187"
+ },
+ {
+  "from_crate": "gents-pack",
+  "kind": "field",
+  "name": "collection",
+  "owner": "RequiredReference",
+  "user": "crates/gents-pack/src/pack/authoring/export/select.rs:218"
+ },
+ {
+  "from_crate": "gents-pack",
+  "kind": "field",
+  "name": "id",
+  "owner": "RequiredReference",
+  "user": "crates/gents-pack/src/pack/authoring/export/select.rs:222"
+ },
+ {
+  "from_crate": "gents-pack",
+  "kind": "field",
+  "name": "field",
+  "owner": "RequiredReference",
+  "user": "crates/gents-pack/src/pack/authoring/export/select.rs:226"
+ },
+ {
+  "from_crate": "gents-pack",
+  "kind": "type",
+  "name": "RequiredReference",
+  "user": "crates/gents-pack/src/pack/authoring/export/select.rs:216"
+ }
+]

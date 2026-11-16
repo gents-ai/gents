@@ -1,0 +1,14 @@
+//! Session tests that need the runtime, goals, tool calls or other crates above gents-session.
+
+mod client_tests;
+mod execution_lease_tests;
+
+mod message_agent_tools_tests;
+mod message_hop_tests;
+
+mod output_replay_tests;
+mod query_result_tests;
+mod queue_tests;
+mod sessions_tests;
+mod terminal_tools_tests;
+mod workspace_capability_runtime_tests;

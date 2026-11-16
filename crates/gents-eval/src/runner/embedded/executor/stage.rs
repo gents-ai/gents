@@ -172,7 +172,7 @@ impl ObservedStage {
 
 async fn observe_stage_terminal(
     node: &std::sync::Arc<EmbeddedNode>,
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     cancel: &CancellationToken,
     runtime: &RunningRuntime,
     request_id: &str,
@@ -516,13 +516,13 @@ async fn runtime_exited(runtime: &RunningRuntime) {
 
 async fn interrupt_and_settle(
     node: &std::sync::Arc<EmbeddedNode>,
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request_id: &str,
 ) -> Result<TerminalObservation> {
     let row = poll_request_with_access(access, request_id)
         .await?
         .context("cancelled stage request is unavailable")?;
-    gents::request::interrupt::interrupt_request_by_doc_id_with_access(
+    gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
         access,
         row.doc_id
             .as_deref()

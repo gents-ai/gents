@@ -35,6 +35,9 @@ function owner(api: object) {
   return { server, store };
 }
 
+const localServerRunning = (store: ReturnType<typeof createLocalServerStore>) =>
+  store.setState({ status: status("running") } as never);
+
 describe("the local server's owner", () => {
   it("joins a start asked for while the same start runs", async () => {
     const started = later<ManagedServerStatus>();
@@ -94,6 +97,23 @@ describe("the local server's owner", () => {
     await stale;
 
     expect(store.getState().status?.state).toBe("stopped");
+  });
+
+  it("reads the node again when a stop reports failure, since it may have stopped", async () => {
+    const managedServerStatus = vi.fn(async () => status("stopped"));
+    const { server, store } = owner({
+      managedServerStatus,
+      stopManagedServer: vi.fn(async () => {
+        throw new Error(
+          "native supervisor did not confirm that the Gents job unloaded",
+        );
+      }),
+    });
+    localServerRunning(store);
+
+    await expect(server.stopLocalServer()).rejects.toThrow("did not confirm");
+    await vi.waitFor(() => expect(store.getState().status?.state).toBe("stopped"));
+    expect(managedServerStatus).toHaveBeenCalledTimes(1);
   });
 
   it("says why a read failed and clears it once one succeeds", async () => {

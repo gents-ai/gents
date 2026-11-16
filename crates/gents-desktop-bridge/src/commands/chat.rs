@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
-use gents_desktop_core::client::{ClientCore, SubmitRequestOptions};
-use uuid::Uuid;
+use gents_desktop_core::client::ClientCore;
+use gents_protocol::operations::request::{MessageSendBody, MessageSendRoute};
 
 use super::super::types::{ChatSendRequest, ChatSendResult, SessionRenameRequest};
 
@@ -62,10 +62,10 @@ pub async fn request_output(
 }
 
 fn request_output_state(
-    output: Option<gents::session::CanonicalRequestOutput>,
+    output: Option<gents_session::session::CanonicalRequestOutput>,
 ) -> crate::types::RequestOutputStateView {
     use crate::types::RequestOutputStateView as View;
-    use gents::session::CanonicalRequestOutput as Output;
+    use gents_session::session::CanonicalRequestOutput as Output;
     match output {
         Some(Output::TerminalMessage { presentation, .. }) => View::TerminalMessage { content: presentation.body_markdown },
         Some(Output::TerminalNoMessage) => View::TerminalNoMessage,
@@ -90,92 +90,61 @@ pub async fn send_chat_message(
             "this message was written under another client identity"
         );
     }
-    let request_id = request
-        .request_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-
-    let captured_context = request.captured_context.unwrap_or_default();
-    let attachments = request.attachments.unwrap_or_default();
-    let (content, question_reply) = match &request.answer {
-        Some(answer) => {
-            if !request.content.trim().is_empty()
-                || !captured_context.is_empty()
-                || !attachments.is_empty()
-            {
-                bail!("an answer renders its own content; send empty content");
-            }
-            super::mailbox::question_reply_content(
-                core,
-                request.caused_by_source_doc_id.as_deref(),
-                request.session_id.as_deref(),
-                &node_did,
-                request.agent_did.as_deref(),
-                answer,
-            )?
-        }
-        None => (request.content.trim().to_string(), None),
+    let route = MessageSendRoute {
+        node_did: node_did.clone(),
+        session_id: request.session_id.clone(),
+        request_id: request.request_id.clone(),
     };
-    if content.is_empty() && captured_context.is_empty() && attachments.is_empty() {
-        bail!("content is required");
-    }
-
-    let agent_did = request
-        .agent_did
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-
-    let requested_session_id = request
-        .session_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let session_id = requested_session_id
-        .map(str::to_string)
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-
-    let input = core
-        .prepare_user_message_input_with_delivery(
-            &node_did,
-            &session_id,
-            gents_protocol::request_input::RequestInput {
+    let message = async {
+        let captured_context = request.captured_context.unwrap_or_default();
+        let attachments = request.attachments.unwrap_or_default();
+        let (content, question_reply, asking_agent) = match &request.answer {
+            Some(answer) => {
+                if !request.content.trim().is_empty()
+                    || !captured_context.is_empty()
+                    || !attachments.is_empty()
+                {
+                    bail!("an answer renders its own content; send empty content");
+                }
+                let prepared = super::mailbox::question_reply_content(
+                    core,
+                    request.caused_by_source_doc_id.as_deref(),
+                    request.session_id.as_deref(),
+                    &node_did,
+                    request.agent_did.as_deref(),
+                    answer,
+                )?;
+                (
+                    prepared.content,
+                    prepared.question_reply,
+                    Some(prepared.agent_did),
+                )
+            }
+            None => (request.content.trim().to_string(), None, None),
+        };
+        Ok(MessageSendBody {
+            agent_did: asking_agent.or(request.agent_did),
+            content,
+            input: gents_protocol::request_input::RequestInput {
                 question_reply,
                 cwd: chat_folder(request.cwd.as_deref())?,
                 captured_context,
                 attachments,
                 ..Default::default()
             },
-            request
-                .delivery
-                .unwrap_or(gents_protocol::request_input::QueueDelivery::Steer),
-        )
-        .await?;
-
-    let submitted = core
-        .submit_request_with_options(
-            &session_id,
-            &node_did,
-            &content,
-            agent_did.as_deref(),
-            SubmitRequestOptions {
-                request_id,
-                caused_by_source_doc_id: request.caused_by_source_doc_id,
-                input,
-                ..SubmitRequestOptions::default()
-            },
-        )
-        .await?;
+            delivery: request.delivery.into(),
+            valid_until: None,
+            mailbox_item_id: request.caused_by_source_doc_id,
+        })
+    };
+    let submitted = core.send_message_with(route, message).await?;
     Ok(submitted.into())
 }
 
 pub async fn retry_request(
     core: &ClientCore,
     request_id: &str,
-    node_did: Option<&str>,
+    node_did: &str,
 ) -> Result<ChatSendResult> {
     let parent = core.request_in_scope(request_id, node_did)?;
     Ok(core.retry_request(&parent).await?.into())
@@ -213,9 +182,6 @@ pub async fn fork_session_before_message(
 
 #[cfg(test)]
 mod edit_fork_tests {
-    use super::*;
-    use gents::store::config_client::ConfigAccess;
-
     #[test]
     fn fork_wire_requires_the_retained_client_and_destination() {
         let mut request = serde_json::json!({ "nodeDid": "node", "sessionId": "source", "messageKey": "canonical-message" });
@@ -233,45 +199,6 @@ mod edit_fork_tests {
             serde_json::from_value::<crate::types::SessionForkBeforeRequest>(request).unwrap();
         assert_eq!(decoded.child_session_id, "child");
         assert_eq!(decoded.client_did, "client");
-    }
-
-    #[tokio::test]
-    async fn fork_refuses_foreign_clients_and_changed_destination_bytes_before_routing(
-    ) -> Result<()> {
-        let (core, _home) = crate::tests::support::boot_core().await;
-        let result = async {
-            let mut request = crate::types::SessionForkBeforeRequest {
-                node_did: "unrouted-node".into(),
-                session_id: "source".into(),
-                message_key: "message".into(),
-                client_did: "foreign-client".into(),
-                child_session_id: "child".into(),
-            };
-            let error = fork_session_before_message(&core, request.clone())
-                .await
-                .unwrap_err();
-            assert!(
-                error.to_string().contains("another native client"),
-                "{error}"
-            );
-            request.client_did = core.node_identity().did().to_owned();
-            request.child_session_id = " child ".into();
-            let error = fork_session_before_message(&core, request)
-                .await
-                .unwrap_err();
-            assert!(
-                error.to_string().contains("exact canonical identity"),
-                "{error}"
-            );
-            let sessions = ConfigAccess::local(core.node_arc())
-                .execute("{ AgentSession { session_id } }")
-                .await?;
-            assert_eq!(sessions["data"]["AgentSession"], serde_json::json!([]));
-            Ok::<(), anyhow::Error>(())
-        }
-        .await;
-        core.shutdown().await?;
-        result
     }
 }
 
@@ -301,16 +228,8 @@ pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) ->
     if node_did.is_empty() {
         bail!("node_did is required");
     }
-    let session_id = request.session_id.trim().to_string();
-    if session_id.is_empty() {
-        bail!("session_id is required");
-    }
-    let title = request.title.trim().to_string();
-    if title.is_empty() {
-        bail!("title is required");
-    }
-    core.rename_session(&node_did, &session_id, &title).await?;
-    Ok(())
+    core.rename_session(&node_did, request.session_id.trim(), &request.title)
+        .await
 }
 
 pub async fn edit_pending_queue(
@@ -321,17 +240,19 @@ pub async fn edit_pending_queue(
         .edit_pending_queue(
             &request.node_did,
             &request.session_id,
-            gents::request::lifecycle::PendingQueueEdit {
+            gents_session::request::lifecycle::PendingQueueEdit {
                 expected_request_doc_ids: request.expected_request_doc_ids,
                 selected_request_doc_ids: request.selected_request_doc_ids,
                 messages: request
                     .messages
                     .into_iter()
-                    .map(|message| gents::request::lifecycle::PendingMessageEdit {
-                        authored_input: message.authored_input,
-                        request_doc_id: message.request_doc_id,
-                        content: message.content,
-                    })
+                    .map(
+                        |message| gents_session::request::lifecycle::PendingMessageEdit {
+                            authored_input: message.authored_input,
+                            request_doc_id: message.request_doc_id,
+                            content: message.content,
+                        },
+                    )
                     .collect(),
             },
         )
@@ -368,7 +289,7 @@ mod tests {
     #[test]
     fn terminal_diagnostic_history_cannot_keep_voice_waiting_for_a_complete_answer() {
         let state = request_output_state(Some(
-            gents::session::CanonicalRequestOutput::RetainedPartial(Vec::new()),
+            gents_session::session::CanonicalRequestOutput::RetainedPartial(Vec::new()),
         ));
         assert!(matches!(
             state,

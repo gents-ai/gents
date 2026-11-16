@@ -1,128 +1,58 @@
-use gents::store::config_client::GraphqlEndpoint;
 use std::fs;
+use std::future::Future;
 use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
-use gents_protocol::graphql::GraphqlRequestOptions;
-use gents_protocol::request_admission::AgentRequestCreate;
-use gents_protocol::request_input::RequestInput;
+use gents_protocol::operations::request::{RequestOperationError, RequestRef, RequestWaitInput};
 use gents_protocol::row::AgentRequestRow;
+use gents_store::config_client::ConfigAccess;
+use gents_store::identity::RegisteredIdentity;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::{post_graphql, require_non_empty};
+use crate::operation_failure::OperationFailure;
+use crate::require_non_empty;
 
-#[derive(Debug, Clone)]
-pub(crate) struct SubmittedRequest {
-    pub(crate) request_id: String,
-    pub(crate) session_id: String,
-    pub(crate) node_did: String,
-    pub(crate) agent_did: Option<String>,
-    pub(crate) request_doc_id: String,
-    pub(crate) requester_did: Option<String>,
-    pub(crate) input: Option<RequestInput>,
+/// The CLI's client identity, which signs the requests it sends.
+pub(crate) fn client_signer(access: &ConfigAccess) -> Result<RegisteredIdentity> {
+    let did = access
+        .actor_did()
+        .ok_or_else(|| OperationFailure::from(RequestOperationError::IdentityRequired))?;
+    Ok(RegisteredIdentity::from_registered_did(did, None)?)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CanonicalToolPresentation {
-    pub(crate) arguments: String,
-    /// Present only after the invocation reply is durably published.
-    pub(crate) result: Option<String>,
-    pub(crate) live_output: Option<String>,
+pub(crate) fn request_ref(node_did: &str, request_id: &str) -> RequestRef {
+    RequestRef {
+        node_did: node_did.to_owned(),
+        requester_did: None,
+        request_id: request_id.to_owned(),
+    }
 }
 
-/// `include_result` must only be requested for a terminal tool lifecycle; a
-/// missing or malformed terminal delivery is an error rather than an empty
-/// preview.
-pub(crate) async fn load_canonical_tool_presentation(
-    graphql: &GraphqlEndpoint,
-    tool_call_doc_id: &str,
-    submitted: &SubmittedRequest,
-    include_result: bool,
-) -> Result<CanonicalToolPresentation> {
-    let access = gents::ConfigAccess::Graphql(graphql.clone());
-    let presentation = gents::session::load_tool_call_presentation(
-        &access,
-        tool_call_doc_id,
-        &submitted.node_did,
-        &submitted.session_id,
-        submitted.requester_did.as_deref(),
-    )
-    .await
-    .context("loading canonical tool presentation")?;
-    Ok(CanonicalToolPresentation {
-        arguments: presentation.arguments,
-        result: include_result.then_some(presentation.result).flatten(),
-        live_output: presentation.live_output,
-    })
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct RequestSubmitOptions {
-    pub(crate) caused_by_source_doc_id: Option<String>,
-    pub(crate) input: Option<RequestInput>,
-    pub(crate) valid_until: Option<DateTime<Utc>>,
-    pub(crate) retry_parent_request: Option<String>,
-    pub(crate) retry_parent_request_doc_id: Option<String>,
-    pub(crate) retry_root_request: Option<String>,
-    pub(crate) retry_key: Option<String>,
-}
-
-/// An exact `_docID` read carries no `order`: DefraDB plans an ordered read as
-/// an index scan and applies `limit` before the `_docID` filter, so later rows
-/// in the collection would hide the request.
-pub(crate) fn request_terminal_query(request_id: &str, physical: Option<&str>) -> String {
-    let (filter, order) = match physical {
-        Some(id) => (
-            format!("_docID:{{_eq:\"{}\"}}", escape_graphql_string(id)),
-            "",
-        ),
-        None => (
-            format!(
-                "request_id:{{_eq:\"{}\"}}",
-                escape_graphql_string(request_id)
-            ),
-            "order: { created_at: DESC },",
-        ),
+pub(crate) async fn wait_for_request<F, Fut>(
+    access: &ConfigAccess,
+    request: RequestRef,
+    timeout_secs: u64,
+    poll_secs: u64,
+    progress: F,
+) -> Result<RequestOutputEnvelope>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<bool>>,
+{
+    let input = RequestWaitInput {
+        request,
+        timeout_secs,
+        poll_secs,
     };
-    format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ {filter} }},
-                {order}
-                limit: 2
-            ) {{
-                _docID node_did requester_did agent_did session_id
-                request_id
-                lifecycle_state
-                failure_reason
-                terminal_output
-                superseded_by_request
-                superseded_by_request_doc_id
-                terminalized_at
-                interrupt_requested_at
-                valid_until
-                execution_generation
-                execution_lease_secs
-                execution_lease_expires_at
-            }}
-        }}"#,
-    )
-}
-
-/// The signed admission input remains on the request row and is never
-/// rewritten into response-shaped JSON.
-pub(crate) async fn observe_canonical_request_output(
-    graphql: &GraphqlEndpoint,
-    request: &AgentRequestRow,
-) -> Result<gents::session::CanonicalRequestOutput> {
-    gents::session::observe_request_output(&gents::ConfigAccess::Graphql(graphql.clone()), request)
+    let (row, output) = gents_session::operations::request::wait(access, input, progress)
         .await
+        .map_err(OperationFailure::from)?;
+    request_output_envelope(&row, output)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -180,7 +110,7 @@ pub(crate) struct RequestOutputEnvelope {
     pub(crate) output: CliOutputObservation,
 }
 
-fn cli_presentation(value: gents::session::CanonicalPresentation) -> CliOutputPresentation {
+fn cli_presentation(value: gents_session::session::CanonicalPresentation) -> CliOutputPresentation {
     CliOutputPresentation {
         body_markdown: value.body_markdown,
         reasoning_markdown: value.reasoning_markdown,
@@ -189,7 +119,7 @@ fn cli_presentation(value: gents::session::CanonicalPresentation) -> CliOutputPr
 
 pub(crate) fn request_output_envelope(
     request: &AgentRequestRow,
-    output: gents::session::CanonicalRequestOutput,
+    output: gents_session::session::CanonicalRequestOutput,
 ) -> Result<RequestOutputEnvelope> {
     let request = CliRequestMetadata {
         request_doc_id: request
@@ -214,22 +144,28 @@ pub(crate) fn request_output_envelope(
         terminalized_at: request.terminalized_at.clone(),
     };
     let output = match output {
-        gents::session::CanonicalRequestOutput::Absent => CliOutputObservation::Absent,
-        gents::session::CanonicalRequestOutput::Live(value) => CliOutputObservation::Live {
+        gents_session::session::CanonicalRequestOutput::Absent => CliOutputObservation::Absent,
+        gents_session::session::CanonicalRequestOutput::Live(value) => CliOutputObservation::Live {
             presentation: cli_presentation(value),
         },
-        gents::session::CanonicalRequestOutput::Settling(value) => CliOutputObservation::Settling {
-            presentation: cli_presentation(value),
-        },
-        gents::session::CanonicalRequestOutput::Loading => CliOutputObservation::Loading,
-        gents::session::CanonicalRequestOutput::Denied => CliOutputObservation::Denied,
-        gents::session::CanonicalRequestOutput::Conflicted => CliOutputObservation::Conflicted,
-        gents::session::CanonicalRequestOutput::Invalid => CliOutputObservation::Invalid,
-        gents::session::CanonicalRequestOutput::Retracted => CliOutputObservation::Retracted,
-        gents::session::CanonicalRequestOutput::RetainedPartial(_) => {
+        gents_session::session::CanonicalRequestOutput::Settling(value) => {
+            CliOutputObservation::Settling {
+                presentation: cli_presentation(value),
+            }
+        }
+        gents_session::session::CanonicalRequestOutput::Loading => CliOutputObservation::Loading,
+        gents_session::session::CanonicalRequestOutput::Denied => CliOutputObservation::Denied,
+        gents_session::session::CanonicalRequestOutput::Conflicted => {
+            CliOutputObservation::Conflicted
+        }
+        gents_session::session::CanonicalRequestOutput::Invalid => CliOutputObservation::Invalid,
+        gents_session::session::CanonicalRequestOutput::Retracted => {
+            CliOutputObservation::Retracted
+        }
+        gents_session::session::CanonicalRequestOutput::RetainedPartial(_) => {
             CliOutputObservation::RetainedPartial
         }
-        gents::session::CanonicalRequestOutput::Published {
+        gents_session::session::CanonicalRequestOutput::Published {
             header,
             message,
             presentation,
@@ -238,10 +174,10 @@ pub(crate) fn request_output_envelope(
             message,
             presentation: cli_presentation(presentation),
         },
-        gents::session::CanonicalRequestOutput::TerminalNoMessage => {
+        gents_session::session::CanonicalRequestOutput::TerminalNoMessage => {
             CliOutputObservation::TerminalNoMessage
         }
-        gents::session::CanonicalRequestOutput::TerminalMessage {
+        gents_session::session::CanonicalRequestOutput::TerminalMessage {
             header,
             message,
             presentation,
@@ -252,617 +188,6 @@ pub(crate) fn request_output_envelope(
         },
     };
     Ok(RequestOutputEnvelope { request, output })
-}
-
-pub(crate) async fn create_agent_request(
-    graphql: &GraphqlEndpoint,
-    node_did: &str,
-    content: &str,
-    session_id: Option<&str>,
-    agent_did: Option<&str>,
-    options: RequestSubmitOptions,
-) -> Result<SubmittedRequest> {
-    let prepared = prepare_agent_request(
-        graphql, node_did, content, session_id, agent_did, None, options,
-    )
-    .await?;
-    submit_prepared_agent_request_committed(graphql, &prepared).await
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PreparedAgentRequest {
-    pub(crate) create: AgentRequestCreate,
-}
-
-pub(crate) async fn prepare_agent_request(
-    graphql: &GraphqlEndpoint,
-    node_did: &str,
-    content: &str,
-    session_id: Option<&str>,
-    agent_did: Option<&str>,
-    request_id: Option<String>,
-    mut options: RequestSubmitOptions,
-) -> Result<PreparedAgentRequest> {
-    if let Some(session_id) = session_id.filter(|_| options.retry_parent_request.is_none()) {
-        options.input = Some(
-            prepare_cli_goal_input(
-                &gents::ConfigAccess::Graphql(graphql.clone()),
-                node_did,
-                session_id,
-                options.input.take().unwrap_or_default(),
-            )
-            .await?,
-        );
-    }
-    prepare_agent_request_with_input(
-        graphql, node_did, content, session_id, agent_did, request_id, options,
-    )
-    .await
-}
-
-pub(crate) async fn prepare_agent_request_with_input(
-    graphql: &GraphqlEndpoint,
-    node_did: &str,
-    content: &str,
-    session_id: Option<&str>,
-    agent_did: Option<&str>,
-    request_id: Option<String>,
-    options: RequestSubmitOptions,
-) -> Result<PreparedAgentRequest> {
-    let (request_content, request_input) =
-        content_and_input_with_prompt_selected_skill_ids(options.input, content);
-    let request_id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let agent_did = resolve_request_agent_did(graphql, node_did, session_id, agent_did).await?;
-    let session_id = session_id
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let retry_parent_value = options.retry_parent_request.as_deref().unwrap_or_default();
-    let retry_root_value = options
-        .retry_root_request
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| {
-            if retry_parent_value.is_empty() {
-                request_id.clone()
-            } else {
-                retry_parent_value.to_string()
-            }
-        });
-    let access = gents::ConfigAccess::Graphql(graphql.clone());
-    let actor_did = access
-        .actor_did()
-        .context("request submission requires an authenticated client identity")?;
-    let signer = gents::store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
-    let requester_did =
-        gents::session::client_requester_scope(&access, node_did, &session_id, &actor_did).await?;
-    let admission =
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&actor_did);
-    let create = gents::request::lifecycle::build_signed_client_request(
-        &access,
-        gents::RequestSpec {
-            trigger_lineage: gents::request::lifecycle::TriggerLineage {
-                source_doc_id: options.caused_by_source_doc_id,
-                ..Default::default()
-            },
-            input: request_input,
-            valid_until: options
-                .valid_until
-                .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
-            retry_key: options.retry_key,
-            retry: Some(gents::RetryLink {
-                parent_request_id: (!retry_parent_value.is_empty())
-                    .then(|| retry_parent_value.to_string()),
-                parent_request_doc_id: options.retry_parent_request_doc_id,
-                root_request_id: retry_root_value,
-                retry_count: 0,
-                max_retries: i64::from(gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES),
-            }),
-            ..gents::RequestSpec::new(
-                gents_protocol::request_admission::RequestPurpose::Normal,
-                gents::RequestIdentity {
-                    request_id: request_id.clone(),
-                    node_did: node_did.to_string(),
-                    requester_did: Some(requester_did),
-                    agent_did: agent_did.clone(),
-                    session_id: session_id.clone(),
-                    content: request_content,
-                    execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
-                    created_at: created_at.clone(),
-                },
-                admission,
-            )
-        },
-        gents::RequestSigner::Identity(&signer),
-    )
-    .await?;
-    Ok(PreparedAgentRequest { create })
-}
-
-pub(crate) async fn prepare_cli_goal_input(
-    access: &gents::ConfigAccess,
-    node_did: &str,
-    session_id: &str,
-    input: RequestInput,
-) -> Result<RequestInput> {
-    if input.goal_assignment.is_some() {
-        return Ok(input);
-    }
-    let actor_did = access
-        .actor_did()
-        .context("Goal input requires an authenticated client identity")?;
-    let verifier =
-        gents::store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
-    gents::goal::prepare_client_goal_input(access, &verifier, node_did, session_id, input).await
-}
-
-pub(crate) async fn submit_prepared_agent_request_committed(
-    graphql: &GraphqlEndpoint,
-    prepared: &PreparedAgentRequest,
-) -> Result<SubmittedRequest> {
-    let access = gents::ConfigAccess::Graphql(graphql.clone());
-    if let Err(error) =
-        gents::request::lifecycle::submit_client_request(&access, &prepared.create).await
-    {
-        match gents::request::lifecycle::reconcile_client_request(&access, &prepared.create).await {
-            Ok(true) => {}
-            Ok(false) => return Err(error.into()),
-            Err(recovery) => {
-                return Err(anyhow::Error::new(recovery).context(format!(
-                    "request submission remains unconfirmed after {error}"
-                )))
-            }
-        }
-    }
-    let row = matching_prepared_receipt(graphql, &prepared.create)
-        .await?
-        .context("committed signed request receipt missing")?;
-    submitted_from_receipt(row)
-}
-
-fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest> {
-    Ok(SubmittedRequest {
-        request_doc_id: row
-            .doc_id
-            .filter(|id| !id.is_empty())
-            .context("receipt has no physical identity")?,
-        request_id: row.request_id,
-        session_id: row.session_id.context("receipt has no session")?,
-        node_did: row.node_did.context("receipt has no node_did")?,
-        requester_did: row.requester_did,
-        agent_did: row.agent_did,
-        input: row.input,
-    })
-}
-
-pub(crate) async fn matching_prepared_receipt(
-    graphql: &GraphqlEndpoint,
-    create: &AgentRequestCreate,
-) -> Result<Option<AgentRequestRow>> {
-    let Some(row) = read_submitted_receipt(graphql, create).await? else {
-        return Ok(None);
-    };
-    let signature = bs58::encode(&create.admission.signature).into_string();
-    anyhow::ensure!(
-        row.admission_signer_did.as_deref() == Some(create.admission.signer_did.as_str())
-            && row.admission_signature.as_deref() == Some(signature.as_str()),
-        "submission receipt differs from prepared signed request"
-    );
-    Ok(Some(row))
-}
-
-async fn read_submitted_receipt(
-    graphql: &GraphqlEndpoint,
-    create: &AgentRequestCreate,
-) -> Result<Option<AgentRequestRow>> {
-    let scope = gents_protocol::session::session_scope_filter(
-        &create.node_did,
-        &create.session_id,
-        (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
-    );
-    let logical = escape_graphql_string(&create.request_id);
-    let response = gents::store::config_client::query_graphql_with_options(
-        graphql,
-        &format!(
-            "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{{}}}}}",
-            gents::SIGNED_REQUEST_FIELDS
-        ),
-        GraphqlRequestOptions {
-            timeout: Duration::from_secs(30),
-            max_attempts: 1,
-            retry_backoff: Duration::ZERO,
-        },
-    )
-    .await
-    .context("reading immutable signed submission receipt")?;
-    let rows = response
-        .pointer("/data/AgentRequest")
-        .and_then(Value::as_array)
-        .context("request receipt query omitted rows")?;
-    anyhow::ensure!(rows.len() <= 1, "ambiguous scoped submission receipt");
-    let Some(value) = rows.first() else {
-        return Ok(None);
-    };
-    let row: AgentRequestRow = serde_json::from_value(value.clone())?;
-    anyhow::ensure!(
-        row.request_id == create.request_id
-            && row.node_did.as_deref() == Some(create.node_did.as_str())
-            && row.session_id.as_deref() == Some(create.session_id.as_str())
-            && row.requester_did.as_deref()
-                == (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
-        "submission receipt crossed exact request scope"
-    );
-    gents::verify_request_receipt_signature(&row)?;
-    Ok(Some(row))
-}
-
-async fn resolve_request_agent_did(
-    graphql: &GraphqlEndpoint,
-    node_did: &str,
-    session_id: Option<&str>,
-    requested: Option<&str>,
-) -> Result<String> {
-    let session_agent = if let Some(session_id) = session_id {
-        gents::ConfigAccess::Graphql(graphql.clone())
-            .transact_readonly("cli.request.session_agent", |txn| {
-                Box::pin(async move {
-                    Ok::<_, anyhow::Error>(
-                        gents::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-                            .await?
-                            .map(|row| row.session.agent_did),
-                    )
-                })
-            })
-            .await?
-    } else {
-        None
-    };
-    let requested = requested.map(str::trim).filter(|value| !value.is_empty());
-    if let (Some(existing), Some(requested)) = (session_agent.as_deref(), requested) {
-        anyhow::ensure!(
-            existing == requested,
-            "request agent differs from the canonical session agent"
-        );
-    }
-    let requested = session_agent.as_deref().or(requested);
-    let escaped_node_did = gents::store::graphql::escape_graphql_string(node_did);
-    let response = post_graphql(
-        graphql,
-        &format!(
-            r#"{{
-                Node(
-                    filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
-                    limit: 2
-                ) {{ node_did default_agent_did enabled }}
-                Agent(
-                    filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }}
-                ) {{ agent_did node_did enabled }}
-            }}"#,
-        ),
-    )
-    .await
-    .context("loading authoritative request agent")?;
-    let nodes = response
-        .pointer("/data/Node")
-        .and_then(Value::as_array)
-        .context("Node query returned no row array")?;
-    anyhow::ensure!(
-        nodes.len() == 1,
-        "request target node must resolve to exactly one row"
-    );
-    let principal = &nodes[0];
-    anyhow::ensure!(
-        principal.get("enabled").and_then(Value::as_bool) == Some(true),
-        "request target node is disabled"
-    );
-    let agent_did = match requested.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(agent_did) => agent_did.to_string(),
-        None => principal
-            .get("default_agent_did")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .context("request target node has no canonical default agent")?,
-    };
-    let agents = response
-        .pointer("/data/Agent")
-        .and_then(Value::as_array)
-        .context("Agent query returned no row array")?;
-    let matching = agents
-        .iter()
-        .filter(|row| row.get("agent_did").and_then(Value::as_str) == Some(&agent_did))
-        .collect::<Vec<_>>();
-    anyhow::ensure!(
-        matching.len() == 1,
-        "request agent must resolve to exactly one row owned by the target node"
-    );
-    anyhow::ensure!(
-        matching[0].get("enabled").and_then(Value::as_bool) == Some(true),
-        "request agent is disabled"
-    );
-    Ok(agent_did)
-}
-
-pub(crate) use gents::documents::skills::content_and_input_with_prompt_selected_skill_ids;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct WaitProgressMarker {
-    request_lifecycle_state: Option<RequestLifecycleState>,
-    request_failure_reason: Option<String>,
-    request_interrupt_requested_at: Option<String>,
-    request_valid_until: Option<String>,
-    request_execution_lease_expires_at: Option<String>,
-    request_terminal_output: Option<String>,
-    request_terminalized_at: Option<String>,
-    canonical_output: Option<WaitOutputProgress>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct WaitOutputProgress {
-    kind: &'static str,
-    body_markdown: String,
-    reasoning_markdown: Option<String>,
-}
-
-fn wait_output_progress(
-    output: &gents::session::CanonicalRequestOutput,
-) -> Option<WaitOutputProgress> {
-    let (kind, presentation) = match output {
-        gents::session::CanonicalRequestOutput::Live(value) => ("live", value),
-        gents::session::CanonicalRequestOutput::Settling(value) => ("settling", value),
-        gents::session::CanonicalRequestOutput::Published { presentation, .. } => {
-            ("published", presentation)
-        }
-        _ => return None,
-    };
-    Some(WaitOutputProgress {
-        kind,
-        body_markdown: presentation.body_markdown.clone(),
-        reasoning_markdown: presentation.reasoning_markdown.clone(),
-    })
-}
-
-fn wait_progress_marker(
-    request_row: Option<&AgentRequestRow>,
-    output: Option<&gents::session::CanonicalRequestOutput>,
-) -> WaitProgressMarker {
-    WaitProgressMarker {
-        request_lifecycle_state: request_row.and_then(|row| row.lifecycle_state),
-        request_failure_reason: request_row.and_then(|row| row.failure_reason.clone()),
-        request_interrupt_requested_at: request_row
-            .and_then(|row| row.interrupt_requested_at.clone()),
-        request_valid_until: request_row.and_then(|row| row.valid_until.clone()),
-        request_execution_lease_expires_at: request_row
-            .and_then(|row| row.execution_lease_expires_at.clone()),
-        request_terminal_output: request_row
-            .and_then(|row| row.terminal_output.as_ref())
-            .and_then(|selection| serde_json::to_string(selection).ok()),
-        request_terminalized_at: request_row.and_then(|row| row.terminalized_at.clone()),
-        canonical_output: output.and_then(wait_output_progress),
-    }
-}
-
-fn successor_output_target(row: &AgentRequestRow) -> Result<Option<(String, String)>> {
-    let Some(logical) = gents::request::lifecycle::folded_into(row)
-        .or_else(|| gents::request::lifecycle::replaced_by(row))
-    else {
-        return Ok(None);
-    };
-    let physical = row
-        .superseded_by_request_doc_id
-        .as_deref()
-        .filter(|id| !id.trim().is_empty())
-        .context("superseded request has no physical output target")?;
-    anyhow::ensure!(
-        row.doc_id.as_deref() != Some(physical),
-        "superseded request targets itself"
-    );
-    Ok(Some((logical.to_owned(), physical.to_owned())))
-}
-
-pub(crate) async fn wait_for_terminal_response(
-    graphql: &GraphqlEndpoint,
-    request_id: &str,
-    timeout_secs: u64,
-    poll_secs: u64,
-) -> Result<RequestOutputEnvelope> {
-    wait_for_terminal_response_with_progress(
-        graphql,
-        request_id,
-        timeout_secs,
-        poll_secs,
-        || async { Ok(false) },
-    )
-    .await
-}
-
-pub(crate) async fn wait_for_terminal_response_with_progress<F, Fut>(
-    graphql: &GraphqlEndpoint,
-    request_id: &str,
-    timeout_secs: u64,
-    poll_secs: u64,
-    mut progress: F,
-) -> Result<RequestOutputEnvelope>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<bool>>,
-{
-    let idle_timeout = Duration::from_secs(timeout_secs);
-    let mut last_progress_at = tokio::time::Instant::now();
-    let mut last_progress_marker: Option<WaitProgressMarker> = None;
-
-    let mut pinned: Option<AgentRequestRow> = None;
-    let mut current_request_id = request_id.to_owned();
-    let mut target_physical: Option<String> = None;
-    let mut followed = std::collections::BTreeSet::new();
-    let mut original_scope: Option<AgentRequestRow> = None;
-    loop {
-        if progress().await? {
-            last_progress_at = tokio::time::Instant::now();
-        }
-        let request_row = {
-            let query = request_terminal_query(
-                &current_request_id,
-                pinned
-                    .as_ref()
-                    .and_then(|row| row.doc_id.as_deref())
-                    .or(target_physical.as_deref()),
-            );
-            let response = post_graphql(graphql, &query).await?;
-            let rows = response
-                .pointer("/data/AgentRequest")
-                .and_then(Value::as_array)
-                .context("terminal request query omitted rows")?;
-            anyhow::ensure!(
-                rows.len() <= 1,
-                "ambiguous request ID while selecting terminal request"
-            );
-            rows.first()
-                .as_ref()
-                .map(|row| {
-                    serde_json::from_value::<AgentRequestRow>((*row).clone())
-                        .context("decoding terminal-wait AgentRequest row")
-                })
-                .transpose()?
-        };
-        if let Some(request) = request_row.as_ref() {
-            anyhow::ensure!(
-                request.doc_id.is_some(),
-                "terminal request has no physical identity"
-            );
-            anyhow::ensure!(
-                request.request_id == current_request_id,
-                "successor output target changed logical identity"
-            );
-            if let Some(expected) = target_physical.as_deref() {
-                anyhow::ensure!(
-                    request.doc_id.as_deref() == Some(expected),
-                    "successor output changed physical target"
-                );
-            }
-            if let Some(original) = original_scope.as_ref() {
-                anyhow::ensure!(
-                    request.node_did == original.node_did
-                        && request.requester_did == original.requester_did
-                        && request.session_id == original.session_id
-                        && request.agent_did == original.agent_did,
-                    "successor output target crossed request scope"
-                );
-            } else {
-                original_scope = Some(request.clone());
-            }
-            if let Some(original) = pinned.as_ref() {
-                anyhow::ensure!(
-                    request.node_did == original.node_did
-                        && request.requester_did == original.requester_did
-                        && request.session_id == original.session_id
-                        && request.request_id == original.request_id,
-                    "terminal request scope changed"
-                );
-            } else {
-                pinned = Some(request.clone());
-            }
-        }
-        if let Some(request) = request_row.as_ref() {
-            if let Some((logical, physical)) = successor_output_target(request)? {
-                followed.insert(request.doc_id.clone().unwrap());
-                anyhow::ensure!(
-                    !followed.contains(&physical),
-                    "cycle in successor output targets"
-                );
-                current_request_id = logical;
-                target_physical = Some(physical);
-                pinned = None;
-                continue;
-            }
-        }
-        let mut observed_output = match request_row.as_ref() {
-            Some(request) => Some(observe_canonical_request_output(graphql, request).await?),
-            None => None,
-        };
-        match observed_output.as_ref() {
-            Some(gents::session::CanonicalRequestOutput::Denied) => {
-                anyhow::bail!("canonical output for request {request_id} is denied")
-            }
-            Some(gents::session::CanonicalRequestOutput::Conflicted) => {
-                anyhow::bail!("canonical output for request {request_id} is conflicted")
-            }
-            Some(gents::session::CanonicalRequestOutput::Invalid) => {
-                anyhow::bail!("canonical output for request {request_id} is invalid")
-            }
-            _ => {}
-        }
-        let marker = wait_progress_marker(request_row.as_ref(), observed_output.as_ref());
-        if last_progress_marker.as_ref() != Some(&marker) {
-            last_progress_marker = Some(marker);
-            last_progress_at = tokio::time::Instant::now();
-        }
-
-        let lifecycle_state = request_row.as_ref().and_then(|row| row.lifecycle_state);
-        let terminal_by_request = lifecycle_state.is_some_and(RequestLifecycleState::is_terminal);
-        if terminal_by_request {
-            let request = request_row
-                .as_ref()
-                .context("terminal request disappeared after exact selection")?;
-            let output = observed_output
-                .take()
-                .context("terminal request output observation is missing")?;
-            match output {
-                gents::session::CanonicalRequestOutput::Loading => {
-                    if last_progress_at.elapsed() >= idle_timeout {
-                        anyhow::bail!(
-                            "timed out waiting for materialized AgentMessage {request_id} after {timeout_secs}s of inactivity\n{}",
-                            request_diagnostic_hint(request_id)
-                        );
-                    }
-                    tokio::time::sleep(Duration::from_secs(poll_secs)).await;
-                    continue;
-                }
-                gents::session::CanonicalRequestOutput::Denied => {
-                    anyhow::bail!("canonical terminal output for request {request_id} is denied")
-                }
-                gents::session::CanonicalRequestOutput::Conflicted => anyhow::bail!(
-                    "canonical terminal output for request {request_id} is conflicted"
-                ),
-                gents::session::CanonicalRequestOutput::Invalid => {
-                    anyhow::bail!("canonical terminal output for request {request_id} is invalid")
-                }
-                gents::session::CanonicalRequestOutput::Retracted => anyhow::bail!(
-                    "canonical terminal output for request {request_id} is retracted"
-                ),
-                gents::session::CanonicalRequestOutput::RetainedPartial(_) => anyhow::bail!(
-                    "canonical terminal output for request {request_id} resolved only to retained partial diagnostics"
-                ),
-                gents::session::CanonicalRequestOutput::TerminalNoMessage
-                | gents::session::CanonicalRequestOutput::TerminalMessage { .. } => {
-                    return request_output_envelope(request, output)
-                }
-                gents::session::CanonicalRequestOutput::Absent
-                | gents::session::CanonicalRequestOutput::Live(_)
-                | gents::session::CanonicalRequestOutput::Settling(_)
-                | gents::session::CanonicalRequestOutput::Published { .. } => anyhow::bail!(
-                    "terminal request {request_id} produced a nonterminal canonical output observation"
-                ),
-            }
-        }
-
-        if last_progress_at.elapsed() >= idle_timeout {
-            anyhow::bail!(
-                "timed out waiting for AgentRequest {request_id} after {timeout_secs}s of inactivity\n{}",
-                request_diagnostic_hint(request_id)
-            );
-        }
-
-        tokio::time::sleep(Duration::from_secs(poll_secs)).await;
-    }
-}
-
-pub(crate) fn request_diagnostic_hint(request_id: &str) -> String {
-    format!(
-        "Next:\n  1. Run `gents utils debug request show {request_id}`\n  2. Run `gents utils debug response show {request_id}`\n  3. Inspect the runtime with `gents status`"
-    )
 }
 
 pub(crate) fn resolve_dual_id(
@@ -1002,549 +327,66 @@ pub(crate) fn parse_valid_until_flag(raw: Option<&str>) -> Result<Option<DateTim
     }
 }
 
-pub(crate) async fn fetch_request_view(
-    graphql: &GraphqlEndpoint,
-    request_id: &str,
-) -> Result<AgentRequestRow> {
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                limit: 2
-            ) {{
-                _docID
-                request_id
-                node_did
-                agent_did
-                content
-                lifecycle_state
-                failure_reason
-                terminal_output
-                terminalized_at
-                execution_generation
-                execution_lease_secs
-                execution_lease_expires_at
-                retry_root_request
-                requester_did
-                session_id
-                input
-            }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
-    );
-    let response = post_graphql(graphql, &query).await?;
-    let rows = response
-        .pointer("/data/AgentRequest")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    if rows.len() != 1 {
-        anyhow::bail!(
-            "request_id {request_id} is ambiguous or absent across {} AgentRequest documents",
-            rows.len()
-        );
-    }
-    let row = rows
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
-    serde_json::from_value(row).with_context(|| format!("decoding AgentRequest {request_id}"))
-}
-
 #[cfg(test)]
 pub(crate) mod goal_input_tests;
 
-#[cfg(test)]
-mod tests {
-    use super::{submit_prepared_agent_request_committed, PreparedAgentRequest};
-    use super::{successor_output_target, CliOutputObservation};
-    use axum::{
-        body::{Body, Bytes},
-        extract::State,
-        response::{IntoResponse, Response},
-        routing::post,
-        Json, Router,
+/// The signed first request of a Goal a person starts; its content is the
+/// objective.
+pub(crate) async fn goal_request(
+    access: &ConfigAccess,
+    node: &str,
+    session: &str,
+    agent: &str,
+    objective: &str,
+) -> anyhow::Result<gents_protocol::request_admission::AgentRequestCreate> {
+    use gents_session::request::lifecycle::{
+        build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
+        RetryLink, DEFAULT_REQUEST_MAX_RETRIES,
     };
-    use futures_util::stream;
-    use gents::store::config_client::GraphqlEndpoint;
-    use gents_protocol::row::AgentRequestRow;
-    use serde_json::{json, Value};
-    use std::collections::BTreeSet;
-    use std::sync::{Arc, Mutex};
-
-    /// The executable SessionCompositionCases.retractedPhase continues through
-    /// delayedPhase before terminalization; a source retraction is not a request terminal.
-    #[tokio::test]
-    async fn terminal_wait_survives_active_retraction_and_preserves_later_failure(
-    ) -> anyhow::Result<()> {
-        use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter, SourceClose};
-        use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
-        let modeled = snapshot["canonical_output_projection_cases"]
-            .as_array()
-            .expect("generated canonical projection cases")
-            .iter()
-            .find(|case| case["name"] == "retracted_attempt_is_not_rendered")
-            .expect("generated nonterminal retraction case");
-        assert_eq!(modeled["input"]["request_terminal"], false);
-        assert_eq!(modeled["expected"]["kind"], "retracted");
-        let modeled_close: SourceClose =
-            serde_json::from_value(modeled["input"]["records"][0]["close"].clone())?;
-        let close = OutputSegment {
-            node_did: "did:test:owner".into(),
-            requester_did: None,
-            session_id: "session".into(),
-            request_doc_id: "physical".into(),
-            source: OutputSource::ProviderTurn {
-                scope: CaptureScope {
-                    kind: CaptureScopeKind::Inference,
-                    seq: 1,
-                },
-                turn_index: 0,
-                attempt: 0,
+    let signer = client_signer(access)?;
+    let actor = gents_store::identity::NodeIdentity::did(&signer).to_owned();
+    let requester =
+        gents_session::session::client_requester_scope(access, node, session, &actor).await?;
+    let input = gents_session::request::lifecycle::prepare_user_message_input(
+        access,
+        node,
+        session,
+        gents_protocol::request_input::RequestInput {
+            goal_assignment: Some(gents_protocol::request_input::GoalAssignmentInput {
+                goal_id: gents_protocol::goal::deterministic_goal_id(node, session),
+                root_request_doc_id: None,
+            }),
+            ..Default::default()
+        },
+        gents_protocol::request_input::QueueDelivery::Queue,
+    )
+    .await?;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let spec = RequestSpec {
+        input,
+        retry_key: Some(format!("goal-request:{request_id}")),
+        retry: Some(RetryLink {
+            parent_request_id: None,
+            parent_request_doc_id: None,
+            root_request_id: request_id.clone(),
+            retry_count: 0,
+            max_retries: i64::from(DEFAULT_REQUEST_MAX_RETRIES),
+        }),
+        ..RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            RequestIdentity {
+                request_id,
+                node_did: node.to_owned(),
+                requester_did: Some(requester),
+                agent_did: agent.to_owned(),
+                session_id: session.to_owned(),
+                content: objective.to_owned(),
+                execution_origin: ExecutionOrigin::Interactive,
+                created_at,
             },
-            writer: OutputWriter::RequestExecution {
-                execution_generation: "generation".into(),
-            },
-            ordinal: None,
-            runs: vec![],
-            payload: String::new(),
-            close: Some(modeled_close),
-            created_at: "2026-09-01T00:00:00Z".into(),
-        };
-        let mut close = serde_json::to_value(close)?;
-        close["_docID"] = json!("retracted-attempt");
-        let output_reads = Arc::new(AtomicUsize::new(0));
-        let request_reads = Arc::new(AtomicUsize::new(0));
-        let app = Router::new().route("/graphql", post({
-            let output_reads = output_reads.clone();
-            let request_reads = request_reads.clone();
-            move |Json(body): Json<Value>| {
-                let output_reads = output_reads.clone();
-                let request_reads = request_reads.clone();
-                let close = close.clone();
-                async move {
-                    if body["query"].as_str().unwrap().contains("AgentOutputSegment") {
-                        output_reads.fetch_add(1, Ordering::SeqCst);
-                        Json(json!({"data": {"AgentOutputSegment": [close], "AgentMessage": []}}))
-                    } else {
-                        request_reads.fetch_add(1, Ordering::SeqCst);
-                        let terminal = output_reads.load(Ordering::SeqCst) > 0;
-                        Json(json!({"data": {"AgentRequest": [{
-                            "_docID": "physical", "request_id": "request",
-                            "node_did": "did:test:owner", "requester_did": null,
-                            "agent_did": "engineer", "session_id": "session",
-                            "lifecycle_state": if terminal { "failed" } else { "processing" },
-                            "execution_generation": "generation",
-                            "execution_lease_secs": 30,
-                            "execution_lease_expires_at": "2026-09-01T00:00:30Z",
-                            "failure_reason": if terminal { Some("provider returned an empty response") } else { None },
-                            "terminal_output": if terminal { Some(json!({"kind": "no_message"})) } else { None },
-                            "terminalized_at": if terminal { Some("2026-09-01T00:00:01Z") } else { None }
-                        }]}}))
-                    }
-                }
-            }
-        }));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let endpoint = gents::store::config_client::GraphqlEndpoint::anonymous(format!(
-            "http://{}/graphql",
-            listener.local_addr()?
-        ));
-        let server = tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
-        let result = super::wait_for_terminal_response(&endpoint, "request", 5, 0).await;
-        server.abort();
-        let result = result?;
-        assert_eq!(output_reads.load(Ordering::SeqCst), 1);
-        assert_eq!(request_reads.load(Ordering::SeqCst), 2);
-        assert_eq!(
-            result.request.lifecycle_state,
-            gents_protocol::client_protocol::RequestLifecycleState::Failed
-        );
-        assert_eq!(
-            result.request.failure_reason.as_deref(),
-            Some("provider returned an empty response")
-        );
-        assert!(matches!(
-            result.output,
-            super::CliOutputObservation::TerminalNoMessage
-        ));
-        Ok(())
-    }
-
-    #[derive(Clone, Default)]
-    struct AmbiguousSubmitState {
-        durable_ids: Arc<Mutex<BTreeSet<String>>>,
-        receipt: Arc<Mutex<Value>>,
-        mutation_count: Arc<std::sync::atomic::AtomicUsize>,
-        lose_transport_response: Arc<std::sync::atomic::AtomicBool>,
-    }
-
-    async fn ambiguous_submit_endpoint(
-        State(state): State<AmbiguousSubmitState>,
-        Json(body): Json<Value>,
-    ) -> Response {
-        let query = body
-            .get("query")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if query.contains("create_AgentRequest") {
-            state
-                .mutation_count
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            state
-                .durable_ids
-                .lock()
-                .expect("durable ids")
-                .insert("stable-request-id".to_string());
-            if state
-                .lose_transport_response
-                .swap(false, std::sync::atomic::Ordering::SeqCst)
-            {
-                // The durable write happened, then the response body failed.
-                // reqwest retains this decode/transport error in the anyhow
-                // cause chain, which recovery must classify before querying
-                // the stable request id.
-                let body = Body::from_stream(stream::once(async {
-                    Err::<Bytes, std::io::Error>(std::io::Error::other(
-                        "connection closed before message completed",
-                    ))
-                }));
-                return Response::new(body);
-            }
-            // The mutation committed, but its response was lost/replaced by a
-            // transient error at the transport boundary.
-            return Json(json!({"errors": [{
-                "message": "transaction conflict. Please retry",
-                "extensions": {"code": gents_protocol::database_error::TXN_CONFLICT_CODE}
-            }]}))
-            .into_response();
-        }
-        let rows: Vec<Value> = state
-            .durable_ids
-            .lock()
-            .expect("durable ids")
-            .iter()
-            .map(|_| state.receipt.lock().unwrap().clone())
-            .collect();
-        Json(json!({"data": {"AgentRequest": rows}})).into_response()
-    }
-
-    async fn stable_test_prepared_request() -> (
-        crate::shared::test_support::ClientHome,
-        PreparedAgentRequest,
-        Value,
-    ) {
-        use gents::NodeIdentity;
-        let client = crate::shared::test_support::ClientHome::new().await;
-        let agent = client.agent("Receipt agent").await;
-        let access = client.access.clone();
-        let user = &client.user;
-        let node_did = client.node_did().to_owned();
-        let binding = agent;
-        let create = gents::request::lifecycle::build_signed_client_request(
-            &access,
-            gents::RequestSpec::new(
-                gents_protocol::request_admission::RequestPurpose::Normal,
-                gents::RequestIdentity {
-                    request_id: "stable-request-id".into(),
-                    node_did: node_did.clone(),
-                    requester_did: Some(user.did().into()),
-                    agent_did: binding.agent_did,
-                    session_id: "session".into(),
-                    content: "hello".into(),
-                    execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
-                    created_at: "2026-09-01T00:00:00Z".into(),
-                },
-                gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
-            ),
-            gents::RequestSigner::Identity(user),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&actor),
         )
-        .await
-        .unwrap();
-        let receipt = json!({
-            "_docID":"physical-receipt", "request_id":create.request_id, "purpose":"normal", "node_did":create.node_did,
-            "requester_did":create.requester_did, "agent_did":create.agent_did, "session_id":create.session_id,
-            "session_doc_id":create.session_doc_id, "agent_doc_id":create.agent_doc_id,
-            "content":create.content, "input":create.input, "execution_origin":create.execution_origin,
-            "created_at":create.created_at, "retry_parent_request":create.retry_parent_request,
-            "retry_root_request":create.retry_root_request, "retry_count":create.retry_count,
-            "max_retries":create.max_retries, "request_hop":create.request_hop,
-            "admission_kind":"client", "admission_signer_did":create.admission.signer_did,
-            "admission_signature":bs58::encode(&create.admission.signature).into_string()
-        });
-        gents::verify_request_receipt_signature(&serde_json::from_value(receipt.clone()).unwrap())
-            .unwrap();
-        drop(access);
-        (client, PreparedAgentRequest { create }, receipt)
-    }
-
-    /// Forwards every exchange to the served home and, once the request create
-    /// has been signed in its client-sign conversation, commits its
-    /// transaction upstream but answers the commit with `lost`: the write is
-    /// durable, its reply is not.
-    async fn lose_committed_submission_reply(
-        client: &crate::shared::test_support::ClientHome,
-        lost: fn() -> Response,
-    ) -> (
-        crate::shared::test_support::ForwardingProxy,
-        Arc<std::sync::atomic::AtomicUsize>,
-    ) {
-        use crate::shared::test_support::{ForwardingProxy, ProxyDecision};
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-        let creates = Arc::new(AtomicUsize::new(0));
-        let staged = Arc::new(AtomicBool::new(false));
-        let hook = {
-            let (creates, staged) = (creates.clone(), staged.clone());
-            Arc::new(move |path: String, _body: Bytes| {
-                let (creates, staged) = (creates.clone(), staged.clone());
-                Box::pin(async move {
-                    if path == "/api/v0/graphql/client-sign" {
-                        creates.fetch_add(1, Ordering::SeqCst);
-                        staged.store(true, Ordering::SeqCst);
-                    } else if path.starts_with("/api/v0/tx/")
-                        && staged.swap(false, Ordering::SeqCst)
-                    {
-                        return ProxyDecision::ForwardThenRespond(lost());
-                    }
-                    ProxyDecision::Forward
-                }) as futures_util::future::BoxFuture<'static, ProxyDecision>
-            })
-        };
-        (
-            ForwardingProxy::spawn(client.graphql(), hook).await,
-            creates,
-        )
-    }
-
-    async fn durable_request_rows(
-        client: &crate::shared::test_support::ClientHome,
-        request_id: &str,
-    ) -> usize {
-        let response = client
-            .access
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
-                gents::store::graphql::escape_graphql_string(request_id)
-            ))
-            .await
-            .unwrap();
-        response["data"]["AgentRequest"].as_array().unwrap().len()
-    }
-
-    #[tokio::test]
-    async fn transient_submission_recovers_committed_identity_without_reposting() {
-        let (client, prepared, _) = stable_test_prepared_request().await;
-        // The commit is durable, but its response is replaced by a transient
-        // conflict at the transport boundary.
-        let (proxy, creates) = lose_committed_submission_reply(&client, || {
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"errors": [{
-                    "message": "transaction conflict. Please retry",
-                    "extensions": {"code": gents_protocol::database_error::TXN_CONFLICT_CODE}
-                }]})),
-            )
-                .into_response()
-        })
-        .await;
-        let submitted = submit_prepared_agent_request_committed(
-            &crate::shared::test_support::user_endpoint(&proxy.graphql, &client.user),
-            &prepared,
-        )
-        .await
-        .expect("recover committed request");
-        assert_eq!(submitted.request_id, "stable-request-id");
-        assert_eq!(
-            creates.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "a committed mutation must not be posted again"
-        );
-        assert_eq!(durable_request_rows(&client, "stable-request-id").await, 1);
-    }
-
-    #[tokio::test]
-    async fn transport_response_loss_recovers_committed_identity_without_reposting() {
-        let (client, prepared, _) = stable_test_prepared_request().await;
-        // The durable commit happened, then its response body failed. reqwest
-        // retains this transport error in the cause chain, which recovery must
-        // classify before querying the stable request id.
-        let (proxy, creates) = lose_committed_submission_reply(&client, || {
-            Response::new(Body::from_stream(stream::once(async {
-                Err::<Bytes, std::io::Error>(std::io::Error::other(
-                    "connection closed before message completed",
-                ))
-            })))
-        })
-        .await;
-        let submitted = submit_prepared_agent_request_committed(
-            &crate::shared::test_support::user_endpoint(&proxy.graphql, &client.user),
-            &prepared,
-        )
-        .await
-        .expect("recover committed request after transport response loss");
-        assert_eq!(submitted.request_id, "stable-request-id");
-        assert_eq!(
-            creates.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "a committed mutation must not be posted again after response loss"
-        );
-        assert_eq!(durable_request_rows(&client, "stable-request-id").await, 1);
-    }
-
-    #[tokio::test]
-    async fn submission_receipt_rejects_tampered_signed_content() {
-        let (_client, prepared, mut receipt) = stable_test_prepared_request().await;
-        receipt["content"] = json!("substituted content");
-        let state = AmbiguousSubmitState::default();
-        state
-            .durable_ids
-            .lock()
-            .unwrap()
-            .insert(prepared.create.request_id.clone());
-        *state.receipt.lock().unwrap() = receipt;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = gents::store::config_client::GraphqlEndpoint::anonymous(format!(
-            "http://{}/",
-            listener.local_addr().unwrap()
-        ));
-        let router = Router::new()
-            .route("/", post(ambiguous_submit_endpoint))
-            .with_state(state.clone());
-        let server = tokio::spawn(async move {
-            let _ = axum::serve(listener, router).await;
-        });
-        assert!(
-            super::matching_prepared_receipt(&endpoint, &prepared.create)
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            state
-                .mutation_count
-                .load(std::sync::atomic::Ordering::SeqCst),
-            0
-        );
-        server.abort();
-    }
-
-    #[tokio::test]
-    async fn terminal_wait_follows_only_exact_same_scope_successor_output_owner(
-    ) -> anyhow::Result<()> {
-        for (cross_scope, reason) in [
-            (false, gents::request::lifecycle::FOLDED_REASON),
-            (true, gents::request::lifecycle::FOLDED_REASON),
-            (false, gents::request::lifecycle::REPLACED_REASON),
-        ] {
-            let queries = Arc::new(Mutex::new(Vec::<String>::new()));
-            let target_polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let app = Router::new().route("/graphql", post({
-                let queries = queries.clone();
-                let target_polls = target_polls.clone();
-                move |Json(body): Json<Value>| {
-                    let queries = queries.clone();
-                    let target_polls = target_polls.clone();
-                    async move {
-                        let query = body["query"].as_str().unwrap().to_owned();
-                        queries.lock().unwrap().push(query.clone());
-                        if query.contains("AgentOutputSegment") {
-                            return Json(json!({"data":{"AgentOutputSegment":[],"AgentMessage":[]}}));
-                        }
-                        let target = query.contains("active-physical");
-                        let output_visible = !target || target_polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0;
-                        Json(json!({"data":{"AgentRequest":[{
-                            "_docID": if target {"active-physical"} else {"input-physical"},
-                            "request_id": if target {"active"} else {"input"},
-                            "node_did":"did:test:owner", "requester_did":"did:test:author",
-                            "session_id": if target && cross_scope {"other-session"} else {"same-session"},
-                            "agent_did":"engineer", "lifecycle_state": if target {"completed"} else {"superseded"},
-                            "failure_reason": if target {Value::Null} else {json!(reason)},
-                            "superseded_by_request": if target {Value::Null} else {json!("active")},
-                            "superseded_by_request_doc_id": if target {Value::Null} else {json!("active-physical")},
-                            "terminal_output":if output_visible {json!({"kind":"no_message"})} else {Value::Null},
-                            "terminalized_at":"2026-10-10T00:00:00Z"
-                        }]}}))
-                    }
-                }
-            }));
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-            let endpoint =
-                GraphqlEndpoint::anonymous(format!("http://{}/graphql", listener.local_addr()?));
-            let server = tokio::spawn(async move {
-                let _ = axum::serve(listener, app).await;
-            });
-            let progress_calls = std::sync::atomic::AtomicUsize::new(0);
-            let result = super::wait_for_terminal_response_with_progress(
-                &endpoint,
-                "input",
-                5,
-                0,
-                || async {
-                    progress_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    Ok(true)
-                },
-            )
-            .await;
-            assert!(progress_calls.load(std::sync::atomic::Ordering::SeqCst) >= 2);
-
-            server.abort();
-            if cross_scope {
-                assert!(result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("crossed request scope"));
-            } else {
-                let result = result?;
-                assert!(
-                    target_polls.load(std::sync::atomic::Ordering::SeqCst) >= 2,
-                    "terminal output lag must be retried"
-                );
-                assert_eq!(result.request.request_id, "active");
-                assert_eq!(result.request.request_doc_id, "active-physical");
-                assert!(matches!(
-                    result.output,
-                    CliOutputObservation::TerminalNoMessage
-                ));
-            }
-            let queries = queries.lock().unwrap();
-            assert!(
-                queries
-                    .iter()
-                    .any(|query| query.contains("_docID:{_eq:\"active-physical\"}")),
-                "{queries:?}"
-            );
-            assert!(
-                !queries
-                    .iter()
-                    .any(|query| query.contains("request_id:{_eq:\"active\"}")),
-                "target must be selected physically"
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn successor_output_target_rejects_missing_physical_identity_and_self_cycles() {
-        let mut row: AgentRequestRow = serde_json::from_value(json!({
-            "_docID":"input", "request_id":"input", "lifecycle_state":"superseded",
-            "failure_reason":gents::request::lifecycle::FOLDED_REASON, "superseded_by_request":"active"
-        }))
-        .unwrap();
-        assert!(successor_output_target(&row).is_err());
-        row.superseded_by_request_doc_id = Some("input".into());
-        assert!(successor_output_target(&row).is_err());
-        row.failure_reason = Some(gents::request::lifecycle::REPLACED_REASON.into());
-        row.superseded_by_request_doc_id = Some("replacement".into());
-        assert_eq!(
-            successor_output_target(&row).unwrap(),
-            Some(("active".into(), "replacement".into())),
-            "an edited input is answered by its replacement"
-        );
-        row.failure_reason = Some("other supersession".into());
-        assert!(successor_output_target(&row).unwrap().is_none());
-    }
+    };
+    build_signed_client_request(access, spec, RequestSigner::Identity(&signer)).await
 }

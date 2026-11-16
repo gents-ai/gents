@@ -11,6 +11,7 @@ import {
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { createChatActions } from "../src/hooks/chatActions";
 import { admittingProjection, shellStores } from "./shell-fixture";
+import { memorySendAttachments } from "./send-attachments-fixture";
 
 describe("chat folders", () => {
   it("keeps a pick per chat; a session keeps no folder as a choice", () => {
@@ -111,6 +112,7 @@ describe("branching with a chat folder", () => {
       refreshSession: vi.fn(),
       refreshSnapshot: vi.fn(),
       reportFailure: vi.fn(),
+      sendAttachments: memorySendAttachments(),
     });
     await actions.forkBeforeMessage("worked", "prefix-message");
     expect(stores.chat.getState().folders).toEqual({ worked: "", child: "" });
@@ -128,6 +130,7 @@ describe("sending with a chat folder", () => {
       refreshSession: vi.fn(),
       refreshSnapshot: vi.fn(),
       reportFailure: vi.fn(),
+      sendAttachments: memorySendAttachments(),
     });
     await actions.sendMessage("carry on");
     expect(sendChatMessage).toHaveBeenCalledWith(
@@ -148,6 +151,7 @@ describe("sending with a chat folder", () => {
       refreshSession: vi.fn(),
       refreshSnapshot: vi.fn(),
       reportFailure: vi.fn(),
+      sendAttachments: memorySendAttachments(),
     });
     actions.setChatFolder("/work/notes");
     await actions.sendMessage("what is in todo.txt");

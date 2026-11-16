@@ -1,11 +1,13 @@
 use super::{fake_llm, Attachment, ChatAction};
 use anyhow::{ensure, Context, Result};
 use base64::Engine;
-use gents::{store::graphql::escape_graphql_string, ConfigAccess, NodeIdentity};
 use gents_protocol::{
     goal_control::{GoalControlOutcome, GoalOperation, SessionGoalControl},
     request_lifecycle::RequestLifecycleState,
     row::AgentRequestRow,
+};
+use gents_store::{
+    config_client::ConfigAccess, graphql::escape_graphql_string, identity::NodeIdentity,
 };
 use serde_json::{json, Value};
 use std::{path::Path, sync::Arc, time::Duration};
@@ -172,7 +174,7 @@ pub async fn verify(
             "Undo input was not admitted exactly once"
         );
         let request = matches[0];
-        gents::verify_request_receipt_signature(request)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(request)?;
         ensure!(
             request.requester_did.as_deref() == Some(author)
                 && request.lifecycle_state == Some(RequestLifecycleState::Completed),

@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 use super::StageEvidence;
 use crate::checks::CheckRegistry;
-use gents::documents::{EvalCase, EvalCheckRef};
+use gents_documents::{EvalCase, EvalCheckRef};
 
 #[derive(Clone, Default, PartialEq)]
 pub struct StageReview(BTreeMap<String, Vec<EvalCheckRef>>);

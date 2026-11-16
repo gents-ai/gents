@@ -1,21 +1,16 @@
 use super::snapshot::is_degraded_startup_unavailable_reason;
-use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
+use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
 #[test]
-fn startup_unavailability_classification_is_complete() {
-    for reason in [
-        Reason::AgentDisabled,
-        Reason::BackendNotConfigured,
-        Reason::BackendDisabled,
-        Reason::BackendTemporarilyUnavailable,
-        Reason::CredentialsRequired,
-    ] {
-        assert!(
-            is_degraded_startup_unavailable_reason(reason),
-            "{reason:?} must allow degraded startup"
-        );
-    }
-    assert!(!is_degraded_startup_unavailable_reason(
-        Reason::ToolConfigurationInvalid
-    ));
+fn generated_startup_degraded_reasons_cover_every_public_reason() {
+    gents_lean_vocab::families::runtime_startup_degraded_allows_startup::replay::<
+        AgentReadinessUnavailableReason,
+    >(|input| is_degraded_startup_unavailable_reason(input.reason));
+}
+
+#[test]
+fn generated_node_degrading_reasons_match_the_protocol_owner() {
+    gents_lean_vocab::families::runtime_startup_degraded_degrades_node::replay::<
+        AgentReadinessUnavailableReason,
+    >(|input| input.reason.degrades_node());
 }

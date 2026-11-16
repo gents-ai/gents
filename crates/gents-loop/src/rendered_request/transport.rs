@@ -40,7 +40,7 @@ enum TransportError {
 }
 
 /// Persist the exact provider body before sending; a failed capture refuses
-/// the request (`capture_failure_blocks_send` in `Proofs/RenderedCapture.lean`).
+/// the request (`capture_failure_blocks_send` in `Proofs/Shared/RenderedCapture.lean`).
 #[derive(Clone, Debug, Default)]
 pub struct RenderedRequestCapturingHttpClient<H> {
     inner: H,
@@ -735,71 +735,112 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compaction_capture_uses_its_separately_built_client_family() {
-        let client = RenderedRequestCapturingHttpClient::new(CountingInner::default());
-        let (sink, seen) = recording_sink();
-        let mut scope = test_scope(context(), sink);
-        Arc::get_mut(&mut scope)
-            .unwrap()
-            .set_compaction_provider_family("XaiGrokOAuth".into());
-
-        scope_request(scope, async {
-            for kind in [
-                CaptureScopeKind::Compaction,
-                CaptureScopeKind::CompactionFallback,
-            ] {
-                arm(kind, 0, 0, trace()).expect("armed");
-                HttpClientExt::send_streaming(
-                    &client,
-                    responses_request(json!({"model":"summary","input":[]})),
-                )
-                .await
-                .expect("send");
+    async fn capturing_transport_matches_the_lean_capture_model() {
+        for case in gents_lean_vocab::families::contract_cases_rendered_capture_transport::cases::<
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        >() {
+            let inner = CountingInner::default();
+            let client = RenderedRequestCapturingHttpClient::new(inner.clone());
+            let (sink, seen) = recording_sink();
+            let mut request_context = context();
+            if !case.input.main_family {
+                request_context.provider_family = None;
             }
-        })
-        .await;
-
-        let seen = seen.lock().expect("seen");
-        assert_eq!(seen.len(), 2);
-        for rendered in seen.iter() {
-            let manifest = crate::rendered_request::ProvenanceManifest::parse(
-                &rendered.provenance_json.to_string(),
-            )
-            .expect("captured manifest");
-            let crate::rendered_request::ParsedProvenance::Manifest(manifest) = manifest else {
-                panic!("capture must have a supported manifest");
-            };
-            assert_eq!(manifest.provider_family.as_deref(), Some("XaiGrokOAuth"));
-            assert_eq!(rendered.source, RenderedRequestSource::OpenAiResponses);
+            let mut scope = test_scope(request_context, sink);
+            if case.input.compaction_family {
+                Arc::get_mut(&mut scope)
+                    .unwrap()
+                    .set_compaction_provider_family("XaiGrokOAuth".into());
+            }
+            let observed = scope_request(scope, async {
+                let mut observed = Vec::new();
+                for send in &case.input.sends {
+                    let kind = CaptureScopeKind::from_label(&send.kind).expect("scope kind");
+                    arm(kind, 0, 0, trace()).expect("armed");
+                    let path = match send.route.as_str() {
+                        "responses" => "/v1/responses",
+                        "chat_completions" => "/v1/chat/completions",
+                        other => panic!("unknown route {other}"),
+                    };
+                    let body = match send.body.as_str() {
+                        "json" => Bytes::from(
+                            serde_json::to_vec(&json!({"model": "summary", "input": [], "messages": []}))
+                                .expect("body"),
+                        ),
+                        "unparseable" => Bytes::from_static(b"not json"),
+                        other => panic!("unknown body {other}"),
+                    };
+                    let captured_before = seen.lock().expect("seen").len();
+                    let sent_before = inner.send_count();
+                    let request = Request::builder()
+                        .method("POST")
+                        .uri(format!("https://example.test{path}"))
+                        .body(body)
+                        .expect("request");
+                    let refused_at = match HttpClientExt::send_streaming(&client, request).await {
+                        Ok(_) => None,
+                        Err(http_client::Error::Instance(refusal)) => {
+                            match refusal.downcast_ref::<TransportError>() {
+                                Some(TransportError::CaptureFailed { source, .. }) => {
+                                    Some(source.stage().as_str().to_owned())
+                                }
+                                other => panic!("{:?}: unexpected refusal {other:?}", case.input),
+                            }
+                        }
+                        Err(other) => panic!("{:?}: unexpected transport error {other}", case.input),
+                    };
+                    let recorded = {
+                        let seen = seen.lock().expect("seen");
+                        match &seen[captured_before..] {
+                            [] => None,
+                            [rendered] => {
+                                let crate::rendered_request::ParsedProvenance::Manifest(manifest) =
+                                    crate::rendered_request::ProvenanceManifest::parse(
+                                        &rendered.provenance_json.to_string(),
+                                    )
+                                    .expect("captured manifest")
+                                else {
+                                    panic!("capture must have a supported manifest");
+                                };
+                                Some(gents_lean_vocab::families::contract_cases_rendered_capture_transport::RecordedCapture {
+                                    family: match manifest.provider_family.as_deref() {
+                                        Some("OpenAiCompatible") => "main_client",
+                                        Some("XaiGrokOAuth") => "compaction_client",
+                                        None => "absent",
+                                        Some(other) => panic!("unknown provider family {other}"),
+                                    }
+                                    .to_owned(),
+                                    source: serde_json::to_value(rendered.source)
+                                        .expect("source")
+                                        .as_str()
+                                        .expect("source name")
+                                        .to_owned(),
+                                })
+                            }
+                            more => panic!("one send recorded {} captures", more.len()),
+                        }
+                    };
+                    let issued = match inner.send_count() - sent_before {
+                        0 => false,
+                        1 => true,
+                        more => panic!("one send issued {more} provider calls"),
+                    };
+                    observed.push(gents_lean_vocab::families::contract_cases_rendered_capture_transport::SendObservation {
+                        recorded,
+                        issued,
+                        refused_at,
+                    });
+                }
+                observed
+            })
+            .await;
+            case.check(observed);
         }
-    }
-
-    #[tokio::test]
-    async fn compaction_without_built_client_family_does_not_inherit_main_family() {
-        let client = RenderedRequestCapturingHttpClient::new(CountingInner::default());
-        let (sink, seen) = recording_sink();
-        let scope = test_scope(context(), sink);
-
-        scope_request(scope, async {
-            arm(CaptureScopeKind::Compaction, 0, 0, trace()).expect("armed");
-            HttpClientExt::send_streaming(
-                &client,
-                responses_request(json!({"model":"summary","input":[]})),
-            )
-            .await
-            .expect("send");
-        })
-        .await;
-
-        let seen = seen.lock().expect("seen");
-        let manifest = crate::rendered_request::ProvenanceManifest::parse(
-            &seen[0].provenance_json.to_string(),
-        )
-        .expect("captured manifest");
-        let crate::rendered_request::ParsedProvenance::Manifest(manifest) = manifest else {
-            panic!("capture must have a supported manifest");
-        };
-        assert_eq!(manifest.provider_family, None);
     }
 
     #[tokio::test]
@@ -829,32 +870,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unparseable_body_fails_closed_too() {
-        let inner = CountingInner::default();
-        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
-        let (sink, seen) = recording_sink();
-        let scope = test_scope(context(), sink);
-
-        let error = scope_request(scope, async {
-            arm(CaptureScopeKind::Inference, 0, 0, trace()).expect("armed");
-            let req = Request::builder()
-                .method("POST")
-                .uri("https://example.test/v1/chat/completions")
-                .body(Bytes::from_static(b"not json"))
-                .expect("request");
-            HttpClientExt::send_streaming(&client, req)
-                .await
-                .err()
-                .expect("send must fail")
-        })
-        .await;
-
-        assert!(error.to_string().contains("decode_body"), "{error}");
-        assert_eq!(inner.sends.load(Ordering::SeqCst), 0);
-        assert!(seen.lock().expect("seen").is_empty());
-    }
-
-    #[tokio::test]
     async fn non_completion_paths_pass_through_without_consuming_the_arm() {
         let inner = CountingInner::default();
         let client = RenderedRequestCapturingHttpClient::new(inner.clone());
@@ -880,18 +895,6 @@ mod tests {
 
         assert_eq!(inner.sends.load(Ordering::SeqCst), 1);
         assert!(seen.lock().expect("seen").is_empty());
-    }
-
-    #[tokio::test]
-    async fn without_a_scope_the_client_is_transparent() {
-        let inner = CountingInner::default();
-        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
-
-        let _ = HttpClientExt::send_streaming(&client, responses_request(json!({"input": []})))
-            .await
-            .expect("send");
-
-        assert_eq!(inner.sends.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -953,34 +956,6 @@ mod tests {
         let seen = seen.lock().expect("seen");
         assert_eq!(seen.len(), 1);
         assert_eq!((seen[0].turn_index, seen[0].attempt), (2, 1));
-        assert_eq!(inner.sends.load(Ordering::SeqCst), 2);
-    }
-
-    #[tokio::test]
-    async fn a_changed_transport_resend_still_reaches_the_integrity_sink() {
-        let inner = CountingInner::default();
-        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
-        let (sink, seen) = recording_sink();
-        let scope = test_scope(context(), sink);
-
-        scope_request(scope, async {
-            arm(CaptureScopeKind::Inference, 2, 1, trace()).expect("armed");
-            let _ = HttpClientExt::send_streaming(
-                &client,
-                responses_request(json!({"input": [{"role": "user", "content": "first"}]})),
-            )
-            .await
-            .expect("first send");
-            let _ = HttpClientExt::send_streaming(
-                &client,
-                responses_request(json!({"input": [{"role": "user", "content": "changed"}]})),
-            )
-            .await
-            .expect("recording sink accepts changed test body");
-        })
-        .await;
-
-        assert_eq!(seen.lock().expect("seen").len(), 2);
         assert_eq!(inner.sends.load(Ordering::SeqCst), 2);
     }
 

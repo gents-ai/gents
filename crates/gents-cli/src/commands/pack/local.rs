@@ -1,3 +1,3 @@
 #[cfg(test)]
-pub(super) use gents::pack::local::LocalName;
-pub(super) use gents::pack::local::{classify, open};
+pub(super) use gents_pack::pack::local::LocalName;
+pub(super) use gents_pack::pack::local::{classify, open};

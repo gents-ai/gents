@@ -1,10 +1,12 @@
-import Proofs.PluginJob.Admission
-import Proofs.PluginJob.Adoption
-import Proofs.PluginJob.Step
-import Proofs.PluginJob.Authority
-import Proofs.PluginJob.ExecutionIdentity
-import Proofs.PluginJob.RecoveryTrace
-import Proofs.Recovery.Sweeps.PluginJob
+import Proofs.ToolCalls.PluginJob.Admission
+import Proofs.ToolCalls.PluginJob.Adoption
+import Proofs.ToolCalls.PluginJob.Step
+import Proofs.ToolCalls.PluginJob.Authority
+import Proofs.ToolCalls.PluginJob.ExecutionIdentity
+import Proofs.ToolCalls.PluginJob.RecoveryTrace
+import Proofs.ToolCalls.Recovery.Sweeps.PluginJob
+import Proofs.Conformance.Functions.ToolCalls
+import Proofs.Conformance.Family
 import Lean
 
 /-!
@@ -387,19 +389,6 @@ private def contextJson (ctx : StepContext) : Json :=
             ("prior", jobJson prior), ("root", jobJson root)]))])),
     ("resume_facts", hostFactsJson ctx.resumeFacts)]
 
-private def render (c : AdmissionCase) (wireTrace : Json := .null) : Json :=
-  let (row, kill) := settled c
-  let (code, admitted, dynamicDisabled) : Option String × Option Job × Bool := match admitStepGuarded c.ctx c.job c.out with
-    | .ok j => ((none : Option String), some j, false)
-    | .error r => (r.code, none, decide (r = Refusal.dynamicCodeDisabled))
-  Json.mkObj [("name", toJson c.name), ("context", contextJson c.ctx), ("job", jobJson c.job),
-    ("output", outputJson c.out), ("wire_trace", wireTrace),
-    ("expected", Json.mkObj [("admitted", toJson admitted.isSome), ("code", toJson code),
-      ("dynamic_code_disabled", toJson dynamicDisabled),
-      ("job", toJson (admitted.map jobJson)), ("row_state", rowStateJson row.state),
-      ("kill", toJson (kill.map fun (k, a) =>
-        Json.mkObj [("retry_key", toJson k.retryKey), ("action", toJson a.toContract)]))])]
-
 private def toolCall : ToolExecution.ToolCallContext :=
   { callId := 1, requestId := 1, state := .running, operation := .nativeCommand, deadline := 20
   , startedAt := some 1, currentTime := 5, persistence := .committed, awaitMode := .foreground }
@@ -573,50 +562,109 @@ theorem adoption_regressions :
       [ some ("job-session:5:row-13:1:a1:0", "call-7"), some ("session-1", "call-1"), none ] := by
   native_decide
 
-private def deliveryJson : Option Delivery → Json
-  | some .inline => toJson "inline"
-  | some .continuation => toJson "continuation"
-  | none => Json.null
+structure ToolCallWire where
+  state : String
+  operation : String
+  awaitMode : String
+  deriving ToJson
 
-private def callJson (c : ToolExecution.ToolCallContext) : Json :=
-  Json.mkObj [("state", toJson c.state.toDefraDB), ("operation", toJson c.operation.toDefraDB),
-    ("await_mode", toJson c.awaitMode.toDefraDB)]
+def ToolCallWire.ofModel (c : ToolExecution.ToolCallContext) : ToolCallWire :=
+  { state := c.state.toDefraDB, operation := c.operation.toDefraDB
+    awaitMode := c.awaitMode.toDefraDB }
 
-private def renderStep0 (c : Step0Case) : Json :=
+structure Step0Input where
+  name : String
+  toolCall : ToolCallWire
+  context : Json
+  job : Json
+  output : Json
+  deriving ToJson
+
+structure ReceiptWire where
+  terminalDecision : String
+  lateDecision : String
+  deriving ToJson
+
+structure Step0Output where
+  admitted : Bool
+  code : Option String
+  job : Option Json
+  toolCall : ToolCallWire
+  delivery : Option String
+  continuationAppended : Bool
+  receipt : Option ReceiptWire
+  deriving ToJson
+
+def step0Named (name : String) : Option Step0Case := step0Cases.find? (·.name == name)
+
+theorem step0_names_are_unique :
+    (step0Cases.map (·.name)).eraseDups.length = step0Cases.length := by native_decide
+
+private def step0Output (c : Step0Case) : Step0Output :=
   let (call, delivery) := adoptedCall c
   let (first, late) := receiptDecisions
   let (code, admitted) := match admitStep c.ctx c.job c.out with
     | .ok j => ((none : Option String), some j)
     | .error r => (r.code, none)
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "step0"), ("tool_call", callJson c.row),
-    ("context", contextJson c.ctx), ("job", jobJson c.job),
-    ("output", outputJson c.out),
-    ("expected", Json.mkObj [("admitted", toJson admitted.isSome), ("code", toJson code),
-      ("job", toJson (admitted.map jobJson)), ("tool_call", callJson call),
-      ("delivery", deliveryJson delivery),
-      ("continuation_appended", toJson (delivery == some .continuation)),
-      ("receipt", toJson (admitted.map fun _ => Json.mkObj
-        [("terminal_decision", toJson first.spelling), ("late_decision", toJson late.spelling)])),
-      ("next_resume_valid", toJson (admitted.any (nextResumeValid c)))])]
+  { admitted := admitted.isSome, code, job := admitted.map jobJson, toolCall := ToolCallWire.ofModel call
+    delivery := match delivery with
+      | some .inline => some "inline"
+      | some .continuation => some "continuation"
+      | none => none
+    continuationAppended := delivery == some .continuation
+    receipt := admitted.map fun _ =>
+      { terminalDecision := first.spelling, lateDecision := late.spelling } }
 
-private def renderHostPin (c : HostPinCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "host_pin"),
-    ("claimed", pinJson c.claimed), ("facts", hostFactsJson c.facts),
-    ("expected", Json.mkObj [("pin", pinJson (hostPin (guestOf c.claimed) c.facts))])]
+/-- `adopt` and `adoptTerminal` on a step-zero output: the adopted row and
+call, inline delivery of a pinned terminal, and the receipt compare-and-set. -/
+@[conformance_family]
+def adoptionStep0 : Family Step0Input (Option Step0Output) where
+  inputs := step0Cases.map fun c =>
+    { name := c.name, toolCall := ToolCallWire.ofModel c.row, context := contextJson c.ctx
+      job := jobJson c.job, output := outputJson c.out }
+  model := fun i => (step0Named i.name).map step0Output
 
-private def renderHandle (c : HandleCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "handle"), ("taken", toJson c.taken),
-    ("handle", toJson c.handle),
-    ("expected", Json.mkObj [("handle", toJson (uniqueHandle c.taken c.handle))])]
+structure HostPinInput where
+  name : String
+  claimed : Json
+  facts : Json
+  deriving ToJson
 
-private def renderAddress (c : AddressCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "address"), ("address", toJson c.address),
-    ("expected", Json.mkObj [("split", toJson ((splitAddress c.address).map fun (s, t) =>
-      Json.mkObj [("session_id", toJson s), ("tool_call_id", toJson t)]))])]
+def hostPinNamed (name : String) : Option HostPinCase := hostPinCases.find? (·.name == name)
 
-def adoptionCasesJson : String :=
-  (toJson (step0Cases.map renderStep0 ++ hostPinCases.map renderHostPin ++
-    handleCases.map renderHandle ++ addressCases.map renderAddress)).compress
+/-- `hostPin` keeps only the guest fields of a claimed pin. -/
+@[conformance_family]
+def adoptionHostPin : Family HostPinInput (Option Json) where
+  inputs := hostPinCases.map fun c =>
+    { name := c.name, claimed := pinJson c.claimed, facts := hostFactsJson c.facts }
+  model := fun i => (hostPinNamed i.name).map fun c => pinJson (hostPin (guestOf c.claimed) c.facts)
+
+structure HandleInput where
+  name : String
+  taken : List String
+  handle : String
+  deriving ToJson
+
+@[conformance_family]
+def adoptionHandle : Family HandleInput String where
+  inputs := handleCases.map fun c => { name := c.name, taken := c.taken, handle := c.handle }
+  model := fun i => uniqueHandle i.taken i.handle
+
+structure AddressInput where
+  name : String
+  address : String
+  deriving ToJson
+
+structure SplitWire where
+  sessionId : String
+  toolCallId : String
+  deriving ToJson
+
+@[conformance_family]
+def adoptionAddress : Family AddressInput (Option SplitWire) where
+  inputs := addressCases.map fun c => { name := c.name, address := c.address }
+  model := fun i => (splitAddress i.address).map fun (session, call) =>
+    { sessionId := session, toolCallId := call }
 
 structure KeyCase where
   name : String
@@ -656,20 +704,44 @@ theorem key_regressions :
           some { root := "row-1", slot := "4:🙂", attempt := 7 }, false) ] := by
   native_decide
 
-private def renderKey (c : KeyCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("root", toJson c.key.root), ("slot", toJson c.key.slot),
-    ("attempt", toJson c.key.attempt), ("messages", toJson c.messages),
-    ("expected", Json.mkObj [("retry_key", toJson c.key.retryKey),
-      ("session_id", toJson c.key.sessionId),
-      ("message_keys", toJson (c.messages.map fun n =>
-        Json.mkObj [("n", toJson n), ("key", toJson (c.key.messageKey n))])),
-      ("decoded", toJson ((decodeRetryKey? c.key.retryKey).map fun k =>
-        Json.mkObj [("root", toJson k.root), ("slot", toJson k.slot),
-          ("attempt", toJson k.attempt)])),
-      ("message_keys_decode", toJson (c.messages.any fun n =>
-        (decodeRetryKey? (c.key.messageKey n)).isSome))])]
+structure KeyInput where
+  name : String
+  root : String
+  slot : String
+  attempt : Nat
+  messages : List Nat
+  deriving ToJson
 
-def keyCasesJson : String := (toJson (keyCases.map renderKey)).compress
+structure MessageKey where
+  n : Nat
+  key : String
+  deriving ToJson
+
+structure DecodedKey where
+  slot : String
+  attempt : Nat
+  deriving ToJson
+
+structure KeyOutput where
+  retryKey : String
+  sessionId : String
+  messageKeys : List MessageKey
+  decoded : Option DecodedKey
+  messageKeysDecode : Bool
+  deriving ToJson
+
+@[conformance_family]
+def spawnKeys : Conformance.Family KeyInput KeyOutput where
+  inputs := keyCases.map fun c =>
+    { name := c.name, root := c.key.root, slot := c.key.slot, attempt := c.key.attempt
+      messages := c.messages }
+  model := fun i =>
+    let key : SpawnKey := { root := i.root, slot := i.slot, attempt := i.attempt }
+    { retryKey := key.retryKey
+      sessionId := key.sessionId
+      messageKeys := i.messages.map fun n => { n, key := key.messageKey n }
+      decoded := (decodeRetryKey? key.retryKey).map fun k => { slot := k.slot, attempt := k.attempt }
+      messageKeysDecode := i.messages.any fun n => (decodeRetryKey? (key.messageKey n)).isSome }
 
 /-- A child another chain caused; no kill of this row reaches it. -/
 private def foreignChild : Child :=
@@ -869,12 +941,6 @@ theorem control_regressions :
           some "plugin_job_step_failed"⟩ ] := by
   native_decide
 
-private def controlJson : Control → Json
-  | .stop => toJson "stop"
-  | .pause => toJson "pause"
-  | .deadline => toJson "deadline"
-  | .resume .. => toJson "resume"
-
 private def jobStateJson : JobState → Json
   | .running => toJson "running"
   | .paused => toJson "paused"
@@ -892,39 +958,8 @@ private def observationsJson (j : Job) : Json :=
   toJson (j.children.map fun ch => Json.mkObj [("retry_key", toJson ch.key.retryKey),
     ("observation", toJson (killObservation ch.key).toContract)])
 
-private def renderKill (c : KillCase) : Json :=
-  let (row, kill) := Control.kill c.job c.control killObservation
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "kill"), ("job", jobJson c.job),
-    ("observations", observationsJson c.job), ("control", controlJson c.control),
-    ("expected", Json.mkObj [("row_state", rowStateJson row.state),
-      ("won", toJson (match c.control.ends with
-        | none => false
-        | some state => decide ((_root_.PluginJob.terminalizeRow c.job state).2 =
-            Background.CompletionDelivery.TerminalizationResult.won))),
-      ("job_state", jobStateJson (JobState.of row.state c.control.note)),
-      ("kill", killJson kill)])]
-
 private def echoJson (e : ControlEcho) : Json :=
   Json.mkObj [("kind", toJson e.kind), ("payload", toJson (e.payload.map resumeJson))]
-
-private def renderResume (c : ResumeCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "resume"),
-    ("caller", processScopeJson context.callerScope),
-    ("owner", processScopeJson context.callerScope), ("same_plugin", toJson true),
-    ("root", jobJson rowA), ("root_call_args", callArgsJson rowA.call),
-    ("prior", jobJson priorJob),
-    ("job", jobJson resumeCall), ("call_args", callArgsJson resumeCall.call),
-    ("guest_pin", guestPinJson c.guest), ("facts", hostFactsJson c.facts),
-    ("resume", resumeJson c.resume),
-    ("expected", Json.mkObj [("valid", toJson (resumeValidFor c)),
-      ("pin", if resumeValidFor c then pinJson (resumePinFor c) else Json.null),
-      ("control", echoJson (echo c.resume)), ("root_call", rootCallJson (rootCallOf rowA))])]
-
-private def renderResultRead (c : ResultReadCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "result_read"),
-    ("caller", processScopeJson c.caller), ("owner", processScopeJson context.callerScope),
-    ("same_plugin", toJson c.samePlugin), ("terminal", toJson c.terminal),
-    ("expected", Json.mkObj [("authorized", toJson (resultReadVerdict c))])]
 
 private def invocationJson : PluginData.Invocation → Json
   | .toolCall => toJson "tool_call"
@@ -932,42 +967,388 @@ private def invocationJson : PluginData.Invocation → Json
   | .callback => toJson "callback"
   | .ux => toJson "ux"
 
-private def renderResultOffer (c : String × PluginData.Invocation) : Json :=
-  Json.mkObj [("name", toJson c.1), ("kind", toJson "result_offer"),
-    ("invocation", invocationJson c.2),
-    ("expected", Json.mkObj [("offered", toJson (resultOffered c.2))])]
-
-private def renderStepFailure (c : StepFailureCase) : Json :=
-  let (row, kill, refusal) := Step.onInvocationFailure (failingJob c) killObservation
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "step_failure"),
-    ("job", jobJson (failingJob c)), ("consecutive_failures", toJson c.failures),
-    ("observations", observationsJson (failingJob c)),
-    ("expected", Json.mkObj [("row_state", rowStateJson row.state),
-      ("consecutive_failures", toJson row.consecutiveFailures), ("kill", killJson kill),
-      ("code", toJson (refusal.bind Refusal.code))])]
-
-def controlCasesJson : String :=
-  (toJson (killCases.map renderKill ++ resumeCases.map renderResume ++
-    resultReadCases.map renderResultRead ++ resultOfferCases.map renderResultOffer ++
-    stepFailureCases.map renderStepFailure)).compress
-
 /-- A newly committed spawn must be visible to every subsequent kill transaction,
 even when recovery originally observed the empty pre-step row. -/
-def commitKillCasesJson : String := Id.run do
-  let initial := pinned [] 0 0
-  let out := effects [spawn "new" targetA]
-  let .ok committed := admitStep context initial out | return "[]"
-  let variants : List (String × (Job × List (SpawnKey × Recovery.KillAction))) := [
-    ("stop", Control.kill committed .stop observation),
-    ("pause", Control.kill committed .pause observation),
-    ("deadline", RecoveryTrace.killAfterCommit context initial out .deadline observation),
-    ("engineChanged", settleStep { context with engineDigest := "replacement" } committed out observation),
-    ("notAvailable", settleStep { context with available := false } committed out observation)]
-  return (toJson (variants.map fun (cause, result) => Json.mkObj [
-    ("cause", toJson cause), ("initial", jobJson initial), ("output", outputJson out),
-    ("committed", jobJson committed), ("row_state", rowStateJson result.1.state),
-    ("kills", toJson (result.2.map fun (entry : SpawnKey × Recovery.KillAction) => Json.mkObj [
-      ("slot", toJson entry.1.slot), ("action", toJson entry.2.toContract)]))])).compress
+structure JobTargetWire where
+  node : String
+  agent : String
+  deriving ToJson, FromJson, Inhabited
+
+structure CeilingWire where
+  targets : List String
+  max_live : Nat
+  max_spawns : Nat
+  max_messages_per_slot : Nat
+  result_bytes : Nat
+  max_wall_secs : Nat
+  deriving ToJson, FromJson, Inhabited
+
+structure PinWire where
+  script_id : String
+  source_digest : String
+  engine_digest : String
+  plugin_ref : String
+  handle : String
+  cwd : String
+  args_digest : String
+  chain_root : String
+  origin : String
+  agent_budget : Nat
+  adopted_at : Nat
+  resume_of : Option String
+  replayed_from : Option String
+  ceiling_at_pin : CeilingWire
+  deriving ToJson, FromJson, Inhabited
+
+structure GuestPinWire where
+  script_id : String
+  source_digest : String
+  handle : String
+  agent_budget : Nat
+  deriving ToJson, FromJson, Inhabited
+
+structure ResumeWire where
+  row_doc_id : String
+  engine_current : Bool
+  answer : Option String
+  budget : Option Nat
+  deriving ToJson, FromJson, Inhabited
+
+structure ChildWire where
+  retry_key : String
+  slot : String
+  attempt : Nat
+  target : JobTargetWire
+  state : String
+  messages : Nat
+  deriving ToJson, FromJson, Inhabited
+
+structure JobCallWire where
+  argv : List String
+  args : Option String
+  script : Option String
+  agent_budget : Option Nat
+  deriving ToJson, FromJson, Inhabited
+
+structure RootCallWire where
+  argv : List String
+  args : Option String
+  agent_budget : Option Nat
+  deriving ToJson, FromJson, Inhabited
+
+/-- A job row in the shape `jobJson` writes. -/
+structure JobWire where
+  root : String
+  row_doc_id : String
+  caller_session : String
+  caller_cwd : String
+  handle : String
+  caller_hop : Nat
+  call : JobCallWire
+  root_call : Option RootCallWire
+  resume : Option ResumeWire
+  pin : Option PinWire
+  children : List ChildWire
+  spent : Nat
+  observed_terminal : Nat
+  consecutive_failures : Nat
+  state : String
+  deriving ToJson, FromJson, Inhabited
+
+structure ExtrasWire where
+  writes : Nat
+  scratch : List String
+  progress : Bool
+  deriving ToJson, FromJson, Inhabited
+
+structure SpawnWire where
+  slot : String
+  attempt : Nat
+  target : JobTargetWire
+  cwd : Option String
+  deriving ToJson, FromJson, Inhabited
+
+structure ControlWire where
+  row_doc_id : String
+  control : String
+  deriving ToJson, FromJson, Inhabited
+
+/-- A step output in the shape `outputJson` writes: its `kind` and the riders
+that variant carries. -/
+structure OutputWire where
+  kind : String
+  extras : ExtrasWire
+  control : Option (List ControlWire)
+  pin : Option GuestPinWire
+  resume : Option ResumeWire
+  suspend : Option String
+  reason : Option String
+  spawns : Option (List SpawnWire)
+  messages : Option (List String)
+  interrupts : Option (List String)
+  deriving ToJson, FromJson, Inhabited
+
+def jobWire (j : Job) : JobWire :=
+  match fromJson? (jobJson j) with
+  | .ok wire => wire
+  | .error _ => default
+
+def outputWire (o : StepOutput) : OutputWire :=
+  match fromJson? (outputJson o) with
+  | .ok wire => wire
+  | .error _ => default
+
+private def rowStateSpelling (s : RowState) : String :=
+  match rowStateJson s with
+  | .str spelling => spelling
+  | _ => ""
+
+private def commitKillInitial : Job := pinned [] 0 0
+
+private def commitKillOutput : StepOutput := effects [spawn "new" targetA]
+
+private def commitKillVariants : List (String × Job × (Job × List (SpawnKey × Recovery.KillAction))) :=
+  match admitStep context commitKillInitial commitKillOutput with
+  | .error _ => []
+  | .ok committed => [
+      ("stop", committed, Control.kill committed .stop observation),
+      ("pause", committed, Control.kill committed .pause observation),
+      ("deadline", committed,
+        RecoveryTrace.killAfterCommit context commitKillInitial commitKillOutput .deadline observation),
+      ("engineChanged", committed,
+        settleStep { context with engineDigest := "replacement" } committed commitKillOutput observation),
+      ("notAvailable", committed,
+        settleStep { context with available := false } committed commitKillOutput observation)]
+
+structure KillWire where
+  slot : String
+  action : String
+  deriving ToJson
+
+structure CommitKillInput where
+  cause : String
+  initial : JobWire
+  output : OutputWire
+  committed : JobWire
+  deriving ToJson
+
+structure CommitKillOutput where
+  rowState : String
+  kills : List KillWire
+  deriving ToJson
+
+@[conformance_family]
+def commitKills : Family CommitKillInput CommitKillOutput where
+  inputs := commitKillVariants.map fun (cause, committed, _) =>
+    { cause, initial := jobWire commitKillInitial, output := outputWire commitKillOutput
+      committed := jobWire committed }
+  model := fun i => match commitKillVariants.find? (·.1 == i.cause) with
+    | some (_, _, (row, kills)) =>
+      { rowState := rowStateSpelling row.state
+        kills := kills.map fun (key, action) => { slot := key.slot, action := action.toContract } }
+    | none => { rowState := "", kills := [] }
+
+example : commitKills.inputs.map (·.committed.children.length) = [1, 1, 1, 1, 1] := by
+  native_decide
+
+private def viaWire {α : Type} [FromJson α] [Inhabited α] (json : Json) : α :=
+  match fromJson? json with
+  | .ok wire => wire
+  | .error _ => default
+
+structure ObservationWire where
+  retry_key : String
+  observation : String
+  deriving ToJson, FromJson, Inhabited
+
+structure KillEntryWire where
+  retry_key : String
+  action : String
+  deriving ToJson, FromJson, Inhabited
+
+structure ProcessScopeWire where
+  request_id : String
+  session_id : String
+  node_did : String
+  requester_did : Option String
+  deriving ToJson, FromJson, Inhabited
+
+structure HostFactsWire where
+  engine_digest : String
+  plugin_ref : String
+  cwd : String
+  args_digest : String
+  chain_root : String
+  origin : String
+  adopted_at : Nat
+  resume_of : Option String
+  replayed_from : Option String
+  ceiling_at_pin : CeilingWire
+  deriving ToJson, FromJson, Inhabited
+
+structure ControlEchoWire where
+  kind : String
+  payload : Option ResumeWire
+  deriving ToJson, FromJson, Inhabited
+
+private def killEntries (kill : List (SpawnKey × Recovery.KillAction)) : List KillEntryWire :=
+  viaWire (killJson kill)
+
+private def observationWires (j : Job) : List ObservationWire := viaWire (observationsJson j)
+
+private def scopeWire (s : Background.ProcessControl.Scope) : ProcessScopeWire :=
+  viaWire (processScopeJson s)
+
+private def controlName : Control → String
+  | .stop => "stop"
+  | .pause => "pause"
+  | .deadline => "deadline"
+  | .resume .. => "resume"
+
+private def jobStateName (s : JobState) : String :=
+  match jobStateJson s with
+  | .str name => name
+  | _ => ""
+
+structure KillInput where
+  name : String
+  job : JobWire
+  observations : List ObservationWire
+  control : String
+  deriving ToJson
+
+structure KillOutput where
+  rowState : String
+  won : Bool
+  /-- The state a stop or pause control answers with; a deadline has no
+  control answer. -/
+  jobState : Option String
+  kill : List KillEntryWire
+  deriving ToJson
+
+private def killCaseNamed (name : String) : KillCase :=
+  (killCases.find? (·.name == name)).getD { name, control := .stop }
+
+@[conformance_family]
+def controlKill : Family KillInput KillOutput where
+  inputs := killCases.map fun c =>
+    { name := c.name, job := jobWire c.job, observations := observationWires c.job
+      control := controlName c.control }
+  model := fun i =>
+    let c := killCaseNamed i.name
+    let (row, kill) := Control.kill c.job c.control killObservation
+    { rowState := rowStateSpelling row.state
+      won := match c.control.ends with
+        | none => false
+        | some state => decide ((_root_.PluginJob.terminalizeRow c.job state).2 =
+            Background.CompletionDelivery.TerminalizationResult.won)
+      jobState := match c.control with
+        | .deadline | .resume .. => none
+        | _ => some (jobStateName (JobState.of row.state c.control.note))
+      kill := killEntries kill }
+
+structure ResumeInput where
+  name : String
+  caller : ProcessScopeWire
+  owner : ProcessScopeWire
+  samePlugin : Bool
+  root : JobWire
+  prior : JobWire
+  guestPin : GuestPinWire
+  facts : HostFactsWire
+  resume : ResumeWire
+  deriving ToJson
+
+structure ResumeOutput where
+  valid : Bool
+  pin : Option PinWire
+  control : ControlEchoWire
+  rootCall : RootCallWire
+  deriving ToJson
+
+private def resumeCaseNamed (name : String) : ResumeCase :=
+  (resumeCases.find? (·.name == name)).getD ⟨name, guestPin, resumeFacts, resumeBlock⟩
+
+@[conformance_family]
+def controlResume : Family ResumeInput ResumeOutput where
+  inputs := resumeCases.map fun c =>
+    { name := c.name, caller := scopeWire context.callerScope
+      owner := scopeWire context.callerScope, samePlugin := true, root := jobWire rowA
+      prior := jobWire priorJob, guestPin := viaWire (guestPinJson c.guest)
+      facts := viaWire (hostFactsJson c.facts), resume := viaWire (resumeJson c.resume) }
+  model := fun i =>
+    let c := resumeCaseNamed i.name
+    { valid := resumeValidFor c
+      pin := if resumeValidFor c then some (viaWire (pinJson (resumePinFor c))) else none
+      control := viaWire (echoJson (echo c.resume))
+      rootCall := viaWire (rootCallJson (rootCallOf rowA)) }
+
+structure ResultReadInput where
+  name : String
+  caller : ProcessScopeWire
+  owner : ProcessScopeWire
+  samePlugin : Bool
+  terminal : Bool
+  deriving ToJson
+
+structure ResultReadOutput where
+  authorized : Bool
+  deriving ToJson
+
+private def resultReadCaseNamed (name : String) : ResultReadCase :=
+  (resultReadCases.find? (·.name == name)).getD ⟨name, context.callerScope, true, true⟩
+
+@[conformance_family]
+def controlResultRead : Family ResultReadInput ResultReadOutput where
+  inputs := resultReadCases.map fun c =>
+    { name := c.name, caller := scopeWire c.caller, owner := scopeWire context.callerScope
+      samePlugin := c.samePlugin, terminal := c.terminal }
+  model := fun i => { authorized := resultReadVerdict (resultReadCaseNamed i.name) }
+
+structure ResultOfferInput where
+  name : String
+  invocation : String
+  deriving ToJson
+
+structure ResultOfferOutput where
+  offered : Bool
+  deriving ToJson
+
+private def invocationName (invocation : PluginData.Invocation) : String :=
+  match invocationJson invocation with
+  | .str name => name
+  | _ => ""
+
+@[conformance_family]
+def controlResultOffer : Family ResultOfferInput ResultOfferOutput where
+  inputs := resultOfferCases.map fun c => { name := c.1, invocation := invocationName c.2 }
+  model := fun i =>
+    { offered := ((resultOfferCases.find? (·.1 == i.name)).map (resultOffered ·.2)).getD false }
+
+structure StepFailureInput where
+  name : String
+  job : JobWire
+  consecutiveFailures : Nat
+  observations : List ObservationWire
+  deriving ToJson
+
+structure StepFailureOutput where
+  rowState : String
+  consecutiveFailures : Nat
+  kill : List KillEntryWire
+  code : Option String
+  deriving ToJson
+
+@[conformance_family]
+def controlStepFailure : Family StepFailureInput StepFailureOutput where
+  inputs := stepFailureCases.map fun c =>
+    { name := c.name, job := jobWire (failingJob c), consecutiveFailures := c.failures
+      observations := observationWires (failingJob c) }
+  model := fun i =>
+    let (row, kill, refusal) :=
+      Step.onInvocationFailure (failingJob ⟨i.name, i.consecutiveFailures⟩) killObservation
+    { rowState := rowStateSpelling row.state, consecutiveFailures := row.consecutiveFailures
+      kill := killEntries kill, code := refusal.bind Refusal.code }
 
 private def allKinds : List PackKind := [.documents, .assets, .plugins]
 
@@ -1100,14 +1481,36 @@ theorem authority_regressions :
       , (["job_plugin_fixture"], [targetA, targetB], [targetA, targetB]) ] := by
   native_decide
 
-private def provenanceJson : InstallProvenance → Json
-  | .operator => toJson "operator"
-  | .selfConfig => toJson "self_config"
+end Conformance.PluginJob
 
-private def recordJson : PluginJob.Record → Json
-  | .absent => Json.mkObj [("kind", toJson "absent")]
-  | .legacy => Json.mkObj [("kind", toJson "legacy")]
-  | .written v => Json.mkObj [("kind", toJson "written"), ("via", provenanceJson v)]
+namespace ToolPolicy
+deriving instance ToJson for InstallProvenance
+end ToolPolicy
+
+namespace PluginJob
+deriving instance ToJson for PackKind, Origin, JobState
+end PluginJob
+
+namespace Conformance.PluginJob
+
+inductive RecordKind | absent | legacy | written
+  deriving ToJson
+
+structure RecordWire where
+  kind : RecordKind
+  via : Option InstallProvenance
+  deriving ToJson
+
+private def RecordWire.ofModel : PluginJob.Record → RecordWire
+  | .absent => ⟨.absent, none⟩
+  | .legacy => ⟨.legacy, none⟩
+  | .written v => ⟨.written, some v⟩
+
+private def RecordWire.toModel (r : RecordWire) : PluginJob.Record :=
+  match r.kind, r.via with
+  | .written, some v => .written v
+  | .legacy, _ => .legacy
+  | _, _ => .absent
 
 private def kindName : PackKind → String
   | .documents => "documents"
@@ -1120,70 +1523,192 @@ private def recordName : PluginJob.Record → String
   | .written .operator => "written_operator"
   | .written .selfConfig => "written_self_config"
 
-private def targetsJson (ts : List Target) : Json := toJson (ts.map targetJson)
+structure ProvenanceInput where
+  name : String
+  packKind : PackKind
+  record : RecordWire
+  deriving ToJson
 
-private def renderProvenance (c : PackKind × PluginJob.Record) : Json :=
-  Json.mkObj [("name", toJson (kindName c.1 ++ "_" ++ recordName c.2)),
-    ("kind", toJson "provenance"), ("pack_kind", toJson (kindName c.1)),
-    ("record", recordJson c.2),
-    ("expected", Json.mkObj [("provenance", provenanceJson (provenanceOf c.1 c.2))])]
+structure ProvenanceOutput where
+  provenance : InstallProvenance
+  deriving ToJson
 
-private def renderInstall (c : InstallCase) : Json :=
-  let r := recordAfterInstall c.prior c.kind c.explicit c.via
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "install"),
-    ("prior", recordJson c.prior), ("pack_kind", toJson (kindName c.kind)),
-    ("explicit", toJson c.explicit), ("via", provenanceJson c.via),
-    ("expected", Json.mkObj [("record", recordJson r),
-      ("provenance", provenanceJson (provenanceOf c.kind r))])]
+@[conformance_family]
+def provenanceRead : Family ProvenanceInput ProvenanceOutput where
+  inputs := provenanceCases.map fun (k, r) =>
+    { name := kindName k ++ "_" ++ recordName r, packKind := k, record := RecordWire.ofModel r }
+  model := fun i => { provenance := provenanceOf i.packKind i.record.toModel }
 
-private def renderInstaller (c : InstallProvenance × Bool) : Json :=
-  let name := (if c.1 = .operator then "operator" else "self_config") ++
-    (if c.2 then "_with_pack_authority" else "_without_pack_authority")
-  Json.mkObj [("name", toJson name), ("kind", toJson "installer"),
-    ("via", provenanceJson c.1), ("pack_authority", toJson c.2),
-    ("expected", Json.mkObj [("provenance", provenanceJson (installerProvenance c.1 c.2))])]
+structure InstallInput where
+  name : String
+  prior : RecordWire
+  packKind : PackKind
+  explicit : Bool
+  via : InstallProvenance
+  deriving ToJson
 
-private def renderOrigin (c : OriginCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "origin"), ("call", callArgsJson c.call),
-    ("expected", Json.mkObj [("origin", originJson (originVerdict c))])]
+structure InstallOutput where
+  record : RecordWire
+  provenance : InstallProvenance
+  deriving ToJson
 
-private def renderPackBlock (c : PackBlockCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "pack_job_block"),
-    ("via", provenanceJson c.via), ("closure", toJson blockClosure),
-    ("block", Json.mkObj [("targets_from", toJson c.block.targetsFrom),
-      ("trusted", toJson c.block.trusted), ("dynamic", modeJson c.block.dynamic)]),
-    ("expected", Json.mkObj [("admissible",
-      toJson (packJobBlockAdmissible c.via blockClosure c.block))])]
+@[conformance_family]
+def installRecord : Family InstallInput InstallOutput where
+  inputs := installCases.map fun c =>
+    { name := c.name, prior := RecordWire.ofModel c.prior, packKind := c.kind
+      explicit := c.explicit, via := c.via }
+  model := fun i =>
+    let r := recordAfterInstall i.prior.toModel i.packKind i.explicit i.via
+    { record := RecordWire.ofModel r, provenance := provenanceOf i.packKind r }
 
-private def renderPolicy (c : PolicyCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "policy_valid"),
-    ("agent_targets", toJson c.agentTargets), ("policy", policyJson c.policy),
-    ("expected", Json.mkObj [("valid", toJson (c.policy.valid c.agentTargets))])]
+structure InstallerInput where
+  name : String
+  via : InstallProvenance
+  packAuthority : Bool
+  deriving ToJson
 
-private def renderConsent (c : String × Bool × DynamicMode) : Json :=
-  Json.mkObj [("name", toJson c.1), ("kind", toJson "consented_dynamic"),
-    ("consent", toJson c.2.1), ("mode", modeJson c.2.2),
-    ("expected", Json.mkObj [("mode", modeJson (consentedDynamic c.2.1 c.2.2))])]
+@[conformance_family]
+def installerAuthority : Family InstallerInput ProvenanceOutput where
+  inputs := installerCases.map fun (via, packAuthority) =>
+    { name := (if via = .operator then "operator" else "self_config") ++
+        (if packAuthority then "_with_pack_authority" else "_without_pack_authority")
+      via := via, packAuthority := packAuthority }
+  model := fun i => { provenance := installerProvenance i.via i.packAuthority }
 
-private def renderWire (c : WireCase) : Json :=
-  let (p, job, caller) := wired c
-  Json.mkObj [("name", toJson c.name), ("kind", toJson "wire_targets_from"),
-    ("pack", toJson c.pack), ("pack_targets", targetsJson c.packTargets),
-    ("policy", policyJson c.policy), ("job_targets", targetsJson c.jobTargets),
-    ("caller_targets", targetsJson c.callerTargets),
-    ("expected", Json.mkObj [("policy", policyJson p), ("job_targets", targetsJson job),
-      ("caller_targets", targetsJson caller)])]
+structure CallWire where
+  argv : List String
+  args : Option String
+  script : Option String
+  agentBudget : Option Nat
+  deriving ToJson
 
-private def renderPublishedRead (publicationInProgress : Bool) : Json :=
-  Json.mkObj [("name", toJson (if publicationInProgress then "staged_read_deferred" else "published_read_observed")),
-    ("kind", toJson "published_read"), ("publication_in_progress", toJson publicationInProgress),
-    ("expected", Json.mkObj [("deferred", toJson (deferPublishedPluginRead publicationInProgress))])]
+structure OriginInput where
+  name : String
+  call : CallWire
+  deriving ToJson
 
-def authorityCasesJson : String :=
-  (toJson (provenanceCases.map renderProvenance ++ installCases.map renderInstall ++
-    installerCases.map renderInstaller ++ originCases.map renderOrigin ++ packBlockCases.map renderPackBlock ++
-    policyCases.map renderPolicy ++ consentCases.map renderConsent ++ wireCases.map renderWire ++
-    [true, false].map renderPublishedRead)).compress
+structure OriginOutput where
+  origin : Origin
+  deriving ToJson
+
+@[conformance_family]
+def scriptOrigin : Family OriginInput OriginOutput where
+  inputs := originCases.map fun c =>
+    { name := c.name
+      call := { argv := c.call.argv, args := c.call.args, script := c.call.script
+                agentBudget := c.call.agentBudget } }
+  model := fun i =>
+    { origin := callOrigin { argv := i.call.argv, args := i.call.args, script := i.call.script
+                             agentBudget := i.call.agentBudget } }
+
+structure BlockWire where
+  targetsFrom : List String
+  trusted : List String
+  dynamic : DynamicMode
+  deriving ToJson
+
+structure PackBlockInput where
+  name : String
+  via : InstallProvenance
+  closure : List String
+  block : BlockWire
+  deriving ToJson
+
+structure PackBlockOutput where
+  admissible : Bool
+  deriving ToJson
+
+@[conformance_family]
+def packBlockAdmission : Family PackBlockInput PackBlockOutput where
+  inputs := packBlockCases.map fun c =>
+    { name := c.name, via := c.via, closure := blockClosure
+      block := { targetsFrom := c.block.targetsFrom, trusted := c.block.trusted
+                 dynamic := c.block.dynamic } }
+  model := fun i =>
+    { admissible := packJobBlockAdmissible i.via i.closure
+        { targetsFrom := i.block.targetsFrom, trusted := i.block.trusted
+          dynamic := i.block.dynamic } }
+
+structure PolicyWire where
+  mode : DynamicMode
+  dynamicTargets : List String
+  trustedPacks : List String
+  deriving ToJson
+
+private def PolicyWire.ofModel (p : PluginJob.Policy) : PolicyWire :=
+  { mode := p.mode, dynamicTargets := p.dynamicTargets, trustedPacks := p.trustedPacks }
+
+private def PolicyWire.toModel (p : PolicyWire) : PluginJob.Policy :=
+  { mode := p.mode, dynamicTargets := p.dynamicTargets, trustedPacks := p.trustedPacks }
+
+structure PolicyValidInput where
+  name : String
+  agentTargets : List String
+  policy : PolicyWire
+  deriving ToJson
+
+structure PolicyValidOutput where
+  valid : Bool
+  deriving ToJson
+
+@[conformance_family]
+def policyValidity : Family PolicyValidInput PolicyValidOutput where
+  inputs := policyCases.map fun c =>
+    { name := c.name, agentTargets := c.agentTargets, policy := PolicyWire.ofModel c.policy }
+  model := fun i => { valid := i.policy.toModel.valid i.agentTargets }
+
+structure TargetWire where
+  node : String
+  agent : String
+  deriving ToJson
+
+private def TargetWire.ofModel (t : Target) : TargetWire := { node := t.1, agent := t.2 }
+
+private def TargetWire.toModel (t : TargetWire) : Target := (t.node, t.agent)
+
+structure WiringInput where
+  name : String
+  pack : String
+  packTargets : List TargetWire
+  policy : PolicyWire
+  jobTargets : List TargetWire
+  callerTargets : List TargetWire
+  deriving ToJson
+
+structure WiringOutput where
+  policy : PolicyWire
+  jobTargets : List TargetWire
+  callerTargets : List TargetWire
+  deriving ToJson
+
+@[conformance_family]
+def targetWiring : Family WiringInput WiringOutput where
+  inputs := wireCases.map fun c =>
+    { name := c.name, pack := c.pack, packTargets := c.packTargets.map TargetWire.ofModel
+      policy := PolicyWire.ofModel c.policy, jobTargets := c.jobTargets.map TargetWire.ofModel
+      callerTargets := c.callerTargets.map TargetWire.ofModel }
+  model := fun i =>
+    let (p, job, caller) := wireTargetsFrom i.pack (i.packTargets.map TargetWire.toModel)
+      i.policy.toModel (i.jobTargets.map TargetWire.toModel)
+      (i.callerTargets.map TargetWire.toModel)
+    { policy := PolicyWire.ofModel p, jobTargets := job.map TargetWire.ofModel
+      callerTargets := caller.map TargetWire.ofModel }
+
+structure PublishedReadInput where
+  name : String
+  publicationInProgress : Bool
+  deriving ToJson
+
+structure PublishedReadOutput where
+  deferred : Bool
+  deriving ToJson
+
+@[conformance_family]
+def publishedReadDeferral : Family PublishedReadInput PublishedReadOutput where
+  inputs := [true, false].map fun publicationInProgress =>
+    { name := if publicationInProgress then "staged_read_deferred" else "published_read_observed"
+      publicationInProgress := publicationInProgress }
+  model := fun i => { deferred := deferPublishedPluginRead i.publicationInProgress }
 
 /-- A target's wire spelling is its AgentTarget id; the host resolves it to the
 `(node, agent)` pair. -/
@@ -1484,15 +2009,59 @@ theorem wire_regressions :
     splitAddress viewAddress = some (childSession, "call-7") := by
   native_decide
 
-private def wireCase (name kind : String) (value : Json) : Json :=
-  Json.mkObj [("name", toJson name), ("kind", toJson kind), ("value", value)]
+inductive WireKind | jobStepInput | jobStepOutput | jobView | jobOutcome
+  deriving ToJson
 
-def wireCasesJson : String :=
-  (toJson (inputSamples.map (fun s => wireCase s.name "job_step_input" (wireInputJson s)) ++
-    outputSamples.map (fun s => wireCase s.name "job_step_output" (wireOutputJson s)) ++
-    [wireCase "job_view_session_with_colons" "job_view" viewJson] ++
-    hostCodes.map fun code => wireCase code "job_outcome" (Json.mkObj
-      [("code", toJson code), ("message", toJson "host terminal")]))).compress
+structure WireInput where
+  name : String
+  kind : WireKind
+  value : String
+  deriving ToJson
+
+structure WireObservation where
+  origin : Option Origin
+  echoKind : Option String
+  rootCall : Bool
+  jobs : List JobState
+  pin : Bool
+  resume : Bool
+  code : Option String
+  deriving ToJson
+
+private def noObservation : WireObservation :=
+  { origin := none, echoKind := none, rootCall := false, jobs := [], pin := false
+    resume := false, code := none }
+
+private def inputObservation (s : InputSample) : WireObservation :=
+  let v := inputVerdict s
+  { noObservation with origin := v.origin, echoKind := v.echoKind, rootCall := v.rootCall
+                       jobs := v.jobs, pin := s.job.pin.isSome }
+
+private def outputObservation (s : OutputSample) : WireObservation :=
+  { noObservation with pin := s.out.pin.isSome, resume := s.out.resume.isSome }
+
+private def viewObservation : WireObservation :=
+  { noObservation with origin := some (hostPin guestPin facts).origin
+                       code := Refusal.code .stalled }
+
+private def wireSamples : List (WireInput × WireObservation) :=
+  inputSamples.map (fun s =>
+      ({ name := s.name, kind := .jobStepInput, value := (wireInputJson s).compress },
+        inputObservation s)) ++
+    outputSamples.map (fun s =>
+      ({ name := s.name, kind := .jobStepOutput, value := (wireOutputJson s).compress },
+        outputObservation s)) ++
+    [({ name := "job_view_session_with_colons", kind := .jobView, value := viewJson.compress },
+      viewObservation)] ++
+    hostCodes.map fun code =>
+      ({ name := code, kind := .jobOutcome
+         value := (Json.mkObj [("code", toJson code), ("message", toJson "host terminal")]).compress },
+        { noObservation with code := some code })
+
+@[conformance_family]
+def wireSample : Family WireInput WireObservation where
+  inputs := wireSamples.map (·.1)
+  model := fun i => ((wireSamples.find? fun s => s.1.name == i.name).map (·.2)).getD noObservation
 
 /-- A request row: created at `t`, in `session`, public, with its calling
 request and tool-call edges. -/
@@ -1553,21 +2122,68 @@ theorem lineage_regressions :
       , [some "req-a", some "req-a-retry"], [some "req-a"], [some "req-a", none], [some "req-b"], [none] ] := by
   native_decide
 
-private def requestRowJson (r : DurableLineage.RequestRow) : Json :=
-  Json.mkObj [("created_at", toJson r.createdAt), ("_docID", toJson r.docId),
-    ("session_id", toJson r.session), ("is_public", toJson r.isPublic),
-    ("caused_by_parent_request_doc_id", toJson r.causeRequestDoc),
-    ("caused_by_parent_tool_call_doc_id", toJson r.causeToolCallDoc),
-    ("opening_request_doc_id", toJson r.sessionOpening)]
+structure LineageRowWire where
+  createdAt : Nat
+  docId : String
+  sessionId : String
+  isPublic : Bool
+  causedByParentRequestDocId : Option String
+  causedByParentToolCallDocId : Option String
+  openingRequestDocId : Option String
+  deriving ToJson
 
-private def renderLineage (c : LineageCase) : Json :=
-  Json.mkObj [("name", toJson c.name), ("rows", toJson (c.rows.map requestRowJson)),
-    ("queries", toJson ((c.queries.zip (openingDocs c)).map fun ((cause, session), opening) =>
-      Json.mkObj [("cause_request_doc_id", toJson cause), ("session_id", toJson session),
-        ("expected_opening_doc_id", toJson opening),
-        ("listed_start", toJson (DurableLineage.listedStart c.rows cause session))]))]
+structure LineageQueryWire where
+  causeRequestDocId : String
+  sessionId : String
+  deriving ToJson
 
-def lineageCasesJson : String := (toJson (lineageCases.map renderLineage)).compress
+structure LineageInput where
+  name : String
+  rows : List LineageRowWire
+  queries : List LineageQueryWire
+  deriving ToJson
+
+private def lineageRowWire (r : DurableLineage.RequestRow) : LineageRowWire :=
+  { createdAt := r.createdAt, docId := r.docId, sessionId := r.session, isPublic := r.isPublic
+    causedByParentRequestDocId := r.causeRequestDoc
+    causedByParentToolCallDocId := r.causeToolCallDoc, openingRequestDocId := r.sessionOpening }
+
+private def lineageRow (w : LineageRowWire) : DurableLineage.RequestRow :=
+  { createdAt := w.createdAt, docId := w.docId, session := w.sessionId, isPublic := w.isPublic
+    causeRequestDoc := w.causedByParentRequestDocId
+    causeToolCallDoc := w.causedByParentToolCallDocId, sessionOpening := w.openingRequestDocId }
+
+private def lineageInput (c : LineageCase) : LineageInput :=
+  { name := c.name, rows := c.rows.map lineageRowWire
+    queries := c.queries.map fun (cause, session) => { causeRequestDocId := cause, sessionId := session } }
+
+private def lineageOpenings (i : LineageInput) : List (Option String) :=
+  i.queries.map fun q =>
+    (DurableLineage.openingRequest (i.rows.map lineageRow) q.causeRequestDocId q.sessionId).map (·.docId)
+
+example : lineageCases.all (fun c => lineageOpenings (lineageInput c) == openingDocs c) := by
+  native_decide
+
+example : (lineageCases.map (·.name)).Nodup := by native_decide
+
+example : lineageCases.all (fun c => (c.rows.map (·.docId)).Nodup && !c.queries.isEmpty &&
+    (openingDocs c).all fun opening => opening.all fun doc => c.rows.any (·.docId == doc)) := by
+  native_decide
+
+example : lineageCases.all (fun c => c.queries.all fun (cause, session) =>
+    !DurableLineage.listedStart c.rows cause session ||
+      (DurableLineage.openingRequest c.rows cause session).isSome) := by
+  native_decide
+
+@[conformance_family]
+def lineageStarting : Conformance.Family LineageInput (List (Option String)) where
+  inputs := lineageCases.map lineageInput
+  model := lineageOpenings
+
+@[conformance_family]
+def lineageOpening : Conformance.Family LineageInput (List (Option String)) where
+  inputs := lineageCases.map lineageInput
+  model := lineageOpenings
 
 /-- One plugin-job row before a sweep tick or a stale observer invocation. -/
 structure RecoveryCase where
@@ -1627,27 +2243,32 @@ theorem recovery_regressions :
       , (false, 0, 0, true, 2), (true, 1, 0, false, 2) ] := by
   native_decide
 
-private def jobRowJson (r : Recovery.PluginJobRow) : Json :=
-  Json.mkObj [("running", toJson r.running), ("session_stopped", toJson r.sessionStopped),
-    ("terminal_children", toJson r.terminalChildren),
-    ("observed", toJson r.observed), ("live", toJson r.live), ("step_new", toJson r.stepNew),
-    ("deadline_expired", toJson r.deadlineExpired), ("available", toJson r.available),
-    ("stepped", toJson r.stepped), ("step_in_flight", toJson r.stepInFlight)]
+deriving instance ToJson for Recovery.PluginJobRow
 
-private def renderRecovery (c : RecoveryCase) : Json :=
-  let after := recoveryTick c.row
-  Json.mkObj [("name", toJson c.name),
-    ("sweep_id", toJson Recovery.pluginJobRecoverySweep.sweepId),
-    ("rust_function", toJson Recovery.pluginJobRecoverySweep.rustFunction),
-    ("row", jobRowJson c.row), ("stale", toJson (recoveryStale c.row)),
-    ("measure_before", toJson (recoveryMeasure c.row)),
-    ("measure_after", toJson (recoveryMeasure after)),
-    ("step_commit_allowed", toJson (Recovery.pluginJobStepCommitAllowed c.row.sessionStopped)),
-    ("step_invocation_allowed", toJson (Recovery.pluginJobStepInvocationAllowed
-      c.row.running c.row.sessionStopped)),
-    ("expected_row", jobRowJson after)]
+structure RecoveryInput where
+  name : String
+  before : Recovery.PluginJobRow
+  deriving ToJson
 
-def recoveryCasesJson : String := (toJson (recoveryCases.map renderRecovery)).compress
+structure RecoveryOutput where
+  stale : Bool
+  row : Recovery.PluginJobRow
+  stepCommitAllowed : Bool
+  stepInvocationAllowed : Bool
+  deriving ToJson
+
+@[conformance_family]
+def recoveries : Family RecoveryInput RecoveryOutput where
+  inputs := recoveryCases.map fun c => { name := c.name, before := c.row }
+  model := fun i =>
+    { stale := recoveryStale i.before, row := recoveryTick i.before
+      stepCommitAllowed := Recovery.pluginJobStepCommitAllowed i.before.sessionStopped
+      stepInvocationAllowed :=
+        Recovery.pluginJobStepInvocationAllowed i.before.running i.before.sessionStopped }
+
+example : Recovery.pluginJobRecoverySweep.sweepId = "tool_call_lifecycle_recover_plugin_job_rows" ∧
+    Recovery.pluginJobRecoverySweep.rustFunction = "plugin_job::recovery::redrive_running_jobs" := by
+  decide
 
 private def wireBindings : List TargetResolution.Binding :=
   [ ⟨"target-local", targetA.1, targetA.2⟩
@@ -1663,11 +2284,30 @@ private def wirePlans : List (String × List String × List String) :=
   , ("target-alias", ["target-local", "target-alias"], ["target-alias"])
   , ("target-remote", ["target-local"], ["target-local"]) ]
 
+structure TraceRead where
+  sessionStopped : Bool
+  nowMillis : Nat
+  available : Bool
+  progressRevision : Nat
+  stepInFlight : Bool
+  deriving ToJson
+
+structure WireTrace where
+  spawnWires : List String
+  interruption : String
+  read : TraceRead
+  deriving ToJson
+
+structure TraceRows where
+  before : Recovery.PluginJobRow
+  after : Recovery.PluginJobRow
+  deriving ToJson
+
 /-- Each trace resolves actual wire input, intersects raw wire ceilings,
 executes admission and settlement, and projects that resulting row into the
 registered recovery owner. Availability and cancellation observations occur
 after the step, so their event order is distinct from admission's snapshot. -/
-private def wireRecoveryCases : List Json := Id.run do
+private def wireRecoveryCases : List (AdmissionCase × WireTrace × TraceRows) := Id.run do
   let mut cases := []
   for (wire, liveIds, pinnedIds) in wirePlans do
     for stopped in [false, true] do
@@ -1684,23 +2324,117 @@ private def wireRecoveryCases : List Json := Id.run do
                 ceilingAtPin := { ceiling with targets := pinnedIds } } }
             let some target := TargetResolution.resolve wireBindings wire | continue
             let out := effects [spawn "new" target]
-            let c : AdmissionCase := ⟨s!"wire_recovery_{cases.length}", ctx, job, out⟩
             for phase in [RecoveryTrace.Interruption.beforeKill, .afterKill] do
               let read : RecoveryTrace.DurableRead :=
                 ⟨stopped, if expired then 7200000 else 0, available, 2, inFlight⟩
-              let before := RecoveryTrace.afterStep ctx job out observation phase read
-              let after := RecoveryTrace.recoverAfterStep ctx job out observation phase read
-              let trace := Json.mkObj
-                [("spawn_wires", toJson [wire]),
-                 ("interruption", toJson (if phase == .beforeKill then "before_kill" else "after_kill")),
-                 ("read", Json.mkObj [("session_stopped", toJson read.sessionStopped),
-                   ("now_millis", toJson read.nowMillis), ("available", toJson read.available),
-                   ("progress_revision", toJson read.progressRevision),
-                   ("step_in_flight", toJson read.stepInFlight)]),
-                 ("before", jobRowJson before), ("after", jobRowJson after)]
-              let c := { c with name := s!"wire_recovery_{cases.length}" }
-              cases := cases ++ [render c trace]
+              let trace : WireTrace :=
+                { spawnWires := [wire]
+                  interruption := if phase == .beforeKill then "before_kill" else "after_kill"
+                  read := { sessionStopped := read.sessionStopped, nowMillis := read.nowMillis
+                            available := read.available, progressRevision := read.progressRevision
+                            stepInFlight := read.stepInFlight } }
+              let rows : TraceRows :=
+                { before := RecoveryTrace.afterStep ctx job out observation phase read
+                  after := RecoveryTrace.recoverAfterStep ctx job out observation phase read }
+              let c : AdmissionCase := ⟨s!"wire_recovery_{cases.length}", ctx, job, out⟩
+              cases := cases ++ [(c, trace, rows)]
   return cases
+
+private def admissionEntries : List (AdmissionCase × Option (WireTrace × TraceRows)) :=
+  (admissionCases ++ sourceBoundaryCases).map (fun c => (c, none)) ++
+    wireRecoveryCases.map fun (c, trace, rows) => (c, some (trace, rows))
+
+private def admissionEntry (name : String) : AdmissionCase × Option (WireTrace × TraceRows) :=
+  (admissionEntries.find? fun e => e.1.name == name).getD
+    (⟨"", context, stepZero, effects []⟩, none)
+
+private def rowStateString : RowState → String
+  | .running => "running"
+  | .completed => "completed"
+  | .failed => "failed"
+  | .cancelled => "cancelled"
+  | .timedOut => "timed_out"
+
+structure AdmissionInput where
+  name : String
+  context : Json
+  job : Json
+  output : Json
+  trace : Option WireTrace
+  deriving ToJson
+
+structure AdmissionOutput where
+  admitted : Bool
+  code : Option String
+  dynamicCodeDisabled : Bool
+  job : Option Json
+  rowState : String
+  killedRetryKeys : List String
+  recovery : Option TraceRows
+  deriving ToJson
+
+private def admissionOutput (name : String) : AdmissionOutput :=
+  let (c, trace) := admissionEntry name
+  let (row, kill) := settled c
+  let (code, admitted, dynamicDisabled) : Option String × Option Job × Bool :=
+    match admitStepGuarded c.ctx c.job c.out with
+    | .ok j => (none, some j, false)
+    | .error r => (r.code, none, decide (r = Refusal.dynamicCodeDisabled))
+  { admitted := admitted.isSome, code, dynamicCodeDisabled := dynamicDisabled
+    job := admitted.map jobJson, rowState := rowStateString row.state
+    killedRetryKeys := (kill.map fun (k, _) => k.retryKey).mergeSort fun a b => decide (a ≤ b)
+    recovery := trace.map (·.2) }
+
+/-- Lean `admitStep` and `settleStep` through the production admission owner,
+and each interrupted wire trace through the recovery projection and tick. -/
+@[conformance_family]
+def admission : Family AdmissionInput AdmissionOutput where
+  inputs := admissionEntries.map fun (c, trace) =>
+    { name := c.name, context := contextJson c.ctx, job := jobJson c.job, output := outputJson c.out
+      trace := trace.map (·.1) }
+  model := fun i => admissionOutput i.name
+
+structure SourceBoundaryInput where
+  name : String
+  argv : List String
+  script : Option String
+  deriving ToJson
+
+structure DispatchVerdict where
+  admitted : Bool
+  dynamicCodeDisabled : Bool
+  code : Option String
+  deriving ToJson
+
+private def dispatchVerdict (name : String) : DispatchVerdict :=
+  let o := admissionOutput name
+  { admitted := o.admitted, dynamicCodeDisabled := o.dynamicCodeDisabled, code := o.code }
+
+/-- A served plugin-job tool call under `policy.dynamic: off` carries only its
+call arguments, so the dispatch scenario builds the source-boundary cases whose
+row is a fresh step-0 run call. -/
+def sourceBoundaryDispatchNames : List String :=
+  [ "absent_sources_under_off", "empty_script_under_off", "nonempty_script_under_off"
+  , "whitespace_script_is_source", "inline_script_without_argv_under_off" ]
+
+@[conformance_family]
+def sourceBoundaryDispatch : Family SourceBoundaryInput DispatchVerdict where
+  inputs := (sourceBoundaryCases.filter fun c => c.name ∈ sourceBoundaryDispatchNames).map
+    fun c => { name := c.name, argv := c.job.call.argv, script := c.job.call.script }
+  model := fun i => dispatchVerdict i.name
+
+structure RefusalInput where
+  name : String
+  deriving ToJson
+
+/-- The served dispatch fixture builds a step-0 script spawn under the `check`
+policy and a call whose caller has no configured target scope. -/
+@[conformance_family]
+def dispatchRefusal : Family RefusalInput DispatchVerdict where
+  inputs := (admissionCases.filter fun c =>
+    c.name ∈ ["dynamic_check_spawn_refused", "caller_target_unconfigured_refused"]).map
+      fun c => { name := c.name }
+  model := fun i => dispatchVerdict i.name
 
 def wakeCases : List (String × ExecutionIdentity.Work × ExecutionIdentity.Work) :=
   [ ("same_agent_coalesces", ⟨"row", "selected"⟩, ⟨"row", "selected"⟩)
@@ -1708,17 +2442,24 @@ def wakeCases : List (String × ExecutionIdentity.Work × ExecutionIdentity.Work
   , ("other_row_independent", ⟨"row", "selected"⟩, ⟨"other-row", "selected"⟩)
   , ("other_row_other_agent_independent", ⟨"row", "selected"⟩, ⟨"other-row", "other"⟩) ]
 
-private def workJson (work : ExecutionIdentity.Work) : Json :=
-  Json.mkObj [("document", toJson work.document), ("agent", toJson work.agent)]
+deriving instance ToJson for ExecutionIdentity.Work, ExecutionIdentity.WakeOutcome
 
-def wakeCasesJson : String :=
-  (toJson (wakeCases.map fun (name, running, wake) => Json.mkObj
-    [("name", toJson name), ("running", workJson running), ("wake", workJson wake),
-     ("expected", Json.mkObj
-       [("outcome", toJson (ExecutionIdentity.wakeOutcome running wake).toContract)])])).compress
+structure WakeInput where
+  name : String
+  running : ExecutionIdentity.Work
+  wake : ExecutionIdentity.Work
+  deriving ToJson
 
-def admissionCasesJson : String :=
-  (toJson (((admissionCases ++ sourceBoundaryCases).map fun c => render c) ++
-    wireRecoveryCases)).compress
+structure WakeOutput where
+  outcome : ExecutionIdentity.WakeOutcome
+  deriving ToJson
+
+@[conformance_family]
+def wakes : Family WakeInput WakeOutput where
+  inputs := wakeCases.map fun (name, running, wake) => { name, running, wake }
+  model := fun i => { outcome := ExecutionIdentity.wakeOutcome i.running i.wake }
+
+example : wakes.inputs.any (fun i => (wakes.model i).outcome == .refused) = true := by
+  native_decide
 
 end Conformance.PluginJob

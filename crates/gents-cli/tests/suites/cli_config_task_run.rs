@@ -7,31 +7,8 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-#[path = "../../../gents/src/lean_vocab_test/support.rs"]
-mod lean_vocab_test;
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
-    let lean_case = lean_manual_dispatch_case()?;
-    assert_eq!(lean_case.name, "manual_unconditional");
-    assert_eq!(lean_case.trigger_id, None);
-    assert_eq!(lean_case.trigger_kind, "manual");
-    assert_eq!(lean_case.concurrency, "parallel");
-    assert_eq!(lean_case.expected_result, "fired");
-    assert_eq!(lean_case.expected_materialize_trigger_id, None);
-    assert_eq!(
-        lean_case.expected_materialize_trigger_kind.as_deref(),
-        Some("manual")
-    );
-    assert_eq!(
-        lean_case.expected_execution_origin.as_deref(),
-        Some("interactive")
-    );
-    assert_eq!(
-        lean_case.request_count_after,
-        lean_case.request_count_before + 1
-    );
-
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     let root = tempdir.path().join("infra").join("agents").join("default");
@@ -61,7 +38,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     )?;
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let agent_did = config["node"]
+    let agent_did = config["default_agent_selection"]
         .get("default_agent_did")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("exported bundle missing default_agent_did"))?
@@ -149,48 +126,55 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
         Some(node_did.as_str())
     );
 
-    let fire = run_cli_json(
-        &home_dir,
-        &[
-            "automation",
-            "task",
-            "run",
-            "--task-id",
-            &task_id,
-            "--args",
-            r#"{"name":"Amy"}"#,
-            "--graphql",
-            &graphql,
-        ],
-    )?;
-    assert_eq!(
-        fire.get("task_id").and_then(Value::as_str),
-        Some(task_id.as_str())
-    );
-    assert_eq!(fire.get("status").and_then(Value::as_str), Some("pending"));
-    assert_eq!(
-        fire.get("agent_did").and_then(Value::as_str),
-        Some(agent_did.as_str())
-    );
-    assert_eq!(
-        fire.get("node_did").and_then(Value::as_str),
-        Some(node_did.as_str())
-    );
-    let request_id = fire
-        .get("request_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("fire output missing request_id: {fire}"))?
-        .to_string();
-    let request_doc_id = fire
-        .get("request_doc_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("fire output missing request_doc_id: {fire}"))?;
-    assert!(!request_doc_id.is_empty());
+    for case in
+        gents_lean_vocab::families::trigger_contracts_manual_run::cases::<String, String, String>()
+    {
+        let fire = run_cli_json(
+            &home_dir,
+            &[
+                "automation",
+                "task",
+                "run",
+                "--task-id",
+                &task_id,
+                "--args",
+                r#"{"name":"Amy"}"#,
+                "--graphql",
+                &graphql,
+            ],
+        )?;
+        assert_eq!(
+            fire.get("task_id").and_then(Value::as_str),
+            Some(task_id.as_str())
+        );
+        assert_eq!(fire.get("status").and_then(Value::as_str), Some("pending"));
+        assert_eq!(
+            fire.get("agent_did").and_then(Value::as_str),
+            Some(agent_did.as_str())
+        );
+        assert_eq!(
+            fire.get("node_did").and_then(Value::as_str),
+            Some(node_did.as_str())
+        );
+        let request_id = fire
+            .get("request_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("fire output missing request_id: {fire}"))?
+            .to_string();
+        let request_doc_id = fire
+            .get("request_doc_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("fire output missing request_doc_id: {fire}"))?;
+        let result = if request_doc_id.is_empty() {
+            "skipped"
+        } else {
+            "fired"
+        };
 
-    let response = graphql_query(
-        &graphql,
-        &format!(
-            r#"{{
+        let response = graphql_query(
+            &graphql,
+            &format!(
+                r#"{{
                 AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     request_id
                     node_did
@@ -202,46 +186,49 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
                     caused_by_trigger_kind
                 }}
             }}"#,
-            escape_graphql_string(&request_id),
-        ),
-    )
-    .await?;
-    let row = first_graphql_row(&response, "AgentRequest")?;
-    assert_eq!(
-        row.get("node_did").and_then(Value::as_str),
-        Some(node_did.as_str())
-    );
-    assert_eq!(
-        row.get("agent_did").and_then(Value::as_str),
-        Some(agent_did.as_str())
-    );
-    assert_eq!(row.get("content").and_then(Value::as_str), Some("hi Amy"));
-    let persisted_lifecycle_state = row.get("lifecycle_state").and_then(Value::as_str);
-    assert!(
+                escape_graphql_string(&request_id),
+            ),
+        )
+        .await?;
+        let row = first_graphql_row(&response, "AgentRequest")?;
+        assert_eq!(
+            row.get("node_did").and_then(Value::as_str),
+            Some(node_did.as_str())
+        );
+        assert_eq!(
+            row.get("agent_did").and_then(Value::as_str),
+            Some(agent_did.as_str())
+        );
+        assert_eq!(row.get("content").and_then(Value::as_str), Some("hi Amy"));
+        let persisted_lifecycle_state = row.get("lifecycle_state").and_then(Value::as_str);
+        assert!(
         matches!(
             persisted_lifecycle_state,
             Some("pending" | "claimed" | "processing" | "completed")
         ),
         "manual task run should create a request that is pending or has advanced through the daemon lifecycle, got lifecycle_state={persisted_lifecycle_state:?}"
     );
-    assert_eq!(
-        row.get("execution_origin").and_then(Value::as_str),
-        lean_case.expected_execution_origin.as_deref()
-    );
-    assert_eq!(
-        row.get("caused_by_trigger_kind").and_then(Value::as_str),
-        lean_case.expected_materialize_trigger_kind.as_deref()
-    );
-    match lean_case.expected_materialize_trigger_id.as_deref() {
-        Some(expected_id) => assert_eq!(
-            row.get("caused_by_trigger_id").and_then(Value::as_str),
-            Some(expected_id)
-        ),
-        None => assert!(
-            row.get("caused_by_trigger_id").is_some_and(Value::is_null),
-            "caused_by_trigger_id must be null for manual runs, got {:?}",
-            row.get("caused_by_trigger_id")
-        ),
+        assert!(
+            row.get("caused_by_trigger_id").is_some(),
+            "AgentRequest row must carry caused_by_trigger_id, got {row}"
+        );
+        case.check(
+            gents_lean_vocab::families::trigger_contracts_manual_run::ManualRunOutput {
+                result: result.to_owned(),
+                materialize_trigger_id: row
+                    .get("caused_by_trigger_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                materialize_trigger_kind: row
+                    .get("caused_by_trigger_kind")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                execution_origin: row
+                    .get("execution_origin")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            },
+        );
     }
 
     Ok(())
@@ -278,7 +265,7 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     )?;
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let agent_did = config["node"]
+    let agent_did = config["default_agent_selection"]
         .get("default_agent_did")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("exported bundle missing default_agent_did"))?
@@ -345,17 +332,4 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     );
 
     Ok(())
-}
-
-fn lean_manual_dispatch_case() -> Result<&'static lean_vocab_test::LeanTriggerDispatchCase> {
-    let cases = lean_vocab_test::lean_trigger_dispatch_cases();
-    assert_eq!(
-        lean_vocab_test::lean_trigger_dispatch_case_count(),
-        cases.len(),
-        "Lean trigger dispatch case-count sentinel drifted"
-    );
-    cases
-        .iter()
-        .find(|case| case.name == "manual_unconditional")
-        .ok_or_else(|| anyhow!("Lean TriggerDispatch contracts did not emit manual_unconditional"))
 }

@@ -8,27 +8,42 @@ import type {
   ChatSendResult,
   DesktopApiAdapter,
   DesktopClientSnapshot,
+  DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 
 import {
   CHAT_SEND_DEADLINE_MS,
   createChatDelivery,
+  observeLandedChatSends,
 } from "../../src/hooks/chatDelivery";
+import { writeSession } from "../../src/hooks/sessionStore";
+import { keepSendDeadlineClock } from "../../src/hooks/sendDeadlineClock";
 import { loadChatDrafts } from "../../src/hooks/chatDrafts";
 import {
   deliveryAffordances,
+  resendRefused,
+  keptRow,
   sendStatus,
   type DeliveryAffordances,
+  type KeptRow,
   type SendStatus,
 } from "../../src/hooks/chatDeliveryView";
 import { acceptedChat } from "../chat-delivery-fixture";
 import { goalDeliveryStorage } from "../goal-delivery-storage";
 import { shellStores } from "../shell-fixture";
+import { memorySendAttachments } from "../send-attachments-fixture";
 
 type ViewCase = Omit<DeliveryAffordances, "view"> & {
   status: SendStatus;
   mailbox: boolean;
+  refused: boolean;
   view: DeliveryAffordances["view"];
+};
+type RowCase = {
+  status: SendStatus;
+  mailbox: boolean;
+  observed: boolean;
+  row: KeptRow | null;
 };
 type Snapshot = {
   status: SendStatus | null;
@@ -60,7 +75,11 @@ async function leanCases() {
     ["env", "lean", "--run", "Proofs/Conformance/ClientOptimisticSend.lean"],
     { cwd, timeout: 240_000, maxBuffer: 64 * 1024 * 1024 },
   );
-  return JSON.parse(stdout) as { views: ViewCase[]; traces: Trace[] };
+  return JSON.parse(stdout) as {
+    views: ViewCase[];
+    rows: RowCase[];
+    traces: Trace[];
+  };
 }
 
 const flush = async () => {
@@ -95,7 +114,9 @@ async function replay(trace: Trace, mailbox: boolean) {
         wire.push({ request, resolve, reject }),
       ),
   } as unknown as DesktopApiAdapter;
-  const delivery = createChatDelivery(api, stores);
+  const delivery = createChatDelivery(api, stores, memorySendAttachments());
+  const stopClock = keepSendDeadlineClock(stores.chat);
+  const stopObserving = observeLandedChatSends(stores);
   const applied = async () => true;
   let requestId: string | null = null;
   let discarded = false;
@@ -119,7 +140,10 @@ async function replay(trace: Trace, mailbox: boolean) {
       status,
       payload: Boolean(draft && !draft.confirmed),
       wire: wire.length,
-      retryOffered: status !== null && deliveryAffordances(status, mailbox).retry,
+      retryOffered:
+        status !== null &&
+        deliveryAffordances(status, mailbox, Boolean(draft && resendRefused(draft)))
+          .retry,
     };
   };
   for (const [index, action] of trace.actions.entries()) {
@@ -182,6 +206,17 @@ async function replay(trace: Trace, mailbox: boolean) {
         await delivery.discard(requestId!);
         discarded = true;
         break;
+      case "observe":
+        writeSession(stores.session, {
+          sessionId: "session",
+          nodeDid: "node",
+          latestRequestId: requestId,
+          pendingTurn: null,
+          queuedTurns: [],
+          foldedInputs: [],
+          timelineItems: [],
+        } as unknown as DesktopSessionSnapshot);
+        break;
       default:
         throw new Error(`unmodeled action ${action.kind}`);
     }
@@ -193,17 +228,29 @@ async function replay(trace: Trace, mailbox: boolean) {
     if (action.kind === "compose" || action.kind === "retry")
       expect(wire.at(-1)?.request.requestId).toBe(requestId);
   }
+  stopObserving();
+  stopClock();
   vi.useRealTimers();
 }
 
 it("derives the send view and actions from the Lean optimistic send owner", async () => {
   const { views } = await leanCases();
-  expect(views).toHaveLength(8);
-  for (const { status, mailbox, ...expected } of views)
+  expect(views).toHaveLength(16);
+  for (const { status, mailbox, refused, ...expected } of views)
     expect(
-      deliveryAffordances(status, mailbox),
-      `${status} mailbox=${mailbox}`,
+      deliveryAffordances(status, mailbox, refused),
+      `${status} mailbox=${mailbox} refused=${refused}`,
     ).toEqual(expected);
+}, 300_000);
+
+it("draws a kept message's transcript row from the Lean optimistic send owner", async () => {
+  const { rows } = await leanCases();
+  expect(rows).toHaveLength(16);
+  for (const { status, mailbox, observed, row } of rows)
+    expect(
+      keptRow(status, mailbox, observed),
+      `${status} mailbox=${mailbox} observed=${observed}`,
+    ).toBe(row);
 }, 300_000);
 
 it("runs chatDelivery through every Lean optimistic send trace", async () => {
@@ -217,6 +264,7 @@ it("runs chatDelivery through every Lean optimistic send trace", async () => {
       "discard",
       "drop",
       "loseReply",
+      "observe",
       "receive",
       "refuse",
       "retry",

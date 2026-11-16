@@ -1,0 +1,16 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "bar",
+    "y": [
+      "nope"
+    ],
+    "file": "sales.csv"
+  },
+  "bind": "fixtures/data",
+  "expect": {
+    "chart": "bar",
+    "error": "column \"nope\" is not in the data; the columns are month, region, revenue, units",
+    "warnings": []
+  }
+}

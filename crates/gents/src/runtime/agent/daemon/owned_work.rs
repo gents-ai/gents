@@ -4,11 +4,13 @@ use anyhow::Result;
 
 use super::terminal::request_failure_reason;
 use super::{AgentDaemon, HandleRequestOutcome, RequestInterruptionSource, ShutdownDrainFailure};
-use crate::inference::llm::rig_compat::ProviderModel;
-use crate::observe::runtime_trace::{record_current_failure_class, record_current_request_outcome};
-use crate::request::lifecycle::RequestLifecycle;
-use crate::request::streaming::DefraStreamWriter;
+use gents_inference::llm::rig_compat::ProviderModel;
+use gents_observe::observe::runtime_trace::{
+    record_current_failure_class, record_current_request_outcome,
+};
 use gents_protocol::row::AgentRequest;
+use gents_session::request::lifecycle::RequestLifecycle;
+use gents_session::request::streaming::DefraStreamWriter;
 
 impl<M> AgentDaemon<M>
 where
@@ -19,19 +21,19 @@ where
         request: &AgentRequest,
         resumed_from_backend: bool,
     ) -> Result<(
-        Vec<crate::documents::TaskHook>,
+        Vec<gents_documents::TaskHook>,
         PathBuf,
-        Option<crate::request::task_hooks::TaskHookRecordHandle>,
+        Option<gents_toolcalls::call::task_hooks::TaskHookRecordHandle>,
         bool,
-        Option<Vec<crate::request::task_hooks::HookAttempt>>,
+        Option<Vec<gents_toolcalls::call::task_hooks::HookAttempt>>,
     )> {
-        let access = crate::ConfigAccess::local_managed_agent(
+        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
             self.node.clone(),
             identity::Did::new(&self.agent_config.agent_did)?,
             self.agent_config.agent_identity.as_ref(),
         )?;
         let (hooks, task_owned) =
-            crate::request::task_hooks::resolve_request_task_hooks(&access, request).await?;
+            gents_toolcalls::call::task_hooks::resolve_request_task_hooks(&access, request).await?;
         if resumed_from_backend && task_owned {
             let (record, handle, before) = self
                 .background_execution_registry
@@ -56,7 +58,7 @@ where
         let record = self
             .background_execution_registry
             .task_hook_records()
-            .begin(crate::request::task_hooks::TaskHookRecord {
+            .begin(gents_toolcalls::call::task_hooks::TaskHookRecord {
                 request_doc_id: request.doc_id.clone(),
                 request_id: request.request_id.clone(),
                 node_did: request.node_did.clone(),
@@ -94,11 +96,11 @@ where
         request: &AgentRequest,
         shutdown: tokio::sync::watch::Receiver<bool>,
         interrupt_rx: tokio::sync::watch::Receiver<
-            Option<crate::request::interrupt::InterruptIntent>,
+            Option<gents_session::request::interrupt::InterruptIntent>,
         >,
-        hook_record: Option<&crate::request::task_hooks::TaskHookRecordHandle>,
+        hook_record: Option<&gents_toolcalls::call::task_hooks::TaskHookRecordHandle>,
     ) -> OwnedWorkOutcome {
-        use crate::request::task_hooks::TaskAgentResult;
+        use gents_toolcalls::call::task_hooks::TaskAgentResult;
 
         let result =
             Box::pin(self.handle_request(lifecycle, stream_writer, shutdown, interrupt_rx.clone()))
@@ -114,7 +116,7 @@ where
                     tracing::warn!(request_id = %request.request_id, %error, "stopping workspace completion after execution ownership loss");
                     return OwnedWorkOutcome::OwnershipLost;
                 }
-                if let Err(error) = crate::tools::workspace::seal_on_writer_success(
+                if let Err(error) = gents_session::workspace::seal_on_writer_success(
                     &self.node,
                     self.agent_config.agent_identity.as_ref(),
                     request,
@@ -125,7 +127,7 @@ where
                     record_current_failure_class(&error);
                     tracing::error!(
                         request_id = %request.request_id,
-                        error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+                        error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                         "failed to seal workspace after writer success"
                     );
                     return OwnedWorkOutcome::observed(
@@ -138,7 +140,7 @@ where
                     tracing::warn!(request_id = %request.request_id, %error, "stopping workspace integration after execution ownership loss");
                     return OwnedWorkOutcome::OwnershipLost;
                 }
-                if let Err(error) = crate::tools::workspace::integrate_on_integrator_success(
+                if let Err(error) = gents_session::workspace::integrate_on_integrator_success(
                     &self.node,
                     self.agent_config.agent_identity.as_ref(),
                     request,
@@ -149,7 +151,7 @@ where
                     record_current_failure_class(&error);
                     tracing::error!(
                         request_id = %request.request_id,
-                        error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+                        error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                         "failed to integrate workspace after integrator success"
                     );
                     // Keep the Active Integrate binding so a retry can observe
@@ -213,7 +215,7 @@ where
                 tracing::error!(
                     agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
-                    error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+                    error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                     "request failed after response started"
                 );
                 OwnedWorkOutcome::observed(
@@ -228,7 +230,7 @@ where
                 tracing::error!(
                     agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
-                    error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+                    error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                     "graceful shutdown could not confirm provider output retention; leaving durable execution for recovery"
                 );
                 OwnedWorkOutcome::DrainFailed(error)
@@ -243,7 +245,7 @@ where
                 tracing::error!(
                     agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
-                    error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+                    error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                     "request handling failed"
                 );
                 OwnedWorkOutcome::observed(
@@ -259,7 +261,7 @@ where
 /// A work failure caused by losing the execution lease is not this execution's
 /// failure to report.
 async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::Error) -> bool {
-    if error.is::<crate::request::lifecycle::ExecutionOwnershipLost>() {
+    if error.is::<gents_session::request::lifecycle::ExecutionOwnershipLost>() {
         return true;
     }
     matches!(lifecycle.owns_execution().await, Ok(false))
@@ -270,7 +272,7 @@ pub(super) enum OwnedWorkOutcome {
     Parked,
     UncertainParking(anyhow::Error),
     Observed {
-        observation: crate::request::task_hooks::TaskAgentResult,
+        observation: gents_toolcalls::call::task_hooks::TaskAgentResult,
         reason: Option<String>,
         release_writer_binding: bool,
     },
@@ -280,7 +282,7 @@ pub(super) enum OwnedWorkOutcome {
 
 impl OwnedWorkOutcome {
     pub(super) fn observed(
-        observation: crate::request::task_hooks::TaskAgentResult,
+        observation: gents_toolcalls::call::task_hooks::TaskAgentResult,
         reason: Option<String>,
         release_writer_binding: bool,
     ) -> Self {
@@ -291,15 +293,15 @@ impl OwnedWorkOutcome {
         }
     }
 
-    pub(super) fn observation(&self) -> crate::request::task_hooks::TaskAgentResult {
+    pub(super) fn observation(&self) -> gents_toolcalls::call::task_hooks::TaskAgentResult {
         match self {
-            Self::Interrupted(_) => crate::request::task_hooks::TaskAgentResult::Cancelled,
+            Self::Interrupted(_) => gents_toolcalls::call::task_hooks::TaskAgentResult::Cancelled,
             Self::Parked | Self::UncertainParking(_) => {
-                crate::request::task_hooks::TaskAgentResult::Parked
+                gents_toolcalls::call::task_hooks::TaskAgentResult::Parked
             }
             Self::Observed { observation, .. } => *observation,
             Self::OwnershipLost | Self::DrainFailed(_) => {
-                crate::request::task_hooks::TaskAgentResult::Interrupted
+                gents_toolcalls::call::task_hooks::TaskAgentResult::Interrupted
             }
         }
     }

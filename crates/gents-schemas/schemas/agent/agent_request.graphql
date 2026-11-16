@@ -1,4 +1,4 @@
-type AgentRequest @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "delivered_requests") {
+type AgentRequest @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "delivered_requests") {
     request_id: String @index @immutable
     purpose: String @index @immutable
     node_did: String @index @immutable
@@ -36,6 +36,11 @@ type AgentRequest @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b932
     input: JSON @immutable
     lifecycle_state: String @index
     backend_id: String @index
+    executed_model_name: String
+    executed_reasoning_effort: String
+    executed_service_tier: String
+    executed_inference_profile_id: String
+    executed_runtime_generation: Int
     execution_origin: String @immutable
     caused_by_trigger_id: String @index @immutable
     caused_by_trigger_doc_id: String @index @immutable

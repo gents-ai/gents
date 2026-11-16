@@ -1,0 +1,41 @@
+{
+  "case_id": "native_help",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "discover",
+      "prompt": "Discover how to use browser_exec: call its help without a connection or a running worker. Explain how to wait for delayed page content and what happens when the wait times out.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "browser_exec"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ],
+            "max_calls": 20
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "response.waits",
+                "contains": "False"
+              }
+            ]
+          },
+          "tier": "acceptance"
+        }
+      ]
+    }
+  ]
+}

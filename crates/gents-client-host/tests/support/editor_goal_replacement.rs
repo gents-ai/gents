@@ -1,11 +1,13 @@
 use super::{fake_llm, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents::{store::graphql::escape_graphql_string, ConfigAccess, NodeIdentity};
 use gents_protocol::{
     goal_control::{GoalControlOutcome, GoalOperation, SessionGoalControl},
     request_input::{CapturedContextKind, CapturedContextSource},
     request_lifecycle::RequestLifecycleState,
     row::AgentRequestRow,
+};
+use gents_store::{
+    config_client::ConfigAccess, graphql::escape_graphql_string, identity::NodeIdentity,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -103,7 +105,7 @@ impl Provider {
             } else {
                 fake_llm::tool_call_sse_with_id(
                     COMPLETE_CALL,
-                    gents::goal::UPDATE_GOAL_TOOL_NAME,
+                    gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
                     &json!({"status":"complete","reason":COMPLETION_EVIDENCE}).to_string(),
                 )
             }));
@@ -211,7 +213,7 @@ pub async fn verify(
     );
     let session_doc = sessions[0]["_docID"].as_str().context("physical session")?;
     for row in &rows {
-        gents::verify_request_receipt_signature(row)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(row)?;
         ensure!(
             row.node_did.as_deref() == Some(node)
                 && row.session_id.as_deref() == Some(session)
@@ -250,20 +252,22 @@ pub async fn verify(
         .map(request)
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
-    let goals: Vec<gents::goal::GoalDocument> =
+    let goals: Vec<gents_automation::goal::GoalDocument> =
         serde_json::from_value(value["data"]["Goal"].clone())?;
     let selected_goals = OBJECTIVES
-        .map(|objective| -> Result<&gents::goal::GoalDocument> {
-            let matching: Vec<_> = goals
-                .iter()
-                .filter(|goal| goal.objective == objective)
-                .collect();
-            ensure!(
-                matching.len() == 1,
-                "expected one retained Goal for {objective:?}"
-            );
-            Ok(matching[0])
-        })
+        .map(
+            |objective| -> Result<&gents_automation::goal::GoalDocument> {
+                let matching: Vec<_> = goals
+                    .iter()
+                    .filter(|goal| goal.objective == objective)
+                    .collect();
+                ensure!(
+                    matching.len() == 1,
+                    "expected one retained Goal for {objective:?}"
+                );
+                Ok(matching[0])
+            },
+        )
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
     ensure!(
@@ -353,9 +357,11 @@ pub async fn verify(
         identity,
     )
     .await?;
-    let timeline =
-        gents::observe::run_timeline_fetch::load_run_timeline_rows(access, &openings[2].request_id)
-            .await?;
+    let timeline = gents_observe::observe::run_timeline_fetch::load_run_timeline_rows(
+        access,
+        &openings[2].request_id,
+    )
+    .await?;
     for goal in &selected_goals {
         ensure!(
             timeline
@@ -375,7 +381,7 @@ pub async fn verify(
         .collect();
     ensure!(
         completed.len() == 1
-            && completed[0].tool_name == gents::goal::UPDATE_GOAL_TOOL_NAME
+            && completed[0].tool_name == gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME
             && completed[0].request_doc_id == followup.doc_id
             && completed[0].lifecycle_state.as_deref() == Some("completed"),
         "Goal completion bypassed the exact signed follow-up tool owner"
@@ -435,10 +441,15 @@ pub async fn verify(
             "Goal {index} charged another assignment's usage"
         );
     }
-    let observation =
-        gents::goal::load_session_goal_observation(access, identity, node, session, Some(author))
-            .await?
-            .context("verified final Goal observation")?;
+    let observation = gents_automation::goal::load_session_goal_observation(
+        access,
+        identity,
+        node,
+        session,
+        Some(author),
+    )
+    .await?
+    .context("verified final Goal observation")?;
     ensure!(
         observation.session_doc_id == session_doc
             && observation.goal.as_ref().is_some_and(|goal| {
@@ -574,7 +585,7 @@ fn verify_captures(rows: &[AgentRequestRow], second: &AgentRequestRow, root: &Pa
 async fn verify_controls(
     value: &Value,
     rows: &[AgentRequestRow],
-    goals: &[&gents::goal::GoalDocument],
+    goals: &[&gents_automation::goal::GoalDocument],
     node: &str,
     session: &str,
     session_doc: &str,

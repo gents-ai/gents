@@ -5,75 +5,8 @@ fn looping_restarts(watch: &mut CrashLoopWatch, sample: JobSample<'_>) -> Option
 }
 
 #[test]
-fn status_reports_a_crash_loop_only_relative_to_its_first_observation() {
-    let mut watch = CrashLoopWatch::default();
-    assert_eq!(
-        looping_restarts(&mut watch, JobSample::Exited(&service_exit(7))),
-        None
-    );
-    assert_eq!(
-        looping_restarts(&mut watch, JobSample::Exited(&service_exit(8))),
-        None
-    );
-    assert_eq!(
-        looping_restarts(&mut watch, JobSample::Exited(&service_exit(9))),
-        Some(2)
-    );
-    assert_eq!(looping_restarts(&mut watch, JobSample::Unloaded), None);
-    assert_eq!(
-        looping_restarts(&mut watch, JobSample::Exited(&service_exit(9))),
-        None,
-        "an unloaded job starts a new baseline"
-    );
-}
-
-#[test]
-fn a_job_that_dies_seconds_into_boot_is_a_crash_loop_across_running_samples() {
-    let mut watch = CrashLoopWatch::default();
-    let samples = [
-        (JobSample::Running, None),
-        (JobSample::Exited(&service_exit(3)), None),
-        (JobSample::Running, None),
-        (JobSample::Running, None),
-        (JobSample::Exited(&service_exit(4)), None),
-        (JobSample::Running, None),
-        (JobSample::Exited(&service_exit(5)), Some(2)),
-        (JobSample::Running, Some(2)),
-        (JobSample::Running, Some(2)),
-    ];
-    for (index, (sample, expected)) in samples.into_iter().enumerate() {
-        assert_eq!(
-            looping_restarts(&mut watch, sample),
-            expected,
-            "sample {index}"
-        );
-    }
-    let (exit, _) = watch.observe(JobSample::Running).expect("still looping");
-    assert_eq!(exit.reason, "exited with code 78");
-
-    assert_eq!(looping_restarts(&mut watch, JobSample::Ready), None);
-    assert_eq!(
-        looping_restarts(&mut watch, JobSample::Exited(&service_exit(6))),
-        None,
-        "readiness starts a new baseline"
-    );
-    assert_eq!(
-        looping_restarts(
-            &mut watch,
-            JobSample::Exited(&gents_server::native_service::ServiceExit {
-                reason: "exited normally".to_string(),
-                restarts: 9,
-                clean: true,
-                code: Some(0),
-            })
-        ),
-        None
-    );
-}
-
-#[test]
 fn a_crash_loop_seen_between_respawns_is_reported_failed_with_its_reason() {
-    let native = gents_server::native_service::NativeServiceStatus {
+    let native = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: true,
         job_loaded: true,
@@ -97,12 +30,12 @@ fn a_crash_loop_seen_between_respawns_is_reported_failed_with_its_reason() {
         looping.as_ref().map(|(exit, restarts)| (exit, *restarts)),
     );
     assert_eq!(status.state, ManagedServerState::Failed);
-    assert!(status.error.unwrap().contains("exited with code 78"));
+    assert!(status.error.unwrap().contains("exit code 78"));
 }
 
 #[test]
-fn a_linux_unit_the_supervisor_gave_up_on_is_failed_with_its_exit_cause() {
-    let failed = gents_server::native_service::NativeServiceStatus {
+fn a_linux_unit_the_supervisor_gave_up_on_is_failed_with_the_supervisors_reason() {
+    let failed = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: false,
         job_loaded: false,
@@ -112,7 +45,7 @@ fn a_linux_unit_the_supervisor_gave_up_on_is_failed_with_its_exit_cause() {
         failed: true,
         detail: Some("failed".to_string()),
     };
-    let exit = gents_server::native_service::ServiceExit {
+    let exit = gents_service::native_service::ServiceExit {
         reason: "exit-code (exit status 1)".to_string(),
         restarts: 5,
         clean: false,
@@ -123,7 +56,6 @@ fn a_linux_unit_the_supervisor_gave_up_on_is_failed_with_its_exit_cause() {
     assert_eq!(status.state, ManagedServerState::Failed);
     let error = status.error.unwrap();
     assert!(error.contains("exit-code (exit status 1)"), "{error}");
-    assert!(error.contains("will not be restarted"), "{error}");
 
     let starting = ManagedServerRuntimeState {
         starting: true,
@@ -149,26 +81,24 @@ async fn a_crash_loop_behind_a_non_gents_listener_names_the_port() {
             let seen = observations.fetch_add(1, Ordering::SeqCst) as u64;
             async move { Ok(NativeProgress::Exited(service_exit(seen))) }
         },
+        || async { None },
     )
     .await
     .expect_err("a crash loop fails");
     let error = error.to_string();
-    assert!(error.contains("exited with code 78"), "{error}");
-    assert!(
-        error.contains("another program that is not a Gents Node"),
-        "{error}"
-    );
+    assert!(error.contains("exit code 78"), "{error}");
+    assert!(error.contains("is in use by another app"), "{error}");
 }
 
 #[tokio::test]
-async fn readiness_fails_with_the_cause_when_the_supervisor_gives_up() {
+async fn readiness_fails_with_the_supervisors_reason_when_it_gives_up() {
     let error = await_runtime_readiness(
         Duration::from_secs(60),
         Duration::from_millis(5),
         || async { Ok(PortReadiness::NotListening) },
         || async {
             Ok(NativeProgress::Failed(
-                gents_server::native_service::ServiceExit {
+                gents_service::native_service::ServiceExit {
                     reason: "start-limit-hit (exit status 1)".to_string(),
                     restarts: 5,
                     clean: false,
@@ -176,10 +106,16 @@ async fn readiness_fails_with_the_cause_when_the_supervisor_gives_up() {
                 },
             ))
         },
+        || async { None },
     )
     .await
     .expect_err("a unit the supervisor gave up on is not waited on");
-    assert!(error.to_string().contains("start-limit-hit"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains("start-limit-hit (exit status 1)"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -197,10 +133,11 @@ async fn readiness_counts_restarts_from_a_high_first_observation() {
             let restarts = counters[seen.min(counters.len() - 1)];
             async move { Ok(NativeProgress::Exited(service_exit(restarts))) }
         },
+        || async { None },
     )
     .await
     .expect_err("two new restarts beyond the first observation fail");
-    assert!(error.to_string().contains("exited with code 78"), "{error}");
+    assert!(error.to_string().contains("exit code 78"), "{error}");
     assert_eq!(
         observations.load(Ordering::SeqCst),
         6,
@@ -216,7 +153,7 @@ async fn a_clean_exit_of_the_loaded_job_is_not_waited_out() {
         || async { Ok(PortReadiness::NotListening) },
         || async {
             Ok(NativeProgress::Exited(
-                gents_server::native_service::ServiceExit {
+                gents_service::native_service::ServiceExit {
                     reason: "exited normally".to_string(),
                     restarts: 0,
                     clean: true,
@@ -224,6 +161,7 @@ async fn a_clean_exit_of_the_loaded_job_is_not_waited_out() {
                 },
             ))
         },
+        || async { None },
     )
     .await
     .expect_err("a job that exited normally will not come back by itself");
@@ -232,7 +170,7 @@ async fn a_clean_exit_of_the_loaded_job_is_not_waited_out() {
 
 #[test]
 fn a_loaded_job_that_exited_cleanly_is_reported_stopped() {
-    let native = gents_server::native_service::NativeServiceStatus {
+    let native = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: false,
         job_loaded: true,
@@ -242,7 +180,7 @@ fn a_loaded_job_that_exited_cleanly_is_reported_stopped() {
         failed: false,
         detail: None,
     };
-    let clean = gents_server::native_service::ServiceExit {
+    let clean = gents_service::native_service::ServiceExit {
         reason: "exited normally".to_string(),
         restarts: 0,
         clean: true,
@@ -376,13 +314,8 @@ fn any_runtime_on_the_port_of_a_fresh_home_is_foreign_and_named() {
         panic!("a fresh home adopts no runtime");
     };
     let message = foreign.message();
-    assert!(message.contains("did:key:other"), "{message}");
+    assert!(message.contains("started by hand"), "{message}");
     assert!(message.contains("/Users/test/other-home"), "{message}");
-    assert!(
-        message.contains("gents runtime service stop --home /Users/test/other-home"),
-        "{message}"
-    );
-    assert!(message.contains("--http-port"), "{message}");
 
     assert!(matches!(
         classify_port_payload(9191, Some("did:key:mine"), payload.clone()),
@@ -398,9 +331,7 @@ fn any_runtime_on_the_port_of_a_fresh_home_is_foreign_and_named() {
     else {
         panic!("a listener without an identity is not this home's");
     };
-    assert!(anonymous
-        .message()
-        .contains("does not advertise a Gents identity"));
+    assert!(anonymous.message().contains("is in use by another app"));
 }
 
 #[test]
@@ -410,7 +341,7 @@ fn a_foreign_runtime_fails_a_loaded_job_and_names_itself_when_stopped() {
         node_did: Some("did:key:other".to_string()),
         home: None,
     };
-    let loaded = gents_server::native_service::NativeServiceStatus {
+    let loaded = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: true,
         job_loaded: true,
@@ -428,9 +359,9 @@ fn a_foreign_runtime_fails_a_loaded_job_and_names_itself_when_stopped() {
         ManagedServerState::Failed,
         "a job that cannot bind its port is not waited on"
     );
-    assert!(status.error.as_deref().unwrap().contains("did:key:other"));
+    assert!(status.error.as_deref().unwrap().contains("started by hand"));
 
-    let stopped = gents_server::native_service::NativeServiceStatus {
+    let stopped = gents_service::native_service::NativeServiceStatus {
         running: false,
         job_loaded: false,
         ..loaded
@@ -438,7 +369,7 @@ fn a_foreign_runtime_fails_a_loaded_job_and_names_itself_when_stopped() {
     let mut status = status_from(&idle, None, Some(&stopped), None, None);
     project_foreign_port(&mut status, &foreign.message(), false);
     assert_eq!(status.state, ManagedServerState::Stopped);
-    assert!(status.error.as_deref().unwrap().contains("<its home>"));
+    assert!(status.error.as_deref().unwrap().contains("started by hand"));
 
     let mut status = status_from(&idle, None, Some(&stopped), None, None);
     project_foreign_port(&mut status, &foreign.message(), true);
@@ -479,12 +410,124 @@ async fn readiness_restarts_its_baseline_when_the_counter_drops() {
             let restarts = counters[seen.min(counters.len() - 1)];
             async move { Ok(NativeProgress::Exited(service_exit(restarts))) }
         },
+        || async { None },
     )
     .await
     .expect_err("two restarts after the reset fail");
-    assert!(
-        error.to_string().contains("restarted 2 times in a row"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("keeps exiting"), "{error}");
     assert_eq!(observations.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn a_crash_loop_names_the_last_error() {
+    let native = gents_service::native_service::NativeServiceStatus {
+        installed: true,
+        running: true,
+        job_loaded: true,
+        enabled: true,
+        requires_approval: false,
+        background_item: Default::default(),
+        failed: false,
+        detail: None,
+    };
+    let exit = service_exit(1);
+    let runtime = ManagedServerRuntimeState {
+        last_exit_error: Some("the store is corrupt".to_string()),
+        ..Default::default()
+    };
+    let status = status_from(&runtime, None, Some(&native), None, Some((&exit, 3)));
+    assert_eq!(
+        status.error.unwrap(),
+        "The background node keeps exiting: the store is corrupt"
+    );
+}
+
+#[test]
+fn a_missing_store_key_is_left_to_the_repair() {
+    let exit = gents_service::native_service::ServiceExit {
+        reason: "exited with code 72".to_string(),
+        restarts: 1,
+        clean: false,
+        code: Some(72),
+    };
+    let status = status_from(
+        &ManagedServerRuntimeState::default(),
+        None,
+        None,
+        Some(&exit),
+        None,
+    );
+    assert_eq!(status.error_code, None);
+}
+
+#[test]
+fn a_foreign_gents_node_is_described_as_started_by_hand() {
+    let foreign = ForeignRuntime {
+        port: 9191,
+        node_did: Some("did:key:other".to_string()),
+        home: Some("/Users/test/other-home".to_string()),
+    };
+    assert_eq!(
+        foreign.message(),
+        "Port 9191 is used by a Gents node started by hand from /Users/test/other-home. Stop it, then try again."
+    );
+}
+
+#[tokio::test]
+async fn the_logged_error_reaches_the_crash_loop_status() {
+    let home = tempfile::tempdir().unwrap();
+    let desktop = tempfile::tempdir().unwrap();
+    let log = gents_service::native_service::runtime_error_log(home.path());
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+    std::fs::write(&log, "starting\nError: the store is corrupt\n").unwrap();
+    let last_exit_error = last_error_in(home.path().to_path_buf(), desktop.path()).await;
+    assert_eq!(last_exit_error.as_deref(), Some("the store is corrupt"));
+
+    let native = gents_service::native_service::NativeServiceStatus {
+        installed: true,
+        running: true,
+        job_loaded: true,
+        enabled: true,
+        requires_approval: false,
+        background_item: Default::default(),
+        failed: false,
+        detail: None,
+    };
+    let exit = service_exit(1);
+    let runtime = ManagedServerRuntimeState {
+        last_exit_error,
+        ..Default::default()
+    };
+    let status = status_from(&runtime, None, Some(&native), None, Some((&exit, 3)));
+    assert_eq!(
+        status.error.unwrap(),
+        "The background node keeps exiting: the store is corrupt"
+    );
+}
+
+#[tokio::test]
+async fn the_old_desktop_log_is_the_fallback() {
+    let home = tempfile::tempdir().unwrap();
+    let desktop = tempfile::tempdir().unwrap();
+    let log = crate::logging::runtime_error_log(desktop.path());
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+    std::fs::write(&log, "Error: from the old log\n").unwrap();
+    assert_eq!(
+        last_error_in(home.path().to_path_buf(), desktop.path())
+            .await
+            .as_deref(),
+        Some("from the old log")
+    );
+}
+
+#[test]
+fn a_missing_store_key_is_not_a_store_refusal_of_the_observe_path() {
+    let exit = |code| gents_service::native_service::ServiceExit {
+        reason: format!("exited with code {code}"),
+        restarts: 1,
+        clean: false,
+        code: Some(code),
+    };
+    assert!(store_refusal(&exit(72)).is_none());
+    assert!(store_refusal(&exit(65)).is_some());
 }

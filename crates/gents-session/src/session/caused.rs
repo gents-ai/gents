@@ -1,0 +1,214 @@
+use rapidhash::RapidHashSet;
+
+use crate::session::load_latest_request_in_txn;
+use crate::session::origin::{
+    lineage, load_session, starting_request, SessionLink, REQUEST_FIELDS,
+};
+use anyhow::{Context, Result};
+use gents_protocol::row::AgentRequestRow;
+use gents_protocol::session::SessionScope;
+use gents_store::config_client::ConfigAccess;
+use serde_json::Value;
+
+#[derive(Clone, Debug)]
+pub struct CausedSession {
+    pub scope: SessionScope,
+    pub agent_did: String,
+    pub caused_by_scope: SessionScope,
+    pub depth: u32,
+    pub first: AgentRequestRow,
+    pub latest: AgentRequestRow,
+}
+
+pub async fn load_caused_sessions_as(
+    access: &ConfigAccess,
+    roots: &[SessionScope],
+) -> Result<Vec<CausedSession>> {
+    let mut visited = roots.iter().cloned().collect::<RapidHashSet<_>>();
+    let mut frontier = roots
+        .iter()
+        .map(|scope| (scope.clone(), 0_u32))
+        .collect::<Vec<_>>();
+    let mut caused = Vec::new();
+    while let Some((scope, depth)) = frontier.pop() {
+        for link in lineage(access, &scope).await?.started {
+            if !visited.insert(link.scope.clone()) {
+                continue;
+            }
+            let child = link.scope.clone();
+            if let Some(session) = view(access, link, scope.clone(), depth + 1).await? {
+                caused.push(session);
+                frontier.push((child, depth + 1));
+            }
+        }
+    }
+    caused.sort_by(|left, right| {
+        left.depth
+            .cmp(&right.depth)
+            .then_with(|| left.first.created_at.cmp(&right.first.created_at))
+            .then_with(|| left.scope.cmp(&right.scope))
+    });
+    Ok(caused)
+}
+
+pub async fn started_by_request(
+    access: &ConfigAccess,
+    cause: &AgentRequestRow,
+) -> Result<Vec<(SessionLink, AgentRequestRow)>> {
+    let cause_doc_id = cause
+        .doc_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .context("started sessions require a physical request")?;
+    let mut started = Vec::new();
+    for link in lineage(access, &row_scope(cause)?).await?.started {
+        if link.cause_request_doc_id != cause_doc_id {
+            continue;
+        }
+        if let Some(first) = starting_request(access, &link).await? {
+            started.push((link, first));
+        }
+    }
+    Ok(started)
+}
+
+async fn view(
+    access: &ConfigAccess,
+    link: SessionLink,
+    caused_by_scope: SessionScope,
+    depth: u32,
+) -> Result<Option<CausedSession>> {
+    let Some(session) = load_session(
+        access,
+        &link.scope.session_id,
+        link.scope.requester_did.as_deref(),
+    )
+    .await?
+    .filter(|session| SessionScope::from(session) == link.scope) else {
+        return Ok(None);
+    };
+    let Some(first) = starting_request(access, &link).await? else {
+        return Ok(None);
+    };
+    let latest = load_session_head_as(access, &link.scope)
+        .await?
+        .unwrap_or_else(|| first.clone());
+    Ok(Some(CausedSession {
+        scope: link.scope,
+        agent_did: session.agent_did,
+        caused_by_scope,
+        depth,
+        first,
+        latest,
+    }))
+}
+
+async fn load_session_head_as(
+    access: &ConfigAccess,
+    scope: &SessionScope,
+) -> Result<Option<AgentRequestRow>> {
+    let head = access
+        .transact_readonly("caused_sessions.head", |txn| {
+            Box::pin(async move {
+                load_latest_request_in_txn(
+                    txn,
+                    &scope.node_did,
+                    &scope.session_id,
+                    Some(scope.requester_did.as_deref()),
+                )
+                .await
+            })
+        })
+        .await?;
+    let Some(head) = head else {
+        return Ok(None);
+    };
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(REQUEST_FIELDS))
+            .filter(Filter::eq(fields::DOC_ID, &head.observed.request_doc_id))
+            .limit(2)
+            .render()
+    };
+    let mut heads = request_rows(access, &rendered).await?;
+    anyhow::ensure!(heads.len() <= 1, "ambiguous caused session head");
+    Ok(heads.pop())
+}
+
+async fn request_rows(
+    access: &ConfigAccess,
+    query: &gents_protocol::document_query::Rendered,
+) -> Result<Vec<AgentRequestRow>> {
+    access
+        .read(query)
+        .await?
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| serde_json::from_value(row).context("decoding AgentRequest row"))
+        .collect()
+}
+
+fn row_scope(row: &AgentRequestRow) -> Result<SessionScope> {
+    Ok(SessionScope {
+        node_did: row
+            .node_did
+            .clone()
+            .context("AgentRequest row omitted node_did")?,
+        session_id: row
+            .session_id
+            .clone()
+            .context("AgentRequest row omitted session_id")?,
+        requester_did: row.requester_did.clone(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::lineage_fixtures::{seed_lineage_case, started_node, FIXTURE_DID};
+
+    #[tokio::test]
+    async fn generated_plugin_job_lineage_cases_drive_caused_session_readers() {
+        let did = FIXTURE_DID;
+        for case in gents_lean_vocab::families::plugin_job_lineage_starting::cases() {
+            let db = started_node("plugin-job-lineage").await;
+            let node = db.node.clone();
+            let mut seed = serde_json::to_value(&case.input).unwrap();
+            for row in seed["rows"].as_array_mut().unwrap() {
+                let doc_id = row.as_object_mut().unwrap().remove("doc_id").unwrap();
+                row["_docID"] = doc_id;
+            }
+            let ids = seed_lineage_case(&node, &seed, did).await;
+            let model_ids = ids
+                .iter()
+                .map(|(model, native)| (native.clone(), model.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let access = ConfigAccess::local(node.clone());
+            let mut openings = Vec::new();
+            for query in &case.input.queries {
+                let cause = query.cause_request_doc_id.as_str();
+                let link = SessionLink {
+                    scope: SessionScope {
+                        node_did: did.into(),
+                        session_id: query.session_id.clone(),
+                        requester_did: Some(did.into()),
+                    },
+                    cause_request_doc_id: ids.get(cause).cloned().unwrap_or(cause.into()),
+                };
+                let found = starting_request(&access, &link)
+                    .await
+                    .unwrap()
+                    .and_then(|row| row.doc_id);
+                openings
+                    .push(found.map(|native| model_ids.get(&native).cloned().unwrap_or(native)));
+            }
+            node.shutdown().await.expect("node shutdown");
+            case.check(openings);
+        }
+    }
+}

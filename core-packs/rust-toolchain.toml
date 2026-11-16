@@ -1,0 +1,7 @@
+# Core pack plugins build below this file, from this directory, with the
+# runtime's compiler and the WASI target, so every machine and CI compile
+# them alike (make core-packs).
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+targets = ["wasm32-wasip1"]

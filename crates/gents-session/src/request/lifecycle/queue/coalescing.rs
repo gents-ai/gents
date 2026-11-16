@@ -1,0 +1,296 @@
+use super::*;
+
+pub(super) fn queue_source_and_key_match(
+    input: Option<&RequestInput>,
+    source: QueueSource,
+    key: &str,
+) -> bool {
+    input
+        .and_then(|input| input.queue.as_ref())
+        .is_some_and(|queue| {
+            queue.source == source
+                && queue.policy == QueuePolicy::Coalesce
+                && queue
+                    .key
+                    .as_deref()
+                    .is_some_and(|candidate| candidate.trim() == key)
+        })
+}
+
+pub(super) fn row_matches_coalesced_source_and_key(
+    row: &AgentRequestRow,
+    source: QueueSource,
+    key: &str,
+) -> bool {
+    queue_source_and_key_match(row.input.as_ref(), source, key)
+}
+
+pub async fn reconcile_coalesced_pending_request(
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
+    session_id: &str,
+    node_did: &str,
+    source: QueueSource,
+    key: &str,
+) -> Result<Option<EnqueuedAgentRequest>> {
+    reconcile_coalesced_pending_request_for(
+        node, agent_did, session_id, node_did, source, key, None,
+    )
+    .await
+}
+
+pub(super) async fn reconcile_coalesced_pending_request_for(
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
+    session_id: &str,
+    node_did: &str,
+    source: QueueSource,
+    key: &str,
+    anchor_doc: Option<&str>,
+) -> Result<Option<EnqueuedAgentRequest>> {
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(agent_did)?,
+    );
+    reconcile_coalesced_pending_request_for_with_access(
+        (node, &access),
+        agent_did,
+        session_id,
+        node_did,
+        source,
+        key,
+        anchor_doc,
+    )
+    .await
+}
+
+pub async fn reconcile_coalesced_pending_request_for_with_access(
+    (node, access): (
+        &std::sync::Arc<EmbeddedNode>,
+        &gents_store::config_client::ConfigAccess,
+    ),
+    agent_did: &str,
+    session_id: &str,
+    node_did: &str,
+    source: QueueSource,
+    key: &str,
+    anchor_doc: Option<&str>,
+) -> Result<Option<EnqueuedAgentRequest>> {
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(agent_did),
+        "queue actor differs from access actor"
+    );
+    anyhow::ensure!(
+        access
+            .local_node()
+            .is_some_and(|owner| std::sync::Arc::ptr_eq(owner, node)),
+        "queue access belongs to another node"
+    );
+    let matching = matching_coalesced_pending_requests(
+        node, agent_did, session_id, node_did, source, key, anchor_doc,
+    )
+    .await?;
+    let Some(survivor) = matching.first().and_then(queue_row_to_enqueued_request) else {
+        return Ok(None);
+    };
+
+    let survivor_doc = survivor.doc_id.as_str();
+    for duplicate in matching.iter().skip(1) {
+        let mutation = supersede_pending_mutation(
+            duplicate
+                .doc_id
+                .as_deref()
+                .context("pending AgentRequest row is missing _docID")?,
+            node_did,
+            &survivor.request_id,
+            &survivor.doc_id,
+            "coalesced into earlier queued request",
+        )?;
+        anyhow::ensure!(
+            duplicate.agent_did.as_deref() == Some(agent_did),
+            "coalesced request selects another agent"
+        );
+        access
+            .transact_idempotent(
+                gents_store::config_client::IdempotentTransactionRetry::Standard,
+                "reconcile_coalesced_pending_request",
+                |txn| {
+                    let mutation = &mutation;
+                    Box::pin(async move {
+                        if source == QueueSource::BackgroundCompletion {
+                            let asked = std::iter::once(survivor_doc.to_owned())
+                                .chain(duplicate.doc_id.clone())
+                                .collect();
+                            let assignments = crate::request::hooks::points::queue_scope(
+                                txn, node_did, session_id, asked,
+                            )
+                            .await?;
+                            if assignments.scope(survivor_doc)?
+                                != assignments.scope(
+                                    duplicate
+                                        .doc_id
+                                        .as_deref()
+                                        .context("duplicate wake has no physical identity")?,
+                                )?
+                            {
+                                return Ok::<_, anyhow::Error>(());
+                            }
+                        }
+                        let response = txn.execute_local_response(mutation).await?;
+                        if response
+                            .data
+                            .as_ref()
+                            .and_then(|data| data.get("update_AgentRequest"))
+                            .is_some_and(gents_store::graphql::response_has_documents)
+                        {
+                            crate::request::hooks::points::request_terminal(
+                                txn,
+                                node_did,
+                                &duplicate.request_id,
+                                RequestLifecycleState::Superseded,
+                                "coalesced into earlier queued request",
+                                &chrono::Utc::now().to_rfc3339(),
+                            )
+                            .await?;
+                        }
+                        Ok(())
+                    })
+                },
+            )
+            .await?;
+    }
+
+    Ok(Some(survivor))
+}
+
+pub fn supersede_pending_mutation(
+    doc_id: &str,
+    node_did: &str,
+    survivor_request_id: &str,
+    survivor_doc_id: &str,
+    reason: &str,
+) -> Result<String, gents_protocol::request_lifecycle::RequestTransitionError> {
+    let transition =
+        RequestLifecycleState::Pending.transition_to(RequestLifecycleState::Superseded)?;
+    Ok(format!(
+        r#"mutation {{
+            update_AgentRequest(
+                docID: "{physical_doc_id}",
+                filter: {{
+                    _docID: {{ _eq: "{}" }},
+                    node_did: {{ _eq: "{}" }},
+                    lifecycle_state: {{ _eq: "{pending}" }}
+                }},
+                input: {{
+                    lifecycle_state: "{superseded}",
+                    superseded_by_request: "{}",
+                    superseded_by_request_doc_id: "{}",
+                    failure_reason: "{}",
+                    terminalized_at: "{}",
+                    terminal_redrive_attempts: 0
+                }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(doc_id),
+        escape_graphql_string(node_did),
+        escape_graphql_string(survivor_request_id),
+        escape_graphql_string(survivor_doc_id),
+        escape_graphql_string(reason),
+        escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
+        physical_doc_id = escape_graphql_string(doc_id),
+        pending = transition.from().as_str(),
+        superseded = transition.to().as_str()
+    ))
+}
+
+async fn matching_coalesced_pending_requests(
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
+    session_id: &str,
+    node_did: &str,
+    source: QueueSource,
+    key: &str,
+    anchor_doc: Option<&str>,
+) -> Result<Vec<AgentRequestRow>> {
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_node_did = escape_graphql_string(node_did);
+    let query = format!(
+        r#"{{ AgentRequest(
+            filter: {{session_id: {{_eq: "{escaped_session_id}"}},
+                node_did: {{_eq: "{escaped_node_did}"}}, lifecycle_state: {{_eq: "{pending}"}}}},
+            order: [{{created_at: ASC}}, {{request_id: ASC}}]
+        ) {{{}}} }}"#,
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+        pending = RequestLifecycleState::Pending.as_str()
+    );
+    gents_store::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        Some(identity::Did::new(agent_did)?),
+        "matching_coalesced_pending_requests",
+        |txn| {
+            let query = &query;
+            Box::pin(async move {
+                let response = txn.execute(query).await?;
+                let rows: Vec<AgentRequestRow> =
+                    serde_json::from_value(response["data"]["AgentRequest"].clone())?;
+                let rows = rows
+                    .into_iter()
+                    .filter(|row| row_matches_coalesced_source_and_key(row, source, key))
+                    .collect::<Vec<_>>();
+                if source != QueueSource::BackgroundCompletion {
+                    return Ok(rows);
+                }
+                let anchor = match anchor_doc {
+                    Some(doc) => rows.iter().find(|row| row.doc_id.as_deref() == Some(doc)),
+                    None => rows.first(),
+                };
+                let Some(anchor) = anchor else {
+                    return Ok(Vec::new());
+                };
+                let asked = std::iter::once(anchor)
+                    .chain(&rows)
+                    .filter_map(|row| row.doc_id.clone())
+                    .collect();
+                let assignments =
+                    crate::request::hooks::points::queue_scope(txn, node_did, session_id, asked)
+                        .await?;
+                let selected_scope = assignments.scope(
+                    anchor
+                        .doc_id
+                        .as_deref()
+                        .context("coalescing anchor has no physical identity")?,
+                )?;
+                let mut matching = Vec::new();
+                for row in rows {
+                    if assignments.scope(
+                        row.doc_id
+                            .as_deref()
+                            .context("pending wake has no physical identity")?,
+                    )? == selected_scope
+                    {
+                        matching.push(row);
+                    }
+                }
+                Ok(matching)
+            })
+        },
+    )
+    .await
+}
+
+pub(super) fn queue_row_to_enqueued_request(row: &AgentRequestRow) -> Option<EnqueuedAgentRequest> {
+    Some(EnqueuedAgentRequest {
+        doc_id: row.doc_id.clone()?,
+        request_id: row.request_id.clone(),
+        session_id: row.session_id.clone()?,
+    })
+}
+
+pub fn parent_agent_did(parent: &AgentRequest) -> Result<String> {
+    anyhow::ensure!(
+        !parent.agent_did.trim().is_empty(),
+        "cannot enqueue same-session request: parent {} has no agent_did",
+        parent.request_id
+    );
+    Ok(parent.agent_did.clone())
+}

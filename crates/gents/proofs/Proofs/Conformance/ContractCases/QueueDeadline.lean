@@ -1,6 +1,6 @@
 import Proofs.Conformance.ContractCases.Types
-import Proofs.Request.Executable
-import Proofs.Session.Executable
+import Proofs.Session.Request.Executable
+import Proofs.Session.SessionQueue.Executable
 
 namespace Conformance.ContractCases
 

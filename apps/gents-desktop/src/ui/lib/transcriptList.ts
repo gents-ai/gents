@@ -93,9 +93,10 @@ export type TranscriptListOptions<E> = {
   /* a row drawn for the first time, at the height it measured in a list
      this wide */
   onMeasured?: (entry: E, height: number, width: number) => void;
-  /* the row of the newest message sent here, once it is drawn */
+
   sentTurn: string | null;
   anchorSentTurn: boolean;
+  tookSentTurn: (key: string) => void;
   /* a turn doing work follows once its reply passes the room */
   turnWorks: (key: string) => boolean;
   /* the rows that open a turn, in order: the turn shortcuts step by them */
@@ -285,7 +286,6 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     let awaitingPlace = 0;
     let glide: { from: number; start: number } | null = null;
     let roomKey: string | null = null;
-    const taken = new Set<string>();
 
     const el = () => live.current.options.scroller;
     const resting = () =>
@@ -836,8 +836,6 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       },
       /* the newest send reached its row: held at its place, or followed */
       takeSentTurn(key: string, anchor: boolean) {
-        if (taken.has(key)) return;
-        taken.add(key);
         takeOver();
         if (!anchor) {
           roomKey = null;
@@ -925,8 +923,9 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
 
   const { sentTurn, anchorSentTurn } = options;
   useLayoutEffect(() => {
-    if (sentTurn && keys.has(sentTurn))
-      owner.current!.takeSentTurn(sentTurn, anchorSentTurn);
+    if (!sentTurn || !keys.has(sentTurn)) return;
+    owner.current!.takeSentTurn(sentTurn, anchorSentTurn);
+    live.current.options.tookSentTurn(sentTurn);
   }, [sentTurn, anchorSentTurn, keys]);
 
   const toBottom = useCallback(() => owner.current!.toBottom(), []);

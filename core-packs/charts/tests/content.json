@@ -1,0 +1,65 @@
+{
+  "defs": "def doc_text($p): .assets[$p]; def schema($n): (.manifest.plugins[] | select(.name == $n) | .input_schema); def plug($n): (.manifest.plugins[] | select(.name == $n)); def row($coll; $key; $id): .config[$coll][] | select(.[$key] == $id);",
+  "jq": [
+    {
+      "name": "the pack ships exactly the charts plugin, in rust",
+      "expr": "[.manifest.plugins[] | {name, language, artifact, instructions}] == [{\"name\": \"charts\", \"language\": \"rust\", \"artifact\": \"plugins/charts.afb\", \"instructions\": \"plugins/charts/TOOL.md\"}]"
+    },
+    {
+      "name": "charts writes only on a call that sets save, and asks for nothing else",
+      "expr": "plug(\"charts\").bind_dir == {\"access\": \"read_write\", \"description\": plug(\"charts\").bind_dir.description, \"input_field\": \"path\", \"original_field\": \"path_original\", \"write_fields\": [\"save\"]} and plug(\"charts\").manifold == null"
+    },
+    {
+      "name": "limits stay inside the host ceilings and the output limit is the host's 4 MiB",
+      "expr": "all(.manifest.plugins[]; .limits.memory_mib <= 4096 and .limits.wall_clock_secs <= 900 and .limits.max_output_mib == 4)"
+    },
+    {
+      "name": "the schema is closed, requires chart and lists every chart type the tool documents",
+      "expr": "schema(\"charts\") as $s | $s.additionalProperties == false and $s.required == [\"chart\"] and ($s.properties.chart.enum | sort) == [\"area\", \"bar\", \"box\", \"bubble\", \"combo\", \"donut\", \"heatmap\", \"histogram\", \"horizontal_bar\", \"line\", \"pie\", \"scatter\", \"stacked_area\", \"stacked_bar\"]"
+    },
+    {
+      "name": "every field the schema names is explained in the tool instructions",
+      "expr": "doc_text(\"plugins/charts/TOOL.md\") as $t | [schema(\"charts\").properties | keys[] | select(. != \"path_original\") | . as $k | select(($t | contains(\"`\" + $k + \"`\")) | not)] == []"
+    },
+    {
+      "name": "numeric limits in the schema match the ones the tool states",
+      "expr": "schema(\"charts\").properties as $p | $p.width.minimum == 200 and $p.width.maximum == 4096 and $p.height.minimum == 150 and $p.height.maximum == 4096 and $p.scale.minimum == 0.5 and $p.scale.maximum == 4 and $p.y.maxItems == 24"
+    },
+    {
+      "name": "the Chart maker's Tools document grants exactly the charts plugin",
+      "expr": "row(\"tools\"; \"tools_id\"; \"chart-maker-tools\").integrations.plugins == [{\"plugin\": \"gents/charts\"}]"
+    },
+    {
+      "name": "the agent uses the declared inference slot and a prompt that names the tool",
+      "expr": "row(\"agents\"; \"agent_slot\"; \"chart-maker\").inference_profile_id == \"gents:inference-slot:chart_maker\" and (.manifest.inference_slots | map(.name)) == [\"chart_maker\"] and (doc_text(\"agent_behaviors/chart_maker/system_prompt.md\") | contains(\"`charts`\"))"
+    },
+    {
+      "name": "two nodes on the one charts plugin split on save, so a read-only folder serves requests without it",
+      "expr": "row(\"event_sources\"; \"event_source_id\"; \"chart-render\").source_collection == \"ChartRequest\" and row(\"event_sources\"; \"event_source_id\"; \"chart-save\").source_collection == \"ChartRequest\" and (row(\"event_sources\"; \"event_source_id\"; \"chart-render\").filter | contains(\"save\")) and (row(\"event_sources\"; \"event_source_id\"; \"chart-save\").filter | contains(\"save\")) and [.config.callbacks[].handler.plugin] == [\"gents/charts\", \"gents/charts\"] and all(.config.callbacks[]; .handler.outputs | length == 1 and .[0].collection == \"ChartResult\" and .[0].required == true)"
+    },
+    {
+      "name": "only the save node's binding passes save, and every passed field is a ChartRequest field",
+      "expr": "doc_text(\"schemas/chart_request.graphql\") as $g | (row(\"callback_bindings\"; \"binding_id\"; \"chart-render\").input_fields | index(\"save\")) == null and (row(\"callback_bindings\"; \"binding_id\"; \"chart-save\").input_fields | index(\"save\")) != null and all(.config.callback_bindings[].input_fields[]; . as $f | $g | contains(\"  \" + $f + \":\"))"
+    },
+    {
+      "name": "the request fields of the schema are exactly the tool fields plus run_id",
+      "expr": "doc_text(\"schemas/chart_request.graphql\") as $g | ([$g | scan(\"\\\\n  ([a-z_0-9]+):\") | .[0]] | sort) == (([\"run_id\"] + (schema(\"charts\").properties | keys)) | sort)"
+    },
+    {
+      "name": "the result schema carries the documented fields",
+      "expr": "doc_text(\"schemas/chart_result.graphql\") as $g | all([\"run_id\", \"chart\", \"width\", \"height\", \"alt\", \"svg\", \"png_base64\", \"png_width\", \"png_height\", \"svg_file\", \"png_file\", \"series_json\", \"warnings\", \"error\"][]; . as $f | $g | contains(\"  \" + $f + \":\"))"
+    },
+    {
+      "name": "the README documents all three call paths with a command or call each",
+      "expr": "doc_text(\"README.md\") as $r | ($r | contains(\"## Use it as a model tool\")) and ($r | contains(\"## Use it as a callback node\")) and ($r | contains(\"gents config pack plugin run charts \")) and ($r | contains(\"create_ChartRequest\"))"
+    },
+    {
+      "name": "the font licence travels with the pack: names, source and both checksums",
+      "expr": "doc_text(\"notice.md\") as $n | ($n | contains(\"SIL Open Font License\")) and ($n | contains(\"76d04c18ea243f426b7de1f3ad208e927008f961dc5945e5aad352d0dfde8ee8\")) and ($n | contains(\"788abee4c806d660e8aee46689dd8540cd4bb98da03dcc9d171ce3efd99a9173\")) and ($n | contains(\"liberation-fonts-ttf-2.1.5\"))"
+    },
+    {
+      "name": "no document of the pack contains an em dash or an en dash",
+      "expr": "all(.assets | to_entries[]; (.value | test(\"[\\u2013\\u2014]\")) | not)"
+    }
+  ]
+}

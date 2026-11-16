@@ -1,33 +1,27 @@
 use super::*;
 
 #[test]
-fn calibration_scales_up_and_never_down() {
-    assert_eq!(calibrated_input_tokens(561_000, 18_000), 1_009_800);
-    assert_eq!(calibrated_input_tokens(3, 15_000), 5, "rounds up");
-    assert_eq!(
-        calibrated_input_tokens(1_000, 5_000),
-        1_000,
-        "floored at one"
-    );
-    let calibration = ContextCalibration::with_ratio(1);
-    assert_eq!(
-        calibration.ratio_basis_points(),
-        UNIT_INPUT_RATIO_BASIS_POINTS
-    );
-    assert_eq!(
-        calibration.observe(500, 1_000),
-        Some(UNIT_INPUT_RATIO_BASIS_POINTS)
-    );
-    assert_eq!(
-        calibration.observe(1_000_000, 1),
-        Some(MAX_INPUT_RATIO_BASIS_POINTS)
-    );
-    assert_eq!(calibration.observe(0, 1_000), None);
-    assert_eq!(calibration.observe(1_000, 0), None);
-    assert_eq!(
-        calibration.ratio_basis_points(),
-        MAX_INPUT_RATIO_BASIS_POINTS
-    );
+fn scaling_matches_the_lean_calibration_model() {
+    gents_lean_vocab::families::provider_input_calibration_scaling::replay(|input| {
+        let calibration = ContextCalibration::with_ratio(input.prior);
+        let initial_ratio = calibration.ratio_basis_points();
+        let readings: Vec<Option<u64>> = input
+            .observations
+            .iter()
+            .map(|sample| {
+                calibration.observe(sample.observed, usize::try_from(sample.estimated).unwrap())
+            })
+            .collect();
+        gents_lean_vocab::families::provider_input_calibration_scaling::ScalingOutput {
+            calibrated: calibrated_input_tokens(
+                usize::try_from(input.raw).unwrap(),
+                calibration.ratio_basis_points(),
+            ) as u64,
+            initial_ratio,
+            ratio: calibration.ratio_basis_points(),
+            readings,
+        }
+    });
 }
 
 #[test]
@@ -111,87 +105,6 @@ fn only_contract_usage_is_an_input_observation() {
         "a pre-normalization uncached input is not an observation"
     );
     assert_eq!(contract_input_tokens(0, 0, 0), None);
-}
-
-fn anchor(input_tokens: u64, output_tokens: u64, estimated_input_tokens: usize) -> ContextAnchor {
-    ContextAnchor {
-        input_tokens,
-        output_tokens,
-        estimated_input_tokens,
-    }
-}
-
-#[test]
-fn anchored_context_is_provider_total_plus_calibrated_growth() {
-    let ratio = observed_input_ratio_basis_points(100_000, 60_000).unwrap();
-    let calibration =
-        ContextCalibration::with_ratio(ratio).anchored_at(anchor(100_000, 2_000, 60_000));
-
-    let unchanged = calibration.context(60_000);
-    assert_eq!(
-        unchanged.anchored,
-        Some(102_000),
-        "the response is counted once"
-    );
-    assert_eq!(unchanged.tokens, 102_000);
-
-    let grown = calibration.context(70_000);
-    let growth = calibrated_input_tokens(10_000, ratio);
-    assert_eq!(grown.anchored, Some(100_000 + 2_000 + (growth - 2_000)));
-    assert_eq!(grown.tokens, grown.anchored.unwrap().max(grown.calibrated));
-    assert_eq!(grown.ratio_basis_points, ratio);
-
-    let reduced = calibration.context(50_000);
-    assert_eq!(
-        reduced.anchored, None,
-        "a request smaller than the anchor's was reduced since"
-    );
-    assert_eq!(reduced.tokens, reduced.calibrated);
-
-    calibration.invalidate_anchor();
-    assert_eq!(calibration.context(70_000).anchored, None);
-}
-
-#[test]
-fn anchor_raises_the_count_and_never_lowers_it() {
-    let calibration =
-        ContextCalibration::with_ratio(12_000).anchored_at(anchor(100_000, 0, 60_000));
-    let context = calibration.context(60_000);
-    assert_eq!(context.calibrated, 72_000);
-    assert_eq!(
-        context.tokens, 100_000,
-        "the provider's count beats a stale low ratio"
-    );
-
-    let calibration =
-        ContextCalibration::with_ratio(30_000).anchored_at(anchor(100_000, 0, 60_000));
-    let context = calibration.context(60_000);
-    assert_eq!(context.anchored, Some(100_000));
-    assert_eq!(
-        context.tokens, 180_000,
-        "the calibrated floor wins when higher"
-    );
-}
-
-#[test]
-fn ratio_only_copies_never_anchor_or_share_state() {
-    let session = ContextCalibration::with_ratio(17_000).anchored_at(anchor(100_000, 0, 60_000));
-    let summary = session.ratio_only();
-    assert_eq!(summary.ratio_basis_points(), 17_000);
-    assert_eq!(summary.context(60_000).anchored, None);
-    summary.anchor_accepted(anchor(5_000, 0, 4_000));
-    summary.observe(40_000, 10_000);
-    assert_eq!(summary.anchor(), None);
-    assert_eq!(session.ratio_basis_points(), 17_000);
-    assert_eq!(session.anchor(), Some(anchor(100_000, 0, 60_000)));
-
-    let shared = session.clone();
-    shared.anchor_accepted(anchor(120_000, 10, 70_000));
-    assert_eq!(
-        session.anchor(),
-        Some(anchor(120_000, 10, 70_000)),
-        "clones share state"
-    );
 }
 
 #[test]
@@ -298,5 +211,102 @@ fn seeded_observations_share_the_window_with_new_ones() {
         calibration.ratio_basis_points(),
         13_000,
         "copies do not share the window"
+    );
+}
+
+#[test]
+fn production_compaction_retention_follows_the_lean_budget_model() {
+    use crate::provider_input::budget;
+    use gents_lean_vocab::families::prompt_assembly_budget_retention::{
+        RetentionInput, RetentionOutput,
+    };
+    gents_lean_vocab::families::prompt_assembly_budget_retention::replay(
+        |input: &RetentionInput| {
+            let configured_keep_recent = input.configured_keep_recent as usize;
+            let effective_input_budget = input.effective_input_budget as usize;
+            let fixed_input = input.fixed_input as usize;
+            let effective_summary_output = budget::summary_output_ceiling(
+                input.summary_max_output as usize,
+                effective_input_budget,
+            );
+            let retention_target = budget::compaction_retention_target(
+                configured_keep_recent,
+                effective_input_budget,
+                fixed_input,
+                effective_summary_output,
+            );
+            let recovery_band = budget::recovery_band_budget(effective_input_budget);
+            assert!(retention_target <= configured_keep_recent, "{input:?}");
+            assert!(
+                retention_target as u64 <= input.available_input,
+                "{input:?}"
+            );
+            let reserved = fixed_input + effective_summary_output;
+            if reserved <= recovery_band {
+                assert!(reserved + retention_target <= recovery_band, "{input:?}");
+            } else {
+                assert_eq!(retention_target, 0, "{input:?}");
+            }
+            RetentionOutput {
+                effective_summary_output: effective_summary_output as u64,
+                recovery_band: recovery_band as u64,
+                retention_target: retention_target as u64,
+                rolling_summary_input_budget: budget::rolling_summary_input_budget(
+                    effective_input_budget,
+                    effective_summary_output,
+                ) as u64,
+            }
+        },
+    );
+}
+
+#[test]
+fn machine_width_budget_arithmetic_is_exact_and_fail_closed() {
+    let third = usize::MAX / 3;
+    for value in [0, 1, third, third.saturating_add(1), usize::MAX] {
+        let retained =
+            crate::provider_input::budget::compaction_retention_target(usize::MAX, value, 0, 0);
+        assert_eq!(retained.checked_add(value.div_ceil(5)), Some(value));
+        assert_eq!(
+            crate::provider_input::budget::compaction_retention_target(
+                usize::MAX,
+                value,
+                value,
+                value
+            ),
+            0,
+            "reserves past the band floor the tail at zero"
+        );
+    }
+
+    let threshold_29 = crate::provider_input::budget::threshold_budget(usize::MAX, 0.29);
+    let threshold_57 = crate::provider_input::budget::threshold_budget(usize::MAX, 0.57);
+    let threshold_69 = crate::provider_input::budget::threshold_budget(usize::MAX, 0.69);
+    assert!(threshold_29 < threshold_57 && threshold_57 < threshold_69);
+    assert!(threshold_29 < usize::MAX / 2);
+    assert!(threshold_57 > usize::MAX / 2);
+    assert_eq!(
+        crate::provider_input::budget::threshold_budget(usize::MAX, 1.0),
+        usize::MAX
+    );
+
+    assert!(crate::provider_input::budget::can_dispatch(
+        usize::MAX - 1,
+        usize::MAX,
+        usize::MAX,
+    ));
+    assert!(!crate::provider_input::budget::can_dispatch(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+    ));
+    assert!(!crate::provider_input::budget::can_dispatch(
+        usize::MAX,
+        usize::MAX,
+        0
+    ));
+    assert_eq!(
+        crate::provider_input::budget::configured_output_ceiling(Some(u64::MAX)),
+        usize::try_from(u64::MAX).unwrap_or(usize::MAX)
     );
 }

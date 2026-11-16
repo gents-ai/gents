@@ -2,8 +2,8 @@
 use gents_desktop_core::inference::backend_config_view;
 use rapidhash::RapidHashMap;
 
-use gents::{BashMode, FileToolMode};
 use gents_desktop_core::client::{ClientCore, ClientPeerStatus};
+use gents_documents::{BashMode, FileToolMode};
 use gents_protocol::row::{
     AgentReadinessUnavailableReason, AgentReadinessUnknownReason, NodeReadinessRow,
     ProjectedAgentReadiness,
@@ -16,9 +16,7 @@ use super::super::types::{
     NodeReadinessView, RuntimeView, SessionSummary, SkillView, TaskRecentRunsView,
     TaskRunSummaryView, TaskView, Tools, TriggerView,
 };
-use super::runtime_tasks::{
-    recent_runs_for_task_views, session_summaries, source_matches_node, task_run_histories,
-};
+use super::runtime_tasks::{recent_runs_for_task_views, session_summaries, task_run_histories};
 use super::to_health_view;
 
 static STARTERS: std::sync::LazyLock<super::runtime_tasks::StarterCache> =
@@ -27,15 +25,20 @@ static STARTERS: std::sync::LazyLock<super::runtime_tasks::StarterCache> =
 pub(crate) fn node_reads(
     core: &ClientCore,
     node_did: &str,
-) -> anyhow::Result<gents::store::config_client::ConfigAccess> {
+) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
     core.operator_observation_graphql(node_did)
-        .map(gents::store::config_client::ConfigAccess::Graphql)
+        .map(gents_store::config_client::ConfigAccess::Graphql)
         .ok_or_else(|| anyhow::anyhow!("Runtime {node_did} has no authenticated GraphQL endpoint"))
 }
 
+/// One `DeploymentView` per configured node, each built only from that node's
+/// own store; the fleet totals sum the nodes' stores.
 pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot {
     let sync_state = core.sync_state();
-    let store = core.store().snapshot();
+    let stores = core.stores();
+    let mut row_count = 0;
+    let mut approx_serialized_bytes = 0_usize;
+    let mut operator_config_authoritative_node_dids = Vec::new();
     let enrollment_requests = core
         .active_status_enrollment_requests()
         .await
@@ -53,12 +56,29 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         .clone()
         .into_iter()
         .map(|peer| {
+            let store = stores.snapshot(&peer.node_did);
+            row_count += store.row_count();
+            approx_serialized_bytes =
+                approx_serialized_bytes.saturating_add(store.approx_serialized_bytes());
+            operator_config_authoritative_node_dids.extend(
+                store
+                    .operator_config_authoritative_node_dids
+                    .iter()
+                    .filter(|did| **did == peer.node_did)
+                    .cloned(),
+            );
             let status = peer_statuses_by_id.get(&peer.peer_id);
             let node_row = store.nodes.iter().find(|row| row.node_did == peer.node_did);
             let mailbox_items = store
                 .mailbox_items
                 .iter()
-                .filter(|row| row.node_did == peer.node_did && row.status == "open")
+                .filter(|row| {
+                    row.node_did == peer.node_did
+                        && gents_session::operations::mailbox::serves_stored(
+                            gents_protocol::operations::mailbox::MailboxListScope::Waiting,
+                            &row.status,
+                        )
+                })
                 .map(MailboxItemView::from)
                 .collect::<Vec<_>>();
             let inference =
@@ -146,16 +166,8 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let mut skills = store
                 .skills
                 .iter()
-                .enumerate()
-                .filter(|(index, row)| {
-                    source_matches_node(
-                        &store.skill_source_node_dids,
-                        *index,
-                        &peer.node_did,
-                        false,
-                    ) && row.node_did == peer.node_did
-                })
-                .map(|(_index, row)| SkillView {
+                .filter(|row| row.node_did == peer.node_did)
+                .map(|row| SkillView {
                     skill_id: row.skill_id.clone(),
                     node_did: Some(row.node_did.clone()),
                     name: normalize_optional(row.name.as_deref()),
@@ -175,11 +187,8 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let scoped_task_rows = store
                 .tasks
                 .iter()
-                .enumerate()
-                .filter(|(index, row)| {
-                    source_matches_node(&store.task_source_node_dids, *index, &peer.node_did, false)
-                        && row.node_did == peer.node_did
-                        && agent_dids.contains(&row.agent_did.as_str())
+                .filter(|row| {
+                    row.node_did == peer.node_did && agent_dids.contains(&row.agent_did.as_str())
                 })
                 .collect::<Vec<_>>();
             let mut schedules = store
@@ -204,31 +213,11 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     let observation = store
                         .trigger_observations
                         .iter()
-                        .enumerate()
-                        .find(|(index, observation)| {
-                            observation.trigger_id == row.trigger_id
-                                && source_matches_node(
-                                    &store.trigger_observation_source_node_dids,
-                                    *index,
-                                    &row.node_did,
-                                    true,
-                                )
-                        })
-                        .map(|(_, observation)| observation);
+                        .find(|observation| observation.trigger_id == row.trigger_id);
                     let schedule_observation = store
                         .schedule_observations
                         .iter()
-                        .enumerate()
-                        .find(|(index, observation)| {
-                            observation.trigger_id == row.trigger_id
-                                && source_matches_node(
-                                    &store.schedule_observation_source_node_dids,
-                                    *index,
-                                    &row.node_did,
-                                    true,
-                                )
-                        })
-                        .map(|(_, observation)| observation);
+                        .find(|observation| observation.trigger_id == row.trigger_id);
                     TriggerView {
                         config: row.clone(),
                         next_run_at: schedule_observation.and_then(|item| item.next_run_at.clone()),
@@ -246,7 +235,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let mut run_histories = task_run_histories(store.as_ref(), &peer.node_did, &triggers);
             let mut tasks = scoped_task_rows
                 .into_iter()
-                .map(|(_index, row)| {
+                .map(|row| {
                     project_task_view(
                         row,
                         recent_runs_for_task_views(&triggers, &peer.node_did, &row.task_id),
@@ -289,13 +278,11 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 operator_root.as_deref(),
             );
 
-            let runtime_connection = core
-                .store()
+            let runtime_connection = stores
                 .runtime_connection(&peer.node_did)
                 .map(|status| status.as_str().to_owned());
             let chat_refusal = peer.chat_refusal();
             let chat_safe = chat_refusal.is_none();
-            let pairing_ready = Some(peer.pairing_ready);
             let lease_expires_at = peer
                 .is_enrollment()
                 .then(|| peer.enrollment_authorization_expires_at.clone())
@@ -319,7 +306,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 runtime_connection,
                 chat_safe,
                 chat_refusal: chat_refusal.map(Into::into),
-                pairing_ready,
                 lease_expires_at,
                 operator_access,
                 last_error: status.and_then(|status| status.last_error.clone()),
@@ -374,16 +360,12 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         p2p_health: to_health_view(&sync_state.transport),
         sync_health: super::project_client_sync_health(core),
         enrollment_requests,
-        row_count: store.row_count(),
-        approx_serialized_bytes: store.approx_serialized_bytes(),
+        row_count,
+        approx_serialized_bytes,
         operator_config_authoritative_node_dids: {
-            let mut dids = store
-                .operator_config_authoritative_node_dids
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>();
-            dids.sort();
-            (!dids.is_empty()).then_some(dids)
+            operator_config_authoritative_node_dids.sort();
+            (!operator_config_authoritative_node_dids.is_empty())
+                .then_some(operator_config_authoritative_node_dids)
         },
         deployments,
         ended_access: core
@@ -396,7 +378,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
 }
 
 fn project_task_view(
-    task: &gents::documents::Task,
+    task: &gents_documents::Task,
     recent_runs: TaskRecentRunsView,
     run_history: Vec<TaskRunSummaryView>,
 ) -> TaskView {
@@ -424,7 +406,7 @@ mod task_view_tests {
 
     #[test]
     fn canonical_task_hooks_and_tags_survive_projection() {
-        let task : gents :: documents :: Task = serde_json :: from_value (serde_json :: json ! ({ "node_did" : "did:test:owner" , "task_id" : "release" , "display_name" : "Release" , "agent_did" : "operator" , "prompt_template" : "Ship it" , "emit_outcome" : true , "output_schema_ref" : "schemas/release-result.json" , "hooks" : [{ "hook_id" : "prepare" , "phase" : "before" , "command" : ["sh" , "-c" , "./prepare.sh"] , "timeout_secs" : 45 } , { "hook_id" : "cleanup" , "phase" : "finally" , "command" : ["./cleanup"] }] , "tags" : ["release" , "operator"] })) . expect ("canonical task") ;
+        let task : gents_documents::Task = serde_json :: from_value (serde_json :: json ! ({ "node_did" : "did:test:owner" , "task_id" : "release" , "display_name" : "Release" , "agent_did" : "operator" , "prompt_template" : "Ship it" , "emit_outcome" : true , "output_schema_ref" : "schemas/release-result.json" , "hooks" : [{ "hook_id" : "prepare" , "phase" : "before" , "command" : ["sh" , "-c" , "./prepare.sh"] , "timeout_secs" : 45 } , { "hook_id" : "cleanup" , "phase" : "finally" , "command" : ["./cleanup"] }] , "tags" : ["release" , "operator"] })) . expect ("canonical task") ;
         let view = project_task_view(
             &task,
             TaskRecentRunsView {
@@ -531,6 +513,7 @@ impl From<AgentReadinessUnknownReason> for AgentReadinessUnknownReasonView {
             AgentReadinessUnknownReason::ProcessNotReady => Self::ProcessNotReady,
             AgentReadinessUnknownReason::RouterGenerationStale => Self::RouterGenerationStale,
             AgentReadinessUnknownReason::AgentNotAssigned => Self::AgentNotAssigned,
+            AgentReadinessUnknownReason::StorageUnavailable => Self::StorageUnavailable,
         }
     }
 }
@@ -602,7 +585,7 @@ fn resolve_agent_environments(
                         .map(str::trim)
                         .filter(|root| !root.is_empty())
                         .map(std::path::Path::new);
-                    gents::tools::surface::resolve_effective_tool_root(
+                    gents_tools::surface::resolve_effective_tool_root(
                         &agent.agent_did,
                         stored_root,
                         operator_root,
@@ -919,7 +902,7 @@ mod backend_config_view_tests {
 
     #[test]
     fn backend_view_never_serializes_key_and_uses_exact_oauth_catalog() {
-        let mut backend: gents::documents::InferenceBackend =
+        let mut backend: gents_documents::InferenceBackend =
             serde_json::from_value(serde_json::json!({
                 "node_did":"owner","backend_id":"backend","name":"Backend",
                 "provider_kind":"OpenAiCompatible","endpoint":"http://localhost/v1",
@@ -931,7 +914,7 @@ mod backend_config_view_tests {
         assert!(!serde_json::to_string(&view)
             .unwrap()
             .contains("NEVER-EXPORT-KEY"));
-        backend.auth = gents::documents::BackendAuth::NodeOAuth { account_ref: None };
+        backend.auth = gents_documents::BackendAuth::NodeOAuth { account_ref: None };
         let observation = serde_json::from_value(serde_json::json!({
             "backend_id":"backend","catalogs":[
                 {"node_did":"foreign","observed_at":"now","models":[{"model_name":"foreign-model"}]},
@@ -947,7 +930,7 @@ mod backend_config_view_tests {
         assert_eq!(view.models, ["own-model"]);
         assert_eq!(view.advertised_models[0].context_window, Some(272_000));
         assert_eq!(view.advertised_models[0].max_context_window, Some(872_000));
-        backend.auth = gents::documents::BackendAuth::NodeOAuth {
+        backend.auth = gents_documents::BackendAuth::NodeOAuth {
             account_ref: Some("acct-2".into()),
         };
         let view = backend_config_view(&backend, Some(&observation));

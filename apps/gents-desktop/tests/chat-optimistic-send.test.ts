@@ -4,16 +4,24 @@ import type {
   ChatSendResult,
   DesktopApiAdapter,
   DesktopClientSnapshot,
+  DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 import { createChatActions } from "../src/hooks/chatActions";
-import { CHAT_SEND_DEADLINE_MS, createChatDelivery } from "../src/hooks/chatDelivery";
+import {
+  CHAT_SEND_DEADLINE_MS,
+  createChatDelivery,
+  observeLandedChatSends,
+} from "../src/hooks/chatDelivery";
 import { createChatStore } from "../src/hooks/chatStore";
-import { loadChatDrafts } from "../src/hooks/chatDrafts";
+import { keepSendDeadlineClock } from "../src/hooks/sendDeadlineClock";
+import { loadChatDrafts, chatDraftOf, saveChatDraft } from "../src/hooks/chatDrafts";
+import { writeSession } from "../src/hooks/sessionStore";
 import { deliveryAffordances, sendStatus } from "../src/hooks/chatDeliveryView";
 import { admittingProjection, shellStores } from "./shell-fixture";
 import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { acceptedChat } from "./chat-delivery-fixture";
 import { deferred } from "./deferred";
+import { memorySendAttachments } from "./send-attachments-fixture";
 
 beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
 afterEach(() => {
@@ -36,6 +44,7 @@ function fixture(sessionId: string | null = "session") {
     .mockRejectedValue(new Error("Outer reply was lost"));
   const report = vi.fn();
   const projection = admittingProjection("agent");
+  const sendAttachments = memorySendAttachments();
   const actions = () =>
     createChatActions({
       api: { sendChatMessage: send } as unknown as DesktopApiAdapter,
@@ -44,6 +53,7 @@ function fixture(sessionId: string | null = "session") {
       refreshSession: vi.fn(),
       refreshSnapshot: vi.fn(),
       reportFailure: report,
+      sendAttachments,
     });
   return { stores, send, report, projection, actions };
 }
@@ -80,7 +90,7 @@ it("shows a failed send with its cause, and Retry resends the same identity and 
   const request = f.send.mock.calls[0][0];
   const [failed] = loadChatDrafts().chatDrafts;
   expect(failed.failure?.message).toBe("Outer reply was lost");
-  expect(deliveryAffordances(sendStatus(failed, Date.now()), false)).toEqual({
+  expect(deliveryAffordances(sendStatus(failed, Date.now()), false, false)).toEqual({
     view: "failed",
     retry: true,
     discard: true,
@@ -156,6 +166,7 @@ it("keeps a confirmed message confirmed when the chat view cannot show it", asyn
   const delivery = createChatDelivery(
     { sendChatMessage: f.send } as unknown as DesktopApiAdapter,
     f.stores,
+    memorySendAttachments(),
   );
   const shown = delivery.submit(
     { clientDid: "client", nodeDid: "node", sessionId: "session", content: "Original" },
@@ -181,6 +192,7 @@ it("shows every window the same status and lets no window discard another window
   const other = createChatDelivery(
     { sendChatMessage: f.send } as unknown as DesktopApiAdapter,
     { ...f.stores, chat: createChatStore() },
+    memorySendAttachments(),
   );
   const [seen] = loadChatDrafts().chatDrafts;
   expect(sendStatus(seen, Date.now())).toBe("pending");
@@ -217,4 +229,113 @@ it("reads a confirmed draft saved by the earlier client as confirmed and release
   localStorage.setItem("gents.chat.unresolvedSubmissions.v1", "[]");
   expect(loadChatDrafts()).toEqual({ chatDrafts: [], chatDraftError: null });
   expect(localStorage.length).toBe(0);
+});
+
+it("clears the composer error about a hung send when its late confirmation arrives", async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const stop = observeLandedChatSends(f.stores);
+  const hung = deferred<ChatSendResult>();
+  f.send.mockImplementationOnce(() => hung.promise);
+  const sent = f.actions().sendMessage("Original message");
+  await vi.waitFor(() => expect(f.send).toHaveBeenCalledTimes(1));
+  const request = f.send.mock.calls[0][0];
+  await vi.advanceTimersByTimeAsync(CHAT_SEND_DEADLINE_MS);
+  expect(await sent).toBeNull();
+  expect(f.stores.chat.getState().submissionError).toMatchObject({
+    requestId: request.requestId,
+    message: expect.stringContaining("No reply arrived"),
+  });
+  hung.resolve(acceptedChat(request));
+  await vi.waitFor(() => expect(f.stores.chat.getState().submissionError).toBeNull());
+  expect(loadChatDrafts().chatDrafts).toEqual([]);
+  stop();
+});
+
+function showing(requestId: string, sessionId = "session") {
+  return {
+    sessionId,
+    nodeDid: "node",
+    latestRequestId: "later",
+    pendingTurn: null,
+    queuedTurns: [],
+    foldedInputs: [],
+    timelineItems: [
+      { kind: "userMessage", requestId, inputRequestId: null, ownsTurn: true },
+    ],
+  } as unknown as DesktopSessionSnapshot;
+}
+
+it("retires a failed send, and its composer error, once the session shows its request", async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const stop = observeLandedChatSends(f.stores);
+  await f.actions().sendMessage("Original message");
+  const request = f.send.mock.calls[0][0];
+  expect(f.stores.chat.getState().submissionError?.requestId).toBe(request.requestId);
+  writeSession(f.stores.session, showing(request.requestId!, "another-session"));
+  writeSession(f.stores.session, showing("another-request"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(loadChatDrafts().chatDrafts).toHaveLength(1);
+  writeSession(f.stores.session, showing(request.requestId!));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(loadChatDrafts().chatDrafts).toEqual([]);
+  expect(f.stores.chat.getState().submissionError).toBeNull();
+  expect(f.send).toHaveBeenCalledTimes(1);
+  stop();
+});
+
+it("retires a send restored after a restart once its deadline passes and the session shows it", async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const draft = chatDraftOf(
+    {
+      clientDid: "client",
+      nodeDid: "node",
+      requestId: "restored",
+      sessionId: "session",
+      content: "Original",
+    },
+    "session",
+  );
+  saveChatDraft(f.stores.chat, { ...draft, pendingUntil: Date.now() + 1_000 });
+  f.stores.chat = createChatStore();
+  const stopClock = keepSendDeadlineClock(f.stores.chat);
+  const stop = observeLandedChatSends(f.stores);
+  writeSession(f.stores.session, showing("restored"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(loadChatDrafts().chatDrafts).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(loadChatDrafts().chatDrafts).toEqual([]);
+  stop();
+  stopClock();
+});
+
+it("keeps an observed answer saved as sent until its question closes", async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  const answer = chatDraftOf(
+    {
+      clientDid: "client",
+      nodeDid: "node",
+      requestId: "answer",
+      sessionId: "session",
+      content: "Yes",
+      causedBySourceDocId: "question",
+    },
+    "session",
+    false,
+    { nodeDid: "node", itemId: "question", summary: "Yes" },
+  );
+  saveChatDraft(f.stores.chat, {
+    ...answer,
+    failure: { message: "Outer reply was lost", error: null },
+  });
+  const stop = observeLandedChatSends(f.stores);
+  writeSession(f.stores.session, showing("answer"));
+  await vi.advanceTimersByTimeAsync(0);
+  const [kept] = loadChatDrafts().chatDrafts;
+  expect(sendStatus(kept, Date.now())).toBe("confirmed");
+  expect(kept.failure).toBeUndefined();
+  stop();
 });

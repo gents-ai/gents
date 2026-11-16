@@ -1,42 +1,60 @@
-import Proofs.ScopeTemplates
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Documents.ScopeTemplates
+import Proofs.Conformance.Family
 
 namespace Conformance.FileReviewRouteContracts
 
-open Conformance.Contracts
+open Lean
 
-private def boolJson (value : Bool) := if value then "true" else "false"
+structure SubscriptionInput where
+  collection : String
+  deriving ToJson
 
-private def predicateJson (predicate : ScopeTemplates.CollectionPredicate) :=
-  "{\"collection\":" ++ jsonString predicate.collection ++
-  ",\"clauses\":" ++ jsonArray (predicate.clauses.map fun clause =>
-    "{\"field\":" ++ jsonString clause.field ++
-    ",\"operator\":" ++ jsonString clause.operator ++
-    ",\"value\":" ++ jsonString clause.value ++ "}") ++ "}"
+structure SubscriptionOutput where
+  replicated : Bool
+  deriving ToJson
 
-private def routeCaseJson (direction : ScopeTemplates.RouteDirection)
-    (requester owner demandCollection imageCollection : String) :=
-  let filters := ScopeTemplates.clientRouteFilters direction requester owner
-  let expected := filters.find? (fun predicate => predicate.collection == demandCollection)
-  "{\"direction\":" ++ jsonString (match direction with
-    | .clientToRuntime => "client-to-runtime" | .runtimeToClient => "runtime-to-client") ++
-  ",\"requester\":" ++ jsonString requester ++ ",\"owner\":" ++ jsonString owner ++
-  ",\"demand_collection\":" ++ jsonString demandCollection ++
-  ",\"image_collection\":" ++ jsonString imageCollection ++
-  ",\"expected\":" ++ (expected.map predicateJson).getD "null" ++
-  ",\"images_granted\":" ++ boolJson ((ScopeTemplates.clientRouteCollections direction).contains imageCollection) ++
-  ",\"image_filter_installed\":" ++ boolJson (filters.any (fun predicate => predicate.collection == imageCollection)) ++ "}"
+@[conformance_family]
+def subscription : Family SubscriptionInput SubscriptionOutput where
+  inputs := ScopeTemplates.transcriptCollections.map fun collection => { collection }
+  model := fun i => { replicated := Identity.collectionReplicates i.collection }
 
-def routeCasesJson := jsonArray (
-  ([ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient]).flatMap fun direction =>
-    [routeCaseJson direction "requester-1" "node-1" "FileInventoryRequest" "ToolFileChange",
-     routeCaseJson direction "requester-\"quoted" "node-\\path" "FileInventoryRequest" "ToolFileChange",
-     routeCaseJson direction "requester-1" "node-1" "FileInventoryRequest" "ToolFileInventory",
-     routeCaseJson direction "requester-\"quoted" "node-\\path" "FileInventoryRequest" "ToolFileInventory"])
+deriving instance ToJson for ScopeTemplates.RouteDirection, ScopeTemplates.FilterClause,
+  ScopeTemplates.CollectionPredicate
 
-def subscriptionCasesJson := jsonArray (
-  ScopeTemplates.transcriptCollections.map fun collection =>
-    "{\"collection\":" ++ jsonString collection ++
-    ",\"replicated\":" ++ boolJson false ++ "}")
+structure FileReviewRouteInput where
+  direction : ScopeTemplates.RouteDirection
+  requester : String
+  owner : String
+  demandCollection : String
+  imageCollection : String
+  deriving ToJson
+
+structure FileReviewRouteOutput where
+  expected : Option ScopeTemplates.CollectionPredicate
+  imagesGranted : Bool
+  imageFilterInstalled : Bool
+  deriving ToJson
 
 end Conformance.FileReviewRouteContracts
+
+namespace Conformance
+
+open FileReviewRouteContracts
+
+@[conformance_family]
+def fileReviewRoutes : Family FileReviewRouteInput FileReviewRouteOutput where
+  inputs := [ScopeTemplates.RouteDirection.clientToRuntime, .runtimeToClient].flatMap fun direction =>
+    [("requester-1", "node-1", "ToolFileChange"),
+     ("requester-\"quoted", "node-\\path", "ToolFileChange"),
+     ("requester-1", "node-1", "ToolFileInventory"),
+     ("requester-\"quoted", "node-\\path", "ToolFileInventory")].map
+      fun (requester, owner, image) =>
+        { direction, requester, owner, demandCollection := "FileInventoryRequest",
+          imageCollection := image }
+  model := fun i =>
+    let filters := ScopeTemplates.clientRouteFilters i.direction i.requester i.owner
+    { expected := filters.find? (fun predicate => predicate.collection == i.demandCollection)
+      imagesGranted := (ScopeTemplates.clientRouteCollections i.direction).contains i.imageCollection
+      imageFilterInstalled := filters.any (fun predicate => predicate.collection == i.imageCollection) }
+
+end Conformance

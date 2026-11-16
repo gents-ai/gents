@@ -9,11 +9,11 @@ use tracing::Instrument;
 #[cfg(test)]
 use super::ShutdownDrainFailure;
 use super::{AgentDaemon, HandleRequestOutcome};
-use crate::error::LoopFailureCause;
-use crate::inference::admission::{self, CallKind};
-use crate::inference::llm::message::Message;
-use crate::inference::resolved::{MaxTurnsProvenance, ResolvedAgent};
 use crate::runtime::agent::loop_stream::{LoopReplayInput, TaggedMessage};
+use gents_inference::admission::{self, CallKind};
+use gents_inference::llm::message::Message;
+use gents_inference::resolved::MaxTurnsProvenance;
+use gents_loop::error::LoopFailureCause;
 use gents_protocol::row::AgentRequest;
 
 mod drive;
@@ -35,7 +35,7 @@ fn wake_frontier_message(authored: &Message, wake_notifications: &[TaggedMessage
     if !wake_notifications.is_empty()
         && *authored
             == Message::user(
-                crate::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+                gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
             )
     {
         Message::user(BACKGROUND_WAKE_RESULT_FRAMING)
@@ -123,14 +123,14 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
 
 pub(super) fn render_request_context_message(
     _node: &defra_node::Node,
-    agent_config: &ResolvedAgent,
+    tool_config: &gents_tools::surface::AgentToolSurfaceConfig,
     request: &AgentRequest,
     frozen_instruction_manifest: Option<&str>,
 ) -> Result<Option<Message>> {
     Ok(assemble_request_context_message(
         frozen_instruction_manifest,
-        crate::tools::workspace::request_workspace_cwd(request).as_deref(),
-        agent_config.tools.host_tools().read_root(),
+        gents_session::workspace::request_workspace_cwd(request).as_deref(),
+        tool_config.host_tools().read_root(),
     ))
 }
 
@@ -139,7 +139,7 @@ fn assemble_request_context_message(
     live_cwd: Option<&std::path::Path>,
     live_tool_root: Option<&std::path::Path>,
 ) -> Option<Message> {
-    crate::tools::workspace::instruction_body_for_request(
+    gents_session::workspace::instruction_body_for_request(
         frozen_instruction_manifest,
         live_cwd,
         live_tool_root,
@@ -178,7 +178,7 @@ where
 
 impl<M> AgentDaemon<M>
 where
-    M: crate::inference::llm::rig_compat::ProviderModel,
+    M: gents_inference::llm::rig_compat::ProviderModel,
 {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_inference(
@@ -188,17 +188,17 @@ where
         history: &[TaggedMessage],
         wake_notifications: &[TaggedMessage],
         replay: LoopReplayInput,
-        lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
-        stream_writer: &crate::request::streaming::DefraStreamWriter,
+        lifecycle: &mut gents_session::request::lifecycle::RequestLifecycle,
+        stream_writer: &gents_session::request::streaming::DefraStreamWriter,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
         interrupt_rx: &mut tokio::sync::watch::Receiver<
-            Option<crate::request::interrupt::InterruptIntent>,
+            Option<gents_session::request::interrupt::InterruptIntent>,
         >,
         request_token: &tokio_util::sync::CancellationToken,
         aggregate_token_budget: Option<crate::runtime::agent::loop_stream::AggregateTokenBudget>,
         effective_seed: Option<i64>,
-        mut workspace: crate::tools::call::lifecycle::runtime::ToolWorkspaceScope,
-        request_context_message: Option<crate::inference::llm::message::Message>,
+        mut workspace: gents_tools::runtime_context::ToolWorkspaceScope,
+        request_context_message: Option<gents_inference::llm::message::Message>,
         resume_from_history: bool,
         consumed_prompts: Vec<crate::runtime::agent::loop_stream::FoldedPrompt>,
         folded_prompts: Vec<crate::runtime::agent::loop_stream::FoldedPrompt>,
@@ -206,7 +206,7 @@ where
     ) -> Result<HandleRequestOutcome> {
         workspace.runtime_home = self.approval_home.clone();
         let request_deadline = lifecycle.claimed_deadline_at();
-        let trigger_context = crate::request::lifecycle::TriggerExecutionContext::parse(
+        let trigger_context = gents_session::request::lifecycle::TriggerExecutionContext::parse(
             request.caused_by_trigger_context.as_deref(),
         )?;
         let trigger_correlation = request.caused_by_correlation.clone();
@@ -239,19 +239,20 @@ where
             request_token.clone(),
             shutdown.clone(),
         );
-        let approval_context = crate::plugin::approval::workspace::for_request(
+        let approval_context = gents_tools::plugin::approval::workspace::for_request(
             self.approval_home.as_deref(),
             &request.node_did,
             request.requester_did.as_deref(),
             &agent_did,
             workspace.workspace_cwd.as_deref(),
+            Some(session_id.as_str()),
         )?
         .map(|context| context.with_reviewer(reviewer.callback.clone()));
         let backend_id = lifecycle.backend_id().to_string();
         let model_name = self.agent_config.model_name.clone();
         let inference_observation = self
             .inference_observations
-            .begin(crate::observe::inference_observation::InferenceKey {
+            .begin(gents_inference::inference_observation::InferenceKey {
                 node: request.node_did.clone(),
                 session: request.session_id.clone(),
                 request: request.request_id.clone(),
@@ -292,7 +293,7 @@ where
                     loop_prompt,
                     max_turns_provenance,
                 } = prepared?;
-                let loop_tools = crate::inference::llm::tool::bind_request_tools(
+                let loop_tools = gents_loop::tool::bind_request_tools(
                     self.loop_tools.clone(),
                     lifecycle.claimed_tool_context()?,
                 );
@@ -383,12 +384,12 @@ where
                 retry_attempt = false,
             )));
 
-        let outcome = crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
+        let outcome = gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
             request.requester_did.clone(),
             Some(request.node_did.clone()),
             Some(agent_did.to_string()),
             Some(request.request_id.clone()),
-            crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+            gents_tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
                 request_deadline,
                 request_token.clone(),
                 workspace,
@@ -397,9 +398,9 @@ where
                 trigger_correlation.clone(),
                 trigger_context.source_fields.clone(),
                 false,
-                crate::plugin::approval::scope_interactive(
+                gents_tools::plugin::approval::scope_interactive(
                     request.execution_origin.as_deref() == Some("interactive"),
-                    crate::plugin::approval::workspace::scope(approval_context, inference),
+                    gents_tools::plugin::approval::workspace::scope(approval_context, inference),
                 ),
             ),
         )
@@ -424,23 +425,24 @@ fn compactor_failure(
 
 #[cfg(test)]
 pub(super) mod tests {
-    use super::{stream_failure_reason, AgentDaemon, MaxTurnsProvenance};
-    use crate::error::LoopFailureCause;
-    use crate::inference::backends::provider::BackendProviderKind;
-    use crate::inference::llm::tool::ToolDyn;
-    use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
-    use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
+    use super::{stream_failure_reason, AgentDaemon};
     use crate::runtime::agent::daemon::AgentDaemonInit;
     use crate::runtime::agent::runtime::StartupBarrier;
-    use crate::store::identity::{NodeIdentity, RuntimeNode};
-    use crate::tools::call::hook::{
-        BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
-    };
-    use crate::tools::surface::AgentToolSurfaceConfig;
     use crate::turn::prompt::LayeredPromptBuilder;
     use anyhow::Context;
     use futures::stream;
+    use gents_inference::backends::provider::BackendProviderKind;
+    use gents_inference::resolved::MaxTurnsProvenance;
+    use gents_inference::resolved::{ResolvedAgent, SamplingConfig};
+    use gents_loop::completion_retry::CompletionRetryProfileFields;
+    use gents_loop::error::LoopFailureCause;
+    use gents_loop::tool::ToolDyn;
     use gents_protocol::row::AgentRequest;
+    use gents_store::identity::{NodeIdentity, RuntimeNode};
+    use gents_toolcalls::call::hook::{
+        BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
+    };
+    use gents_tools::surface::AgentToolSurfaceConfig;
     use rig::completion::{
         CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
     };
@@ -500,7 +502,8 @@ pub(super) mod tests {
             &self,
             request: CompletionRequest,
         ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+            gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
+                .await?;
             let items = vec![
                 Ok(RawStreamingChoice::Message("routed reply".to_string())),
                 Ok(RawStreamingChoice::FinalResponse(())),
@@ -523,7 +526,7 @@ pub(super) mod tests {
         node: Arc<defra_node::Node>,
         request_id: String,
         did: String,
-        signer: crate::store::identity::ManagedAgentSigner,
+        signer: gents_store::identity::ManagedAgentSigner,
         runtime: Arc<dyn NodeIdentity>,
     }
 
@@ -550,7 +553,8 @@ pub(super) mod tests {
             &self,
             request: CompletionRequest,
         ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+            gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
+                .await?;
             let history =
                 serde_json::to_value(&request.chat_history).expect("serialize provider input");
             let title_preamble = super::super::title::title_generation_preamble();
@@ -582,7 +586,7 @@ pub(super) mod tests {
                             runtime,
                         }) = &self.successor
                         {
-                            crate::tools::call::lifecycle::admission_fixture::complete_child_managed_verified(
+                            gents_toolcalls::call::lifecycle::admission_fixture::complete_child_managed_verified(
                                 node,
                                 request_id,
                                 "successor native output",
@@ -591,8 +595,8 @@ pub(super) mod tests {
                             )
                             .await;
                             assert_eq!(
-                                crate::tools::background::completion::settle_running_session_message_rows_with_access(
-                                    node, &crate::ConfigAccess::local_with_agent_signer(node.clone(), identity::Did::new(signer.did()).unwrap(), signer.clone()).unwrap(), did
+                                gents_toolcalls::background::completion::settle_running_session_message_rows_with_access(
+                                    node, &gents_store::config_client::ConfigAccess::local_with_agent_signer(node.clone(), identity::Did::new(signer.did()).unwrap(), signer.clone()).unwrap(), &gents_automation::goal::session_message::SessionGoals, did
                                 )
                                 .await
                                 .unwrap(),
@@ -631,13 +635,13 @@ pub(super) mod tests {
     }
 
     async fn persisted_request_by_doc_id(
-        access: &crate::ConfigAccess,
+        access: &gents_store::config_client::ConfigAccess,
         doc_id: &str,
     ) -> serde_json::Value {
         let response = access
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason terminal_output }} }}"#,
-                crate::store::graphql::escape_graphql_string(doc_id)
+                gents_store::graphql::escape_graphql_string(doc_id)
             ))
             .await
             .unwrap();
@@ -647,7 +651,7 @@ pub(super) mod tests {
     }
 
     async fn persisted_request_state(
-        access: &crate::ConfigAccess,
+        access: &gents_store::config_client::ConfigAccess,
         doc_id: &str,
     ) -> gents_protocol::request_lifecycle::RequestLifecycleState {
         let row = persisted_request_by_doc_id(access, doc_id).await;
@@ -678,7 +682,8 @@ pub(super) mod tests {
             &self,
             request: CompletionRequest,
         ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-            crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+            gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
+                .await?;
             self.0.fetch_add(1, Ordering::SeqCst);
             let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(vec![
                 Ok(RawStreamingChoice::Message("admitted reply".to_string())),
@@ -700,31 +705,30 @@ pub(super) mod tests {
             enabled: true,
         });
         let agent_identity =
-            crate::store::identity::resolve_agent_identity(principal.identity.as_ref(), &binding)
+            gents_store::identity::resolve_agent_identity(principal.identity.as_ref(), &binding)
                 .unwrap();
         let backend_id = format!("{}:backend", binding.agent_did);
         let agent_did = binding.agent_did;
         Arc::new(ResolvedAgent {
-            configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+            configuration: gents_inference::resolved::ResolvedConfiguration::Static,
             profile_id: None,
             agent_did,
             agent_identity,
             node: principal,
             backend_id: Some(backend_id),
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
-            openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
+            openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
             claude_platform: None,
-            backend_auth: crate::documents::BackendAuth::Unauthenticated,
+            backend_auth: gents_documents::BackendAuth::Unauthenticated,
             model_name: "scripted".to_string(),
             service_tier: None,
             resolved_reasoning_efforts: None,
             context_window: 8_192,
             max_output_tokens: 1_024,
             max_turns: 2,
-            max_turns_provenance: crate::inference::resolved::MaxTurnsProvenance::Default,
+            max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
             system_prompt: "system".to_string(),
-            tools: AgentToolSurfaceConfig::meta_only(),
             compaction: None,
             compaction_inference: None,
             max_total_tokens: None,
@@ -732,7 +736,7 @@ pub(super) mod tests {
             stream_liveness_timeout: Duration::from_secs(5),
             deadline_duration: Duration::from_secs(30),
             provider_idle_timeout: Duration::from_secs(
-                crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+                gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
             ),
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
@@ -745,15 +749,17 @@ pub(super) mod tests {
         name: &str,
     ) -> (
         crate::support::TestDb,
-        crate::KeyIdentity,
-        crate::ConfigAccess,
+        gents_store::identity::KeyIdentity,
+        gents_store::config_client::ConfigAccess,
         Arc<ResolvedAgent>,
     ) {
-        use crate::store::config_client::NodePermission;
-        let (db, user, access, binding) = crate::test_support::signed_test_node(name).await;
+        use gents_store::config_client::NodePermission;
+        let (db, user, access, binding) = crate::test_support::root::signed_test_node(name).await;
         let config = test_agent_with_binding(db.node_identity.clone(), binding);
-        let admin =
-            crate::ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
+        let admin = gents_store::config_client::ConfigAccess::local_as(
+            db.node.clone(),
+            db.node_identity.did().parse().unwrap(),
+        );
         let agent_did = identity::Did::new(&config.agent_did).unwrap();
         for permission in [
             NodePermission::CollectionGet,
@@ -774,8 +780,8 @@ pub(super) mod tests {
     fn held_daemon_agent_access(
         db: &crate::support::TestDb,
         config: &ResolvedAgent,
-    ) -> crate::ConfigAccess {
-        crate::ConfigAccess::local_managed_agent(
+    ) -> gents_store::config_client::ConfigAccess {
+        gents_store::config_client::ConfigAccess::local_managed_agent(
             db.node.clone(),
             identity::Did::new(&config.agent_did).unwrap(),
             config.agent_identity.as_ref(),
@@ -784,7 +790,7 @@ pub(super) mod tests {
     }
 
     async fn held_daemon_query(
-        access: &crate::ConfigAccess,
+        access: &gents_store::config_client::ConfigAccess,
         document: &str,
     ) -> query::QueryResponse {
         let result = if document.trim_start().starts_with("mutation") {
@@ -798,13 +804,13 @@ pub(super) mod tests {
 
     async fn create_held_routed_request(
         db: &crate::support::TestDb,
-        user: &crate::KeyIdentity,
-        access: &crate::ConfigAccess,
+        user: &gents_store::identity::KeyIdentity,
+        access: &gents_store::config_client::ConfigAccess,
         agent_config: &ResolvedAgent,
         title: Option<&str>,
     ) -> AgentRequest {
-        use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
         use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+        use gents_session::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
         let request_id = uuid::Uuid::new_v4().to_string();
         let mut spec = RequestSpec::new(
             RequestPurpose::Normal,
@@ -815,7 +821,7 @@ pub(super) mod tests {
                 agent_did: agent_config.agent_did.clone(),
                 session_id: uuid::Uuid::new_v4().to_string(),
                 content: "route this reply".into(),
-                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                 created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             },
             AgentRequestAdmissionRecord::client(user.did()),
@@ -824,17 +830,17 @@ pub(super) mod tests {
             text: text.to_owned(),
             source: gents_protocol::session::SessionTitleSource::Task,
         });
-        let create = crate::request::lifecycle::build_signed_client_request(
+        let create = gents_session::request::lifecycle::build_signed_client_request(
             access,
             spec,
             RequestSigner::Identity(user),
         )
         .await
         .unwrap();
-        crate::request::lifecycle::submit_client_request(access, &create)
+        gents_session::request::lifecycle::submit_client_request(access, &create)
             .await
             .unwrap();
-        let escaped = crate::store::graphql::escape_graphql_string(&request_id);
+        let escaped = gents_store::graphql::escape_graphql_string(&request_id);
         let response = access
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{_docID}} }}"#
@@ -844,7 +850,7 @@ pub(super) mod tests {
         let doc_id = response["data"]["AgentRequest"][0]["_docID"]
             .as_str()
             .unwrap();
-        crate::request::admission::load_request_for_admission_test_as(
+        gents_session::request::admission::load_request_for_admission_test_as(
             &db.node,
             doc_id,
             &agent_config.agent_did,
@@ -855,10 +861,10 @@ pub(super) mod tests {
 
     async fn create_enrollment_daemon_request(
         db: &crate::support::TestDb,
-        member_access: &crate::ConfigAccess,
+        member_access: &gents_store::config_client::ConfigAccess,
         agent_config: &ResolvedAgent,
         member: &dyn NodeIdentity,
-        fence: &crate::runtime::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence,
+        fence: &gents_p2p::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence,
         suffix: &str,
     ) -> AgentRequest {
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
@@ -880,10 +886,10 @@ pub(super) mod tests {
                 &fence.authorization_expires_at,
             ),
         );
-        crate::sign_agent_request_create(member, &mut create)
+        gents_session::request::admission::sign_agent_request_create(member, &mut create)
             .await
             .unwrap();
-        let input = crate::store::config_client::client_request_input(&create).unwrap();
+        let input = gents_store::config_client::client_request_input(&create).unwrap();
         let agent_did = identity::Did::new(&agent_config.agent_did).unwrap();
         let doc_id = member_access
             .transact_write("test.enrollment_request", |txn| {
@@ -895,14 +901,14 @@ pub(super) mod tests {
                         &serde_json::json!({"input":input}),
                         gents_protocol::schemas::AGENT_REQUEST,
                     ).await?;
-                    let doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                    let doc_id = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
                     txn.add_actor_relationship("AgentRequest", &doc_id, "working_agent", agent_did).await?;
                     Ok::<_, anyhow::Error>(doc_id)
                 })
             })
             .await
             .unwrap();
-        crate::request::admission::load_request_for_admission_test_as(
+        gents_session::request::admission::load_request_for_admission_test_as(
             &db.node,
             &doc_id,
             &agent_config.agent_did,
@@ -916,8 +922,8 @@ pub(super) mod tests {
         use super::{
             request_entry, wake_frontier_message, TaggedMessage, BACKGROUND_WAKE_RESULT_FRAMING,
         };
-        use crate::inference::llm::message::Message;
-        use crate::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
+        use gents_inference::llm::message::Message;
+        use gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
 
         let notification = TaggedMessage::unassociated(Message::user(
             "<tool-completion tool_call_id=\"c1\" status=\"completed\">".to_owned(),
@@ -951,15 +957,13 @@ pub(super) mod tests {
         // provenance; it is never reframed and its document parts survive.
         let captured = Message::User {
             content: vec![
-                crate::inference::llm::message::UserContent::text(
-                    BACKGROUND_COMPLETION_WAKE_PROMPT,
-                ),
-                crate::inference::llm::message::UserContent::Document(
-                    crate::inference::llm::message::Document {
-                        data: crate::inference::llm::message::DocumentSourceKind::String(
+                gents_inference::llm::message::UserContent::text(BACKGROUND_COMPLETION_WAKE_PROMPT),
+                gents_inference::llm::message::UserContent::Document(
+                    gents_inference::llm::message::Document {
+                        data: gents_inference::llm::message::DocumentSourceKind::String(
                             "fn main() {}".into(),
                         ),
-                        media_type: Some(crate::inference::llm::message::DocumentMediaType::TXT),
+                        media_type: Some(gents_inference::llm::message::DocumentMediaType::TXT),
                         additional_params: Some(
                             serde_json::json!({ "captured_context": { "kind": "selection" } }),
                         ),
@@ -1011,14 +1015,14 @@ pub(super) mod tests {
 
     #[test]
     fn retry_entry_matches_lean_frontier() {
-        for case in &crate::lean_vocab_test::lean_contract_snapshot().retry_entry_cases {
-            let message = |value: &serde_json::Value| {
-                use crate::inference::llm::message::{
+        gents_lean_vocab::families::contracts_retry_entry_frontier::replay(|case| {
+            let message = |value: &u64| {
+                use gents_inference::llm::message::{
                     AssistantContent, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
                     UserContent,
                 };
-                let native = match value.as_u64().unwrap() {
-                    2 => crate::inference::llm::message::Message::Assistant {
+                let native = match *value {
+                    2 => gents_inference::llm::message::Message::Assistant {
                         request_id: None,
                         id: None,
                         content: vec![AssistantContent::ToolCall(ToolCall {
@@ -1033,7 +1037,7 @@ pub(super) mod tests {
                             },
                         })],
                     },
-                    3 => crate::inference::llm::message::Message::User {
+                    3 => gents_inference::llm::message::Message::User {
                         content: vec![UserContent::ToolResult(ToolResult {
                             id: "call-1".into(),
                             call_id: Some("call-1".into()),
@@ -1042,36 +1046,41 @@ pub(super) mod tests {
                             })],
                         })],
                     },
-                    4 => crate::inference::llm::message::Message::assistant("recorded progress"),
-                    10 => crate::inference::llm::message::Message::user(super::RETRY_CONTINUATION),
-                    _ => crate::inference::llm::message::Message::user(value.to_string()),
+                    4 => gents_inference::llm::message::Message::assistant("recorded progress"),
+                    10 => gents_inference::llm::message::Message::user(super::RETRY_CONTINUATION),
+                    _ => gents_inference::llm::message::Message::user(value.to_string()),
                 };
                 super::TaggedMessage::unassociated(native)
             };
-            let history = case["history"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(message)
-                .collect();
-            let context = (!case["context"].is_null()).then(|| message(&case["context"]).message);
+            let history = case.history.iter().map(message).collect();
+            let context = case.context.as_ref().map(|value| message(value).message);
             let (mut actual, prompt) = super::request_entry(
                 history,
-                &crate::inference::llm::message::Message::user(case["authored"].to_string()),
-                case["resume"].as_bool().unwrap(),
+                &gents_inference::llm::message::Message::user(case.authored.to_string()),
+                case.resume,
                 context.as_ref(),
                 &[],
             )
             .unwrap();
             actual.push(prompt);
-            let expected: Vec<_> = case["expected"]
-                .as_array()
-                .unwrap()
+            let candidates = case
+                .history
                 .iter()
-                .map(message)
-                .collect();
-            assert_eq!(actual, expected, "{case}");
-        }
+                .copied()
+                .chain([case.authored, 10])
+                .chain(case.context)
+                .collect::<Vec<_>>();
+            actual
+                .iter()
+                .map(|row| {
+                    candidates
+                        .iter()
+                        .copied()
+                        .find(|value| message(value) == *row)
+                        .unwrap_or_else(|| panic!("{case:?}: unmodeled entry row {row:?}"))
+                })
+                .collect::<Vec<u64>>()
+        });
     }
 
     #[tokio::test]
@@ -1099,13 +1108,14 @@ pub(super) mod tests {
         );
         let request_identity = agent_config.node_identity().clone();
         let rendered_request_capture_factory =
-            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+            gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
                 agent_config.agent_identity.as_ref(),
             )
             .unwrap();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
+            tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config,
             provider_family: None,
             model: Arc::new(RoutedReplyModel),
@@ -1119,11 +1129,12 @@ pub(super) mod tests {
             startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
             runtime_status,
             slot_generation: 1,
-            request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
-                node.clone(),
-                request_identity,
-                crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
-            ),
+            request_admission:
+                gents_session::request::admission::AgentRequestAdmissionVerifier::new(
+                    node.clone(),
+                    request_identity,
+                    gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
+                ),
         })
         .unwrap();
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -1133,14 +1144,14 @@ pub(super) mod tests {
             .await
             .unwrap();
 
-        let escaped = crate::store::graphql::escape_graphql_string(&request.doc_id);
+        let escaped = gents_store::graphql::escape_graphql_string(&request.doc_id);
         let result = access.execute(&format!(r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{escaped}"}}}}) {{lifecycle_state}} }}"#)).await.unwrap();
         assert_eq!(
             result["data"]["AgentRequest"][0]["lifecycle_state"],
             RequestLifecycleState::Completed.as_str()
         );
-        let request_doc_id = crate::store::graphql::escape_graphql_string(&request.doc_id);
-        let requester = crate::store::graphql::escape_graphql_string(&requester_did);
+        let request_doc_id = gents_store::graphql::escape_graphql_string(&request.doc_id);
+        let requester = gents_store::graphql::escape_graphql_string(&requester_did);
         let authored_prompt = access
             .execute(&format!(
                 r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }}, requester_did: {{ _eq: "{requester}" }}, role: {{ _eq: "user" }} }}) {{ _docID message_key request_doc_id requester_did role }} }}"#
@@ -1163,7 +1174,7 @@ pub(super) mod tests {
             "completed fresh non-retry request must have its exact durable authored prompt: {authored_rows:?}"
         );
 
-        let escaped_session_id = crate::store::graphql::escape_graphql_string(&request.session_id);
+        let escaped_session_id = gents_store::graphql::escape_graphql_string(&request.session_id);
         let query = format!(
             r#"{{
                 AgentMessage(
@@ -1190,7 +1201,7 @@ pub(super) mod tests {
                 .get("_docID")
                 .and_then(serde_json::Value::as_str)
                 .unwrap();
-            let (_, message) = crate::session::load_canonical_message(
+            let (_, message) = gents_session::session::load_canonical_message(
                 &access,
                 doc_id,
                 &node_did,
@@ -1208,7 +1219,7 @@ pub(super) mod tests {
             "daemon-persisted assistant message must carry requester lineage; rows={rows:?}; request={:?}",
             access.execute(&format!(
                 "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ lifecycle_state failure_reason terminal_output }} }}",
-                crate::store::graphql::escape_graphql_string(&request.doc_id)
+                gents_store::graphql::escape_graphql_string(&request.doc_id)
             )).await
         );
 
@@ -1220,7 +1231,7 @@ pub(super) mod tests {
         use gents_protocol::request_lifecycle::RequestLifecycleState;
 
         let (selected, successor) =
-            crate::tools::call::lifecycle::completion_owner_conformance::selected_background_wake_with_successor(true)
+            crate::toolcalls_tests::lifecycle::completion_owner_conformance::selected_background_wake_with_successor(true)
                 .await;
         let admission = selected.admission;
         let wake = selected.wake;
@@ -1238,7 +1249,7 @@ pub(super) mod tests {
             .unwrap()
             .managed_agent_signer()
             .unwrap();
-        let escaped_agent = crate::store::graphql::escape_graphql_string(signer.did());
+        let escaped_agent = gents_store::graphql::escape_graphql_string(signer.did());
         let agent_row = admission.client.execute(&format!(
             r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{escaped_agent}" }} }}, limit: 2) {{ agent_did creation_nonce }} }}"#,
         )).await.unwrap();
@@ -1254,8 +1265,8 @@ pub(super) mod tests {
             wake.max_total_tokens, None,
             "fixture allows the daemon to create an auxiliary title request"
         );
-        assert!(
-            crate::session::session_needs_generated_title(
+        assert_eq!(
+            gents_session::session::session_needs_generated_title(
                 &admission.client,
                 &admission.node_did,
                 wake.requester_did.as_deref(),
@@ -1263,6 +1274,7 @@ pub(super) mod tests {
             )
             .await
             .expect("read fixture session title"),
+            gents_session::session::GeneratedTitleNeed::Needed,
             "fixture starts with a placeholder title so title work is created"
         );
 
@@ -1280,6 +1292,7 @@ pub(super) mod tests {
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
+            tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
             model: Arc::new(WakeInputModel {
@@ -1299,7 +1312,7 @@ pub(super) mod tests {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                     node.clone(), agent_config.agent_identity.as_ref(),
                 ).unwrap(),
             ),
@@ -1311,10 +1324,10 @@ pub(super) mod tests {
                 admission.node_did.clone(),
             ),
             slot_generation: 1,
-            request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+            request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 request_identity,
-                crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+                gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
             ),
         })
         .unwrap();
@@ -1324,9 +1337,9 @@ pub(super) mod tests {
             .await
             .unwrap();
 
-        let session_id = crate::store::graphql::escape_graphql_string(&wake.session_id);
-        let node_did = crate::store::graphql::escape_graphql_string(&admission.node_did);
-        let title_purpose = crate::store::graphql::escape_graphql_string(
+        let session_id = gents_store::graphql::escape_graphql_string(&wake.session_id);
+        let node_did = gents_store::graphql::escape_graphql_string(&admission.node_did);
+        let title_purpose = gents_store::graphql::escape_graphql_string(
             gents_protocol::request_admission::RequestPurpose::TitleAudit.as_str(),
         );
         // The auxiliary title request is the Agent's own work, read as it.
@@ -1354,8 +1367,8 @@ pub(super) mod tests {
         })
         .await
         .expect("daemon must persist pending title work before test shutdown");
-        assert!(
-            crate::session::session_needs_generated_title(
+        assert_eq!(
+            gents_session::session::session_needs_generated_title(
                 &admission.client,
                 &admission.node_did,
                 wake.requester_did.as_deref(),
@@ -1363,6 +1376,7 @@ pub(super) mod tests {
             )
             .await
             .expect("read title pending session"),
+            gents_session::session::GeneratedTitleNeed::Needed,
             "creator cannot update the title without watcher dispatch"
         );
 
@@ -1397,7 +1411,7 @@ pub(super) mod tests {
             "wake must complete through the daemon's owned request path"
         );
 
-        let mut watcher = crate::request::watcher::DefraWatcher::for_agents(
+        let mut watcher = gents_session::request::watcher::DefraWatcher::for_agents(
             node.clone(),
             &admission.node_did,
             vec![agent_config.agent_identity.clone()],
@@ -1405,7 +1419,7 @@ pub(super) mod tests {
         .expect("request watcher");
         let successor = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                let request = crate::request::watcher::Watcher::next_request(&mut watcher)
+                let request = gents_session::request::watcher::Watcher::next_request(&mut watcher)
                     .await
                     .context("successor wake disappeared")??;
                 if request.session_id == wake.session_id
@@ -1427,12 +1441,14 @@ pub(super) mod tests {
             .process_request(successor.clone(), shutdown_rx)
             .await
             .unwrap();
-        let contract = crate::lean_vocab_test::lean_contract_snapshot()
-            .wake_input_cases
-            .iter()
-            .find(|case| case.name == "successor_wake_moves_only_new_notification")
-            .unwrap();
+        let [contract] = gents_lean_vocab::families::contracts_wake_input_provider_order::cases()
+            .try_into()
+            .unwrap_or_else(|_| panic!("the successor wake scenario replays one modeled wake"));
         let labels = ["notification-a", "notification-b", "answer-0"];
+        assert_eq!(
+            contract.input.observable, labels,
+            "the scenario locates these headers in the provider input"
+        );
         {
             let captured = provider_inputs.lock().unwrap();
             assert_eq!(captured.len(), 2);
@@ -1452,21 +1468,11 @@ pub(super) mod tests {
                 ("answer-0", answer),
             ];
             observed.sort_by_key(|(_, position)| *position);
-            let expected = contract
-                .expected_order
-                .iter()
-                .map(String::as_str)
-                .filter(|header| labels.contains(header))
-                .collect::<Vec<_>>();
-            assert_eq!(
-                observed.map(|(header, _)| header).as_slice(),
-                expected,
-                "current wake order must match the model: {input}"
-            );
+            contract.check(observed.map(|(header, _)| header.to_owned()).to_vec());
             assert_eq!(input.matches("successor native output").count(), 1);
             assert_eq!(input.matches("durable native output").count(), 1);
         }
-        let history = crate::session::load_history_with_access(
+        let history = gents_session::session::load_history_with_access(
             &admission.client,
             &wake.session_id,
             &admission.node_did,
@@ -1499,6 +1505,8 @@ pub(super) mod tests {
         ];
         durable.sort_by_key(|(_, position)| *position);
         let expected = contract
+            .input
+            .wake
             .rows
             .iter()
             .map(|row| row.header.as_str())
@@ -1526,7 +1534,7 @@ pub(super) mod tests {
         std::fs::create_dir_all(&selected).unwrap();
         let selected = std::fs::canonicalize(selected).unwrap();
         let root_path = selected.to_str().unwrap();
-        crate::tools::surface::set_workspace_root_with_readers(
+        gents_tools::surface::set_workspace_root_with_readers(
             &user_access,
             agent_config.node_did(),
             root_path,
@@ -1552,6 +1560,7 @@ pub(super) mod tests {
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
+            tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
             model: Arc::new(CountingReplyModel(calls.clone())),
@@ -1560,7 +1569,7 @@ pub(super) mod tests {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                     node.clone(),
                     agent_config.agent_identity.as_ref(),
                 )
@@ -1571,14 +1580,14 @@ pub(super) mod tests {
             startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
             runtime_status,
             slot_generation: 1,
-            request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+            request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 request_identity,
-                crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+                gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
             ),
         })
         .unwrap()
-        .with_root_execution_guard(Some(crate::tools::surface::RootExecutionGuard {
+        .with_root_execution_guard(Some(gents_tools::surface::RootExecutionGuard {
             agent_did: agent_config.agent_did.clone(),
             selected_root: Some(selected.clone()),
             ceiling_root: Some(selected.clone()),
@@ -1594,7 +1603,7 @@ pub(super) mod tests {
             calls.load(Ordering::SeqCst) > 0,
             "the admitted request must reach the provider before revocation"
         );
-        let escaped_first_doc_id = crate::store::graphql::escape_graphql_string(&first_doc_id);
+        let escaped_first_doc_id = gents_store::graphql::escape_graphql_string(&first_doc_id);
         let first_terminal = user_access.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_first_doc_id}" }} }}, limit: 1) {{ lifecycle_state failure_reason terminal_output }} }}"#
         )).await.unwrap();
@@ -1614,7 +1623,7 @@ pub(super) mod tests {
         );
         let calls_before_revocation = calls.load(Ordering::SeqCst);
 
-        crate::tools::surface::set_workspace_root(
+        gents_tools::surface::set_workspace_root(
             &user_access,
             agent_config.node_did(),
             root_path,
@@ -1632,7 +1641,7 @@ pub(super) mod tests {
             calls_before_revocation,
             "the revoked fresh request must fail before provider exposure"
         );
-        let escaped_request_doc_id = crate::store::graphql::escape_graphql_string(&second_doc_id);
+        let escaped_request_doc_id = gents_store::graphql::escape_graphql_string(&second_doc_id);
         let rejected = user_access.execute(&format!(
             r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{escaped_request_doc_id}"}}}}, limit:1) {{lifecycle_state terminal_output}} }}"#
         )).await.unwrap();
@@ -1655,7 +1664,7 @@ pub(super) mod tests {
             held_daemon_fixture("daemon-enrollment-final-claim").await;
         let node = db.node.clone();
         let fence = |sequence: u64, request_id: &str| {
-            crate::runtime::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence {
+            gents_p2p::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence {
                 network_id: "network-1".into(),
                 request_id: request_id.into(),
                 admin_did: agent_config.node_did().to_string(),
@@ -1663,7 +1672,7 @@ pub(super) mod tests {
                 member_peer: "peer-member".into(),
                 member_ticket: "ticket-member".into(),
                 owner_node: agent_config.node_did().to_string(),
-                profile: crate::runtime::agent::p2p_reconcile::templates::CLIENT_TEMPLATE.into(),
+                profile: gents_p2p::p2p_reconcile::templates::CLIENT_TEMPLATE.into(),
                 request_digest: format!("digest-{sequence}"),
                 authorization_sequence: sequence,
                 authorization_expires_at: "2099-01-01T00:00:00Z".into(),
@@ -1680,9 +1689,9 @@ pub(super) mod tests {
         )
         .await;
         let (authority, authority_handle) =
-            crate::runtime::agent::p2p_reconcile::enrollment_reconcile::test_enrollment_authority(
-                Some(generation_one),
-            );
+            gents_p2p::p2p_reconcile::enrollment_reconcile::test_enrollment_authority(Some(
+                generation_one,
+            ));
 
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
@@ -1699,6 +1708,7 @@ pub(super) mod tests {
         let request_identity = agent_config.node_identity().clone();
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: node.clone(),
+            tool_config: Arc::new(AgentToolSurfaceConfig::meta_only()),
             agent_config: agent_config.clone(),
             provider_family: None,
             model: Arc::new(CountingReplyModel(calls.clone())),
@@ -1707,7 +1717,7 @@ pub(super) mod tests {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                     node.clone(),
                     agent_config.agent_identity.as_ref(),
                 )
@@ -1718,7 +1728,7 @@ pub(super) mod tests {
             startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
             runtime_status,
             slot_generation: 1,
-            request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+            request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 request_identity,
                 authority_handle,
@@ -1737,7 +1747,7 @@ pub(super) mod tests {
             let member_access = &member_access;
             async move {
                 let observed = member_access.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state claimed_at }} }}"#,
-                    crate::store::graphql::escape_graphql_string(&doc_id))).await.unwrap();
+                    gents_store::graphql::escape_graphql_string(&doc_id))).await.unwrap();
                 let row = &observed["data"]["AgentRequest"][0];
                 assert_eq!(row["lifecycle_state"], "pending", "{doc_id}");
                 assert!(row["claimed_at"].is_null(), "{doc_id}");

@@ -17,3 +17,21 @@ pub fn question_reply_source<'a>(
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod conformance {
+    #[test]
+    fn generated_question_reply_source_cases_preserve_attribution() {
+        gents_lean_vocab::families::question_reply_source::replay(|i| {
+            gents_lean_vocab::families::question_reply_source::QuestionOutput {
+                source: super::question_reply_source(
+                    i.person,
+                    i.request_source.as_deref(),
+                    i.evidence_source.as_deref(),
+                    i.observed_question,
+                )
+                .map(str::to_owned),
+            }
+        });
+    }
+}

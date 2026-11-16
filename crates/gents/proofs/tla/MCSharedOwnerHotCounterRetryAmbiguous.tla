@@ -1,0 +1,4 @@
+---- MODULE MCSharedOwnerHotCounterRetryAmbiguous ----
+EXTENDS SharedOwnerHotCounter
+
+====

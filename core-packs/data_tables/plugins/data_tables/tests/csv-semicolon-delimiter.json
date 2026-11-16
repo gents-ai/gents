@@ -1,0 +1,39 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "id",
+        "type": "int64"
+      },
+      {
+        "name": "city",
+        "type": "text"
+      },
+      {
+        "name": "pop",
+        "type": "int64"
+      }
+    ],
+    "markdown": "| id | city | pop |\n| --- | --- | --- |\n| 1 | Oslo | 709 |\n| 2 | Bergen | 286 |",
+    "offset": 0,
+    "order": "query",
+    "row_count": 2,
+    "rows": [
+      [
+        1,
+        "Oslo",
+        709
+      ],
+      [
+        2,
+        "Bergen",
+        286
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT * FROM semi ORDER BY id"
+  }
+}

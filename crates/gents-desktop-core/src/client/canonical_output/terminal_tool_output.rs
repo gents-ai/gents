@@ -89,10 +89,10 @@ pub fn terminal_tool_output(
     }
     let text = reconstruct_presented_payload(&observed, denied, denials, payload)?;
     Ok(Some(
-        gents::truncation::truncate(
+        gents_loop::truncation::truncate(
             &text,
-            gents::truncation::TruncationMode::Tail,
-            &gents::truncation::TruncationLimits::default(),
+            gents_loop::truncation::TruncationMode::Tail,
+            &gents_loop::truncation::TruncationLimits::default(),
         )
         .text,
     ))

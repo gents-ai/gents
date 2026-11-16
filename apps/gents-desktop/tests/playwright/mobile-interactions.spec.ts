@@ -1,5 +1,5 @@
 import type { Locator, Page } from "@playwright/test";
-import { expect, gotoHarness, openChat, test } from "./desktopTest";
+import { expect, gotoHarness, openChat, OWN_VIEWPORT, test } from "./desktopTest";
 
 async function keyboard(page: Page, height = 300, top = 50) {
   await page.evaluate(
@@ -35,7 +35,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/tests/ui-harness/mobile.html");
 });
 
-test("editor sheets fit above the keyboard", async ({ page }) => {
+test("editor sheets fit above the keyboard @own-viewport", async ({ page }) => {
   await page.getByRole("button", { name: "Open editor", exact: true }).click();
   await keyboard(page);
   const sheet = page.getByRole("dialog", { name: "Mobile editor" });
@@ -51,7 +51,7 @@ test("editor sheets fit above the keyboard", async ({ page }) => {
     .toBe(844);
 });
 
-test("dialogs fit inside the visible viewport", async ({ page }) => {
+test("dialogs fit inside the visible viewport @own-viewport", async ({ page }) => {
   await page.getByRole("button", { name: "Open dialog", exact: true }).click();
   await keyboard(page);
   const dialog = page.getByRole("dialog", { name: "Mobile dialog" });
@@ -73,7 +73,7 @@ test("dialogs fit inside the visible viewport", async ({ page }) => {
   await expect(save).toBeInViewport();
 });
 
-test("focusing a field reveals it in the editor's real scroll container", async ({
+test("focusing a field reveals it in the editor's real scroll container @own-viewport", async ({
   page,
 }) => {
   await page.getByRole("button", { name: "Open editor", exact: true }).click();
@@ -88,7 +88,7 @@ test("focusing a field reveals it in the editor's real scroll container", async 
     .toBeLessThanOrEqual(334);
 });
 
-test("an edge swipe inside a dialog does not navigate the underlying page", async ({
+test("an edge swipe inside a dialog does not navigate the underlying page @own-viewport", async ({
   page,
 }) => {
   await page.getByRole("button", { name: "Open editor", exact: true }).click();
@@ -100,7 +100,7 @@ test("an edge swipe inside a dialog does not navigate the underlying page", asyn
   await expect(page.getByTestId("back-count")).toHaveText("1");
 });
 
-test("horizontal scrolling and text selection do not navigate back", async ({
+test("horizontal scrolling and text selection do not navigate back @own-viewport", async ({
   page,
 }) => {
   const horizontal = page.getByTestId("horizontal");
@@ -120,7 +120,7 @@ test("horizontal scrolling and text selection do not navigate back", async ({
   await expect(page.getByTestId("back-count")).toHaveText("2");
 });
 
-test("bottom sheets stay above the keyboard", async ({ page }) => {
+test("bottom sheets stay above the keyboard @own-viewport", async ({ page }) => {
   await page.getByRole("button", { name: "Open bottom sheet", exact: true }).click();
   await keyboard(page);
   const sheet = page.getByRole("dialog", { name: "Bottom sheet" });
@@ -129,7 +129,9 @@ test("bottom sheets stay above the keyboard", async ({ page }) => {
     .toBe(350);
 });
 
-test("search stays reachable with the keyboard open", async ({ page }) => {
+test("search stays reachable with the keyboard open @own-viewport", async ({
+  page,
+}) => {
   await gotoHarness(page);
   await page.getByRole("button", { name: "Menu", exact: true }).click();
   await page.getByRole("button", { name: "Search", exact: true }).click();
@@ -150,7 +152,7 @@ test("search stays reachable with the keyboard open", async ({ page }) => {
     .toBeLessThanOrEqual(350);
 });
 
-test("reading away from a focused field survives viewport scroll notifications", async ({
+test("reading away from a focused field survives viewport scroll notifications @own-viewport", async ({
   page,
 }) => {
   await page.getByRole("button", { name: "Open editor", exact: true }).click();
@@ -171,7 +173,9 @@ test("reading away from a focused field survives viewport scroll notifications",
   );
 });
 
-test("the app frame and portals share the panned visual viewport", async ({ page }) => {
+test("the app frame and portals share the panned visual viewport @own-viewport", async ({
+  page,
+}) => {
   await keyboard(page, 300, 50);
   const frame = page.locator(".viewport-frame");
   await expect
@@ -207,7 +211,7 @@ test("the app frame and portals share the panned visual viewport", async ({ page
     .toBe(844);
 });
 
-test.describe("touch targets", () => {
+test.describe("touch targets", { tag: OWN_VIEWPORT }, () => {
   test.use({ hasTouch: true, isMobile: true });
   test("compact controls have room for an imprecise finger", async ({ page }) => {
     await page.getByRole("button", { name: "Open editor", exact: true }).tap();
@@ -220,7 +224,7 @@ test.describe("touch targets", () => {
   });
 });
 
-test("dragging off a button cancels its press without moving the hit box", async ({
+test("dragging off a button cancels its press without moving the hit box @own-viewport", async ({
   page,
 }) => {
   const target = page.getByRole("button", { name: "Press target", exact: true });
@@ -234,7 +238,7 @@ test("dragging off a button cancels its press without moving the hit box", async
   await expect(page.getByTestId("press-count")).toHaveText("1");
 });
 
-test("the chat composer stays in the visible frame across keyboard resizing", async ({
+test("the chat composer stays in the visible frame across keyboard resizing @own-viewport", async ({
   page,
 }) => {
   await gotoHarness(page);

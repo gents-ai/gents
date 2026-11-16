@@ -14,7 +14,7 @@ pub struct SessionGoalView {
     pub waiting_question_ids: Option<Vec<String>>,
 }
 
-pub use gents::goal::SessionGoalNextAction;
+pub use gents_automation::goal::SessionGoalNextAction;
 
 /// One session's Goal state as the desktop reads it from its runtime. The
 /// state, its next action and an unknown state's reason come from the
@@ -32,7 +32,7 @@ pub enum SessionGoalState {
         next: SessionGoalNextAction,
     },
     Unknown {
-        cause: gents::goal::SessionGoalUnknownCause,
+        cause: gents_automation::goal::SessionGoalUnknownCause,
         next: SessionGoalNextAction,
         /// The refusal a send or Goal change from this state returns.
         reason: String,

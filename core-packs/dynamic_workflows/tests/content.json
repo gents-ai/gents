@@ -1,0 +1,25 @@
+{
+  "defs": "def tool($id): .config.tools[] | select(.tools_id == $id); def plugin: .manifest.plugins[0];",
+  "jq": [
+    {
+      "name": "every text asset is non-empty",
+      "expr": "[.assets[]] | all(length > 0)"
+    },
+    {
+      "name": "the workflow plugin is a job plugin that declares the run_script import and requires script",
+      "expr": "plugin | .name == \"workflow\" and .job == true and .host_imports == [\"run_script\"] and (.script_runtime == null) and (.input_schema.required | index(\"script\") != null) and .instructions == \"plugins/workflow/TOOL.md\" and .limits.wall_clock_secs <= 900"
+    },
+    {
+      "name": "the caller template names only the read-only worker and ships dynamic as check (a pack may not ship run)",
+      "expr": "tool(\"workflow-caller\") | .integrations.plugins[0] | .plugin == \"gents/workflow\" and .job.policy.dynamic == \"check\" and .job.policy.dynamic_targets == [\"wf-read-only\"] and .job.agent_targets == [\"wf-read-only\"]"
+    },
+    {
+      "name": "the worker is read-only with no network and no session history",
+      "expr": "tool(\"wf-read-only-tools\") | .host.bash.mode == \"ReadOnly\" and .host.bash.network_mode == \"disabled\" and .host.files.mode == \"ReadOnly\" and .built_ins.enable_session_history_tool == false"
+    },
+    {
+      "name": "the TOOL.md example asks text only of completed children (the host refuses child_output for a failed slot)",
+      "expr": ".assets[\"plugins/workflow/TOOL.md\"] | contains(\"const ok = slots.filter(completed);\") and contains(\"read(ok)\") and (contains(\"read(slots)\") | not)"
+    }
+  ]
+}

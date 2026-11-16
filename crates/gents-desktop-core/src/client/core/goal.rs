@@ -1,10 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
-#[cfg(test)]
-use gents::goal::bind_goal_input;
-use gents::goal::SessionGoalObservationState;
-#[cfg(test)]
-use gents_protocol::goal_control::SessionGoalObservation;
+use gents_automation::goal::SessionGoalObservationState;
 use gents_protocol::goal_control::{
     GoalOperation, GoalRevision, SessionGoalControl, SessionGoalControlReceipt,
     SESSION_GOAL_CONTROL_VERSION,
@@ -25,7 +21,7 @@ impl ClientCore {
         session_id: &str,
         input: RequestInput,
     ) -> Result<RequestInput> {
-        gents::goal::prepare_client_goal_input(
+        gents_automation::goal::prepare_client_goal_input(
             &self.session_queue_access(node_did)?,
             &self.node_identity,
             node_did,
@@ -42,7 +38,7 @@ impl ClientCore {
         node_did: &str,
         session_id: &str,
     ) -> Result<SessionGoalObservationState> {
-        gents::goal::load_client_session_goal_observation_state(
+        gents_automation::goal::load_client_session_goal_observation_state(
             &self.session_queue_access(node_did)?,
             &self.node_identity,
             node_did,
@@ -74,7 +70,7 @@ impl ClientCore {
                 uuid::Uuid::new_v4().to_string(),
             )
             .await?;
-        gents::goal::submit_prepared_session_goal_control(
+        gents_automation::goal::submit_prepared_session_goal_control(
             &self.session_queue_access(node_did)?,
             signer.as_ref(),
             &command,
@@ -94,7 +90,7 @@ impl ClientCore {
         mut input: RequestInput,
         command_id: String,
     ) -> Result<(
-        std::sync::Arc<dyn gents::store::identity::NodeIdentity>,
+        std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
         SessionGoalControl,
     )> {
         let peer = self.peer_record_for_chat_write(node_did)?;
@@ -107,7 +103,7 @@ impl ClientCore {
         crate::local_runtime::ensure_request_input_supported(peer.as_ref(), &input).await?;
         let (signer, admission, requester_did) =
             self.request_authority(node_did, peer.as_ref()).await?;
-        let requester_did = gents::session::client_requester_scope(
+        let requester_did = gents_session::session::client_requester_scope(
             &self.session_queue_access(node_did)?,
             node_did,
             session_id,
@@ -117,7 +113,8 @@ impl ClientCore {
         let mut session_doc_id = session_doc_id;
         let initial_request = if let GoalOperation::Create { objective, .. } = &operation {
             let goal_id = if expected.is_some() {
-                gents::goal::replacement_goal_identity(node_did, session_id, &command_id).goal_id
+                gents_automation::goal::replacement_goal_identity(node_did, session_id, &command_id)
+                    .goal_id
             } else {
                 gents_protocol::goal::deterministic_goal_id(node_did, session_id)
             };
@@ -133,7 +130,7 @@ impl ClientCore {
                     QueueDelivery::Queue,
                 )
                 .await?;
-            let snapshot = self.store.snapshot();
+            let snapshot = self.stores.snapshot(node_did);
             let (_, request) = prepare_request_submission(
                 &self.session_queue_access(node_did)?,
                 snapshot.as_ref(),
@@ -158,7 +155,7 @@ impl ClientCore {
                     "replacing a goal requires its observed session"
                 );
                 session_doc_id = Some(
-                    gents::request::lifecycle::reserve_goal_session(
+                    gents_session::request::lifecycle::reserve_goal_session(
                         &self.session_queue_access(node_did)?,
                         &request,
                     )
@@ -174,18 +171,19 @@ impl ClientCore {
             .transact_readonly("goal.command.selected_session", |txn| {
                 Box::pin(async move {
                     let session =
-                        gents::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-                            .await?
-                            .ok_or_else(|| anyhow::anyhow!("selected session is not available"))?;
-                    let (agent_doc_id, _) =
-                        gents::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            gents::Collection::Agent,
-                            node_did,
-                            &session.session.agent_did,
+                        gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                            txn, node_did, session_id,
                         )
                         .await?
-                        .ok_or_else(|| anyhow::anyhow!("selected agent is not available"))?;
+                        .ok_or_else(|| anyhow::anyhow!("selected session is not available"))?;
+                    let (agent_doc_id, _) = gents_documents::read_desired_state_record_in_txn(
+                        txn,
+                        gents_store::collection::Collection::Agent,
+                        node_did,
+                        &session.session.agent_did,
+                    )
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("selected agent is not available"))?;
                     Ok::<_, anyhow::Error>((session, agent_doc_id))
                 })
             })
@@ -222,7 +220,8 @@ impl ClientCore {
             signature: Vec::new(),
         };
         let command =
-            gents::goal::prepare_session_goal_control(&access, signer.as_ref(), command).await?;
+            gents_automation::goal::prepare_session_goal_control(&access, signer.as_ref(), command)
+                .await?;
         Ok((signer, command))
     }
 }
@@ -230,87 +229,8 @@ impl ClientCore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_protocol::goal_control::ObservedGoal;
-    use serde_json::{json, Value};
-
-    fn reference(value: &Value) -> Option<GoalAssignmentInput> {
-        (!value.is_null()).then(|| GoalAssignmentInput {
-            goal_id: format!("goal:{}", value["goal"].as_u64().unwrap()),
-            root_request_doc_id: value["root"]
-                .as_u64()
-                .map(|root| format!("request-document:{root}")),
-        })
-    }
-
-    fn observation(reference: Option<GoalAssignmentInput>) -> SessionGoalObservation {
-        SessionGoalObservation {
-            version: SESSION_GOAL_CONTROL_VERSION,
-            node_did: "did:key:source".into(),
-            agent_did: "did:key:agent".into(),
-            session_id: "chat".into(),
-            session_doc_id: "session-document".into(),
-            requester_did: Some("did:key:source".into()),
-            observed_at: "2026-10-21T00:00:00Z".into(),
-            goal: reference.map(|reference| {
-                let goal: gents::goal::GoalDocument = serde_json::from_value(json!({
-                    "_docID": "goal-document", "node_did": "did:key:source",
-                    "session_id": "chat", "goal_id": reference.goal_id,
-                    "objective": "Preserve this assignment", "status": "active"
-                }))
-                .unwrap();
-                ObservedGoal {
-                    revision: GoalRevision {
-                        document: goal.doc_id.clone(),
-                        composite: "source-composite".into(),
-                    },
-                    assignment_root_request_doc_id: reference.root_request_doc_id,
-                    snapshot: gents::goal::snapshot(&goal, Utc::now()),
-                }
-            }),
-            signature: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn generated_goal_input_bindings_wait_for_verified_source_state() {
-        let contracts: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = contracts["goal_input_binding_cases"].as_array().unwrap();
-        assert_eq!(cases.len(), 12);
-        for case in cases {
-            let mut input: RequestInput = serde_json::from_value(json!({
-                "captured_context": [{"kind":"file", "source":"editor",
-                    "capturedAt":"2026-10-21T00:00:00Z", "uri":"file:///workspace/main.rs",
-                    "terminalName":null, "workspaceUri":"file:///workspace", "version":4,
-                    "unsaved":true, "range":null, "content":"private unsaved capture"}]
-            }))
-            .unwrap();
-            input.goal_assignment = reference(&case["captured"]);
-            let original = input.clone();
-            let state = if !case["session_readable"].as_bool().unwrap() {
-                SessionGoalObservationState::NoReadableSession
-            } else if !case["observation_verified"].as_bool().unwrap() {
-                SessionGoalObservationState::Unknown(
-                    gents::goal::SessionGoalUnknownCause::ProjectionUnverified,
-                )
-            } else {
-                SessionGoalObservationState::Observed(Box::new(observation(reference(
-                    &case["observed"],
-                ))))
-            };
-            let actual = bind_goal_input(input, state);
-            if case["expected"]["kind"] == "pending" {
-                assert_eq!(
-                    actual.unwrap_err(),
-                    gents::goal::GoalInputRefused::ProjectionUnverified,
-                    "{case}"
-                );
-            } else {
-                let mut expected = original;
-                expected.goal_assignment = reference(&case["expected"]["reference"]);
-                assert_eq!(actual.unwrap(), expected, "{case}");
-            }
-        }
-    }
+    use gents_protocol::goal_control::SessionGoalObservation;
+    use serde_json::json;
 
     /// A send to an existing hosted chat binds its Goal assignment only from
     /// the Agent's published, signed projection, read as the User.
@@ -318,8 +238,8 @@ mod tests {
     async fn followup_preparation_verifies_the_hosted_assignment_before_queueing() -> Result<()> {
         use crate::client::{ClientCoreOptions, DesktopPaths};
         use crate::test_fixtures::ServedRuntimeHome;
-        use gents::store::collection::Collection;
-        use gents::store::graphql::escape_graphql_string;
+        use gents_store::collection::Collection;
+        use gents_store::graphql::escape_graphql_string;
         use std::sync::Arc;
 
         let root = tempfile::tempdir()?;
@@ -358,9 +278,9 @@ mod tests {
             .await;
         let agent_access = runtime.agent_access(&binding).await;
         let agent =
-            gents::store::identity::resolve_agent_identity(runtime.runtime().as_ref(), &binding)?;
+            gents_store::identity::resolve_agent_identity(runtime.runtime().as_ref(), &binding)?;
         let project = || {
-            gents::goal::project_session_goal(
+            gents_automation::goal::project_session_goal(
                 runtime.node(),
                 runtime.runtime(),
                 &agent,
@@ -368,11 +288,19 @@ mod tests {
                 Some(core.node_identity().did()),
             )
         };
-        let send = || core.prepare_user_message_input(&node_did, "chat", RequestInput::default());
-        let refused = |result: Result<RequestInput>, expected: gents::goal::GoalInputRefused| {
+        let send = || {
+            core.prepare_user_message_input_with_delivery(
+                &node_did,
+                "chat",
+                RequestInput::default(),
+                QueueDelivery::Steer,
+            )
+        };
+        let refused = |result: Result<RequestInput>,
+                       expected: gents_automation::goal::GoalInputRefused| {
             let error = result.expect_err("an unknown Goal state refuses the send");
             assert_eq!(
-                gents_protocol::error_chain::find_source::<gents::goal::GoalInputRefused>(
+                gents_protocol::error_chain::find_source::<gents_automation::goal::GoalInputRefused>(
                     error.as_ref()
                 )
                 .copied(),
@@ -383,7 +311,7 @@ mod tests {
 
         refused(
             send().await,
-            gents::goal::GoalInputRefused::ProjectionMissing,
+            gents_automation::goal::GoalInputRefused::ProjectionMissing,
         );
 
         project().await?;
@@ -391,7 +319,7 @@ mod tests {
         assert_eq!(input.goal_assignment, None, "verified absence");
         assert!(input.queue.is_some(), "verified absence queues");
 
-        let goal = gents::goal::set_goal_from_access(
+        let goal = gents_automation::goal::seed_goal_from_access(
             &agent_access,
             &node_did,
             "chat",
@@ -445,7 +373,7 @@ mod tests {
             .await?;
         refused(
             send().await,
-            gents::goal::GoalInputRefused::ProjectionUnverified,
+            gents_automation::goal::GoalInputRefused::ProjectionUnverified,
         );
 
         let opening = RequestInput {
@@ -485,7 +413,7 @@ mod tests {
         let key = root.path().join("runtime.key");
         let source_key = key.clone();
         let did = tokio::task::spawn_blocking(move || -> Result<String> {
-            let identity = gents::store::identity::load_or_create_file_identity(&source_key)?;
+            let identity = gents_store::identity::load_or_create_file_identity(&source_key)?;
             Ok(identity.did()?.to_string())
         })
         .await??;
@@ -508,7 +436,7 @@ mod tests {
         )
         .await?;
         let original_key = tokio::fs::read(&key).await?;
-        assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
+        assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
         Mock::given(method("POST"))
             .and(path("/api/v0/tx"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"goal-read"})))
@@ -558,16 +486,16 @@ mod tests {
         let cold = core
             .session_goal_observation(&did, "cold-goal-session")
             .await;
-        let remained_cold = !gents::store::identity::can_mint_defradb_bearer(&did);
+        let remained_cold = !gents_store::identity::can_mint_defradb_bearer(&did);
         let cold_send = core
             .prepare_goal_input(&did, "cold-goal-session", RequestInput::default())
             .await;
         let source_key = key.clone();
         let _unlocked = tokio::task::spawn_blocking(move || {
-            gents::store::identity::KeyIdentity::load_or_create(source_key, None)
+            gents_store::identity::KeyIdentity::load_or_create(source_key, None)
         })
         .await??;
-        assert!(gents::store::identity::can_mint_defradb_bearer(&did));
+        assert!(gents_store::identity::can_mint_defradb_bearer(&did));
         let warm = core
             .session_goal_observation(&did, "warm-goal-session")
             .await;

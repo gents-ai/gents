@@ -1,9 +1,9 @@
 use super::{fake_llm, ChatAction};
 use anyhow::{Context, Result};
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{load_agent_context_and_tools_in_txn, AgentTools};
-use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::{Collection, ConfigAccess};
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{load_agent_context_and_tools_in_txn, AgentTools};
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_store::{collection::Collection, config_client::ConfigAccess};
 use serde_json::{json, Value};
 use std::{path::Path, sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
@@ -102,7 +102,7 @@ pub async fn configure(access: &ConfigAccess, node: &str, agent: &str) -> Result
         Box::pin(async move {
             let (_, tools) = load_agent_context_and_tools_in_txn(txn, node, agent).await?;
             let mut tools = tools.context("fixture agent tools")?;
-            let (_, base) = gents::store::config_client::read_desired_state_record_in_txn(txn, Collection::Agent, node, agent).await?.context("fixture agent")?;
+            let (_, base) = gents_documents::read_desired_state_record_in_txn(txn, Collection::Agent, node, agent).await?.context("fixture agent")?;
             let mut documents = Vec::new();
             let targets: Vec<_> = (0..2).map(|index| format!("related-worker-{index}")).collect();
             for target in &targets {
@@ -114,7 +114,7 @@ pub async fn configure(access: &ConfigAccess, node: &str, agent: &str) -> Result
             tools.agents = Some(AgentTools { enabled: Some(true), target_ids: targets });
             documents.push((Collection::Tools, serde_json::to_value(tools)?));
             let plan = DesiredStateApplyPlan::new(documents.into_iter().map(|(collection, value)| DesiredStateApplyDocument {collection, add:value.clone(), update:value}).collect())?;
-            apply_desired_state_plan(txn, &plan).await?;
+            apply_desired_state_plan(txn, &plan, &gents_inference::resolved::ProviderProfilePolicy).await?;
             Ok(())
         })
     }).await
@@ -129,8 +129,8 @@ pub async fn verify(
     profile_commands: bool,
 ) -> Result<Value> {
     use anyhow::ensure;
-    use gents::store::graphql::escape_graphql_string as escape;
     use gents_protocol::row::AgentRequestRow;
+    use gents_store::graphql::escape_graphql_string as escape;
     let response = access
         .execute(&format!(
             "{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ {} }} }}",
@@ -149,7 +149,7 @@ pub async fn verify(
         "related-work input must be admitted once"
     );
     let parent = parents[0];
-    gents::verify_request_receipt_signature(parent)?;
+    gents_store::identity::request_receipt::verify_request_receipt_signature(parent)?;
     ensure!(
         parent.session_id.as_deref() == Some(session)
             && parent.requester_did.as_deref() == Some(author),
@@ -181,7 +181,7 @@ pub async fn verify(
         } else {
             gents_protocol::request_lifecycle::RequestLifecycleState::Completed
         };
-        gents::verify_request_receipt_signature(child)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(child)?;
         ensure!(
             child.caused_by_parent_request_doc_id == parent.doc_id
                 && child.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())

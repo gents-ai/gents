@@ -8,6 +8,8 @@ use gents_eval::runner::{
     STALE_WINDOW,
 };
 
+use super::render::percent;
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Screen {
     pub(crate) width: usize,
@@ -564,10 +566,6 @@ pub(crate) fn compact(value: Option<u64>) -> String {
         Some(value @ 10_000..=999_999) => format!("{:.1}k", value as f64 / 1_000.0),
         Some(value) => format!("{:.2}M", value as f64 / 1_000_000.0),
     }
-}
-
-fn percent(bp: Option<u32>) -> String {
-    super::render::percent(bp)
 }
 
 pub(crate) fn short_id(trial_id: &str) -> &str {

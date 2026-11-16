@@ -1,0 +1,13 @@
+{
+ "ok": true,
+ "problems": [],
+ "notes": [
+  "contracts_prompt_assembly_claude_replay: consumer crates/gents-loop/src/prompt_assembly_conformance_tests.rs",
+  "contracts_prompt_assembly_claude_replay_round_trip: consumer crates/gents/src/runtime/agent/loop_stream/tests/claude.rs",
+  "contracts_prompt_assembly_replay_shape: consumer crates/gents-loop/src/prompt_assembly_conformance_tests.rs",
+  "contracts_prompt_assembly_claude_checkpoint: consumer crates/gents-loop/src/prompt_assembly_conformance_tests.rs",
+  "contracts_prompt_assembly_reasoning_suffix: consumer crates/gents-loop/src/prompt_assembly_conformance_tests.rs",
+  "contracts_protected_replay_compaction: consumer crates/gents-loop/src/prompt_assembly_conformance_tests.rs",
+  "contracts_discovery_guidance_presented: consumer crates/gents/src/turn/prompt/tests.rs"
+ ]
+}

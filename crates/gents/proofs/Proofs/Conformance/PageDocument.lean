@@ -1,4 +1,4 @@
-import Proofs.PluginJob.Authority
+import Proofs.ToolCalls.PluginJob.Authority
 import Lean
 
 open Lean PluginJob

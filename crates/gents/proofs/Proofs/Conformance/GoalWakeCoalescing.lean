@@ -1,5 +1,6 @@
-import Proofs.Background.CompletionContinuation
+import Proofs.ToolCalls.Background.CompletionContinuation
 import Proofs.Conformance.GoalRequestAssignment
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.GoalWakeCoalescingContracts
@@ -14,6 +15,7 @@ structure Case where
   firstKey : Nat := 7
   secondKey : Nat := 7
   retireFirst : Bool := false
+  deriving ToJson
 
 def cases : List Case :=
   [ {name := "same_signed_assignment_coalesces"}
@@ -61,18 +63,33 @@ def scopedWakeAccepted (c : Case) : Bool := Id.run do
     BackgroundCompletion.canonicalWaitReservedTranscript | return false
   return (BackgroundCompletion.enqueueWake? notified BackgroundCompletion.canonicalQueue).isSome
 
-def caseJson (c : Case) : Json := Json.mkObj
-  [("name", toJson c.name), ("first", GoalRequestAssignmentContracts.entryJson c.first),
-    ("second", GoalRequestAssignmentContracts.entryJson c.second),
-    ("observed", toJson (c.observed.map GoalRequestAssignmentContracts.assignmentJson)),
-    ("first_key", toJson c.firstKey), ("second_key", toJson c.secondKey),
-    ("retire_first", toJson c.retireFirst),
-    ("first_scope", (queueScope c.observed c.first).map GoalRequestAssignmentContracts.queueScopeJson |>.getD Json.null),
-    ("second_scope", (queueScope c.observed c.second).map GoalRequestAssignmentContracts.queueScopeJson |>.getD Json.null),
-    ("expected_coalesced", toJson (coalesces c)),
-    ("expected_wake", toJson (scopedWakeAccepted c))]
+structure ScopeWire where
+  kind : String
+  goal : Option Nat
+  root : Option Nat
+  entry : Option Nat
+  deriving ToJson
 
-def casesJson : String := (toJson (cases.map caseJson)).compress
+def ScopeWire.ofModel : QueueScope → ScopeWire
+  | .unassigned => ⟨"unassigned", none, none, none⟩
+  | .unresolved entry => ⟨"unresolved", none, none, some entry⟩
+  | .referenced goal root => ⟨"referenced", some goal, some root, none⟩
+
+structure Output where
+  coalesced : Bool
+  wake : Bool
+  firstScope : Option ScopeWire
+  secondScope : Option ScopeWire
+  deriving ToJson
+
+@[conformance_family]
+def assignmentWakes : Family Case Output where
+  inputs := cases
+  model := fun c =>
+    { coalesced := coalesces c
+      wake := scopedWakeAccepted c
+      firstScope := (queueScope c.observed c.first).map ScopeWire.ofModel
+      secondScope := (queueScope c.observed c.second).map ScopeWire.ofModel }
 
 example : cases.map coalesces =
   [true, false, false, true, false, true, false, true, true, false] := by native_decide

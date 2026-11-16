@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
+use gents_protocol::operations::session::SessionOrderKey;
 use gents_protocol::session::SessionArchiveVisibility;
 use serde::{Deserialize, Serialize};
 
-use crate::snapshot::{session_summary_order_key, SessionSummaryOrderKey};
+use crate::snapshot::session_summary_order_key;
 use crate::types::{SessionHistoryPage, SessionHistoryRequest, SessionSummary};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -11,7 +12,7 @@ struct Cursor {
     node_did: String,
     visibility: SessionArchiveVisibility,
     query: String,
-    order: SessionSummaryOrderKey,
+    order: SessionOrderKey,
 }
 
 /// Pages follow the live runtime projection. Rows that move ahead of a saved

@@ -2,7 +2,7 @@ use std::error::Error;
 
 use serde::Serialize;
 
-use super::StringUpdate;
+use super::{NextCall, StringUpdate};
 
 /// What the Agent materializer did, as its receipt names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -74,6 +74,36 @@ pub struct AgentCreateInput {
     pub make_default: bool,
 }
 
+/// Lean `SelfConfig.AgentEditFields`: the one agent edit, over every writable
+/// Agent field and `system_prompt`, which writes the Agent's selected Context.
+/// Disabling is `enabled: Some(false)`; an omitted field is preserved.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentEdit {
+    pub display_name: StringUpdate,
+    pub description: StringUpdate,
+    pub system_prompt: StringUpdate,
+    pub inference_profile_id: StringUpdate,
+    /// `Clear` selects no Context.
+    pub context_id: StringUpdate,
+    pub enabled: Option<bool>,
+    /// Replaces the whole list; an empty list clears it.
+    pub tags: Option<Vec<String>>,
+}
+
+/// Lean `SelfConfig.agentOutcome` for a preview. A refused preview is a
+/// successful answer carrying the refusal, the message and the next call the
+/// refused commit's error would carry (`preview_refusal_matches_commit`).
+/// Failures that are not admission refusals stay errors.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AgentOutcome<R> {
+    Admitted(R),
+    Refused {
+        refusal: AgentRefusal,
+        message: String,
+        next_call: NextCall,
+    },
+}
+
 /// The materializer's answer. `A` is the Agent document as the caller's crate
 /// types it. Fields serialize in declaration order, which is the order every
 /// front end shows.
@@ -91,17 +121,42 @@ pub struct AgentReceipt<A> {
     pub make_default: bool,
 }
 
-/// The call that lets a caller correct a refused operation. Each front end
-/// renders it in its own syntax.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NextCall {
-    VerbHelp {
-        resource: &'static str,
-        verb: &'static str,
-    },
-    ResourceHelp {
-        resource: &'static str,
-    },
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentContextPatch {
+    pub context_id: String,
+    pub changes: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Lean `SelfConfig.AgentRefusal`: the admission check that refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRefusal {
+    /// The actor lacks `nodes manage_agents`.
+    CatalogNotHeld,
+    /// The actor lacks `agents update` on the target.
+    AgentNotHeld,
+    TargetExists,
+    TargetMissing,
+    InvalidInput,
+    /// The request would leave the node's default agent disabled.
+    DefaultDisabled,
+    /// The request would disable the acting actor.
+    SelfLockout,
+}
+
+impl AgentRefusal {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CatalogNotHeld => "catalog_not_held",
+            Self::AgentNotHeld => "agent_not_held",
+            Self::TargetExists => "target_exists",
+            Self::TargetMissing => "target_missing",
+            Self::InvalidInput => "invalid_input",
+            Self::DefaultDisabled => "default_disabled",
+            Self::SelfLockout => "self_lockout",
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -122,6 +177,10 @@ pub enum AgentOperationError {
     IdentityBindingRequired,
     #[error("agent creation identity binding missing")]
     IdentityBindingMissing,
+    #[error("the identity binding names agent {binding:?}, not the supplied Agent {agent:?}; provision a binding for this Agent")]
+    IdentityBindingMismatch { binding: String, agent: String },
+    #[error("a new Agent is created enabled; save it enabled, then disable it with an edit")]
+    NewAgentDisabled,
     #[error("agent operation requires an exact agent_did")]
     AgentDidRequired,
     #[error("agent {0:?} already exists")]
@@ -136,20 +195,22 @@ pub enum AgentOperationError {
     CloneSourceNotEnabled,
     #[error("agent {0:?} does not exist")]
     AgentMissing(String),
-    #[error("protected agent cannot be edited")]
-    ProtectedAgentEdit,
+    #[error("creating or cloning an agent and choosing the default agent need the agent catalog (manage_agents on the Node), which this actor does not hold; a Node owner or administrator grants it with nodes#agent_manager")]
+    CatalogNotHeld,
+    #[error("this actor may not configure agent {0:?}: it holds no update grant on that Agent; configure an agent it created or its own, or ask a User who administers {0:?} to make the change")]
+    AgentNotHeld(String),
     #[error("unsupported agent edit field {0:?}")]
     UnsupportedEditField(String),
     #[error("display_name cannot be empty")]
     DisplayNameEmpty,
     #[error("system_prompt cannot be blank")]
     SystemPromptBlank,
-    #[error("protected agent cannot be disabled")]
-    ProtectedAgentDisable,
-    #[error("agent disable cannot also make the target default")]
-    DisableMakesDefault,
-    #[error("default agent cannot be disabled")]
-    DefaultAgentDisable,
+    #[error("context_id cannot be blank; clear it to select no context")]
+    ContextIdBlank,
+    #[error("agent {0:?} is or would become the default agent, which must stay enabled; choose another enabled default first, or set enabled true in the same edit")]
+    DefaultAgentDisabled(String),
+    #[error("an actor cannot disable itself; another actor holding a grant on this agent can")]
+    SelfDisable,
     #[error("missing {collection} {id:?}")]
     MissingDocument {
         collection: &'static str,
@@ -171,10 +232,14 @@ pub enum AgentOperationError {
     },
     #[error("{0} object required")]
     ObjectRequired(&'static str),
+    #[error("the context patch must name the context selected by the saved Agent")]
+    ContextPatchMismatch,
     #[error("agent has no context; create and select a context first")]
     AgentHasNoContext,
     #[error("system_prompt edit requires an unshared context")]
     SystemPromptContextShared,
+    #[error("agent admission was observed for a different actor than the transaction's")]
+    AdmissionActorMismatch,
     #[error("candidate identity missing")]
     CandidateIdentityMissing,
     #[error("candidate agent does not resolve; inspect its context, profile and backend")]
@@ -197,6 +262,8 @@ impl AgentOperationError {
             | Self::UnknownOperation(_)
             | Self::IdentityBindingRequired
             | Self::IdentityBindingMissing
+            | Self::IdentityBindingMismatch { .. }
+            | Self::NewAgentDisabled
             | Self::AgentDidRequired
             | Self::AgentExists(_)
             | Self::DisplayNameRequired
@@ -204,13 +271,10 @@ impl AgentOperationError {
             | Self::SystemPromptRequired
             | Self::CloneSourceNotEnabled
             | Self::AgentMissing(_)
-            | Self::ProtectedAgentEdit
             | Self::UnsupportedEditField(_)
             | Self::DisplayNameEmpty
             | Self::SystemPromptBlank
-            | Self::ProtectedAgentDisable
-            | Self::DisableMakesDefault
-            | Self::DefaultAgentDisable
+            | Self::ContextIdBlank
             | Self::MissingDocument { .. }
             | Self::GeneratedContextIdExists
             | Self::GeneratedToolsIdExists
@@ -218,11 +282,70 @@ impl AgentOperationError {
             | Self::UnknownPreset
             | Self::CloneSourceGrantNotHeld { .. }
             | Self::ObjectRequired(_)
+            | Self::ContextPatchMismatch
             | Self::AgentHasNoContext
             | Self::SystemPromptContextShared
             | Self::CandidateIdentityMissing
+            | Self::AdmissionActorMismatch
             | Self::CandidateDoesNotResolve
             | Self::Passthrough(_) => operation.declaration().help,
+            Self::CatalogNotHeld | Self::AgentNotHeld(_) | Self::SelfDisable => {
+                NextCall::Inspect { resource: "agent" }
+            }
+            Self::DefaultAgentDisabled(_) => NextCall::List { resource: "agent" },
+        }
+    }
+
+    /// The call that lets the caller correct this failure of an edit,
+    /// disable or default choice on an existing Agent.
+    pub fn edit_recovery(&self) -> NextCall {
+        match self {
+            Self::CatalogNotHeld | Self::AgentNotHeld(_) | Self::SelfDisable => {
+                NextCall::Inspect { resource: "agent" }
+            }
+            Self::DefaultAgentDisabled(_) | Self::AgentMissing(_) => {
+                NextCall::List { resource: "agent" }
+            }
+            _ => NextCall::VerbHelp {
+                resource: "agent",
+                verb: "update",
+            },
+        }
+    }
+
+    /// Lean `SelfConfig.AgentRefusal`: which admission check refused, when
+    /// this failure is an admission refusal.
+    pub fn refusal(&self) -> Option<AgentRefusal> {
+        match self {
+            Self::CatalogNotHeld => Some(AgentRefusal::CatalogNotHeld),
+            Self::AgentNotHeld(_) => Some(AgentRefusal::AgentNotHeld),
+            Self::AgentExists(_) => Some(AgentRefusal::TargetExists),
+            Self::AgentMissing(_) => Some(AgentRefusal::TargetMissing),
+            Self::DisplayNameRequired
+            | Self::ProfileNotPublished
+            | Self::SystemPromptRequired
+            | Self::CloneSourceNotEnabled
+            | Self::UnsupportedEditField(_)
+            | Self::DisplayNameEmpty
+            | Self::SystemPromptBlank
+            | Self::ContextIdBlank => Some(AgentRefusal::InvalidInput),
+            Self::DefaultAgentDisabled(_) => Some(AgentRefusal::DefaultDisabled),
+            Self::SelfDisable => Some(AgentRefusal::SelfLockout),
+            _ => None,
+        }
+    }
+
+    /// Lean `SelfConfig.agentOutcome` in preview mode: an admission refusal
+    /// becomes the successful refused answer, with `next_call` the recovery
+    /// the commit's error declares; any other failure stays an error.
+    pub fn preview_outcome<R>(self, next_call: NextCall) -> Result<AgentOutcome<R>, Self> {
+        match self.refusal() {
+            Some(refusal) => Ok(AgentOutcome::Refused {
+                refusal,
+                message: crate::error_chain::ErrorChain(&self).to_string(),
+                next_call,
+            }),
+            None => Err(self),
         }
     }
 
@@ -264,8 +387,6 @@ const fn option(name: &'static str, requirement: OptionRequirement) -> Operation
 /// describes those owners; it is not a second authorization decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OperationPermission {
-    /// The self-config category an Agent caller's Tools must grant.
-    pub self_config_category: &'static str,
     pub document_access: &'static str,
 }
 
@@ -338,8 +459,7 @@ const CREATION_NOTES: &[&str] = &[
 ];
 
 const CREATION_PERMISSION: OperationPermission = OperationPermission {
-    self_config_category: "node",
-    document_access: "DefraDB document ACP for the signing actor on the Node's Agent, AgentContext and Tools, and on its Node document with the default switch",
+    document_access: "manage_agents on the Node for the signing actor (owner, administrator or agent_manager), which also authorizes the Node's DefaultAgentSelection with the default switch; DefraDB document ACP on the new Agent, AgentContext and Tools",
 };
 
 pub const AGENT_CREATE: AgentCreateDeclaration = AgentCreateDeclaration {

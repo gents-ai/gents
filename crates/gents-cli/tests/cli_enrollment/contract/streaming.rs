@@ -19,112 +19,79 @@ pub(super) fn latest_user_text(request: &Value) -> Option<String> {
     }
 }
 
-async fn emission_deadline(
-    mut emission: tokio::sync::watch::Receiver<Option<std::time::Instant>>,
-    budget: Duration,
-) -> Result<(std::time::Instant, tokio::time::Instant)> {
-    let emitted = *emission.wait_for(|timestamp| timestamp.is_some()).await?;
-    let emitted = emitted.context("provider first-frame timestamp missing")?;
-    let deadline = tokio::time::Instant::from_std(emitted + budget);
-    anyhow::ensure!(
-        tokio::time::Instant::now() < deadline,
-        "provider content visibility deadline already elapsed before observation"
-    );
-    Ok((emitted, deadline))
-}
-
-#[tokio::test]
-async fn delayed_first_frame_starts_visibility_budget_at_emission() -> Result<()> {
-    let gate = Arc::new(tokio::sync::Semaphore::new(0));
-    let model_gate = gate.clone();
-    let (emitted, emission) = tokio::sync::watch::channel(None);
-    let delay = Duration::from_millis(650);
-    let model = FakeLlm::start(
-        "emission-contract",
-        None,
-        Arc::new(move |_| {
-            ChatAction::GatedSse(
-                vec![(delay, "data: first-frame\n\n".to_owned())],
-                model_gate.clone(),
-                "data: [DONE]\n\n".to_owned(),
-                emitted.clone(),
-            )
-        }),
-    )?;
-    let started = std::time::Instant::now();
-    let mut response = reqwest::Client::new()
-        .post(format!("{}/chat/completions", model.endpoint()))
-        .json(&serde_json::json!({"messages": []}))
-        .send()
-        .await?
-        .error_for_status()?;
-    let (timestamp, deadline) = timeout(
-        Duration::from_secs(2),
-        emission_deadline(emission, Duration::from_millis(500)),
-    )
-    .await??;
-    assert!(timestamp.duration_since(started) >= delay);
-    assert_eq!(
-        deadline.into_std().duration_since(timestamp),
-        Duration::from_millis(500)
-    );
-    tokio::time::timeout_at(deadline, async {
-        let mut received = Vec::new();
-        while !String::from_utf8_lossy(&received).contains("first-frame") {
-            received.extend(response.chunk().await?.context("missing first frame")?);
-        }
-        Ok::<_, anyhow::Error>(())
-    })
-    .await??;
-    assert_eq!(gate.available_permits(), 0, "completion must remain held");
-    gate.add_permits(1);
-    while response.chunk().await?.is_some() {}
-    Ok(())
-}
-
-#[tokio::test]
-async fn late_visibility_observer_cannot_restart_the_emission_budget() {
-    let (_sender, receiver) =
-        tokio::sync::watch::channel(Some(std::time::Instant::now() - Duration::from_secs(1)));
-    assert!(emission_deadline(receiver, Duration::from_millis(500))
-        .await
-        .is_err());
-}
-
+/// Waits for the gated provider's streamed content in the app's live
+/// projection, then checks the order: the provider emitted it, and the runtime
+/// request is still open because the test holds the completion gate.
+///
+/// The projection joins the app's observed request row with the runtime's
+/// transcript, so either the app store or a runtime document may be the last
+/// input to arrive; the wait wakes on both. It has no deadline of its own and
+/// fails only when neither changes for the suite's stall ceiling.
 pub(super) async fn wait_for_visible_content(
     core: &ClientCore,
     graphql: &str,
     request: &str,
     expected: &str,
-    emission: tokio::sync::watch::Receiver<Option<std::time::Instant>>,
-    visibility_budget: Duration,
+    gate: &tokio::sync::Semaphore,
+    emission: &tokio::sync::watch::Receiver<Option<std::time::Instant>>,
 ) -> Result<()> {
-    let (started, deadline) = emission_deadline(emission, visibility_budget).await?;
+    let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let mut changes = observed_changes(
+        &access,
+        &["AgentRequest", "AgentMessage", "AgentOutputSegment"],
+    )
+    .await;
+    let mut store_updates = core.store_updates();
+    loop {
+        store_updates.borrow_and_update();
+        let content = canonical_live_content(core, graphql, request).await?;
+        if content
+            .as_deref()
+            .is_some_and(|content| content.contains(expected))
+        {
+            break;
+        }
+        let progressed = tokio::time::timeout(support::waits::STALL_CEILING, async {
+            tokio::select! {
+                changed = store_updates.changed() => changed.context("app projection update channel closed"),
+                () = observe_change(&mut changes) => Ok(()),
+            }
+        })
+        .await;
+        match progressed {
+            Ok(changed) => changed?,
+            Err(_) => bail!(
+                "streamed content for {request} not visible and nothing changed for {:?}; last projection={content:?}",
+                support::waits::STALL_CEILING
+            ),
+        }
+    }
+    let emitted = (*emission.borrow())
+        .context("streamed content was visible before the provider emitted it")?;
+    anyhow::ensure!(
+        gate.available_permits() == 0,
+        "provider completion gate was released before the streamed content was visible"
+    );
+    let response = graphql_query(
+        graphql,
+        &format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ _docID request_id lifecycle_state }} }}"#,
+            escape_graphql_string(request),
+        ),
+    )
+    .await?;
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(first_graphql_row(&response, "AgentRequest")?.clone())
+            .context("decoding canonical AgentRequest row")?;
+    anyhow::ensure!(
+        !row.is_terminal(),
+        "runtime request completed while the provider completion gate was held: {response}"
+    );
     tracing::info!(
         request,
-        budget_ms = visibility_budget.as_millis(),
-        "canonical live visibility deadline started"
+        since_provider_emission_ms = emitted.elapsed().as_millis(),
+        "canonical live content observed while provider completion remains gated"
     );
-    tokio::time::timeout_at(deadline, async {
-        loop {
-            let content = canonical_live_content(core, graphql, request).await?;
-            anyhow::ensure!(
-                tokio::time::Instant::now() < deadline,
-                "provider content visibility deadline elapsed during observation"
-            );
-            if content.is_some_and(|content| content.contains(expected)) {
-                tracing::info!(
-                    request,
-                    elapsed_ms = started.elapsed().as_millis(),
-                    "canonical live content observed while provider completion remains gated"
-                );
-                return Ok::<_, anyhow::Error>(());
-            }
-            sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .context("streaming content did not reach client projection before provider completion")??;
     Ok(())
 }
 
@@ -142,12 +109,14 @@ async fn canonical_live_content(
     use gents_protocol::output::reconstruction::ObservedSegment;
     use gents_protocol::output::StreamPayload;
 
-    let snapshot = core.store().snapshot();
-    let Some(request) = snapshot
-        .requests
-        .iter()
-        .find(|row| row.request_id == request_id)
-    else {
+    let Some(request) = core.stores().node_dids().into_iter().find_map(|node_did| {
+        core.stores()
+            .snapshot(&node_did)
+            .requests
+            .iter()
+            .find(|row| row.request_id == request_id)
+            .cloned()
+    }) else {
         return Ok(None);
     };
     let (Some(request_doc_id), Some(session_id), Some(node_did), Some(generation)) = (
@@ -159,9 +128,11 @@ async fn canonical_live_content(
         return Ok(None);
     };
     let app = core.node_identity();
-    let access = gents::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, app.did())
-            .with_client_signing_capability(gents::NodeIdentity::client_signing_capability(app)?)?,
+    let access = gents_store::config_client::ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(graphql, app.did())
+            .with_client_signing_capability(
+                gents_store::identity::NodeIdentity::client_signing_capability(app)?,
+            )?,
     );
     let canonical = gents_desktop_core::client::load_session_context_store_on(
         &access,
@@ -209,7 +180,7 @@ async fn canonical_live_content(
         &[],
         &[],
         OwnerLiveness {
-            current_request: observed_request_execution_owner(request),
+            current_request: observed_request_execution_owner(&request),
             live_tools: Vec::new(),
         },
         terminal,

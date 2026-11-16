@@ -26,10 +26,10 @@ pub(super) struct ScenarioManifest {
     #[serde(skip)]
     pub(super) dependencies: Vec<String>,
     #[serde(skip)]
-    pub(super) plugins: Vec<gents::pack::PackPlugin>,
+    pub(super) plugins: Vec<gents_pack::pack::PackPlugin>,
 
     #[serde(skip)]
-    pub(super) config: Option<gents::pack::AuthoredPackConfig>,
+    pub(super) config: Option<gents_pack::pack::AuthoredPackConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,7 +37,7 @@ pub(super) struct ScenarioManifest {
 pub(super) struct ScenarioAllowedFolder {
     pub(super) path: String,
     #[serde(default)]
-    pub(super) access: gents::pack::BindAccess,
+    pub(super) access: gents_pack::pack::BindAccess,
 }
 
 fn default_timeout() -> u64 {

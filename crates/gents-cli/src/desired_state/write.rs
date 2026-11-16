@@ -1,4 +1,4 @@
-pub(crate) use gents::pack::authoring::export::write_manifest_root;
+pub(crate) use gents_pack::pack::authoring::export::write_manifest_root;
 
 #[cfg(test)]
 mod tests {

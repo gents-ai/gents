@@ -75,6 +75,17 @@ export const FLAGS = [
     restart: false,
   },
   {
+    id: "workflow-panel",
+    name: "Workflows in the session panel",
+    description:
+      "Gives a session's workflow runs their own panel tab with each run's stages, and a line above the composer while one is going.",
+    default: false,
+    owner: "david-on-github",
+    removeBy: "2027-02-01",
+    removeWhen: "The Workflows tab and the strip ship to everyone, or are dropped.",
+    restart: true,
+  },
+  {
     id: "browser",
     name: "Browser",
     description:

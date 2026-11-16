@@ -253,25 +253,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn off_and_unconfigured_do_not_poll_delivery() {
-        let directory = tempfile::tempdir().unwrap();
-        let calls = AtomicUsize::new(0);
-        let off = configured(directory.path().join("off"));
-        off.deliver(async {
-            calls.fetch_add(1, Ordering::SeqCst);
-        })
-        .await;
-        let missing = ProductTelemetry::with_config(directory.path().join("missing"), None);
-        assert!(missing.set_enabled(true).await.is_err());
-        missing
-            .deliver(async {
-                calls.fetch_add(1, Ordering::SeqCst);
-            })
-            .await;
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
     async fn consent_persists_and_disabling_cancels_and_releases_capacity() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("consent");
@@ -305,20 +286,6 @@ mod tests {
 
     #[tokio::test]
     async fn repeated_enable_preserves_in_flight_delivery() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let case = snapshot["client_telemetry_cases"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|case| {
-                case["initial"]["configured"] == true
-                    && case["initial"]["consent"] == true
-                    && case["actions"].as_array().unwrap().len() == 2
-                    && case["actions"][0]["kind"] == "open"
-                    && case["actions"][1]["kind"] == "enable"
-            })
-            .unwrap();
-        assert_eq!(case["expected"][1]["state"]["in_flight"], true);
         let directory = tempfile::tempdir().unwrap();
         let owner = configured(directory.path().join("consent"));
         owner.set_enabled(true).await.unwrap();
@@ -390,19 +357,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn consent_can_be_revoked_while_unconfigured() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("consent");
-        configured(path.clone()).set_enabled(true).await.unwrap();
-        let offline = ProductTelemetry::with_config(path.clone(), None);
-        let status = offline.status().await;
-        assert!(!status.configured && status.enabled);
-        offline.set_enabled(false).await.unwrap();
-        assert!(tokio::fs::metadata(&path).await.is_err());
-        assert!(!configured(path).status().await.enabled);
-    }
-
-    #[tokio::test]
     async fn native_transport_sends_only_after_consent_and_stops_after_revocation() {
         use axum::{
             extract::State,
@@ -470,54 +424,52 @@ mod tests {
 
     #[tokio::test]
     async fn generated_telemetry_traces_match_native_consent_and_http() {
-        use axum::{extract::State, http::StatusCode, routing::post, Router};
+        use axum::{extract::State, routing::post, Router};
+        use gents_lean_vocab::families::client_telemetry_trace as telemetry;
         use std::sync::Arc;
+        type Arrivals = (Arc<AtomicUsize>, Arc<tokio::sync::Notify>);
         let count = Arc::new(AtomicUsize::new(0));
+        let arrived = Arc::new(tokio::sync::Notify::new());
         let app = Router::new()
             .route(
                 "/api/send",
-                post(|State(count): State<Arc<AtomicUsize>>| async move {
+                post(|State((count, arrived)): State<Arrivals>| async move {
                     count.fetch_add(1, Ordering::SeqCst);
-                    StatusCode::NO_CONTENT
+                    arrived.notify_one();
+                    std::future::pending::<()>().await
                 }),
             )
-            .with_state(count.clone());
+            .with_state((count.clone(), arrived.clone()));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["client_telemetry_cases"].as_array().unwrap();
-        assert!(!cases.is_empty());
-        for case in cases {
+        for case in gents_lean_vocab::families::client_telemetry_trace::cases::<String>() {
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().join("consent");
-            let initial = &case["initial"];
-            if initial["persisted"].as_bool().unwrap() {
+            let initial = &case.input.initial;
+            if initial.persisted {
                 tokio::fs::write(&path, b"true").await.unwrap();
             }
-            let configured = initial["configured"].as_bool().unwrap();
+            let configured = initial.configured;
             let make_owner = || {
-                ProductTelemetry::with_config(
+                Arc::new(ProductTelemetry::with_config(
                     path.clone(),
                     configured.then(|| Config {
                         endpoint: reqwest::Url::parse(&format!("http://{address}/api/send"))
                             .unwrap(),
                         website: "12345678-1234-1234-1234-123456789abc".into(),
                     }),
-                )
+                ))
             };
             let mut owner = make_owner();
-            for (action, expected) in case["actions"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .zip(case["expected"].as_array().unwrap())
-            {
+            let mut deliveries: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+            let mut observed = Vec::new();
+            for action in &case.input.actions {
                 let before = count.load(Ordering::SeqCst);
-                let kind = action["kind"].as_str().unwrap();
-                let write_ok = action["write_ok"].as_bool().unwrap_or(true);
+                let kind = action.kind.as_str();
+                let write_ok = action.write_ok.unwrap_or(true);
                 if !write_ok && (kind == "disable" || (kind == "enable" && configured)) {
                     // The native owner must read its current consent before the
                     // external storage fault replaces the marker with a directory.
@@ -530,39 +482,53 @@ mod tests {
                     tokio::fs::create_dir(&path).await.unwrap();
                 }
                 match kind {
-                    "open" => owner.send_app_opened().await,
+                    "open" => {
+                        let opening = owner.clone();
+                        let mut delivery =
+                            tokio::spawn(async move { opening.send_app_opened().await });
+                        tokio::select! {
+                            _ = arrived.notified() => deliveries.push(delivery),
+                            finished = &mut delivery => finished.unwrap(),
+                        }
+                    }
                     "enable" => assert_eq!(
                         owner.set_enabled(true).await.is_ok(),
                         configured && write_ok
                     ),
                     "disable" => assert_eq!(owner.set_enabled(false).await.is_ok(), write_ok),
-                    "restart" => owner = make_owner(),
-                    _ => panic!("unknown generated telemetry action"),
+                    "restart" => {
+                        for delivery in deliveries.drain(..) {
+                            delivery.abort();
+                        }
+                        owner = make_owner();
+                    }
+                    other => panic!("unknown generated telemetry action {other}"),
                 }
-                assert_eq!(
-                    count.load(Ordering::SeqCst) - before,
-                    usize::from(expected["send"].as_bool().unwrap()),
-                    "{case}"
-                );
-                let state = &expected["state"];
-                assert_eq!(
-                    owner.status().await.enabled,
-                    state["consent"].as_bool().unwrap(),
-                    "{case}"
-                );
-                assert_eq!(
-                    tokio::fs::read(&path)
-                        .await
-                        .is_ok_and(|bytes| bytes == b"true"),
-                    state["persisted"].as_bool().unwrap(),
-                    "{case}"
-                );
-                assert_eq!(
-                    owner.opened.load(Ordering::Acquire),
-                    state["opened"].as_bool().unwrap(),
-                    "{case}"
-                );
+                for _ in 0..16 {
+                    tokio::task::yield_now().await;
+                }
+                let status = owner.status().await;
+                observed.push(telemetry::StepObservation {
+                    state: telemetry::State {
+                        configured: status.configured,
+                        consent: status.enabled,
+                        persisted: tokio::fs::read(&path)
+                            .await
+                            .is_ok_and(|bytes| bytes == b"true"),
+                        opened: owner.opened.load(Ordering::Acquire),
+                        in_flight: owner.capacity.available_permits() == 0,
+                    },
+                    send: match count.load(Ordering::SeqCst) - before {
+                        0 => false,
+                        1 => true,
+                        sent => panic!("one open sent {sent} events"),
+                    },
+                });
             }
+            for delivery in deliveries {
+                delivery.abort();
+            }
+            case.check(observed);
         }
         server.abort();
         let _ = server.await;

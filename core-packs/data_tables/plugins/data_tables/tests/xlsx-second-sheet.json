@@ -1,0 +1,27 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "note",
+        "type": "text"
+      }
+    ],
+    "markdown": "| note |\n| --- |\n| computed |\n| a & b <c> |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 2,
+    "rows": [
+      [
+        "computed"
+      ],
+      [
+        "a & b <c>"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT * FROM book_Notes"
+  }
+}

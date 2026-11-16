@@ -1,4 +1,5 @@
 import type { createDesktopInvoker } from "../src/api/invoke.js";
+import type { ManagedServerRepairResult } from "../src/generated/ManagedServerRepairResult.js";
 import type { ManagedServerStatus } from "../src/generated/ManagedServerStatus.js";
 
 declare const invoke: ReturnType<typeof createDesktopInvoker>;
@@ -7,6 +8,10 @@ const status: Promise<ManagedServerStatus> = invoke(
   "desktop_managed_server_status",
 );
 void status;
+const repair: Promise<ManagedServerRepairResult> = invoke(
+  "desktop_managed_server_repair",
+);
+void repair;
 invoke("desktop_open_external_url", { url: "https://example.com" });
 invoke("desktop_pack_install", {
   request: { package: "example/demo", registry: null },
@@ -16,14 +21,18 @@ invoke("desktop_pack_plugin_bind", {
 });
 invoke("desktop_default_packs");
 invoke("desktop_default_packs_approve", {
-  request: { packs: [{ pack: "example/demo", digest: "sha256:reviewed" }] },
-});
-invoke("desktop_default_packs_approve", {
-  // @ts-expect-error An approval names the digest it reviewed.
-  request: { packs: [{ pack: "example/demo" }] },
+  request: { packs: [{ pack: "gents/dynamic_workflows" }] },
 });
 
 invoke("desktop_join_requests_list", { nodeDid: "did:key:z6MkNode" });
+invoke("desktop_jobs_list", {
+  nodeDid: "did:key:z6MkNode",
+  states: ["running", "paused", "awaiting_user"],
+});
+invoke("desktop_job_view", {
+  nodeDid: "did:key:z6MkNode",
+  address: "session:call",
+});
 invoke("desktop_join_members_list", { nodeDid: "did:key:z6MkNode" });
 invoke("desktop_join_history_read", { nodeDid: "did:key:z6MkNode" });
 invoke("desktop_join_request_decide", {
