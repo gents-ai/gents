@@ -537,10 +537,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     result.and(released).and(stopped).and(drained)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each live journey adds its own optional configuration fixture"
-)]
+#[allow(clippy::too_many_arguments)]
 async fn configure(
     client: &mut Attachment,
     id: &mut u32,

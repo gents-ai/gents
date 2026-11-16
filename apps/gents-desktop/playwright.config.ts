@@ -18,7 +18,9 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  /* the journeys are CPU-bound: on a four-core hosted runner two workers
+     took 24-26 min against 52 at one, and four workers were no faster */
+  workers: process.env.CI ? 2 : undefined,
   reporter: process.env.CI
     ? [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]]
     : "list",
@@ -66,6 +68,14 @@ export default defineConfig({
          checkout folder named transcript-… does not match every spec */
       testMatch:
         /(?:^|[\\/])(?:transcript-[^\\/]*|turn-changes|editor-sheet-wheel|sessions-window|ux-sandbox|attachments|composer-chips|composer-history|mobile-interactions|onboarding-layout|mailbox-stack)\.spec\.ts$/,
+      /* one WebKit page at a time. Playwright's Linux WebKit (WPE) crashes in
+         its compositor thread (a segfault in libWPEWebKit, the page closes)
+         when two WebKit processes share four cores: turn-changes.spec.ts:180
+         alone crashed in 11 of 150 runs that way and 0 of 90 with one. Its
+         wheel- and frame-paced journeys also slow past their budget when a
+         second WebKit draws beside them. A Chromium worker still runs
+         alongside it */
+      workers: 1,
       use: {
         ...devices["Desktop Safari"],
         viewport: { width: 1280, height: 900 },

@@ -50,12 +50,13 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-latest]
     runs-on: ${{ matrix.os }}
-    # macOS also builds and runs the live onboarding suite (#3546); a cold
-    # dependency cache took 46 minutes to build the service alone.
-    timeout-minutes: 90
+    # macOS also builds the service and the live onboarding suite's test
+    # binary from cold workspace crates: 58-78 minutes of compiling on a
+    # change to a core crate, so 90 left no margin for the tests.
+    timeout-minutes: 120
     env:
       CARGO_INCREMENTAL: '0'
-      CARGO_BUILD_JOBS: '2'
+      CARGO_BUILD_JOBS: ${{ matrix.os == 'macos-latest' && '3' || '2' }}
       RUST_MIN_STACK: '16777216'
       CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER: /usr/bin/clang
     steps:
@@ -101,4 +102,4 @@ jobs:
       - name: Exercise first-run setup against launchd
         if: runner.os == 'macOS'
         run: |
-          cargo test --locked -p gents-cli --features live-e2e,native-e2e --test cli_live_suite cli_onboarding_live::no_model:: --profile fast-dev -- --ignored --nocapture --test-threads=1
+          cargo test --locked -p gents-cli --features live-e2e,native-e2e --test integration cli_live_suite::cli_onboarding_live::no_model:: --profile fast-dev -- --ignored --nocapture --test-threads=1

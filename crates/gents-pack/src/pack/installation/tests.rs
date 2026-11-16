@@ -1167,6 +1167,63 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     node.shutdown().await.expect("node shutdown");
 }
 
+/// The concurrent write changes `installed_at`, a field of the installation
+/// record the removal reads and deletes but never selects, so the rebuilt
+/// attempt plans the same removal the conflicted one did.
+#[tokio::test]
+async fn signed_removal_rebuilds_after_a_concurrent_installation_record_write() {
+    use gents_store::config_client::ConfigApplyTxn;
+    use gents_store::identity::NodeIdentity;
+
+    let (_directory, root, node, access) = crate::pack::agent_bindings::tests::fixture().await;
+    let owner = root.did();
+    install_owned(
+        &access,
+        owner,
+        "1",
+        &config_owned(owner, &[("alpha", "Alpha")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    assert_eq!(tools_ids(&access).await, vec!["alpha"]);
+    let doc_id = installation_doc_id(&access).await;
+
+    let (removed, paused) = ConfigApplyTxn::with_concurrent_write_before_commit(
+        remove_pack(
+            &access,
+            owner,
+            "acme/demo",
+            DriftPolicy::Refuse,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        ),
+        corrupt_installation_field(
+            &access,
+            &doc_id,
+            "installed_at",
+            json!("2000-01-01T00:00:00Z"),
+        ),
+    )
+    .await;
+    let removed = removed.unwrap();
+
+    assert!(paused, "the removal never reached its first mutation");
+    assert_eq!(removed.documents.removed, vec!["Tools/alpha"]);
+    assert_eq!(tools_ids(&access).await, Vec::<String>::new());
+    let record = access
+        .execute("{ PackInstallation { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(record["data"]["PackInstallation"], json!([]));
+    assert_eq!(
+        read_installed_pack(&access, owner, "acme/demo")
+            .await
+            .unwrap(),
+        None
+    );
+    node.shutdown().await.expect("node shutdown");
+}
+
 async fn dependency_fixture() -> (Arc<defra_node::Node>, ConfigAccess) {
     use gents_store::identity::NodeIdentity as _;
 

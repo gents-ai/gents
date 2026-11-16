@@ -293,10 +293,12 @@ mod tests {
     use super::*;
 
     fn workspace() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .expect("workspace root")
+        std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+        )
+        .join("../..")
+        .canonicalize()
+        .expect("workspace root")
     }
 
     #[test]

@@ -1,17 +1,24 @@
 name: CI
 
+# The pull request gate. `plan` maps the change to the crates it touches and
+# their reverse dependents and selects jobs; every job runs a `make gate-run`
+# recipe, so `make gate` runs the same commands locally. A draft is linted
+# across the changed crates and their dependents and tested on the crates it
+# changes; a pull request that is ready for review, and a merge queue entry,
+# also test the dependents; a push to main selects everything. `gate` is the
+# one check to require, so it must run on every event a merge waits for.
 on:
   push:
     branches:
       - main
-  # Draft PRs run only the guard jobs (repository-guard, triage-hygiene).
-  # Marking a PR ready runs the full suite on the stack top.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
     inputs:
       full_candidate:
-        description: Run non-PR candidate tests, including the full selected Rust suites.
+        description: Run the whole gate on the dispatched commit.
         required: true
         type: boolean
         default: true
@@ -19,16 +26,28 @@ on:
         description: Exact 40-character commit SHA expected at the dispatched ref.
         required: true
         type: string
-      rust_suite:
-        description: Select one Rust suite for a focused rerun, or all CI jobs.
-        required: true
-        type: choice
-        default: all
-        options: [all, runtime, support, desktop, cli]
+      only:
+        description: Space-separated gate jobs for a focused rerun (lint, contract, test:cli, ts-unit, ...); empty runs all.
+        required: false
+        type: string
+        default: ""
+      runner_overrides:
+        description: JSON object from runner role to label list for this run only (roles in .github/ci-runners.json); empty uses the inventory.
+        required: false
+        type: string
+        default: ""
+      portable_shards:
+        description: Build the portable groups once and run their tests as this many slices on this run only; empty uses GENTS_CI_PORTABLE_SHARDS, 0 keeps one job per group.
+        required: false
+        type: string
+        default: ""
 
+# A new push to a pull request cancels its run in progress. A run of main, a
+# merge queue entry or a dispatch finishes: main's post-merge run is the only
+# run of each merged commit. GitHub keeps the newest waiting run per group.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Each 32-core Studio runs at most two gents jobs concurrently. Keep eight
@@ -36,6 +55,15 @@ env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '12' }}
   CARGO_INCREMENTAL: "0"
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  # A runner keeps its Cargo target tree between jobs only for pushes to main
+  # and pull requests from this repository's own branches. Fork pull requests
+  # and every other event build in a job-scoped tree, so build outputs,
+  # build-script outputs included, never cross into another trust domain's job.
+  # test-rust-build-space.py evaluates this condition per event.
+  GENTS_CI_KEEP_TARGET_TREE: >-
+    ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+    (github.event_name == 'pull_request' &&
+    github.event.pull_request.head.repo.full_name == github.repository) }}
   HOMEBREW_NO_AUTO_UPDATE: "1"
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
   LEAN_CACHE_ROOT: ${{ vars.LEAN_CACHE_ROOT || '/Users/admin/.cache/gents-lean' }}
@@ -50,9 +78,101 @@ env:
   SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
 
 jobs:
+  # Every job runs where the plan's runs_on says: the runner roles in
+  # .github/ci-runners.json, a hosted runner for a fork pull request, or a
+  # role's fallback while GENTS_CI_FALLBACK is `hosted`. The plan itself
+  # cannot read the plan, so its labels are the inventory's `linux` role
+  # (test_gate.py keeps them equal).
+  plan:
+    runs-on: >-
+      ${{ ((github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name != github.repository) ||
+      vars.GENTS_CI_FALLBACK == 'hosted') && 'ubuntu-latest' ||
+      fromJSON('["self-hosted","Linux","X64","ci-linux"]') }}
+    timeout-minutes: 10
+    env:
+      RUSTC_WRAPPER: ""
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      jobs: ${{ steps.plan.outputs.jobs }}
+      tests: ${{ steps.plan.outputs.tests }}
+      archives: ${{ steps.plan.outputs.archives }}
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: List the files the pull request changes
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST}/files?per_page=100" \
+            --jq '.[] | .filename, (.previous_filename // empty)' > "${RUNNER_TEMP}/changed-files.txt"
+          count="$(wc -l < "${RUNNER_TEMP}/changed-files.txt")"
+          echo "The pull request changes ${count} paths."
+          # The API lists at most 3000 files; a larger change selects everything.
+          if (( count == 0 || count >= 3000 )); then
+            echo "GATE_EVERYTHING=true" >> "$GITHUB_ENV"
+          fi
+
+      # A queue entry is its base plus every pull request queued ahead of it
+      # and its own; the diff covers all of them.
+      - name: List the files the merge queue entry changes
+        if: github.event_name == 'merge_group'
+        env:
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          git diff --name-only --no-renames "${BASE_SHA}" HEAD > "${RUNNER_TEMP}/changed-files.txt"
+          count="$(wc -l < "${RUNNER_TEMP}/changed-files.txt")"
+          echo "The merge queue entry changes ${count} paths."
+          if (( count == 0 )); then
+            echo "GATE_EVERYTHING=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install the pinned Rust toolchain
+        run: .github/scripts/setup-rust.sh
+
+      - name: Select gate jobs
+        id: plan
+        env:
+          GATE_EVERYTHING: >-
+            ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+            && 'true' || env.GATE_EVERYTHING }}
+          GATE_ONLY: ${{ inputs.only }}
+          GATE_RUNNER_OVERRIDES: ${{ inputs.runner_overrides }}
+          GATE_FALLBACK: ${{ vars.GENTS_CI_FALLBACK }}
+          GATE_FORK: >-
+            ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name != github.repository }}
+          GATE_PORTABLE_SHARDS: ${{ inputs.portable_shards || vars.GENTS_CI_PORTABLE_SHARDS }}
+          GATE_RUNTIME_ISOLATED: ${{ vars.GENTS_CI_RUNTIME_ISOLATED }}
+          # Inside a stack only the top is tested in full: lower layers may be
+          # intentionally red. A pull request into the default branch always is.
+          GATE_TIER: >-
+            ${{ (github.event_name != 'pull_request' ||
+            (github.event.pull_request.draft == false &&
+            (github.event.pull_request.base.ref == github.event.repository.default_branch ||
+            github.event.pull_request.stack == null ||
+            github.event.pull_request.stack.position == github.event.pull_request.stack.size)))
+            && 'full' || 'draft' }}
+        run: python3 scripts/ci/gate.py plan --files "${RUNNER_TEMP}/changed-files.txt"
+
   repository-guard:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    needs: plan
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.linux }}
+    timeout-minutes: 10
+    env:
+      RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@v7
         with:
@@ -78,17 +198,40 @@ jobs:
             exit 1
           fi
 
+      - name: Lint workflows
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C "${RUNNER_TEMP}" actionlint
+          "${RUNNER_TEMP}/actionlint" -color
+
+      - name: Install the pinned Rust toolchain and shellcheck
+        run: |
+          .github/scripts/setup-rust.sh
+          .github/scripts/setup-shellcheck.sh
+
+      - name: Check gate selection and test guards
+        run: make gate-selftest
+
+      - name: Check the live node backstop
+        run: |
+          shellcheck .github/scripts/host-runtime-service.sh .github/scripts/setup-rust-build-cache.sh \
+            .github/scripts/setup-shellcheck.sh
+          python3 .github/scripts/test-host-runtime-service.py
+
       - name: Check Harbor runner syntax
         run: |
           bash -n scripts/harbor/run_gents.sh
           bash -n scripts/measure-gents-binary.sh
           bash -n scripts/measure-gents-build-attribution.sh
-          bash -n .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh .github/scripts/desktop-rust-suite.sh
+          bash -n .github/scripts/desktop-runtime-journey.sh
           bash -n .github/scripts/setup-macos-rust-toolchain.sh .github/scripts/setup-cmake.sh
           shellcheck -s sh scripts/harbor/run_gents.sh
           shellcheck scripts/measure-gents-binary.sh
           shellcheck scripts/measure-gents-build-attribution.sh
-          shellcheck .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh .github/scripts/desktop-rust-suite.sh
+          shellcheck .github/scripts/desktop-runtime-journey.sh
           shellcheck .github/scripts/setup-macos-rust-toolchain.sh .github/scripts/setup-cmake.sh
 
       - name: Check the macOS toolchain selection
@@ -97,14 +240,22 @@ jobs:
       - name: Check isolated runtime runner validation
         run: python3 .github/scripts/test-isolated-runtime-runner.py
 
-      - name: Check desktop Rust build and test graph routing
-        run: python3 .github/scripts/test-desktop-rust-suite.py
-
       - name: Run Harbor runner self-test
         run: scripts/harbor/run_gents.sh self-test
 
       - name: Run build attribution parser self-test
         run: scripts/measure-gents-build-attribution.sh self-test
+
+      - name: Report jobs a fork pull request skips
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || 'a deleted repository' }}
+        run: |
+          message="This pull request comes from ${HEAD_REPOSITORY}, so jobs that run on self-hosted runners (lint, contract, test, build, shard, desktop-ui-bombadil, core-packs build, adapter-interop) are skipped and gate fails if the plan selected one; the other jobs run on GitHub-hosted runners. A maintainer reruns the change from a branch of this repository to test it on the self-hosted runners."
+          echo "::notice title=Self-hosted jobs skipped for a fork::${message}"
+          printf '### Self-hosted jobs skipped for a fork\n\n%s\n' "${message}" >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Check runner build-space reclamation
         run: python3 .github/scripts/test-rust-build-space.py
@@ -126,10 +277,10 @@ jobs:
           python3 .github/scripts/test-afterburner-downloads.py
 
   publish-control-tests:
-    if: inputs.rust_suite == '' || inputs.rust_suite == 'all'
     # Focused, network-free tests for the staged-prerelease publication
     # control script (fake gh). No secrets; read-only token.
-    runs-on: ubuntu-latest
+    needs: plan
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.linux }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -141,140 +292,67 @@ jobs:
       - name: Run publication control tests
         run: |
           set -euo pipefail
-          python3 -m venv "${RUNNER_TEMP}/publish-venv"
-          "${RUNNER_TEMP}/publish-venv/bin/pip" install --quiet pyyaml==6.0.2
-          "${RUNNER_TEMP}/publish-venv/bin/python" .github/scripts/test-publish-staged-prerelease.py
+          if python3 -c 'import yaml' 2>/dev/null; then
+            python=python3
+          else
+            python3 -m venv "${RUNNER_TEMP}/yaml-venv"
+            "${RUNNER_TEMP}/yaml-venv/bin/pip" install --quiet pyyaml==6.0.2
+            python="${RUNNER_TEMP}/yaml-venv/bin/python"
+          fi
+          "${python}" .github/scripts/test-publish-staged-prerelease.py
 
-  rust-and-cli:
-    name: rust-and-cli (${{ matrix.suite }})
+  fmt:
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.jobs), 'fmt')
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.linux }}
+    timeout-minutes: 10
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
+      RUSTC_WRAPPER: ""
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install the pinned Rust toolchain
+        run: .github/scripts/setup-rust.sh
+      - name: Check formatting
+        run: make gate-run JOB=fmt
+
+  # The product build without test features, then clippy over every target of
+  # the changed crates and their dependents.
+  lint:
+    needs: [plan, repository-guard]
+    # Fork pull requests never run on a self-hosted runner: its account shares
+    # the Cargo home, the compiler cache and the kept target trees with every
+    # other runner on the host (test-rust-build-space.py checks every job).
     if: >-
-      github.event_name != 'pull_request' ||
-      (github.event.pull_request.draft == false &&
-      (github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size))
-    needs: repository-guard
-    runs-on:
-      [
-        self-hosted,
-        macOS,
-        ARM64,
-        studio,
-        "${{ (matrix.suite == 'runtime' || matrix.suite == 'support') && 'studio-1' || 'studio-2' }}",
-        "${{ matrix.suite == 'runtime' && vars.GENTS_CI_RUNTIME_ISOLATED == 'true' && 'ci-runtime-isolated' || format('ci-{0}', matrix.suite) }}",
-      ]
-    strategy:
-      fail-fast: false
-      matrix:
-        suite: ${{ fromJSON(inputs.rust_suite != '' && inputs.rust_suite != 'all' && format('["{0}"]', inputs.rust_suite) || '["runtime","support","desktop","cli"]') }}
-    # Each job starts from an empty RUNNER_TEMP target tree; the size-capped
-    # host sccache service supplies cached rlibs. Binaries, test harnesses,
-    # proc macros, and build scripts are not cacheable and relink every run.
-    timeout-minutes: 180
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      contains(fromJSON(needs.plan.outputs.jobs), 'lint')
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.macos }}
+    timeout-minutes: 90
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      # Enable only after provisioning a separate OS account and runner. The
-      # configured path must be the running fleet node's actual gents home.
-      - name: Verify isolated runtime runner
-        if: matrix.suite == 'runtime' && vars.GENTS_CI_RUNTIME_ISOLATED == 'true'
-        env:
-          GENTS_CI_FLEET_HOME: ${{ vars.GENTS_CI_FLEET_HOME }}
-          GENTS_CI_FLEET_USER: ${{ vars.GENTS_CI_FLEET_USER }}
-        run: |
-          python3 .github/scripts/check-isolated-runtime-runner.py
-          echo "LEAN_CACHE_ROOT=$HOME/.cache/gents-lean" >> "$GITHUB_ENV"
-          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> "$GITHUB_ENV"
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
 
-      # A Command Line Tools update repointed the default SDK to MacOSX27.2.sdk,
-      # whose libSystem.B.tbd declares arm64e.x1-macos targets that neither
-      # linker on this runner understands: Xcode-beta's ld-1266.5 fails with
-      # `ld: tapi error: malformed file`, and rust-lld (forced by
-      # .cargo/config.toml) with `could not load TAPI file ... unknown target`.
-      # Pin SDKROOT to the SDK of the developer directory the linker comes
-      # from, so cc-rs crates and the C fixtures the tests spawn with
-      # /usr/bin/cc all resolve one readable SDK.
-      - name: Select a matching macOS SDK for the linker
-        run: .github/scripts/setup-macos-rust-toolchain.sh
-
-      # gents-migration's build script compiles the fixture lens for WASM and
-      # is in the dependency graph of every heavy suite. Install the target
-      # explicitly instead of relying on mutable host toolchain state.
-      # Runtime/support build the WASI callback fixture; CLI pack tests compile
-      # Rust plugins. Install their target rather than relying on host state.
-      - name: Install pinned Rust toolchain and WASM targets
-        run: >-
-          .github/scripts/setup-rust.sh
-          ${{ matrix.suite != 'desktop' && 'wasm32-wasip1' || '' }}
-
-      - name: Install elan
-        # Runtime conformance, desktop-bridge, and support migration tests load
-        # the generated Lean contract. The FULL CLI suite (main pushes only — PR runs use
-        # the smoke subset) loads it too, via gents-cli's lean_apply_write_
-        # boundary and identity_decide fences.
-        if: matrix.suite == 'runtime' || matrix.suite == 'desktop' || matrix.suite == 'support' || (matrix.suite == 'cli' && github.event_name != 'pull_request')
-        run: |
-          .github/scripts/setup-elan.sh
-          cargo_dir="$(dirname "$(rustup which cargo)")"
-          echo "${cargo_dir}" >> "$GITHUB_PATH"
-          "${cargo_dir}/cargo" --version
-
-      - name: Install protobuf compiler
-        run: .github/scripts/setup-protoc.sh
-
-      - name: Install CMake for native dependencies
-        run: bash .github/scripts/setup-cmake.sh
-
-      - name: Prepare disk-backed Rust build cache
-        run: .github/scripts/setup-rust-build-cache.sh
-
-      - name: Install Go for Afterburner compiler tests
-        if: matrix.suite == 'cli' && github.event_name != 'pull_request'
-        uses: actions/setup-go@v6
+      - uses: ./.github/actions/rust-runner
         with:
-          go-version: "1.25.1"
-          cache: false
+          role: macos
 
-      - name: Install Afterburner compiler test prerequisites
-        if: matrix.suite == 'cli' && github.event_name != 'pull_request'
-        run: .github/scripts/setup-afterburner-toolchains.sh
+      - name: Install cargo-hakari
+        run: .github/scripts/setup-hakari.sh
 
-      # Runtime, desktop-bridge, and support migration tests load the generated
-      # Lean contract. Mathlib publishes matching precompiled artifacts; without
-      # this cache Lake recompiles the dependency graph in every clean checkout.
-      - name: Prepare persistent Lean build cache
-        if: matrix.suite == 'runtime' || matrix.suite == 'desktop' || matrix.suite == 'support' || (matrix.suite == 'cli' && github.event_name != 'pull_request')
-        run: .github/scripts/setup-lean-build-cache.sh
-
-      - name: Download precompiled Mathlib artifacts
-        if: matrix.suite == 'runtime' || matrix.suite == 'desktop' || matrix.suite == 'support' || (matrix.suite == 'cli' && github.event_name != 'pull_request')
-        working-directory: crates/gents/proofs
-        # Lean 4.18's LLVM 15 linker emits a native cache executable that
-        # macOS 26 rejects. Running the same checked-in entry point through the
-        # interpreter avoids that dyld incompatibility without changing tools.
-        run: |
-          lake build Cache.Main
-          lake env lean --run .lake/packages/mathlib/Cache/Main.lean get
-
-      - name: Check formatting
-        if: matrix.suite == 'support'
-        run: cargo fmt --all --check
-
-      - name: Check clippy
-        if: matrix.suite == 'support'
-        run: make lint
-
-      - name: Assert native-e2e excluded from production capabilities
-        if: matrix.suite == 'support'
-        run: ./scripts/check-native-e2e-capabilities.sh
-
-      - name: Verify Rust CI covers every workspace package
-        if: matrix.suite == 'support'
-        run: .github/scripts/check-rust-ci-package-coverage.sh
+      - name: Check the product build and clippy
+        run: make gate-run JOB=lint
 
       - name: Record Rust dependency graph metrics
-        if: matrix.suite == 'support'
         env:
           MEASURE_MODE: graph
           OUTPUT_JSON: ${{ runner.temp }}/gents-build-graph-${{ github.sha }}.json
@@ -290,7 +368,6 @@ jobs:
           ' "${OUTPUT_JSON}" >/dev/null
 
       - name: Upload Rust dependency graph metrics
-        if: matrix.suite == 'support'
         uses: actions/upload-artifact@v7
         with:
           name: gents-build-graph-${{ github.sha }}
@@ -298,285 +375,261 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # Together these four jobs compile and link the FULL workspace target
-      # surface — examples, benches, every test target, and the desktop crates.
-      # This preserves the #646 construction-site fence without doing a
-      # metadata-only cargo check pass before the test-profile build.
-      - name: Compile and link runtime targets
-        if: matrix.suite == 'runtime'
-        run: .github/scripts/compile-rust-ci-suite.sh runtime
-
-      - name: Check live test targets
-        if: matrix.suite == 'runtime'
-        run: |
-          cargo check -p gents --tests --features live-e2e
-          cargo check -p gents-cli --tests --features live-e2e
-
-      - name: Build gents-loop for wasm32-wasip1
-        if: matrix.suite == 'runtime'
-        run: cargo build -p gents-loop --target wasm32-wasip1
-
-      - name: Run proof conformance tests
-        if: matrix.suite == 'runtime'
-        # DefraDB operations can exceed the platform-default worker stack.
-        # Production runtimes reserve 16 MiB for the same work; keep the
-        # conformance gate representative and deterministic under parallelism.
-        env:
-          RUST_MIN_STACK: 16777216
-        run: cargo test -p gents --test conformance
-
-      - name: Compile and link CLI targets
-        if: matrix.suite == 'cli'
-        run: .github/scripts/compile-rust-ci-suite.sh cli
-
-      - name: Compile and link desktop targets
-        if: matrix.suite == 'desktop'
-        run: .github/scripts/compile-rust-ci-suite.sh desktop
-
-      - name: Compile and link support targets
-        if: matrix.suite == 'support'
-        run: .github/scripts/compile-rust-ci-suite.sh support
-
-      - name: Build the WASM lens target
-        if: matrix.suite == 'support'
-        run: cargo build -p gents-lens-fixture-add-label --target wasm32-unknown-unknown
-
-      # Every workspace package whose tests are not run by the runtime, cli, or
-      # desktop steps below. The package-coverage guard above only proves each
-      # package is COMPILED; without this these suites build and never execute,
-      # so a broken assertion in them can survive indefinitely.
-      - name: Run support package tests
-        if: matrix.suite == 'support'
-        # --no-fail-fast: a node flake in gents-migration must not mask the
-        # 140 pure gents-protocol/gents-schemas assertions that run after it.
-        run: |
-          cargo test --no-fail-fast --features gents-claude/transport,gents-protocol/typescript \
-            -p gents-migration \
-            -p gents-lens-fixture-add-label \
-            -p gents-callback-fixture-create-workspace \
-            -p gents-protocol \
-            -p gents-schemas \
-            -p gents-chatgpt-login \
-            -p gents-claude \
-            -p gents-claude-login \
-            -p gents-fs-runner \
-            -p gents-shell \
-            -p gents-lean-contract \
-            -p gents-lean-vocab
-
-      - name: Collect migration lens diagnostics on support failure
-        if: failure() && matrix.suite == 'support'
-        run: python3 .github/scripts/collect-migration-lens-diagnostics.py "${RUNNER_TEMP}/gents-migration-lenses"
-
-      - name: Upload migration lens diagnostics
-        if: failure() && matrix.suite == 'support'
-        uses: actions/upload-artifact@v7
-        with:
-          name: gents-migration-lenses-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/gents-migration-lenses
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Run PR runtime smoke tests
-        if: matrix.suite == 'runtime' && github.event_name == 'pull_request'
-        # Embedded eval homes execute the same DefraDB paths as production.
-        env:
-          RUST_MIN_STACK: 16777216
-        run: |
-          cargo test -p gents --lib runtime::status::tests::
-          cargo test -p gents-tools --lib native::tests::read_only_bash
-          cargo test -p gents-session --lib exec::
-          cargo test -p gents-session --lib artifact_
-          cargo test -p gents-tools --lib artifact_
-          # Live-output byte evidence for background tools must fail the PR
-          # that breaks it, not the post-merge main run (#2686).
-          cargo test -p gents-toolcalls --lib call::hook::tests::r4c_list_background_tools::
-          cargo test -p gents-automation --lib triggers::callback::
-          cargo test -p gents-eval --test onboarding_evals
-          cargo test -p gents-eval --test eval_runner_canary
-          # Per-request store budgets: a capture, segment or write-drop
-          # regression must fail the PR that grows the store, not a user's
-          # node after release.
-          cargo test -p gents --test e2e_runtime storage_budget:: -- --nocapture
-          cargo test -p gents --test misc ordered_read_plans::
-          # DefraDB-free; the extraction's wasm claim is otherwise unenforced
-          # on PRs (full -p gents-loop is main-only below).
-          cargo test -p gents-loop --lib
-
-      - name: Run PR CLI smoke tests
-        if: matrix.suite == 'cli' && github.event_name == 'pull_request'
-        run: |
-          cargo test -p gents-cli --test cli_server server_startup_with_iroh_p2p_reports_runtime_connectivity -- --nocapture --test-threads=1
-          cargo test -p gents-cli --test cli_runtime cli_status:: -- --nocapture --test-threads=1
-          cargo test -p gents-cli --test cli_runtime cli_reconciliation::reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
-          # gents config pack check over the fixture packs: manifests, files,
-          # configuration, graphs, filters, README and topology diagrams.
-          env -u CARGO_TARGET_DIR cargo test --target-dir "$CARGO_TARGET_DIR" \
-            -p gents-cli --lib commands::pack::check::
-
-      - name: Run full library and integration tests
-        if: matrix.suite == 'runtime' && github.event_name != 'pull_request'
-        env:
-          RUST_MIN_STACK: 16777216
-        run: |
-          cargo test --no-fail-fast --lib --tests \
-            -p gents \
-            -p gents-eval \
-            -p gents-loop \
-            -p gents-store \
-            -p gents-documents \
-            -p gents-inference \
-            -p gents-p2p \
-            -p gents-pack \
-            -p gents-session \
-            -p gents-tools \
-            -p gents-toolcalls \
-            -p gents-automation \
-            -p gents-observe
-
-      - name: Run desktop Rust package tests
-        if: matrix.suite == 'desktop'
-        run: .github/scripts/desktop-rust-suite.sh test
-
-      - name: Run native client runtime journey
-        if: matrix.suite == 'desktop'
-        env:
-          RUST_MIN_STACK: 16777216
-        run: |
-          python3 .github/scripts/ensure-rust-build-space.py "$CARGO_TARGET_DIR"
-          .github/scripts/desktop-runtime-journey.sh run
-
-      - name: Run full CLI test suite
-        if: matrix.suite == 'cli' && github.event_name != 'pull_request'
-        env:
-          RUST_MIN_STACK: 16777216
-        # --no-fail-fast: cli binaries run alphabetically; without this the
-        # first red binary hides every later one (how a broken test binary
-        # masked the trace-export suite for days — see #1139).
-        # Compiler tests spawn Cargo in temporary plugin source directories.
-        # Do not leak the outer job's target directory into those child
-        # builds: Afterburner reads their standard, source-local target output.
-        run: |
-          env -u CARGO_TARGET_DIR cargo test --target-dir "$CARGO_TARGET_DIR" \
-            --no-fail-fast \
-            -p gents-cli \
-            -p gents-service \
-            -p gents-host \
-            -p gents-core-packs \
-            -- --nocapture --test-threads=1
-
-      - name: Check the iOS simulator build
-        if: matrix.suite == 'desktop' && github.event_name != 'pull_request'
-        # iOS shares the desktop crates, so desktop-only Tauri APIs break it
-        # silently; a compile check is the cheapest gate (#890).
-        # Keep the DEVELOPER_DIR/SDKROOT selected above: it is the Xcode
-        # developer directory the linker comes from, and that Xcode ships the
-        # iOS SDKs. Unsetting them would fall back to the default SDK, which is
-        # the Command Line Tools one rust-lld cannot read.
-        run: |
-          rustup target add aarch64-apple-ios-sim
-          cargo check -p gents-desktop-tauri --lib --target aarch64-apple-ios-sim
-
       - name: Show Rust build cache stats
         if: always()
         run: .github/scripts/show-sccache-stats.sh
 
-  lean-proofs:
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
+
+  # Proofs, the files generated from them, the one-consumer-per-family scan
+  # and, when the runtime group does not run them, the structure ratchets.
+  contract:
+    needs: [plan, repository-guard]
     if: >-
-      (inputs.rust_suite == '' || inputs.rust_suite == 'all') &&
       (github.event_name != 'pull_request' ||
-      (github.event.pull_request.draft == false &&
-      (github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size)))
-    # Reuse the warm proof cache on studio-1's light support slot. This keeps
-    # the runtime slot free once repository-guard releases the Rust matrix.
-    runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
-    timeout-minutes: 60
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      contains(fromJSON(needs.plan.outputs.jobs), 'contract')
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.macos }}
+    timeout-minutes: 90
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Install elan
-        run: .github/scripts/setup-elan.sh
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
 
-      - name: Prepare persistent Lean build cache
-        run: .github/scripts/setup-lean-build-cache.sh
+      - uses: ./.github/actions/rust-runner
+        with:
+          lean: "true"
+          role: macos
 
-      - name: Download precompiled Mathlib artifacts
-        working-directory: crates/gents/proofs
-        run: |
-          lake build Cache.Main
-          lake env lean --run .lake/packages/mathlib/Cache/Main.lean get
-
-      - name: Reject Lean sorry placeholders
-        working-directory: crates/gents/proofs
-        run: |
-          if find . -type f -name '*.lean' -exec grep -n -E '(^|[^[:alnum:]_])sorry([^[:alnum:]_]|$)' {} +; then
-            echo "::error::Lean proof sources must not contain sorry placeholders."
-            exit 1
-          fi
-
-      - name: Check proof import closure
-        run: |
-          python3 .github/scripts/test-lean-import-closure.py
-          cd crates/gents/proofs && lake build importClosure
-
-      - name: Check proof import layers
-        run: |
-          python3 .github/scripts/test-lean-import-layers.py
-          cd crates/gents/proofs && lake build importLayers
-
-      - name: Build proofs
-        working-directory: crates/gents/proofs
-        run: lake build
-
-      - name: Check canonical output conformance mapping
-        run: |
-          python3 .github/scripts/test-canonical-output-map.py
-          python3 .github/scripts/check-canonical-output-map.py --check-export
-
-      # The #1571 foundation is red, so these strict decoders cannot compile yet.
-      # Limited structural lint only; this does not execute Rust or Serde.
-      - name: Lint Rust fixture shapes against the generated contract
-        run: |
-          python3 .github/scripts/test-lean-rust-decoders.py
-          python3 .github/scripts/check-lean-rust-decoders.py
-
-      # Desktop consumers exercise generated ClientShell contracts here, after
-      # the proof build has warmed the persistent Lake cache.
       - uses: actions/setup-node@v7
+        if: fromJSON(needs.plan.outputs.plan).contract.ts_lean
         with:
           node-version: 22
           package-manager-cache: false
 
       - name: Install workspace frontend dependencies
+        if: fromJSON(needs.plan.outputs.plan).contract.ts_lean
         run: npm ci
 
-      - name: Build desktop package dependencies
-        run: |
-          npm run build --workspace @source-inc/gents-desktop-client
-          npm run build --workspace @source-inc/gents-desktop-ui
-          npm run build --workspace @source-inc/gents-desktop-chat
-          npm run build --workspace @source-inc/gents-desktop-fleet
+      - name: Check proofs, generated files and structure
+        run: make gate-run JOB=contract
 
-      - name: Run Lean-backed desktop conformance tests
+      - name: Show Rust build cache stats
+        if: always()
+        run: .github/scripts/show-sccache-stats.sh
+
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
+
+  # One job per group of crates that holds a changed crate or a dependent.
+  # Each job starts from an empty RUNNER_TEMP target tree; the host sccache
+  # service supplies cached rlibs, so parallel jobs share compilation.
+  test:
+    name: test (${{ matrix.group }})
+    needs: [plan, repository-guard]
+    if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      needs.plan.outputs.tests == 'true'
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
+
+      # Enable only after provisioning a separate OS account and runner. The
+      # configured path must be the running fleet node's actual gents home.
+      - name: Verify isolated runtime runner
+        if: matrix.group == 'runtime' && vars.GENTS_CI_RUNTIME_ISOLATED == 'true'
+        env:
+          GENTS_CI_FLEET_HOME: ${{ vars.GENTS_CI_FLEET_HOME }}
+          GENTS_CI_FLEET_USER: ${{ vars.GENTS_CI_FLEET_USER }}
         run: |
-          npm test --workspace @source-inc/gents-desktop-chat
-          npm run test:lean-conformance --workspace @source-inc/gents-desktop-app
+          python3 .github/scripts/check-isolated-runtime-runner.py
+          echo "LEAN_CACHE_ROOT=$HOME/.cache/gents-lean" >> "$GITHUB_ENV"
+          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> "$GITHUB_ENV"
+
+      - uses: ./.github/actions/rust-runner
+        with:
+          lean: "true"
+          afterburner: ${{ matrix.go }}
+          role: ${{ matrix.role }}
+
+      - name: Run tests for ${{ matrix.packages }}
+        run: make gate-run JOB="test:${{ matrix.group }}"
+
+      - name: Collect migration lens diagnostics on failure
+        if: failure() && matrix.group == 'foundation'
+        run: python3 .github/scripts/collect-migration-lens-diagnostics.py "${RUNNER_TEMP}/gents-migration-lenses"
+
+      - name: Upload migration lens diagnostics
+        if: failure() && matrix.group == 'foundation'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-migration-lenses-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gents-migration-lenses
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Show Rust build cache stats
+        if: always()
+        run: .github/scripts/show-sccache-stats.sh
+
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
+
+  # With GATE_PORTABLE_SHARDS set, the portable groups' crates compile once
+  # here into a nextest archive; `shard` runs slices of it and compiles nothing.
+  build:
+    name: build (${{ matrix.archive }})
+    needs: [plan, repository-guard]
+    if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      contains(fromJSON(needs.plan.outputs.jobs), 'build:portable')
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.archives) }}
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
+
+      - uses: ./.github/actions/rust-runner
+
+      - name: Install cargo-nextest
+        run: .github/scripts/setup-nextest.sh
+
+      - name: Build the ${{ matrix.archive }} test archive
+        run: make gate-run JOB="build:${{ matrix.archive }}"
+
+      - name: Upload the ${{ matrix.archive }} test archive
+        if: ${{ !matrix.run }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-tests-${{ matrix.archive }}
+          path: ${{ runner.temp }}/gents-tests
+          if-no-files-found: error
+          compression-level: 0
+          # Re-running failed slices needs the run's archive; a rebuilt one replaces it.
+          overwrite: true
+          retention-days: 1
+
+      - name: Show Rust build cache stats
+        if: always()
+        run: .github/scripts/show-sccache-stats.sh
+
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
+
+  shard:
+    name: test (${{ matrix.archive }} ${{ matrix.index }}/${{ matrix.count }})
+    needs: [plan, build]
+    if: >-
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      contains(fromJSON(needs.plan.outputs.jobs), 'shard:portable')
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.shards) }}
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
+
+      - uses: ./.github/actions/rust-runner
+        with:
+          lean: "true"
+
+      - name: Install cargo-nextest
+        run: .github/scripts/setup-nextest.sh
+
+      - name: Download the ${{ matrix.archive }} test archive
+        uses: actions/download-artifact@v7
+        with:
+          name: gents-tests-${{ matrix.archive }}
+          path: ${{ runner.temp }}/gents-tests
+
+      - name: Run slice ${{ matrix.index }} of ${{ matrix.count }}
+        run: make gate-run JOB="shard:${{ matrix.archive }}:${{ matrix.index }}"
+
+      - name: Upload the slice's JUnit report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-junit-${{ matrix.archive }}-${{ matrix.index }}-of-${{ matrix.count }}-${{ github.run_attempt }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Collect migration lens diagnostics on failure
+        if: failure()
+        run: python3 .github/scripts/collect-migration-lens-diagnostics.py "${RUNNER_TEMP}/gents-migration-lenses"
+
+      - name: Upload migration lens diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-migration-lenses-${{ github.sha }}-${{ matrix.index }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gents-migration-lenses
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
 
   desktop-packages:
-    if: >-
-      (inputs.rust_suite == '' || inputs.rust_suite == 'all') &&
-      (github.event_name != 'pull_request' ||
-      (github.event.pull_request.draft == false &&
-      (github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size)))
-    # Package boundary, publishability, and package-local tests are independent
-    # of the desktop application/browser gate and should not block it.
-    runs-on: ubuntu-latest
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.jobs), 'ts-packages')
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.linux }}
     timeout-minutes: 15
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -591,39 +644,16 @@ jobs:
       - name: Install workspace frontend dependencies
         run: npm ci
 
-      - name: Check desktop package boundaries
-        run: npm run check:package-boundaries
-
-      - name: Build desktop packages
-        run: npm run build:packages
-
-      # The chat package's Lean-backed conformance test runs in lean-proofs so
-      # it can reuse that job's already-built, persistent proof cache.
-      - name: Run desktop package tests
-        run: |
-          npm run test --workspace @source-inc/gents-desktop-client
-          npm run test --workspace @source-inc/gents-desktop-ui
-          npm run test --workspace @source-inc/gents-desktop-fleet
-          npm run test --workspace @source-inc/gents-desktop-operations
-
-      - name: Build desktop fixture host
-        run: npm run build --workspace @source-inc/fixture-host-ui
-
-      - name: Verify packed desktop packages
-        # Exercise the same relative output path used by the release workflow.
-        run: ./scripts/pack-desktop-packages.sh target/desktop-npm-ci
+      - name: Check, build, test and pack the desktop packages
+        run: make gate-run JOB=ts-packages
 
   desktop-ui:
-    if: >-
-      (inputs.rust_suite == '' || inputs.rust_suite == 'all') &&
-      (github.event_name != 'pull_request' ||
-      (github.event.pull_request.draft == false &&
-      (github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size)))
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.jobs), 'ts-unit')
     # This job exercises browser-only code. Keep scarce macOS capacity for the
     # Rust/Lean work that benefits from persistent host caches.
     name: desktop-ui (${{ matrix.suite }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.browser }}
     # The browser journeys take 44 to 58 minutes on one Playwright worker on a
     # hosted runner (#3786); 60 cut a run whose journeys had passed.
     timeout-minutes: 75
@@ -631,6 +661,8 @@ jobs:
       fail-fast: false
       matrix:
         suite: [unit, browser]
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -645,13 +677,12 @@ jobs:
       - name: Install workspace frontend dependencies
         run: npm ci
 
-      # The application imports the workspaces through their dist exports, so
-      # each isolated shard prepares those small build products locally.
-      - name: Build desktop packages
-        run: npm run build:packages
-
+      # A hosted runner is a fresh machine: install the browsers' system
+      # libraries as root. A self-hosted browser runner has them installed
+      # once by its operator (`npx playwright install-deps chromium webkit`)
+      # and keeps the browsers in its account's cache.
       - name: Use the Ubuntu archive for browser system dependencies
-        if: matrix.suite == 'browser'
+        if: matrix.suite == 'browser' && runner.environment == 'github-hosted'
         run: |
           sudo python3 - <<'PYTHON'
           from pathlib import Path
@@ -676,38 +707,17 @@ jobs:
       - name: Install Playwright browsers
         if: matrix.suite == 'browser'
         working-directory: apps/gents-desktop
-        run: npx playwright install --with-deps chromium webkit
+        env:
+          HOSTED: ${{ runner.environment == 'github-hosted' }}
+        run: |
+          if [[ "${HOSTED}" == true ]]; then
+            npx playwright install --with-deps chromium webkit
+          else
+            npx playwright install chromium webkit
+          fi
 
-      - name: Check desktop formatting
-        if: matrix.suite == 'unit'
-        working-directory: apps/gents-desktop
-        run: npm run format:check
-
-      - name: Typecheck desktop tests and bridge harness
-        if: matrix.suite == 'unit'
-        working-directory: apps/gents-desktop
-        run: npm run typecheck
-
-      - name: Build desktop frontend
-        working-directory: apps/gents-desktop
-        run: npm run build
-
-      - name: Run desktop unit tests
-        if: matrix.suite == 'unit'
-        working-directory: apps/gents-desktop
-        run: npm test
-
-      - name: Run desktop browser journeys
-        if: matrix.suite == 'browser'
-        working-directory: apps/gents-desktop
-        run: npm run test:ui:e2e
-
-      # Only deterministic shape assertions fail this lane. Wall-clock and
-      # resource measurements remain evidence until runner stability is known.
-      - name: Check mobile interaction structural budgets
-        if: matrix.suite == 'browser'
-        working-directory: apps/gents-desktop
-        run: npm run perf:mobile -- --runs=3 --output=test-results/mobile-performance/ci
+      - name: Run the desktop ${{ matrix.suite }} suite
+        run: make gate-run JOB="ts-${{ matrix.suite }}"
 
       - name: Upload desktop UI artifacts
         if: failure() && matrix.suite == 'browser'
@@ -721,23 +731,25 @@ jobs:
             apps/gents-desktop/playwright-screenshots-report
 
   desktop-ui-bombadil:
+    needs: plan
     if: >-
-      (inputs.rust_suite == '' || inputs.rust_suite == 'all') &&
       (github.event_name != 'pull_request' ||
-      (github.event.pull_request.draft == false &&
-      (github.event.pull_request.stack == null ||
-      github.event.pull_request.stack.position == github.event.pull_request.stack.size)))
-    # Bombadil's exact Linux failure trace passes on macOS. Keep this small
-    # platform-specific smoke on a Studio while the portable UI suite runs on
-    # hosted Linux; it normally releases the slot before Rust becomes ready.
-    # Keep the heavier desktop Rust slot available; the CLI shard is short and
-    # can wait for this platform-specific smoke test to release its runner.
-    runs-on: [self-hosted, macOS, ARM64, studio, studio-2, ci-cli]
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      contains(fromJSON(needs.plan.outputs.jobs), 'ts-fuzz')
+    # Bombadil's exact Linux failure trace passes on macOS, so this smoke
+    # stays on macOS while the portable UI suite runs on Linux.
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.macos }}
     timeout-minutes: 10
+    env:
+      GATE_PLAN: ${{ needs.plan.outputs.plan }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+
+      - name: Record the host's live Gents node
+        if: runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh record
 
       - uses: actions/setup-node@v7
         with:
@@ -747,16 +759,12 @@ jobs:
       - name: Install workspace frontend dependencies
         run: npm ci
 
-      - name: Build desktop packages
-        run: npm run build:packages
-
       - name: Install Playwright browser
         working-directory: apps/gents-desktop
         run: npx playwright install chromium
 
       - name: Run desktop Bombadil smoke
-        working-directory: apps/gents-desktop
-        run: npm run test:ui:fuzz -- --time-limit 30s
+        run: make gate-run JOB=ts-fuzz
 
       # Bombadil has no --seed; the recorded trace is the only exact-replay
       # handle. Upload it on success too so a failing run can be bisected
@@ -770,12 +778,17 @@ jobs:
           retention-days: 30
           path: apps/gents-desktop/test-results/bombadil
 
+      # Read-only; fails the job when one of its steps stopped the host's live node.
+      - name: Check the host's live Gents node is still running
+        if: always() && runner.os == 'macOS' && runner.environment == 'self-hosted'
+        run: .github/scripts/host-runtime-service.sh verify
+
   triage-hygiene:
-    if: inputs.rust_suite == '' || inputs.rust_suite == 'all'
     # The issue-triage bot holds `issues: write` and runs on a daily cron. These
     # tests are the only fence on its decision function, so every pull request
     # must run them.
-    runs-on: ubuntu-latest
+    needs: plan
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.linux }}
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
@@ -792,11 +805,11 @@ jobs:
         run: npm run test:triage
 
   notary-control-tests:
-    if: inputs.rust_suite == '' || inputs.rust_suite == 'all'
     # Focused, network-free tests for the staged-artifact notarization control
-    # scripts. They need real macOS ditto/shasum, so they run on a hosted
-    # macOS runner with no secrets. Draft PRs run them too.
-    runs-on: macos-latest
+    # scripts. They need real macOS ditto/shasum and no secrets. Draft PRs run
+    # them too.
+    needs: plan
+    runs-on: ${{ fromJSON(needs.plan.outputs.plan).runs_on.macos }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -806,9 +819,53 @@ jobs:
       - name: Run notarization control tests
         run: |
           set -euo pipefail
-          python3 -m venv "${RUNNER_TEMP}/notary-venv"
-          "${RUNNER_TEMP}/notary-venv/bin/pip" install --quiet pyyaml==6.0.2
+          if python3 -c 'import yaml' 2>/dev/null; then
+            python=python3
+          else
+            python3 -m venv "${RUNNER_TEMP}/yaml-venv"
+            "${RUNNER_TEMP}/yaml-venv/bin/pip" install --quiet pyyaml==6.0.2
+            python="${RUNNER_TEMP}/yaml-venv/bin/python"
+          fi
           bash -n .github/scripts/notarize-staged-artifact.sh
-          "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-notarize-staged-artifact.py
-          "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-rc1-notary-auth.py
-          "${RUNNER_TEMP}/notary-venv/bin/python" .github/scripts/test-release-signing-mode.py
+          "${python}" .github/scripts/test-notarize-staged-artifact.py
+          "${python}" .github/scripts/test-rc1-notary-auth.py
+          "${python}" .github/scripts/test-release-signing-mode.py
+
+  # The one check to require: every job that runs on every event, and every
+  # job the plan selected, succeeded. A skip passes only for a job the plan
+  # left out (scripts/ci/gate.py verdict).
+  gate:
+    if: always()
+    needs:
+      - plan
+      - repository-guard
+      - fmt
+      - lint
+      - contract
+      - test
+      - build
+      - shard
+      - desktop-packages
+      - desktop-ui
+      - desktop-ui-bombadil
+      - publish-control-tests
+      - triage-hygiene
+      - notary-control-tests
+    # A failed plan has no runs_on; the verdict still reports it.
+    runs-on: >-
+      ${{ needs.plan.outputs.plan && fromJSON(needs.plan.outputs.plan).runs_on.linux ||
+      'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+
+      - name: Require every selected job
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          GATE_FORK: >-
+            ${{ github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name != github.repository }}
+        run: python3 scripts/ci/gate.py verdict

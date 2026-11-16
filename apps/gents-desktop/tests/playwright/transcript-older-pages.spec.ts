@@ -37,10 +37,20 @@ test("scrolling up a long session does not wait at the top for each page", async
     Object.assign(window, { __olderFrames: frames });
   });
 
+  /* a notch at a time, until four pages more than the first view are read.
+     A wheel returns once the page has taken it, so under load each notch
+     takes longer: the reading ends at the rows reached, not a notch count */
+  const goal = async () =>
+    page.evaluate(() => {
+      const seen = (window as unknown as { __olderFrames: { rows: number }[] })
+        .__olderFrames;
+      return Math.max(...seen.map((f) => f.rows)) >= seen[0]!.rows + 160;
+    });
   await panel.hover();
   for (let i = 0; i < 240; i += 1) {
     await page.mouse.wheel(0, -120);
     await page.waitForTimeout(50);
+    if (i % 8 === 7 && (await goal())) break;
   }
 
   const frames = await page.evaluate(

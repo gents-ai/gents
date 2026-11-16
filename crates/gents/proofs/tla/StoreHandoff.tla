@@ -1,4 +1,7 @@
 ---- MODULE StoreHandoff ----
+\* lean: none
+\* crates: gents-store, gents-client-host, gents-desktop-core
+\* models: StoreHandoff.decide, ClientInstallation.step
 (***************************************************************************)
 (* Handing one local store from the process that holds it to the next one *)
 (* that opens it: a client installation that retires and the attachment   *)

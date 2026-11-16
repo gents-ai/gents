@@ -15,12 +15,12 @@ name: Live Engineer eval
 # Not a pull request gate. When the endpoint is unreachable or not serving the
 # model, the job says so in its summary and ends green with a warning.
 #
-# The job runs on the inference host's own runner, on the host itself: the
+# The job runs on a `ci-inference` runner, on the inference host itself: the
 # model listens there on loopback, a job container cannot reach the host
 # (bridge-to-host traffic is dropped) and job containers cannot join the host
-# network, and the minisforum runners deny private addresses to jobs. That
-# runner also builds core-packs; one runner runs one job at a time, so the
-# two never overlap. The nightly start (07:17 UTC) sits in the runner's
+# network, and the `ci-linux`/`ci-portable` runners deny private addresses to
+# jobs. Today that runner also builds core-packs (`ci-docker`); one runner
+# runs one job at a time, so the two never overlap. The nightly start (07:17 UTC) sits in the runner's
 # quietest hours, and the concurrency group keeps eval runs from stacking.
 
 on:
@@ -53,7 +53,7 @@ concurrency:
 jobs:
   live-engineer-eval:
     name: Live Engineer eval (${{ inputs.scope || 'ladder' }})
-    runs-on: [self-hosted, Linux, X64, workstation-1]
+    runs-on: [self-hosted, Linux, X64, ci-inference]
     timeout-minutes: 140
     defaults:
       run:

@@ -1,0 +1,4 @@
+---- MODULE MCBackgroundWakeIdentityNoGateNoConflict ----
+EXTENDS BackgroundWakeIdentity
+
+====

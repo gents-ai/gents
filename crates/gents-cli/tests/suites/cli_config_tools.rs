@@ -371,6 +371,7 @@ fn assert_keys_in_order(report: &str, keys: &[&str]) {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tools_explain_refuses_a_live_root_the_server_cannot_resolve() -> Result<()> {
     let tempdir = tempfile::tempdir()?;

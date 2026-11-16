@@ -5,6 +5,19 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Core DefraDB-backed agent runtime for Gents"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+[[test]]
+name = "e2e_triggers"
+path = "tests/e2e_triggers.rs"
+
+[[test]]
+name = "write_owner_structure"
+path = "tests/write_owner_structure.rs"
 
 [features]
 # Gents executes Lens migrations at runtime, so keep Wasmtime explicit while
@@ -22,14 +35,6 @@ live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e", "gents-inference
 test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard", "gents-inference/test-home-guard", "gents-p2p/test-home-guard", "gents-pack/test-home-guard", "gents-session/test-home-guard", "gents-tools/test-home-guard", "gents-toolcalls/test-home-guard", "gents-automation/test-home-guard", "gents-observe/test-home-guard"]
 # Native fixtures for downstream conformance tests; never enabled in production.
 test-fixtures = ["dep:gents-lean-vocab", "test-home-guard", "axum/ws", "gents-store/test-fixtures", "gents-documents/test-fixtures", "gents-inference/test-fixtures", "gents-p2p/test-fixtures", "gents-pack/test-fixtures", "gents-session/test-fixtures", "gents-tools/test-fixtures", "gents-toolcalls/test-fixtures", "gents-automation/test-fixtures", "gents-observe/test-fixtures"]
-
-# All other test binaries are auto-discovered; this explicit target overrides
-# autodiscovery for e2e_live so the link only happens on live runs
-# (`cargo test -p gents --features live-e2e --test e2e_live`).
-[[test]]
-name = "e2e_live"
-path = "tests/e2e_live.rs"
-required-features = ["live-e2e"]
 
 [dependencies]
 # Decoder of Lean-generated cases; compiled in only for test-fixtures.
