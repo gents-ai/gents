@@ -177,9 +177,9 @@ pub struct ServeArgs {
     #[arg(
         long,
         value_name = "MIB",
-        help = "Store block cache size in whole MiB. Omitted or invalid values (not a whole number of MiB at least 1) use the 512 MiB default"
+        help = "Store block cache size in MiB (must be > 0). Defaults to 512"
     )]
-    pub block_cache_mb: Option<String>,
+    pub block_cache_mb: Option<u64>,
     #[arg(
         long,
         value_enum,

@@ -613,8 +613,7 @@ async fn serve_foreground(
     }
     let _post_open_keychain_prompt_guard =
         gents_service::process_resources::prevent_keychain_prompts(args.keychain_startup_approval)?;
-    let block_cache_bytes =
-        gents_store::local::storage_backend::block_cache_size(args.block_cache_mb.as_deref());
+    let block_cache_bytes = resolve_block_cache_bytes(&args)?;
     let protected_backend = protected_backend
         .preflight(&backend_store_key, Some(identity.did()), block_cache_bytes)
         .await?;
@@ -1550,6 +1549,17 @@ fn positive_millis(flag: &str, value: Option<u64>) -> Result<Option<Duration>> {
     }
 }
 
+fn resolve_block_cache_bytes(args: &ServeArgs) -> Result<usize> {
+    match args.block_cache_mb {
+        None => Ok(gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES),
+        Some(0) => anyhow::bail!("--block-cache-mb must be > 0"),
+        Some(mib) => usize::try_from(mib)
+            .ok()
+            .and_then(|mib| mib.checked_mul(1024 * 1024))
+            .context("--block-cache-mb exceeds the addressable size"),
+    }
+}
+
 fn resolve_p2p_intervals(args: &ServeArgs) -> Result<P2pIntervals> {
     Ok(P2pIntervals::with_overrides(
         positive_millis("p2p-registry-heartbeat-ms", args.p2p_registry_heartbeat_ms)?,
@@ -1689,6 +1699,21 @@ mod server_key_tests {
         assert!(error
             .to_string()
             .contains("--p2p-pairing-sweep-ms must be > 0"));
+    }
+
+    #[test]
+    fn block_cache_defaults_and_rejects_zero() {
+        assert_eq!(
+            resolve_block_cache_bytes(&parse_server(&[])).unwrap(),
+            gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES
+        );
+        assert_eq!(
+            resolve_block_cache_bytes(&parse_server(&["--block-cache-mb", "128"])).unwrap(),
+            128 * 1024 * 1024
+        );
+        let error =
+            resolve_block_cache_bytes(&parse_server(&["--block-cache-mb", "0"])).unwrap_err();
+        assert!(error.to_string().contains("--block-cache-mb must be > 0"));
     }
 
     #[cfg(unix)]
