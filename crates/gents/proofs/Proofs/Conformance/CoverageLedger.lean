@@ -1936,7 +1936,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (boundaryCoverage
       "family"
       "identity_user_delegation_admit"
-      "model-production-gap: the pinned DefraDB runs a verified client graph only under transaction-bound document authorization, which a Vera node does not offer, and takes no credential for the graph's signer; no production path admits a User's write the runtime makes in its own process on a Vera home until it does (#3831, defradb.rs#2970).")
+      "model-production-gap: the pinned DefraDB runs a verified client graph only under transaction-bound document authorization, which a Vera node does not offer, and takes no credential for the graph's signer; no production path admits a User's write the runtime makes in its own process on a Vera home until the pin carries the signer credential of defradb.rs#2972 (#3831).")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "family"
