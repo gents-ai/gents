@@ -612,8 +612,10 @@ async fn serve_foreground(
     }
     let _post_open_keychain_prompt_guard =
         gents_service::process_resources::prevent_keychain_prompts(args.keychain_startup_approval)?;
+    let block_cache_bytes =
+        gents_store::local::storage_backend::block_cache_size(args.block_cache_mb.as_deref());
     let protected_backend = protected_backend
-        .preflight(&backend_store_key, Some(identity.did()))
+        .preflight(&backend_store_key, Some(identity.did()), block_cache_bytes)
         .await?;
     let effective_tool_ceiling = args
         .tool_ceiling

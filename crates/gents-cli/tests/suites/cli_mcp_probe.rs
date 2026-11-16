@@ -455,12 +455,16 @@ impl McpFixture {
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let graphql = format!("http://{}/api/v0/graphql", listener.local_addr()?);
         let node = Arc::new(
-            gents_store::local::store_key::persistent_builder(&data, &store_key)?
-                .with_node_identity_did(node_did.clone())
-                .with_node_acp_enabled()
-                .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
-                .build()
-                .await?,
+            gents_store::local::store_key::persistent_builder(
+                &data,
+                &store_key,
+                gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+            )?
+            .with_node_identity_did(node_did.clone())
+            .with_node_acp_enabled()
+            .with_http(gents::defra_node::HttpConfig::with_listener(listener)?)
+            .build()
+            .await?,
         );
         let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             client.private_key_bytes(),

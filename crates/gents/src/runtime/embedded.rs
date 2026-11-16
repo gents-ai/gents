@@ -186,7 +186,11 @@ impl EmbeddedHome {
             &store_lock,
         )
         .await?
-        .preflight(&store_key, Some(&did))
+        .preflight(
+            &store_key,
+            Some(&did),
+            gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
         .await?;
         let served = ServedNode::default();
         let (http, client_endpoint, owner_staged) = trial_http(served.clone()).await?;
@@ -330,7 +334,11 @@ impl EmbeddedHome {
                 .context("trial store lock was released")?,
         )
         .await?
-        .preflight(&self.store_key, Some(&self.did))
+        .preflight(
+            &self.store_key,
+            Some(&self.did),
+            gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
         .await?;
         let served = ServedNode::default();
         let (http, client_endpoint, owner_staged) = trial_http(served.clone()).await?;
