@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use globset::GlobBuilder;
 
+use crate::blocker::TraversalBlocker;
 use crate::context::RunnerContext;
 use crate::output::{
     default_ignored_names, echoed_pattern, format_entries, format_grep_matches, render_tool_output,
@@ -75,7 +76,16 @@ pub fn execute_request_with_base(
     base: Option<PathBuf>,
     request: NativeFsRunnerRequest,
 ) -> Result<String> {
-    let context = RunnerContext::new_with_base(root, base)?;
+    execute_request_with_blocker(root, base, request, None)
+}
+
+pub fn execute_request_with_blocker(
+    root: PathBuf,
+    base: Option<PathBuf>,
+    request: NativeFsRunnerRequest,
+    blocker: Option<TraversalBlocker>,
+) -> Result<String> {
+    let context = RunnerContext::new_with_base(root, base)?.with_blocker(blocker);
     match request {
         NativeFsRunnerRequest::ListFiles(args) => list_files(&context, args),
         NativeFsRunnerRequest::Glob(args) => glob(&context, args),

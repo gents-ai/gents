@@ -62,6 +62,8 @@ fn fs_runner_timed_out_error(
 pub(crate) struct NativeFsRunner {
     root: PathBuf,
     base: PathBuf,
+    #[cfg(test)]
+    blocker: Option<std::sync::Arc<gents_fs_runner::TraversalBlocker>>,
 }
 
 impl NativeFsRunner {
@@ -69,6 +71,8 @@ impl NativeFsRunner {
         Self {
             root: context.root(),
             base: context.base(),
+            #[cfg(test)]
+            blocker: context.runner_blocker(),
         }
     }
 
@@ -100,7 +104,17 @@ impl NativeFsRunner {
         tool_name: &'static str,
     ) -> Result<String, ToolError> {
         let runner = resolve_runner_command(&self.effective_root(), &self.effective_base())?;
+        #[cfg(test)]
+        let runner = self.with_blocker_args(runner);
         self.run_resolved(request, tool_name, runner).await
+    }
+
+    #[cfg(test)]
+    fn with_blocker_args(&self, mut runner: RunnerCommand) -> RunnerCommand {
+        if let Some(blocker) = &self.blocker {
+            runner.argv.extend(blocker.to_args());
+        }
+        runner
     }
 
     async fn run_resolved(

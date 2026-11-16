@@ -2,10 +2,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
+use crate::blocker::TraversalBlocker;
+
 #[derive(Clone)]
 pub(crate) struct RunnerContext {
     root: PathBuf,
     base: PathBuf,
+    blocker: Option<TraversalBlocker>,
 }
 
 impl RunnerContext {
@@ -27,7 +30,20 @@ impl RunnerContext {
             }
             None => root.clone(),
         };
-        Ok(Self { root, base })
+        Ok(Self {
+            root,
+            base,
+            blocker: None,
+        })
+    }
+
+    pub(crate) fn with_blocker(mut self, blocker: Option<TraversalBlocker>) -> Self {
+        self.blocker = blocker;
+        self
+    }
+
+    pub(crate) fn blocker(&self) -> Option<&TraversalBlocker> {
+        self.blocker.as_ref()
     }
 
     fn resolve_path(&self, path: &str) -> Result<PathBuf> {
