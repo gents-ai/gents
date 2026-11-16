@@ -32,8 +32,13 @@ end SchemaInstall
 
 namespace AccessClassification
 
-deriving instance Lean.ToJson for Classification, Failure, Erasure, StoreWrapper, ViewWrapper
+deriving instance Lean.ToJson for Classification, Failure, Erasure, StoreWrapper,
+  InferenceWrapper, SessionWrapper, P2pWrapper, ServiceWrapper, ToolsWrapper, DesktopCoreWrapper,
+  StoreRetryWrapper, ProtocolRetryWrapper, OwnerProbe, StoreOwnerWrapper, PassthroughWrapper,
+  Printer, EvalWrapper, ToolcallsWrapper
 
-attribute [conformance_function] storeWrapped viewWrapped
+attribute [conformance_function] storeWrapped inferenceWrapped sessionWrapped p2pWrapped
+  serviceWrapped toolsWrapped desktopCoreWrapped storeRetryWrapped protocolRetryWrapped
+  storeOwnerFound passthroughWrapped passthroughPrinted evalWrapped toolcallsWrapped
 
 end AccessClassification

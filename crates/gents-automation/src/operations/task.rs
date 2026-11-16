@@ -217,11 +217,11 @@ fn passthrough<E>(error: E) -> TaskOperationError
 where
     E: Into<anyhow::Error>,
 {
-    TaskOperationError::Passthrough(
+    TaskOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::new(Into::<
+        anyhow::Error,
+    >::into(
         error
-            .into()
-            .reallocate_into_boxed_dyn_error_without_backtrace(),
-    )
+    )))
 }
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use chrono::Utc;
 use gents_inference::llm::{HookAction, ToolCallHookAction};
 use gents_store::identity::NodeIdentity;
 use gents_toolcalls::call::hook::fixtures::*;
@@ -29,13 +28,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.unwrap();
-    bind_managed_hook_request(
-        &mut hook,
-        "goal-request",
-        &identity,
-        Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_managed_hook_request(&mut hook, "goal-request", &identity).await;
     let access = hook.actor_access().unwrap();
 
     accept_hook_tool_call(
@@ -287,13 +280,7 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
                     HookAction::Continue
                 ));
                 let session = hook.session_id().await.unwrap();
-                bind_managed_hook_request(
-                    &mut hook,
-                    "control-receipt",
-                    &identity,
-                    Utc::now() + chrono::Duration::minutes(5),
-                )
-                .await;
+                bind_managed_hook_request(&mut hook, "control-receipt", &identity).await;
                 let access = hook.actor_access().unwrap();
                 accept_hook_tool_call(&hook, "control-call", "create_goal", &args, None).await;
                 let (action, trace) =

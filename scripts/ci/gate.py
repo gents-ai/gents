@@ -37,14 +37,19 @@ PROOFS = "crates/gents/proofs"
 TLA_CHECK = ROOT / PROOFS / "tla/scripts/tla_check.py"
 
 
+@functools.cache
 def load_tla_check():
+    """Loaded on first use: the verdict job checks out only scripts/ci."""
     spec = importlib.util.spec_from_file_location("tla_check", TLA_CHECK)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-tla_check = load_tla_check()
+def __getattr__(name):
+    if name == "tla_check":
+        return load_tla_check()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # Roles -> runner labels: the one inventory of CI runners. Jobs select runners
 # by these capability labels only, never by host name, so new machines join by
@@ -537,6 +542,7 @@ def walk_module(path, owns_directory, features, filters, seen):
 def tla_specs(files, members, everything):
     """The TLA+ specs a change selects by their headers: every spec when it
     changes everything or a header does not parse (the runner then reports it)."""
+    tla_check = load_tla_check()
     try:
         nodes = tla_check.graph()
     except tla_check.HeaderError:

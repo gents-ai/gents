@@ -413,7 +413,7 @@ pub fn session_operation_failure(
         error.next_call(),
     );
     match error {
-        E::Passthrough(cause) => anyhow::Error::new(OperationCause(cause)),
+        E::Passthrough(cause) => anyhow::Error::new(OperationCause(Box::new(cause))),
         error => anyhow::Error::new(error).context(bridge),
     }
 }
@@ -714,6 +714,70 @@ mod transaction_conflict_tests {
             assert_eq!(error.retryable, repeatable);
             assert!(error.message.contains("DefraDB transaction conflict"));
         }
+    }
+
+    fn passed(
+        conflict: gents_store::config_client::ConfigClientError,
+    ) -> gents_protocol::error_chain::PassedThrough {
+        gents_protocol::error_chain::PassedThrough::new(anyhow::Error::new(conflict))
+    }
+
+    /// Mailbox and Agent operations reach the desktop through their own
+    /// failure owners; a conflict they pass through stays typed.
+    #[test]
+    fn mailbox_and_agent_passthrough_conflicts_reach_the_desktop_typed() {
+        use gents_protocol::operations::agent::AgentOperationError;
+        use gents_protocol::operations::mailbox::MailboxOperationError;
+        for error in [
+            mailbox_operation_failure(MailboxOperationError::Passthrough(passed(
+                gents_store::config_client::classified_conflict_for_test(),
+            ))),
+            agent_operation_failure(
+                AgentOperationError::Passthrough(passed(
+                    gents_store::config_client::classified_conflict_for_test(),
+                )),
+                gents_protocol::operations::NextCall::ResourceHelp { resource: "agent" },
+            ),
+        ] {
+            let error = BridgeError::classify_transport_error(error);
+            assert_eq!(error.code, BridgeErrorCode::TransactionConflict);
+            assert!(error.retryable);
+        }
+    }
+
+    /// Every operation error that passes another owner's failure through keeps
+    /// the store's conflict on its chain, where the store's own classifier
+    /// finds it, and its `passthrough()` accessor yields the store error.
+    #[test]
+    fn every_operation_passthrough_keeps_the_store_conflict_classifiable() {
+        use gents_protocol::operations::{agent, document, mailbox};
+        use gents_store::config_client::{
+            classified_conflict_for_test, classified_conflict_repeatable,
+            unconfirmed_commit_conflict_for_test, ConfigClientError,
+        };
+        let mailbox =
+            mailbox::MailboxOperationError::Passthrough(passed(classified_conflict_for_test()));
+        let agent =
+            agent::AgentOperationError::Passthrough(passed(unconfirmed_commit_conflict_for_test()));
+        let document =
+            document::DocumentOperationError::Passthrough(passed(classified_conflict_for_test()));
+        for accessor in [mailbox.passthrough(), agent.passthrough()] {
+            assert!(
+                accessor.is_some_and(|error| error.downcast_ref::<ConfigClientError>().is_some())
+            );
+        }
+        assert_eq!(
+            classified_conflict_repeatable(&anyhow::Error::new(mailbox)),
+            Some(true)
+        );
+        assert_eq!(
+            classified_conflict_repeatable(&anyhow::Error::new(agent)),
+            Some(false)
+        );
+        assert_eq!(
+            classified_conflict_repeatable(&anyhow::Error::new(document)),
+            Some(true)
+        );
     }
 
     #[test]
