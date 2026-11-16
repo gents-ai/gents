@@ -114,8 +114,8 @@ build:
 build-cli:
 	CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli $(CARGO_PROFILE_FLAG) $(CARGO_TARGET_FLAG)
 
-build-desktop:
-	$(CARGO) build -p gents-desktop-tauri $(CARGO_PROFILE_FLAG)
+build-desktop: core-packs
+	GENTS_REQUIRE_CORE_PACKS=1 $(CARGO) build -p gents-desktop-tauri $(CARGO_PROFILE_FLAG)
 
 build-desktop-ui:
 	$(NPM) --prefix $(DESKTOP_DIR) run build
@@ -323,8 +323,9 @@ desktop-native-stage-sidecar: release-cli
 desktop-native-preflight: build-cli
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:native:preflight
 
-desktop-native-dev: build-cli
-	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- dev
+desktop-native-dev: core-packs
+	GENTS_REQUIRE_CORE_PACKS=1 $(CARGO) build -p gents-cli $(CARGO_PROFILE_FLAG) $(CARGO_TARGET_FLAG)
+	GENTS_REQUIRE_CORE_PACKS=1 $(NPM) --prefix $(DESKTOP_DIR) run tauri -- dev
 
 desktop-native-build: desktop-native-stage-sidecar
 	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build --config src-tauri/tauri.bundle.conf.json --config $(DESKTOP_LOCAL_TAURI_CONFIG)

@@ -2,6 +2,7 @@ use crate::support::*;
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
+use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -628,10 +629,45 @@ async fn desktop_first_run_without_inference_sets_up_the_engineer() -> Result<()
     Ok(())
 }
 
+fn onboarding_core_archives() -> &'static [(&'static str, &'static [u8])] {
+    let root = tempfile::tempdir().unwrap();
+    let archives: Vec<_> = gents_pack::pack::core_packs::CorePack::ALL
+        .into_iter()
+        .map(|pack| {
+            let coordinate = pack.coordinate();
+            let name = coordinate.strip_prefix("gents/").unwrap();
+            let dir = root.path().join(name);
+            fs::create_dir_all(&dir).unwrap();
+            let manifest = json!({"manifest_version":1,"name":name,"namespace":"gents",
+            "version":"1.0.0","description":"onboarding fixture","authors":["tests"],
+            "tags":[],"kind":"documents","assets":["README.md","pack_config.json"],
+            "dependencies":[],"config":"pack_config.json"});
+            let config = json!({"node":{"node_did":"${GENTS_PACK_NODE_DID}"},
+            "skills":[{"skill_id":format!("core-{name}"),"node_did":"${GENTS_PACK_NODE_DID}",
+            "name":name,"description":"fixture","instructions":"Use it."}]});
+            fs::write(
+                dir.join("manifest.json"),
+                serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+            fs::write(
+                dir.join("pack_config.json"),
+                serde_json::to_vec(&config).unwrap(),
+            )
+            .unwrap();
+            fs::write(dir.join("README.md"), "fixture").unwrap();
+            let mut bytes = Vec::new();
+            gents_pack::pack::archive::write_pack(&dir, &mut bytes).unwrap();
+            (coordinate, &*Box::leak(bytes.into_boxed_slice()))
+        })
+        .collect();
+    Box::leak(archives.into_boxed_slice())
+}
+
 async fn provision_as_the_desktop(home: PathBuf, desktop_root: PathBuf) -> Result<()> {
     let root = home.with_file_name("root");
     fs::create_dir_all(&root)?;
-    gents_server::server_host::ensure_standard_home(
+    gents_server::server_host::ensure_standard_home_with_core_packs(
         &gents_store::test_support::runtime_handle(),
         gents_server::server_host::ProvisionOptions {
             home,
@@ -642,8 +678,20 @@ async fn provision_as_the_desktop(home: PathBuf, desktop_root: PathBuf) -> Resul
             store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             default_packs: true,
         },
+        onboarding_core_archives(),
     )
     .await
+}
+
+#[test]
+fn desktop_first_run_without_archives_refuses() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    first_run_step(
+        tempdir.path(),
+        &tempdir.path().join("home"),
+        "no-archives",
+        "",
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -659,6 +707,30 @@ async fn desktop_first_run_in_fixture_home() -> Result<()> {
     let home = PathBuf::from(std::env::var_os(FIRST_RUN_HOME_ENV).context("fixture home")?);
     let step = std::env::var(FIRST_RUN_STEP_ENV).context("fixture step")?;
     let resolved = gents_desktop_core::client::DesktopPaths::discover()?;
+    if step == "no-archives" {
+        let error = gents_server::server_host::ensure_standard_home_with_core_packs(
+            &gents_store::test_support::runtime_handle(),
+            gents_server::server_host::ProvisionOptions {
+                home,
+                desktop_root: resolved.root().to_path_buf(),
+                node_name: "Forge".to_owned(),
+                tool_ceiling: gents_service::args::ToolCeilingArg::Readwrite,
+                tool_root: Some(fs::canonicalize(resolved.root().parent().unwrap())?),
+                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                default_packs: true,
+            },
+            &[],
+        )
+        .await
+        .unwrap_err();
+        let message = format!("{error:#}");
+        anyhow::ensure!(
+            message.contains("make core-packs && make desktop-native-dev")
+                && !message.contains("--no-default-packs"),
+            "unexpected desktop error: {message}"
+        );
+        return Ok(());
+    }
     if step == "provision" {
         return provision_as_the_desktop(home, resolved.root().to_path_buf()).await;
     }

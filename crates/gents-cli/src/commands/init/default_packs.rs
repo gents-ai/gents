@@ -78,14 +78,32 @@ fn release_archive<'a>(archives: Archives<'a>, pack: CorePack) -> Option<&'a [u8
         .map(|(_, bytes)| *bytes)
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("this build cannot initialize the Engineer: missing core pack archives: {missing}; in the Gents source checkout run `make core-packs && make build-cli`, then retry with the rebuilt binary, or pass `--no-default-packs` to opt out")]
+#[derive(Debug, Clone, thiserror::Error)]
+#[error(
+    "this build cannot initialize the Engineer: missing core pack archives: {missing}{opt_out}"
+)]
 pub(crate) struct MissingCorePackArchives {
     missing: String,
+    opt_out: &'static str,
 }
 
-/// Refuse a fresh Engineer before reserving its bootstrap if the build cannot
+impl MissingCorePackArchives {
+    pub(crate) fn managed(&self, advice: &'static str) -> Self {
+        Self {
+            opt_out: advice,
+            ..self.clone()
+        }
+    }
+}
+
+/// Refuse a fresh Engineer before bootstrap reservation if the build cannot
 /// provide its core packs. A bootstrap-only binary can still build packs.
+pub(crate) fn all_archives_present(archives: Archives<'_>) -> bool {
+    CorePack::ALL
+        .into_iter()
+        .all(|pack| release_archive(archives, pack).is_some())
+}
+
 pub(crate) fn require_archives(archives: Archives<'_>) -> Result<()> {
     let missing: Vec<_> = CorePack::ALL
         .into_iter()
@@ -95,10 +113,28 @@ pub(crate) fn require_archives(archives: Archives<'_>) -> Result<()> {
     if !missing.is_empty() {
         return Err(MissingCorePackArchives {
             missing: missing.join(", "),
+            opt_out:
+                "; run `make core-packs && make build-cli` and retry, or pass `--no-default-packs` to opt out, leaving the Engineer without skills",
         }
         .into());
     }
     Ok(())
+}
+
+pub(crate) fn start_error(error: anyhow::Error) -> anyhow::Error {
+    match error.downcast_ref::<MissingCorePackArchives>() {
+        Some(missing) => missing
+            .managed("; run `make core-packs && make build-cli` and retry")
+            .into(),
+        None => error,
+    }
+}
+
+pub(crate) fn desktop_error(error: anyhow::Error) -> anyhow::Error {
+    match error.downcast_ref::<MissingCorePackArchives>() {
+        Some(missing) => missing.managed("; this desktop dev build is incomplete; run `make core-packs && make desktop-native-dev`").into(),
+        None => error,
+    }
 }
 
 fn not_carried(pack: CorePack) -> String {
@@ -1142,7 +1178,19 @@ mod tests {
             crate::commands::init::init_home_with_core_packs(init_args(home.path(), &[]), &[])
                 .await
                 .unwrap_err();
-        let message = format!("{error:#}");
+        let typed = error.downcast_ref::<MissingCorePackArchives>().unwrap();
+        let message = typed.to_string();
+        assert!(
+            message.contains("make core-packs && make build-cli"),
+            "{message}"
+        );
+        assert!(message.contains("--no-default-packs"), "{message}");
+        assert!(message.contains("without skills"), "{message}");
+        let managed = start_error(error);
+        assert!(managed.downcast_ref::<MissingCorePackArchives>().is_some());
+        let managed_message = managed.to_string();
+        assert!(managed_message.contains("make core-packs && make build-cli"));
+        assert!(!managed_message.contains("--no-default-packs"));
         assert!(message.contains("gents/pack_builder"), "{message}");
         assert!(message.contains("gents/script"), "{message}");
         assert!(!home
@@ -1156,6 +1204,38 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn existing_home_does_not_require_archives() {
+        let home = tempfile::tempdir().unwrap();
+        crate::commands::init::init_home_with_core_packs(
+            init_args(home.path(), &["--no-default-packs"]),
+            &[],
+        )
+        .await
+        .unwrap();
+        let result =
+            crate::commands::init::init_home_with_core_packs(init_args(home.path(), &[]), &[])
+                .await;
+        if let Err(error) = result {
+            assert!(
+                error.downcast_ref::<MissingCorePackArchives>().is_none(),
+                "{error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn partial_archive_set_reports_only_missing_packs() {
+        let archives = [("gents/pack_builder", &b"fixture"[..])];
+        let error = require_archives(&archives).unwrap_err();
+        let typed = error.downcast_ref::<MissingCorePackArchives>().unwrap();
+        assert!(!typed.missing.contains("gents/pack_builder"));
+        assert!(typed.missing.contains("gents/script"));
+        assert!(typed
+            .to_string()
+            .contains("make core-packs && make build-cli"));
     }
 
     /// The real `init --engineer` and `gents config pack starter --enable`

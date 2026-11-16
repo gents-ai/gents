@@ -296,7 +296,12 @@ pub(crate) async fn init_home_with_core_packs(
     };
 
     let installs_core_packs = args.engineer && fresh_store && !args.no_default_packs;
-    if installs_core_packs {
+    if gents_pack::pack::core_packs::refuse_init(
+        fresh_store,
+        args.engineer,
+        !args.no_default_packs,
+        default_packs::all_archives_present(core_packs),
+    ) {
         default_packs::require_archives(core_packs)?;
     }
     if fresh_store {

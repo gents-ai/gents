@@ -17,6 +17,12 @@ pub enum CorePack {
     Script,
 }
 
+/// Lean `Pack.CorePacks.refuseInit`: only a fresh Engineer using the default
+/// packs requires every release archive before bootstrap reservation.
+pub fn refuse_init(fresh: bool, engineer: bool, defaults: bool, all_archives: bool) -> bool {
+    fresh && engineer && defaults && !all_archives
+}
+
 impl CorePack {
     /// Lean `Pack.CorePacks.all`, in the order init installs them.
     pub const ALL: [Self; 6] = [
@@ -338,6 +344,18 @@ mod conformance {
     use gents_lean_vocab::families;
 
     use super::*;
+
+    #[test]
+    fn refuse_init_matches_the_lean_model() {
+        families::pack_core_packs_refuse_init::replay(|input| {
+            refuse_init(
+                input.fresh,
+                input.engineer,
+                input.defaults,
+                input.all_archives,
+            )
+        });
+    }
 
     #[test]
     fn approval_required_matches_the_lean_model() {

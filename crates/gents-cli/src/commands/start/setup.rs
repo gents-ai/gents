@@ -155,7 +155,9 @@ pub(super) async fn setup(
     args.store_key_custody = store_key_custody;
     resolve_backend_interactively(&mut args, next_screen).await?;
 
-    let initialized = init_home(args).await?;
+    let initialized = init_home(args)
+        .await
+        .map_err(crate::commands::init::default_packs::start_error)?;
     for line in next_step_lines(&initialized, &home) {
         eprintln!("{line}");
     }
