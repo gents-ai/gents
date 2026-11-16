@@ -9,7 +9,9 @@ use gents_pack::{
     plugin::http_calls, plugin::PluginBudget, plugin::PluginOutcome, plugin::PluginVerdict,
 };
 
-pub const MAX_ROUNDS: u32 = 64;
+/// The unset default for `PluginBudget::max_rounds`; a pack declaration can
+/// raise the per-invocation budget up to `MAX_DECLARED_ROUNDS`.
+pub const MAX_ROUNDS: u32 = gents_pack::plugin::DEFAULT_MAX_ROUNDS;
 pub const FINAL_ROUND_RESERVE_DIVISOR: u32 = 8;
 
 pub type Round = Arc<dyn Fn(Value, PluginBudget) -> Result<PluginOutcome> + Send + Sync>;
@@ -266,13 +268,16 @@ where
                     .to_owned(),
             ));
         }
-        if served == MAX_ROUNDS {
+        if served == budget.max_rounds {
             return Ok(refused(
                 started,
                 now(),
                 fuel,
                 PluginVerdict::Failed,
-                format!("the plugin asked for more than {MAX_ROUNDS} rounds of requests"),
+                format!(
+                    "the plugin asked for more than {} rounds of requests",
+                    budget.max_rounds
+                ),
             ));
         }
         served += 1;
@@ -425,6 +430,7 @@ mod tests {
             memory_bytes: 1 << 20,
             wall_clock: Duration::from_secs(5),
             max_output_bytes: 1 << 20,
+            max_rounds: MAX_ROUNDS,
         };
         let outcome = drive(calls, json!({"state": {"n": 1}}), budget, round)
             .await
