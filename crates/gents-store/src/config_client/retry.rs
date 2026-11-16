@@ -120,7 +120,10 @@ pub(super) fn rerun_request_in<'a>(
 }
 
 pub(super) fn transaction_conflict(origin: ConflictSource) -> ConfigClientError {
-    ConfigClientError::TransactionConflict(TransactionConflict { origin })
+    ConfigClientError::TransactionConflict(TransactionConflict {
+        origin,
+        repeatable: true,
+    })
 }
 
 pub(super) fn classified_transaction_conflict<E>(error: &E) -> Option<ConflictSource>

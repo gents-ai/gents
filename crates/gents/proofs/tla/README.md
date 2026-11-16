@@ -41,6 +41,20 @@ See `../README.md` for how this fits the broader formal-verification model.
   drops the cadence premise and loses an admission to back-to-back renewals;
   `StartWitness` reproduces the traced renewal/dispatch-start conflict that
   green absorbs.
+- `LeaseRenewalStarvation` — one request's execution lease, its owner and
+  its renewal task on the owner's runtime, beside the wall clock (#3704).
+  The claim starts the lease and the renewal task together; the renewal
+  polls every quarter lease and renews once half a lease remains; the
+  publication fence admits output only from the owning generation before
+  its deadline (Lean `RequestExecutionLease`). The owner also runs one
+  synchronous step that holds its runtime thread, the first Lean snapshot
+  read of a test. `SingleWriter` holds whatever the owner's runtime does
+  (`Fenced`); `OwnerPublishes` and `LeaseHeld` hold when the step runs
+  before the claim (green), off the runtime (`OffRuntime`) or for less than
+  half a lease (`BoundedSync`). RED: `SyncInsideLease` is the failing test's
+  order and breaks `OwnerPublishes`; `MarginSpent` spends half a lease and
+  breaks `LeaseHeld`; `Unfenced` drops the deadline check and breaks
+  `SingleWriter`.
 - `ClientSubmissionContention` — a User's optimistic chat send (Lean
   `ClientOptimisticSend`) racing writes to the documents it reads. The client
   picks the request identity, shows the message pending, keeps its payload
@@ -65,6 +79,20 @@ See `../README.md` for how this fits the broader formal-verification model.
   retries under a new identity and duplicates the turn; `NoPayload` drops the
   payload of an unconfirmed message and leaves a failed message with no
   Retry.
+- `InterruptLatchContention` — a User's interrupt of a running turn
+  (`interrupt.latch_request`, the desktop's and CLI's request interrupt)
+  racing the turn's own writes to the `AgentRequest` document: the execution
+  lease renewal and any other interrupter. The latch reads the row and sends
+  a User-signed update stamping `interrupt_requested_at` unless it is already
+  set; its commit aborts when a write of the row lands after the read. It is a
+  signed-conflict rebuild (Lean `TransactionReplay.disposition`) whose every
+  attempt reads the row afresh. `NoConflictLoss`, `StampedOnce`,
+  `DoneIsLatched` and `InterruptSettles` hold while fewer writes land in one
+  attempt series than it has attempts (the renewal cadence premise).
+  `SingleAttempt` is the found race (`transact_write` never rebuilds a sent
+  signed write, so one renewal failed the interrupt with a DefraDB
+  transaction conflict); `StaleRebuild` keeps the first read and stamps a
+  latch another interrupter set; `Exhausted` drops the cadence premise.
 - `PackUxWatch` — a pack page's live data watch (`desktop_ux_data_watch`)
   racing runtime restarts, window node selection, unwatch, window
   destruction and four runtime hazards (stopped for good, credentials
@@ -240,6 +268,44 @@ See `../README.md` for how this fits the broader formal-verification model.
   waits on the `pending_native` write-attempt event, a projection the attempt
   may skip once it holds a terminal outcome; `LostWakeup` drops permit
   semantics, the lost wakeup an enable-then-check wait avoids.
+- `DroppedPermitCleanup` — one admitted provider call's `InferenceCall` row
+  from its creation to its terminal, and what a reader may await before
+  reading it (#3659). The holder finishes explicitly (the terminal write is
+  awaited) or its permit or queued guard is dropped, and `Drop` hands the
+  terminal write to a detached cleanup the registry's tracker counts. Every
+  terminal is a compare-and-set on a live row. The runtime stops gracefully
+  (join the tasks that hold permits, await the tracker, exit), is cut by the
+  teardown deadline, or exits abruptly; an exit discards cleanup in flight,
+  and recovery terminalizes a live row whose call ended, with its own reason
+  and no usage. `ExactlyOneTerminal`, `ObserverSawTarget`,
+  `GracefulExitFlushed` and `EndedCallTerminal` hold in the green model, whose
+  reader awaits the flush after ending the permits; GREEN `Changes` and
+  `ChangesTerminal` add `ObserverSettles` for a reader on the store's change
+  subscription armed before its first read, the signal for a row no drop of
+  the reader's own owes (a spawned call's queued row). RED: `UntrackedSpawn`
+  is the code before #3692; `UnawaitedFlush` is a graceful stop that does not
+  await the tracker and discards a dropped permit's terminal and usage;
+  `UncountedFinalizer` awaits it but does not count a stream's finalizer,
+  which the stop aborts without joining, so the stop exits before that
+  permit is dropped; `NoRecovery` leaves a live row after an abrupt exit; `NoTerminalCas` writes
+  a second terminal over a finish dropped after its commit; `SleepTerminal`
+  and `SleepQueued` are the timer waits; `QueuedByFlush` awaits the tracker
+  for a row it does not count; `PollBudget` polls within a budget;
+  `LateSubscribe` subscribes after the first read. Lean
+  `InferenceCall.DroppedPermit` owns the terminal a drop records.
+- `ClientIdentityMetadata` — first-run writers of one home's client identity
+  metadata (#3659, the concurrent eval pilots). Each writer reads the
+  metadata, stages it beside the destination, renames it over the
+  destination and reads again; what it does with each read is Lean
+  `ClientIdentityMetadata.decide`. `NoMissingFileError`, `NoTornMetadata`,
+  `NeverUninstalled`, `OkSawOwnMetadata`, `AgreedInstall`, `WriterSettles`
+  and `SameKeyAccepts` hold with a staging name per writer, one rename, the
+  second read and a single-winner signing key, with writers dying at any
+  step. RED: `Before` is the code before #3692 (the loser's rename finds
+  `principal.tmp` gone); `SharedStaging` and `SharedStagingTorn` keep only
+  the fixed staging name; `RemoveThenRename` and `RemoveThenRenameReread`
+  keep only the removal; `NoReread` and `DivergentKey` drop the key premise,
+  which is what keeps writers of one home in agreement.
 - `GuestAllowance` — a computing plugin guest that never calls the host and
   is stopped only by its compute allowance (Lean `allowanceTicks`), an epoch
   deadline advanced by the WASM host's ticker thread. `MCGuestAllowance`
@@ -249,6 +315,50 @@ See `../README.md` for how this fits the broader formal-verification model.
   that stop is late, not lost; `Punctual` holds with on-time wakes;
   `Unchecked` (no epoch checks in loops) never stops the guest;
   `CancelLate` shows a cancel can find the guest already stopped.
+- `GoalWrapup` — the one wrap-up turn of a Goal whose token budget is
+  exhausted (#3810). Goal sources reconcile from the rows they read and
+  write in separate transactions (begin the wrap-up, claim the parent,
+  publish the child keyed by goal, parent and sequence, set the
+  `wrapup_completed` latch); a caller that stops polling drops a step
+  between them. `OneWrapupPerParent`, `NeverAfterCompletedWrapup`,
+  `OneWrapup` and `LatchRecorded` hold for two sources. `Window` is the test
+  that read the Goal after a fixed polling window and asserted the latch the
+  source had not yet written; `NoWrapupGuard` drops the `requestIsWrapup`
+  input of Lean `Goals.decide` and publishes a second wrap-up while the latch
+  is unwritten; `UnkeyedChild` publishes two children of one claim.
+- `BackgroundWakeIdentity` — concurrent background-completion notifications
+  of one finished request coalescing into one wake request (#3810), and the
+  fixture that prepares their tools. Under the process gate and DefraDB's
+  read-conflict abort, `OneWake`, `SameIdentity`, `NoneFailed` and
+  `EveryNotifierAnswered` hold. `WallClock` is the fixture that appended
+  each tool's output observed at the wall clock and was refused by the claim
+  deadline before any notification ran; `NoGate` loses a notifier to aborted
+  attempts; `NoGateNoConflict` creates two wakes.
+- `StreamDelivery` — streamed provider text reaching a subscribed client
+  while the provider pauses (#2131, #3803): the provider's chunks and its
+  gated completion, the owned drive loop and stream writer (flush on the
+  first visible bytes, on a due write, or at the batch deadline the drive
+  waits on; Lean `StreamBatch.plan`), the segment append, the app store's
+  request row and the client reader that joins both. `NoWithheldDuringPause`,
+  `ChunksReachClient`, `ObservedBeforeCompletion` and `NoSpuriousFailure`
+  hold for the paced and unpaced cases. `NoFlushTimer` flushes only on the
+  next chunk or completion and `NoAppendOnDue` ignores the writer's due
+  verdict; both strand a chunk during the pause. `RuntimeWakeOnly` is the
+  test reader's lost wake-up and `Budget` its wall-clock visibility budget:
+  the product is the green one in both. TLC2 `2026.11.06.222357` on Linux
+  amd64, Temurin 17, `-workers 4`: green 214 and 72 distinct states, each red
+  configuration violates its named property.
+- `BackgroundLiveOutputObservation` — a background process observed mid-run
+  (`list_background_tools_reports_running_live_output_bytes`): a gated child
+  prints "live" and waits; the test polls `list_processes` until the row is
+  running with 4 bytes, reads the same output with `read_process`, releases
+  the gate and waits. List and read report the output at the moment they run,
+  so `ReadAgrees` depends only on the gate still being closed when the read
+  runs. `Timed` is the code before the fix: the child's own bounded wait (or
+  its tool timeout) opens the gate after some ticks and the read returns 8
+  bytes, the observed failure; `TimeoutKill` is the tool timeout killing it
+  at the gate, which the wait reports as failed; `PollBudget` is the test's poll budget failing
+  before the child prints. Green has neither clock.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
@@ -327,6 +437,20 @@ with only running children writing, `RenewalBudget` violates
 ./scripts/run-tlc.sh MCBackgroundAdmissionContentionUnspaced
 ./scripts/run-tlc.sh MCBackgroundAdmissionContentionRenewalWitness
 ./scripts/run-tlc.sh MCBackgroundAdmissionContentionStartWitness
+```
+
+For LeaseRenewalStarvation — the green model (the synchronous step before
+the claim) and the `BoundedSync`, `OffRuntime` and `Fenced` models check
+clean; the three diagnostics are EXPECTED to report the violation named in
+their config:
+```bash
+./scripts/run-tlc.sh MCLeaseRenewalStarvation
+./scripts/run-tlc.sh MCLeaseRenewalStarvationBoundedSync
+./scripts/run-tlc.sh MCLeaseRenewalStarvationOffRuntime
+./scripts/run-tlc.sh MCLeaseRenewalStarvationFenced
+./scripts/run-tlc.sh MCLeaseRenewalStarvationSyncInsideLease
+./scripts/run-tlc.sh MCLeaseRenewalStarvationMarginSpent
+./scripts/run-tlc.sh MCLeaseRenewalStarvationUnfenced
 ```
 
 For SessionHeadObservation — the green model (Lean order, head-seeded
@@ -444,6 +568,16 @@ EXPECTED to report the violation named in their config:
 ./scripts/run-tlc.sh MCPackUxWatchUnbounded
 ```
 
+For DroppedPermitCleanup and ClientIdentityMetadata — the green models
+(`MCDroppedPermitCleanup`, `Changes`, `ChangesTerminal`;
+`MCClientIdentityMetadata`) check clean; every other config is a diagnostic
+EXPECTED to report the violation named in its file:
+```bash
+for m in MCDroppedPermitCleanup*.cfg MCClientIdentityMetadata*.cfg; do
+  ./scripts/run-tlc.sh "${m%.cfg}"
+done
+```
+
 Each run directly, from this directory, is:
 ```bash
 java -cp <tla2tools.jar> tlc2.TLC -workers 2 -metadir <scratch dir> \
@@ -521,12 +655,23 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCBackgroundAdmissionContentionUnspaced.cfg` | as green, `RenewalSpaced = FALSE` | `NoConflictLoss` intentionally VIOLATED: two back-to-back renewals and two children exhaust call 2's 4 receipt attempts | 33,653 distinct states before counterexample; 68,174 generated | 25 | <1s |
 | `MCBackgroundAdmissionContentionRenewalWitness.cfg` | green constants | `RenewalNeverLost` intentionally VIOLATED: admission bumps exhaust a renewal poll, which green's re-drive recovers | 286,417 distinct states before counterexample; 580,008 generated | 33 | 1s |
 | `MCBackgroundAdmissionContentionStartWitness.cfg` | green constants | `StartNeverConflicts` intentionally VIOLATED: a renewal commits while call 1's dispatch start is open, the traced conflict | 46 distinct states before counterexample; 94 generated | 7 | <1s |
+| `MCLeaseRenewalStarvation.cfg` | `Lease = 4`, `Horizon = 14`, `MaxSync = 8`, step before the claim, fenced | Passes `TypeOK`, `SingleWriter`, `OwnerPublishes`, `LeaseHeld` | 2,511 distinct states; 3,651 generated | 33 | <1s (Linux x86_64, OpenJDK 17.0.21, 4 workers) |
+| `MCLeaseRenewalStarvationBoundedSync.cfg` | as green, step inside the lease, `MaxSync = 1` | Passes the same; at `Lease = 8`, `Horizon = 20`, `MaxSync = 3` also passes | 2,001 distinct states; 3,010 generated | 33 | <1s |
+| `MCLeaseRenewalStarvationOffRuntime.cfg` | as green, step inside the lease, off the runtime | Passes the same | 3,939 distinct states; 7,635 generated | 33 | <1s |
+| `MCLeaseRenewalStarvationFenced.cfg` | as green, step inside the lease | Passes `TypeOK`, `SingleWriter` | 12,190 distinct states; 21,739 generated | 33 | <1s |
+| `MCLeaseRenewalStarvationSyncInsideLease.cfg` | as `Fenced` | `OwnerPublishes` intentionally VIOLATED: Claim, SyncStart, Tick past the deadline, SyncEnd, Publish rejected | 257 distinct states before counterexample; 306 generated | 11 | <1s |
+| `MCLeaseRenewalStarvationMarginSpent.cfg` | as `BoundedSync`, `MaxSync = 2` | `LeaseHeld` intentionally VIOLATED: Claim, Poll skips, SyncStart as the renewal comes due, Tick to the deadline, SyncEnd; at `Lease = 8`, `MaxSync = 4` also fails | 540 distinct states before counterexample; 704 generated | 14 | <1s |
+| `MCLeaseRenewalStarvationUnfenced.cfg` | as `Fenced`, `FenceDeadline = FALSE` | `SingleWriter` intentionally VIOLATED: the starved owner's publication after its deadline is accepted | 228 distinct states before counterexample; 275 generated | 11 | <1s |
 | `MCClientSubmissionContention.cfg` | `Publications = 3`, `Attempts = 4`, `Redrive`, `ReserveRedrive`, `LostReply`, `Refusals`, `MaxSends = 3`, no `RetryFreshId`, no `PayloadLost` | Passes `TypeOK`, `NoConflictLoss`, `CreatedOnce`, `RetainedUntilConfirmed`, `FailedOffersRetry`, `PendingResolves`, `EverySendSettles` | 33,960 distinct states; 219,232 generated | 23 | 3s (OpenJDK 25, 4 workers) |
 | `MCClientSubmissionContentionSingleAttempt.cfg` | `Publications = 1`, `Redrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: Compose, ReserveCommit, AgentPublish, SubmitCommit | 36 distinct states; 58 generated | 8 | <1s |
 | `MCClientSubmissionContentionReserveSingleAttempt.cfg` | `Publications = 1`, `ReserveRedrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: Compose, AgentPublish, ReserveCommit | 36 distinct states; 58 generated | 8 | <1s |
 | `MCClientSubmissionContentionShortBudget.cfg` | `Publications = Attempts = 4` | `NoConflictLoss` intentionally VIOLATED: four AgentPublish/ReserveCommit rounds | 237 distinct states; 513 generated | 12 | <1s |
 | `MCClientSubmissionContentionRetryFreshId.cfg` | `Publications = 0`, `LostReply`, `MaxSends = 2`, `RetryFreshId` | `CreatedOnce` intentionally VIOLATED: Compose, Timeout, ReserveCommit, SubmitCommit (reply not yet received), Retry under a new identity, ReserveCommit, SubmitCommit | 48 distinct states before counterexample; 75 generated | 9 | <1s |
 | `MCClientSubmissionContentionNoPayload.cfg` | `Publications = 0`, `LostReply`, `MaxSends = 2`, `PayloadLost` | `FailedOffersRetry` intentionally VIOLATED: Compose, DropPayload, Timeout leaves a failed message with no Retry | 32 distinct states before counterexample; 47 generated | 4 | <1s |
+| `MCInterruptLatchContention.cfg` | `Writes = 2`, `OtherInterrupt`, `Attempts = 4`, `Redrive`, `Reread` | Passes `TypeOK`, `NoConflictLoss`, `StampedOnce`, `DoneIsLatched`, `InterruptSettles` | 78 distinct states; 100 generated | — | <1s (OpenJDK 17, 4 workers) |
+| `MCInterruptLatchContentionSingleAttempt.cfg` | `Writes = 1`, `Redrive = FALSE` | `NoConflictLoss` intentionally VIOLATED: Open, Renew, Commit | 9 distinct states; 9 generated | 4 | <1s |
+| `MCInterruptLatchContentionStaleRebuild.cfg` | `Writes = 0`, `OtherInterrupt`, `Reread = FALSE` | `StampedOnce` intentionally VIOLATED: Open, OtherLatch, Commit (rebuild), Commit stamps again | — | 5 | <1s |
+| `MCInterruptLatchContentionExhausted.cfg` | `Writes = Attempts = 4` | `NoConflictLoss` intentionally VIOLATED: four Renew/Commit rounds | — | 9 | <1s |
 | `MCSessionHeadObservation.cfg` | `Order = "lean"`, `HeadSeed = TRUE`, `Refusals = TRUE` | Passes `TypeOK`, `HeadFollowsBoundary`, `ReplyObserved` | 838 distinct states; 1,406 generated | 11 | <1s |
 | `MCSessionHeadObservationRequestIdTie.cfg` | `Order = "requestId"`, `Refusals = FALSE` | `HeadFollowsBoundary` intentionally VIOLATED: ClaimA, CompleteA, AdmitB, ClaimB leaves the head on A | 77 distinct states before counterexample; 99 generated | 6 | <1s |
 | `MCSessionHeadObservationRequestIdTieLiveness.cfg` | `Order = "requestId"`, `Refusals = FALSE` | `ReplyObserved` intentionally VIOLATED: the #3604 schedule; after reopen B completes and every load omits it | 620 distinct states; 1,056 generated | 11 | <1s |
@@ -562,6 +707,10 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCObserverResyncStaleCommit.cfg` | `NoPublicationFence` checking only `TypeOK` and `NoStaleCommit` | `NoStaleCommit` intentionally VIOLATED: the same older refresh replaces the newer published version | 114 distinct states before counterexample; 201 generated | 9 | <1s |
 | `MCObserverResyncNoEventQueue.cfg` | 1 node, a delivered event does not queue its node | `NoLostWrite` intentionally VIOLATED: a write after the snapshot read is delivered and never loaded | 21 distinct states before counterexample; 25 generated | 7 | <1s |
 | `MCObserverResyncSnapshotBeforeArm.cfg` | 1 node, the snapshot is queued before the streams arm | `NoLostWrite` intentionally VIOLATED: a write between the read and the arm has no event and no later load | 65 distinct states before counterexample; 102 generated | 7 | <1s |
+| `MCBackgroundLiveOutputObservation.cfg` | no child self-expiry, no poll budget | Passes `TypeOK`, `ReadAgrees`, `NoWindowFailure`, `CompletedOk`, `Completes` | 7 distinct states; 8 generated | — | <1s (Linux, OpenJDK 17) |
+| `MCBackgroundLiveOutputObservationTimed.cfg` | `SelfExpire`, `K = 2` | `ReadAgrees` intentionally VIOLATED: ChildPrint, Tick, Tick, Poll (running, 4 bytes), ChildFinish, Read returns 8 | 20 distinct states; 25 generated | 7 | <1s |
+| `MCBackgroundLiveOutputObservationTimeoutKill.cfg` | `SelfExpire`, `K = 2` | `CompletedOk` intentionally VIOLATED: the tool timeout kills the child at its gate after the running/4 listing; the wait reports failed | 31 distinct states; 39 generated | 9 | <1s |
+| `MCBackgroundLiveOutputObservationPollBudget.cfg` | `PollCap`, `Cap = 2` | `NoWindowFailure` intentionally VIOLATED: two polls before the child prints | 6 distinct states; 6 generated | 3 | <1s |
 | `MCDesktopUpdateListener.cfg` | `MaxVersion = 2`, `ListenFailures = 1`, `Mismatches = 1`, `Selections = 1`, `RereadBudget = 2`, every guard on | Passes `TypeOK`, `MovedReadQueued`, `ViewConverges`, `NoStuckPending` | 10,819 distinct states; 46,787 generated | 18 | <1s |
 | `MCDesktopUpdateListenerNoRegistration.cfg` | as green, `SpecListenerUnfair` (registration may never resolve) | Passes `TypeOK`, `MovedReadQueued`, `NoStuckPending`: the read without a listener settles the selection with no event at all | 10,819 distinct states; 46,787 generated | 18 | <1s |
 | `MCDesktopUpdateListenerNoInitialRead.cfg` | as NoRegistration, `InitialRead = FALSE` | `NoStuckPending` intentionally VIOLATED: ListenRejects, Relistens, then the listener never resolves; 'Opening session' stays with no read and no action | 5,856 distinct states; 22,536 generated | 18 | <1s |
@@ -579,6 +728,23 @@ Reference environment for the following runs: macOS arm64, OpenJDK 17.0.19, TLC 
 | `MCPackUxWatchSilentBackoff.cfg` | `NotifyStall = FALSE`, no hazards, `MaxSelects = 0` | `NotSilent` intentionally VIOLATED: Start, Restart, Connect backs off with nothing shown | 45 distinct states before counterexample; 67 generated | 5 | <1s |
 | `MCPackUxWatchResetOnAccept.cfg` | `KeepFailuresOnAccept = FALSE`, hazard `broken`, `MaxRestarts = MaxFaults = MaxSelects = 0` | `EventualResume` intentionally VIOLATED: Connect, SendAtomic, StreamBroken, Notify, Retry cycles forever | 297 distinct states; 749 generated | 13 | <1s |
 | `MCPackUxWatchUnbounded.cfg` | `BoundedRetry = FALSE`, hazard `stop`, `MaxRestarts = MaxFaults = MaxSelects = 0` | `EventualResume` intentionally VIOLATED: a stopped runtime is retried forever and never reported | 536 distinct states; 1,257 generated | 20 | <1s |
+| `MCDroppedPermitCleanup.cfg` | `Calls = {c1, c2}`, every guard on, graceful, deadline and abrupt exits, reader on the flush | Passes `TypeOK`, `ExactlyOneTerminal`, `ObserverSawTarget`, `GracefulExitFlushed`, `EndedCallTerminal` | 457 distinct states; 1,048 generated | 11 | 1s (Linux x86_64, OpenJDK 17, 4 workers) |
+| `MCDroppedPermitCleanupChanges.cfg` | as green without exits, reader on the change subscription for persisted rows | Passes `TypeOK`, `ExactlyOneTerminal`, `ObserverSawTarget`, `ObserverSettles` | 467 distinct states; 1,661 generated | 11 | 1s |
+| `MCDroppedPermitCleanupChangesTerminal.cfg` | as `Changes`, for terminal rows | Passes the same | 419 distinct states; 1,509 generated | 9 | 1s |
+| `MCDroppedPermitCleanupUntrackedSpawn.cfg` | `Tracked = FALSE` | `ObserverSawTarget` intentionally VIOLATED: Enqueue, Drop for both calls, ObsWait, ObsFlushed reads live rows | 102 distinct states before counterexample; 250 generated | 7 | <1s |
+| `MCDroppedPermitCleanupUnawaitedFlush.cfg` | `ShutdownAwaitsFlush = FALSE` | `GracefulExitFlushed` intentionally VIOLATED: Enqueue(c1), BeginShutdown, Drop(c1), Exit | 80 distinct states before counterexample; 132 generated | 6 | <1s |
+| `MCDroppedPermitCleanupNoRecovery.cfg` | `Recovery = FALSE` | `EndedCallTerminal` intentionally VIOLATED: a queued call's runtime exits abruptly and its row stays live | 457 distinct states; 808 generated | 11 | <1s |
+| `MCDroppedPermitCleanupNoTerminalCas.cfg` | `TerminalCas = FALSE` | `ExactlyOneTerminal` intentionally VIOLATED: Start, FinishCommit, Drop, RunCleanup | 165 distinct states before counterexample; 281 generated | 6 | <1s |
+| `MCDroppedPermitCleanupSleepTerminal.cfg`, `SleepQueued.cfg` | `Signal = "timer"` | `ObserverSawTarget` intentionally VIOLATED: the timer fires first | 2 distinct states | 2 | <1s |
+| `MCDroppedPermitCleanupQueuedByFlush.cfg` | flush awaited for persisted rows | `ObserverSawTarget` intentionally VIOLATED: ObsWait, ObsFlushed before any row exists | 46 distinct states before counterexample; 65 generated | 4 | <1s |
+| `MCDroppedPermitCleanupPollBudget.cfg` | `Signal = "poll"`, `PollBudget = 2` | `ObserverNeverTimesOut` intentionally VIOLATED: two polls before any write | 21 distinct states before counterexample; 24 generated | 4 | <1s |
+| `MCDroppedPermitCleanupLateSubscribe.cfg` | `SubscribeFirst = FALSE` | `ObserverSettles` intentionally VIOLATED: ObsRead, the last write, ObsSubscribe, then no wake | 671 distinct states; 2,303 generated | 11 | 1s |
+| `MCClientIdentityMetadata.cfg` | `Writers = {w1, w2, w3}`, every guard on, `CanCrash` | Passes `TypeOK`, `NoMissingFileError`, `NoTornMetadata`, `NeverUninstalled`, `OkSawOwnMetadata`, `AgreedInstall`, `WriterSettles`, `SameKeyAccepts` | 856 distinct states; 2,743 generated | 14 | 1s |
+| `MCClientIdentityMetadataBefore.cfg` | shared staging name, removal, no second read | `NoMissingFileError` intentionally VIOLATED: w1 stages and removes, w2 truncates the same staging file, w1 renames it away, w2's rename finds it gone | 70 distinct states before counterexample; 95 generated | 11 | <1s |
+| `MCClientIdentityMetadataSharedStaging.cfg`, `SharedStagingTorn.cfg` | as green, `UniqueStaging = FALSE` | `NoMissingFileError` and `NoTornMetadata` intentionally VIOLATED | 49 and 52 distinct states | 10 | <1s |
+| `MCClientIdentityMetadataRemoveThenRename.cfg`, `RemoveThenRenameReread.cfg` | as green, `RemoveBeforeRename = TRUE` | `NeverUninstalled` and `NoMissingFileError` intentionally VIOLATED: w2 removes the file w1 installed | 52 and 55 distinct states | 12 | <1s |
+| `MCClientIdentityMetadataNoReread.cfg` | `SingleWinnerKey = FALSE`, `Reread = FALSE` | `OkSawOwnMetadata` intentionally VIOLATED | 46 distinct states | 11 | <1s |
+| `MCClientIdentityMetadataDivergentKey.cfg` | `SingleWinnerKey = FALSE` | `AgreedInstall` intentionally VIOLATED: w1 accepts, w2 renames over it | 42 distinct states | 11 | <1s |
 
 The nine BackgroundAdmissionContention rows used TLC2 `2026.11.06.222357`
 (rev `d8fb231`) with Homebrew OpenJDK 25.0.2 on macOS arm64 and

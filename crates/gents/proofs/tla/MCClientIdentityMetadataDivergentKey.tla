@@ -1,0 +1,4 @@
+---- MODULE MCClientIdentityMetadataDivergentKey ----
+EXTENDS ClientIdentityMetadata
+
+====

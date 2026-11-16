@@ -149,6 +149,9 @@ pub struct CanonicalBackgroundFixture {
     pub lifecycle: RequestLifecycle,
     pub writer: DefraStreamWriter,
     pub next_turn: usize,
+    /// Read before the parent's claim, so it precedes the accepted deadline
+    /// every fixture tool inherits from that claim.
+    pub claimed_at: chrono::DateTime<chrono::Utc>,
 }
 
 pub async fn canonical_background_fixture(
@@ -216,6 +219,7 @@ pub async fn canonical_background_fixture_with_input(
         .bind_managed_agent(db.agent_identity.as_ref())
         .unwrap();
     lifecycle.set_client_claim_admission(admission);
+    let claimed_at = chrono::Utc::now();
     assert_eq!(
         lifecycle
             .claim_with_identity()
@@ -237,6 +241,7 @@ pub async fn canonical_background_fixture_with_input(
         lifecycle,
         writer,
         next_turn: 0,
+        claimed_at,
     }
 }
 
@@ -324,8 +329,17 @@ impl CanonicalBackgroundFixture {
         let binding = tool
             .tool_output_binding()
             .context("accepted fixture tool has output binding")?;
-        crate::call::lifecycle::delivery::append_tool_output(&binding, notification_content)
-            .await?;
+        // The append checks its observation time against the accepted deadline,
+        // which the claim set from the wall clock. Observing it at the claim
+        // instant keeps fixture setup time out of the deadline the test
+        // does not exercise.
+        crate::call::lifecycle::delivery::append_tool_output_at(
+            &binding,
+            notification_content,
+            self.claimed_at,
+            self.claimed_at,
+        )
+        .await?;
         anyhow::ensure!(
             tool.complete_owned(notification_content, None).await?,
             "fixture tool terminal CAS lost"

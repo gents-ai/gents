@@ -1,0 +1,4 @@
+---- MODULE MCBackgroundLiveOutputObservation ----
+EXTENDS BackgroundLiveOutputObservation
+
+====

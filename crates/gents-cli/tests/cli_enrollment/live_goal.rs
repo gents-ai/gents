@@ -138,7 +138,7 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
             let predecessor = core.submit_request(&session, &node_did,
                 "Answer briefly: what is one plus one?", Some(&binding.agent_did)).await?;
             let predecessor_reply = wait_for_complete_agent_response_with_access(
-                &access, &predecessor.request_id, &session, Duration::from_secs(240),
+                &access, &predecessor.request_id, &session,
             ).await?;
             anyhow::ensure!(!predecessor_reply.text.trim().is_empty(), "predecessor produced no response");
             let goal = seed_goal_from_access(&access, &node_did, &session,
@@ -173,7 +173,7 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
 
             let resumed = resume_goal_request(&access, core.node_identity(), &node_did, &session, &predecessor.request_id).await?;
             anyhow::ensure!(resumed.created && resumed.goal_id == goal.goal_id, "unexpected signed resume receipt: {resumed:?}");
-            let reply = wait_for_complete_agent_response_with_access(&access, &resumed.request_id, &session, Duration::from_secs(240)).await?;
+            let reply = wait_for_complete_agent_response_with_access(&access, &resumed.request_id, &session).await?;
             let response = access.execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id node_did requester_did agent_did session_id session_doc_id agent_doc_id admission_kind admission_signer_did relationships_pending input caused_by_trigger_kind caused_by_trigger_id caused_by_parent_request_id caused_by_parent_request_doc_id lifecycle_state failure_reason }} }}"#,
                     escape_graphql_string(&resumed.doc_id),

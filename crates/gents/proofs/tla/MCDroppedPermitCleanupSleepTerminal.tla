@@ -1,0 +1,4 @@
+---- MODULE MCDroppedPermitCleanupSleepTerminal ----
+EXTENDS DroppedPermitCleanup
+
+====
