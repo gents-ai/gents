@@ -1,0 +1,4 @@
+#!/bin/sh
+[ "$2" = --check ] || exit 9
+printf '%s' '{"completed":false,"error":"store held"}' > "$3"
+exit 1

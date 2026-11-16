@@ -1,0 +1,2 @@
+#!/bin/sh
+printf '%s' '{"completed":true}' > "$2"

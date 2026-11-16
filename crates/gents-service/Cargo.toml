@@ -57,3 +57,4 @@ gents-desktop-core = { workspace = true, features = ["test-fixtures", "typescrip
 gents-workspace-hack = { workspace = true }
 gents-lean-vocab.workspace = true
 gents = { path = "../gents", features = ["test-fixtures", "typescript"] }
+gents-store = { workspace = true, features = ["test-fixtures"] }
