@@ -227,6 +227,13 @@ async fn observer_snapshot_excludes_transcript_while_context_read_stays_authorit
     let response = node
         .execute(
             r#"mutation {
+                root: create_Node(input: {
+                    node_did: "did:test:selected",
+                    display_name: "selected",
+                    enabled: true,
+                    created_at: "2026-08-26T00:00:00Z",
+                    created_by: "user"
+                }) { _docID }
                 message: create_AgentMessage(input: {
                     message_key: "resident:1",
                     session_id: "resident",

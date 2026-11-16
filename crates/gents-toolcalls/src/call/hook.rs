@@ -2248,13 +2248,14 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         name: &str,
         internal_id: &str,
         call: gents_loop::session_hook::ForegroundCall,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> gents_loop::session_hook::ForegroundResult {
         let _activity = self
             .inference_observation
             .as_ref()
             .and_then(std::sync::Weak::upgrade)
             .map(|owner| owner.begin_tool(internal_id));
-        self.run_backgroundable_foreground(name, internal_id, call)
+        self.run_backgroundable_foreground(name, internal_id, call, context)
             .await
     }
 
@@ -2264,6 +2265,7 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         ordinal: u32,
         tool_name: &str,
         arguments: &str,
+        _context: &gents_loop::tool::ToolCallEnvelope,
     ) -> Result<String, String> {
         let parents = self.in_flight_lifecycles.lock().await;
         let parent = parents
@@ -2448,8 +2450,17 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
+        context: &gents_loop::tool::ToolCallEnvelope,
     ) -> ToolCallHookAction {
-        DefraSessionHook::on_tool_call(self, tool_name, tool_call_id, internal_call_id, args).await
+        DefraSessionHook::on_tool_call(
+            self,
+            tool_name,
+            tool_call_id,
+            internal_call_id,
+            args,
+            context,
+        )
+        .await
     }
 
     async fn on_tool_admission_rejected(

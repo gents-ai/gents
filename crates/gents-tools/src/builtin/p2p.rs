@@ -897,9 +897,9 @@ impl P2pTool {
                     _ => decide(EnrollmentOperatorAction::Revoke, 0).await,
                 }
                 .map_err(|error| {
-                    let reused = gents_protocol::error_chain::find_source::<
-                        gents_p2p::p2p_reconcile::EnrollmentDecisionRefusal,
-                    >(error.as_ref())
+                    let reused = gents_p2p::p2p_reconcile::EnrollmentDecisionRefusal::in_chain(
+                        error.as_ref(),
+                    )
                     .is_some_and(|refusal| {
                         refusal.code()
                             == gents_protocol::enrollment::EnrollmentDecisionRefusalCode::ChallengeReused
@@ -1060,7 +1060,11 @@ impl Tool for P2pTool {
         }
     }
 
-    async fn call(&self, args: P2pParams) -> std::result::Result<String, P2pError> {
+    async fn call(
+        &self,
+        args: P2pParams,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> std::result::Result<String, P2pError> {
         let (argv, options) = args
             .command()
             .map_err(|error| P2pError(format!("{error:#}")))?;

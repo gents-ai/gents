@@ -36,6 +36,7 @@ pub(crate) use settle::settle_plugin_job_in_txn;
 pub(super) use settle::{refusal_text, terminal_text};
 pub use settle::{settle_plugin_job, Settlement};
 pub use step::{run_step, StepOutcome};
+use step::{try_step, StepError};
 
 pub(crate) type AgentSnapshots = Box<dyn AgentIdentityWatch>;
 
@@ -425,7 +426,7 @@ impl JobDriver {
             .acquire()
             .await
             .expect("the step semaphore is never closed");
-        let outcome = run_step(&self.runtime, row_doc_id, actor).await;
+        let outcome = try_step(&self.runtime, row_doc_id, actor).await;
         let again = match &outcome {
             Ok(StepOutcome::Stale) => true,
             Ok(_) => {
@@ -435,21 +436,21 @@ impl JobDriver {
                     .remove(row_doc_id);
                 false
             }
-            Err(error) => match error.downcast_ref::<StepFailure>() {
-                None => {
-                    tracing::warn!(row_doc_id, error = %format!("{error:#}"), "job step did not run");
-                    false
-                }
-                Some(failure) => match self.step_failed(row_doc_id, actor, failure).await {
+            Err(StepError::Other(error)) => {
+                tracing::warn!(row_doc_id, error = %format!("{error:#}"), "job step did not run");
+                false
+            }
+            Err(StepError::Failed { failure, .. }) => {
+                match self.step_failed(row_doc_id, actor, failure).await {
                     Ok(verdict) => verdict == FailureVerdict::Retry,
                     Err(error) => {
                         tracing::warn!(row_doc_id, error = %format!("{error:#}"), "job step failure was not settled");
                         false
                     }
-                },
-            },
+                }
+            }
         };
-        (again, outcome)
+        (again, outcome.map_err(StepError::erase))
     }
 
     /// Reads the row and its children's observations, counts the failure and,

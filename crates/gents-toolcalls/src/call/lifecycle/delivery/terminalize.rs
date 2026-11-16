@@ -3,7 +3,7 @@ use super::take_terminal_failure_for_test;
 use super::terminal_effects::{retain_file_changes, write_terminal_progress};
 use super::terminal_transaction::terminalize_transaction;
 use super::{
-    plugin_writes_failed, PluginWritesFailed, RawPresentation, TerminalFields, TerminalJobProgress,
+    plugin_writes_failed, RawPresentation, TerminalFields, TerminalJobProgress, TerminalWriteError,
     TerminalizeOptions,
 };
 use crate::call::lifecycle::{FailureClass, ToolCallLifecycle, ToolRowKind};
@@ -395,10 +395,12 @@ impl ToolCallLifecycle {
                                 .await?
                             }
                             crate::call::lifecycle::file_inventory::FileCapture::Unchanged { tool_call_doc_id } => {
-                                anyhow::ensure!(
-                                    tool_call_doc_id.as_deref() == Some(doc_id.as_str()),
-                                    "unchanged capture belongs to another physical tool"
-                                );
+                                if tool_call_doc_id.as_deref() != Some(doc_id.as_str()) {
+                                    return Err(anyhow::anyhow!(
+                                        "unchanged capture belongs to another physical tool"
+                                    )
+                                    .into());
+                                }
                                 crate::call::lifecycle::file_inventory::retain_inventory(
                                     txn,
                                     crate::call::lifecycle::file_inventory::Metadata::Unchanged,
@@ -414,15 +416,17 @@ impl ToolCallLifecycle {
                             }
                         }
                     }
-                    Ok(published)
+                    Ok::<_, TerminalWriteError>(published)
                 })
             },
         )
         .await;
         let published = match published {
             Ok(published) => published,
-            Err(error) => match error.downcast_ref::<PluginWritesFailed>() {
-                Some(refused) => {
+            Err(error) => match error {
+                TerminalWriteError::PluginWritesFailed {
+                    refusal: refused, ..
+                } => {
                     let text = format!(
                         "plugin data writes were refused and nothing was committed: {refused}"
                     );
@@ -447,7 +451,7 @@ impl ToolCallLifecycle {
                     ))
                     .await;
                 }
-                None => return Err(error),
+                error => return Err(error.into_anyhow()),
             },
         };
         if published {

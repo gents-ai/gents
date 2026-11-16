@@ -246,7 +246,9 @@ pub(crate) fn write_json_output_file(path: &Path, value: &Value) -> Result<()> {
 
 tokio::task_local! {
     /// Set while a command runs for an embedding caller (the desktop): its
-    /// report is kept here instead of printed.
+    /// report is kept here instead of printed. Not request context: it is
+    /// where the command's standard output goes, and it names no actor,
+    /// request, session or transaction.
     static CAPTURED_REPORT: std::cell::RefCell<Option<Value>>;
 }
 
