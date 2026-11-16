@@ -254,13 +254,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                 HookAction::Continue
             ));
             let session_id = hook.session_id().await.unwrap();
-            bind_managed_hook_request(
-                &mut hook,
-                "request-receipt",
-                &root,
-                chrono::Utc::now() + chrono::Duration::minutes(5),
-            )
-            .await;
+            bind_managed_hook_request(&mut hook, "request-receipt", &root).await;
             accept_hook_tool_call(&hook, "receipt-call", "read", "{}", None).await;
             let accepted = hook.accepted_tool_calls.lock().await["receipt-call"].clone();
             let admitted = fetch_tool_call_row(&hook, &session_id, "receipt-call").await;

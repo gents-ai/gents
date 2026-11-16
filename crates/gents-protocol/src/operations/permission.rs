@@ -48,7 +48,7 @@ pub enum AgentPermissionError {
     NodeUnavailable(String),
     /// Another owner's failure (the store, ACP), unchanged.
     #[error(transparent)]
-    Passthrough(Box<dyn Error + Send + Sync>),
+    Passthrough(crate::error_chain::PassedThrough),
 }
 
 impl AgentPermissionError {

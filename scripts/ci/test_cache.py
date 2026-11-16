@@ -133,8 +133,8 @@ def keyed_environment(policy, environ):
 def static_key(policy, binary_id, binary_digest, runner):
     """TestCache.lean `StaticKey`: every non-file input of one test binary.
 
-    `runner` holds the nextest version, the digest of its configuration and the
-    keyed environment, which are the same for every binary of a run.
+    `runner` holds the nextest version, the digest of its configuration, the
+    keyed environment and the platform, which are the same for every binary of a run.
     """
     components = {"schema": SCHEMA, "policy": policy["version"], "binary": binary_id,
                   "digest": binary_digest, **runner}
@@ -822,12 +822,33 @@ def run_identity():
     }
 
 
-def runner_inputs(policy, nextest_version):
+def platform_inputs(system=None, triple=None, os_build=None):
+    """The platform part of TestCache.lean `StaticKey`: the operating system, the
+    Rust target triple and, on macOS, the OS build number (its system libraries
+    are in the dyld shared cache, which no trace sees read)."""
+    system = system or sys.platform
+    if triple is None:
+        verbose = subprocess.run(["rustc", "-vV"], cwd=ROOT, check=True, stdout=subprocess.PIPE,
+                                 text=True).stdout
+        triple = next(line.split(":", 1)[1].strip() for line in verbose.splitlines() if line.startswith("host:"))
+    platform = {"os": system, "target": triple}
+    if system == "darwin":
+        if os_build is None:
+            os_build = subprocess.run(["sw_vers", "-buildVersion"], check=True, stdout=subprocess.PIPE,
+                                      text=True).stdout.strip()
+        if not os_build:
+            raise ValueError("the macOS build number is part of the test cache key and sw_vers reported none")
+        platform["os_build"] = os_build
+    return platform
+
+
+def runner_inputs(policy, nextest_version, platform=None):
     profile = ROOT / ".config" / "nextest.toml"
     return {
         "nextest": nextest_version,
         "nextest_config": sha256_file(profile) if profile.exists() else "",
         "environment": keyed_environment(policy, os.environ),
+        "platform": platform or platform_inputs(),
     }
 
 

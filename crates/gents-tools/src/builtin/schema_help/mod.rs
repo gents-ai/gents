@@ -92,7 +92,7 @@ pub struct SchemaError(String);
 pub enum SchemaIdentityError {
     #[error(transparent)]
     InvalidDid(#[from] identity::Error),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     ConfigClient(#[from] gents_store::config_client::ConfigClientError),
 }
 
@@ -102,7 +102,7 @@ enum SchemaCommandError {
     DigestMismatch,
     #[error("SDL definition is invalid")]
     Sdl(#[source] anyhow::Error),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

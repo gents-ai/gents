@@ -33,6 +33,7 @@ pub struct ClientHost {
     advertised_commands: Vec<String>,
     policy: ResolvedBridgePolicy,
     pending_oauth_credentials: Arc<crate::accounts::PendingOAuthCredentials>,
+    retirement: std::sync::Mutex<Option<connection::PendingRetirement>>,
 }
 
 impl ClientHost {
@@ -60,6 +61,29 @@ impl ClientHost {
     /// Private client attachments present the current identity's mailbox,
     /// including decision questions. Embedding webview grants remain
     /// independent; no runtime document authorization is conferred here.
+    /// Answers an accepted retirement once the installation has closed its
+    /// core: the attachment that asked starts the successor as soon as it
+    /// reads this answer (Lean `ClientInstallation.acknowledgement_requires_closed_store`).
+    /// `closed` is the core's shutdown, which returns only after the store
+    /// lock is released; a failed shutdown is answered as a failed retirement.
+    pub async fn acknowledge_retirement(&self, closed: &anyhow::Result<()>) {
+        let pending = self
+            .retirement
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        if let Some(pending) = pending {
+            pending.acknowledge(closed).await;
+        }
+    }
+
+    fn hold_retirement(&self, pending: connection::PendingRetirement) {
+        *self
+            .retirement
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(pending);
+    }
+
     pub fn new(core: Arc<ClientCore>) -> Self {
         Self {
             installation_build: None,
@@ -86,6 +110,7 @@ impl ClientHost {
                 store_key_custody: core.options().store_key_custody,
             },
             pending_oauth_credentials: Arc::default(),
+            retirement: std::sync::Mutex::new(None),
             core,
         }
     }

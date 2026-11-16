@@ -268,22 +268,22 @@ const DISCOVERY_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// Why a model discovery has no answer to show.
 #[derive(Debug, thiserror::Error)]
 pub enum ModelDiscoveryError {
-    #[error(transparent)]
-    Connection(anyhow::Error),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Connection(#[source] anyhow::Error),
     #[error("API key is required")]
     KeyRequired,
     /// A sign-in needs the node's configuration, which the caller could not reach.
     #[error("node configuration is not reachable")]
     NoAccess,
     /// Reading the node's provider accounts failed.
-    #[error(transparent)]
-    Accounts(anyhow::Error),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Accounts(#[source] anyhow::Error),
     #[error("the selected provider account is not connected")]
     NotConnected,
     #[error(transparent)]
     Client(reqwest::Error),
-    #[error(transparent)]
-    Model(anyhow::Error),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Model(#[source] anyhow::Error),
 }
 
 /// What the provider answered: the connection asked, its models, or why there are none.

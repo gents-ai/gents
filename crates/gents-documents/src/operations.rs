@@ -32,12 +32,12 @@ impl<E> OperationFailure<E> {
 
     pub fn finish(
         self,
-        passthrough: impl FnOnce(Box<dyn std::error::Error + Send + Sync>) -> E,
+        passthrough: impl FnOnce(gents_protocol::error_chain::PassedThrough) -> E,
     ) -> E {
         match self {
             Self::Operation(error) => error,
             Self::Other(error) => {
-                passthrough(error.reallocate_into_boxed_dyn_error_without_backtrace())
+                passthrough(gents_protocol::error_chain::PassedThrough::new(error))
             }
         }
     }

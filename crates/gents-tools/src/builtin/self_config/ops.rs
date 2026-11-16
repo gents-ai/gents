@@ -44,7 +44,7 @@ pub enum ApplyFailure {
         #[source]
         error: Box<InferenceOperationError>,
     },
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

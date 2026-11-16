@@ -363,10 +363,15 @@ class Broker(unittest.TestCase):
         shim = test_cache_broker.shim(str(directory / "bin"), socket_path, "sh-via-broker")
         result = subprocess.run([shim, "-c", 'read line; echo "$line in $(pwd) $GATE_PROBE"; echo err >&2; exit 3'],
                                 input="hello\n", capture_output=True, text=True, cwd=str(directory),
-                                env={**os.environ, "GATE_PROBE": "env"})
+                                env={**os.environ, "GATE_PROBE": "env"}, timeout=20)
         self.assertEqual(result.returncode, 3)
         self.assertEqual(result.stdout.strip(), f"hello in {os.path.realpath(directory)} env")
         self.assertEqual(result.stderr.strip(), "err")
+        # A CI job's environment (its gate plan) spans many socket reads.
+        large = "x" * (1 << 18)
+        result = subprocess.run([shim, "-c", 'printf %s "${#GATE_LARGE}"'], capture_output=True, text=True,
+                                env={**os.environ, "GATE_LARGE": large}, timeout=20)
+        self.assertEqual((result.returncode, result.stdout), (0, str(len(large))), result.stderr)
         # Many concurrent calls each return: a reply must not wait for the broker's watcher.
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(16) as pool:
@@ -401,6 +406,28 @@ class Policy(unittest.TestCase):
             "GENTS_TEST_BINARIES_PREBUILT": "1", "RUST_MIN_STACK": "16777216", "GENTS_CI_KEEP_TARGET_TREE": "true",
             "GITHUB_RUN_ID": "1", "CARGO_TARGET_DIR": "/runner/a", "HOME": "/home/x"})
         self.assertEqual(keyed, {"GENTS_TEST_BINARIES_PREBUILT": "1", "RUST_MIN_STACK": "16777216"})
+
+    def test_the_platform_enters_the_key(self):
+        policy = test_cache.load_policy()
+        linux = test_cache.platform_inputs("linux", "x86_64-unknown-linux-gnu")
+        self.assertEqual(linux, {"os": "linux", "target": "x86_64-unknown-linux-gnu"})
+        mac = test_cache.platform_inputs("darwin", "aarch64-apple-darwin", "25A100")
+        self.assertEqual(mac["os_build"], "25A100")
+        with self.assertRaises(ValueError):
+            test_cache.platform_inputs("darwin", "aarch64-apple-darwin", "")
+
+        def key(platform):
+            return test_cache.static_key(policy, "b", "digest", test_cache.runner_inputs(policy, "nextest 1", platform))
+
+        updated = test_cache.platform_inputs("darwin", "aarch64-apple-darwin", "25B200")
+        other_arch = test_cache.platform_inputs("linux", "aarch64-unknown-linux-gnu")
+        keys = [key(linux), key(mac), key(updated), key(other_arch)]
+        self.assertEqual(len(set(keys)), len(keys))
+        self.assertEqual(key(linux), key(dict(linux)))
+        # This host's own platform is read from the toolchain and the OS.
+        here = test_cache.platform_inputs()
+        self.assertEqual(here["os"], sys.platform)
+        self.assertEqual("os_build" in here, sys.platform == "darwin")
 
     def test_filters_select_exactly_the_tests_that_run(self):
         listing = {"a": ["x", "y"], "b": ["z"], "c": ["u", "v", "w"]}

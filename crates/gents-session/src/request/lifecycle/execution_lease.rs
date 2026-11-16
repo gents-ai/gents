@@ -1214,7 +1214,7 @@ mod tests;
 enum TerminalizeError {
     #[error("pending input changed before natural completion")]
     PendingQueueChanged,
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 
