@@ -178,6 +178,7 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
     for did in [owner.did(), first.did(), second.did()] {
         for permission in [
             acp::nac::NodePermission::DocumentRead,
+            acp::nac::NodePermission::CollectionGet,
             acp::nac::NodePermission::DocumentUpdate,
             acp::nac::NodePermission::DacRelationAdd,
             acp::nac::NodePermission::DacRelationDelete,

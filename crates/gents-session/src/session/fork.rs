@@ -91,7 +91,7 @@ pub struct ForkRelationshipIntent {
     agent_doc_id: String,
     agent_did: String,
     session_pending: bool,
-    segment_doc_ids: Vec<String>,
+    pub(super) segment_doc_ids: Vec<String>,
     message_doc_ids: Vec<String>,
 }
 
@@ -254,15 +254,25 @@ async fn link_fork_children(
         );
         let agent = identity::Did::new(agent_did)?;
         let update = format!("update_{collection}");
-        // The creator grants and marks in one native transaction, so neither
-        // commits without the other (`Identity.SessionChild.recoverSessionChild`).
-        access.transact_write("session.mark_fork_parent_linked", |txn| {
+        access.transact_signed_conflict_rebuild("session.mark_fork_parent_linked", |txn| {
             let (agent, update, doc, creator) = (&agent, &update, &doc, &creator);
             Box::pin(async move {
                 txn.add_resource_relationship(collection, doc_id, "parent", "sessions", session_doc_id)
                     .await?;
                 txn.add_actor_relationship(collection, doc_id, "working_agent", agent)
                     .await?;
+                // A rebuilt attempt may find the child another linker marked.
+                let current = txn.execute(&format!(r#"{{ {collection}(filter: {{ _docID: {{ _eq: "{doc}" }}, creator_did: {{ _eq: "{creator}" }} }}, limit: 2) {{ _docID parent_linked }} }}"#)).await?;
+                let current = current["data"][collection]
+                    .as_array()
+                    .context("fork relationship marker read omitted rows")?;
+                anyhow::ensure!(
+                    current.len() == 1 && current[0]["_docID"].as_str() == Some(doc_id.as_str()),
+                    "fork relationship marker lost its creation binding"
+                );
+                if current[0]["parent_linked"] == true {
+                    return Ok(());
+                }
                 let mutation = format!(r#"mutation($input: {collection}MutationInputArg!) {{ {update}(filter: {{ _docID: {{ _eq: "{doc}" }}, creator_did: {{ _eq: "{creator}" }}, parent_linked: {{ _eq: false }} }}, input: $input) {{ _docID }} }}"#);
                 let response = txn.execute_client_signed_update(
                     &mutation, &json!({"input": {"parent_linked": true}}), schema,

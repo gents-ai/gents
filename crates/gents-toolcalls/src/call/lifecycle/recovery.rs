@@ -1748,7 +1748,8 @@ mod actor_read_tests {
             escape_graphql_string(&doc_id),
             escape_graphql_string(&parent.request().doc_id),
         );
-        let node_view = gents_store::config_client::ConfigAccess::local(node.clone())
+        let node_view = gents_store::test_support::unrelated_document_reader(&node)
+            .await
             .execute(&query)
             .await;
         if let Ok(response) = node_view {

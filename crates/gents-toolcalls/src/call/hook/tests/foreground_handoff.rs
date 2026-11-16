@@ -46,7 +46,8 @@ async fn background_request_observation_uses_selected_agent_authority() {
     let expected = hook.foreground_background_request(doc).await.unwrap();
     assert!(expected.is_some());
 
-    let node_view = gents_store::config_client::ConfigAccess::local(node.clone())
+    let node_view = gents_store::test_support::unrelated_document_reader(&node)
+        .await
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}} }}"#,
             gents_store::graphql::escape_graphql_string(doc),
@@ -531,6 +532,14 @@ async fn refused_foreground_handoff_can_be_retried() {
 
 #[tokio::test]
 async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() {
+    // The first Lean read in a process builds the model synchronously, for as
+    // long as the machine takes, on this runtime's only thread. After the
+    // claim it would starve the lease renewal past the lease and the deadline
+    // (`LeaseRenewalStarvation.tla`, `SyncInsideLease`).
+    let capacity = gents_lean_vocab::lean_r6_backgrounding_case(
+        "background_tool_budget_count_8_rejects_spawn",
+    )
+    .max_backgrounded;
     let node_db = gents_inference::test_support::test_db(
         "concurrent-background-starts-on-one-requ",
         gents_session::test_support::no_lifecycle_plugins(),
@@ -541,10 +550,6 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
     let session = hook.session_id().await.unwrap();
     let deadline = Utc::now() + chrono::Duration::seconds(30);
     bind_interruptible_request(&hook, "concurrent-parent", &session, deadline).await;
-    let capacity = gents_lean_vocab::lean_r6_backgrounding_case(
-        "background_tool_budget_count_8_rejects_spawn",
-    )
-    .max_backgrounded;
     let ids = (0..=capacity)
         .map(|index| format!("concurrent-start-{index}"))
         .collect::<Vec<_>>();

@@ -331,10 +331,20 @@ mod tests {
         let visible = admin
             .execute("{ OAuthCredential { _docID access_token } }")
             .await?;
-        assert!(visible["data"]["OAuthCredential"]
+        assert_eq!(
+            visible["data"]["OAuthCredential"].as_array().unwrap().len(),
+            1
+        );
+        let hidden = agent
+            .execute("{ OAuthCredential { _docID access_token } }")
+            .await?;
+        assert!(hidden["data"]["OAuthCredential"]
             .as_array()
             .unwrap()
             .is_empty());
+        let mut disabled = credential.clone();
+        disabled.enabled = false;
+        crate::auth::credential::upsert_oauth_credential_on(&user_access, &disabled).await?;
         let empty = agent
             .transact_readonly("test.default_account.hidden", |txn| {
                 Box::pin(async move {

@@ -819,11 +819,14 @@ async fn desktop_interrupt_observation(
     .unwrap();
     let first = latch(&fixture.agent_access, parent).await;
     assert_eq!(
-        fetch_interrupt_requested_at_by_doc_id(&fixture.db.node, &parent.doc_id)
-            .await
-            .unwrap(),
+        fetch_interrupt_requested_at_by_doc_id_with_access(
+            &gents_store::test_support::unrelated_document_reader(&fixture.db.node).await,
+            &parent.doc_id
+        )
+        .await
+        .unwrap(),
         None,
-        "the Node's default read cannot observe the User-owned request"
+        "an unrelated reader cannot observe the User-owned request"
     );
     assert_eq!(
         fetch_interrupt_requested_at_by_doc_id_with_access(&fixture.agent_access, &parent.doc_id)

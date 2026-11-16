@@ -108,6 +108,7 @@ async fn drive_signed_command(
         );
         for permission in [
             gents_store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::CollectionGet,
             gents_store::config_client::NodePermission::DocumentUpdate,
             gents_store::config_client::NodePermission::DacRelationAdd,
         ] {

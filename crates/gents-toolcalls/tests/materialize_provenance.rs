@@ -31,7 +31,7 @@ async fn pending_receipt_lookup_uses_the_selected_agent() {
     .unwrap();
     assert_eq!(resolved, parent.request().doc_id);
     assert!(resolve_created_agent_request_doc_id(
-        &gents_store::config_client::ConfigAccess::local(admission.node.clone()),
+        &gents_store::test_support::unrelated_document_reader(&admission.node).await,
         &receipt,
         "create_AgentRequest",
         &escaped,

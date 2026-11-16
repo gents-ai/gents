@@ -280,8 +280,20 @@ pub enum SessionOperationError {
 }
 
 impl SessionOperationError {
-    pub fn passthrough(error: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
-        Self::Passthrough(error.into())
+    pub fn passthrough<E>(error: E) -> Self
+    where
+        E: crate::error_chain::PassedSource,
+    {
+        Self::Passthrough(crate::error_chain::PassedThrough::boxed(error))
+    }
+
+    /// Passes a typed owner error through as itself, the first error on the
+    /// chain.
+    pub fn passthrough_error<E>(error: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        Self::Passthrough(Box::new(error))
     }
 
     pub fn code(&self) -> &'static str {

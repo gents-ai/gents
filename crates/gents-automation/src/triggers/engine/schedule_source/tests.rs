@@ -63,6 +63,12 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
         &agent.agent_did,
     )
     .await?;
+    node.add_nac_actor_relationship_as(
+        &context,
+        acp::nac::NodePermission::CollectionGet.as_str(),
+        &agent.agent_did,
+    )
+    .await?;
     node.add_collection(gents_protocol::schemas::NODE).await?;
     node.add_collection(gents_protocol::schemas::SCHEDULE)
         .await?;
