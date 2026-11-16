@@ -45,7 +45,7 @@ pub(crate) async fn upsert_agent_with_publication_on(
         agent_did: document.agent_did.clone(),
     };
     let owner = document.node_did.as_str();
-    let admission = observe(access, owner, std::slice::from_ref(&document.agent_did))
+    let admission = observe(access, owner, std::slice::from_ref(&document.agent_did), None)
         .await
         .map_err(agent_failure)?;
     access

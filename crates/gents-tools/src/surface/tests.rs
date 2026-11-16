@@ -1940,7 +1940,7 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
 /// this one exactly as it was.
 #[tokio::test]
 async fn tool_construction_without_the_root_reader_names_the_grant_that_fixes_it() {
-    let (db, mut runtime) = selected_surface_runtime().await;
+    let (db, runtime) = selected_surface_runtime().await;
     let node = db.node.clone();
     let ceiling = tempfile::tempdir().unwrap();
     let root = ceiling.path().join("shared-root");
@@ -2008,7 +2008,7 @@ async fn tool_construction_without_the_root_reader_names_the_grant_that_fixes_it
     let refusal = tool_root_refusal(error.as_ref()).expect("the refusal is typed");
     let ToolRootRefusal::ReaderMissing {
         root: named_root,
-        home: named_home,
+        home: _named_home,
         ..
     } = refusal
     else {

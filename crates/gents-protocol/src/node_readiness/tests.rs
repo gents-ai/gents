@@ -448,12 +448,20 @@ fn the_reader_reasons_own_wording_names_the_cause_and_the_grant() {
     let message = AgentReadinessUnavailableReason::WorkspaceRootReaderMissing.public_message();
     assert!(message.contains("not a reader of"), "{message}");
     assert!(
-        message.contains("gents config workspace-root grant-reader --path"),
+        message.contains("gents config workspace-root list"),
+        "the fix starts with the call that shows the roots and their readers: {message}"
+    );
+    assert!(
+        message.contains("grant the reader it names"),
         "{message}"
     );
     assert!(
-        message.contains("--home"),
-        "the fix names the home a bare `gents` would miss: {message}"
+        message.contains("adding `--home` with this node's home"),
+        "the fix says what a bare `gents` would miss, without a placeholder in the call: {message}"
+    );
+    assert!(
+        !message.contains("<this node's home>"),
+        "no placeholder sits inside a copy-pasteable command: {message}"
     );
     assert_eq!(
         unavailable_rejection_reason(message),

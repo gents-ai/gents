@@ -37,7 +37,7 @@ fn reason_next_step(
         }
         Reason::WorkspaceRootReaderMissing => Some(format!(
             "Grant the agent a reader on the workspace root its tools read: {}",
-            gents_protocol::node_readiness::workspace_root_reader_grant_without_root(home)
+            gents_protocol::node_readiness::workspace_root_list_call(home)
         )),
         _ => None,
     }
