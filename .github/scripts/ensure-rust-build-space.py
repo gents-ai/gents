@@ -40,36 +40,29 @@ def initialize_cache_tag(target):
                 raise ValueError("Cargo cache tag has an invalid signature")
 
 
-def runner_gib(name, setting, runner, default):
-    """A per-runner GiB setting: empty, a bare integer for every runner, or a
-    JSON object from runner name to integer with an optional "default" entry."""
-    setting = setting.strip()
-    if not setting:
-        value = default
-    else:
-        try:
-            parsed = json.loads(setting)
-        except json.JSONDecodeError as error:
-            raise ValueError(f"{name} must be an integer or a JSON object of runner "
-                             f"names to integers: {error}") from None
-        if isinstance(parsed, dict):
-            value = parsed.get(runner, parsed.get("default", default))
-        else:
-            value = parsed
+INVENTORY = Path(__file__).resolve().parents[1] / "ci-runners.json"
+
+
+def positive_gib(name, value, role):
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{name} for runner {runner!r} must be a positive integer of GiB")
+        raise ValueError(f"{name} of runner role {role!r} must be a positive integer of GiB")
     return value
 
 
-def target_limits(environ):
-    runner = environ.get("RUNNER_NAME", "")
-    if not runner:
+def target_limits(environ, inventory=None):
+    """The kept-tree cap and host floor in GiB for the job's runner role
+    (GENTS_CI_RUNNER_ROLE), from the runner inventory; defaults without one."""
+    if not environ.get("RUNNER_NAME", ""):
         raise ValueError("RUNNER_NAME must name the runner whose kept tree is limited")
-    return (runner_gib("GENTS_CI_TARGET_MAX_GIB", environ.get("GENTS_CI_TARGET_MAX_GIB", ""),
-                       runner, DEFAULT_TARGET_MAX_GIB),
-            runner_gib("GENTS_CI_TARGET_FLOOR_GIB",
-                       environ.get("GENTS_CI_TARGET_FLOOR_GIB", ""),
-                       runner, DEFAULT_TARGET_FLOOR_GIB))
+    role = environ.get("GENTS_CI_RUNNER_ROLE", "")
+    if not role:
+        return DEFAULT_TARGET_MAX_GIB, DEFAULT_TARGET_FLOOR_GIB
+    roles = (inventory if inventory is not None else json.loads(INVENTORY.read_text()))["roles"]
+    if role not in roles:
+        raise ValueError(f"GENTS_CI_RUNNER_ROLE {role!r} is not a role in {INVENTORY.name}")
+    target = roles[role].get("target", {})
+    return (positive_gib("max_gib", target.get("max_gib", DEFAULT_TARGET_MAX_GIB), role),
+            positive_gib("floor_gib", target.get("floor_gib", DEFAULT_TARGET_FLOOR_GIB), role))
 
 
 def tree_size(target):
