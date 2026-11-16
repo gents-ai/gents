@@ -428,8 +428,16 @@ async fn a_plugin_build_runs_confined_to_the_tool_root() {
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
-    let case: Value =
-        serde_json::from_str(&tool.call(tested["next_call"].to_string()).await.unwrap()).unwrap();
+    let case: Value = serde_json::from_str(
+        &tool
+            .call(
+                tested["next_call"].to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(case["case"], "deal.json", "{case}");
     assert_eq!(case["passed"], false, "{case}");
     assert_eq!(case["returned"]["writes"][0], whole.as_str(), "{case}");
