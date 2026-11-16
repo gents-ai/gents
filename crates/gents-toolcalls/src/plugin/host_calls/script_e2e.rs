@@ -1,0 +1,82 @@
+use std::sync::Arc;
+
+use gents_loop::tool::{BoxFuture, Tool, ToolDefinition};
+use gents_loop::tool_call_lifecycle::ToolOutcome;
+use gents_loop::tool_effects::{self, ToolEffectDispatcher, ToolEffectError};
+use gents_pack::plugin::PluginVerdict;
+use gents_tools::native::file_tools::read_tools::ReadFileTool;
+use gents_tools::native::shared::ToolContext;
+use serde_json::{json, Value};
+use sha2::Digest;
+
+struct Files(ReadFileTool);
+
+impl ToolEffectDispatcher for Files {
+    fn definitions<'a>(&'a self) -> BoxFuture<'a, Vec<ToolDefinition>> {
+        Box::pin(async { vec![self.0.definition(String::new()).await] })
+    }
+
+    fn call<'a>(
+        &'a self,
+        ordinal: u32,
+        name: &'a str,
+        arguments: &'a str,
+    ) -> BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
+        Box::pin(async move {
+            assert_eq!(name, "read_file");
+            assert!((1..=2).contains(&ordinal));
+            let args: Value = serde_json::from_str(arguments).unwrap();
+            assert_eq!(args["raw_json"], true);
+            self.0
+                .call(serde_json::from_value(args).unwrap())
+                .await
+                .map(ToolOutcome::Completed)
+                .map_err(|error| ToolEffectError::Unavailable(error.to_string()))
+        })
+    }
+}
+
+#[tokio::test]
+#[ignore = "set GENTS_SCRIPT_WASM to the script pack's compiled WASM"]
+async fn script_discovers_batches_and_reads_objects_on_a_scratch_home() {
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(tracing::Level::INFO)
+        .try_init();
+    let wasm =
+        std::fs::read(std::env::var_os("GENTS_SCRIPT_WASM").expect("GENTS_SCRIPT_WASM")).unwrap();
+    let bytes = gents_pack::plugin::test_fixtures::build_plugin_afb_bytes(&wasm);
+    let (home, mut record) = gents_pack::plugin::test_fixtures::installed_echo();
+    let digest = format!("{:x}", sha2::Sha256::digest(&bytes));
+    gents_pack::plugin::store::store_bytes(home.path(), &digest, &bytes).unwrap();
+    record.digest = format!("sha256:{digest}");
+    record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
+    gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
+    std::fs::write(home.path().join("a.txt"), "alpha\n").unwrap();
+    std::fs::write(home.path().join("b.txt"), "beta\n").unwrap();
+    let files = Files(ReadFileTool::new(
+        ToolContext::new(home.path().to_owned(), false).unwrap(),
+        32000,
+    ));
+    let executor = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
+    let result = tool_effects::scope(Some(Arc::new(files)), executor.call_data_bound_for(
+        &record,
+        json!({"script": r#"
+            const names = Object.keys(tools);
+            const files = await Promise.all([tools.read_file({path: 'a.txt'}), tools.read_file({path: 'b.txt'})]);
+            return {names, types: files.map(f => typeof f), contents: files.map(f => f.content), ok: files.every(f => f.ok)};
+        "#}),
+        None, true, None,
+    )).await.unwrap();
+    assert_eq!(
+        result.outcome.verdict,
+        PluginVerdict::Success,
+        "{}",
+        result.outcome.diagnostics
+    );
+    tracing::info!(home = %home.path().display(), output = %result.outcome.output, "scratch script end-to-end result");
+    assert_eq!(
+        result.outcome.output,
+        json!({"names": ["read_file"], "types": ["object", "object"], "contents": ["L1: alpha", "L1: beta"], "ok": true})
+    );
+}

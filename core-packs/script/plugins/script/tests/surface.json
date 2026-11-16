@@ -1,0 +1,38 @@
+{
+  "input": {
+    "script": "return {names: Object.keys(tools), description: tools.read.description, parameters: tools.read.parameters, missing: typeof tools.missing, has: 'read' in tools};"
+  },
+  "tools": {
+    "definitions": [
+      {
+        "name": "read",
+        "description": "Reads a value.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "raw_json": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    ],
+    "calls": []
+  },
+  "expect": {
+    "names": [
+      "read"
+    ],
+    "description": "Reads a value.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "raw_json": {
+          "type": "boolean"
+        }
+      }
+    },
+    "missing": "undefined",
+    "has": true
+  }
+}

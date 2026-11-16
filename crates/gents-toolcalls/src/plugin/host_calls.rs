@@ -288,6 +288,9 @@ pub fn prepare_input(
 }
 
 #[cfg(test)]
+mod script_e2e;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use gents_loop::tool_call_lifecycle::ToolOutcome;
