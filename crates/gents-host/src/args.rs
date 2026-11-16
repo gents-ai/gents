@@ -217,6 +217,26 @@ pub struct ServeArgs {
     )]
     pub p2p_rate_limit_rate: Option<f64>,
     #[arg(
+        long,
+        help = "P2P registry heartbeat interval in milliseconds (must be > 0). Defaults to 30000"
+    )]
+    pub p2p_registry_heartbeat_ms: Option<u64>,
+    #[arg(
+        long,
+        help = "P2P pairing sweep interval in milliseconds (must be > 0). Defaults to 30000"
+    )]
+    pub p2p_pairing_sweep_ms: Option<u64>,
+    #[arg(
+        long,
+        help = "P2P endpoint heartbeat interval in milliseconds (must be > 0). Defaults to the registry heartbeat"
+    )]
+    pub p2p_endpoint_heartbeat_ms: Option<u64>,
+    #[arg(
+        long,
+        help = "P2P registry staleness threshold in milliseconds (must be > 0). Defaults to three registry heartbeats"
+    )]
+    pub p2p_registry_stale_ms: Option<u64>,
+    #[arg(
         long = "apply-root",
         value_name = "ROOT",
         help = "After the server is ready, run config apply on this pack root (schemas/ then desired-state) against the in-process node. Rebinds pack placeholder DIDs to the home node (same as config apply --bind-node-did home --force-rebind-concrete-did)"

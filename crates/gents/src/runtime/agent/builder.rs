@@ -284,6 +284,7 @@ impl GentsBuilder {
             health_checker_options: self.health_checker_options,
             backend_prober_options:
                 gents_inference::backends::health::BackendProberOptions::default(),
+            p2p_intervals: Default::default(),
             backend_health: self.backend_health,
             storage_fault: crate::runtime::storage_fault::StorageFaultObservation::new(),
             process_state_observer: self.process_state_observer,

@@ -157,6 +157,7 @@ pub struct DocumentRuntimeOptions {
     pub hook_failure_policy: FailurePolicy,
     pub health_checker_options: HealthCheckerOptions,
     pub backend_prober_options: BackendProberOptions,
+    pub p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
     pub backend_health: Option<BackendHealthMap>,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     pub runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
@@ -222,6 +223,7 @@ pub struct Gents {
     health_checker_options: HealthCheckerOptions,
     backend_prober_options: BackendProberOptions,
     backend_health: BackendHealthMap,
+    p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
     storage_fault: crate::runtime::storage_fault::StorageFaultObservation,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
@@ -319,6 +321,7 @@ impl Gents {
             inference_observations: Default::default(),
             health_checker_options: options.health_checker_options,
             backend_prober_options: options.backend_prober_options,
+            p2p_intervals: options.p2p_intervals,
             backend_health,
             storage_fault: crate::runtime::storage_fault::StorageFaultObservation::new(),
             process_state_observer: options.process_state_observer,
@@ -498,6 +501,10 @@ impl Gents {
         Ok(resolve_document_runtime_snapshot(&self.node, context)
             .await?
             .configuration_fingerprint())
+    }
+
+    pub(crate) fn p2p_intervals(&self) -> gents_p2p::p2p_reconcile::intervals::P2pIntervals {
+        self.p2p_intervals
     }
 
     pub(crate) fn document_runtime_context(&self) -> Option<&DocumentResolveContext> {

@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use gents_store::identity::NodeIdentity;
 
 use super::enrollment_store::{EnrollmentProjection, GraphqlEnrollmentStore};
+use super::intervals::P2pIntervals;
 use super::templates::{resolve_template, CLIENT_TEMPLATE};
 use super::{
     desired_route_is_applied, observe_owned_pairing_live_matches, EmbeddedRemoteP2pAdmin,
@@ -344,6 +345,7 @@ pub async fn run_enrollment_reconciler(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     mut owner: EnrollmentAuthorityOwner,
+    intervals: P2pIntervals,
     cancel: CancellationToken,
 ) -> Result<()> {
     let store = GraphqlEnrollmentStore::new(node.clone(), identity.clone());
@@ -360,7 +362,7 @@ pub async fn run_enrollment_reconciler(
         ENROLLMENT_SWEEP_COLLECTIONS,
     )?;
     let mut subscription_open = true;
-    let mut interval = tokio::time::interval(super::intervals::sweep_interval());
+    let mut interval = tokio::time::interval(intervals.pairing_sweep);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
