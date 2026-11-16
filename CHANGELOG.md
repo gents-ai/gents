@@ -6,6 +6,9 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Breaking: `GENTS_REGISTRY` no longer selects the pack or plugin registry.
+  The `--registry` flag of each pack and plugin command is the only override;
+  without it the public registry is used.
 - Task `goal_blocked_audit_threshold` (positive, default 3) and
   `goal_max_infrastructure_retries` (non-negative, default 2) replace the fixed
   Goal limits for the Goals a Task creates. Every Goal a Task creates pins them,

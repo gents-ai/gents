@@ -25,10 +25,7 @@ pub(crate) struct PackFetchArgs {
         help = "Where to write the .pack; defaults to <namespace>.<name>-<version>.pack here"
     )]
     pub(crate) out: Option<std::path::PathBuf>,
-    #[arg(
-        long,
-        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
-    )]
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
     pub(crate) registry: Option<String>,
 }
 
@@ -55,10 +52,7 @@ pub(crate) struct PackSearchArgs {
     pub(crate) query: Option<String>,
     #[arg(long, default_value_t = 1, help = "Result page, 50 packs each")]
     pub(crate) page: u32,
-    #[arg(
-        long,
-        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
-    )]
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
     pub(crate) registry: Option<String>,
 }
 
@@ -66,10 +60,7 @@ pub(crate) struct PackSearchArgs {
 pub(crate) struct PackPublishArgs {
     #[arg(help = "Path to the .pack file to publish")]
     pub(crate) file: PathBuf,
-    #[arg(
-        long,
-        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
-    )]
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
     pub(crate) registry: Option<String>,
     #[arg(
         long,
@@ -108,10 +99,7 @@ pub(crate) struct PackLoginArgs {
         help = "Read the registry token from standard input, instead of --token"
     )]
     pub(crate) token_stdin: bool,
-    #[arg(
-        long,
-        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
-    )]
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
     pub(crate) registry: Option<String>,
     #[arg(long, help = "Home to save the login in")]
     pub(crate) home: Option<PathBuf>,
@@ -119,10 +107,7 @@ pub(crate) struct PackLoginArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackAccountArgs {
-    #[arg(
-        long,
-        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
-    )]
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
     pub(crate) registry: Option<String>,
     #[arg(long, help = "Home holding your saved registry login")]
     pub(crate) home: Option<PathBuf>,
@@ -132,10 +117,7 @@ pub(crate) struct PackAccountArgs {
 pub(crate) struct PackInfoArgs {
     #[arg(help = "The package, as name or namespace/name")]
     pub(crate) package: String,
-    #[arg(
-        long,
-        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
-    )]
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
     pub(crate) registry: Option<String>,
 }
 
@@ -155,10 +137,7 @@ pub(crate) struct PackOwnerArgs {
         help = "Confirm the transfer; it cannot be undone"
     )]
     pub(crate) yes: bool,
-    #[arg(
-        long,
-        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
-    )]
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
     pub(crate) registry: Option<String>,
     #[arg(
         long,
@@ -181,10 +160,7 @@ pub(crate) struct PackYankArgs {
     pub(crate) package: String,
     #[arg(long, help = "Restore a yanked version")]
     pub(crate) undo: bool,
-    #[arg(
-        long,
-        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
-    )]
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
     pub(crate) registry: Option<String>,
     #[arg(
         long,
@@ -205,10 +181,7 @@ pub(crate) struct PackYankArgs {
 pub(crate) struct PackOutdatedArgs {
     #[command(flatten)]
     pub(crate) scope: ScopeArgs,
-    #[arg(
-        long,
-        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
-    )]
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
     pub(crate) registry: Option<String>,
 }
 
@@ -226,10 +199,7 @@ pub(crate) struct PackUpdateArgs {
     pub(crate) inference_slots: Vec<String>,
     #[command(flatten)]
     pub(crate) scope: ScopeArgs,
-    #[arg(
-        long,
-        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
-    )]
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
     pub(crate) registry: Option<String>,
     #[command(flatten)]
     pub(crate) drift: PackDriftArgs,
@@ -315,7 +285,7 @@ pub(crate) struct PackInstallArgs {
     pub(crate) force_rebind_concrete_did: bool,
     #[arg(
         long,
-        help = "Pack registry base URL, used when the pack is not found locally or already installed. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL, used when the pack is not found locally or already installed. Defaults to the public registry"
     )]
     pub(crate) registry: Option<String>,
     #[command(flatten)]
@@ -414,7 +384,7 @@ pub(crate) struct PackRunArgs {
     pub(crate) with_pack: Vec<PathBuf>,
     #[arg(
         long,
-        help = "Pack registry base URL, used to resolve the pack and its dependencies. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Pack registry base URL, used to resolve the pack and its dependencies. Defaults to the public registry"
     )]
     pub(crate) registry: Option<String>,
 }
