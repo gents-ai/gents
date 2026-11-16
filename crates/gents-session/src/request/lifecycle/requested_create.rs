@@ -89,10 +89,7 @@ impl CoreOperation for RequestCreateOperation {
         create.agent_doc_id = Some(agent_doc_id);
         crate::request::lifecycle::bind_client_targets_in_txn(txn, &mut create).await?;
         sign_request(&mut create, RequestSigner::Identity(signer)).await?;
-        let response = txn
-            .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
-            .await?;
-        let doc_id = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
+        let doc_id = super::runtime_publication::publish(txn, &create).await?;
         crate::request::hooks::points::request_created(
             txn,
             context,

@@ -1,4 +1,6 @@
 ---- MODULE BackgroundLiveOutputObservation ----
+\* lean: none
+\* crates: gents-toolcalls, gents-tools
 \* A background process observed mid-run, as
 \* `list_background_tools_reports_running_live_output_bytes` drives it: the
 \* test spawns a gated child through `spawn_process`, polls `list_processes`

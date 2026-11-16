@@ -1,0 +1,4 @@
+---- MODULE MCWallClockBoundDriven ----
+EXTENDS WallClockBound
+
+====

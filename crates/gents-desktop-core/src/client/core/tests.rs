@@ -16,8 +16,24 @@ use super::supervisor::{probe_p2p_health, repair_saved_peer, saved_peer_needs_re
 use super::*;
 use crate::client::{PeerDirectory, PeerRecord};
 
-#[derive(Default)]
-struct RecordingP2P {
+#[derive(Debug, Default)]
+struct ConnectPause {
+    started: Notify,
+    release: Notify,
+    pending: std::sync::atomic::AtomicBool,
+}
+
+struct PendingConnect<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for PendingConnect<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct RecordingP2P {
+    connect_pause: Option<Arc<ConnectPause>>,
     collection_batches: StdRwLock<Vec<Vec<String>>>,
     collection_error: StdRwLock<Option<String>>,
     notify_calls: AtomicUsize,
@@ -365,6 +381,12 @@ impl P2POps for RecordingP2P {
     }
 
     async fn connect_peer(&self, addr: &str) -> P2PResult<()> {
+        if let Some(pause) = &self.connect_pause {
+            pause.pending.store(true, Ordering::SeqCst);
+            let _pending = PendingConnect(&pause.pending);
+            pause.started.notify_one();
+            pause.release.notified().await;
+        }
         self.connect_calls
             .write()
             .expect("connect calls lock poisoned")
@@ -1197,23 +1219,26 @@ async fn startup_observes_runtimes_without_waiting_for_saved_peer_dials() {
     directory.upsert(peer).await.unwrap();
     drop(directory);
 
-    let core = tokio::time::timeout(
-        BOOTSTRAP_OPERATION_TIMEOUT / 4,
-        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only()),
-    )
-    .await
-    .expect("startup does not wait for the saved peer's dial")
-    .expect("client core");
+    let pause = Arc::new(ConnectPause::default());
+    let options = ClientCoreOptions {
+        startup_p2p: Some(Arc::new(RecordingP2P {
+            connect_pause: Some(Arc::clone(&pause)),
+            ..Default::default()
+        })),
+        ..ClientCoreOptions::local_only()
+    };
+    let (core, ()) = tokio::join!(
+        ClientCore::start_with_paths_and_options(paths, options),
+        pause.started.notified(),
+    );
+    let core = core.expect("client core");
     let core = Arc::new(core);
     assert_eq!(
-        tokio::time::timeout(
-            BOOTSTRAP_OPERATION_TIMEOUT / 4,
-            core.reconnect_runtime_now(NODE)
-        )
-        .await
-        .expect("the observer answers while the dial is still retrying"),
+        core.reconnect_runtime_now(NODE).await,
         Some(crate::client::RuntimeConnectionStatus::Disconnected)
     );
+    assert!(pause.pending.load(Ordering::SeqCst));
+    pause.release.notify_one();
     core.shutdown().await.expect("shutdown");
 }
 

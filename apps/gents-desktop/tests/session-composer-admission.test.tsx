@@ -590,19 +590,35 @@ describe("SessionScreen automated inputs", () => {
           },
           {
             kind: "automatedInput",
-            origin: { kind: "trigger", triggerId: "nightly", triggerKind: "schedule" },
+            origin: {
+              kind: "trigger",
+              displayBody: "write the nightly report",
+              triggerId: "nightly",
+              triggerKind: "schedule",
+            },
             content: "write the nightly report",
             ...durable("trigger", 4),
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion", notification: true },
+            origin: {
+              kind: "backgroundCompletion",
+              toolCallId: null,
+              reason: null,
+              resultRange: null,
+              notification: true,
+            },
             content: "<agent-notification>done</agent-notification>",
             ...durable("background", 5),
           },
           {
             kind: "automatedInput",
-            origin: { kind: "goalContinuation", goalId: "goal-1", sequence: 2 },
+            origin: {
+              kind: "goalContinuation",
+              retry: null,
+              goalId: "goal-1",
+              sequence: 2,
+            },
             content: "You are running under the durable goal controller",
             ...durable("goal", 6),
           },
@@ -614,7 +630,7 @@ describe("SessionScreen automated inputs", () => {
     expect(items.map((item) => item.textContent)).toEqual([
       expect.stringContaining("From another session"),
       expect.stringContaining("Schedule · nightly"),
-      expect.stringContaining("<agent-notification>done</agent-notification>"),
+      expect.stringContaining("Background result"),
       expect.stringContaining("Goal continuation · 2"),
     ]);
     const text = screen.getByTestId("transcript-panel").textContent ?? "";
@@ -646,7 +662,7 @@ describe("SessionScreen automated inputs", () => {
     );
     await user.click(
       within(items[2]!).getByRole("button", {
-        name: "Show model input: <agent-notification>done</agent-notification>",
+        name: "Show model input: Background result",
       }),
     );
     expect(within(items[2]!).getByTestId("automated-input-content")).toBeVisible();
@@ -659,7 +675,7 @@ describe("SessionScreen automated inputs", () => {
     expect(within(items[3]!).getByTestId("automated-input-content")).toBeVisible();
   });
 
-  it("reads a message without its routing line when it has no friendly body", () => {
+  it("does not infer a display body from a routing line", () => {
     const routed =
       "[message agent:default session:5c1d node:did:key:z6Mk · at:2026-11-01T13:53:39Z · cause:9a7e]\n\nthe build is green";
     const { app } = screenApp({
@@ -684,7 +700,7 @@ describe("SessionScreen automated inputs", () => {
     expect(item).toHaveTextContent("From another node");
     expect(within(item).queryByRole("link")).toBeNull();
     expect(within(item).getByTestId("automated-input-body").textContent?.trim()).toBe(
-      "the build is green",
+      "Message contents unavailable",
     );
   });
 
@@ -704,6 +720,7 @@ describe("SessionScreen automated inputs", () => {
                 itemKey: "tool-test",
                 toolName: "bash",
                 toolCallId: "call-test",
+                toolCallDocId: "doc-call-test",
                 statusKind: "success",
                 awaitMode: "background",
                 reconstruction: { state: "ready" },
@@ -726,6 +743,7 @@ describe("SessionScreen automated inputs", () => {
                 itemKey: "tool-worker",
                 toolName: "agent_new",
                 toolCallId: "call-worker",
+                toolCallDocId: "doc-call-worker",
                 statusKind: "success",
                 awaitMode: "background",
                 reconstruction: { state: "ready" },
@@ -742,19 +760,46 @@ describe("SessionScreen automated inputs", () => {
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion", notification: true },
+            origin: {
+              kind: "backgroundCompletion",
+              toolCallId: "call-test",
+              toolCallDocId: "doc-call-test",
+              toolName: "bash",
+              statusKind: "completed",
+              reason: null,
+              resultRange: null,
+              notification: true,
+            },
             content: completion("call-test", "completed"),
             ...durable("first", 2),
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion", notification: true },
+            origin: {
+              kind: "backgroundCompletion",
+              toolCallId: "call-worker",
+              toolCallDocId: "doc-call-worker",
+              toolName: "agent_new",
+              statusKind: "completed",
+              reason: null,
+              resultRange: null,
+              notification: true,
+            },
             content: completion("call-worker", "completed"),
             ...durable("worker", 3),
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion", notification: true },
+            origin: {
+              kind: "backgroundCompletion",
+              toolCallId: "call-elsewhere",
+              toolCallDocId: "doc-call-elsewhere",
+              toolName: "bash",
+              statusKind: "failed",
+              reason: null,
+              resultRange: null,
+              notification: true,
+            },
             content: completion("call-elsewhere", "failed"),
             ...durable("second", 4),
           },
@@ -802,7 +847,15 @@ describe("SessionScreen automated inputs", () => {
     const completion = `<tool-completion tool_call_id="call-x" tool_name="bash" status="completed">\n  <result>ok</result>\n</tool-completion>`;
     const background = (key: string, sequence: number, content: string) => ({
       kind: "automatedInput",
-      origin: { kind: "backgroundCompletion", notification: content !== wake },
+      origin: {
+        kind: "backgroundCompletion",
+        toolCallId: null,
+        reason: null,
+        resultRange: null,
+        notification: content !== wake,
+        toolName: "bash",
+        statusKind: "completed",
+      },
       content,
       ...durable(key, sequence),
     });
@@ -844,7 +897,7 @@ describe("SessionScreen automated inputs", () => {
     );
   });
 
-  it("draws the sender's agent and session, from its routing line when the origin lacks it", () => {
+  it("draws the sender's session from its native origin", () => {
     const shortNode =
       NODE.length > 20 ? `${NODE.slice(0, 16)}..${NODE.slice(-4)}` : NODE;
     const message = (itemKey: string, sequence: number, session: string) => ({
@@ -852,7 +905,7 @@ describe("SessionScreen automated inputs", () => {
       origin: {
         kind: "sessionMessage",
         senderNodeDid: NODE,
-        senderSessionId: null,
+        senderSessionId: session,
         senderRequestId: `cause-${itemKey}`,
       },
       content: `[message agent:default session:${session} node:${shortNode} · at:2026-11-01T13:53:39Z · cause:cause-${itemKey}]\n\nthe build is green`,
@@ -891,7 +944,9 @@ describe("SessionScreen automated inputs", () => {
     ).toHaveAttribute("href", expect.stringContaining("session-reviewer"));
     expect(known!.querySelector(".lucide-bot")).toBeNull();
     expect(unknown).toHaveAccessibleName("From another session");
-    expect(within(unknown!).queryByRole("link")).toBeNull();
+    expect(
+      within(unknown!).getByRole("link", { name: "another session" }),
+    ).toHaveAttribute("href", expect.stringContaining("session-unlisted"));
     expect(unknown!.querySelector(".lucide-bot")).not.toBeNull();
   });
 
@@ -904,7 +959,12 @@ describe("SessionScreen automated inputs", () => {
             itemKey: "authored:doc-trigger:prompt",
             requestId: "doc-trigger",
             sequence: 1,
-            origin: { kind: "trigger", triggerId: "nightly", triggerKind: "event" },
+            origin: {
+              kind: "trigger",
+              displayBody: null,
+              triggerId: "nightly",
+              triggerKind: "event",
+            },
             content: null,
             timestamp: null,
             reconstruction: { state: "denied", deniedDependencyDocId: "segment" },

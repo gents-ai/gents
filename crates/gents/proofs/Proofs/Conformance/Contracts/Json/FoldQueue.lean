@@ -288,6 +288,18 @@ def foldScript : Family FoldInput (Option FoldObservation) where
            terminal := observed.terminal
            claims := observed.claims.map fun (head, folded) => { head, folded } }
 
+
+/-- The real runtime's client-rediscovery journey consumes the busy-turn
+trace from the queue owner's cases and executes the same model. Its adapter
+also binds provider dispatch and retained replies, beyond the claim owner. -/
+@[conformance_family]
+def queuedTurnRediscovery : Family FoldInput (Option FoldObservation) where
+  inputs := foldScript.inputs.filter fun input =>
+    input.name == "ordinary_queued_inputs_arrive_during_busy_turn"
+  model := foldScript.model
+
+example : queuedTurnRediscovery.inputs.length = 1 := by native_decide
+
 structure HandoverInput where
   name : String
   pending : List IssuedEntryWire

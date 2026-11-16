@@ -89,7 +89,7 @@ pub async fn insert_runtime_queue_request(
 ) -> String {
     let signer = db.agent_identity.managed_agent_signer().unwrap();
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mutation = gents_session::request::lifecycle::queue::mutation::session_request_create_mutation_at_hop_with_signer(
+    let mutation = gents_session::request::lifecycle::queue::mutation::build_session_request_at_hop_with_signer(
         parent,
         parent.request_hop,
         SessionRequestFields {
@@ -104,7 +104,7 @@ pub async fn insert_runtime_queue_request(
         Some(&signer),
     )
     .await
-    .unwrap();
+    .unwrap().graphql_mutation().unwrap();
     let agent = escape_graphql_string(db.agent_did());
     let session = escape_graphql_string(&parent.session_id);
     let node = escape_graphql_string(db.node_did());

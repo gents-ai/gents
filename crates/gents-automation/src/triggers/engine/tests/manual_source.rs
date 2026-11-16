@@ -149,17 +149,13 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
     agent
         .transact_write("test.paired_client_session", |txn| {
             let owner = &owner;
-            let agent_did = &agent_did;
             let desktop = desktop.did();
             Box::pin(async move {
-                gents_session::session::ensure_session_in_txn(
+                gents_session::test_support::stage_agent_owned_session_in_txn(
                     txn,
-                    session_id,
                     owner,
-                    agent_did,
+                    session_id,
                     Some(desktop),
-                    None,
-                    None,
                     &chrono::Utc::now().to_rfc3339(),
                 )
                 .await

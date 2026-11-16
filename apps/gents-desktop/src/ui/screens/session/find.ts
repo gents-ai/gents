@@ -6,7 +6,6 @@ import { createStore } from "zustand/vanilla";
 
 import { readableReasoning, toolSummary } from "../tool-summary";
 import type { TranscriptEntry } from "../transcript-groups";
-import { withoutRoutingHeader } from "../TranscriptInputs";
 
 /** Where a piece of a transcript's text is drawn: its row, and for an
     activity group the step or thought within it, and whether it is drawn
@@ -91,7 +90,7 @@ const itemText = (item: RenderedTimelineItem): string | null => {
       return item.content;
     case "automatedInput":
       return item.origin.kind === "sessionMessage"
-        ? (item.origin.displayBody ?? withoutRoutingHeader(item.content ?? ""))
+        ? (item.origin.displayBody ?? item.content ?? "")
         : item.content;
     case "sessionCompaction":
       return item.summary ?? null;

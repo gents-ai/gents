@@ -1,4 +1,6 @@
 ---- MODULE PairingGrantRevocation ----
+\* lean: none
+\* crates: gents-p2p
 (***************************************************************************)
 (* An application pairing from node A toward enrolled peer B, racing the   *)
 (* withdrawal of its author's P2P mutation grant. The pairing reconciler   *)

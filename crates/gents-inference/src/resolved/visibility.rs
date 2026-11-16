@@ -11,6 +11,8 @@ pub enum ConfigurationVisibilityError {
     #[error("configuration visibility query returned an invalid response")]
     InvalidResponse,
     #[error(transparent)]
+    Version(#[from] gents_store::graphql::GraphqlResponseError),
+    #[error(transparent)]
     Access(#[from] ConfigClientError),
 }
 
@@ -24,10 +26,22 @@ impl TransactionFailure for ConfigurationVisibilityError {
 }
 
 impl SelectedConfiguration {
-    /// Observe the exact resolved generation under its Agent DID. Each check
-    /// is a native read; access to another generation or to the runtime's
-    /// snapshot does not authorize these documents.
+    /// Recheck the admitted selection's visibility under its Agent DID.
+    /// Running work retains its resolved values; access to another generation
+    /// or to the runtime's snapshot does not authorize these documents.
     pub async fn check(&self) -> Result<(), ConfigurationVisibilityError> {
+        self.validate()?;
+        self.check_documents(self.documents.clone(), false)
+            .await
+            .map(|_| ())
+    }
+
+    pub async fn check_current(&self) -> Result<bool, ConfigurationVisibilityError> {
+        self.validate()?;
+        self.check_documents(self.documents.clone(), true).await
+    }
+
+    fn validate(&self) -> Result<(), ConfigurationVisibilityError> {
         if !matches!(self.documents.first(), Some(doc) if doc.collection == gents_store::collection::Collection::Agent)
             || self.documents.iter().any(|doc| {
                 doc.doc_id.is_empty()
@@ -48,7 +62,7 @@ impl SelectedConfiguration {
         {
             return Err(ConfigurationVisibilityError::Unavailable);
         }
-        self.check_documents(self.documents.clone()).await
+        Ok(())
     }
 
     /// Resolve the cached Skill ID only within this generation, then read its
@@ -66,7 +80,7 @@ impl SelectedConfiguration {
         if documents.len() != 1 || documents[0].doc_id.is_empty() {
             return Err(ConfigurationVisibilityError::Unavailable);
         }
-        self.check_documents(documents).await
+        self.check_documents(documents, false).await.map(|_| ())
     }
 
     pub async fn check_skills(
@@ -88,20 +102,23 @@ impl SelectedConfiguration {
             }
             documents.push((*matching[0]).clone());
         }
-        self.check_documents(documents).await
+        self.check_documents(documents, false).await.map(|_| ())
     }
 
     async fn check_documents(
         &self,
         documents: Vec<SelectedConfigurationDocument>,
-    ) -> Result<(), ConfigurationVisibilityError> {
+        require_current: bool,
+    ) -> Result<bool, ConfigurationVisibilityError> {
         let access = ConfigAccess::local_as(Arc::clone(&self.node), self.actor.clone());
         access.transact_readonly("provider_input.configuration_visibility", |txn| {
             let documents = documents.clone();
             Box::pin(async move {
+                let mut current = true;
                 for document in documents {
                     let name = document.collection.graphql_type();
-                    let query = format!("{{ {name}(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{_docID}} }}", escape_graphql_string(&document.doc_id));
+                    let version = if require_current { "_version { cid height fieldName }" } else { "" };
+                    let query = format!("{{ {name}(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{_docID {version}}} }}", escape_graphql_string(&document.doc_id));
                     let response = txn.execute(&query).await?;
                     let rows = response.get("data").and_then(|data| data.get(name))
                         .and_then(serde_json::Value::as_array)
@@ -109,8 +126,13 @@ impl SelectedConfiguration {
                     if !matches!(rows.as_slice(), [row] if row["_docID"].as_str() == Some(document.doc_id.as_str())) {
                         return Err(ConfigurationVisibilityError::Unavailable);
                     }
+                    if require_current {
+                        let observed = gents_store::graphql::document_composite_version(&rows[0], "configuration admission")?
+                            .ok_or(ConfigurationVisibilityError::InvalidResponse)?;
+                        current &= !document.version.is_empty() && observed.cid == document.version;
+                    }
                 }
-                Ok(())
+                Ok(current)
             })
         }).await
     }

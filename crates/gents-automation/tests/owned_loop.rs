@@ -44,7 +44,7 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
                 "config".into(),
                 serde_json::json!({
                     "argv": ["profile", "preview"],
-                    "set": serde_json::json!({"display_name": "{\"literal\":true}"}).to_string(),
+                    "set": serde_json::json!({"display_name": format!("{{\"literal\":true,\"index\":{index}}}")}).to_string(),
                     "options": serde_json::json!({"agent": &agent_did}).to_string()
                 }),
             ))
@@ -467,7 +467,7 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
         owned_config(4),
     );
     let collected = gents_tools::runtime_context::scope_request_tool_execution(
-        Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
+        Some(gents_store::test_support::unreached_deadline_at()),
         tokio_util::sync::CancellationToken::new(),
         Box::pin(collect_owned_scripted_stream(
             stream,
@@ -515,7 +515,13 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
 async fn a_script_that_stops_mid_child_settles_the_child_and_the_request_finishes() {
     let (db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let node = db.node.clone();
-    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StoppingParent), Box::new(Stall)];
+    let tools: Vec<Box<dyn ToolDyn>> = {
+        let started = Arc::new(tokio::sync::Notify::new());
+        vec![
+            Box::new(StoppingParent(started.clone())),
+            Box::new(Stall(started)),
+        ]
+    };
     let stream = run_loop_stream(
         ScriptedModel::new_turns(plugin_call_then_text_turns()),
         Some(hook.clone()),
@@ -525,7 +531,7 @@ async fn a_script_that_stops_mid_child_settles_the_child_and_the_request_finishe
         owned_config(4),
     );
     let collected = gents_tools::runtime_context::scope_request_tool_execution(
-        Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
+        Some(gents_store::test_support::unreached_deadline_at()),
         tokio_util::sync::CancellationToken::new(),
         Box::pin(collect_owned_scripted_stream(
             stream,
@@ -642,3 +648,6 @@ async fn parallel_native_reads_publish_distinct_bound_unchanged_receipts() {
     }
     node.shutdown().await.expect("node shutdown");
 }
+
+#[path = "owned_loop/repeated_success.rs"]
+mod repeated_success;

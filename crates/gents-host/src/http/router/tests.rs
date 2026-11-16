@@ -310,6 +310,30 @@ async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
     let owner = identity.did().to_owned();
     let binding = home.agent("fixture").await;
     home.mark_backend_healthy(&binding).await;
+    let configuration: gents_documents::PackConfig = serde_json::from_value(json!({
+        "node": {"node_did": owner},
+        "tools": [{"node_did": owner, "tools_id": "wire-tools"}],
+        "contexts": [{"node_did": owner, "context_id": "wire-context", "tools_id": "wire-tools"}],
+        "agents": [{"node_did": owner, "agent_did": binding.agent_did,
+            "creation_nonce": binding.creation_nonce, "context_id": "wire-context",
+            "inference_profile_id": format!("{}:inference", binding.agent_did), "enabled": true}]
+    }))
+    .unwrap();
+    let plan = gents_documents::DesiredStateApplyPlan::from_pack_config(&configuration).unwrap();
+    home.access
+        .transact_write("test.wire.context", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
     let runtime = gents::Gents::builder()
         .node(home.node().clone())
         .backend_admission(home.home.backend_admission())
@@ -324,6 +348,47 @@ async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
         .await
         .unwrap();
     let plugin_home = tempfile::tempdir().unwrap();
+    let user = gents_service::home_state::load_held_user_identity(plugin_home.path())
+        .await
+        .unwrap();
+    let native = gents_store::config_client::ConfigAccess::local_as(
+        home.node().clone(),
+        identity::Did::new(&owner).unwrap(),
+    );
+    gents_store::identity::GrantSet::HouseholdOwner
+        .grant(&native, &identity::Did::new(user.did()).unwrap())
+        .await
+        .unwrap();
+    let roots = home.access.execute("{ Node { _docID } }").await.unwrap();
+    home.access
+        .add_actor_relationship(
+            "Node",
+            roots["data"]["Node"][0]["_docID"].as_str().unwrap(),
+            "administrator",
+            &identity::Did::new(user.did()).unwrap(),
+        )
+        .await
+        .unwrap();
+    let (mut plugin, artifact) = gents_pack::plugin::test_fixtures::build_plugin_pack(
+        "wire_acceptance",
+        &gents_pack::plugin::test_fixtures::constant_output_wat(br#"{}"#),
+        None,
+    );
+    plugin.name = "tool".into();
+    let installed = gents_pack::plugin::install::install_from_pack(
+        plugin_home.path(),
+        "acme",
+        "acme/wire_acceptance",
+        "1.0.0",
+        &format!("sha256:{}", "a".repeat(64)),
+        &plugin,
+        &artifact,
+        None,
+        Default::default(),
+        Default::default(),
+        false,
+    )
+    .unwrap();
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     for case in gents_lean_vocab::families::contracts_pack_installation_operator_wire::cases() {
         let (activation_runtime, activation_observation) = empty_activation_state();
@@ -365,10 +430,10 @@ async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
                 node_did: owner.clone(),
                 request: WireRequest {
                     plugin: "acme/tool".into(),
-                    agent: "fixture".into(),
+                    agent: binding.agent_did.clone(),
                     targets_from: Vec::new(),
                     remove: false,
-                    preview: true,
+                    preview: false,
                     dynamic_consent: false,
                     tool_calls_consent: false,
                 },
@@ -382,7 +447,31 @@ async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
         } else {
             request
         };
-        let status = request.send().await.unwrap().status();
+        let response = request.send().await.unwrap();
+        let status = response.status();
+        if case.input.operator && case.input.ready && case.input.home {
+            let report: Value = response.json().await.unwrap();
+            assert_eq!(status, StatusCode::OK, "{report}");
+            assert_eq!(report["preview"], false);
+            let rows = home
+                .access
+                .execute("{ Tools { integrations } }")
+                .await
+                .unwrap();
+            assert!(
+                rows["data"]["Tools"].as_array().unwrap().iter().any(|row| {
+                    row["integrations"]["plugins"]
+                        .as_array()
+                        .is_some_and(|plugins| {
+                            plugins.iter().any(|entry| {
+                                entry["plugin"] == "acme/tool"
+                                    && entry["digest"] == installed.digest
+                            })
+                        })
+                }),
+                "{rows}"
+            );
+        }
         case.check(operator_wire::OperatorWireOutput {
             allowed: !matches!(
                 status,

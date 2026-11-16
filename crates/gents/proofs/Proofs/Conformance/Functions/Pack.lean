@@ -5,9 +5,11 @@ import Proofs.Conformance.Family
 namespace Pack.Operations
 
 deriving instance Lean.ToJson for
-  Actor, Digest, DigestAdmission, Edited, EditedAdmission, VariableSource, RootReader, ReaderAction
+  Actor, Digest, DigestAdmission, Edited, EditedAdmission, VariableSource, RootReader, ReaderAction,
+  HostRootSource
 
 attribute [conformance_function] digestAdmission editedAdmission variableSource readerAction
+  hostRootSource hostRootSupplied
 
 end Pack.Operations
 

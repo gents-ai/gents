@@ -222,12 +222,10 @@ mod tests {
         let home = root.join("node-home");
         fs::create_dir_all(&home).unwrap();
         let executable = root.join("gents");
-        fs::write(&executable, b"fixture").unwrap();
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        gents_store::test_support::write_executable_script(&executable, "fixture").unwrap();
+        #[cfg(not(unix))]
+        fs::write(&executable, b"fixture").unwrap();
         NativeServiceConfig {
             home: fs::canonicalize(&home).unwrap(),
             executable: fs::canonicalize(&executable).unwrap(),

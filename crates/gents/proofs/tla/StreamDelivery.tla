@@ -1,4 +1,7 @@
 ---- MODULE StreamDelivery ----
+\* lean: none
+\* crates: gents, gents-loop, gents-session, gents-cli
+\* models: StreamBatch.plan
 (***************************************************************************)
 (* Streamed provider text reaching a subscribed client while the provider  *)
 (* pauses (#2131, #3803). The provider emits its chunks, then holds its     *)
