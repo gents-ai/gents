@@ -34,15 +34,63 @@ pub(super) async fn receipt(
 }
 
 /// Fixtures sharing a node slow down as it accumulates their documents, so
-/// the cases run on a small pool of nodes, a few at a time.
+/// each shard's cases run on a small pool of nodes, a few at a time.
 const CASES_PER_NODE: usize = 32;
 const NODES_AT_ONCE: usize = 4;
 
-#[tokio::test]
-async fn generated_goal_client_controls_drive_signed_commands() {
+/// The family replays as one test per shard, so each test stays far inside
+/// the suite's per-test hang ceiling on a loaded host.
+const SHARDS: usize = 16;
+
+macro_rules! client_control_shards {
+    ($($name:ident = $shard:literal),* $(,)?) => {
+        const SHARD_TESTS: &[usize] = &[$($shard),*];
+        $(
+            #[tokio::test]
+            async fn $name() {
+                drive_client_control_shard($shard).await;
+            }
+        )*
+    };
+}
+
+client_control_shards!(
+    generated_goal_client_controls_drive_signed_commands_shard_0 = 0,
+    generated_goal_client_controls_drive_signed_commands_shard_1 = 1,
+    generated_goal_client_controls_drive_signed_commands_shard_2 = 2,
+    generated_goal_client_controls_drive_signed_commands_shard_3 = 3,
+    generated_goal_client_controls_drive_signed_commands_shard_4 = 4,
+    generated_goal_client_controls_drive_signed_commands_shard_5 = 5,
+    generated_goal_client_controls_drive_signed_commands_shard_6 = 6,
+    generated_goal_client_controls_drive_signed_commands_shard_7 = 7,
+    generated_goal_client_controls_drive_signed_commands_shard_8 = 8,
+    generated_goal_client_controls_drive_signed_commands_shard_9 = 9,
+    generated_goal_client_controls_drive_signed_commands_shard_10 = 10,
+    generated_goal_client_controls_drive_signed_commands_shard_11 = 11,
+    generated_goal_client_controls_drive_signed_commands_shard_12 = 12,
+    generated_goal_client_controls_drive_signed_commands_shard_13 = 13,
+    generated_goal_client_controls_drive_signed_commands_shard_14 = 14,
+    generated_goal_client_controls_drive_signed_commands_shard_15 = 15,
+);
+
+type ControlCase = gents_lean_vocab::family::Case<
+    gents_lean_vocab::families::goal_client_control_contracts_control::ControlInput<String>,
+    Option<gents_lean_vocab::families::goal_client_control_contracts_control::GoalSnapshot<String>>,
+>;
+
+/// The family's one replay site; the shards and their coverage check share it.
+fn control_cases() -> Vec<ControlCase> {
+    gents_lean_vocab::families::goal_client_control_contracts_control::cases::<String>()
+}
+
+#[test]
+fn generated_goal_client_control_shards_replay_every_case_once() {
+    gents_lean_vocab::family::assert_shards_cover(control_cases().len(), SHARD_TESTS, SHARDS);
+}
+
+async fn drive_client_control_shard(shard: usize) {
     use futures::StreamExt;
-    let cases =
-        gents_lean_vocab::families::goal_client_control_contracts_control::cases::<String>();
+    let cases = gents_lean_vocab::family::shard(control_cases(), shard, SHARDS);
     futures::stream::iter(cases.chunks(CASES_PER_NODE))
         .for_each_concurrent(NODES_AT_ONCE, |chunk| async move {
             let node = FixtureNode::start().await;
@@ -54,15 +102,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
         .await;
 }
 
-async fn drive_signed_command(
-    node: &FixtureNode,
-    modeled_case: &gents_lean_vocab::family::Case<
-        gents_lean_vocab::families::goal_client_control_contracts_control::ControlInput<String>,
-        Option<
-            gents_lean_vocab::families::goal_client_control_contracts_control::GoalSnapshot<String>,
-        >,
-    >,
-) {
+async fn drive_signed_command(node: &FixtureNode, modeled_case: &ControlCase) {
     let case = &modeled_case.input;
     let before_execution = serde_json::to_value(&case.before.execution).unwrap();
     let terminal_parent = !case.facts.unfinished_request;

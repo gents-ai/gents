@@ -482,411 +482,390 @@ async fn discharge_completion_obligation(
     assert_eq!(updated["_docID"], doc_id);
 }
 
+/// Each case runs on its own fixture node, so the family runs a few cases at
+/// a time; one test still sees every case, which the follow-up count needs.
+const WAIT_CASES_AT_ONCE: usize = 4;
+
 async fn run_generated_wait_observations() {
-    let mut abandoned_follow_ups = 0;
-    for generated in
+    use futures::StreamExt;
+    let abandoned_follow_ups = std::sync::atomic::AtomicUsize::new(0);
+    let cases =
         gents_lean_vocab::families::goal_claimed_publication_contracts_wait_observation::cases::<
             String,
             String,
             GoalStatus,
             String,
-        >()
-    {
-        let case = &generated.input;
-        let before = serde_json::to_value(&case.before).unwrap();
-        let fixture = Fixture::new_with_earlier_request(
-            &before,
-            false,
-            (case.name == "unrelated_wait_cannot_suppress").then_some("older-wait-parent"),
-        )
-        .await;
-        if case.name == "unrelated_wait_cannot_suppress" {
-            let older = gents_protocol::row::AgentRequest::try_from(
-                request_rows(&fixture.agent_access())
-                    .await
-                    .into_iter()
-                    .find(|row| row.request_id == "older-wait-parent")
-                    .unwrap(),
-            )
-            .unwrap();
-            let mut older_request = verified_client_lifecycle(&fixture, older).await;
-            assert_eq!(older_request.claim().await.unwrap(), ClaimOutcome::Claimed);
-            let unrelated_handle = "unrelated-background-handle";
-            let mut unrelated = publish_accepted_on_claimed_request(
-                fixture.node.clone(),
-                &mut older_request,
-                fixture.identity.did(),
-                0,
-                "wait_process",
-                "older-goal-wait",
-                json!({"tool_call_id":unrelated_handle,"timeout_secs":1}),
-                AwaitMode::Foreground,
-                true,
-            )
-            .await
-            .unwrap();
-            let older_terminal_header = unrelated.accepted_header_doc_id().unwrap().to_owned();
-            unrelated
-                .complete(
-                    &json!({"ok":false,"tool_call_id":unrelated_handle,
-                    "tool_name":"bash","await_mode":"background","status":"running",
-                    "result":"","error":{"reason":"wait_timeout","failure_class":"external"}})
-                    .to_string(),
+        >();
+    futures::stream::iter(cases.iter())
+        .for_each_concurrent(WAIT_CASES_AT_ONCE, |generated| {
+            let abandoned_follow_ups = &abandoned_follow_ups;
+            async move {
+                let case = &generated.input;
+                let before = serde_json::to_value(&case.before).unwrap();
+                let fixture = Fixture::new_with_earlier_request(
+                    &before,
+                    false,
+                    (case.name == "unrelated_wait_cannot_suppress").then_some("older-wait-parent"),
                 )
-                .await
-                .unwrap();
-            assert_eq!(
-                older_request
-                    .terminalize_owned(
-                        RequestTerminalOutcome::Completed,
-                        gents_protocol::output::TerminalOutput::Message {
-                            message_doc_id: older_terminal_header,
-                        },
-                        None,
-                    )
-                    .await
-                    .unwrap(),
-                TerminalizeResult::Won
-            );
-        }
-        let mut request = verified_client_lifecycle(&fixture, fixture.parent.clone()).await;
-        assert_eq!(
-            request.claim().await.unwrap(),
-            ClaimOutcome::Claimed,
-            "{}",
-            case.name
-        );
-        let backgrounds = case.observation.backgrounds.as_ref();
-        let wants_target = backgrounds.is_some_and(|rows| !rows.is_empty())
-            || matches!(
-                case.name.as_str(),
-                "unreadable_target_fails_closed" | "lost_waited_tool_recovers"
-            );
-        let mut turn = 0;
-        let mut terminal_header = None;
-        let mut handle = "absent-generated-handle".to_owned();
-        let mut target_doc = None;
-        let mut renamed_wait_doc = None;
-        let mut wait_docs = Vec::new();
-        if wants_target {
-            let mut spawn = publish_accepted_on_claimed_request(
-                fixture.node.clone(),
-                &mut request,
-                fixture.identity.did(),
-                turn,
-                "spawn_process",
-                "goal-spawn",
-                json!({"tool_name":"bash","args":{"command":"sleep 1"}}),
-                AwaitMode::Foreground,
-                true,
-            )
-            .await
-            .unwrap();
-            handle = format!("spawned:{}", spawn.doc_id().unwrap());
-            terminal_header = spawn.accepted_header_doc_id().map(str::to_owned);
-            let mut target = spawn
-                .admit_spawned_background(
-                    SpawnedBackgroundToolAdmission {
-                        tool_name: "bash".into(),
-                        deadline_at: chrono::Utc::now() + chrono::Duration::minutes(10),
-                        selected_tool_identity: None,
-                    },
-                    &json!({"ok":true,"tool_call_id":handle,"status":"running"}).to_string(),
-                )
-                .await
-                .unwrap();
-            target_doc = Some(target.doc_id().unwrap().to_owned());
-            let target_state = if matches!(
-                case.name.as_str(),
-                "unreadable_target_fails_closed" | "lost_waited_tool_recovers"
-            ) {
-                "running"
-            } else {
-                case.observation.backgrounds.as_ref().unwrap()[0]
-                    .state
-                    .as_str()
-            };
-            match target_state {
-                "pending" => {}
-                "running" => {
-                    target.start_running().await.unwrap();
-                }
-                "completion_pending" => {
-                    target.start_running().await.unwrap();
-                    if case.name.starts_with("failed_") {
-                        target
-                            .fail(
-                                "failed",
-                                gents_loop::tool_call_lifecycle::FailureClass::External,
-                            )
+                .await;
+                if case.name == "unrelated_wait_cannot_suppress" {
+                    let older = gents_protocol::row::AgentRequest::try_from(
+                        request_rows(&fixture.agent_access())
                             .await
-                            .unwrap();
-                    } else if case.name.starts_with("cancelled_") {
-                        target
-                            .cancel_during_run(
-                                gents_session::session::tool_call_state::CancelCause::UserCancelled,
-                            )
-                            .await
-                            .unwrap();
-                    } else {
-                        target.complete("finished").await.unwrap();
-                    }
-                }
-                "terminal" => {
-                    target.start_running().await.unwrap();
-                    target.complete("finished").await.unwrap();
-                    discharge_completion_obligation(
-                        &fixture.agent_access(),
-                        target.doc_id().unwrap(),
+                            .into_iter()
+                            .find(|row| row.request_id == "older-wait-parent")
+                            .unwrap(),
                     )
-                    .await;
-                }
-                state => panic!("unmapped generated background state {state}"),
-            }
-            turn += 1;
-        }
-        if case.name == "ambiguous_same_handle_fails_closed" {
-            let mut duplicate = publish_accepted_on_claimed_request(
-                fixture.node.clone(),
-                &mut request,
-                fixture.identity.did(),
-                turn,
-                "bash",
-                &handle,
-                json!({"command":"sleep 1"}),
-                AwaitMode::Foreground,
-                false,
-            )
-            .await
-            .unwrap();
-            duplicate.start_running().await.unwrap();
-            duplicate
-                .complete("duplicate background handle")
-                .await
-                .unwrap();
-            terminal_header = duplicate.accepted_header_doc_id().map(str::to_owned);
-            assert_ne!(duplicate.doc_id(), target_doc.as_deref());
-            turn += 1;
-        }
-        for (index, observed_wait) in case.observation.waits.iter().enumerate() {
-            if case.name == "unrelated_wait_cannot_suppress" {
-                continue;
-            }
-            let reply = observed_wait.reply.as_str();
-            let malformed_arguments = case.name == "malformed_accepted_wait_error_fails_closed";
-            let mut wait = publish_accepted_on_claimed_request(
-                fixture.node.clone(),
-                &mut request,
-                fixture.identity.did(),
-                turn,
-                "wait_process",
-                &format!("goal-wait-{index}"),
-                if malformed_arguments {
-                    json!({"tool_call_id":7})
-                } else {
-                    json!({"tool_call_id":handle,"timeout_secs":1})
-                },
-                AwaitMode::Foreground,
-                observed_wait.replied,
-            )
-            .await
-            .unwrap();
-            terminal_header = wait.accepted_header_doc_id().map(str::to_owned);
-            wait_docs.push(wait.doc_id().unwrap().to_owned());
-            if !observed_wait.replied {
-                turn += 1;
-                continue;
-            }
-            match reply {
-                "timed_out_running" => {
-                    let reply_handle = if observed_wait.reply_handle == "wrong" {
-                        "wrong"
-                    } else {
-                        &handle
-                    };
-                    wait.complete(
-                        &json!({"ok":false,"tool_call_id":reply_handle,
-                        "tool_name":"bash","await_mode":"background","status":"running",
-                        "result":"","error":{"reason":"wait_timeout","failure_class":"external"}})
-                        .to_string(),
+                    .unwrap();
+                    let mut older_request = verified_client_lifecycle(&fixture, older).await;
+                    assert_eq!(older_request.claim().await.unwrap(), ClaimOutcome::Claimed);
+                    let unrelated_handle = "unrelated-background-handle";
+                    let mut unrelated = publish_accepted_on_claimed_request(
+                        fixture.node.clone(),
+                        &mut older_request,
+                        fixture.identity.did(),
+                        0,
+                        "wait_process",
+                        "older-goal-wait",
+                        json!({"tool_call_id":unrelated_handle,"timeout_secs":1}),
+                        AwaitMode::Foreground,
+                        true,
                     )
                     .await
                     .unwrap();
-                }
-                "malformed" => {
-                    let raw = if case.name == "renamed_wait_row_cannot_hide_accepted_control" {
-                        json!({"ok":false,"tool_call_id":handle,"tool_name":"bash",
-                            "await_mode":"background","status":"running","result":"",
-                            "error":{"reason":"wait_timeout","failure_class":"external"}})
-                    } else if malformed_arguments {
-                        json!({"ok":true,"failure_class":"argument_invalid",
-                            "path":null,"message":"invalid", "retryable":false,
-                            "service_id":"process","tool_name":"wait_process"})
-                    } else {
-                        json!({"ok":true,"tool_call_id":handle,"tool_name":"bash",
-                            "await_mode":"background","status":"running","result":"",
-                            "error":{"reason":"caller_deadline_exceeded","failure_class":"external"}})
-                    };
-                    wait.complete(&raw.to_string()).await.unwrap();
-                }
-                "argument_error" => {
-                    let raw = json!({"ok":false,"failure_class":"argument_invalid",
-                        "path":"/tool_call_id","message":"not a runnable handle",
-                        "retryable":false,"service_id":"process","tool_name":"wait_process"})
-                    .to_string();
-                    if case.name == "bounded_presentation_preserves_raw_wait_receipt" {
-                        use gents_protocol::output::{PayloadPresentation, PresentationPart};
-                        wait.complete_raw_with_presentation(
-                            &raw,
-                            "[bounded presentation]",
-                            PayloadPresentation::Composed {
-                                parts: vec![PresentationPart::Literal {
-                                    text: "[bounded presentation]".into(),
-                                }],
-                            },
+                    let older_terminal_header = unrelated.accepted_header_doc_id().unwrap().to_owned();
+                    unrelated
+                        .complete(
+                            &json!({"ok":false,"tool_call_id":unrelated_handle,
+                            "tool_name":"bash","await_mode":"background","status":"running",
+                            "result":"","error":{"reason":"wait_timeout","failure_class":"external"}})
+                            .to_string(),
                         )
                         .await
                         .unwrap();
-                    } else {
-                        wait.complete(&raw).await.unwrap();
-                    }
+                    assert_eq!(
+                        older_request
+                            .terminalize_owned(
+                                RequestTerminalOutcome::Completed,
+                                gents_protocol::output::TerminalOutput::Message {
+                                    message_doc_id: older_terminal_header,
+                                },
+                                None,
+                            )
+                            .await
+                            .unwrap(),
+                        TerminalizeResult::Won
+                    );
                 }
-                "other" => {
-                    let pending = case.name == "pending_waited_tool_does_not_suppress";
-                    wait.complete(
-                        &json!({"ok":false,"tool_call_id":handle,
-                            "tool_name":"bash","await_mode":"background",
-                            "status":if pending { "pending" } else { "running" },
-                            "result":"","error":{"reason":if pending { "wait_timeout" }
-                                else { "caller_deadline_exceeded" },
-                                "failure_class":"external"}})
-                        .to_string(),
+                let mut request = verified_client_lifecycle(&fixture, fixture.parent.clone()).await;
+                assert_eq!(
+                    request.claim().await.unwrap(),
+                    ClaimOutcome::Claimed,
+                    "{}",
+                    case.name
+                );
+                let backgrounds = case.observation.backgrounds.as_ref();
+                let wants_target = backgrounds.is_some_and(|rows| !rows.is_empty())
+                    || matches!(
+                        case.name.as_str(),
+                        "unreadable_target_fails_closed" | "lost_waited_tool_recovers"
+                    );
+                let mut turn = 0;
+                let mut terminal_header = None;
+                let mut handle = "absent-generated-handle".to_owned();
+                let mut target_doc = None;
+                let mut renamed_wait_doc = None;
+                let mut wait_docs = Vec::new();
+                if wants_target {
+                    let mut spawn = publish_accepted_on_claimed_request(
+                        fixture.node.clone(),
+                        &mut request,
+                        fixture.identity.did(),
+                        turn,
+                        "spawn_process",
+                        "goal-spawn",
+                        json!({"tool_name":"bash","args":{"command":"sleep 1"}}),
+                        AwaitMode::Foreground,
+                        true,
                     )
                     .await
                     .unwrap();
+                    handle = format!("spawned:{}", spawn.doc_id().unwrap());
+                    terminal_header = spawn.accepted_header_doc_id().map(str::to_owned);
+                    let mut target = spawn
+                        .admit_spawned_background(
+                            SpawnedBackgroundToolAdmission {
+                                tool_name: "bash".into(),
+                                deadline_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+                                selected_tool_identity: None,
+                            },
+                            &json!({"ok":true,"tool_call_id":handle,"status":"running"}).to_string(),
+                        )
+                        .await
+                        .unwrap();
+                    target_doc = Some(target.doc_id().unwrap().to_owned());
+                    let target_state = if matches!(
+                        case.name.as_str(),
+                        "unreadable_target_fails_closed" | "lost_waited_tool_recovers"
+                    ) {
+                        "running"
+                    } else {
+                        case.observation.backgrounds.as_ref().unwrap()[0]
+                            .state
+                            .as_str()
+                    };
+                    match target_state {
+                        "pending" => {}
+                        "running" => {
+                            target.start_running().await.unwrap();
+                        }
+                        "completion_pending" => {
+                            target.start_running().await.unwrap();
+                            if case.name.starts_with("failed_") {
+                                target
+                                    .fail(
+                                        "failed",
+                                        gents_loop::tool_call_lifecycle::FailureClass::External,
+                                    )
+                                    .await
+                                    .unwrap();
+                            } else if case.name.starts_with("cancelled_") {
+                                target
+                                    .cancel_during_run(
+                                        gents_session::session::tool_call_state::CancelCause::UserCancelled,
+                                    )
+                                    .await
+                                    .unwrap();
+                            } else {
+                                target.complete("finished").await.unwrap();
+                            }
+                        }
+                        "terminal" => {
+                            target.start_running().await.unwrap();
+                            target.complete("finished").await.unwrap();
+                            discharge_completion_obligation(
+                                &fixture.agent_access(),
+                                target.doc_id().unwrap(),
+                            )
+                            .await;
+                        }
+                        state => panic!("unmapped generated background state {state}"),
+                    }
+                    turn += 1;
                 }
-                "settled_diagnostic" => {
-                    wait.timeout().await.unwrap();
+                if case.name == "ambiguous_same_handle_fails_closed" {
+                    let mut duplicate = publish_accepted_on_claimed_request(
+                        fixture.node.clone(),
+                        &mut request,
+                        fixture.identity.did(),
+                        turn,
+                        "bash",
+                        &handle,
+                        json!({"command":"sleep 1"}),
+                        AwaitMode::Foreground,
+                        false,
+                    )
+                    .await
+                    .unwrap();
+                    duplicate.start_running().await.unwrap();
+                    duplicate
+                        .complete("duplicate background handle")
+                        .await
+                        .unwrap();
+                    terminal_header = duplicate.accepted_header_doc_id().map(str::to_owned);
+                    assert_ne!(duplicate.doc_id(), target_doc.as_deref());
+                    turn += 1;
                 }
-                result => panic!("unmapped generated wait result {result}"),
-            }
-            if case.name == "renamed_wait_row_cannot_hide_accepted_control" {
-                renamed_wait_doc = Some(wait.doc_id().unwrap().to_owned());
-            }
-            turn += 1;
-        }
-        let unstarted_wait = case.observation.waits.iter().any(|wait| !wait.replied);
-        let (outcome, failure) = if unstarted_wait {
-            (
-                RequestTerminalOutcome::Failed,
-                Some("provider failed before the accepted wait started"),
-            )
-        } else {
-            (RequestTerminalOutcome::Completed, None)
-        };
-        assert_eq!(
-            request
-                .terminalize_owned(
-                    outcome,
-                    gents_protocol::output::TerminalOutput::Message {
-                        message_doc_id: terminal_header
-                            .expect("accepted parent has assistant header"),
-                    },
-                    failure,
-                )
-                .await
-                .unwrap_or_else(|error| panic!("{} terminalize: {error:#}", case.name)),
-            TerminalizeResult::Won,
-            "{}",
-            case.name
-        );
-        assert_eq!(fixture.observe().await, before, "{} prestate", case.name);
-        if case.name == "unreadable_target_fails_closed" {
-            let target_doc = target_doc.as_deref().unwrap();
-            execute(&fixture.agent_access(), &format!(
-                r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "invalid-state" }}) {{ _docID }} }}"#,
-                escape_graphql_string(target_doc),
-            )).await;
-        }
-        if case.name == "malformed_spawn_origin_fails_closed" {
-            let target_doc = target_doc.as_deref().unwrap();
-            execute(&fixture.agent_access(), &format!(
-                r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ tool_call_key: "wrong-key" }}) {{ _docID }} }}"#,
-                escape_graphql_string(target_doc),
-            )).await;
-        }
-        if case.name == "foreign_session_target_cannot_suppress" {
-            let target_doc = target_doc.as_deref().unwrap();
-            execute(&fixture.agent_access(), &format!(
-                r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ session_id: "foreign-session" }}) {{ _docID }} }}"#,
-                escape_graphql_string(target_doc),
-            )).await;
-        }
-        if case.name == "lost_waited_tool_recovers" {
-            execute(&fixture.agent_access(), &format!(
-                r#"mutation {{ delete_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-                escape_graphql_string(target_doc.as_deref().unwrap()),
-            )).await;
-        }
-        if let Some(wait_doc) = renamed_wait_doc {
-            execute(&fixture.agent_access(), &format!(
-                r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ tool_name: "bash" }}) {{ _docID }} }}"#,
-                escape_graphql_string(&wait_doc),
-            )).await;
-        }
-        let observed = fixture.current_goal().await;
-        let wrapup = observed.parsed_status() == Some(GoalStatus::BudgetLimited);
-        let publication = publish_claimed_continuation(
-            &fixture.node,
-            fixture.agent.as_ref(),
-            &observed,
-            PARENT,
-            "Original signed continuation",
-            wrapup,
-        );
-        let result = if case.observation.storage_failed {
-            ConfigApplyTxn::with_read_storage_failure(
-                "await_mode spawned_by_tool_call_doc_id",
-                publication,
-            )
-            .await
-        } else {
-            publication.await
-        };
-        let outcome = publication_outcome(&result, case.commit);
-        let published = fixture.observe().await;
-        match result {
-            Err(error) if gents_store::config_client::is_transaction_step_unavailable(&error) => {
-                let retried = publish_claimed_continuation_with_identity(
+                for (index, observed_wait) in case.observation.waits.iter().enumerate() {
+                    if case.name == "unrelated_wait_cannot_suppress" {
+                        continue;
+                    }
+                    let reply = observed_wait.reply.as_str();
+                    let malformed_arguments = case.name == "malformed_accepted_wait_error_fails_closed";
+                    let mut wait = publish_accepted_on_claimed_request(
+                        fixture.node.clone(),
+                        &mut request,
+                        fixture.identity.did(),
+                        turn,
+                        "wait_process",
+                        &format!("goal-wait-{index}"),
+                        if malformed_arguments {
+                            json!({"tool_call_id":7})
+                        } else {
+                            json!({"tool_call_id":handle,"timeout_secs":1})
+                        },
+                        AwaitMode::Foreground,
+                        observed_wait.replied,
+                    )
+                    .await
+                    .unwrap();
+                    terminal_header = wait.accepted_header_doc_id().map(str::to_owned);
+                    wait_docs.push(wait.doc_id().unwrap().to_owned());
+                    if !observed_wait.replied {
+                        turn += 1;
+                        continue;
+                    }
+                    match reply {
+                        "timed_out_running" => {
+                            let reply_handle = if observed_wait.reply_handle == "wrong" {
+                                "wrong"
+                            } else {
+                                &handle
+                            };
+                            wait.complete(
+                                &json!({"ok":false,"tool_call_id":reply_handle,
+                                "tool_name":"bash","await_mode":"background","status":"running",
+                                "result":"","error":{"reason":"wait_timeout","failure_class":"external"}})
+                                .to_string(),
+                            )
+                            .await
+                            .unwrap();
+                        }
+                        "malformed" => {
+                            let raw = if case.name == "renamed_wait_row_cannot_hide_accepted_control" {
+                                json!({"ok":false,"tool_call_id":handle,"tool_name":"bash",
+                                    "await_mode":"background","status":"running","result":"",
+                                    "error":{"reason":"wait_timeout","failure_class":"external"}})
+                            } else if malformed_arguments {
+                                json!({"ok":true,"failure_class":"argument_invalid",
+                                    "path":null,"message":"invalid", "retryable":false,
+                                    "service_id":"process","tool_name":"wait_process"})
+                            } else {
+                                json!({"ok":true,"tool_call_id":handle,"tool_name":"bash",
+                                    "await_mode":"background","status":"running","result":"",
+                                    "error":{"reason":"caller_deadline_exceeded","failure_class":"external"}})
+                            };
+                            wait.complete(&raw.to_string()).await.unwrap();
+                        }
+                        "argument_error" => {
+                            let raw = json!({"ok":false,"failure_class":"argument_invalid",
+                                "path":"/tool_call_id","message":"not a runnable handle",
+                                "retryable":false,"service_id":"process","tool_name":"wait_process"})
+                            .to_string();
+                            if case.name == "bounded_presentation_preserves_raw_wait_receipt" {
+                                use gents_protocol::output::{PayloadPresentation, PresentationPart};
+                                wait.complete_raw_with_presentation(
+                                    &raw,
+                                    "[bounded presentation]",
+                                    PayloadPresentation::Composed {
+                                        parts: vec![PresentationPart::Literal {
+                                            text: "[bounded presentation]".into(),
+                                        }],
+                                    },
+                                )
+                                .await
+                                .unwrap();
+                            } else {
+                                wait.complete(&raw).await.unwrap();
+                            }
+                        }
+                        "other" => {
+                            let pending = case.name == "pending_waited_tool_does_not_suppress";
+                            wait.complete(
+                                &json!({"ok":false,"tool_call_id":handle,
+                                    "tool_name":"bash","await_mode":"background",
+                                    "status":if pending { "pending" } else { "running" },
+                                    "result":"","error":{"reason":if pending { "wait_timeout" }
+                                        else { "caller_deadline_exceeded" },
+                                        "failure_class":"external"}})
+                                .to_string(),
+                            )
+                            .await
+                            .unwrap();
+                        }
+                        "settled_diagnostic" => {
+                            wait.timeout().await.unwrap();
+                        }
+                        result => panic!("unmapped generated wait result {result}"),
+                    }
+                    if case.name == "renamed_wait_row_cannot_hide_accepted_control" {
+                        renamed_wait_doc = Some(wait.doc_id().unwrap().to_owned());
+                    }
+                    turn += 1;
+                }
+                let unstarted_wait = case.observation.waits.iter().any(|wait| !wait.replied);
+                let (outcome, failure) = if unstarted_wait {
+                    (
+                        RequestTerminalOutcome::Failed,
+                        Some("provider failed before the accepted wait started"),
+                    )
+                } else {
+                    (RequestTerminalOutcome::Completed, None)
+                };
+                assert_eq!(
+                    request
+                        .terminalize_owned(
+                            outcome,
+                            gents_protocol::output::TerminalOutput::Message {
+                                message_doc_id: terminal_header
+                                    .expect("accepted parent has assistant header"),
+                            },
+                            failure,
+                        )
+                        .await
+                        .unwrap_or_else(|error| panic!("{} terminalize: {error:#}", case.name)),
+                    TerminalizeResult::Won,
+                    "{}",
+                    case.name
+                );
+                assert_eq!(fixture.observe().await, before, "{} prestate", case.name);
+                if case.name == "unreadable_target_fails_closed" {
+                    let target_doc = target_doc.as_deref().unwrap();
+                    execute(&fixture.agent_access(), &format!(
+                        r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "invalid-state" }}) {{ _docID }} }}"#,
+                        escape_graphql_string(target_doc),
+                    )).await;
+                }
+                if case.name == "malformed_spawn_origin_fails_closed" {
+                    let target_doc = target_doc.as_deref().unwrap();
+                    execute(&fixture.agent_access(), &format!(
+                        r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ tool_call_key: "wrong-key" }}) {{ _docID }} }}"#,
+                        escape_graphql_string(target_doc),
+                    )).await;
+                }
+                if case.name == "foreign_session_target_cannot_suppress" {
+                    let target_doc = target_doc.as_deref().unwrap();
+                    execute(&fixture.agent_access(), &format!(
+                        r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ session_id: "foreign-session" }}) {{ _docID }} }}"#,
+                        escape_graphql_string(target_doc),
+                    )).await;
+                }
+                if case.name == "lost_waited_tool_recovers" {
+                    execute(&fixture.agent_access(), &format!(
+                        r#"mutation {{ delete_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                        escape_graphql_string(target_doc.as_deref().unwrap()),
+                    )).await;
+                }
+                if let Some(wait_doc) = renamed_wait_doc {
+                    execute(&fixture.agent_access(), &format!(
+                        r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ tool_name: "bash" }}) {{ _docID }} }}"#,
+                        escape_graphql_string(&wait_doc),
+                    )).await;
+                }
+                let observed = fixture.current_goal().await;
+                let wrapup = observed.parsed_status() == Some(GoalStatus::BudgetLimited);
+                let publication = publish_claimed_continuation(
                     &fixture.node,
                     fixture.agent.as_ref(),
                     &observed,
                     PARENT,
                     "Original signed continuation",
                     wrapup,
-                )
-                .await
-                .unwrap();
-                assert!(
-                    retried.is_none(),
-                    "{} retry still observes the wait",
-                    case.name
                 );
-            }
-            Ok(ClaimedPublication::InvalidEvidence(_)) => {
-                let stopped = fixture.current_goal().await;
-                assert!(
-                    stopped
-                        .last_failure
-                        .as_deref()
-                        .is_some_and(|reason| reason.starts_with("invalid Goal wait evidence: ")),
-                    "{} must record why automation stopped: {:?}",
-                    case.name,
-                    stopped.last_failure,
-                );
-                if stopped.parsed_status() == Some(GoalStatus::BudgetLimited) {
-                    let rescan = |wrapup| {
-                        publish_claimed_continuation_with_identity(
+                let result = if case.observation.storage_failed {
+                    ConfigApplyTxn::with_read_storage_failure(
+                        "await_mode spawned_by_tool_call_doc_id",
+                        publication,
+                    )
+                    .await
+                } else {
+                    publication.await
+                };
+                let outcome = publication_outcome(&result, case.commit);
+                let published = fixture.observe().await;
+                match result {
+                    Err(error) if gents_store::config_client::is_transaction_step_unavailable(&error) => {
+                        let retried = publish_claimed_continuation_with_identity(
                             &fixture.node,
                             fixture.agent.as_ref(),
                             &observed,
@@ -894,45 +873,87 @@ async fn run_generated_wait_observations() {
                             "Original signed continuation",
                             wrapup,
                         )
-                    };
-                    assert!(rescan(wrapup).await.unwrap().is_none(), "{}", case.name);
-                    assert_eq!(fixture.observe().await, published, "{}", case.name);
-                    let rescanned = fixture.current_goal().await;
-                    assert_eq!(
-                        (&rescanned.updated_at, &rescanned.last_failure),
-                        (&stopped.updated_at, &stopped.last_failure),
-                        "{}: a rescan must not write the Goal again",
-                        case.name
-                    );
-                    for wait_doc in &wait_docs {
-                        execute(&fixture.agent_access(), &format!(
-                            r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "cancelled" }}) {{ _docID }} }}"#,
-                            escape_graphql_string(wait_doc),
-                        )).await;
+                        .await
+                        .unwrap();
+                        assert!(
+                            retried.is_none(),
+                            "{} retry still observes the wait",
+                            case.name
+                        );
                     }
-                    assert!(rescan(wrapup).await.unwrap().is_none(), "{}", case.name);
-                    assert_eq!(fixture.observe().await, published, "{}", case.name);
-                    abandoned_follow_ups += 1;
+                    Ok(ClaimedPublication::InvalidEvidence(_)) => {
+                        let stopped = fixture.current_goal().await;
+                        assert!(
+                            stopped
+                                .last_failure
+                                .as_deref()
+                                .is_some_and(|reason| reason.starts_with("invalid Goal wait evidence: ")),
+                            "{} must record why automation stopped: {:?}",
+                            case.name,
+                            stopped.last_failure,
+                        );
+                        if stopped.parsed_status() == Some(GoalStatus::BudgetLimited) {
+                            let rescan = |wrapup| {
+                                publish_claimed_continuation_with_identity(
+                                    &fixture.node,
+                                    fixture.agent.as_ref(),
+                                    &observed,
+                                    PARENT,
+                                    "Original signed continuation",
+                                    wrapup,
+                                )
+                            };
+                            assert!(rescan(wrapup).await.unwrap().is_none(), "{}", case.name);
+                            assert_eq!(fixture.observe().await, published, "{}", case.name);
+                            let rescanned = fixture.current_goal().await;
+                            assert_eq!(
+                                (&rescanned.updated_at, &rescanned.last_failure),
+                                (&stopped.updated_at, &stopped.last_failure),
+                                "{}: a rescan must not write the Goal again",
+                                case.name
+                            );
+                            for wait_doc in &wait_docs {
+                                execute(&fixture.agent_access(), &format!(
+                                    r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "cancelled" }}) {{ _docID }} }}"#,
+                                    escape_graphql_string(wait_doc),
+                                )).await;
+                            }
+                            assert!(rescan(wrapup).await.unwrap().is_none(), "{}", case.name);
+                            assert_eq!(fixture.observe().await, published, "{}", case.name);
+                            abandoned_follow_ups.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                    }
+                    _ => {}
                 }
+                generated.check(gents_lean_vocab::families::goal_claimed_publication_contracts_wait_observation::PublicationOutput {
+                    expected: gents_lean_vocab::family::recode(&published),
+                    outcome,
+                });
+                fixture.node.shutdown().await.expect("node shutdown");
             }
-            _ => {}
-        }
-        generated.check(gents_lean_vocab::families::goal_claimed_publication_contracts_wait_observation::PublicationOutput {
-            expected: gents_lean_vocab::family::recode(&published),
-            outcome,
-        });
-        fixture.node.shutdown().await.expect("node shutdown");
-    }
+        })
+        .await;
     assert_eq!(
-        abandoned_follow_ups, 1,
+        abandoned_follow_ups.load(std::sync::atomic::Ordering::SeqCst),
+        1,
         "the budget wrap-up case drives its follow-up scans"
     );
 }
 
 #[tokio::test]
-async fn generated_goal_claimed_publication_cases_drive_real_transactions() {
+async fn generated_goal_claimed_publication_historical_cases_drive_real_transactions() {
     run_historical_publication_cases().await;
+}
+
+#[tokio::test]
+async fn generated_goal_claimed_publication_running_wait_cases_drive_real_transactions() {
     run_generated_running_wait().await;
+}
+
+/// One test: the family asserts a count across its cases (exactly one case
+/// drives abandoned follow-up scans).
+#[tokio::test]
+async fn generated_goal_claimed_publication_wait_observation_cases_drive_real_transactions() {
     run_generated_wait_observations().await;
 }
 

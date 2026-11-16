@@ -326,6 +326,27 @@ theorem request_event_preserves_reload (s : State) :
     acceptsReload (requestEvent s) (beginRead s) = true := by
   simp [acceptsReload, requestEvent, beginRead]
 
+/-- The store after a capture saw a publication into it, a request event of
+it, both or neither. -/
+def sinceCapture (s : State) (publication event : Bool) : State :=
+  let published := if publication then dataChange s else s
+  if event then requestEvent published else published
+
+/-- The reload fence as a finite decision: whether a reload captured before
+`sinceCapture` still publishes. -/
+def reloadAcceptedSince (publication event : Bool) : Bool :=
+  let start : State :=
+    { dataEpoch := 0, provenanceEpoch := 0, requestEventEpoch := 0, transcriptEpoch := 0 }
+  acceptsReload (sinceCapture start publication event) (beginRead start)
+
+/-- The finite table decides every store, whatever its epochs: `ObserverResync`
+TLA reads its reload fence from it. -/
+theorem reload_accepted_since_any_state (s : State) (publication event : Bool) :
+    acceptsReload (sinceCapture s publication event) (beginRead s) =
+      reloadAcceptedSince publication event := by
+  cases publication <;> cases event <;>
+    simp [reloadAcceptedSince, sinceCapture, acceptsReload, dataChange, requestEvent, beginRead]
+
 def requestEvents (s : State) : Nat → State
   | 0 => s
   | n + 1 => requestEvent (requestEvents s n)

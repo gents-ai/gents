@@ -696,7 +696,10 @@ pub async fn allow_general_agent_target(
     .unwrap();
 }
 
-pub struct StoppingParent;
+/// Stops while its `stall` child is in flight: it drops the child call once
+/// the child's tool body has started, which follows the child's admission and
+/// running transition (`WallClockBound`: the stop is an event, not a delay).
+pub struct StoppingParent(pub Arc<tokio::sync::Notify>);
 
 impl ToolDyn for StoppingParent {
     fn name(&self) -> String {
@@ -717,12 +720,13 @@ impl ToolDyn for StoppingParent {
         Box::pin(async move {
             let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
             // A script that exhausts its own allowance drops the child call it awaits.
-            let stopped = tokio::time::timeout(
-                std::time::Duration::from_millis(200),
-                dispatcher.call(1, "stall", "{}"),
-            )
-            .await;
-            assert!(stopped.is_err(), "the child outlives the script");
+            tokio::select! {
+                biased;
+                _ = self.0.notified() => {}
+                finished = dispatcher.call(1, "stall", "{}") => {
+                    panic!("the child outlives the script: {finished:?}")
+                }
+            }
             Err(ToolError::ReportedFailure {
                 class: gents_loop::tool_call_lifecycle::FailureClass::External,
                 text: "the plugin exceeded its wall-clock budget".into(),
@@ -731,7 +735,8 @@ impl ToolDyn for StoppingParent {
     }
 }
 
-pub struct Stall;
+/// Never answers; notifies its shared `Notify` once its body has started.
+pub struct Stall(pub Arc<tokio::sync::Notify>);
 
 impl ToolDyn for Stall {
     fn name(&self) -> String {
@@ -749,7 +754,10 @@ impl ToolDyn for Stall {
     }
 
     fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(std::future::pending())
+        Box::pin(async move {
+            self.0.notify_one();
+            std::future::pending().await
+        })
     }
 }
 
