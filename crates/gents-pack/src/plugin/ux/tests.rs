@@ -283,7 +283,10 @@ fn lint_pack_dir_reads_the_declared_stylesheet() {
 }
 
 fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("../..")
 }
 
 fn plugin_files_under(dir: &Path, found: &mut Vec<PathBuf>) {

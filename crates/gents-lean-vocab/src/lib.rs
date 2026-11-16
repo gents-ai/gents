@@ -245,9 +245,10 @@ fn mutate_leaves(value: &mut serde_json::Value, field: Option<&str>, selected: b
 }
 
 fn load_lean_contract_snapshot() -> LeanContractSnapshot {
-    let proofs_dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../gents/proofs"));
+    let proofs_dir = gents_lean_contract::proofs_dir()
+        .unwrap_or_else(|error| panic!("failed to locate the Lean proofs: {error:#}"));
     let stdout = gents_lean_contract::run_prepared_generator(
-        proofs_dir,
+        &proofs_dir,
         LEAN_CONTRACT_TARGET,
         LEAN_CONTRACT_FILE,
     )

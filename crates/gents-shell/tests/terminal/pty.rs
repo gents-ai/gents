@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use tui_test::{
@@ -11,6 +11,13 @@ const WAIT: Duration = Duration::from_secs(20);
 /// Concurrent `openpty` calls on macOS can fail with the kernel's internal EREDRIVEOPEN, errno -6,
 /// which asks the caller to open again. Nothing has run yet, and the next attempt succeeds.
 const OPEN_AGAIN: &str = "Unknown error: -6";
+
+/// The shell under test. Read at run time: an archived test binary runs on
+/// another machine, where the compile-time path does not exist.
+pub fn gents_shell() -> String {
+    std::env::var("CARGO_BIN_EXE_gents-shell")
+        .expect("cargo test and nextest set CARGO_BIN_EXE_gents-shell")
+}
 
 pub fn cursor_at(row: u16, col: u16) -> Operation {
     Operation::ExpectCursor {
@@ -63,7 +70,7 @@ pub struct Exit {
 
 impl Shell {
     pub fn start(args: &[&str], rows: u16, cols: u16) -> Shell {
-        Shell::start_command(env!("CARGO_BIN_EXE_gents-shell"), args, &[], rows, cols)
+        Shell::start_command(&gents_shell(), args, &[], rows, cols)
     }
 
     pub fn start_command(
@@ -74,7 +81,15 @@ impl Shell {
         cols: u16,
     ) -> Shell {
         let test = std::thread::current();
-        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        // Beside the test binary's target directory (CARGO_TARGET_TMPDIR is a
+        // compile-time path, absent where an archived binary runs).
+        let exe = std::env::current_exe().expect("test binary path");
+        let target = exe
+            .ancestors()
+            .nth(3)
+            .expect("test binary is under <target>/<profile>/deps");
+        let dir = target
+            .join("tmp")
             .join("terminal")
             .join(test.name().unwrap_or("unnamed"));
         let context = ExecutionContext {
