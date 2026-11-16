@@ -117,7 +117,16 @@ pub async fn invoke(
     args: &str,
 ) -> serde_json::Value {
     accept_hook_tool_call(hook, id, name, args, None).await;
-    let ToolCallHookAction::Skip { reason } = hook.on_tool_call(name, None, id, args).await else {
+    let ToolCallHookAction::Skip { reason } = hook
+        .on_tool_call(
+            name,
+            None,
+            id,
+            args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+    else {
         panic!("accepted {name} must return a tool result")
     };
     serde_json::from_str(&reason).unwrap()

@@ -136,7 +136,7 @@ async fn start_live(questions: bool) -> Result<Live> {
 }
 
 async fn start_on(model_endpoint: String, model_name: String, questions: bool) -> Result<Live> {
-    let (tempdir, home, node_did, mut serve, port) = tokio::task::spawn_blocking(move || {
+    let (tempdir, home, node_did, serve, port) = tokio::task::spawn_blocking(move || {
         let tempdir = tempfile::tempdir().context("creating tempdir")?;
         let home = tempdir.path().join("home");
         fs::create_dir_all(&home)?;

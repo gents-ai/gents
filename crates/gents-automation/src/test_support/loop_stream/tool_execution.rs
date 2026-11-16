@@ -429,7 +429,11 @@ impl ToolDyn for ComposedChild {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             if self.name == "slow" {
                 tokio::time::sleep(
@@ -472,7 +476,11 @@ impl ToolDyn for ComposingParent {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
             let mut spawned = String::new();
@@ -481,7 +489,13 @@ impl ToolDyn for ComposingParent {
                 let arguments = arguments
                     .replace(SPAWNED_PROCESS, &spawned)
                     .replace(NEW_SESSION, &session);
-                let outcome = dispatcher.call(*ordinal, name, &arguments).await;
+                // A child runs without the parent's dispatcher, as the plugin
+                // host's `tool_calls` service runs it (`children_cannot_delegate`).
+                let outcome = gents_loop::tool_effects::scope(
+                    None,
+                    dispatcher.call(context, *ordinal, name, &arguments),
+                )
+                .await;
                 assert!(
                     !matches!(
                         outcome,
@@ -543,7 +557,11 @@ impl ToolDyn for AdmissionChild {
         })
     }
 
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             let args: serde_json::Value = serde_json::from_str(&args).unwrap();
             self.invoked
@@ -716,14 +734,21 @@ impl ToolDyn for StoppingParent {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
             // A script that exhausts its own allowance drops the child call it awaits.
             tokio::select! {
                 biased;
                 _ = self.0.notified() => {}
-                finished = dispatcher.call(1, "stall", "{}") => {
+                finished = gents_loop::tool_effects::scope(
+                    None,
+                    dispatcher.call(context, 1, "stall", "{}"),
+                ) => {
                     panic!("the child outlives the script: {finished:?}")
                 }
             }
@@ -753,7 +778,11 @@ impl ToolDyn for Stall {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             self.0.notify_one();
             std::future::pending().await
@@ -783,7 +812,11 @@ impl ToolDyn for ParallelReadProbe {
     fn footprint(&self, _: &str) -> gents_loop::tool::ToolFootprint {
         gents_loop::tool::ToolFootprint::Read
     }
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             self.gate.wait().await;
             if args.contains("first") {
@@ -882,14 +915,19 @@ impl ToolDyn for SerialReadMeasurement {
     fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {
         self.0.definition(prompt)
     }
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        self.0.call(args)
+    fn call<'a>(
+        &'a self,
+        args: String,
+        context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
+        self.0.call(args, context)
     }
     fn call_with_receipt<'a>(
         &'a self,
         args: String,
+        context: &'a gents_loop::tool::ToolCallEnvelope,
     ) -> BoxFuture<'a, gents_loop::tool::ToolDispatchResult> {
-        self.0.call_with_receipt(args)
+        self.0.call_with_receipt(args, context)
     }
     fn admit(&self, args: &str) -> Result<(), ToolError> {
         self.0.admit(args)

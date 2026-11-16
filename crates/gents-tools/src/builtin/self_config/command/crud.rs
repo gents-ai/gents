@@ -495,6 +495,13 @@ pub(super) struct BatchFailure {
     pub unattempted: usize,
 }
 
+impl BatchFailure {
+    /// The stopped non-atomic batch an erased error carries as its root or as a context value.
+    pub(super) fn in_error(error: &anyhow::Error) -> Option<&Self> {
+        error.downcast_ref::<Self>()
+    }
+}
+
 /// The agent whose anchor this exact-ID write is validated against, or `None`
 /// when nothing selects the document.
 ///

@@ -369,10 +369,3 @@ async fn resolve_inference_outcome(
 
     result
 }
-
-fn is_stale_compaction_generation(error: &anyhow::Error) -> bool {
-    gents_protocol::error_chain::find_source::<gents_session::session::StaleCompactionGeneration>(
-        error.as_ref(),
-    )
-    .is_some()
-}

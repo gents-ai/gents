@@ -261,7 +261,7 @@ where
 /// A work failure caused by losing the execution lease is not this execution's
 /// failure to report.
 async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::Error) -> bool {
-    if error.is::<gents_session::request::lifecycle::ExecutionOwnershipLost>() {
+    if gents_session::request::lifecycle::ExecutionOwnershipLost::occurs_in(error) {
         return true;
     }
     matches!(lifecycle.owns_execution().await, Ok(false))

@@ -261,11 +261,14 @@ async fn endpoint_rebind_during_preflight_does_not_dispatch_to_either_route() {
     );
     let tool = CallToolTool::new(remote_context(node.clone(), pool));
     let error = tool
-        .call(CallToolArgs {
-            service_id: "shared".into(),
-            tool_name: "selected".into(),
-            arguments: serde_json::json!({"value": 1}),
-        })
+        .call(
+            CallToolArgs {
+                service_id: "shared".into(),
+                tool_name: "selected".into(),
+                arguments: serde_json::json!({"value": 1}),
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap_err();
     assert!(error.to_string().contains("route changed"));
@@ -294,7 +297,10 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
     );
     let ctx = remote_context(node.clone(), pool.clone());
     let discovered = super::DiscoverToolsTool::new(ctx.clone())
-        .call(super::discover::DiscoverToolsArgs { query: None })
+        .call(
+            super::discover::DiscoverToolsArgs { query: None },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert!(discovered.contains("selected"));
@@ -304,11 +310,14 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
         context.remote_tools.services[0].style = style;
         let dispatcher = CallToolTool::new(context.clone());
         let denial = dispatcher
-            .call(CallToolArgs {
-                service_id: "shared".into(),
-                tool_name: "hidden".into(),
-                arguments: serde_json::json!({"value":1}),
-            })
+            .call(
+                CallToolArgs {
+                    service_id: "shared".into(),
+                    tool_name: "hidden".into(),
+                    arguments: serde_json::json!({"value":1}),
+                },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap_err();
         assert!(denial.to_string().contains("tool_not_allowed"));
@@ -332,9 +341,13 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
             tool_name: "hidden".into(),
             context: context.clone(),
         };
-        let denial = gents_loop::tool::ToolDyn::call(&flat, "{}".into())
-            .await
-            .unwrap_err();
+        let denial = gents_loop::tool::ToolDyn::call(
+            &flat,
+            "{}".into(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(
             denial,
             gents_loop::tool::ToolError::ReportedFailure {
@@ -369,11 +382,14 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
                 assert_eq!(built.len(), 3);
                 assert_eq!(
                     dispatcher
-                        .call(CallToolArgs {
-                            service_id: "shared".into(),
-                            tool_name: "selected".into(),
-                            arguments: serde_json::json!({"value":1})
-                        })
+                        .call(
+                            CallToolArgs {
+                                service_id: "shared".into(),
+                                tool_name: "selected".into(),
+                                arguments: serde_json::json!({"value":1})
+                            },
+                            &gents_loop::tool::ToolCallEnvelope::ambient()
+                        )
                         .await
                         .unwrap(),
                     "executed"
@@ -387,7 +403,13 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
                     serde_json::json!(["value"])
                 );
                 assert_eq!(
-                    built[0].call("{\"value\":1}".into()).await.unwrap(),
+                    built[0]
+                        .call(
+                            "{\"value\":1}".into(),
+                            &gents_loop::tool::ToolCallEnvelope::ambient()
+                        )
+                        .await
+                        .unwrap(),
                     "executed"
                 );
             }
@@ -440,11 +462,14 @@ async fn configured_discovery_timeout_cannot_fall_through_to_mutating_dispatch()
     context.remote_tools.services[0].discovery_timeout_secs = Some(2);
     let started = std::time::Instant::now();
     let error = CallToolTool::new(context)
-        .call(CallToolArgs {
-            service_id: "shared".into(),
-            tool_name: "selected".into(),
-            arguments: serde_json::json!({"value":1}),
-        })
+        .call(
+            CallToolArgs {
+                service_id: "shared".into(),
+                tool_name: "selected".into(),
+                arguments: serde_json::json!({"value":1}),
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap_err();
     let elapsed = started.elapsed();
@@ -487,11 +512,14 @@ async fn stale_limit_intersects_normal_call_timeout() {
             .await;
         let start = std::time::Instant::now();
         let result = CallToolTool::new(context)
-            .call(CallToolArgs {
-                service_id: "shared".into(),
-                tool_name: "selected".into(),
-                arguments: serde_json::json!({"value":1}),
-            })
+            .call(
+                CallToolArgs {
+                    service_id: "shared".into(),
+                    tool_name: "selected".into(),
+                    arguments: serde_json::json!({"value":1}),
+                },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await;
         let elapsed = start.elapsed();
         let text = format!("{:#}", result.unwrap_err());

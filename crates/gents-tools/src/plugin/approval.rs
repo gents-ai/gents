@@ -234,7 +234,8 @@ pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool>
             );
         }
         if let Some(binding) = request.binding() {
-            workspace::validate_binding(home, binding)?;
+            workspace::validate_binding(home, binding)
+                .map_err(workspace::BindingError::into_anyhow)?;
         }
         write_atomic(
             &queue.request_file(home, &request.id),
@@ -249,7 +250,8 @@ pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool>
     let mut pause = Duration::from_millis(20);
     loop {
         if let Some(binding) = request.binding() {
-            workspace::validate_binding(home, binding)?;
+            workspace::validate_binding(home, binding)
+                .map_err(workspace::BindingError::into_anyhow)?;
         }
         if let Some(allowed) = read_decision(home, request)? {
             return Ok(allowed);
@@ -310,13 +312,13 @@ pub fn pending_requests(home: &Path) -> Result<Vec<Request>> {
                 "the approval queue contains duplicate question identities"
             );
             if let Some(binding) = request.binding() {
-                if let Err(error) = workspace::validate_binding(home, binding) {
-                    if error.is::<workspace::SelectionChanged>()
-                        || error.is::<allowed::PathChanged>()
-                    {
-                        continue;
-                    }
-                    return Err(error);
+                match workspace::validate_binding(home, binding) {
+                    Err(
+                        workspace::BindingError::SelectionChanged(_)
+                        | workspace::BindingError::PathChanged(_),
+                    ) => continue,
+                    Err(error) => return Err(error.into_anyhow()),
+                    Ok(_) => {}
                 }
             }
             if valid_id(&request.id)
@@ -401,7 +403,7 @@ fn decide_with_clock(
         "the plugin approval question was already answered"
     );
     if let Some(binding) = request.binding() {
-        workspace::validate_binding(home, binding)?;
+        workspace::validate_binding(home, binding).map_err(workspace::BindingError::into_anyhow)?;
     }
     anyhow::ensure!(
         request.allows_answer(answer),

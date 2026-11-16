@@ -447,30 +447,60 @@ pub(crate) fn job_dir_in_this_home(
 }
 
 pub(crate) fn dir_size(path: &Path) -> Result<u64> {
-    let metadata =
-        std::fs::symlink_metadata(path).with_context(|| format!("reading {}", path.display()))?;
+    Ok(size_of(path)?)
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SizeError {
+    #[error("reading {}", .path.display())]
+    Reading {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("listing {}", .path.display())]
+    Listing {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    Entry(#[from] std::io::Error),
+}
+
+impl SizeError {
+    fn gone(&self) -> bool {
+        let (Self::Reading { source, .. } | Self::Listing { source, .. } | Self::Entry(source)) =
+            self;
+        source.kind() == std::io::ErrorKind::NotFound
+    }
+}
+
+fn size_of(path: &Path) -> std::result::Result<u64, SizeError> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|source| SizeError::Reading {
+        path: path.to_path_buf(),
+        source,
+    })?;
     if !metadata.is_dir() {
         return Ok(metadata.len());
     }
     let mut total = 0;
-    for entry in std::fs::read_dir(path).with_context(|| format!("listing {}", path.display()))? {
+    let entries = std::fs::read_dir(path).map_err(|source| SizeError::Listing {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    for entry in entries {
         total += below(entry.map(|entry| entry.path()))?;
     }
     Ok(total)
 }
 
-fn below(entry: std::io::Result<PathBuf>) -> Result<u64> {
-    let gone = |error: &anyhow::Error| {
-        error
-            .chain()
-            .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
-            .any(|error| error.kind() == std::io::ErrorKind::NotFound)
-    };
+fn below(entry: std::io::Result<PathBuf>) -> std::result::Result<u64, SizeError> {
     match entry
-        .map_err(anyhow::Error::from)
-        .and_then(|path| dir_size(&path))
+        .map_err(SizeError::from)
+        .and_then(|path| size_of(&path))
     {
-        Err(error) if gone(&error) => Ok(0),
+        Err(error) if error.gone() => Ok(0),
         other => other,
     }
 }

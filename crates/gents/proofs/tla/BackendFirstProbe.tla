@@ -1,13 +1,11 @@
 ---- MODULE BackendFirstProbe ----
-EXTENDS Naturals, BackendFirstProbeCases
+\* lean: Proofs.BackendHealth.awaitProbeRequest
+\* crates: gents-inference, gents
+EXTENDS Naturals, LeanDecision_Proofs_BackendHealth
 
 CONSTANTS HoldPending, ReleaseDeferred, StartupFailed
 VARIABLES probe, generation, request, deferredAt, refusedBeforeProbe
 vars == <<probe, generation, request, deferredAt, refusedBeforeProbe>>
-
-AwaitProbe(waiting) ==
-  (CHOOSE row \in AwaitProbeTable :
-    row[1] = waiting /\ row[2] = StartupFailed)[3]
 
 Init ==
   /\ probe = "unknown"
@@ -30,7 +28,7 @@ Probe ==
 Route ==
   /\ request = "pending"
        \/ (request = "deferred" /\ generation > deferredAt /\ ReleaseDeferred)
-  /\ IF HoldPending /\ AwaitProbe(probe = "unknown")
+  /\ IF HoldPending /\ awaitProbeRequest(probe = "unknown", StartupFailed)
         THEN /\ request' = "deferred"
              /\ deferredAt' = generation
              /\ UNCHANGED refusedBeforeProbe
