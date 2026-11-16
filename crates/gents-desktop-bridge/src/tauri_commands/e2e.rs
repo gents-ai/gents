@@ -7,7 +7,7 @@ const E2E_STATUS_FILENAME: &str = "native-e2e-status.json";
 #[cfg(feature = "native-e2e")]
 const E2E_EVENTS_FILENAME: &str = "native-e2e-events.jsonl";
 
-#[derive(Serialize, ts_rs::TS)]
+#[derive(Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeE2eConfig {
     agent_label: String,
@@ -21,7 +21,7 @@ pub struct NativeE2eConfig {
     local_setup: Option<NativeLocalSetup>,
 }
 
-#[derive(Serialize, ts_rs::TS)]
+#[derive(Clone, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeLocalSetup {
     endpoint: String,
@@ -40,76 +40,152 @@ pub struct NativeE2eStatus {
     metrics: Option<serde_json::Value>,
 }
 
-#[tauri::command]
+/// A native-e2e build's launch configuration, which the app's entry point
+/// decodes once from its `--native-e2e <json>` argument and manages as state.
+/// Without that argument the app runs as an ordinary desktop.
 #[cfg(feature = "native-e2e")]
-pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, BridgeError> {
-    #[cfg(not(debug_assertions))]
-    {
-        return Ok(None);
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeE2eLaunch {
+    server_address: String,
+    #[serde(default = "default_agent_label")]
+    agent_label: String,
+    #[serde(default = "default_prompt")]
+    prompt: String,
+    #[serde(default = "default_expected_response")]
+    expected_response: String,
+    #[serde(default)]
+    expect_empty_session_slice: bool,
+    #[serde(default = "default_correlation_id")]
+    correlation_id: String,
+    #[serde(default)]
+    reconnect_real_inference: bool,
+    #[serde(default)]
+    measure_performance: bool,
+    /// Drives the local setup flow against an isolated node and desktop home.
+    pub local: Option<NativeLocalLaunch>,
+    /// 32 hex digits naming the isolated WebKit store the windows open.
+    pub webview_store_id: Option<String>,
+}
+
+#[cfg(feature = "native-e2e")]
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeLocalLaunch {
+    model: String,
+    #[serde(default = "default_local_phase")]
+    phase: String,
+    #[serde(default)]
+    tool_root: String,
+    pub node_home: std::path::PathBuf,
+    pub desktop_home: std::path::PathBuf,
+    /// Keeps store keys in files rather than the platform keychain.
+    #[serde(default)]
+    pub file_store_keys: bool,
+}
+
+#[cfg(feature = "native-e2e")]
+fn default_agent_label() -> String {
+    "Fleet E2E Agent".to_owned()
+}
+
+#[cfg(feature = "native-e2e")]
+fn default_prompt() -> String {
+    "Reply with only the uppercase underscore form of: fleet iphone simulator e2e.".to_owned()
+}
+
+#[cfg(feature = "native-e2e")]
+fn default_expected_response() -> String {
+    "FLEET_IPHONE_SIMULATOR_E2E".to_owned()
+}
+
+#[cfg(feature = "native-e2e")]
+fn default_correlation_id() -> String {
+    "native-e2e".to_owned()
+}
+
+#[cfg(feature = "native-e2e")]
+fn default_local_phase() -> String {
+    "setup".to_owned()
+}
+
+#[cfg(feature = "native-e2e")]
+impl NativeE2eLaunch {
+    pub fn parse(raw: &str) -> anyhow::Result<Self> {
+        use anyhow::Context;
+        let launch: Self = serde_json::from_str(raw).context("decoding --native-e2e")?;
+        anyhow::ensure!(
+            !launch.server_address.trim().is_empty(),
+            "--native-e2e serverAddress must not be empty"
+        );
+        if let Some(local) = &launch.local {
+            anyhow::ensure!(
+                local.node_home.is_absolute() && local.desktop_home.is_absolute(),
+                "--native-e2e local nodeHome and desktopHome must be absolute"
+            );
+        }
+        Ok(launch)
     }
 
-    #[cfg(debug_assertions)]
-    {
-        let enabled = std::env::var("GENTS_NATIVE_E2E").ok().as_deref() == Some("1");
-        tracing::info!(
-            target: "gents_desktop_bridge::mobile_performance",
-            enabled,
-            "native E2E configuration requested"
-        );
-        if !enabled {
-            return Ok(None);
-        }
-
-        let server_address = std::env::var("GENTS_E2E_SERVER_ADDRESS").map_err(|_| {
-            BridgeError::untyped("GENTS_E2E_SERVER_ADDRESS is required for native E2E")
-        })?;
-        if server_address.trim().is_empty() {
-            return Err(BridgeError::untyped(
-                "GENTS_E2E_SERVER_ADDRESS must not be empty",
-            ));
-        }
-
-        Ok(Some(NativeE2eConfig {
-            local_setup: std::env::var("GENTS_E2E_LOCAL_MODEL").ok().map(|model| {
-                NativeLocalSetup {
-                    model,
-                    endpoint: server_address.clone(),
-                    phase: std::env::var("GENTS_E2E_LOCAL_PHASE")
-                        .unwrap_or_else(|_| "setup".to_owned()),
-                    tool_root: std::env::var("GENTS_E2E_LOCAL_TOOL_ROOT").unwrap_or_default(),
-                }
+    fn config(&self) -> NativeE2eConfig {
+        NativeE2eConfig {
+            agent_label: self.agent_label.clone(),
+            server_address: self.server_address.clone(),
+            prompt: self.prompt.clone(),
+            expected_response: self.expected_response.clone(),
+            expect_empty_session_slice: self.expect_empty_session_slice,
+            correlation_id: self.correlation_id.clone(),
+            reconnect_real_inference: self.reconnect_real_inference,
+            measure_performance: self.measure_performance,
+            local_setup: self.local.as_ref().map(|local| NativeLocalSetup {
+                endpoint: self.server_address.clone(),
+                model: local.model.clone(),
+                phase: local.phase.clone(),
+                tool_root: local.tool_root.clone(),
             }),
-            agent_label: std::env::var("GENTS_E2E_AGENT_LABEL")
-                .unwrap_or_else(|_| "Fleet E2E Agent".to_owned()),
-            server_address,
-            prompt: std::env::var("GENTS_E2E_PROMPT").unwrap_or_else(|_| {
-                "Reply with only the uppercase underscore form of: fleet iphone simulator e2e."
-                    .to_owned()
-            }),
-            expected_response: std::env::var("GENTS_E2E_EXPECTED_RESPONSE")
-                .unwrap_or_else(|_| "FLEET_IPHONE_SIMULATOR_E2E".to_owned()),
-            expect_empty_session_slice: std::env::var("GENTS_E2E_EXPECT_EMPTY_SESSIONS")
-                .ok()
-                .as_deref()
-                == Some("1"),
-            correlation_id: std::env::var("GENTS_E2E_CORRELATION_ID")
-                .unwrap_or_else(|_| "native-e2e".to_owned()),
-            reconnect_real_inference: std::env::var("GENTS_E2E_RECONNECT_REAL_INFERENCE")
-                .ok()
-                .as_deref()
-                == Some("1"),
-            measure_performance: std::env::var("GENTS_MOBILE_PERFORMANCE").ok().as_deref()
-                == Some("1"),
-        }))
+        }
     }
 }
 
 #[tauri::command]
 #[cfg(feature = "native-e2e")]
-pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), BridgeError> {
+pub fn desktop_native_e2e_config<R>(
+    app: tauri::AppHandle<R>,
+) -> Result<Option<NativeE2eConfig>, BridgeError>
+where
+    R: tauri::Runtime,
+{
     #[cfg(not(debug_assertions))]
     {
-        let _ = status;
+        let _ = app;
+        return Ok(None);
+    }
+
+    #[cfg(debug_assertions)]
+    {
+        use tauri::Manager;
+        let launch = app.try_state::<NativeE2eLaunch>();
+        tracing::info!(
+            target: "gents_desktop_bridge::mobile_performance",
+            enabled = launch.is_some(),
+            "native E2E configuration requested"
+        );
+        Ok(launch.map(|launch| launch.config()))
+    }
+}
+
+#[tauri::command]
+#[cfg(feature = "native-e2e")]
+pub async fn desktop_native_e2e_status<R>(
+    app: tauri::AppHandle<R>,
+    status: NativeE2eStatus,
+) -> Result<(), BridgeError>
+where
+    R: tauri::Runtime,
+{
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = (app, status);
         return Err(BridgeError::untyped(
             "native E2E status is disabled in release builds",
         ));
@@ -117,7 +193,8 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
 
     #[cfg(debug_assertions)]
     {
-        if std::env::var("GENTS_NATIVE_E2E").ok().as_deref() != Some("1") {
+        use tauri::Manager;
+        if app.try_state::<NativeE2eLaunch>().is_none() {
             return Err(BridgeError::untyped("native E2E status is not enabled"));
         }
         if status.stage.is_empty() || status.stage.len() > 64 {

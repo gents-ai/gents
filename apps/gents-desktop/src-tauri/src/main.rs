@@ -47,6 +47,20 @@ fn main() {
             let mut receipt = args
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("missing browser clear receipt path"))?;
+            #[cfg(all(feature = "native-e2e", debug_assertions))]
+            let isolated = if receipt == "--webview-store-id" {
+                let isolated = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("missing WebView store ID"))?;
+                receipt = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("missing browser clear receipt path"))?;
+                Some(isolated)
+            } else {
+                None
+            };
+            #[cfg(not(all(feature = "native-e2e", debug_assertions)))]
+            let isolated: Option<String> = None;
             let check = receipt == "--check";
             if check {
                 receipt = args
@@ -56,9 +70,15 @@ fn main() {
             anyhow::ensure!(args.next().is_none(), "unexpected browser clear argument");
             let receipt = std::path::Path::new(&receipt);
             if check {
-                gents_desktop_tauri_lib::browser_data::check_to_receipt(receipt)
+                gents_desktop_tauri_lib::browser_data::check_to_receipt(
+                    receipt,
+                    isolated.as_deref(),
+                )
             } else {
-                gents_desktop_tauri_lib::browser_data::clear_to_receipt(receipt)
+                gents_desktop_tauri_lib::browser_data::clear_to_receipt(
+                    receipt,
+                    isolated.as_deref(),
+                )
             }
         })();
         if let Err(error) = result {
@@ -74,13 +94,21 @@ fn main() {
             .with_writer(std::io::stderr)
             .try_init();
         let result = (|| -> anyhow::Result<()> {
+            anyhow::ensure!(
+                args.next().as_deref() == Some("--webview-store-id"),
+                "browser reset fixture requires --webview-store-id"
+            );
+            let isolated = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("missing WebView store ID"))?;
             let receipt = args
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("missing fixture receipt path"))?;
             anyhow::ensure!(args.next().is_none(), "unexpected fixture argument");
-            gents_desktop_tauri_lib::browser_data::verify_isolated_clear(std::path::Path::new(
-                &receipt,
-            ))
+            gents_desktop_tauri_lib::browser_data::verify_isolated_clear(
+                std::path::Path::new(&receipt),
+                &isolated,
+            )
         })();
         if let Err(error) = result {
             tracing::error!(%error, "isolated browser data fixture failed");

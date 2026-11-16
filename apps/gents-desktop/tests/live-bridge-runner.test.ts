@@ -86,6 +86,36 @@ describe("live bridge runner invocation", () => {
     ]);
   });
 
+  it("passes harness settings to the runner as arguments", () => {
+    const invocation = createLiveBridgeRunnerInvocation(
+      {},
+      {
+        [LIVE_RUNNER_BINARY_ENV]: process.execPath,
+        OPENROUTER_API_KEY: "test-openrouter-key",
+        GENTS_DESKTOP_LIVE_INFERENCE: '{"max_turns":4}',
+        GENTS_DESKTOP_TEST_LOG: "debug",
+        GENTS_TAURI_LIVE: "1",
+        GENTS_TAURI_LIVE_RETAIN_DATA: "",
+      },
+    );
+
+    expect(invocation.runnerArgs).toEqual([
+      "--inference-url",
+      "https://openrouter.ai/api/v1",
+      "--provider",
+      "OpenRouter",
+      "--api-key-env-var",
+      "OPENROUTER_API_KEY",
+      "--inference-settings",
+      '{"max_turns":4}',
+      "--log-filter",
+      "debug",
+      "--fixture-routes",
+      "--retain-data",
+    ]);
+    expect(invocation.runnerArgs).not.toContain("test-openrouter-key");
+  });
+
   it("rejects relative, missing, and non-executable overrides before spawn", () => {
     expect(() =>
       createLiveBridgeRunnerInvocation(

@@ -1,6 +1,8 @@
 #[path = "inference.rs"]
 mod inference;
 
+pub(crate) use self::inference::LiveInferenceSettings;
+
 use anyhow::{Context, Result};
 use gents::runtime::embedded::EmbeddedHome;
 use gents::{DocumentRuntimeOptions, Gents};
@@ -47,6 +49,7 @@ pub(super) async fn spawn_live_node(
     name: &str,
     backend: &LiveBackendConfig,
     target_backend: Option<&LiveBackendConfig>,
+    inference: &LiveInferenceSettings,
 ) -> Result<(RunningNode, LiveAgentDocs, PathBuf)> {
     let tool_root = agent_root.join("tool-root");
     std::fs::create_dir_all(&tool_root)
@@ -64,6 +67,7 @@ pub(super) async fn spawn_live_node(
         &tool_root,
         backend,
         target_backend,
+        inference,
     )
     .await?;
     let agent = Gents::from_default_agent_documents(
@@ -102,6 +106,7 @@ async fn seed_live_agent_documents(
     tool_root: &std::path::Path,
     backend: &LiveBackendConfig,
     target_backend: Option<&LiveBackendConfig>,
+    inference: &LiveInferenceSettings,
 ) -> Result<LiveAgentDocs> {
     use gents_documents::apply_desired_state_plan;
     use gents_documents::PackConfig;
@@ -110,7 +115,6 @@ async fn seed_live_agent_documents(
     };
     use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
     use serde_json::json;
-    let inference = inference::LiveInferenceSettings::from_env()?;
     let tool_root = tool_root
         .to_str()
         .context("fixture tool root is not UTF-8")?;

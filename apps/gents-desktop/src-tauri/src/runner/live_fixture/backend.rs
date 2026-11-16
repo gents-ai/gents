@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use gents_inference::backends::provider::BackendProviderKind;
 
-const LIVE_BACKEND_PREFIX: &str = "GENTS_DESKTOP_LIVE_BACKEND";
-
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LiveBackendOverride {
     pub(crate) inference_url: Option<String>,
@@ -25,63 +23,25 @@ impl LiveBackendConfig {
     pub(crate) fn resolve(override_config: Option<&LiveBackendOverride>) -> Result<Self> {
         let endpoint = override_config
             .and_then(|config| normalize_optional_owned(config.inference_url.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_BACKEND_PREFIX}_ENDPOINT")));
+            .context("pass --inference-url to run the live Tauri bridge runner")?;
         let model_name = override_config
             .and_then(|config| normalize_optional_owned(config.model_name.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_BACKEND_PREFIX}_MODEL")))
-            .or_else(|| optional_env("GENTS_TEST_OPENROUTER_MODEL"))
             .unwrap_or_else(|| "openai/gpt-4o-mini".to_string());
-        let provider_kind = override_config
-            .and_then(|config| normalize_optional_owned(config.provider.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_BACKEND_PREFIX}_PROVIDER")));
-        let api_key = override_config
-            .and_then(|config| normalize_optional_owned(config.api_key.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_BACKEND_PREFIX}_API_KEY")));
+        let provider_kind =
+            override_config.and_then(|config| normalize_optional_owned(config.provider.as_ref()));
+        let api_key =
+            override_config.and_then(|config| normalize_optional_owned(config.api_key.as_ref()));
         let api_key_env_var = override_config
-            .and_then(|config| normalize_optional_owned(config.api_key_env_var.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_BACKEND_PREFIX}_API_KEY_ENV_VAR")));
-
-        if endpoint.is_some()
-            || provider_kind.is_some()
-            || api_key.is_some()
-            || api_key_env_var.is_some()
-        {
-            if let Some(env_var_name) = api_key_env_var.as_deref() {
-                std::env::var(env_var_name).with_context(|| {
-                    format!(
-                        "set {env_var_name} because {LIVE_BACKEND_PREFIX}_API_KEY_ENV_VAR points at it"
-                    )
-                })?;
-            }
-
-            return Ok(Self {
-                endpoint: endpoint.context(format!(
-                    "set {LIVE_BACKEND_PREFIX}_ENDPOINT or OPENROUTER_API_KEY to run the live Tauri bridge runner"
-                ))?,
-                model_name,
-                provider_kind: BackendProviderKind::parse_optional(provider_kind.as_deref())?,
-                api_key,
-                api_key_env_var,
-            });
-        }
-
-        if std::env::var("OPENROUTER_API_KEY").is_ok() {
-            return Ok(Self {
-                endpoint: "https://openrouter.ai/api/v1".to_string(),
-                model_name,
-                provider_kind: BackendProviderKind::OpenRouter,
-                api_key: None,
-                api_key_env_var: Some("OPENROUTER_API_KEY".to_string()),
-            });
-        }
-
-        anyhow::bail!(
-            "set {LIVE_BACKEND_PREFIX}_ENDPOINT or OPENROUTER_API_KEY to run the live Tauri bridge runner"
-        );
+            .and_then(|config| normalize_optional_owned(config.api_key_env_var.as_ref()));
+        Ok(Self {
+            endpoint,
+            model_name,
+            provider_kind: BackendProviderKind::parse_optional(provider_kind.as_deref())?,
+            api_key,
+            api_key_env_var,
+        })
     }
 }
-
-const LIVE_TARGET_BACKEND_PREFIX: &str = "GENTS_DESKTOP_LIVE_TARGET_BACKEND";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LiveTargetBackendOverride {
@@ -97,47 +57,27 @@ impl LiveBackendConfig {
         override_config: Option<&LiveTargetBackendOverride>,
         primary: &LiveBackendConfig,
     ) -> Result<Option<Self>> {
-        let endpoint = override_config
-            .and_then(|c| normalize_optional_owned(c.inference_url.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_TARGET_BACKEND_PREFIX}_ENDPOINT")));
-        if endpoint.is_none() {
+        let endpoint =
+            override_config.and_then(|c| normalize_optional_owned(c.inference_url.as_ref()));
+        let Some(endpoint) = endpoint else {
             return Ok(None);
-        }
+        };
         let model_name = override_config
             .and_then(|c| normalize_optional_owned(c.model_name.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_TARGET_BACKEND_PREFIX}_MODEL")))
             .unwrap_or_else(|| primary.model_name.clone());
-        let provider_kind = override_config
-            .and_then(|c| normalize_optional_owned(c.provider.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_TARGET_BACKEND_PREFIX}_PROVIDER")));
-        let api_key = override_config
-            .and_then(|c| normalize_optional_owned(c.api_key.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_TARGET_BACKEND_PREFIX}_API_KEY")));
-        let api_key_env_var = override_config
-            .and_then(|c| normalize_optional_owned(c.api_key_env_var.as_ref()))
-            .or_else(|| optional_env(&format!("{LIVE_TARGET_BACKEND_PREFIX}_API_KEY_ENV_VAR")));
-        if let Some(env_var_name) = api_key_env_var.as_deref() {
-            std::env::var(env_var_name).with_context(|| {
-                format!(
-                    "set {env_var_name} because {LIVE_TARGET_BACKEND_PREFIX}_API_KEY_ENV_VAR points at it"
-                )
-            })?;
-        }
+        let provider_kind =
+            override_config.and_then(|c| normalize_optional_owned(c.provider.as_ref()));
+        let api_key = override_config.and_then(|c| normalize_optional_owned(c.api_key.as_ref()));
+        let api_key_env_var =
+            override_config.and_then(|c| normalize_optional_owned(c.api_key_env_var.as_ref()));
         Ok(Some(Self {
-            endpoint: endpoint.expect("endpoint presence checked above"),
+            endpoint,
             model_name,
             provider_kind: BackendProviderKind::parse_optional(provider_kind.as_deref())?,
             api_key,
             api_key_env_var,
         }))
     }
-}
-
-fn optional_env(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 fn normalize_optional_owned(value: Option<&String>) -> Option<String> {
