@@ -231,13 +231,14 @@ impl SelfConfigFixture {
     }
 
     /// Lean `SelfConfig.ActorGrants.catalog`: the Node's owner gives this
-    /// Agent `nodes#agent_manager`, which is `manage_agents` on the Node.
-    pub async fn grant_agent_catalog(&self) {
+    /// Agent `nodes#administrator`, the one grant of `manage_agents` on the
+    /// Node.
+    pub async fn grant_node_administration(&self) {
         self.user_access
             .add_actor_relationship(
                 "Node",
                 &self.node_binding.doc_id,
-                "agent_manager",
+                "administrator",
                 &identity::Did::new(&self.agent_did).unwrap(),
             )
             .await

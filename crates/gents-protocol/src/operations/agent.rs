@@ -195,7 +195,7 @@ pub enum AgentOperationError {
     CloneSourceNotEnabled,
     #[error("agent {0:?} does not exist")]
     AgentMissing(String),
-    #[error("creating or cloning an agent and choosing the default agent need the agent catalog (manage_agents on the Node), which this actor does not hold; a Node owner or administrator grants it with nodes#agent_manager")]
+    #[error("creating or cloning an agent and choosing the default agent need the agent catalog (manage_agents on the Node), which this actor does not hold and cannot grant itself; it comes only with administration of the Node: the Node's owner or an administrator adds this actor as administrator on the Node")]
     CatalogNotHeld,
     #[error("this actor may not configure agent {0:?}: it holds no update grant on that Agent; configure an agent it created or its own, or ask a User who administers {0:?} to make the change")]
     AgentNotHeld(String),
@@ -459,7 +459,7 @@ const CREATION_NOTES: &[&str] = &[
 ];
 
 const CREATION_PERMISSION: OperationPermission = OperationPermission {
-    document_access: "manage_agents on the Node for the signing actor (owner, administrator or agent_manager), which also authorizes the Node's DefaultAgentSelection with the default switch; DefraDB document ACP on the new Agent, AgentContext and Tools",
+    document_access: "manage_agents on the Node for the signing actor (owner or administrator), which also authorizes the Node's DefaultAgentSelection with the default switch; DefraDB document ACP on the new Agent, AgentContext and Tools",
 };
 
 pub const AGENT_CREATE: AgentCreateDeclaration = AgentCreateDeclaration {
