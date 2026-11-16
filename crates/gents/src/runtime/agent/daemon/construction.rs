@@ -122,7 +122,7 @@ where
         mut self,
         root: Option<PathBuf>,
     ) -> Self {
-        gents_session::workspace::install_process_operator_tool_root(root.clone());
+        self.request_admission = self.request_admission.with_operator_tool_root(root.clone());
         self.operator_tool_root = root;
         self
     }

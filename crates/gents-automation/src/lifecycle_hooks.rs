@@ -25,6 +25,10 @@ pub fn bundled() -> Arc<Registry> {
 /// client endpoint it builds; tests at this layer and above start their nodes
 /// with it.
 pub fn composition() -> gents_store::node_extension::Extensions {
+    /// The build's fixed callback selection, the same for every node and
+    /// Agent. Nodes compare attached extensions by address, so every
+    /// composition must hand out this one value for a repeated attachment to
+    /// the same node to be accepted.
     static SELECTION: OnceLock<Arc<gents_store::config_client::CallbackAgentSelection>> =
         OnceLock::new();
     let mut extensions = gents_store::node_extension::Extensions::of(bundled());

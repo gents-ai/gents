@@ -2276,6 +2276,136 @@ fn environment_reads_count_calls_outside_test_items() {
     assert_eq!(environment_read_sites(&syntax), 3);
 }
 
+/// Configuration and request context travel as explicit arguments or fields
+/// on the owner that already reaches the reader, never in a process-wide
+/// static: a static is shared by every node and Agent in the process, so the
+/// last writer wins for all of them. This counts non-test `static` items whose
+/// type is interior-mutable or lazily initialised, and every `static mut`.
+/// Entries name why each remaining static is a genuine process singleton (set
+/// once at the entry point or a fixed property of the build, the same for every
+/// Agent) or what owner replaces it; the list only shrinks (#1764).
+#[rustfmt::skip]
+const PROCESS_STATIC_ALLOWLIST: &[(&str, usize, &str)] = &[
+];
+
+const PROCESS_STATIC_TYPES: &[&str] = &[
+    "Mutex",
+    "RwLock",
+    "OnceLock",
+    "OnceCell",
+    "LazyLock",
+    "LazyCell",
+    "Lazy",
+    "Semaphore",
+];
+
+fn names_process_state(ty: &syn::Type) -> bool {
+    struct TypeNames(bool);
+    impl<'ast> Visit<'ast> for TypeNames {
+        fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+            let name = segment.ident.to_string();
+            if PROCESS_STATIC_TYPES.contains(&name.as_str()) || name.starts_with("Atomic") {
+                self.0 = true;
+            }
+            visit::visit_path_segment(self, segment);
+        }
+    }
+    let mut names = TypeNames(false);
+    names.visit_type(ty);
+    names.0
+}
+
+#[derive(Default)]
+struct ProcessStaticVisitor {
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for ProcessStaticVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_item_static(&mut self, item: &'ast syn::ItemStatic) {
+        if matches!(item.mutability, syn::StaticMutability::Mut(_)) || names_process_state(&item.ty)
+        {
+            self.sites += 1;
+        }
+        visit::visit_item_static(self, item);
+    }
+}
+
+fn process_static_sites(syntax: &syn::File) -> usize {
+    let mut visitor = ProcessStaticVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+#[test]
+fn process_wide_statics_only_shrink() {
+    let root = repo_root();
+    let actual = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .map(|(relative, syntax)| (relative, process_static_sites(&syntax)))
+        .filter(|(_, sites)| *sites > 0)
+        .collect::<BTreeMap<_, _>>();
+    let allowed = PROCESS_STATIC_ALLOWLIST
+        .iter()
+        .map(|(path, count, _)| (path.to_string(), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let found = actual.get(path).copied().unwrap_or_default();
+        match allowed.get(path).copied() {
+            None => violations.push(format!(
+                "{path}: {found} new process-wide static(s); pass the value as an argument or a field on its owner"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{path}: {found} process-wide statics exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{path}: {found} process-wide statics; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    let current = actual
+        .iter()
+        .map(|(path, count)| format!("    (\"{path}\", {count}, \"<reason>\"),"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        violations.is_empty(),
+        "process-wide static ratchet failed:\n{}\n\ncurrent sites:\n{current}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn process_statics_count_interior_mutable_statics_outside_test_items() {
+    let syntax = syn::parse_file(
+        r##"
+        static A: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
+        static B: AtomicU64 = AtomicU64::new(0);
+        static mut C: u8 = 0;
+        fn f() { static D: OnceLock<Arc<u8>> = OnceLock::new(); }
+        static E: std::sync::LazyLock<Option<RwLock<u8>>> = std::sync::LazyLock::new(|| None);
+        static F: &[&str] = &["Mutex"];
+        static G: u64 = 0;
+        const H: std::sync::Mutex<u8> = std::sync::Mutex::new(0);
+        fn g() { let _ = r#"static I: RwLock<u8> = RwLock::new(0);"#; }
+        thread_local! { static J: std::cell::Cell<u8> = const { std::cell::Cell::new(0) }; }
+        #[cfg(test)]
+        static K: OnceLock<u8> = OnceLock::new();
+        #[cfg(test)]
+        mod tests { static L: AtomicBool = AtomicBool::new(false); }
+        "##,
+    )
+    .expect("parse snippet");
+    assert_eq!(process_static_sites(&syntax), 5);
+}
+
 /// Functions that write a file with `fs::write` and then give that path an
 /// exec bit. Linux execve refuses a file any process holds open for writing
 /// (ETXTBSY), and a concurrent test's spawn copies this process's write
