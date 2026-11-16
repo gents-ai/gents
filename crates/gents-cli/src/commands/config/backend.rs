@@ -101,6 +101,7 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         &target.endpoint,
         target.api_key.as_deref(),
         None,
+        None,
     )
     .await?;
     crate::print_json(&json!({
