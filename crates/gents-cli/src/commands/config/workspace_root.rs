@@ -63,7 +63,13 @@ pub(super) async fn workspace_root_list(args: ConfigListArgs) -> Result<()> {
                         readers: match &listed.readers {
                             gents_protocol::operations::workspace_root::WorkspaceRootReaders::Known {
                                 agents,
-                            } => agents.join(", "),
+                            } => {
+                                if agents.is_empty() {
+                                    "(no reader: host tools cannot start)".to_owned()
+                                } else {
+                                    agents.join(", ")
+                                }
+                            }
                             gents_protocol::operations::workspace_root::WorkspaceRootReaders::Unknown {
                                 reason,
                             } => format!("unknown ({reason})"),

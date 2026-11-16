@@ -35,9 +35,12 @@ fn reason_next_step(
         Reason::ToolSurfaceUnavailable => {
             Some("Check installed plugins and Tools configuration on the node.".to_owned())
         }
+        // The root is not known here, so the step is the call that shows each
+        // root with its readers; the grant it names is the fix.
         Reason::WorkspaceRootReaderMissing => Some(format!(
-            "Grant the agent a reader on the workspace root its tools read: {}",
-            gents_protocol::node_readiness::workspace_root_list_call(home)
+            "Find the root whose readers lack the agent with `{}`, then grant it with `gents config workspace-root grant-reader --path <root> --agent-did <agent-did> --home {}`",
+            gents_protocol::node_readiness::workspace_root_list_call(home),
+            home.display()
         )),
         _ => None,
     }
@@ -545,8 +548,15 @@ mod tests {
             home,
         )
         .expect("the reader cause names a step");
-        assert!(step.contains("workspace-root list --home /Users/someone/.gents-one"), "{step}");
-        assert!(step.contains("grant-reader"), "{step}");
+        assert!(
+            step.contains("workspace-root list --home /Users/someone/.gents-one"),
+            "{step}"
+        );
+        assert!(step.contains("grant-reader --path"), "{step}");
+        assert!(
+            step.contains("--home /Users/someone/.gents-one"),
+            "both calls name this node's home: {step}"
+        );
         assert_eq!(
             reason_next_step(
                 gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
