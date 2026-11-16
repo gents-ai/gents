@@ -4,8 +4,6 @@ mod background_panic;
 mod background_policy;
 #[path = "change_capture.rs"]
 mod change_capture;
-#[path = "materialize_provenance.rs"]
-mod materialize_provenance;
 #[path = "message_agent_tools.rs"]
 mod message_agent_tools;
 #[path = "message_hop.rs"]

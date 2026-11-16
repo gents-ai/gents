@@ -64,17 +64,20 @@ async fn claimed_title_fixture() -> TitleFixture {
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::local_self(identity.did()),
     );
-    let session_id = gents_store::graphql::escape_graphql_string(&create.session_id);
-    let agent_did = gents_store::graphql::escape_graphql_string(agent.did());
     let agent_access = ConfigAccess::local_managed_agent(
         node.clone(),
         agent.did().parse().unwrap(),
         agent.as_ref(),
     )
     .unwrap();
-    agent_access
-        .write("test.title.session", &format!(r#"mutation {{ create_AgentSession(input: {{session_id: "{session_id}", node_did: "{root_did}", requester_did: "{root_did}", agent_did: "{agent_did}", created_at: "2026-01-01T00:00:00Z"}}) {{ _docID }} }}"#))
-        .await.unwrap();
+    crate::test_support::create_agent_owned_session_at(
+        &agent_access,
+        identity.did(),
+        &create.session_id,
+        Some(identity.did()),
+        "2026-01-01T00:00:00Z",
+    )
+    .await;
     crate::request::admission::sign_agent_request_create(&identity, &mut create)
         .await
         .unwrap();

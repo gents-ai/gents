@@ -15,21 +15,6 @@ mod folding;
 mod management;
 mod steering;
 
-#[test]
-fn transaction_create_doc_id_accepts_both_defradb_response_shapes() {
-    for response in [
-        serde_json::json!({
-            "data": { "create_AgentRequest": { "_docID": "doc-object" } }
-        }),
-        serde_json::json!({
-            "data": { "add_AgentRequest": [{ "_docID": "doc-array" }] }
-        }),
-    ] {
-        let doc_id = transaction_created_doc_id(&response, "AgentRequest").unwrap();
-        assert!(doc_id == "doc-object" || doc_id == "doc-array");
-    }
-}
-
 mod background_completion;
 mod input;
 

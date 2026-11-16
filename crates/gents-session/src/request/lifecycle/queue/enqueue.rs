@@ -73,7 +73,7 @@ pub(crate) async fn enqueue_steering_request(
                     &parent.session_id,
                 )
                 .await?;
-                let mutation = session_request_create_mutation_at_hop_with_signer(
+                let create = build_session_request_at_hop_with_signer(
                     parent,
                     hop,
                     SessionRequestFields {
@@ -88,7 +88,7 @@ pub(crate) async fn enqueue_steering_request(
                     Some(signer),
                 )
                 .await?;
-                steering_transaction_attempt(txn, parent, request_id, &mutation).await
+                steering_transaction_attempt(txn, parent, request_id, &create).await
             })
         })
         .await

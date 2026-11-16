@@ -383,14 +383,21 @@ async fn redrive_in_transaction(
     // Lean `CausalHop.continuation_preserves_hop`: the retried wake copies
     // the session's current hop.
     let hop = crate::session::load_session_current_hop_in_txn(txn, node_did, session_id).await?;
+    let create = build_redrive_request(candidate, request_id, &retry_key, hop, signer).await?;
+    let doc_id = super::runtime_publication::publish(txn, &create).await?;
     let response = txn
-        .execute_local_response(
-            &redrive_mutation(candidate, request_id, &retry_key, hop, signer).await?,
-        )
+        .execute(&format!(
+            "{{ AgentRequest(docIDs: [\"{}\"]) {{ {} }} }}",
+            escape_graphql_string(&doc_id),
+            gents_protocol::row::AGENT_REQUEST_FIELDS,
+        ))
         .await?;
-    let created =
-        crate::request::watcher::agent_request_from_mutation_response(&response, "successor")?
-            .context("background wake successor create matched no document")?;
+    let rows: Vec<AgentRequestRow> =
+        serde_json::from_value(response["data"]["AgentRequest"].clone())?;
+    let [row] = rows.as_slice() else {
+        anyhow::bail!("background wake successor is unavailable")
+    };
+    let created = gents_protocol::row::AgentRequest::try_from(row.clone())?;
     let successor = crate::session::load_latest_request_in_txn(txn, node_did, session_id, None)
         .await?
         .context("background wake successor is missing")?;
@@ -452,13 +459,13 @@ fn precondition_query(candidate: &AgentRequestRow, retry_key: &str) -> Result<St
     ))
 }
 
-async fn redrive_mutation(
+async fn build_redrive_request(
     candidate: &AgentRequestRow,
     request_id: &str,
     retry_key: &str,
     hop: u32,
     signer: &dyn gents_store::identity::NodeIdentity,
-) -> Result<String> {
+) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let retry_root = candidate
         .retry_root_request
@@ -510,14 +517,7 @@ async fn redrive_mutation(
             admission,
         )
     };
-    let create = build_signed_request(spec, RequestSigner::Identity(signer)).await?;
-    let request_fields = create.graphql_input_fields().map_err(anyhow::Error::msg)?;
-    Ok(format!(
-        r#"mutation {{
-            successor: create_AgentRequest(input: {{ {request_fields} }}) {{ {fields} }}
-        }}"#,
-        fields = gents_protocol::row::AGENT_REQUEST_FIELDS,
-    ))
+    build_signed_request(spec, RequestSigner::Identity(signer)).await
 }
 
 #[cfg(test)]
