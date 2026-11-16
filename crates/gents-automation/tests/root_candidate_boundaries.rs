@@ -11,7 +11,6 @@ use gents_loop::tool::ToolDyn;
 use gents_toolcalls::call::hook::fixtures::*;
 use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
 use std::sync::Arc;
-use std::time::Duration;
 #[tokio::test]
 async fn other_provider_loop_has_no_codex_affinity() {
     let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
@@ -41,6 +40,13 @@ async fn other_provider_loop_has_no_codex_affinity() {
     assert_eq!(collected.error, None, "{collected:?}");
 }
 
+/// The accepted batch ends at the invalid-tool budget by step count, not by
+/// time: the eighth invalid result exhausts it (Lean
+/// `CompletionRetry.InvalidToolProgress`, `eight_invalids_exhaust`) after one
+/// provider request, which the assertions below check; the scripted model and
+/// `max_turns` bound every other path. The only clock left is the claimed
+/// request's own deadline (60 s in the fixture), which the product enforces:
+/// past it a tool call ends with "tool call deadline exceeded".
 #[tokio::test]
 async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
     for batched in [false, true] {
@@ -62,19 +68,15 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
             Arc::new(vec![Box::new(InvalidProgressProbe) as Box<dyn ToolDyn>]),
             owned_config(500),
         );
-        let collected = tokio::time::timeout(
-            Duration::from_secs(10),
-            Box::pin(collect_owned_scripted_stream(
-                stream,
-                &hook,
-                &writer,
-                &mut lifecycle,
-                gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
-            )),
+        let collected = collect_owned_scripted_stream(
+            stream,
+            &hook,
+            &writer,
+            &mut lifecycle,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
         )
-        .await
-        .expect("accepted batch must terminate at the invalid-tool budget");
-        assert_eq!(collected.tool_results.len(), 8);
+        .await;
+        assert_eq!(collected.tool_results.len(), 8, "{collected:?}");
         let error = collected
             .error
             .expect("budget exhaustion must fail the loop");
