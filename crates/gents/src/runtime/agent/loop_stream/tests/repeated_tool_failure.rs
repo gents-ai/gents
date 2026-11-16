@@ -30,6 +30,10 @@ async fn repeated_tool_failures_follow_the_lean_model() {
         ]);
         let model = ScriptedModel::new_turns(turns);
         let dispatched = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut config = owned_config(64);
+        config.max_invalid_tool_calls = usize::try_from(case.input.max_invalid_tool_calls).unwrap();
+        config.repeated_tool_failure_limit =
+            usize::try_from(case.input.repeated_tool_failure_limit).unwrap();
         let stream = run_loop_stream(
             model.clone(),
             Some(hook.clone()),
@@ -40,7 +44,7 @@ async fn repeated_tool_failures_follow_the_lean_model() {
                 model: model.clone(),
                 dispatched: Arc::clone(&dispatched),
             }) as Box<dyn ToolDyn>]),
-            owned_config(64),
+            config,
         );
         let collected = collect_owned_scripted_stream(
             stream,

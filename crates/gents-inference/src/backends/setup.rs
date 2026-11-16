@@ -145,6 +145,14 @@ pub fn inference_setup_catalog() -> InferenceSetupCatalog {
             ("maxTurns", Some(crate::resolved::DEFAULT_MAX_TURNS as i64)),
             ("maxTotalTokens", None),
             (
+                "maxInvalidToolCalls",
+                Some(crate::resolved::DEFAULT_MAX_INVALID_TOOL_CALLS as i64),
+            ),
+            (
+                "repeatedToolFailureLimit",
+                Some(crate::resolved::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT as i64),
+            ),
+            (
                 "streamBatchMs",
                 Some(crate::resolved::DEFAULT_STREAM_BATCH_MS as i64),
             ),

@@ -1711,18 +1711,19 @@ actors. Real host containment and compiler QA remain separate acceptance gates.
 
 ### Invalid tool progress (#1298)
 
-`CompletionRetry.InvalidToolProgress` models a cumulative allowance of eight
+`CompletionRetry.InvalidToolProgress` models a cumulative allowance of
 invalid-arguments, policy-denied, or unknown-tool outcomes per owned request
-execution. Success and ordinary failures do not reset it; skips and background
-completion do not charge it. The eighth outcome is durably observed before the
+execution, configured by `InferenceExecution.max_invalid_tool_calls` (default
+eight). Success and ordinary failures do not reset it; skips and background
+completion do not charge it. The last allowed outcome is durably observed before the
 existing stream failure path delegates terminalization to the execution lease
-owner. No ninth tool dispatch is permitted, including within a multi-call turn.
+owner. No further tool dispatch is permitted, including within a multi-call turn.
 
 The model proves bounded counts over arbitrary finite traces, monotonic usage,
 a strictly decreasing remaining allowance on accepted invalid outcomes, and
 absorbing exhaustion. This bounds invalid churn, not infinite valid work or
 storage/provider availability. Outcome classification and persistence ordering
-remain runtime consumer obligations. Eleven traces of the
+remain runtime consumer obligations. Fourteen traces of the
 `invalid_tool_progress_contracts_composed` family drive the real owned loop and persistence hook,
 checked against their composition with `RepeatedToolFailure`; the model is not
 a second lifecycle or permission owner.
@@ -1731,7 +1732,7 @@ a second lifecycle or permission owner.
 
 `CompletionRetry.RepeatedToolFailure` folds the owned loop's dispatch record
 over `InvalidToolProgress.Outcome` and composes with that allowance. After
-three consecutive dispatches of one call (tool name and argument text) whose
+`InferenceExecution.repeated_tool_failure_limit` (default three) consecutive dispatches of one call (tool name and argument text) whose
 ordinary failure has the same error identity, the next identical call is not
 run: a policy-denied notice stands in as its result through the persistence
 hook, so transcript and provider input agree. Repeating it again ends the
@@ -1754,8 +1755,8 @@ allowance nearly spent, a suppression ends the execution as
 The model proves the streak and suppression bounds across composed steps,
 that a call at the limit is never dispatched, that other calls are, that
 charged outcomes never count, that hook-handled calls not stopped reset, that suppression
-spends one allowance unit, and that an unbounded identical failure stops on
-the fifth call. Interleaved repeats are left to the turn cap and other
+spends one allowance unit, and that with the default limit an unbounded
+identical failure stops on the fifth call. Interleaved repeats are left to the turn cap and other
 budgets. The `repeated_tool_failure_contracts_owned_loop` and
 `invalid_tool_progress_contracts_composed` families drive the real owned loop and persistence hook.
 

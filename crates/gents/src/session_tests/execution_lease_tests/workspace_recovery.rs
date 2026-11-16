@@ -338,6 +338,8 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
+        max_invalid_tool_calls: gents_inference::resolved::DEFAULT_MAX_INVALID_TOOL_CALLS,
+        repeated_tool_failure_limit: gents_inference::resolved::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT,
         stream_batch_ms: 0,
         stream_liveness_timeout: Duration::from_secs(60),
         title_timeout: Duration::from_secs(gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS),
