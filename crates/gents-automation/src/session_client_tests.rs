@@ -58,6 +58,7 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
                 "task-session",
                 "finish work",
                 None,
+                gents_protocol::goal::GoalLimits::default(),
                 &request,
                 Some(agent.as_ref()),
             )
@@ -135,6 +136,7 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
             "task-session",
             "finish work",
             None,
+            gents_protocol::goal::GoalLimits::default(),
             &attempt,
             Some(signer),
         )
@@ -233,6 +235,7 @@ async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back
                 "task-session",
                 "finish work",
                 None,
+                gents_protocol::goal::GoalLimits::default(),
                 &request,
                 Some(agent.as_ref()),
             )

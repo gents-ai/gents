@@ -56,7 +56,14 @@ pub async fn enqueue_task_run(
     let goal_token_budget = task.goal_token_budget;
     let goal_blocked_audit_threshold = task.goal_blocked_audit_threshold;
     let goal_max_infrastructure_retries = task.goal_max_infrastructure_retries;
-    validate_task_goal_declaration(goal_objective_template.as_deref(), goal_token_budget)?;
+    validate_task_goal_declaration(
+        goal_objective_template.as_deref(),
+        goal_token_budget,
+        gents_protocol::goal::GoalLimits {
+            blocked_audit_threshold: goal_blocked_audit_threshold,
+            max_infrastructure_retries: goal_max_infrastructure_retries,
+        },
+    )?;
 
     let invocation_key = resolve_invocation_key(
         &task_id,

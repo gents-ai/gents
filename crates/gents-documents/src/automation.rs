@@ -30,6 +30,14 @@ impl ResolvedTask {
             .filter(|value| !value.is_empty())
             .unwrap_or(&self.task_id)
     }
+
+    /// The limits each Goal this Task creates or assigns pins.
+    pub fn goal_limits(&self) -> gents_protocol::goal::GoalLimits {
+        gents_protocol::goal::GoalLimits {
+            blocked_audit_threshold: self.goal_blocked_audit_threshold,
+            max_infrastructure_retries: self.goal_max_infrastructure_retries,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

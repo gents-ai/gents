@@ -421,7 +421,8 @@ def taskGoalPublicationCases : List TaskGoalPublicationCase :=
   , { name := "overflow_budget_cannot_publish", nodeDid, taskId, fireKey
       declaration := ⟨some "implement feature",
         some (GoalAutomation.maxTokenBudget + 1), none, none⟩ }
-  , { name := "goal_limits_use_atomic_goal_publication", nodeDid, taskId, fireKey
+  , { name := "goal_limits_use_atomic_goal_publication", nodeDid, taskId,
+      fireKey := "schedule:2026-09-03T12:00:00Z"
       declaration := ⟨some "implement feature", none, some 5, some 4⟩ }
   , { name := "zero_retry_limit_uses_atomic_goal_publication", nodeDid, taskId, fireKey
       declaration := ⟨some "implement feature", none, none, some 0⟩ }
@@ -584,11 +585,13 @@ structure TaskGoalPublicationMaterialized where
   durableGoal : Bool
   deriving Lean.ToJson
 
-/-- The production materializer scenario publishes one scheduled goal Task on
-its own node; it builds the positive-budget declaration. -/
+/-- The production materializer scenario publishes scheduled goal Tasks on
+its own node; it builds the positive-budget and the goal-limits declarations,
+whose distinct fires open distinct Goals. -/
 def taskGoalPublicationMaterializedCases : List TaskGoalPublicationCase :=
   taskGoalPublicationCases.filter fun w =>
-    w.name ∈ ["positive_budget_uses_atomic_goal_publication"]
+    w.name ∈ ["positive_budget_uses_atomic_goal_publication",
+      "goal_limits_use_atomic_goal_publication"]
 
 @[conformance_family]
 def taskGoalPublicationMaterialized :

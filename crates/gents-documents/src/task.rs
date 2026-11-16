@@ -90,6 +90,16 @@ pub struct Task {
     pub tags: Vec<String>,
 }
 
+impl Task {
+    /// The limits each Goal this Task creates or assigns pins.
+    pub fn goal_limits(&self) -> gents_protocol::goal::GoalLimits {
+        gents_protocol::goal::GoalLimits {
+            blocked_audit_threshold: self.goal_blocked_audit_threshold,
+            max_infrastructure_retries: self.goal_max_infrastructure_retries,
+        }
+    }
+}
+
 /// A task-owned host command, using the behavior's HostTools.root and inherited
 /// host environment.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]

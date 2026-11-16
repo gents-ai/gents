@@ -3,6 +3,7 @@
 
 use async_trait::async_trait;
 
+use gents_protocol::goal::GoalLimits;
 use gents_protocol::request_admission::AgentRequestCreate;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
@@ -56,6 +57,7 @@ impl SessionMessageGoals for SessionGoals {
         session_id: &str,
         objective: &str,
         token_budget: Option<i64>,
+        limits: GoalLimits,
         request: &AgentRequestCreate,
     ) -> anyhow::Result<EnqueuedAgentRequest> {
         super::stage_goal_backed_request_in_txn(
@@ -64,6 +66,7 @@ impl SessionMessageGoals for SessionGoals {
             session_id,
             objective,
             token_budget,
+            limits,
             request,
         )
         .await

@@ -1318,6 +1318,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
                 SESSION,
                 "new User work",
                 None,
+                gents_protocol::goal::GoalLimits::default(),
                 &request,
                 None,
                 Some(&graph),

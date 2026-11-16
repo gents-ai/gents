@@ -111,6 +111,8 @@ pub fn snapshot(goal: &GoalDocument, now: DateTime<Utc>) -> GoalSnapshot {
         tokens_used: goal.tokens_used.unwrap_or_default().max(0),
         active_time_seconds: goal.current_active_time_seconds(now),
         consecutive_blocked_audits: goal.consecutive_blocked_audits.unwrap_or_default().max(0),
+        blocked_audit_threshold: goal.blocked_audit_threshold(),
+        max_infrastructure_retries: goal.max_infrastructure_retries(),
         continuation_sequence: goal.continuation_sequence(),
         wrapup_requested: goal.wrapup_requested.unwrap_or(false),
         wrapup_completed: goal.wrapup_completed.unwrap_or(false),

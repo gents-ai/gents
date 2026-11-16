@@ -340,6 +340,7 @@ impl TriggerEngine {
             &intent.task.prompt_template,
             intent.task.goal_objective_template.as_deref(),
             intent.task.goal_token_budget,
+            intent.task.goal_limits(),
             &scope,
         ) {
             Ok(rendered) => rendered,
