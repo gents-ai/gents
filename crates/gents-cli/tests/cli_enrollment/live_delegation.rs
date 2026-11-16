@@ -178,7 +178,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             anyhow::ensure!(Instant::now() < deadline, "model never published a child request: {rows:?}");
             observe_change_until(&mut child_changes, deadline).await;
         };
-        let child_reply = wait_for_complete_agent_response_with_access(&access, &child_request, &child_session, Duration::from_secs(240)).await?;
+        let child_reply = wait_for_complete_agent_response_with_access(&access, &child_request, &child_session).await?;
         anyhow::ensure!(!child_reply.text.trim().is_empty(), "child did not respond");
         let child_page = gents_desktop_core::client::load_session_transcript_page_on(
             &access, &child_session, Some(&node_did), Some(&a.agent_did), None, Some(40),

@@ -13,6 +13,10 @@ on:
       - "core-packs/**"
       - "crates/gents-core-packs/**"
       - "crates/gents-pack/**"
+      - "crates/gents-toolcalls/src/plugin/**"
+      - "crates/gents-cli/src/commands/pack/**"
+      - "crates/gents-cli/src/commands/afterburner_build.rs"
+      - "Makefile"
       - ".github/workflows/core-packs.yml"
   workflow_dispatch:
   workflow_call:
@@ -39,7 +43,7 @@ jobs:
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 150
-    runs-on: [self-hosted, Linux, X64, workstation-1]
+    runs-on: [self-hosted, Linux, X64, ci-docker]
     container: rust:1-bookworm
     defaults:
       run:
