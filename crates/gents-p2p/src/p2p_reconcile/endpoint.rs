@@ -16,7 +16,7 @@ pub enum EndpointError {
     Unavailable(String),
     #[error("runtime {0} has an ambiguous or invalid signed GraphQL endpoint")]
     InvalidBinding(String),
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] gents_store::config_client::ConfigClientError),
     #[error(transparent)]
     Identity(#[from] gents_store::identity::IdentityError),

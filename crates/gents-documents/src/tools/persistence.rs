@@ -31,9 +31,9 @@ pub async fn write_tools_document(
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolsWriteError {
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Invalid(#[source] anyhow::Error),
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Publication(#[source] anyhow::Error),
 }
 

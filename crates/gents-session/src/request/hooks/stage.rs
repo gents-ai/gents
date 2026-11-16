@@ -63,7 +63,7 @@ pub enum HookError {
     #[error("a lifecycle hook could not read or write its rows")]
     Store(#[from] gents_store::config_client::ConfigClientError),
     /// A declared revision read failed; the caller sees the read's own error.
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Revisions(#[source] anyhow::Error),
     /// Lean `Hooks.out_of_bound_history_is_not_answered`.
     #[error(
@@ -76,7 +76,7 @@ pub enum HookError {
     #[error("lifecycle plugin declared the unknown core read {0}")]
     UnknownRead(String),
     /// A declared named core read failed; the caller sees the read's own error.
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     CoreRead(#[source] anyhow::Error),
 }
 

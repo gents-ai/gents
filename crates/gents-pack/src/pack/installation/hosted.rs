@@ -49,9 +49,9 @@ pub struct HostedPackStage {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HostedPackStageError {
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Rejected(#[source] anyhow::Error),
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Unconfirmed(#[source] anyhow::Error),
 }
 

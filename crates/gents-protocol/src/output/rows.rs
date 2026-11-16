@@ -32,7 +32,7 @@ pub enum CanonicalRowError {
     },
     #[error(transparent)]
     Blocks(serde_json::Error),
-    #[error("{0}")]
+    #[error(fmt = crate::error_chain::held)]
     Graphql(#[from] GraphqlError),
 }
 

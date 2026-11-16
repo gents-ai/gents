@@ -3479,7 +3479,7 @@ fn access_error_holders_are_sourced() {
             if holder.transparent && !must_source.is_empty() {
                 violations.push(format!(
                     "{relative}: {}::{} holds {} transparently; hold it as `#[source]` under \
-                     `#[error(\"{{0}}\")]`",
+                     `#[error(fmt = gents_protocol::error_chain::held)]`",
                     holder.owner,
                     holder.variant,
                     must_source.join(", ")

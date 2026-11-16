@@ -10,9 +10,9 @@ pub enum ConfigurationVisibilityError {
     Unavailable,
     #[error("configuration visibility query returned an invalid response")]
     InvalidResponse,
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Version(#[from] gents_store::graphql::GraphqlResponseError),
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] ConfigClientError),
 }
 

@@ -27,6 +27,19 @@ pub fn printed_messages(error: &(dyn Error + '_)) -> Vec<String> {
     printed
 }
 
+/// The message of an owner variant that holds an error as its `#[source]`
+/// and keeps that error's text (`#[error(fmt = held)]`): the held error,
+/// displayed with the caller's flags, as `#[error(transparent)]` displays it.
+/// `{:#}` of the holder therefore still shows an application error's causes,
+/// while the held error stays on the `source()` chain for classifiers (Lean
+/// `AccessClassification.Chain.exposed`).
+pub fn held<T>(held: &T, formatter: &mut fmt::Formatter<'_>) -> fmt::Result
+where
+    T: fmt::Display + ?Sized,
+{
+    fmt::Display::fmt(held, formatter)
+}
+
 /// Renders an error and every `source()` joined by `": "`, as anyhow's `{:#}`
 /// does, except that a repeated message is printed once
 /// ([`printed_messages`]). Typed errors format only their own message under
@@ -187,9 +200,9 @@ mod tests {
 
     #[derive(Debug, thiserror::Error)]
     enum Holder {
-        #[error("{0}")]
+        #[error(fmt = crate::error_chain::held)]
         Held(#[source] std::io::Error),
-        #[error("{0}")]
+        #[error(fmt = crate::error_chain::held)]
         Boxed(#[source] Box<std::io::Error>),
         #[error("holder")]
         Repeating(#[source] Repeated),

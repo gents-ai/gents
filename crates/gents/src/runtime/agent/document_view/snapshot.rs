@@ -52,7 +52,7 @@ struct UnknownKindBackend {
 enum InferenceSelectionError {
     #[error(transparent)]
     UnknownKind(#[from] UnknownKindBackend),
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

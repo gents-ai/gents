@@ -29,7 +29,7 @@ pub enum RenderedRequestError {
     EncodeProvenancePayload(#[source] serde_json::Error),
     #[error("encoding canonical JSON")]
     EncodeCanonicalJson(#[source] serde_json::Error),
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Sink(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 

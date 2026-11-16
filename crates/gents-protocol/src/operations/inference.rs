@@ -275,7 +275,7 @@ pub enum InferenceOperationError {
     #[error("{} requires a document ID", .0.resource())]
     IdRequired(InferenceDocument),
     /// The patch or the document it produces is not a valid document.
-    #[error("{0}")]
+    #[error(fmt = crate::error_chain::held)]
     Invalid(#[source] Box<dyn Error + Send + Sync>),
     /// Another owner's failure (plan validation, the store), unchanged.
     #[error(transparent)]

@@ -38,7 +38,7 @@ pub enum SlotBindingError {
         slots: Vec<String>,
         profiles: Vec<PackInferenceProfileOption>,
     },
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

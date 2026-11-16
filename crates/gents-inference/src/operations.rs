@@ -34,7 +34,7 @@ use gents_store::config_client::{ConfigClientError, TransactionFailure};
 pub enum OperationFailure {
     #[error(transparent)]
     Operation(InferenceOperationError),
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[source] anyhow::Error),
 }
 

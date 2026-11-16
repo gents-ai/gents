@@ -92,7 +92,7 @@ pub struct SchemaError(String);
 pub enum SchemaIdentityError {
     #[error(transparent)]
     InvalidDid(#[from] identity::Error),
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     ConfigClient(#[from] gents_store::config_client::ConfigClientError),
 }
 

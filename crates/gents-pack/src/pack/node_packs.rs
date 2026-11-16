@@ -138,7 +138,7 @@ pub enum LocalPackError {
         sources: Vec<String>,
         built: Option<PathBuf>,
     },
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 
@@ -181,7 +181,7 @@ pub enum HomePackRemovalError {
         selections: Option<Vec<PluginSelection>>,
         cause: anyhow::Error,
     },
-    #[error("{0}")]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

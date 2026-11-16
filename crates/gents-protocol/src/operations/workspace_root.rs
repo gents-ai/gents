@@ -367,7 +367,7 @@ pub enum AgentWorkspaceRootError {
     },
     #[error(transparent)]
     Publication(#[from] WorkspaceRootError),
-    #[error("{0}")]
+    #[error(fmt = crate::error_chain::held)]
     Other(#[source] Box<dyn Error + Send + Sync>),
 }
 
