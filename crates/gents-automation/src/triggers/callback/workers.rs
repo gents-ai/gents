@@ -132,6 +132,9 @@ impl CallbackWorkers {
                         ceiling.as_deref(),
                         &plugins,
                         Some(&node),
+                        // Only plugin handlers are dispatched here, and they
+                        // never create a workspace.
+                        None,
                     )
                     .await?;
                 }
@@ -168,6 +171,10 @@ impl CallbackEngine {
                 return Ok(());
             }
         }
+        let snapshot = self
+            .snapshots
+            .as_ref()
+            .map(|snapshots| snapshots.borrow().clone());
         run_owned_invocation(
             &self.node,
             &access,
@@ -176,6 +183,7 @@ impl CallbackEngine {
             self.ceiling.as_deref(),
             &self.plugins,
             Some(&self.node),
+            snapshot.as_deref(),
         )
         .await
     }

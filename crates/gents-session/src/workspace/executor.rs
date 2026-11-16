@@ -40,6 +40,10 @@ pub struct HostExecutorContext<'a> {
     pub caused_by_correlation: String,
     /// The creating invocation's route, stamped on the workspace it creates.
     pub route: gents_protocol::trigger_delivery::HandoffRoute,
+    /// The writer Agent's `HostTools.max_instruction_chars`, bounding each
+    /// instruction file a created workspace freezes. Contexts that never
+    /// create a workspace leave it unset; a create that must capture refuses.
+    pub max_instruction_chars: Option<usize>,
     pub documents: &'a mut dyn WorkspaceDocuments,
 }
 

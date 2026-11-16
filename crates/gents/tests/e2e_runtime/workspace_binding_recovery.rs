@@ -88,6 +88,7 @@ async fn startup_binds_an_agent_authored_workspace_request() {
             writer_agent_did: agent_did.clone(),
             integrator_agent_did: agent_did.clone(),
             reader_agent_dids: Vec::new(),
+            max_instruction_chars: gents_session::workspace::INSTRUCTION_TEXT_BUDGET,
         },
     )
     .await

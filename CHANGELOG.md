@@ -6,6 +6,11 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Tools `host.max_instruction_chars` (default 32768, at most 262144) bounds the
+  workspace AGENTS.md bytes placed in provider context, replacing the fixed
+  budget. A workspace freezes its instructions with its writer Agent's value at
+  creation and keeps them; a later change applies to new workspaces and to live
+  instruction discovery. The desktop Tools editor sets it.
 - InferenceExecution `title_timeout_secs` (default 10s) bounds one title-generation
   attempt, replacing the fixed title timeout. InferenceBackend `request_timeout_secs`
   (default 120s) bounds one plugin model call through that backend, replacing the fixed

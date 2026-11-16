@@ -48,7 +48,7 @@ pub use executor::{
 };
 pub use instructions::{
     instruction_body_for_request, instruction_context_section, live_instruction_context_section,
-    InstructionFile, InstructionManifest, DEFAULT_INSTRUCTION_PATHS,
+    InstructionFile, InstructionManifest, DEFAULT_INSTRUCTION_PATHS, INSTRUCTION_TEXT_BUDGET,
 };
 pub use journal::{
     action_journal_prefix_legal, recover_running, retry_allowed, ActionJournalEntry,

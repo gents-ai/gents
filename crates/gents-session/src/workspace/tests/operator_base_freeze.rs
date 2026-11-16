@@ -383,6 +383,7 @@ fn freeze_fault_context<'a>(
         integrator_principal: "did:key:zIntegrator".into(),
         caused_by_invocation_id: "inv-1".into(),
         caused_by_correlation: "corr-1".into(),
+        max_instruction_chars: Some(crate::workspace::INSTRUCTION_TEXT_BUDGET),
         documents: docs,
         route: Default::default(),
     }

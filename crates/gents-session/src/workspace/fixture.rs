@@ -178,6 +178,7 @@ impl Fixture {
             integrator_principal: "did:key:zIntegrator".to_string(),
             caused_by_invocation_id: "inv-1".to_string(),
             caused_by_correlation: "corr-1".to_string(),
+            max_instruction_chars: Some(crate::workspace::INSTRUCTION_TEXT_BUDGET),
             documents: docs,
             route: Default::default(),
         }

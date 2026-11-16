@@ -28,6 +28,8 @@ pub struct WorkspaceProvisioningSelection {
     pub writer_agent_did: String,
     pub integrator_agent_did: String,
     pub reader_agent_dids: Vec<String>,
+    /// The writer Agent's `HostTools.max_instruction_chars`.
+    pub max_instruction_chars: usize,
 }
 
 fn repository_id(path: &Path, node_did: &str) -> String {
@@ -242,6 +244,7 @@ pub async fn provision_read_only_workspace(
                 &invocation,
                 &correlation,
                 &Default::default(),
+                selection.max_instruction_chars,
             )?;
             reservation.seal_hash = Some(super::adapter::base_tree_hash(
                 &repository.host_path,
@@ -306,6 +309,7 @@ pub async fn provision_read_only_workspace(
                     caused_by_invocation_id: invocation,
                     caused_by_correlation: correlation,
                     route: Default::default(),
+                    max_instruction_chars: Some(selection.max_instruction_chars),
                     documents: &mut documents,
                 };
                 execute_create_workspace_plan(
@@ -345,6 +349,7 @@ pub async fn provision_read_only_workspace(
                     caused_by_invocation_id: invocation,
                     caused_by_correlation: correlation,
                     route: Default::default(),
+                    max_instruction_chars: None,
                     documents: &mut documents,
                 };
                 execute_freeze_workspace_base_plan(

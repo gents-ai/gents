@@ -85,6 +85,20 @@ describe("canonical tool selections", () => {
     ).toBe(24000);
   });
 
+  it("persists the workspace instruction byte limit", async () => {
+    const { api, app } = harness();
+    const user = userEvent.setup();
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Workspace instruction byte limit" }),
+      { target: { value: "65536" } },
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      api.saveToolsConfig.mock.calls[0][0].document.host.max_instruction_chars,
+    ).toBe(65536);
+  });
+
   it("rejects bash output byte limits above the runtime ceiling", async () => {
     const { api, app } = harness();
     const user = userEvent.setup();

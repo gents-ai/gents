@@ -98,6 +98,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         writer_agent_did: writer.did().into(),
         integrator_agent_did: writer.did().into(),
         reader_agent_dids: vec![reader.did().into()],
+        max_instruction_chars: crate::workspace::INSTRUCTION_TEXT_BUDGET,
     };
     let before_head = git(&fx.repo, &["rev-parse", "HEAD"]);
     let before_index = git(&fx.repo, &["write-tree"]);
