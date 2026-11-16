@@ -200,7 +200,13 @@ class Answers:
             base = self.extract
             if base is None:
                 return "absent"
-            return self.disk(base / rest)
+            # A directory of the archive is keyed by kind: a build script's
+            # OUT_DIR is archived whole, and with kept target trees it holds
+            # each runner's leftovers (dispatches 43788390725 and 43791453932
+            # built identical binaries and every listing differed). The
+            # loader and the tests probe the files they need, each a query.
+            answer = self.disk(base / rest)
+            return {"dir": []} if isinstance(answer, dict) and "dir" in answer else answer
         if kind == "up":
             target = Path(rest)
             return {"dir": []} if target.is_dir() else ({"file": "exists"} if target.exists() else "absent")
@@ -856,7 +862,8 @@ def plan_run(listing, binaries, answers, mode, root=None):
 
 
 def first_difference(records, answers):
-    for record in records:
+    """The first input that differs from the newest record's."""
+    for record in sorted(records, key=lambda record: record.get("provenance", {}).get("id", ""), reverse=True)[:1]:
         for path, expected in record["trace"]:
             if answers(path) != expected:
                 return path

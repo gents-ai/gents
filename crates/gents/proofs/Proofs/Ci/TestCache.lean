@@ -38,8 +38,11 @@ inductive Answer where
 
 /-- A path in the gate's normalized namespace (`ws:` workspace-relative,
 `target:` inside the archive, `host:` absolute on the runner, `tree:` a
-derived tree's sources, `up:` an ancestor of the checkout). The gate keys an
-ancestor by its kind alone: tests search upward for the workspace root, and
+derived tree's sources, `up:` an ancestor of the checkout). The gate keys a
+directory of the archive by its kind alone: a build script's output directory
+is archived whole and holds whatever a runner's kept target tree left there,
+while the files a test or the loader needs are their own queries. It keys an
+ancestor by its kind alone too: tests search upward for the workspace root, and
 an ancestor's other entries are other checkouts on the runner, which no test
 reads; every marker the search probes is its own query. -/
 abbrev Path := String

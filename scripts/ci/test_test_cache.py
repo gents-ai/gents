@@ -368,6 +368,19 @@ class Broker(unittest.TestCase):
         self.assertEqual(codes, list(range(48)))
 
 
+class ArchiveAnswers(unittest.TestCase):
+    def test_archive_directories_are_keyed_by_kind_and_files_by_content(self):
+        extract = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, extract)
+        (extract / "target/debug/build/x/out").mkdir(parents=True)
+        (extract / "target/debug/build/x/out/leftover.o").write_bytes(b"runner a")
+        answers = test_cache.Answers(test_cache.ROOT, extract)
+        self.assertEqual(answers("target:target/debug/build/x/out"), {"dir": []})
+        self.assertEqual(answers("target:target/debug/build/x/out/leftover.o"),
+                         {"file": test_cache.sha256_file(extract / "target/debug/build/x/out/leftover.o")})
+        self.assertEqual(answers("target:target/debug/missing"), "absent")
+
+
 class Policy(unittest.TestCase):
     def test_the_repository_policy_loads_and_names_issues(self):
         policy = test_cache.load_policy()
