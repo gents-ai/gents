@@ -1,6 +1,8 @@
 import Proofs.Clients.ClientShell.ObservationOrdering
 import Proofs.Conformance.Family
 
+attribute [conformance_function] ClientDataPublication.reloadAcceptedSince
+
 namespace Conformance.ClientDataPublication
 
 open Lean _root_.ClientDataPublication

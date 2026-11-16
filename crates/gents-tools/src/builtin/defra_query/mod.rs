@@ -52,6 +52,8 @@ pub(crate) fn truncate_field_strings(value: &mut serde_json::Value) -> bool {
 
 pub mod bounded;
 mod command;
+#[cfg(test)]
+pub(crate) use command::QueryCommandError;
 mod field_page;
 pub(crate) use field_page::{utf8_page, Utf8PageError};
 mod native_filter;
@@ -130,7 +132,11 @@ impl Tool for DefraQueryTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {name:Self::NAME.into(),description:"Read application and runtime documents. argv: [fields], [find], [count], [search], [explain], or [help,COMMAND]. Count aggregates every matching row; find returns a bounded ordered page. Explain inspects a native plan; executing it requires options.mode:execute. Configuration uses config, definitions use schema.".into(),parameters:json!({"type":"object","required":["argv"],"additionalProperties":false,"properties":{"argv":{"type":"array","items":{"type":"string"}},"collection":{"type":"string","description":"GraphQL collection name. Discover with schema collection list. Surface IDs belong to config datastore get."},"options":{"type":"object"}}})}
     }
-    async fn call(&self, args: Self::Args) -> Result<String, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<String, Self::Error> {
         if let Some(verb) = command::write_verb(&args) {
             return Err(anyhow!("{}", json!({
                 "error": format!("query only reads; it has no {verb} command. Writes go through the write tool"),
@@ -142,11 +148,11 @@ impl Tool for DefraQueryTool {
                 &self.node,
                 Some(actor.clone()),
                 "application_query",
-                |txn| Box::pin(execute_command(txn, &args, &self.scope)),
+                |txn| Box::pin(command::execute_typed_command(txn, &args, &self.scope)),
             )
             .await
         } else {
-            execute_command(
+            command::execute_typed_command(
                 &gents_store::config_client::ConfigAccess::local(self.node.clone()),
                 &args,
                 &self.scope,
@@ -155,8 +161,11 @@ impl Tool for DefraQueryTool {
         };
         match result {
             Ok(value) => render_result(value).map_err(Into::into),
-            Err(error) if error.is::<command::CollectionDiscoveryError>() => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"schema","args":{"argv":["collection","list"]}}})).into()),
-            Err(error) => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into()),
+            Err(error @ command::QueryCommandError::Discovery(_)) => Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"schema","args":{"argv":["collection","list"]}}})).into()),
+            Err(error) => {
+                let error = error.erased();
+                Err(anyhow!("{}", json!({"error":format!("{error:#}"),"recovery":{"tool":"query","args":{"argv":["help",args.argv.first().filter(|command| query_help(Some(command)).is_ok()).map(String::as_str).unwrap_or("find")]}}})).into())
+            }
         }
     }
 }

@@ -101,6 +101,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
                 None,
                 "premature-goal-complete",
                 r#"{"status":"complete","reason":"text alone is not output"}"#,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await,
         ToolCallHookAction::Skip { .. }
@@ -132,7 +133,13 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     .await;
     assert!(matches!(
         persistence_hook
-            .on_tool_call("write_scan_result", None, "required-output", "{}")
+            .on_tool_call(
+                "write_scan_result",
+                None,
+                "required-output",
+                "{}",
+                &gents_loop::tool::ToolCallEnvelope::ambient()
+            )
             .await,
         ToolCallHookAction::Continue
     ));
@@ -163,6 +170,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
                 None,
                 "acknowledged-goal-complete",
                 r#"{"status":"complete","reason":"required scan output is durable"}"#,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await,
         ToolCallHookAction::Skip { .. }
@@ -252,13 +260,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                 HookAction::Continue
             ));
             let session_id = hook.session_id().await.unwrap();
-            bind_managed_hook_request(
-                &mut hook,
-                "request-receipt",
-                &root,
-                chrono::Utc::now() + chrono::Duration::minutes(5),
-            )
-            .await;
+            bind_managed_hook_request(&mut hook, "request-receipt", &root).await;
             accept_hook_tool_call(&hook, "receipt-call", "read", "{}", None).await;
             let accepted = hook.accepted_tool_calls.lock().await["receipt-call"].clone();
             let admitted = fetch_tool_call_row(&hook, &session_id, "receipt-call").await;
@@ -281,7 +283,8 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                         .await
                         .unwrap();
                 }
-                let call = hook.on_tool_call("read", None, "receipt-call", "{}");
+                let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+                let call = hook.on_tool_call("read", None, "receipt-call", "{}", &envelope);
                 let action = if attempt.acknowledged {
                     call.await
                 } else {
@@ -386,7 +389,15 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             hook.adopt_accepted_tool_calls(vec![("receipt-call".into(), accepted.clone())])
                 .await
                 .unwrap();
-            let replay = hook.on_tool_call("read", None, "receipt-call", "{}").await;
+            let replay = hook
+                .on_tool_call(
+                    "read",
+                    None,
+                    "receipt-call",
+                    "{}",
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
+                .await;
             let after_replay = fetch_tool_call_row(&hook, &session_id, "receipt-call").await;
             assert_eq!(
                 after_replay["lifecycle_state"],

@@ -1,6 +1,59 @@
 pub mod acp_policies;
+pub mod bounded_process;
+#[cfg(unix)]
+mod executable_script;
 pub mod relationships;
 pub mod wire_database;
+
+#[cfg(unix)]
+pub use executable_script::write_executable_script;
+
+/// Hang detector for a test wait that has no deadline of its own: the longest
+/// the awaited owner may go without a change before the wait fails. It is one
+/// suite-wide ceiling far above any host's scheduling delay, never a per-test
+/// latency budget (TLA+ `WallClockBound`; the same value as the `gents`
+/// suites' `STALL_CEILING`).
+pub const STALL_CEILING: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// A fixture deadline the scenario does not exercise: beyond any run the hang
+/// ceiling lets finish, so the product's deadline cut is never enabled
+/// (`WallClockBound` `DeadlineMode = "unreached"`).
+pub const UNREACHED_DEADLINE: std::time::Duration =
+    std::time::Duration::from_secs(4 * STALL_CEILING.as_secs());
+
+/// [`UNREACHED_DEADLINE`] from now, as the wall-clock instant a fixture binds.
+pub fn unreached_deadline_at() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now() + chrono::TimeDelta::from_std(UNREACHED_DEADLINE).expect("bounded")
+}
+
+/// Resolves with the first `Some` that `read` returns, re-running it after
+/// each committed change to `collections` and failing with `what` once none
+/// has changed for [`STALL_CEILING`]. The subscription opens before the first
+/// read, so a change committed between two reads is never missed; `read` must
+/// change its answer only together with a change to `collections`.
+pub async fn read_when_changed<T, F>(
+    node: &defra_node::Node,
+    collections: &[&str],
+    what: &str,
+    mut read: F,
+) -> T
+where
+    F: AsyncFnMut() -> Option<T>,
+{
+    let mut changes =
+        crate::subscription_source::subscribe_collections(node, collections.iter().copied())
+            .expect("observe the awaited collections");
+    loop {
+        if let Some(value) = read().await {
+            return value;
+        }
+        match tokio::time::timeout(STALL_CEILING, changes.recv()).await {
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("{what}: the change feed for {collections:?} closed"),
+            Err(_) => panic!("{what}: {collections:?} unchanged for {STALL_CEILING:?}"),
+        }
+    }
+}
 
 pub fn attach_node_extensions(
     node: &std::sync::Arc<defra_node::Node>,
@@ -154,4 +207,44 @@ pub async fn verified_block_signer_as(node: &defra_node::Node, reader: &str, cid
         defra_core::block::Signature::from_dag_cbor(&signature).expect("decode block signature");
     db::block::verify::verified_signature_signer_did(&block, &signature)
         .unwrap_or_else(|error| panic!("verify {cid}: {error}"))
+}
+
+/// Makes write-attempt events visible to a scoped subscriber. tracing caches
+/// one interest per callsite for the whole process, and while a single
+/// dispatcher is registered it computes that interest from the default of
+/// whichever thread reaches the callsite first; a thread with no default
+/// caches `never`, which then hides the event from a scoped subscriber on
+/// another thread. A global default that enables the target is every such
+/// thread's default.
+#[cfg(test)]
+pub(crate) fn enable_scoped_event_capture() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        tracing::subscriber::set_global_default(CapturedTargetSubscriber)
+            .expect("no other global tracing default in this test binary");
+    });
+}
+
+#[cfg(test)]
+struct CapturedTargetSubscriber;
+
+#[cfg(test)]
+impl tracing::Subscriber for CapturedTargetSubscriber {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target() == crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::Id {
+        tracing::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::Id, _follows: &tracing::Id) {}
+
+    fn event(&self, _event: &tracing::Event<'_>) {}
+
+    fn enter(&self, _span: &tracing::Id) {}
+
+    fn exit(&self, _span: &tracing::Id) {}
 }

@@ -56,6 +56,32 @@ pub(crate) fn session_message_display_body_with_content<'a>(
     content.strip_prefix(&format!("{header}\n\n"))
 }
 
+pub fn signed_session_message_display_body(request: &AgentRequestRow) -> Option<&str> {
+    let super::RequestOrigin::SessionMessage { .. } = super::request_origin(request) else {
+        return None;
+    };
+    let source = request.input.as_ref()?.started_by.as_ref()?;
+    let signer = request.admission_signer_did.as_deref()?;
+    if source.node_did.trim().is_empty()
+        || source.session_id.trim().is_empty()
+        || signer.trim().is_empty()
+        || request.requester_did.as_deref() != Some(signer)
+    {
+        return None;
+    }
+    let header = sender_header(
+        &source.node_did,
+        signer,
+        &source.session_id,
+        request.caused_by_parent_request_id.as_deref()?,
+        request.created_at.as_deref()?,
+    );
+    request
+        .content
+        .as_deref()?
+        .strip_prefix(&format!("{header}\n\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

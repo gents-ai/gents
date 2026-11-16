@@ -1856,6 +1856,10 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
+      "fold_queue_contracts_queued_turn_rediscovery")
+      "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
       "fold_queue_contracts_handover_claim")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -2436,6 +2440,10 @@ def caseCoverage : List CoverageEntry :=
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"
+      "plugin_resources_allowance_tick_counts")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
       "plugin_resources_sleeps")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -2803,6 +2811,10 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "family"
       "goal_client_control_contracts_control")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_client_control_contracts_resume_readers")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
@@ -3339,10 +3351,6 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage "family" "household_unattended_documents_admission")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_unattended_documents_unavailable")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "family" "household_unattended_session_admission")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "family" "household_unattended_session_unavailable")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "household_configuration_removal")
       "identity-permission" [Surface.runtimeInternal]
@@ -4174,6 +4182,8 @@ def externalPremiseCoverage : List CoverageEntry :=
       "One active runtime per node is an operating premise. Host-local job control and in-memory step coalescing do not enforce that premise across processes.") "tool-call" [Surface.runtimeInternal]
   , tagged (boundaryCoverage "premise" "boundary.count-carrier.non-null-id"
       "DefraDB refuses a non-null ID field declaration (NonNull variant for type ID is not supported), so no count carrier of that schema is ever stored.") "completion-retry" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage "premise" "boundary.plugin-allowance.epoch-ticker"
+      "The WASM host's epoch advances once per ticker wake-up, so a guest's compute allowance is counted in wake-ups; late wakes stretch it without bound until the ticker advances the epoch by elapsed time.") "tool-policy" [Surface.runtimeInternal]
   , tagged (boundaryCoverage "premise" "boundary.plugin-data.transaction"
       "DefraDB provides transaction serializability and its unique index as a backstop for read-then-insert plugin data writes.") "tool-policy" [Surface.runtimeInternal]
   ]
@@ -4181,7 +4191,10 @@ def externalPremiseCoverage : List CoverageEntry :=
 def coverageLedger : List CoverageEntry :=
   vocabularyCoverage ++ stateMachineCoverage ++ caseCoverage ++ followUpHookCoverage ++ externalPremiseCoverage ++
     [tagged (consumerCoverage "family" "event_delivery_cooldown_pruning")
-      "event-delivery" [Surface.runtimeInternal]]
+      "event-delivery" [Surface.runtimeInternal]
+    , tagged (boundaryCoverage "family" "client_window_scope_bound_delivers"
+        "TLA WindowIndependence reads this bound of ClientWindowScope.delivers as its delivery decision; the bridge's window registry replays the unbounded owner through generated window traces.")
+      "client-shell" [Surface.operatorUi]]
 
 structure FeatureMatrixCell where
   feature : String

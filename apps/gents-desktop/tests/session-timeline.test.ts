@@ -300,6 +300,7 @@ describe("session timeline page merging", () => {
     };
     const origin = {
       kind: "trigger" as const,
+      displayBody: "write the report",
       triggerId: "nightly",
       triggerKind: "schedule",
     };

@@ -90,10 +90,8 @@ pub(super) async fn enrollment_decision_handler(
             StatusCode::BAD_REQUEST,
             axum::Json(json!({
                 "error": error.to_string(),
-                "code": gents_protocol::error_chain::find_source::<
-                    gents_p2p::p2p_reconcile::EnrollmentDecisionRefusal,
-                >(error.as_ref())
-                .map(gents_p2p::p2p_reconcile::EnrollmentDecisionRefusal::code),
+                "code": gents_p2p::p2p_reconcile::EnrollmentDecisionRefusal::in_chain(error.as_ref())
+                    .map(gents_p2p::p2p_reconcile::EnrollmentDecisionRefusal::code),
             })),
         )
             .into_response(),

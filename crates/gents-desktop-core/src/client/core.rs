@@ -58,6 +58,8 @@ const DESKTOP_P2P_RATE_LIMIT_RATE: f64 = 500.0;
 
 #[derive(Debug, Clone)]
 pub struct ClientCoreOptions {
+    #[cfg(test)]
+    pub(crate) startup_p2p: Option<Arc<tests::RecordingP2P>>,
     pub port: u16,
     pub bind_addr: Option<IpAddr>,
     // Defra's HTTP listener lives until its Tokio runtime stops;
@@ -105,6 +107,8 @@ pub trait ClientStoreKeyProvider: std::fmt::Debug + Send + Sync {
 impl Default for ClientCoreOptions {
     fn default() -> Self {
         Self {
+            #[cfg(test)]
+            startup_p2p: None,
             port: 0,
             bind_addr: None,
             http_addr: None,
@@ -295,6 +299,11 @@ pub struct ClientSyncStateSnapshot {
 enum P2PSupervisorCommand {
     RepairNow,
 }
+
+/// How long a client start may go without completing a stage. Opening the
+/// store waits at most this long for a previous holder that declared its
+/// release (Lean `StoreHandoff.decide`).
+pub const CLIENT_START_STALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A finished shutdown's result, with the error rendered for every waiter.
 type ShutdownOutcome = std::result::Result<(), String>;
@@ -556,7 +565,7 @@ impl ClientCore {
             Ok(snapshot) => snapshot,
             Err(error) => {
                 self.observe_refresh_failure(node_did, &error);
-                return Err(error);
+                return Err(error.into());
             }
         };
         let rows = snapshot.row_count();
@@ -577,9 +586,9 @@ impl ClientCore {
 
     /// The observer owns runtime connection state: a refusal clears the
     /// node's rows and asks it to confirm with its own authenticated read.
-    fn observe_refresh_failure(&self, node_did: &str, error: &anyhow::Error) {
+    fn observe_refresh_failure(&self, node_did: &str, error: &super::SnapshotReadError) {
         let store = self.stores.ensure(node_did);
-        if gents_store::config_client::TransactionFailure::permission_denied(error) {
+        if error.refused() {
             store.clear_after_refused_read();
         } else {
             store.request_resync();
@@ -627,8 +636,20 @@ impl ClientCore {
         }
     }
 
+    /// Reports done only once the store lock is free: a stop, retire or quit
+    /// built on this is acknowledged after the release (`tla/StoreHandoff.tla`
+    /// `AckFollowsRelease`). The claim lives in the node's write gate until
+    /// its last owner, possibly a native operation still settling, drops it.
+    /// The release is declared first, so a process that opens the store
+    /// meanwhile waits for it instead of being refused.
     async fn shutdown_inner(&self) -> Result<()> {
         tracing::info!("client core shutdown: begin");
+        let release = self
+            .store_access
+            .lock()
+            .await
+            .as_ref()
+            .and_then(ConfigAccess::begin_store_release);
         self.p2p_control.lock().await.take();
         if let Some(task) = self.p2p_supervisor.lock().await.take() {
             tracing::info!("client core shutdown: stopping p2p supervisor");
@@ -652,6 +673,9 @@ impl ClientCore {
             pause.allow_access_release.notified().await;
         }
         self.store_access.lock().await.take();
+        if let Some(release) = release {
+            release.released().await;
+        }
         node_shutdown.context("shutting down embedded node")?;
         tracing::info!("client core shutdown: complete");
         Ok(())

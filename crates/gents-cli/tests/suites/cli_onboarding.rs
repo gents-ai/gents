@@ -1,6 +1,7 @@
 use crate::support::*;
 
 use anyhow::{Context, Result};
+use futures::StreamExt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -439,71 +440,105 @@ fn place(home: &Path, settings_present: bool, pending: bool) -> Result<()> {
     Ok(())
 }
 
+struct IdentityCase {
+    selection: HomeSelection,
+    key_present: bool,
+    selected: (bool, bool),
+    other: (bool, bool),
+}
+
+async fn observe_identity(case: &IdentityCase, command: &[&str]) -> Result<&'static str> {
+    let fixture = ClientIdentityFixture::new()?;
+    let home = fixture.selected_home(case.selection);
+    place(&home, case.selected.0, case.selected.1)?;
+    let other = match case.selection {
+        HomeSelection::Flag | HomeSelection::Env => {
+            let remembered = remembered_home_path(fixture.user_home.path());
+            fs::create_dir_all(
+                remembered
+                    .parent()
+                    .context("remembered file has a parent")?,
+            )?;
+            let other = fixture.user_home.path().join("remembered");
+            fs::write(&remembered, format!("{}\n", other.display()))?;
+            other
+        }
+        HomeSelection::Remembered => fixture.user_home.path().join(".gents"),
+        HomeSelection::Fallback => fixture.other.path().to_path_buf(),
+    };
+    place(&other, case.other.0, case.other.1)?;
+    let held = if case.key_present {
+        let paths = gents_desktop_core::client::DesktopPaths::from_root(
+            fixture.identities.path().join("cli"),
+        );
+        paths.ensure_root_dirs().await?;
+        gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths).await?;
+        Some(fs::read(fixture.key())?)
+    } else {
+        None
+    };
+
+    let output = tokio::process::Command::from(fixture.command(command, case.selection, &home)?)
+        .output()
+        .await?;
+
+    let stderr = stderr_of(&output);
+    anyhow::ensure!(
+        output.status.code() != Some(2),
+        "{command:?} did not parse:\n{stderr}"
+    );
+    let after = fs::read(fixture.key()).ok();
+    let refused = stderr.contains(&format!(
+        "This machine has no Gents client identity for {}",
+        home.display()
+    ));
+    Ok(match (held, after) {
+        (Some(before), Some(after)) if before == after && !refused => "load",
+        (None, Some(_)) => "create",
+        (None, None) if refused => "refuse",
+        _ => "neither",
+    })
+}
+
 #[tokio::test]
 async fn every_client_command_decides_its_identity_by_the_selected_home() -> Result<()> {
     use gents_lean_vocab::families::install_repair_client_commands as family;
-    for case in family::cases::<String, String>() {
-        let input = &case.input;
-        let selection = match input.selection.as_str() {
-            "flag" => HomeSelection::Flag,
-            "env" => HomeSelection::Env,
-            "remembered" => HomeSelection::Remembered,
-            "fallback" => HomeSelection::Fallback,
-            other => panic!("unknown home selection {other}"),
-        };
+    let cases = family::cases::<String, String>();
+    let identities = cases
+        .iter()
+        .map(|case| IdentityCase {
+            selection: match case.input.selection.as_str() {
+                "flag" => HomeSelection::Flag,
+                "env" => HomeSelection::Env,
+                "remembered" => HomeSelection::Remembered,
+                "fallback" => HomeSelection::Fallback,
+                other => panic!("unknown home selection {other}"),
+            },
+            key_present: case.input.key_present,
+            selected: (
+                case.input.selected.settings_present,
+                case.input.selected.pending,
+            ),
+            other: (case.input.other.settings_present, case.input.other.pending),
+        })
+        .collect::<Vec<_>>();
+    let mut observations = futures::stream::iter(identities.iter().flat_map(|identity| {
+        RESOLVING_COMMANDS
+            .iter()
+            .map(move |command| observe_identity(identity, command))
+    }))
+    .buffered(std::thread::available_parallelism()?.get());
+    for (case, identity) in cases.iter().zip(&identities) {
         for command in RESOLVING_COMMANDS {
-            let fixture = ClientIdentityFixture::new()?;
-            let home = fixture.selected_home(selection);
-            place(
-                &home,
-                input.selected.settings_present,
-                input.selected.pending,
-            )?;
-            let other = match selection {
-                HomeSelection::Flag | HomeSelection::Env => {
-                    let remembered = remembered_home_path(fixture.user_home.path());
-                    fs::create_dir_all(
-                        remembered
-                            .parent()
-                            .context("remembered file has a parent")?,
-                    )?;
-                    let other = fixture.user_home.path().join("remembered");
-                    fs::write(&remembered, format!("{}\n", other.display()))?;
-                    other
-                }
-                HomeSelection::Remembered => fixture.user_home.path().join(".gents"),
-                HomeSelection::Fallback => fixture.other.path().to_path_buf(),
-            };
-            place(&other, input.other.settings_present, input.other.pending)?;
-            let held = if input.key_present {
-                let paths = gents_desktop_core::client::DesktopPaths::from_root(
-                    fixture.identities.path().join("cli"),
-                );
-                paths.ensure_root_dirs().await?;
-                gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths).await?;
-                Some(fs::read(fixture.key())?)
-            } else {
-                None
-            };
-
-            let output = tokio::process::Command::from(fixture.command(command, selection, &home)?)
-                .output()
-                .await?;
-
-            let stderr = stderr_of(&output);
-            assert_ne!(output.status.code(), Some(2), "{command:?}:\n{stderr}");
-            let after = fs::read(fixture.key()).ok();
-            let refused = stderr.contains(&format!(
-                "This machine has no Gents client identity for {}",
-                home.display()
-            ));
-            let observed = match (held, after) {
-                (Some(before), Some(after)) if before == after && !refused => "load",
-                (None, Some(_)) => "create",
-                (None, None) if refused => "refuse",
-                _ => "neither",
-            };
-            eprintln!("gents {} with the home by {selection:?}", command.join(" "));
+            let observed = observations
+                .next()
+                .await
+                .context("every command of every case is observed")??;
+            eprintln!(
+                "gents {} with the home by {:?}",
+                command.join(" "),
+                identity.selection
+            );
             case.check(observed.to_owned());
         }
     }
@@ -517,14 +552,17 @@ const FIRST_RUN_GRAPHQL_ENV: &str = "GENTS_TEST_FIRST_RUN_GRAPHQL";
 fn first_run_step(user_home: &Path, home: &Path, step: &str, graphql: &str) -> Result<()> {
     let output = Command::new(std::env::current_exe()?)
         .args([
-            "cli_onboarding::desktop_first_run_in_fixture_home",
+            "cli_offline::cli_onboarding::desktop_first_run_in_fixture_home",
             "--exact",
             "--include-ignored",
             "--nocapture",
         ])
         .env("HOME", user_home)
         .env_remove("GENTS_HOME")
-        .env_remove(gents_desktop_core::client::DESKTOP_HOME_ENV)
+        .env(
+            gents_desktop_core::client::DESKTOP_HOME_ENV,
+            user_home.join("selected-desktop"),
+        )
         .env(FIRST_RUN_HOME_ENV, home)
         .env(FIRST_RUN_STEP_ENV, step)
         .env(FIRST_RUN_GRAPHQL_ENV, graphql)
@@ -556,7 +594,13 @@ async fn desktop_first_run_without_inference_sets_up_the_engineer() -> Result<()
         user_home,
         port,
         &["--home", home.to_str().context("home path")?],
-        &[],
+        &[(
+            gents_desktop_core::client::DESKTOP_HOME_ENV,
+            user_home
+                .join("selected-desktop")
+                .to_str()
+                .context("desktop root path")?,
+        )],
     )?;
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(
@@ -566,34 +610,89 @@ async fn desktop_first_run_without_inference_sets_up_the_engineer() -> Result<()
     )
     .await?;
     first_run_step(user_home, &home, "desktop", &graphql)?;
+    let desktop =
+        gents_desktop_core::client::DesktopPaths::from_root(user_home.join("selected-desktop"));
+    anyhow::ensure!(
+        desktop.cli_client().identity_key_path().is_file(),
+        "the selected desktop root has no administrator key"
+    );
+    let fallback = if cfg!(target_os = "macos") {
+        user_home.join("Library/Application Support/gents/desktop")
+    } else {
+        user_home.join(".local/share/gents/desktop")
+    };
+    anyhow::ensure!(
+        !fallback.exists(),
+        "first-run wrote an unselected desktop root"
+    );
     Ok(())
 }
 
+async fn provision_as_the_desktop(home: PathBuf, desktop_root: PathBuf) -> Result<()> {
+    let root = home.with_file_name("root");
+    fs::create_dir_all(&root)?;
+    gents_server::server_host::ensure_standard_home(
+        &gents_store::test_support::runtime_handle(),
+        gents_server::server_host::ProvisionOptions {
+            home,
+            desktop_root,
+            node_name: "Forge".to_owned(),
+            tool_ceiling: gents_service::args::ToolCeilingArg::Readwrite,
+            tool_root: Some(fs::canonicalize(root)?),
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
+            default_packs: true,
+        },
+    )
+    .await
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "run by desktop_first_run_without_inference_sets_up_the_engineer in the fixture's HOME"]
+async fn provisioning_refuses_a_desktop_root_the_process_does_not_resolve() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let user_home = tempdir.path();
+    first_run_step(user_home, &user_home.join(".gents"), "foreign-root", "")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "run by the first-run tests in the fixture's HOME"]
 async fn desktop_first_run_in_fixture_home() -> Result<()> {
     let home = PathBuf::from(std::env::var_os(FIRST_RUN_HOME_ENV).context("fixture home")?);
     let step = std::env::var(FIRST_RUN_STEP_ENV).context("fixture step")?;
+    let resolved = gents_desktop_core::client::DesktopPaths::discover()?;
     if step == "provision" {
-        let root = home.with_file_name("root");
-        fs::create_dir_all(&root)?;
-        return gents_server::server_host::ensure_standard_home(
-            &gents_store::test_support::runtime_handle(),
-            gents_server::server_host::ProvisionOptions {
-                home,
-                node_name: "Forge".to_owned(),
-                tool_ceiling: gents_service::args::ToolCeilingArg::Readwrite,
-                tool_root: Some(fs::canonicalize(root)?),
-                store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
-                default_packs: true,
-            },
-        )
-        .await;
+        return provision_as_the_desktop(home, resolved.root().to_path_buf()).await;
+    }
+    if step == "foreign-root" {
+        let foreign = home.with_file_name("another-desktop");
+        let refusal = provision_as_the_desktop(home.clone(), foreign.clone())
+            .await
+            .expect_err("a desktop root this process does not resolve is refused");
+        let refusal = format!("{refusal:#}");
+        anyhow::ensure!(
+            refusal.contains(gents_desktop_core::client::DESKTOP_HOME_ENV)
+                && refusal.contains(&foreign.display().to_string()),
+            "the refusal does not name the root to start with: {refusal}"
+        );
+        anyhow::ensure!(
+            !resolved.cli_client().root().exists() && !foreign.exists(),
+            "a refused provisioning wrote a client key"
+        );
+        anyhow::ensure!(
+            gents_service::home_state::read_init_config(&home)?.is_none(),
+            "a refused provisioning initialized the home"
+        );
+        return Ok(());
     }
     let graphql = std::env::var(FIRST_RUN_GRAPHQL_ENV).context("fixture graphql")?;
     let stored = gents_service::home_state::read_init_config(&home)?.context("initialized home")?;
     let owner = stored.node_did.as_str();
     let user = gents_service::home_state::client_identity_for(&home).await?;
+    let desktop_user =
+        gents_desktop_core::client::PrincipalIdentity::load_existing(&resolved.cli_client())?;
+    anyhow::ensure!(
+        desktop_user.did() == user.did(),
+        "the status signer differs from the provisioned administrator"
+    );
     let access = gents_store::config_client::ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(graphql, user.did())
             .with_client_signing_capability(

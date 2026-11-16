@@ -1,5 +1,3 @@
-#![cfg(any(unix, windows))]
-
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -8,6 +6,7 @@ use std::time::Duration;
 use anyhow::{ensure, Context, Result};
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use gents_store::identity::NodeIdentity;
+use gents_store::test_support::bounded_process::BoundedProcess;
 use serde_json::{json, Value};
 #[cfg(unix)]
 use tokio::process::Child;
@@ -61,8 +60,6 @@ mod editor_workspace;
 mod fake_llm;
 #[path = "support/goal_delivery.rs"]
 mod goal_delivery;
-#[path = "support/initialization.rs"]
-mod initialization;
 #[path = "support/live_runtime.rs"]
 mod live_runtime;
 #[path = "support/passive_settings.rs"]
@@ -75,7 +72,7 @@ mod ports;
 mod retained_schema_upgrade;
 #[path = "support/runtime_replacement.rs"]
 mod runtime_replacement;
-mod support;
+use crate::support;
 
 use fake_llm::{ChatAction, FakeLlm};
 use support::Attachment;
@@ -222,7 +219,6 @@ async fn managed_runtime_replacement_preserves_running_input_enrollment_and_tran
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "drives a local model; run through `make live-client`"]
 async fn enrolled_client_resumes_a_durable_goal_and_observes_completion() -> Result<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::Goal)
@@ -472,9 +468,6 @@ async fn installed_editor_refreshes_models_and_reconnects_without_the_runtime_ke
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if matches!(journey, Journey::Conversation) {
         return live_runtime::exercise(root, false).await;
-    }
-    if matches!(journey, Journey::Goal) {
-        return live_runtime::exercise(root, true).await;
     }
     if matches!(journey, Journey::RuntimeReplacement) {
         return live_runtime::exercise_replacement(root).await;
@@ -767,9 +760,17 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if matches!(journey, Journey::EditorQuestions) {
         init.args(["--engineer", "--no-default-packs"]);
     }
-    let output = initialization::Initialization::spawn(&mut init, root)?
+    let capture = root.to_owned();
+    let output = tokio::task::spawn_blocking(move || {
+        BoundedProcess::spawn(
+            init.as_std_mut(),
+            &capture,
+            "init",
+            "fixture initialization",
+        )?
         .wait(Duration::from_secs(30))
-        .await?;
+    })
+    .await??;
     let init_stages = std::fs::read_to_string(root.join("init.stderr"))?;
     ensure!(
         init_stages.contains(r#""embedded_node_drained""#),

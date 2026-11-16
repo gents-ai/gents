@@ -22,6 +22,8 @@ mod intake;
 mod management;
 pub mod mutation;
 mod position;
+#[cfg(test)]
+pub(crate) use position::PositionError;
 mod submission;
 
 pub use atomic_inputs::background_completion_gate;
@@ -30,8 +32,6 @@ pub use atomic_inputs::persist_background_completion_with_message_canonical_with
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use atomic_inputs::persist_background_completion_with_message_waking_with_access;
 use atomic_inputs::steering_transaction_attempt;
-#[cfg(test)]
-use atomic_inputs::transaction_created_doc_id;
 pub use atomic_inputs::ToolNotificationPublication;
 pub use coalescing::parent_agent_did;
 pub use coalescing::supersede_pending_mutation;
@@ -80,12 +80,12 @@ pub use management::{
 #[cfg(test)]
 use management::{replace_pending_user_messages, PendingEditActor};
 pub use management::{PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt};
+use mutation::build_session_request_at_hop_with_signer;
 #[cfg(test)]
 use mutation::session_request_create_mutation;
-use mutation::session_request_create_mutation_at_hop_with_signer;
 use mutation::SessionRequestFields;
+pub(crate) use position::effective_slots;
 pub use position::validate_position;
-pub(crate) use position::{effective_slots, InvalidQueuePosition};
 pub use submission::{prepare_user_message_input, queue_user_message_input, UserMessageInputError};
 
 #[derive(Debug)]

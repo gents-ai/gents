@@ -19,6 +19,11 @@ impl BackgroundSlotRefusal {
             Self::RequestStopped => None,
         }
     }
+
+    /// The slot refusal `error` was raised as, possibly under context.
+    pub(crate) fn in_failure(error: &anyhow::Error) -> Option<&Self> {
+        error.downcast_ref::<Self>()
+    }
 }
 
 #[derive(Debug, Deserialize)]

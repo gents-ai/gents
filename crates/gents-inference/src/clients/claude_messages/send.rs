@@ -4,21 +4,20 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Bytes;
-use rapidhash::RapidHashSet;
-use rig::completion::{CompletionError, CompletionRequest};
-use rig::http_client::{self, HeaderValue, HttpClientExt, Request};
-use rig::streaming::RawStreamingChoice;
-
 use super::aws::sign_request;
 use super::bedrock;
 use super::error::{body_prefix, non_success_error, read_body_prefix};
 use super::route::{ClaudeRoute, Credential};
 use super::sse::{self, stream_sse_body_observed, MessagesSseState};
-use super::transport::{capturing, url_parts, ClaudeHttpClient};
+use super::transport::{send_capturing, url_parts, ClaudeHttpClient};
 use super::MESSAGES_URI;
 use crate::auth::credential::BearerSource;
 use crate::clients::claude_subscription::ClaudeStreamResponse;
+use crate::llm::rig_compat::completion::{CompletionError, CompletionRequest, RawStreamingChoice};
+use crate::llm::rig_compat::http::{self as http_client, Request};
+use bytes::Bytes;
+use rapidhash::RapidHashSet;
+use reqwest::header::HeaderValue;
 
 use gents_claude::bedrock as bedrock_rules;
 use gents_claude::headers::{self, AgentHeaders, Auth, HeaderContext};
@@ -368,9 +367,13 @@ where
     let mut replay = Replay::default();
     let response = loop {
         let http_request = render_request(route, &plan, account, &token, &uri, &body)?;
-        let client = capturing(fixture.clone(), ClaudeHttpClient::new(usage.clone()));
+        let send = send_capturing(
+            fixture.clone(),
+            ClaudeHttpClient::new(usage.clone()),
+            http_request,
+        );
         replay.sent();
-        let failure = match client.send_streaming(http_request).await {
+        let failure = match send.await {
             Ok(response) => break response,
             Err(http_client::Error::InvalidStatusCodeWithMessage(status, message)) => {
                 let (text, marker) = gents_loop::provider_limit::split_annotated_body(&message);

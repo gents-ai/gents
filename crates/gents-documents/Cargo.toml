@@ -46,5 +46,8 @@ reqwest = { workspace = true, features = ["stream"] }
 tempfile = "3"
 
 [dev-dependencies]
+gents-claude = { workspace = true, features = ["transport"] }
+gents-documents = { path = ".", features = ["test-fixtures", "typescript"] }
+gents-workspace-hack = { workspace = true }
 gents-store = { workspace = true, features = ["test-fixtures"] }
 gents-lean-vocab.workspace = true

@@ -19,13 +19,7 @@ async fn fixture(
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
     let request = format!("native-transcript-{name}");
-    bind_interruptible_request(
-        &hook,
-        &request,
-        &session,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, &request, &session).await;
     (db, hook, session, request)
 }
 
@@ -83,8 +77,14 @@ async fn accept_turn(
 async fn dispatch(hook: &DefraSessionHook, call_id: usize, provider_id: &str) {
     let internal = format!("internal-{call_id}");
     assert!(matches!(
-        hook.on_tool_call("read", Some(provider_id.into()), &internal, ARGS)
-            .await,
+        hook.on_tool_call(
+            "read",
+            Some(provider_id.into()),
+            &internal,
+            ARGS,
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
 }

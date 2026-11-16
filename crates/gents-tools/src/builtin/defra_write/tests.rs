@@ -137,6 +137,7 @@ async fn writes_one_bounded_doc() {
             "drift_sig": "abc", "summary": "stale host doc", "status": "open"
         }))
         .unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -180,6 +181,7 @@ async fn writes_native_measurements_without_string_coercion() {
     Tool::call(
         &tool,
         serde_json::from_value(json!({"disk":86,"healthy":false})).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -197,7 +199,8 @@ async fn rejects_missing_required_and_undeclared_fields() {
     let tool = BoundedWriteTool::new(ConfigAccess::local(node), decl());
     assert!(Tool::call(
         &tool,
-        serde_json::from_value(json!({ "summary": "x" })).unwrap()
+        serde_json::from_value(json!({ "summary": "x" })).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .is_err());
@@ -206,7 +209,8 @@ async fn rejects_missing_required_and_undeclared_fields() {
         serde_json::from_value(json!({
             "drift_sig": "a", "summary": "b", "evil": "1"
         }))
-        .unwrap()
+        .unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .is_err());
@@ -224,6 +228,7 @@ async fn empty_field_declaration_reports_the_surface_contract_without_writing() 
     let error = Tool::call(
         &tool,
         serde_json::from_value(json!({"summary":"queued"})).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap_err()
@@ -279,6 +284,7 @@ async fn runtime_backstop_rejects_invalid_graphql_identifiers() {
         let result = Tool::call(
             &BoundedWriteTool::new(ConfigAccess::local(Arc::clone(&node)), declaration),
             serde_json::from_value(json!({ "drift_sig": "a", "summary": "b" })).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await;
         assert!(result.is_err(), "runtime must reject invalid identifiers");
@@ -301,11 +307,13 @@ async fn rejects_decl_with_non_identifier_field_name() {
         output_obligation: None,
     };
     let tool = BoundedWriteTool::new(ConfigAccess::local(node), bad);
-    assert!(
-        Tool::call(&tool, serde_json::from_value(json!({})).unwrap())
-            .await
-            .is_err()
-    );
+    assert!(Tool::call(
+        &tool,
+        serde_json::from_value(json!({})).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient()
+    )
+    .await
+    .is_err());
 }
 
 #[tokio::test]
@@ -373,6 +381,7 @@ async fn bounded_writes_follow_the_datastore_write_model() {
             .collect();
         let result = crate::runtime_context::scope_request_tool_execution_with_trigger_context(
             None,
+            None,
             tokio_util::sync::CancellationToken::new(),
             None,
             None,
@@ -380,7 +389,11 @@ async fn bounded_writes_follow_the_datastore_write_model() {
             input.correlation.then(|| CORRELATION.to_string()),
             captured,
             false,
-            Tool::call(&tool, super::BoundedWriteParams(arguments)),
+            Tool::call(
+                &tool,
+                super::BoundedWriteParams(arguments),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            ),
         )
         .await;
         let selection = format!(
@@ -520,17 +533,25 @@ async fn native_schema_and_receipts_preserve_lists_json_and_null() {
         json!(["boolean", "null"])
     );
     let args = json!({"count":86,"flag":false,"score":0.5,"labels":["quoted\"\nlabel"],"data":{"measured":true,"readings":[1,2]}});
-    let receipt = Tool::call(&tool, serde_json::from_value(args.clone()).unwrap())
-        .await
-        .unwrap();
+    let receipt = Tool::call(
+        &tool,
+        serde_json::from_value(args.clone()).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .unwrap();
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     for (field, value) in args.as_object().unwrap() {
         assert_eq!(&receipt["document"][field], value, "{field}");
     }
     let args = json!({"count":null,"flag":null,"score":null,"labels":[],"data":null});
-    let receipt = Tool::call(&tool, serde_json::from_value(args).unwrap())
-        .await
-        .unwrap();
+    let receipt = Tool::call(
+        &tool,
+        serde_json::from_value(args).unwrap(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .unwrap();
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     assert!(receipt["document"]["count"].is_null());
     assert!(receipt["document"]["labels"].is_null());
@@ -678,6 +699,7 @@ async fn count_carriers_store_as_the_count_carrier_model() {
         Tool::call(
             &tool,
             serde_json::from_value(json!({"count": input})).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .unwrap_or_else(|error| panic!("{schema}: {error:#}"));
@@ -719,6 +741,7 @@ async fn count_carriers_store_as_the_count_carrier_model() {
                 Tool::call(
                     &tool,
                     serde_json::from_value(json!({"count":"10"})).unwrap(),
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
                 )
                 .await
                 .is_ok(),

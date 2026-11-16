@@ -978,6 +978,7 @@ async fn a_reader_granted_only_the_fork_reads_its_whole_retained_transcript() {
 #[tokio::test]
 async fn edit_fork_reuses_canonical_request_reads_for_the_retained_prefix() {
     use gents_store::identity::NodeIdentity as _;
+    const RETAINED: usize = 200;
     const SOURCE: &str = "fork-shared-source";
     const CHILD: &str = "fork-shared-child";
     let (db, user, client, binding) = fork_reader_node("fork-shared-reads").await;
@@ -993,16 +994,19 @@ async fn edit_fork_reuses_canonical_request_reads_for_the_retained_prefix() {
     .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let mut keys = Vec::new();
-    for sequence in 1..=21 {
+    let mut headers = Vec::new();
+    for sequence in 1..=RETAINED + 1 {
         let name = format!("message-{sequence}");
         keys.push(gents_protocol::output::rows::authored_message_key(
             &lifecycle.request().doc_id,
             &name,
         ));
-        writer
-            .publish_authored_message(&lifecycle, &name, &Message::user(&name))
-            .await
-            .unwrap();
+        headers.push(
+            writer
+                .publish_authored_message(&lifecycle, &name, &Message::user(&name))
+                .await
+                .unwrap(),
+        );
     }
     lifecycle
         .terminalize_owned(
@@ -1014,13 +1018,13 @@ async fn edit_fork_reuses_canonical_request_reads_for_the_retained_prefix() {
         .unwrap();
     let params = ForkParams {
         source_session_id: SOURCE,
-        boundary: ForkBoundary::BeforeMessageKey(&keys[20]),
+        boundary: ForkBoundary::BeforeMessageKey(&keys[RETAINED]),
         caller_node_did: &node_did,
         caller_requester_did: Some(user.did()),
         target_agent_did: None,
     };
     let (result, scans) =
-        count_request_output_scans(fork_edit_on(&client, params, CHILD, user.did())).await;
+        count_request_output_scans(fork_edit_on(&client, params.clone(), CHILD, user.did())).await;
     assert_eq!(result.unwrap(), CHILD);
     assert_eq!(
         scans, 1,
@@ -1031,7 +1035,90 @@ async fn edit_fork_reuses_canonical_request_reads_for_the_retained_prefix() {
             .await
             .unwrap()
             .len(),
-        20
+        RETAINED
+    );
+    let committed = session_rewrite_rows(&client).await;
+    assert_eq!(
+        fork_edit_on(&client, params.clone(), CHILD, user.did())
+            .await
+            .unwrap(),
+        CHILD
+    );
+    assert_eq!(session_rewrite_rows(&client).await, committed);
+
+    let last = escape_graphql_string(&headers[RETAINED - 1]);
+    let observed = client
+        .execute(&format!(
+            r#"{{AgentMessage(filter:{{_docID:{{_eq:"{last}"}}}}){{{}}}}}"#,
+            gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
+        ))
+        .await
+        .unwrap();
+    let header = gents_protocol::output::rows::decode_transcript_message_row(
+        &observed["data"]["AgentMessage"][0],
+    )
+    .unwrap();
+    let close = escape_graphql_string(&header.message.payload_references()[0].close_doc_id);
+    let agent =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
+    gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        identity::Did::new(&node_did).unwrap(),
+    )
+    .grant_node_permission(
+        &identity::Did::new(agent.did()).unwrap(),
+        gents_store::config_client::NodePermission::DocumentDelete,
+    )
+    .await
+    .unwrap();
+    let source_owner = gents_store::config_client::ConfigAccess::local_managed_agent(
+        db.node.clone(),
+        identity::Did::new(agent.did()).unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let deleted = source_owner
+        .write(
+            "test.remove_last_fork_dependency",
+            &format!(r#"mutation{{delete_AgentOutputSegment(docID:"{close}"){{_docID}}}}"#),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        deleted["data"]["delete_AgentOutputSegment"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let damaged = session_rewrite_rows(&client).await;
+    assert!(
+        fork_edit_on(&client, params.clone(), "incomplete-child", user.did())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        session_rewrite_rows(&client).await,
+        damaged,
+        "an invalid dependency at the end of a long prefix must publish no partial child"
+    );
+    assert_eq!(
+        fork_edit_on(&client, params, CHILD, user.did())
+            .await
+            .unwrap(),
+        CHILD
+    );
+    assert_eq!(
+        session_rewrite_rows(&client).await,
+        damaged,
+        "a retained destination must not re-copy a source whose dependencies later disappeared"
+    );
+    assert_eq!(
+        history_on(&client, CHILD, &node_did, Some(user.did()), None)
+            .await
+            .unwrap()
+            .len(),
+        RETAINED
     );
     db.node.shutdown().await.expect("shut down test node");
 }
@@ -1133,6 +1220,123 @@ async fn fork_rolls_back_at_every_mutation_position() {
     assert_eq!(child_entries[0].files_read, vec!["/tmp/a.rs"]);
     assert_eq!(child_entries[1].files_read, vec!["/tmp/a.rs", "/tmp/b.rs"]);
     node.shutdown().await.expect("shut down test node");
+}
+
+/// Another linker marking the child between the signed marker and its commit
+/// aborts that commit with DefraDB's own conflict; the rebuilt marker re-reads,
+/// grants again and accepts the child as linked (signed-conflict rebuild).
+#[tokio::test]
+async fn fork_child_marker_rebuilds_after_a_concurrent_child_write() {
+    use gents_store::identity::NodeIdentity;
+    const SOURCE: &str = "fork-marker-race-source";
+    let (db, user, client, binding) = fork_reader_node("fork-marker-race").await;
+    let node_did = db.node_identity.did();
+    let agent_did = binding.agent_did.as_str();
+    let messages = (1..=3)
+        .map(|sequence| format!("turn {sequence}"))
+        .collect::<Vec<_>>();
+    publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
+    let publication = super::fork::commit_fork(
+        &client,
+        ForkParams {
+            source_session_id: SOURCE,
+            boundary: ForkBoundary::UserTurn(3),
+            caller_node_did: node_did,
+            caller_requester_did: Some(user.did()),
+            target_agent_did: None,
+        },
+    )
+    .await
+    .unwrap();
+    let child = publication.outcome.session_id.clone();
+    let child_doc = session_doc_id(&client, &child).await;
+    let agent_doc = client
+        .transact_readonly("test.fork_marker_race.agent", |txn| {
+            Box::pin(async move {
+                let record = gents_documents::read_desired_state_record_in_txn(
+                    txn,
+                    gents_store::collection::Collection::Agent,
+                    node_did,
+                    agent_did,
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(record)
+            })
+        })
+        .await
+        .unwrap()
+        .expect("the fork Agent is visible")
+        .0;
+    super::sessions::grant_created_session_relationships(
+        &client, &child_doc, &agent_doc, agent_did,
+    )
+    .await
+    .unwrap();
+    let children = format!(
+        r#"{{ AgentOutputSegment(filter: {{session_id: {{_eq: "{session}"}}}}) {{ _docID parent_linked }} AgentMessage(filter: {{session_id: {{_eq: "{session}"}}}}) {{ _docID parent_linked }} }}"#,
+        session = escape_graphql_string(&child)
+    );
+    let unlinked = client.execute(&children).await.unwrap();
+    assert!(
+        !unlinked["data"]["AgentMessage"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "the fork copied messages"
+    );
+
+    let first = publication
+        .intent
+        .segment_doc_ids
+        .last()
+        .cloned()
+        .expect("the fork copied output segments");
+    let rewrite = async {
+        let doc = escape_graphql_string(&first);
+        let mutation = format!(
+            r#"mutation($input: AgentOutputSegmentMutationInputArg!) {{ update_AgentOutputSegment(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: $input) {{ _docID }} }}"#
+        );
+        client
+            .transact_write("test.fork_marker_race.other_linker", |txn| {
+                let mutation = &mutation;
+                Box::pin(async move {
+                    txn.execute_client_signed_update(
+                        mutation,
+                        &serde_json::json!({"input": {"parent_linked": true}}),
+                        gents_protocol::schemas::AGENT_OUTPUT_SEGMENT,
+                    )
+                    .await
+                })
+            })
+            .await
+            .expect("another linker marks the child before the marker commits");
+    };
+    let (published, paused) =
+        gents_store::config_client::ConfigApplyTxn::with_concurrent_write_before_commit(
+            super::fork::publish_fork_relationships(&client, publication.intent),
+            rewrite,
+        )
+        .await;
+    assert!(
+        paused,
+        "the first child marker paused after its signed update"
+    );
+    published.unwrap();
+    let linked = client.execute(&children).await.unwrap();
+    for collection in ["AgentOutputSegment", "AgentMessage"] {
+        assert_eq!(
+            linked["data"][collection].as_array().unwrap().len(),
+            unlinked["data"][collection].as_array().unwrap().len()
+        );
+        for row in linked["data"][collection].as_array().unwrap() {
+            assert_eq!(
+                row["parent_linked"], true,
+                "{collection} {} is linked to the fork",
+                row["_docID"]
+            );
+        }
+    }
+    db.node.shutdown().await.expect("shut down test node");
 }
 
 #[tokio::test]
@@ -1964,5 +2168,120 @@ async fn unsigned_starter_cannot_populate_the_index() {
         .unwrap()
         .started
         .is_empty());
+    db.node.shutdown().await.expect("shut down test node");
+}
+
+/// A write of the source session (its observation refresh, here its tags)
+/// landing between the fork's first signed create and its commit aborts that
+/// commit with DefraDB's own conflict. `session.fork` and `session.edit_fork`
+/// re-read the source and copy it again under the same child identity
+/// (signed-conflict rebuild), so each creates its child exactly once.
+#[tokio::test]
+async fn forks_rebuild_after_a_concurrent_source_session_write() {
+    use gents_store::config_client::ConfigApplyTxn;
+    use gents_store::identity::NodeIdentity;
+    const SOURCE: &str = "fork-source-race";
+    const EDIT_CHILD: &str = "fork-source-race-edit";
+    let (db, user, client, binding) = fork_reader_node("fork-source-race").await;
+    let node_did = db.node_identity.did();
+    let messages = (1..=3)
+        .map(|sequence| format!("turn {sequence}"))
+        .collect::<Vec<_>>();
+    publish_signed_history(&db, &user, &client, &binding, SOURCE, &messages).await;
+    let source_doc = session_doc_id(&client, SOURCE).await;
+    let refresh = |tag: &'static str| {
+        let (client, source_doc) = (&client, &source_doc);
+        async move {
+            client
+                .transact_write("test.fork_source_race.refresh", |txn| {
+                    Box::pin(async move {
+                        txn.execute_client_signed_update(
+                            "mutation($id: ID!, $input: AgentSessionMutationInputArg!) { update_AgentSession(filter: { _docID: { _eq: $id } }, input: $input) { _docID } }",
+                            &serde_json::json!({"id": source_doc, "input": {"tags": [tag]}}),
+                            gents_protocol::schemas::AGENT_SESSION,
+                        )
+                        .await
+                    })
+                })
+                .await
+                .expect("the source session is refreshed between the fork's read and commit");
+        }
+    };
+    let children = |session: String| {
+        let client = &client;
+        async move {
+            let session = escape_graphql_string(&session);
+            let response = client
+                .execute(&format!(
+                    r#"{{ AgentSession(filter: {{session_id: {{_eq: "{session}"}}}}) {{ _docID }} AgentMessage(filter: {{session_id: {{_eq: "{session}"}}}}) {{ _docID }} }}"#
+                ))
+                .await
+                .unwrap();
+            (
+                response["data"]["AgentSession"].as_array().unwrap().len(),
+                response["data"]["AgentMessage"].as_array().unwrap().len(),
+            )
+        }
+    };
+
+    let (forked, paused) = ConfigApplyTxn::with_concurrent_write_before_commit(
+        super::fork::commit_fork(
+            &client,
+            ForkParams {
+                source_session_id: SOURCE,
+                boundary: ForkBoundary::UserTurn(3),
+                caller_node_did: node_did,
+                caller_requester_did: Some(user.did()),
+                target_agent_did: None,
+            },
+        ),
+        refresh("fork-race"),
+    )
+    .await;
+    assert!(paused, "the fork paused after its first signed create");
+    let forked = forked.expect("the fork settles despite the concurrent source write");
+    assert_eq!(
+        children(forked.outcome.session_id.clone()).await,
+        (1, forked.outcome.copied_messages as usize),
+        "the rebuilt fork created its child once"
+    );
+
+    let keys = client
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{session_id: {{_eq: "{}"}}, role: {{_eq: "user"}}}}, order: {{sequence: ASC}}) {{ message_key }} }}"#,
+            escape_graphql_string(SOURCE)
+        ))
+        .await
+        .unwrap();
+    let anchor = keys["data"]["AgentMessage"][2]["message_key"]
+        .as_str()
+        .expect("the source's third user turn")
+        .to_owned();
+    let (edited, paused) = ConfigApplyTxn::with_concurrent_write_before_commit(
+        fork_edit_on(
+            &client,
+            ForkParams {
+                source_session_id: SOURCE,
+                boundary: ForkBoundary::BeforeMessageKey(&anchor),
+                caller_node_did: node_did,
+                caller_requester_did: Some(user.did()),
+                target_agent_did: None,
+            },
+            EDIT_CHILD,
+            user.did(),
+        ),
+        refresh("edit-race"),
+    )
+    .await;
+    assert!(paused, "the edit fork paused after its first signed create");
+    assert_eq!(
+        edited.expect("the edit fork settles despite the concurrent source write"),
+        EDIT_CHILD
+    );
+    assert_eq!(
+        children(EDIT_CHILD.to_owned()).await.0,
+        1,
+        "the rebuilt edit fork created its child once"
+    );
     db.node.shutdown().await.expect("shut down test node");
 }

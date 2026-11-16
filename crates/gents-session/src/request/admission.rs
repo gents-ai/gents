@@ -1067,12 +1067,9 @@ async fn verify_request_input(
                 },
             )
             .await
-            .map_err(|error| {
-                if error.is::<crate::request::lifecycle::queue::InvalidQueuePosition>() {
-                    AgentRequestAdmissionError::denied(error)
-                } else {
-                    AgentRequestAdmissionError::unavailable(error)
-                }
+            .map_err(|error| match error.refusal() {
+                Ok(invalid) => AgentRequestAdmissionError::denied(invalid),
+                Err(other) => AgentRequestAdmissionError::unavailable(other),
             })?;
         }
     }
@@ -1641,9 +1638,6 @@ mod captured_context_tests;
 
 #[cfg(test)]
 mod relationship_readiness_tests;
-
-#[cfg(test)]
-mod unattended_tests;
 
 #[cfg(test)]
 mod projection_conformance;

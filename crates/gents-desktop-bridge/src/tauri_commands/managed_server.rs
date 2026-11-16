@@ -117,6 +117,13 @@ where
 {
     ensure_allowed(&state)?;
     let lifecycle = state.managed_server_lifecycle.lock().await;
+    let starting = state.managed_server.lock().await.starting;
+    if matches!(
+        start_wait::start_disposition(starting),
+        start_wait::StartDisposition::Observe
+    ) {
+        return managed_server_status_for(&app, &state).await;
+    }
     start_managed_server(&app, request, &state, lifecycle).await
 }
 
@@ -539,6 +546,7 @@ where
     let was_enabled = service_status.enabled;
     let provision = gents_server::server_host::ProvisionOptions {
         home: node_home.clone(),
+        desktop_root: state.policy.desktop_paths.root().to_path_buf(),
         node_name: request.node_name.clone(),
         tool_ceiling: runtime_tool_ceiling(tool_ceiling),
         tool_root: authority.tool_root.clone(),
@@ -623,7 +631,7 @@ where
         Ok((ready, lifecycle)) => match validate_ready_runtime(&ready, &authority, &node_home) {
             Ok(()) => Ok(lifecycle),
             Err(error) => Err(LaunchFailure {
-                error,
+                error: error.into(),
                 attempted_start: true,
                 preserve_runtime: false,
                 lifecycle: Some(lifecycle),

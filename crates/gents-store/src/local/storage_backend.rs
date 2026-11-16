@@ -2,7 +2,7 @@ use gents_protocol::operations::install_repair::{IncompatibleStore, Incompatible
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use gents_protocol::error_chain::{find_map_source, find_source};
+use gents_protocol::error_chain::{as_owner, find_map_source};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageBackendError {
@@ -165,7 +165,7 @@ pub fn incompatible_store(
         });
     }
     if matches!(
-        find_source::<super::backend_protection::BackendProtectionError>(error),
+        super::backend_protection::BackendProtectionError::in_chain(error),
         Some(super::backend_protection::BackendProtectionError::MissingProvenance)
     ) {
         return Some(IncompatibleStore {
@@ -173,7 +173,7 @@ pub fn incompatible_store(
             data_path: data_path.to_path_buf(),
         });
     }
-    find_source::<gents_migration::Error>(error)
+    gents_migration::Error::in_chain(error)
         .and_then(|cause| {
             if cause.is_unknown_lineage() {
                 Some(IncompatibleStoreKind::UnknownLineage)
@@ -193,47 +193,27 @@ pub fn incompatible_store(
 
 /// Each owner is asked by its own type too, since transparent wrappers
 /// forward `source()` past the sentinel they carry.
-fn find_incompatible<'a>(
+pub(crate) fn find_incompatible<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a IncompatibleStore> {
     find_map_source(error, |cause| {
-        cause
-            .downcast_ref::<IncompatibleStore>()
-            .or_else(|| cause.downcast_ref::<StorageBackendError>()?.incompatible())
+        IncompatibleStore::of(cause)
+            .or_else(|| as_owner::<StorageBackendError>(cause)?.incompatible())
+            .or_else(|| as_owner::<crate::local::store_key::StoreKeyError>(cause)?.incompatible())
             .or_else(|| {
-                cause
-                    .downcast_ref::<crate::local::store_key::StoreKeyError>()?
-                    .incompatible()
-            })
-            .or_else(|| {
-                cause
-                    .downcast_ref::<crate::local::store_key::upgrade::UpgradeError>()?
-                    .incompatible()
+                as_owner::<crate::local::store_key::upgrade::UpgradeError>(cause)?.incompatible()
             })
     })
 }
 
-fn find_insecure_key<'a>(
+pub(crate) fn find_insecure_key<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a crate::identity::InsecureKeyPermissions> {
     find_map_source(error, |cause| {
-        cause
-            .downcast_ref::<crate::identity::InsecureKeyPermissions>()
-            .or_else(|| {
-                cause
-                    .downcast_ref::<crate::identity::IdentityError>()?
-                    .insecure_key()
-            })
-            .or_else(|| {
-                cause
-                    .downcast_ref::<crate::local::store_key::StoreKeyError>()?
-                    .insecure_key()
-            })
-            .or_else(|| {
-                cause
-                    .downcast_ref::<crate::config_client::ConfigClientError>()?
-                    .insecure_key()
-            })
+        as_owner::<crate::identity::InsecureKeyPermissions>(cause)
+            .or_else(|| as_owner::<crate::identity::IdentityError>(cause)?.insecure_key())
+            .or_else(|| as_owner::<crate::local::store_key::StoreKeyError>(cause)?.insecure_key())
+            .or_else(|| crate::config_client::access_owner(cause)?.insecure_key())
     })
 }
 

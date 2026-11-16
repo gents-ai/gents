@@ -86,4 +86,22 @@ end Event
 def effectiveAvailable (intent : Bool) (m : Model) : Bool :=
   intent && !(m.state.blocksRouting)
 
+/-- An enabled backend without a completed probe holds requests without granting
+provider admission. A local health veto prevents indefinite first-probe waiting. -/
+def awaitingFirstProbe (enabled : Bool) (probeStatus : String)
+    (measuredUnhealthy : Bool) : Bool :=
+  enabled && probeStatus == HealthState.unknown.toDefraDB && !measuredUnhealthy
+
+/-- Startup failure remains terminal even while configuration awaits its first probe. -/
+def awaitProbeRequest (awaitingProbe startupFailed : Bool) : Bool :=
+  awaitingProbe && !startupFailed
+
+theorem disabled_never_awaits (status : String) (unhealthy : Bool) :
+    awaitingFirstProbe false status unhealthy = false := by
+  simp [awaitingFirstProbe]
+
+theorem startup_failure_never_awaits (waiting : Bool) :
+    awaitProbeRequest waiting true = false := by
+  simp [awaitProbeRequest]
+
 end Proofs.BackendHealth

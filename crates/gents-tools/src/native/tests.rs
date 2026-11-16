@@ -172,6 +172,7 @@ async fn workspace_write_bash_names_its_process_limits() {
         let output = gents_loop::tool::Tool::call(
             &tool,
             serde_json::from_value(serde_json::json!({"command":"ps -p 1 -o pid="})).unwrap(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await;
         let text = match output {
@@ -382,7 +383,16 @@ fn temp_root(name: &str) -> PathBuf {
 fn ensure_native_fs_runner_for_test() {
     static BUILT: OnceLock<()> = OnceLock::new();
     BUILT.get_or_init(|| {
-        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        // A gate shard runs archived binaries with no Cargo build state; the
+        // archive carries gents-fs-runner beside the test binaries.
+        if std::env::var_os("GENTS_TEST_BINARIES_PREBUILT").is_some() {
+            assert!(
+                native_fs_runner_binary_for_current_test().is_some(),
+                "GENTS_TEST_BINARIES_PREBUILT is set but no gents-fs-runner is adjacent to the test binary"
+            );
+            return;
+        }
+        let repo_root = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(2)
             .expect("gents manifest should be under workspace crates/")
@@ -523,12 +533,14 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
             let _entered = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_ENTERED", &control_entered);
             let _gate = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_GATE", &control_gate);
             let _released = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_RELEASED", &control_released);
+            let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
             let call = crate::runtime_context::scope_request_tool_execution(
                 None,
                 tokio_util::sync::CancellationToken::new(),
                 crate::runtime_context::call_tool_managed(
                     blocking_tool.as_ref(),
                     blocking_args.to_string(),
+                    &envelope,
                 ),
             );
             let open_gate = async {
@@ -576,6 +588,7 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
                     crate::runtime_context::call_tool_managed(
                         blocking_tool.as_ref(),
                         blocking_args.to_string(),
+                        &gents_loop::tool::ToolCallEnvelope::ambient(),
                     ),
                 ),
             )
@@ -600,6 +613,7 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
             crate::runtime_context::call_tool_managed(
                 second_tool.as_ref(),
                 r#"{"path":"second.txt"}"#.to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             ),
         )
         .await;
@@ -642,6 +656,7 @@ async fn read_file_returns_compact_numbered_contents() {
             max_chars: Some(DEFAULT_MAX_FILE_CHARS),
             raw_json: false,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -673,6 +688,7 @@ async fn read_file_reports_truncation_in_compact_metadata() {
             max_chars: Some(12),
             raw_json: false,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -707,6 +723,7 @@ async fn read_file_rejects_paths_outside_root() {
             max_chars: Some(DEFAULT_MAX_FILE_CHARS),
             raw_json: false,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect_err("path escape should be rejected");
@@ -735,6 +752,7 @@ async fn write_and_edit_file_work_under_base_within_root() {
             expected_content_hash: None,
             overwrite: false,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -763,6 +781,7 @@ async fn write_and_edit_file_work_under_base_within_root() {
             operation: None,
             expected_content_hash: None,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -788,6 +807,7 @@ async fn read_only_workspace_authority_denies_file_writes() {
     let writer = WriteFileTool::new(ToolContext::new(root.clone(), true).unwrap());
     let error = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
         None,
+        None,
         tokio_util::sync::CancellationToken::new(),
         crate::runtime_context::ToolWorkspaceScope {
             runtime_home: None,
@@ -811,6 +831,7 @@ async fn read_only_workspace_authority_denies_file_writes() {
                     expected_content_hash: None,
                     overwrite: true,
                 },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
         },
@@ -840,6 +861,7 @@ async fn command_definition_uses_the_current_workspace_policy() {
     let describe = || gents_loop::tool::Tool::definition(&tool, String::new());
     assert!(describe().await.description.contains("unrestricted policy"));
     let description = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+        None,
         None,
         tokio_util::sync::CancellationToken::new(),
         crate::runtime_context::ToolWorkspaceScope {
@@ -886,6 +908,7 @@ async fn read_write_overlay_meets_unrestricted_bash_to_workspace_write() {
     );
     let result = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
         None,
+        None,
         tokio_util::sync::CancellationToken::new(),
         crate::runtime_context::ToolWorkspaceScope {
             runtime_home: None,
@@ -911,6 +934,7 @@ async fn read_write_overlay_meets_unrestricted_bash_to_workspace_write() {
                     timeout_secs: None,
                     raw_json: true,
                 },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
         },
@@ -963,6 +987,7 @@ async fn raw_json_escape_hatch_returns_structured_output() {
             max_entries: Some(100),
             raw_json: true,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -1002,6 +1027,7 @@ async fn list_files_skips_permission_denied_subtrees() {
             max_entries: Some(100),
             raw_json: true,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -1034,6 +1060,7 @@ async fn list_files_ignores_common_generated_directories_by_default() {
             max_entries: Some(100),
             raw_json: false,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -1066,6 +1093,7 @@ async fn glob_returns_compact_matches() {
             max_matches: Some(100),
             raw_json: false,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -1100,6 +1128,7 @@ async fn grep_returns_compact_line_numbered_matches() {
             max_matches: Some(100),
             raw_json: false,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -1313,6 +1342,7 @@ async fn unrestricted_bash_runs_shell_command_strings() {
             timeout_secs: Some(DEFAULT_COMMAND_TIMEOUT_SECS),
             raw_json: false,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -1370,6 +1400,7 @@ async fn unrestricted_bash_reports_descendant_bounded_capture() {
             timeout_secs: Some(DEFAULT_COMMAND_TIMEOUT_SECS),
             raw_json: false,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -1404,6 +1435,7 @@ async fn command_policy_explicit_unrestricted_reports_unsandboxed_metadata() {
             timeout_secs: Some(DEFAULT_COMMAND_TIMEOUT_SECS),
             raw_json: false,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -1433,6 +1465,7 @@ async fn bash_output_supports_raw_json_escape_hatch() {
             timeout_secs: Some(DEFAULT_COMMAND_TIMEOUT_SECS),
             raw_json: true,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -1458,6 +1491,7 @@ async fn bash_nonzero_exit_is_a_typed_tool_failure_with_metadata() {
     let outcome = crate::runtime_context::call_tool_managed(
         boxed.as_ref(),
         serde_json::json!({ "command": "false" }).to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await;
 
@@ -1494,6 +1528,7 @@ async fn bash_per_call_timeout_is_a_recoverable_typed_failure_with_metadata() {
             "timeout_secs": 1,
         })
         .to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await;
 
@@ -1534,7 +1569,11 @@ async fn bash_request_deadline_resolves_to_typed_timeout() {
     let outcome = crate::runtime_context::scope_request_tool_execution(
         Some(deadline),
         tokio_util::sync::CancellationToken::new(),
-        crate::runtime_context::call_tool_managed(boxed.as_ref(), args),
+        crate::runtime_context::call_tool_managed(
+            boxed.as_ref(),
+            args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        ),
     )
     .await;
 
@@ -1562,6 +1601,7 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
     let command = "sleep 2; trap '' TERM; while :; do sleep 1; done & child=$!; printf '%s' \"$child\" > descendant.pid; wait";
 
     let boxed: Box<dyn gents_loop::tool::ToolDyn> = Box::new(tool);
+    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
     let call = crate::runtime_context::call_tool_managed(
         boxed.as_ref(),
         serde_json::json!({
@@ -1569,6 +1609,7 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
             "timeout_secs": 60,
         })
         .to_string(),
+        &envelope,
     );
     tokio::pin!(call);
     let ready = tokio::time::timeout(Duration::from_secs(30), async {
@@ -1632,6 +1673,7 @@ async fn unrestricted_bash_timeout_keeps_output_printed_before_the_timeout() {
     let command = "printf '%s' \"$$\" > shell.pid; echo compiled-pkg-one; echo compiled-pkg-two; echo warn-from-stderr >&2; sleep 30";
 
     let boxed: Box<dyn gents_loop::tool::ToolDyn> = Box::new(tool);
+    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
     let call = crate::runtime_context::call_tool_managed(
         boxed.as_ref(),
         serde_json::json!({
@@ -1639,6 +1681,7 @@ async fn unrestricted_bash_timeout_keeps_output_printed_before_the_timeout() {
             "timeout_secs": 1,
         })
         .to_string(),
+        &envelope,
     );
     let outcome = tokio::time::timeout(Duration::from_secs(10), call)
         .await
@@ -1722,6 +1765,7 @@ async fn workspace_write_bash_contains_writes_to_tool_root() {
             "timeout_secs": DEFAULT_COMMAND_TIMEOUT_SECS,
         })
         .to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await;
     let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
@@ -1775,16 +1819,24 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
     let writer = WriteFileTool::new(context.clone());
     let reader = ReadFileTool::new(context, DEFAULT_MAX_FILE_CHARS);
 
-    let created = gents_loop::tool::Tool::call(&writer, write_args("notes.txt", "one\n"))
-        .await
-        .expect("creating a new file is unguarded");
+    let created = gents_loop::tool::Tool::call(
+        &writer,
+        write_args("notes.txt", "one\n"),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .expect("creating a new file is unguarded");
     let created: serde_json::Value = serde_json::from_str(&created).unwrap();
     assert_eq!(created["created"], true);
     let written_hash = created["content_hash"].as_str().unwrap().to_string();
 
-    let refused = gents_loop::tool::Tool::call(&writer, write_args("notes.txt", "blind\n"))
-        .await
-        .expect_err("blind overwrite must be refused");
+    let refused = gents_loop::tool::Tool::call(
+        &writer,
+        write_args("notes.txt", "blind\n"),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .expect_err("blind overwrite must be refused");
     let refused = refused.to_string();
     assert!(refused.contains("already exists"), "{refused}");
     assert!(
@@ -1802,6 +1854,7 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
             max_chars: Some(DEFAULT_MAX_FILE_CHARS),
             raw_json: true,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -1812,9 +1865,13 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
     std::fs::write(&file, "changed by operator\n").unwrap();
     let mut stale = write_args("notes.txt", "two\n");
     stale.expected_content_hash = Some(read_hash.clone());
-    let stale = gents_loop::tool::Tool::call(&writer, stale)
-        .await
-        .expect_err("a stale hash must be refused");
+    let stale = gents_loop::tool::Tool::call(
+        &writer,
+        stale,
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .expect_err("a stale hash must be refused");
     let stale = stale.to_string();
     assert!(stale.contains("has changed since it was read"), "{stale}");
     assert!(
@@ -1832,34 +1889,50 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
     current.expected_content_hash = Some(gents_session::file_contents::content_hash(
         b"changed by operator\n",
     ));
-    let current = gents_loop::tool::Tool::call(&writer, current)
-        .await
-        .expect("the current hash authorizes the replacement");
+    let current = gents_loop::tool::Tool::call(
+        &writer,
+        current,
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .expect("the current hash authorizes the replacement");
     let current: serde_json::Value = serde_json::from_str(&current).unwrap();
     assert_eq!(current["created"], false);
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "two\n");
 
     let mut forced = write_args("notes.txt", "three\n");
     forced.overwrite = true;
-    gents_loop::tool::Tool::call(&writer, forced)
-        .await
-        .expect("explicit overwrite replaces regardless of current content");
+    gents_loop::tool::Tool::call(
+        &writer,
+        forced,
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .expect("explicit overwrite replaces regardless of current content");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "three\n");
 
     let mut both = write_args("notes.txt", "four\n");
     both.expected_content_hash = Some(gents_session::file_contents::content_hash(b"three\n"));
     both.overwrite = true;
-    let both = gents_loop::tool::Tool::call(&writer, both)
-        .await
-        .expect_err("a hash with overwrite=true is ambiguous");
+    let both = gents_loop::tool::Tool::call(
+        &writer,
+        both,
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .expect_err("a hash with overwrite=true is ambiguous");
     assert!(both.to_string().contains("conflict"), "{both}");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "three\n");
 
     let mut vanished = write_args("gone.txt", "x");
     vanished.expected_content_hash = Some(read_hash);
-    let vanished = gents_loop::tool::Tool::call(&writer, vanished)
-        .await
-        .expect_err("a hash for a missing file must be refused");
+    let vanished = gents_loop::tool::Tool::call(
+        &writer,
+        vanished,
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .expect_err("a hash for a missing file must be refused");
     assert!(
         vanished.to_string().contains("no longer exists"),
         "{vanished}"
@@ -1884,6 +1957,7 @@ async fn read_file_reports_raw_content_hash() {
             max_chars: Some(DEFAULT_MAX_FILE_CHARS),
             raw_json: true,
         },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap();
@@ -1901,7 +1975,10 @@ async fn edit_file_dry_run_previews_diff_without_writing() {
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
     let mut args = edit_args("config.json", "\"max_turns\": 20", "\"max_turns\": 250");
     args.dry_run = true;
-    let output = gents_loop::tool::Tool::call(&tool, args).await.unwrap();
+    let output =
+        gents_loop::tool::Tool::call(&tool, args, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .unwrap();
     let value: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(value["dry_run"], true, "{value}");
     assert!(
@@ -1923,9 +2000,10 @@ async fn edit_file_stale_hash_rejects_before_matching_without_disclosing_current
     let mut args = edit_args("a.txt", "dup", "x");
     args.expected_content_hash =
         Some("sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string());
-    let err = gents_loop::tool::Tool::call(&tool, args)
-        .await
-        .expect_err("stale hash must reject");
+    let err =
+        gents_loop::tool::Tool::call(&tool, args, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .expect_err("stale hash must reject");
     let text = err.to_string();
     assert!(text.contains("changed since"), "{text}");
     assert!(
@@ -1955,7 +2033,10 @@ async fn edit_file_success_reports_strategy_hashes_and_diff() {
         "  \"max_turns\": 250",
     );
     args.expected_content_hash = Some(pre_hash.clone());
-    let output = gents_loop::tool::Tool::call(&tool, args).await.unwrap();
+    let output =
+        gents_loop::tool::Tool::call(&tool, args, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .unwrap();
     let value: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(value["match_strategy"], "trailing_whitespace", "{value}");
     assert_eq!(value["pre_edit_hash"].as_str().unwrap(), pre_hash);
@@ -1978,6 +2059,7 @@ async fn edit_file_not_found_error_carries_closest_match() {
     let err = gents_loop::tool::Tool::call(
         &tool,
         edit_args("a.yaml", "max_turns: 21", "max_turns: 250"),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .expect_err("no match");
@@ -1992,9 +2074,13 @@ async fn edit_file_ambiguous_error_lists_occurrences() {
     let root = temp_root("gents-edit-ambiguous");
     std::fs::write(root.join("a.txt"), "x = 1\ny\nx = 1\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
-    let err = gents_loop::tool::Tool::call(&tool, edit_args("a.txt", "x = 1", "x = 2"))
-        .await
-        .expect_err("ambiguous");
+    let err = gents_loop::tool::Tool::call(
+        &tool,
+        edit_args("a.txt", "x = 1", "x = 2"),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .expect_err("ambiguous");
     let text = err.to_string();
     assert!(text.contains("2 "), "{text}");
     assert!(text.contains("line 1"), "{text}");
@@ -2008,10 +2094,13 @@ async fn edit_file_crlf_file_round_trips() {
     let file = root.join("w.ini");
     std::fs::write(&file, "a=1\r\nmax_turns=20\r\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
-    let output =
-        gents_loop::tool::Tool::call(&tool, edit_args("w.ini", "max_turns=20", "max_turns=250"))
-            .await
-            .unwrap();
+    let output = gents_loop::tool::Tool::call(
+        &tool,
+        edit_args("w.ini", "max_turns=20", "max_turns=250"),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .unwrap();
     let _: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(std::fs::read(&file).unwrap(), b"a=1\r\nmax_turns=250\r\n");
 }
@@ -2024,7 +2113,9 @@ async fn edit_file_regex_mode_and_insert_after_operation() {
     let tool = EditFileTool::new(ToolContext::new(root.clone(), false).unwrap());
     let mut args = edit_args("c.toml", r"timeout = (\d+)", "timeout = 3600 # was $1");
     args.match_mode = Some("regex".to_string());
-    gents_loop::tool::Tool::call(&tool, args).await.unwrap();
+    gents_loop::tool::Tool::call(&tool, args, &gents_loop::tool::ToolCallEnvelope::ambient())
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         "timeout = 3600 # was 1800\n"
@@ -2032,7 +2123,9 @@ async fn edit_file_regex_mode_and_insert_after_operation() {
 
     let mut args = edit_args("c.toml", "timeout = 3600 # was 1800", "\nretries = 3");
     args.operation = Some("insert_after".to_string());
-    gents_loop::tool::Tool::call(&tool, args).await.unwrap();
+    gents_loop::tool::Tool::call(&tool, args, &gents_loop::tool::ToolCallEnvelope::ambient())
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         "timeout = 3600 # was 1800\nretries = 3\n"
@@ -2045,9 +2138,13 @@ async fn edit_file_rejects_non_utf8_instead_of_corrupting() {
     let file = root.join("latin1.txt");
     std::fs::write(&file, b"caf\xe9 target\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
-    let err = gents_loop::tool::Tool::call(&tool, edit_args("latin1.txt", "target", "x"))
-        .await
-        .expect_err("non-UTF-8 must be rejected");
+    let err = gents_loop::tool::Tool::call(
+        &tool,
+        edit_args("latin1.txt", "target", "x"),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .expect_err("non-UTF-8 must be rejected");
     assert!(err.to_string().contains("UTF-8"), "{err}");
     assert_eq!(std::fs::read(&file).unwrap(), b"caf\xe9 target\n");
 }
@@ -2059,8 +2156,18 @@ async fn edit_file_concurrent_edits_do_not_lose_updates() {
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
     for round in 0..20 {
         std::fs::write(&file, "alpha: 0\nbeta: 0\n").unwrap();
-        let a = gents_loop::tool::Tool::call(&tool, edit_args("both.txt", "alpha: 0", "alpha: 1"));
-        let b = gents_loop::tool::Tool::call(&tool, edit_args("both.txt", "beta: 0", "beta: 1"));
+        let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+        let a = gents_loop::tool::Tool::call(
+            &tool,
+            edit_args("both.txt", "alpha: 0", "alpha: 1"),
+            &envelope,
+        );
+        let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+        let b = gents_loop::tool::Tool::call(
+            &tool,
+            edit_args("both.txt", "beta: 0", "beta: 1"),
+            &envelope,
+        );
         let (ra, rb) = tokio::join!(a, b);
         ra.unwrap();
         rb.unwrap();
@@ -2081,8 +2188,13 @@ async fn write_file_and_edit_file_serialize_on_the_same_lock() {
     let writer = WriteFileTool::new(context);
     for round in 0..20 {
         std::fs::write(&file, "alpha: 0\nbeta: 0\n").unwrap();
-        let edit =
-            gents_loop::tool::Tool::call(&editor, edit_args("both.txt", "alpha: 0", "alpha: 1"));
+        let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
+        let edit = gents_loop::tool::Tool::call(
+            &editor,
+            edit_args("both.txt", "alpha: 0", "alpha: 1"),
+            &envelope,
+        );
+        let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
         let write = gents_loop::tool::Tool::call(
             &writer,
             WriteFileArgs {
@@ -2092,6 +2204,7 @@ async fn write_file_and_edit_file_serialize_on_the_same_lock() {
                 expected_content_hash: None,
                 overwrite: true,
             },
+            &envelope,
         );
         let (re, rw) = tokio::join!(edit, write);
         rw.unwrap();
@@ -2204,6 +2317,7 @@ async fn backgrounded_bash_is_exempt_from_foreground_ceiling() {
                 timeout_secs: None,
                 raw_json: false,
             },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         ),
     )
     .await
@@ -2276,6 +2390,7 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
         );
         let operation = async move {
             crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+                None,
                 None,
                 tokio_util::sync::CancellationToken::new(),
                 crate::runtime_context::ToolWorkspaceScope {
@@ -2366,6 +2481,7 @@ with socket.socket() as connection:
     let root = fx.grant.source_root().to_path_buf();
     let result = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
         None,
+        None,
         tokio_util::sync::CancellationToken::new(),
         crate::runtime_context::ToolWorkspaceScope {
             runtime_home: None,
@@ -2423,6 +2539,7 @@ with socket.socket() as connection:
                 environment: Some(command.environment),
                 tool_name: Some("artifact-probe".into()),
                 live_output: None,
+                process_recorder: None,
             })
             .await
         },
@@ -2500,6 +2617,7 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
     for subcommand in ["check", "test"] {
         let result = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
             None,
+            None,
             tokio_util::sync::CancellationToken::new(),
             crate::runtime_context::ToolWorkspaceScope {
                 runtime_home: None,
@@ -2522,6 +2640,7 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
                     timeout_secs: Some(120),
                     raw_json: true,
                 },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             ),
         )
         .await;
@@ -2662,6 +2781,7 @@ async fn bash_tool_liveness_follows_the_lean_composed_model() {
                 crate::runtime_context::call_tool_managed(
                     tool.as_ref(),
                     serde_json::json!({ "command": command }).to_string(),
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
                 ),
             ),
         )

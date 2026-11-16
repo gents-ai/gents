@@ -151,7 +151,6 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
                     &access,
                     &receipt.request_id,
                     &session,
-                    Duration::from_secs(240),
                 )
                 .await?;
                 wait_for_client_complete_response(

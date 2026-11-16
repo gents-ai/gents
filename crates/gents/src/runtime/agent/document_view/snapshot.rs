@@ -52,7 +52,7 @@ struct UnknownKindBackend {
 enum InferenceSelectionError {
     #[error(transparent)]
     UnknownKind(#[from] UnknownKindBackend),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 
@@ -65,14 +65,38 @@ struct UnselectedDisabledBackend {
     backend_id: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum InferenceResolveError {
+    #[error(transparent)]
+    Unselected(#[from] UnselectedDisabledBackend),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Invalid(#[from] anyhow::Error),
+}
+
+impl InferenceResolveError {
+    /// Callers downstream of the snapshot downcast the root cause, so the
+    /// erased error carries the cause itself rather than this enum.
+    fn into_detail(self) -> anyhow::Error {
+        match self {
+            Self::Unselected(error) => error.into(),
+            Self::Invalid(error) => error,
+        }
+    }
+}
+
 struct AgentResolutionError {
     code: AgentReadinessUnavailableReason,
     detail: anyhow::Error,
+    awaiting_first_probe: bool,
 }
 
 impl AgentResolutionError {
     fn new(code: AgentReadinessUnavailableReason, detail: anyhow::Error) -> Self {
-        Self { code, detail }
+        Self {
+            code,
+            detail,
+            awaiting_first_probe: false,
+        }
     }
 }
 
@@ -189,12 +213,15 @@ fn resolve_agent_factories(
             let inference =
                 resolve_inference(view, &agent_config.inference_profile_id).map_err(|error| {
                     AgentResolutionError::new(
-                        if error.is::<UnselectedDisabledBackend>() {
-                            AgentReadinessUnavailableReason::BackendDisabled
-                        } else {
-                            AgentReadinessUnavailableReason::InferenceProfileInvalid
+                        match error {
+                            InferenceResolveError::Unselected(_) => {
+                                AgentReadinessUnavailableReason::BackendDisabled
+                            }
+                            InferenceResolveError::Invalid(_) => {
+                                AgentReadinessUnavailableReason::InferenceProfileInvalid
+                            }
                         },
-                        error,
+                        error.into_detail(),
                     )
                 })?;
             ensure_inference_available(
@@ -273,7 +300,8 @@ fn resolve_agent_factories(
             Err(error) => {
                 unavailable_agents.insert(
                     agent_config.agent_did.clone(),
-                    UnavailableAgent::new(error.code, error.detail.to_string()),
+                    UnavailableAgent::new(error.code, error.detail.to_string())
+                        .with_awaiting_first_probe(error.awaiting_first_probe),
                 );
             }
         }
@@ -341,14 +369,17 @@ fn ensure_inference_available(
         }
     }
     if let Some(code) = unavailable {
-        return Err(AgentResolutionError::new(
+        let mut error = AgentResolutionError::new(
             code,
             anyhow!(
                 "backend {} is unavailable: {:?}",
                 backend.backend_id,
                 admission.availability()
             ),
-        ));
+        );
+        error.awaiting_first_probe = admission.awaiting_first_probe()
+            && code == AgentReadinessUnavailableReason::BackendTemporarilyUnavailable;
+        return Err(error);
     }
     Ok(())
 }
@@ -399,6 +430,10 @@ fn append_inference_selection(
                 .ok_or_else(|| anyhow!("resolved inference document disappeared"))?;
             documents.push(SelectedConfigurationDocument {
                 collection: $collection,
+                version: record
+                    .version
+                    .clone()
+                    .ok_or_else(|| anyhow!("resolved configuration has no composite version"))?,
                 doc_id: record.doc_id.clone(),
                 logical_id: None,
             });
@@ -491,8 +526,8 @@ fn select_inference_documents<'a>(
 fn resolve_inference(
     view: &DocumentRuntimeView,
     id: &str,
-) -> Result<gents_inference::resolved::ResolvedInference> {
-    let selected = select_inference_documents(view, id)?;
+) -> std::result::Result<gents_inference::resolved::ResolvedInference, InferenceResolveError> {
+    let selected = select_inference_documents(view, id).map_err(anyhow::Error::from)?;
     let profile = selected.profile.clone();
     let backend = selected.backend.clone();
     if profile.model_name.trim().is_empty() && !backend.enabled {
@@ -501,11 +536,9 @@ fn resolve_inference(
         }
         .into());
     }
-    anyhow::ensure!(
-        !profile.model_name.trim().is_empty(),
-        "profile {} has no model selection",
-        profile.profile_id
-    );
+    if profile.model_name.trim().is_empty() {
+        return Err(anyhow!("profile {} has no model selection", profile.profile_id).into());
+    }
     let sampling = selected.sampling.cloned();
     let execution = selected.execution.cloned();
     let retry_policy = selected.retry_policy.cloned();

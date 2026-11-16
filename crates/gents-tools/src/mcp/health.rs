@@ -976,7 +976,7 @@ fn classify_last_error(error: &str) -> &'static str {
     let lower = error.to_lowercase();
     if lower.contains("timed out") || lower.contains("timeout") {
         "timeout"
-    } else if lower.contains("connection refused") || lower.contains("refused") {
+    } else if lower.contains("refused") {
         "connection_refused"
     } else if lower.contains("no route") || lower.contains("unreachable") {
         "network_unreachable"

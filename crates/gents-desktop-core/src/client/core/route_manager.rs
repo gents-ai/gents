@@ -344,9 +344,8 @@ impl ClientRouteManager {
                 return RouteReconcileState::Unavailable;
             }
             Err(error) => {
-                let error_class = error
-                    .downcast_ref::<RemoteP2pAdminError>()
-                    .map(classify_remote_admin_error);
+                let error_class =
+                    RemoteP2pAdminError::in_error(&error).map(classify_remote_admin_error);
                 record_pairing_error(record, sync_state, &error);
                 publish_route_status(
                     record,

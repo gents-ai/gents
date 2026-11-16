@@ -1,0 +1,4 @@
+---- MODULE MCWallClockBoundFixedWindow ----
+EXTENDS WallClockBound
+
+====

@@ -1,6 +1,6 @@
 use super::{
     append_inference_selection, ensure_inference_available, resolve_inference,
-    DocumentResolveContext, DocumentRuntimeView,
+    DocumentResolveContext, DocumentRuntimeView, InferenceResolveError,
 };
 use anyhow::{anyhow, Result};
 use defra_node::Node as EmbeddedNode;
@@ -86,7 +86,7 @@ pub(super) fn agent_context_documents(
     let summary = compaction
         .as_ref()
         .and_then(|config| config.inference_profile_id.as_deref())
-        .map(|id| resolve_inference(view, id))
+        .map(|id| resolve_inference(view, id).map_err(InferenceResolveError::into_detail))
         .transpose()?;
     if let Some(summary) = &summary {
         ensure_inference_available(view, summary, backend_admission_configs, measured_health)
@@ -137,6 +137,10 @@ pub(super) fn agent_configuration_documents(
     let mut configuration_documents =
         vec![gents_inference::resolved::SelectedConfigurationDocument {
             collection: gents_store::collection::Collection::Agent,
+            version: behavior_record
+                .version
+                .clone()
+                .ok_or_else(|| anyhow!("resolved configuration has no composite version"))?,
             doc_id: behavior_record.doc_id.clone(),
             logical_id: None,
         }];
@@ -151,6 +155,10 @@ pub(super) fn agent_configuration_documents(
             .ok_or_else(|| anyhow!("resolved AgentContext disappeared"))?;
         configuration_documents.push(gents_inference::resolved::SelectedConfigurationDocument {
             collection: gents_store::collection::Collection::AgentContext,
+            version: context_record
+                .version
+                .clone()
+                .ok_or_else(|| anyhow!("resolved configuration has no composite version"))?,
             doc_id: context_record.doc_id.clone(),
             logical_id: None,
         });
@@ -162,6 +170,9 @@ pub(super) fn agent_configuration_documents(
             configuration_documents.push(
                 gents_inference::resolved::SelectedConfigurationDocument {
                     collection: gents_store::collection::Collection::Skill,
+                    version: record.version.clone().ok_or_else(|| {
+                        anyhow!("resolved configuration has no composite version")
+                    })?,
                     doc_id: record.doc_id.clone(),
                     logical_id: Some(id.clone()),
                 },
@@ -175,6 +186,9 @@ pub(super) fn agent_configuration_documents(
             configuration_documents.push(
                 gents_inference::resolved::SelectedConfigurationDocument {
                     collection: gents_store::collection::Collection::Compaction,
+                    version: record.version.clone().ok_or_else(|| {
+                        anyhow!("resolved configuration has no composite version")
+                    })?,
                     doc_id: record.doc_id.clone(),
                     logical_id: None,
                 },
@@ -188,6 +202,9 @@ pub(super) fn agent_configuration_documents(
             configuration_documents.push(
                 gents_inference::resolved::SelectedConfigurationDocument {
                     collection: gents_store::collection::Collection::Tools,
+                    version: tools_record.version.clone().ok_or_else(|| {
+                        anyhow!("resolved configuration has no composite version")
+                    })?,
                     doc_id: tools_record.doc_id.clone(),
                     logical_id: None,
                 },

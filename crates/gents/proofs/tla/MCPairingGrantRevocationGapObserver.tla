@@ -1,0 +1,4 @@
+---- MODULE MCPairingGrantRevocationGapObserver ----
+EXTENDS PairingGrantRevocation
+
+====

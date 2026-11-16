@@ -197,16 +197,19 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
             identity::Did::new(actor)?,
             vec![
                 SelectedConfigurationDocument {
+                    version: "fixture-version".into(),
                     collection: Collection::Agent,
                     doc_id: agent_doc.clone(),
                     logical_id: None,
                 },
                 SelectedConfigurationDocument {
+                    version: "fixture-version".into(),
                     collection: Collection::AgentContext,
                     doc_id: context_doc.clone(),
                     logical_id: None,
                 },
                 SelectedConfigurationDocument {
+                    version: "fixture-version".into(),
                     collection: Collection::Skill,
                     doc_id: skill_doc.clone(),
                     logical_id: Some("skill".into()),
@@ -228,18 +231,24 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
         let tool =
             crate::native::skills::LoadSkillTool::for_agent(vec![skill], ceiling, &configuration);
         let loaded = tool
-            .call(crate::native::skills::LoadSkillArgs {
-                name: "skill".into(),
-            })
+            .call(
+                crate::native::skills::LoadSkillArgs {
+                    name: "skill".into(),
+                },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await;
         let tool_loaded = loaded.is_ok();
         if let Ok(output) = loaded {
             assert!(output.contains("private skill"));
         }
         let catalog = tool
-            .call(crate::native::skills::LoadSkillArgs {
-                name: "missing".into(),
-            })
+            .call(
+                crate::native::skills::LoadSkillArgs {
+                    name: "missing".into(),
+                },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await;
         assert_eq!(catalog.is_ok(), tool_loaded, "{}", case.input.name);
         case.check(

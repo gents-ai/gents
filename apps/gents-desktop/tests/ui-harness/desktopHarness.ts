@@ -198,6 +198,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
     itemKey,
     toolName: "bash",
     toolCallId,
+    toolCallDocId: `doc-${toolCallId}`,
     statusKind: "success",
     awaitMode: "background",
     reconstruction: HARNESS_READY_RECONSTRUCTION,
@@ -238,6 +239,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
           itemKey: "auto-worker",
           toolName: "agent_new",
           toolCallId: "call-auto-worker",
+          toolCallDocId: "doc-call-auto-worker",
           requestId: "request-auto-user",
           statusKind: "success",
           awaitMode: "background",
@@ -282,7 +284,16 @@ function automatedInputItems(): RenderedTimelineItem[] {
     }),
     {
       ...durable("auto-bg-test", 7, "2026-06-03T14:10:00Z"),
-      origin: { kind: "backgroundCompletion" as const, notification: true },
+      origin: {
+        kind: "backgroundCompletion" as const,
+        toolCallId: "call-auto-test",
+        toolCallDocId: "doc-call-auto-test",
+        toolName: "bash",
+        statusKind: "completed",
+        reason: null,
+        resultRange: null,
+        notification: true,
+      },
       content: completion(
         "call-auto-test",
         "bash",
@@ -292,7 +303,16 @@ function automatedInputItems(): RenderedTimelineItem[] {
     },
     {
       ...durable("auto-bg-lint", 8, "2026-06-03T14:10:00Z"),
-      origin: { kind: "backgroundCompletion" as const, notification: true },
+      origin: {
+        kind: "backgroundCompletion" as const,
+        toolCallId: "call-auto-lint",
+        toolCallDocId: "doc-call-auto-lint",
+        toolName: "bash",
+        statusKind: "failed",
+        reason: null,
+        resultRange: null,
+        notification: true,
+      },
       content: completion(
         "call-auto-lint",
         "bash",
@@ -302,7 +322,16 @@ function automatedInputItems(): RenderedTimelineItem[] {
     },
     {
       ...durable("auto-bg-worker", 9, "2026-06-03T14:10:00Z"),
-      origin: { kind: "backgroundCompletion" as const, notification: true },
+      origin: {
+        kind: "backgroundCompletion" as const,
+        toolCallId: "call-auto-worker",
+        toolCallDocId: "doc-call-auto-worker",
+        toolName: "agent_new",
+        statusKind: "completed",
+        reason: null,
+        resultRange: null,
+        notification: true,
+      },
       content: completion(
         "call-auto-worker",
         "agent_new",
@@ -312,7 +341,13 @@ function automatedInputItems(): RenderedTimelineItem[] {
     },
     {
       ...durable("auto-bg-wake", 10, "2026-06-03T14:10:01Z"),
-      origin: { kind: "backgroundCompletion" as const, notification: false },
+      origin: {
+        kind: "backgroundCompletion" as const,
+        toolCallId: null,
+        reason: null,
+        resultRange: null,
+        notification: false,
+      },
       content:
         "Review the new background completion results and continue the task if needed.",
     },
@@ -325,7 +360,16 @@ function automatedInputItems(): RenderedTimelineItem[] {
     }),
     {
       ...durable("auto-bg-single", 12, "2026-06-03T14:11:00Z"),
-      origin: { kind: "backgroundCompletion" as const, notification: true },
+      origin: {
+        kind: "backgroundCompletion" as const,
+        toolCallId: "call-auto-other",
+        toolCallDocId: "doc-call-auto-other",
+        toolName: "spawn_process",
+        statusKind: "completed",
+        reason: null,
+        resultRange: null,
+        notification: true,
+      },
       content: completion("call-auto-other", "spawn_process", "completed", "done"),
     },
     harnessAssistantItem({
@@ -340,7 +384,7 @@ function automatedInputItems(): RenderedTimelineItem[] {
       origin: {
         kind: "sessionMessage" as const,
         senderNodeDid: NODE_DID,
-        senderSessionId: null,
+        senderSessionId: "session-worker",
         senderRequestId: "request-worker-note",
       },
       content: `[message agent:ops session:session-worker node:${
@@ -368,13 +412,25 @@ function automatedInputItems(): RenderedTimelineItem[] {
     }),
     {
       ...durable("auto-alone-wake", 17, "2026-06-03T14:20:00Z"),
-      origin: { kind: "backgroundCompletion" as const, notification: false },
+      origin: {
+        kind: "backgroundCompletion" as const,
+        toolCallId: null,
+        reason: null,
+        resultRange: null,
+        notification: false,
+      },
       content:
         "Review the new background completion results and continue the task if needed.",
     },
     {
       ...durable("auto-bg-note", 18, "2026-06-03T14:20:00Z"),
-      origin: { kind: "backgroundCompletion" as const, notification: true },
+      origin: {
+        kind: "backgroundCompletion" as const,
+        toolCallId: null,
+        reason: null,
+        resultRange: null,
+        notification: true,
+      },
       content:
         "\nThe preview deploy is ready at https://preview.example.test/parser-fix and will stay up for the next twenty-four hours.\n\nNothing else changed.",
     },
@@ -389,6 +445,8 @@ function automatedInputItems(): RenderedTimelineItem[] {
       ...durable("auto-schedule", 20, "2026-06-04T07:00:00Z"),
       origin: {
         kind: "trigger" as const,
+        displayBody:
+          "Write the nightly report: what changed, what failed, what is next.",
         triggerId: "nightly-report",
         triggerKind: "schedule",
       },
@@ -403,7 +461,12 @@ function automatedInputItems(): RenderedTimelineItem[] {
     }),
     {
       ...durable("auto-goal", 22, "2026-06-04T07:02:00Z"),
-      origin: { kind: "goalContinuation" as const, goalId: "goal-1", sequence: 2 },
+      origin: {
+        kind: "goalContinuation" as const,
+        retry: null,
+        goalId: "goal-1",
+        sequence: 2,
+      },
       content: "You are running under the durable goal controller. Continue the goal.",
     },
   ];

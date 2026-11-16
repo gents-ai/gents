@@ -15,7 +15,7 @@ use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 use tokio::sync::Notify;
 
-use crate::queue_management::{enqueue_owned, row_as};
+use super::queue_management::{enqueue_owned, row_as};
 use crate::support::agent_requests::{canonical_now, RequestActors};
 use crate::support::agent_transcript;
 use crate::support::builder_runtime::{
@@ -49,7 +49,11 @@ impl ToolDyn for HeldTool {
             }
         })
     }
-    fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             self.entered.notify_one();
             self.release.notified().await;

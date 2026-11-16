@@ -183,18 +183,39 @@ pub(crate) async fn fetch_managed_runtime_status(
     }
 }
 
+pub(crate) async fn managed_pairing_ready(
+    core: &ClientCore,
+    node_did: &str,
+    request_id: Option<&str>,
+) -> Result<bool, PairingFailure> {
+    if !core.peer_records().await.iter().any(|peer| {
+        peer.node_did == node_did
+            && peer.is_enrollment()
+            && peer.is_managed_runtime()
+            && peer.is_enrollment_ready_at(chrono::Utc::now())
+            && request_id.is_none_or(|id| peer.enrollment_request_id.as_deref() == Some(id))
+    }) {
+        return Ok(false);
+    }
+    let access = core.operator_access(node_did).map_err(|error| {
+        PairingFailure::Transient(format!("reading desktop Node access: {error:#}"))
+    })?;
+    access
+        .read_view(&gents_documents::views::config::NodeList::new(node_did))
+        .await
+        .map(|rows| !rows.is_empty())
+        .map_err(|error| {
+            PairingFailure::Transient(format!("reading desktop Node access: {error:#}"))
+        })
+}
+
 pub(crate) async fn ensure_managed_runtime_pairing(
     core: Arc<ClientCore>,
     node_home: &std::path::Path,
     target: &ManagedPairingTarget,
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<(), PairingFailure> {
-    if core.peer_records().await.iter().any(|peer| {
-        peer.node_did == target.node_did
-            && peer.is_enrollment()
-            && peer.is_managed_runtime()
-            && peer.is_enrollment_ready_at(chrono::Utc::now())
-    }) {
+    if managed_pairing_ready(&core, &target.node_did, None).await? {
         return Ok(());
     }
 
@@ -239,12 +260,9 @@ pub(crate) async fn ensure_managed_runtime_pairing(
         MANAGED_PAIRING_APPROVAL_WINDOW,
         MANAGED_PAIRING_POLL_INTERVAL,
         || async {
-            core.peer_records().await.iter().any(|peer| {
-                peer.node_did == target.node_did
-                    && peer.is_enrollment()
-                    && peer.is_managed_runtime()
-                    && peer.is_enrollment_ready_at(chrono::Utc::now())
-            })
+            managed_pairing_ready(&core, &target.node_did, Some(&request_id))
+                .await
+                .unwrap_or(false)
         },
         || async {
             grant_then_approve_managed(
@@ -368,10 +386,9 @@ where
 }
 
 pub(crate) fn enrollment_request_is_not_visible_yet(error: &anyhow::Error) -> bool {
-    gents_protocol::error_chain::find_source::<
-        gents_service::enrollment_admin::EnrollmentDecisionRejected,
-    >(error.as_ref())
-    .is_some_and(|rejected| {
-        rejected.code == Some(gents_protocol::enrollment::EnrollmentDecisionRefusalCode::NotPending)
-    })
+    gents_service::enrollment_admin::EnrollmentDecisionRejected::in_chain(error.as_ref())
+        .is_some_and(|rejected| {
+            rejected.code
+                == Some(gents_protocol::enrollment::EnrollmentDecisionRefusalCode::NotPending)
+        })
 }

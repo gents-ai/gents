@@ -7,7 +7,7 @@ use gents_migration::{
     Registry, CLIENT_AUTHORED_COLLECTIONS,
 };
 
-mod common;
+use crate::common;
 use common::fresh_node;
 
 #[test]

@@ -22,6 +22,9 @@ pub mod task;
 pub mod tools;
 pub mod workspace_root;
 
+#[cfg(test)]
+mod passthrough_tests;
+
 /// The call that lets a caller correct a refused operation. Each front end
 /// renders it in its own syntax.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

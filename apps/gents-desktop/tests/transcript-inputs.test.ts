@@ -11,7 +11,6 @@ import {
   backgroundText,
   originLabel,
   senderSession,
-  withoutRoutingHeader,
 } from "@/screens/TranscriptInputs";
 import type { BackgroundResult } from "@/screens/transcript-groups";
 import type { Reached } from "@/screens/workers";
@@ -20,21 +19,33 @@ describe("goal continuation labels", () => {
   it("distinguishes a recorded wrap-up from an ordinary continuation", () => {
     expect(
       originLabel(
-        { kind: "goalContinuation", goalId: "g", sequence: 3, wrapup: true },
+        {
+          kind: "goalContinuation",
+          retry: null,
+          goalId: "g",
+          sequence: 3,
+          wrapup: true,
+        },
         null,
         null,
       ),
     ).toBe("Goal wrap-up");
     expect(
       originLabel(
-        { kind: "goalContinuation", goalId: "g", sequence: 3, wrapup: false },
+        {
+          kind: "goalContinuation",
+          retry: null,
+          goalId: "g",
+          sequence: 3,
+          wrapup: false,
+        },
         null,
         null,
       ),
     ).toBe("Goal continuation · 3");
     expect(
       originLabel(
-        { kind: "goalContinuation", goalId: "g", sequence: null },
+        { kind: "goalContinuation", retry: null, goalId: "g", sequence: null },
         null,
         null,
       ),
@@ -42,33 +53,20 @@ describe("goal continuation labels", () => {
   });
 });
 
-describe("a message's routing line", () => {
-  const header =
-    "[message agent:default session:5c1d node:did:key:z6Mk · at:2026-11-01T13:53:39Z · cause:9a7e]";
-
-  it("is left out of the text a person reads", () => {
-    expect(withoutRoutingHeader(`${header}\n\nthe build is green\n\nnext step`)).toBe(
-      "the build is green\n\nnext step",
-    );
-    expect(withoutRoutingHeader(`${header}\r\n\r\nhello`)).toBe("hello");
-    expect(withoutRoutingHeader(header)).toBe("");
-  });
-
-  it("is only a first line shaped like one", () => {
-    for (const text of [
-      "the build is green",
-      "[message agent:default but no closing bracket\n\nbody",
-      "[note] something else\n\nbody",
-      `intro\n${header}\n\nbody`,
-      ` ${header}\n\nbody`,
-    ])
-      expect(withoutRoutingHeader(text)).toBe(text);
-  });
-});
-
 describe("naming a background result", () => {
-  const completion = (status: string, tool = "bash_unrestricted") =>
-    `<tool-completion tool_call_id="call-1" tool_name="${tool}" status="${status}">\n  <result>ok</result>\n</tool-completion>`;
+  const completion = (
+    status: string,
+    tool = "bash_unrestricted",
+  ): RequestOriginView => ({
+    kind: "backgroundCompletion",
+    notification: true,
+    toolCallId: "call-1",
+    toolCallDocId: "physical-call-1",
+    toolName: tool,
+    statusKind: status,
+    reason: null,
+    resultRange: null,
+  });
   const step = (presentation: object) =>
     ({
       itemKey: "t",
@@ -131,25 +129,23 @@ describe("naming a background result", () => {
     );
   });
 
-  it("says what an input that names no call is, by its words", () => {
-    const wake =
-      "Review the new background completion results and continue the task if needed.";
+  it("names a wake from its native origin, independently of prompt wording", () => {
+    const wake: RequestOriginView = {
+      kind: "backgroundCompletion",
+      notification: false,
+      toolCallId: null,
+      reason: null,
+      resultRange: null,
+    };
     expect(backgroundName(wake, null)).toBeNull();
     expect(backgroundText(null, wake)).toBe("Asked to review background results");
-    expect(backgroundText(null, "\n  <agent-notification>done  \nmore")).toBe(
-      "<agent-notification>done",
-    );
-    const long = "x".repeat(120);
-    expect(backgroundText(null, long)).toBe(`${"x".repeat(79)}…`);
-    expect(backgroundText(null, "x".repeat(80))).toBe("x".repeat(80));
-    expect(backgroundText(null, "  \n ")).toBe("Background result");
-    expect(backgroundText(null)).toBe("Background result");
+    expect(backgroundText(null, null)).toBe("Background result");
   });
 
   it("counts the completions a run folds", () => {
-    const result = (content: string): BackgroundResult =>
-      ({ item: { content }, call: null, prompts: [] }) as unknown as BackgroundResult;
-    const other = result("an input that names no call");
+    const result = (origin: RequestOriginView | null): BackgroundResult =>
+      ({ item: { origin }, call: null, prompts: [] }) as unknown as BackgroundResult;
+    const other = result(null);
     expect(backgroundRunLabel([result(completion("completed")), other])).toBe(
       "bash_unrestricted finished",
     );
@@ -188,51 +184,22 @@ describe("finding who sent a message", () => {
     senderRequestId: "request-1",
     ...over,
   });
-  const routed = (
-    session: string,
-    node = "did:key:z6MkSend..fier",
-    cause = "request-1",
-  ) =>
-    `[message agent:engineer session:${session} node:${node} · at:2026-11-01T13:53:39Z · cause:${cause}]\n\nhello`;
-
-  it("finds the sender session the origin names, under the sender node first", () => {
+  it("uses the native sender scope without reading a prompt header", () => {
+    expect(senderSession(fleet, origin({ senderSessionId: "session-reviewer" }))).toBe(
+      reviewer,
+    );
     expect(
-      senderSession(fleet, origin({ senderSessionId: "session-reviewer" }), null),
-    ).toBe(reviewer);
+      senderSession(
+        fleet,
+        origin({ senderNodeDid: OTHER, senderSessionId: "session-reviewer" }),
+      ),
+    ).toBeNull();
     expect(
       senderSession(
         fleet,
         origin({ senderNodeDid: null, senderSessionId: "session-elsewhere" }),
-        null,
-      ),
-    ).toBe(elsewhere);
-    expect(
-      senderSession(fleet, origin({ senderSessionId: "unlisted" }), null),
-    ).toBeNull();
-  });
-
-  it("reads the routing line only when it agrees with the authenticated sender", () => {
-    expect(senderSession(fleet, origin(), routed("session-reviewer"))).toBe(reviewer);
-    expect(senderSession(fleet, origin(), routed("session-elsewhere"))).toBeNull();
-    expect(
-      senderSession(
-        fleet,
-        origin(),
-        routed("session-reviewer", "did:key:z6MkSome..0000"),
       ),
     ).toBeNull();
-    expect(
-      senderSession(
-        fleet,
-        origin(),
-        routed("session-reviewer", undefined, "request-2"),
-      ),
-    ).toBeNull();
-    expect(
-      senderSession(fleet, origin({ senderNodeDid: null }), routed("session-reviewer")),
-    ).toBeNull();
-    expect(
-      senderSession(fleet, origin(), `hello\n${routed("session-reviewer")}`),
-    ).toBeNull();
+    expect(senderSession(fleet, origin())).toBeNull();
   });
 });

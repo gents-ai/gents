@@ -18,11 +18,14 @@ use super::shared::{lookup_service, MetaToolContext};
 use gents_loop::tool::Tool;
 
 async fn invoke(tool: &super::CallToolTool, service: &str, name: &str) -> Result<String> {
-    tool.call(super::CallToolArgs {
-        service_id: service.into(),
-        tool_name: name.into(),
-        arguments: json!({}),
-    })
+    tool.call(
+        super::CallToolArgs {
+            service_id: service.into(),
+            tool_name: name.into(),
+            arguments: json!({}),
+        },
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
     .await
     .map_err(anyhow::Error::new)
 }
@@ -209,16 +212,19 @@ async fn held_client_and_agent_mcp_selection_isolation_rebind_and_rollback() -> 
         ConfigAccess::local_managed_agent(node.clone(), agent_did.clone(), agent.as_ref())?;
     let docs = vec![
         SelectedConfigurationDocument {
+            version: "fixture-version".into(),
             collection: Collection::Agent,
             doc_id: doc(&access, "Agent").await?,
             logical_id: None,
         },
         SelectedConfigurationDocument {
+            version: "fixture-version".into(),
             collection: Collection::AgentContext,
             doc_id: doc(&access, "AgentContext").await?,
             logical_id: None,
         },
         SelectedConfigurationDocument {
+            version: "fixture-version".into(),
             collection: Collection::Tools,
             doc_id: doc(&access, "Tools").await?,
             logical_id: None,

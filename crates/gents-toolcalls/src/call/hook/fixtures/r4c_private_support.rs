@@ -47,11 +47,15 @@ pub async fn setup_private_hook_for_agent(
         agent_identity,
     )
     .expect("fixture Agent's managed access");
-    let session = gents_store::graphql::escape_graphql_string(session_id);
-    let escaped_node = gents_store::graphql::escape_graphql_string(node_did);
-    let agent = gents_store::graphql::escape_graphql_string(agent_did);
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    access.write("r4c.create_session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{session}", node_did: "{escaped_node}", requester_did: "{agent}", agent_did: "{agent}", created_at: "{now}" }}) {{ _docID }} }}"#)).await.expect("create R4C agent-owned session");
+    gents_session::test_support::create_agent_owned_session_at(
+        &access,
+        node_did,
+        session_id,
+        Some(agent_did),
+        &now,
+    )
+    .await;
 
     let hook = DefraSessionHook::resume_with_actor_policy(
         node.clone(),
@@ -164,8 +168,14 @@ pub async fn accepted_call(
         provider_call_id.as_deref(),
     )
     .await;
-    hook.on_tool_call(name, provider_call_id, internal_call_id, args)
-        .await
+    hook.on_tool_call(
+        name,
+        provider_call_id,
+        internal_call_id,
+        args,
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
 }
 
 pub async fn assert_accepted_control_rows(

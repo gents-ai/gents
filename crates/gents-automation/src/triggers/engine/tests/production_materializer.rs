@@ -917,16 +917,15 @@ async fn goal_task_replay_traces_match_the_lean_admission_model() {
         .unwrap();
         access
             .transact_write("test.replay_session", |txn| {
-                Box::pin(gents_session::session::ensure_session_in_txn(
-                    txn,
-                    session,
-                    &owner,
-                    &agent_did,
-                    Some(&agent_did),
-                    None,
-                    None,
-                    "2030-01-01T00:00:00Z",
-                ))
+                Box::pin(
+                    gents_session::test_support::stage_agent_owned_session_in_txn(
+                        txn,
+                        &owner,
+                        session,
+                        Some(&agent_did),
+                        "2030-01-01T00:00:00Z",
+                    ),
+                )
             })
             .await
             .unwrap();
@@ -1048,16 +1047,11 @@ async fn goal_task_replay_traces_match_the_lean_admission_model() {
                     let outcome = match publish().await {
                         Ok(request) if request == prepared.receipt.request_id => "fired",
                         Ok(request) => panic!("published another request {request}"),
-                        Err(error) => {
-                            assert_eq!(
-                                error
-                                    .downcast_ref::<MaterializeDuplicate>()
-                                    .unwrap()
-                                    .request_id,
-                                prepared.receipt.request_id
-                            );
+                        Err(MaterializeError::Duplicate(duplicate)) => {
+                            assert_eq!(duplicate.request_id, prepared.receipt.request_id);
                             "duplicate"
                         }
+                        Err(error) => panic!("publish failed: {error}"),
                     };
                     let after = access.execute(&query).await.unwrap();
                     let fire_goal = after["data"]["TriggerFire"][0]["goal_id"].as_str().unwrap();
@@ -2291,18 +2285,32 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
         access
             .transact_write("test.scheduled_target_session", |txn| {
                 let owner = &owner;
+                let held_agent = &held_agent;
                 Box::pin(async move {
-                    gents_session::session::ensure_session_in_txn(
-                        txn,
-                        target,
-                        node_did,
-                        agent,
-                        Some(owner.as_str()),
-                        None,
-                        None,
-                        &chrono::Utc::now().to_rfc3339(),
-                    )
-                    .await
+                    if agent == held_agent && node_did == owner {
+                        gents_session::test_support::stage_agent_owned_session_in_txn(
+                            txn,
+                            node_did,
+                            target,
+                            Some(owner.as_str()),
+                            &chrono::Utc::now().to_rfc3339(),
+                        )
+                        .await
+                        .map(|_| ())
+                    } else {
+                        gents_session::session::ensure_session_in_txn(
+                            txn,
+                            target,
+                            node_did,
+                            agent,
+                            Some(owner.as_str()),
+                            None,
+                            None,
+                            &chrono::Utc::now().to_rfc3339(),
+                        )
+                        .await
+                        .map(|_| ())
+                    }
                 })
             })
             .await

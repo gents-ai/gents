@@ -585,12 +585,26 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     assert_eq!(failed["attempt"], 1);
     assert_eq!(failed["trigger_id"], "change-unit-test-failure");
     assert_eq!(failed["terminal_state"], "failed");
+    let expected_reason = if gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
+        SCRIPTED_STAGE_FAILURE
+    } else {
+        "ReadWrite workspace binding requires an enforceable WorkspaceWrite sandbox on this host"
+    };
+    assert!(
+        failed["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains(expected_reason)),
+        "the ReadWrite stage fails with the provider error where the sandbox is enforced and with the workspace owner's refusal elsewhere: {failed:#}"
+    );
 
     let inbox = wait_supervisor_inbox(access, FAILURE_UNIT).await;
     assert_eq!(inbox["session_id"], supervisor_session);
     assert_eq!(inbox["agent_did"], supervisor);
     assert_eq!(inbox["requester_did"], cycle.user.did());
-    assert_eq!(inbox["lifecycle_state"], "completed");
+    assert_eq!(
+        inbox["lifecycle_state"], "completed",
+        "the unbound supervisor inbox needs no workspace sandbox: {inbox:#}"
+    );
     assert!(inbox["content"].as_str().unwrap().contains(FAILURE_UNIT));
 
     let outcome_count = access
@@ -725,20 +739,24 @@ async fn select_default_agent(access: &ConfigAccess, owner: &str, agent_did: &st
     .await;
 }
 
+const SCRIPTED_STAGE_FAILURE: &str = "scripted failure for the change-unit supervisor inbox test";
+
+/// One plan per stage prompt: the ReadWrite failure stage reaches the provider only on a
+/// host that enforces the WorkspaceWrite sandbox, so a shared response queue would hand
+/// its scripted failure to the supervisor inbox elsewhere.
 fn failure_inbox_backend() -> MockStreamingBackend {
-    let unit = StreamPlan::current_authored_user(
-        "change-unit:cycle-inbox",
-        vec![
-            StreamResponse::bad_request(
-                "scripted failure for the change-unit supervisor inbox test",
-            ),
-            StreamResponse::completes(
-                "change-unit:cycle-inbox",
-                ["The failed stage reached the supervisor session."],
-            ),
-        ],
+    let stage = StreamPlan::current_authored_user(
+        "Test failure stage for change-unit:cycle-inbox",
+        vec![StreamResponse::bad_request(SCRIPTED_STAGE_FAILURE)],
     );
-    MockStreamingBackend::start_with_plans(MODEL, vec![unit]).expect("mock provider starts")
+    let inbox = StreamPlan::current_authored_user(
+        "Supervisor inbox delivery: stage change-unit-test-failure for change-unit:cycle-inbox",
+        vec![StreamResponse::completes(
+            "change-unit:cycle-inbox",
+            ["The failed stage reached the supervisor session."],
+        )],
+    );
+    MockStreamingBackend::start_with_plans(MODEL, vec![stage, inbox]).expect("mock provider starts")
 }
 
 async fn install_inference(access: &ConfigAccess, owner: &str, source: InferenceSource<'_>) {
@@ -1334,17 +1352,16 @@ async fn wait_supervisor_inbox(access: &ConfigAccess, work_unit_id: &str) -> Val
         let response = access.execute(&query).await.unwrap();
         let rows = response["data"]["AgentRequest"].as_array().unwrap();
         if let Some(row) = rows.first() {
-            if row["lifecycle_state"] == "completed" {
+            if matches!(
+                row["lifecycle_state"].as_str(),
+                Some("completed" | "failed")
+            ) {
                 return row.clone();
             }
-            assert!(
-                row["lifecycle_state"] != "failed",
-                "supervisor inbox request failed: {row:#}"
-            );
         }
         assert!(
             Instant::now() < deadline,
-            "failed-stage inbox request was not completed: {response:#}"
+            "failed-stage inbox request did not settle: {response:#}"
         );
         let _ = tokio::time::timeout_at(deadline, changes.recv()).await;
     }

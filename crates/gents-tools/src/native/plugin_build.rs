@@ -79,6 +79,7 @@ pub async fn run_plugin_build(
         environment: Some(command.environment),
         tool_name: Some("config".to_owned()),
         live_output: None,
+        process_recorder: None,
     })
     .await;
     match outcome {

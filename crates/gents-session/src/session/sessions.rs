@@ -940,8 +940,10 @@ pub async fn close_session_with_access(
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     chrono::DateTime::parse_from_rfc3339(&now).context("invalid session closed_at")?;
+    // The callback re-reads the session the turn keeps refreshing, skips a
+    // closed one and patches from that read, so a confirmed conflict is rebuilt.
     access
-        .transact_write("session.close", move |txn| {
+        .transact_signed_conflict_rebuild("session.close", move |txn| {
             let now = now.clone();
             Box::pin(async move {
                 let Some(row) =

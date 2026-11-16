@@ -13,10 +13,18 @@ use super::super::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
 use super::reconcile::{prepare_pairing_peer, reconcile_prepared_peer};
 use super::{GraphqlPairingStateStore, PairingStateStore, MAX_CONCURRENT_PEER_PREPARATIONS};
 
-const PAIRING_STATE_COLLECTIONS: [&str; 3] = [
+/// An application overlay contributes only while its author is an enabled
+/// Agent holding the P2P mutation grant, and a standing replicator keeps
+/// pushing until a sweep removes it, so the author's Agent, context and tools
+/// wake the reconciler as the pairing documents do rather than waiting for the
+/// periodic sweep (`tla/PairingGrantRevocation.tla`, `StrictNoLeak`).
+const PAIRING_STATE_COLLECTIONS: [&str; 6] = [
     "PeerPairingDesired",
     "DataPlanePairingDesired",
     "PeerPairingApplied",
+    "Agent",
+    "AgentContext",
+    "Tools",
 ];
 
 pub async fn run_pairing_reconciler(

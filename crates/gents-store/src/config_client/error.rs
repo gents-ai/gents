@@ -99,7 +99,7 @@ pub enum ConfigClientError {
     WriteTelemetry(#[from] WriteTelemetryError),
     #[error(transparent)]
     Reentrant(#[from] ReentrantEmbeddedWrite),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Protocol(#[from] gents_protocol::graphql::GraphqlError),
     #[error(transparent)]
     Identity(Box<crate::identity::IdentityError>),
@@ -314,7 +314,7 @@ pub enum ConfigClientError {
         source: reqwest::Error,
     },
     /// Error list returned by DefraDB; its source exposes storage exhaustion.
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Database(#[from] gents_protocol::database_error::GraphqlFailure),
     /// Error list returned by the embedded DefraDB node.
     #[error("graphql returned errors: {errors:?}")]
@@ -574,6 +574,27 @@ impl ConfigClientError {
         self.transaction_conflict().is_some()
     }
 
+    /// For a conflict, whether a client may repeat the failed operation (Lean
+    /// `TransactionReplay.clientMayRepeat`): the attempt that met it did not
+    /// commit. `None` for any other failure.
+    pub fn conflict_repeatable(&self) -> Option<bool> {
+        match self.access() {
+            Self::TransactionConflict(conflict) => Some(conflict.repeatable),
+            _ => None,
+        }
+    }
+
+    /// Marks a conflict as met at a commit the store did not confirm aborted.
+    pub(super) fn mark_unconfirmed_commit(&mut self) {
+        match self {
+            Self::TransactionConflict(conflict) => conflict.repeatable = false,
+            Self::Response(crate::graphql::GraphqlResponseError::Access(error)) => {
+                error.mark_unconfirmed_commit()
+            }
+            _ => {}
+        }
+    }
+
     /// The conflict origin when the transaction owner may replay this failure.
     pub(crate) fn transaction_conflict(&self) -> Option<ConflictSource> {
         match self.access() {
@@ -725,10 +746,13 @@ impl ConfigClientError {
 }
 
 /// A conflict the transaction owner may replay; its origin is telemetry only.
+/// `repeatable` is Lean `TransactionReplay.clientMayRepeat` for the attempt
+/// that met it: false only for a commit the store did not confirm aborted.
 #[derive(Debug, thiserror::Error)]
 #[error("DefraDB transaction conflict")]
 pub struct TransactionConflict {
     pub(super) origin: ConflictSource,
+    pub(super) repeatable: bool,
 }
 
 /// Native wraps a refused relationship change in `RelationshipAcp`, naming the

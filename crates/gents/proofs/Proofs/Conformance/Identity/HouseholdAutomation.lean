@@ -72,18 +72,6 @@ def unattendedDocumentsUnavailable : Family UnattendedInput Bool where
   inputs := unattendedInputs.filter fun i => i.invoke == "unavailable"
   model := unattendedAllowed
 
-/-- An unavailable invoke observation needs a node without node ACP, which
-`household_unattended_session_unavailable` builds on its own fixture. -/
-@[conformance_family]
-def unattendedSessionAdmission : Family UnattendedInput Bool where
-  inputs := unattendedInputs.filter fun i => i.invoke != "unavailable"
-  model := unattendedAllowed
-
-@[conformance_family]
-def unattendedSessionUnavailable : Family UnattendedInput Bool where
-  inputs := unattendedInputs.filter fun i => i.invoke == "unavailable"
-  model := unattendedAllowed
-
 structure CallbackGenerationInput where
   name : String
   sourceVisible : Bool

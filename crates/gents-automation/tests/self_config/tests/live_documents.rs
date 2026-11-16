@@ -59,7 +59,10 @@ async fn call(tools: &[Box<dyn ToolDyn>], args: Value) -> Result<Value, String> 
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .expect("config registered")
-        .call(args.to_string())
+        .call(
+            args.to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .map_err(|error| error.to_string())?;
     Ok(serde_json::from_str(&text).unwrap_or(Value::String(text)))
@@ -250,9 +253,11 @@ async fn plugin_build_saves_the_source_and_reports_build_and_case_failures() {
     let outside = tempfile::tempdir().unwrap();
     let builder = outside.path().join("builder.sh");
     let stub = |body: &str| {
-        std::fs::write(&builder, format!("#!/bin/sh\n{body}\n")).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&builder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        gents_store::test_support::write_executable_script(
+            &builder,
+            &format!("#!/bin/sh\n{body}\n"),
+        )
+        .unwrap();
     };
     let _stub = PLUGIN_BUILDER_STUB.lock().await;
     stub("echo 'main.js:1: unexpected token' >&2; exit 1");
@@ -344,20 +349,18 @@ async fn plugin_build_accepts_data_collections_that_live_on_the_node() {
     let home_path = std::fs::canonicalize(home.path()).unwrap();
     let outside = tempfile::tempdir().unwrap();
     let builder = outside.path().join("builder.sh");
-    let artifact = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../gents/tests/fixtures/packs/job_plugin_fixture/plugins/job_fixture.afb");
-    std::fs::write(
+    let artifact = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("../gents/tests/fixtures/packs/job_plugin_fixture/plugins/job_fixture.afb");
+    gents_store::test_support::write_executable_script(
         &builder,
-        format!(
+        &format!(
             "#!/bin/sh\ncat {:?} > plugins/probe.afb\nprintf '{{\"cases\":[{{\"plugin\":\"probe\",\"passed\":1,\"failures\":[]}}]}}'\n",
             artifact
         ),
     )
     .unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&builder, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
     let _stub = PLUGIN_BUILDER_STUB.lock().await;
     let _builder = gents_store::test_support::EnvVarGuard::set(
         "GENTS_PLUGIN_BUILDER",
@@ -419,18 +422,14 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
         .unwrap();
     };
     let builder = outside.path().join("builder.sh");
-    std::fs::write(
+    gents_store::test_support::write_executable_script(
         &builder,
-        format!(
+        &format!(
             "#!/bin/sh\ncat {:?} > plugins/probe.afb\nprintf '{{\"cases\":[{{\"plugin\":\"probe\",\"passed\":1,\"failures\":[]}}]}}'\n",
             artifact
         ),
     )
     .unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&builder, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
     let _stub = PLUGIN_BUILDER_STUB.lock().await;
     let _builder = gents_store::test_support::EnvVarGuard::set(
         "GENTS_PLUGIN_BUILDER",

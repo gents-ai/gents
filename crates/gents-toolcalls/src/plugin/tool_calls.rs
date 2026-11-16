@@ -96,6 +96,7 @@ pub fn parse_batch(output: &Value) -> Result<Option<Batch>, String> {
 
 pub struct Session {
     dispatcher: Arc<dyn ToolEffectDispatcher>,
+    parent: gents_loop::tool::ToolCallEnvelope,
     used: u32,
     pub fatal: Option<String>,
 }
@@ -112,18 +113,24 @@ impl Session {
         self.used = next;
         let arguments = Value::Object(arguments).to_string();
         settle(
-            gents_loop::tool_effects::scope(None, self.dispatcher.call(next, name, &arguments))
-                .await,
+            gents_loop::tool_effects::scope(
+                None,
+                self.dispatcher.call(&self.parent, next, name, &arguments),
+            )
+            .await,
         )
     }
 
-    pub fn for_call(granted: bool) -> Option<Self> {
+    /// The `tool_calls` service of the plugin call `parent`, if it is granted
+    /// and the call may compose.
+    pub fn for_call(granted: bool, parent: &gents_loop::tool::ToolCallEnvelope) -> Option<Self> {
         let dispatcher = gents_loop::tool_effects::current();
         if !available(granted, dispatcher.is_some()) {
             return None;
         }
         Some(Self {
             dispatcher: dispatcher?,
+            parent: parent.clone(),
             used: 0,
             fatal: None,
         })
@@ -174,6 +181,7 @@ mod tests {
     impl ToolEffectDispatcher for Tools {
         fn call<'a>(
             &'a self,
+            _parent: &'a gents_loop::tool::ToolCallEnvelope,
             ordinal: u32,
             name: &'a str,
             arguments: &'a str,
@@ -217,7 +225,7 @@ mod tests {
     async fn rounds_chain_a_query_result_into_a_chart_without_model_calls() {
         let tools = Arc::new(Tools::default());
         gents_loop::tool_effects::scope(Some(tools.clone()), async {
-            let session = Session::for_call(true).unwrap();
+            let session = Session::for_call(true, &gents_loop::tool::ToolCallEnvelope::ambient()).unwrap();
             let round: rounds::Round = Arc::new(|input, _| {
                 let output = match input.get("state").and_then(Value::as_str) {
                     None => json!({"tool_calls":{"requests":[{"id":"table","tool_name":"query","arguments":{"sql":"SELECT day, sales FROM sales"}}],"state":"chart"}}),
@@ -265,15 +273,17 @@ mod tests {
             let plugin =
                 crate::plugin::tool::PluginTool::resolve(executor.clone(), &selected, None)
                     .unwrap();
-            let output =
-                gents_loop::tool_effects::scope(Some(tools.clone()), plugin.call("{}".into()))
-                    .await
-                    .unwrap();
+            let output = gents_loop::tool_effects::scope(
+                Some(tools.clone()),
+                plugin.call("{}".into(), &gents_loop::tool::ToolCallEnvelope::ambient()),
+            )
+            .await
+            .unwrap();
             let output: Value = serde_json::from_str(&output).unwrap();
             assert_eq!(output.get("tool_results").is_some(), granted);
         }
         assert_eq!(tools.0.lock().unwrap().len(), 1);
-        assert!(Session::for_call(true).is_none());
+        assert!(Session::for_call(true, &gents_loop::tool::ToolCallEnvelope::ambient()).is_none());
     }
 
     #[tokio::test]
@@ -303,7 +313,10 @@ mod tests {
             let dispatcher = live.then(|| tools.clone() as Arc<dyn ToolEffectDispatcher>);
             let call = gents_loop::tool_effects::scope(
                 dispatcher,
-                plugin.call_with_receipt(input.to_string()),
+                plugin.call_with_receipt(
+                    input.to_string(),
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                ),
             )
             .await;
             let observed: Value = serde_json::from_str(&call.result.unwrap()).unwrap();
@@ -321,10 +334,16 @@ mod tests {
                 format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
             );
         }
-        let call =
-            gents_loop::tool_effects::scope(Some(tools.clone()), executor.call(&record, input))
-                .await
-                .unwrap();
+        let call = gents_loop::tool_effects::scope(
+            Some(tools.clone()),
+            executor.call(
+                &record,
+                input,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            ),
+        )
+        .await
+        .unwrap();
         assert!(!call.receipt.authority.unwrap().host_tools);
         assert!(tools.0.lock().unwrap().is_empty());
     }
@@ -335,6 +354,7 @@ mod tests {
         impl ToolEffectDispatcher for Fatal {
             fn call<'a>(
                 &'a self,
+                _parent: &'a gents_loop::tool::ToolCallEnvelope,
                 _: u32,
                 _: &'a str,
                 _: &'a str,
@@ -350,7 +370,7 @@ mod tests {
             }
         }
         gents_loop::tool_effects::scope(Some(Arc::new(Fatal)), async {
-            let session = Session::for_call(true).unwrap();
+            let session = Session::for_call(true, &gents_loop::tool::ToolCallEnvelope::ambient()).unwrap();
             let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let observed = polls.clone();
             let round: rounds::Round = Arc::new(move |_, _| {
@@ -401,11 +421,13 @@ mod tests {
             let availability = gents_loop::tool_effects::scope(live, async {
                 if child {
                     gents_loop::tool_effects::scope(None, async {
-                        Session::for_call(granted).is_some()
+                        Session::for_call(granted, &gents_loop::tool::ToolCallEnvelope::ambient())
+                            .is_some()
                     })
                     .await
                 } else {
-                    Session::for_call(granted).is_some()
+                    Session::for_call(granted, &gents_loop::tool::ToolCallEnvelope::ambient())
+                        .is_some()
                 }
             })
             .await;
@@ -488,6 +510,7 @@ mod tests {
         impl ToolEffectDispatcher for Slow {
             fn call<'a>(
                 &'a self,
+                _parent: &'a gents_loop::tool::ToolCallEnvelope,
                 _: u32,
                 _: &'a str,
                 _: &'a str,
@@ -501,7 +524,8 @@ mod tests {
         }
         let clock = RoundClock::new();
         gents_loop::tool_effects::scope(Some(Arc::new(Slow(clock.clone()))), async {
-            let session = Session::for_call(true).unwrap();
+            let session =
+                Session::for_call(true, &gents_loop::tool::ToolCallEnvelope::ambient()).unwrap();
             let guest_clock = clock.clone();
             let round: rounds::Round = Arc::new(move |input, _| {
                 guest_clock.advance(10);
@@ -555,6 +579,7 @@ mod tests {
         impl ToolEffectDispatcher for Asking {
             fn call<'a>(
                 &'a self,
+                _parent: &'a gents_loop::tool::ToolCallEnvelope,
                 _: u32,
                 _: &'a str,
                 _: &'a str,
@@ -607,7 +632,9 @@ mod tests {
                 clock.clone(),
             ))),
             async {
-                let session = Session::for_call(true).unwrap();
+                let session =
+                    Session::for_call(true, &gents_loop::tool::ToolCallEnvelope::ambient())
+                        .unwrap();
                 let guest_clock = clock.clone();
                 let round: rounds::Round = Arc::new(move |input, _| {
                     guest_clock.advance(10);

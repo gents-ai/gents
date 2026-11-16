@@ -3,6 +3,7 @@ import Proofs.Store.AccessClassification
 import Proofs.Store.Views
 import Proofs.Store.Identity.RelationshipReplay
 import Proofs.Shared.Basic
+import Proofs.Ci.TestCache
 import Proofs.Automation.Process
 import Proofs.Store.Persistence
 import Proofs.Store.SchemaInstall
@@ -10,11 +11,13 @@ import Proofs.Store.StorageObservation
 import Proofs.Store.StorageWriteGate
 import Proofs.Store.NativeCompletion
 import Proofs.Store.NativeClaimLifetime
+import Proofs.Store.StoreHandoff
 import Proofs.Inference.Operations
 import Proofs.Inference.Scheduling
 import Proofs.Session.Request
 import Proofs.Session.RequestExecutionLease
 import Proofs.Runtime.InferenceCall
+import Proofs.Runtime.StreamBatch
 import Proofs.Shared.AccountRotation
 import Proofs.Runtime.AuxiliaryAdmission
 import Proofs.Shared.TextNormalization
@@ -155,3 +158,4 @@ import Proofs.Session.Request.PreclaimBoundary
 import Proofs.Clients.InstallRepair
 import Proofs.Clients.RepairBackups
 import Proofs.Clients.DesktopConnect
+import Proofs.Clients.IdentityMetadata

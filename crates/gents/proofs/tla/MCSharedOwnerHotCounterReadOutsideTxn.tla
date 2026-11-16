@@ -1,0 +1,4 @@
+---- MODULE MCSharedOwnerHotCounterReadOutsideTxn ----
+EXTENDS SharedOwnerHotCounter
+
+====

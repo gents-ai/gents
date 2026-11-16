@@ -315,26 +315,41 @@ fn install_board(home: &std::path::Path, data: Vec<UxDataSurface>) {
 }
 
 async fn install_verified_board_schema(home: &Path, sdl: &str) {
+    install_verified_board_schemas(home, &[("schemas/board.graphql", sdl)]).await;
+}
+
+async fn install_verified_board_schemas(home: &Path, schemas: &[(&str, &str)]) {
     let home = home.to_owned();
-    let sdl = sdl.to_owned();
+    let schemas: Vec<_> = schemas
+        .iter()
+        .map(|(path, sdl)| (path.to_string(), sdl.to_string()))
+        .collect();
     tokio::task::spawn_blocking(move || -> Result<()> {
         let mut record = gents_pack::pack::read_home_install(&home, "acme/board")?.context("board record missing")?;
         let source = tempfile::tempdir()?;
         std::fs::create_dir_all(source.path().join("ux/board"))?;
-        std::fs::create_dir_all(source.path().join("schemas"))?;
         std::fs::write(source.path().join("README.md"), "# Board")?;
         std::fs::write(source.path().join("ux/board/plugin.js"), "export default {}")?;
-        std::fs::write(source.path().join("schemas/board.graphql"), sdl)?;
-        std::fs::write(source.path().join("config.json"), "{}")?;
-        let manifest = json!({"manifest_version":1, "name":"board", "namespace":"acme",
-            "version":&record.version, "description":"trusted UX fixture", "kind":"documents",
-            "authors":["Fixture"], "assets":["README.md", "ux/board/plugin.js", "schemas/board.graphql", "config.json"],
-            "config":"config.json", "schemas":["schemas/board.graphql"], "ux":&record.ux});
+        let mut assets = vec!["README.md".to_owned(), "ux/board/plugin.js".to_owned()];
+        for (path, sdl) in &schemas {
+            std::fs::create_dir_all(source.path().join(path).parent().unwrap())?;
+            std::fs::write(source.path().join(path), sdl)?;
+            assets.push(path.clone());
+        }
+        let kind = if schemas.is_empty() { PackKind::Assets } else { PackKind::Documents };
+        let mut manifest = json!({"manifest_version":1, "name":"board", "namespace":"acme",
+            "version":&record.version, "description":"trusted UX fixture", "kind":kind,
+            "authors":["Fixture"], "assets":assets, "schemas":schemas.iter().map(|(path,_)| path).collect::<Vec<_>>(), "ux":&record.ux});
+        if kind == PackKind::Documents {
+            std::fs::write(source.path().join("config.json"), "{}")?;
+            manifest["config"] = json!("config.json");
+            manifest["assets"].as_array_mut().unwrap().push(json!("config.json"));
+        }
         std::fs::write(source.path().join("manifest.json"), serde_json::to_vec(&manifest)?)?;
         let (bytes, header) = gents_pack::pack::archive::pack_dir(source.path())?;
         gents_pack::pack::store::PackStore::new(&home).import(bytes.as_slice(), Some(&header.digest))?;
         record.digest = header.digest;
-        record.kind = PackKind::Documents;
+        record.kind = kind;
         gents_pack::pack::write_home_install(&home, &record)?;
         Ok(())
     }).await.unwrap().unwrap();
@@ -600,12 +615,21 @@ async fn cached_operator_tools_recheck_current_source_and_roll_back() {
     let write = BoundedWriteTool::new(fixture.access.clone(), write)
         .declared_by(Some("board".into()))
         .with_visible_surface_owner(fixture.node_did.clone());
-    let initial = query.call(BoundedQueryParams(Map::new())).await.unwrap();
+    let initial = query
+        .call(
+            BoundedQueryParams(Map::new()),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+        .unwrap();
     assert!(initial.contains("BoardTask"));
     let successful = write
-        .call(BoundedWriteParams(
-            serde_json::from_value(json!({"title":"kept", "lane":"doing"})).unwrap(),
-        ))
+        .call(
+            BoundedWriteParams(
+                serde_json::from_value(json!({"title":"kept", "lane":"doing"})).unwrap(),
+            ),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
     assert!(successful.contains("kept"));
@@ -617,9 +641,12 @@ async fn cached_operator_tools_recheck_current_source_and_roll_back() {
     let (failed, mutations) =
         gents_store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
             Some(1),
-            write.call(BoundedWriteParams(
-                serde_json::from_value(json!({"title":"rolled-back", "lane":"doing"})).unwrap(),
-            )),
+            write.call(
+                BoundedWriteParams(
+                    serde_json::from_value(json!({"title":"rolled-back", "lane":"doing"})).unwrap(),
+                ),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            ),
         )
         .await;
     assert!(failed.is_err());
@@ -635,11 +662,20 @@ async fn cached_operator_tools_recheck_current_source_and_roll_back() {
     fixture
         .write_surface(board_surface(&fixture.node_did, "board", false))
         .await;
-    assert!(query.call(BoundedQueryParams(Map::new())).await.is_err());
+    assert!(query
+        .call(
+            BoundedQueryParams(Map::new()),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await
+        .is_err());
     assert!(write
-        .call(BoundedWriteParams(
-            serde_json::from_value(json!({"title":"denied", "lane":"doing"})).unwrap()
-        ))
+        .call(
+            BoundedWriteParams(
+                serde_json::from_value(json!({"title":"denied", "lane":"doing"})).unwrap()
+            ),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
         .await
         .is_err());
     assert_eq!(
@@ -1051,3 +1087,6 @@ async fn surfaces_lists_each_declared_surface_with_its_callable_tools() {
     );
     fixture.node.shutdown().await.expect("node shutdown");
 }
+
+#[path = "tests/create_schema.rs"]
+mod create_schema_errors;

@@ -61,14 +61,27 @@ impl ToolDyn for PendingTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(std::future::pending())
     }
 }
 
 async fn invoke(hook: &DefraSessionHook, id: &str, name: &str, args: &str) -> serde_json::Value {
     accept_hook_tool_call(hook, id, name, args, None).await;
-    let ToolCallHookAction::Skip { reason } = hook.on_tool_call(name, None, id, args).await else {
+    let ToolCallHookAction::Skip { reason } = hook
+        .on_tool_call(
+            name,
+            None,
+            id,
+            args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+    else {
         panic!("accepted {name} must return a tool result")
     };
     serde_json::from_str(&reason).expect("canonical process-control result JSON")
@@ -187,8 +200,7 @@ async fn observe_wait_boundary(boundary: &str) -> WaitObservation {
         .await;
     let session_id = hook.session_id().await.unwrap();
     let request_id = "wait-observer-boundary";
-    let deadline = Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(&hook, request_id, &session_id, deadline).await;
+    bind_interruptible_request(&hook, request_id, &session_id).await;
     let receipt = invoke(
         &hook,
         "observer-spawn",
@@ -216,7 +228,13 @@ async fn observe_wait_boundary(boundary: &str) -> WaitObservation {
     let waiting_hook = hook.clone();
     let wait = tokio::spawn(async move {
         waiting_hook
-            .on_tool_call("wait_process", None, wait_id, &args)
+            .on_tool_call(
+                "wait_process",
+                None,
+                wait_id,
+                &args,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
     });
     if boundary == "callerInterrupted" {
@@ -358,8 +376,7 @@ async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job()
     let owner_request = format!("process-control-owner-{suffix}");
     let foreign_request = format!("process-control-foreign-{suffix}");
     let owner_cancel_request = format!("process-control-owner-cancel-{suffix}");
-    let deadline = Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(&owner, &owner_request, &session_id, deadline).await;
+    bind_interruptible_request(&owner, &owner_request, &session_id).await;
     assert_eq!(
         owner.session_id().await.as_deref(),
         Some(session_id.as_str())
@@ -412,7 +429,7 @@ async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job()
     finish_owned_request(&owner, &owner_request).await;
     let after_owner_completion = fetch_tool_call_row(&owner, &session_id, &tool_call_id).await;
     assert_eq!(after_owner_completion["lifecycle_state"], "running");
-    bind_interruptible_request(&foreign, &foreign_request, &foreign_session_id, deadline).await;
+    bind_interruptible_request(&foreign, &foreign_request, &foreign_session_id).await;
     assert_eq!(
         foreign.active_requester_did().await.as_deref(),
         Some(foreign_agent.as_str())
@@ -449,9 +466,9 @@ async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job()
     assert!(still_running["cancel_cause"].is_null());
 
     finish_owned_request(&foreign, &foreign_request).await;
-    bind_interruptible_request(&owner, &owner_cancel_request, &session_id, deadline).await;
+    bind_interruptible_request(&owner, &owner_cancel_request, &session_id).await;
     let cancelled = invoke(&owner, "owner-cancel", "cancel_process", &args).await;
-    assert_eq!(cancelled["status"], "cancelled");
+    assert_eq!(cancelled["status"], "cancelled", "{cancelled}");
     executions.wait_for_completion(&tool_call_id).await;
     let final_row = fetch_tool_call_row(&owner, &session_id, &tool_call_id).await;
     assert_eq!(final_row["lifecycle_state"], "cancelled");
@@ -534,13 +551,7 @@ mod job_control {
                 .with_background_execution_registry(executions.clone());
             let session_id = owner.session_id().await.unwrap();
             let request_id = format!("job-control-{}", uuid::Uuid::new_v4());
-            bind_interruptible_request(
-                &owner,
-                &request_id,
-                &session_id,
-                Utc::now() + chrono::Duration::minutes(5),
-            )
-            .await;
+            bind_interruptible_request(&owner, &request_id, &session_id).await;
             owner
                 .on_completion_call(&user_text_message("run job control work"), &[])
                 .await;

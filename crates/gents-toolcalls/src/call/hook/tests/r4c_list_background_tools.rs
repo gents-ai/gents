@@ -30,7 +30,11 @@ impl ToolDyn for StaticTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move { Ok(self.result.to_string()) })
     }
 }
@@ -54,7 +58,11 @@ impl ToolDyn for GatedTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async {
             let _permit = self.0.acquire().await.unwrap();
             Ok("wake-completed".to_owned())
@@ -154,7 +162,11 @@ impl ToolDyn for PendingTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(std::future::pending())
     }
 }
@@ -230,27 +242,6 @@ async fn wait_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
             &json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await,
-    )
-}
-
-/// wait_process with an explicit bounded timeout_secs (no polling loop):
-/// the failure diagnostic path uses 1s so an unfinished child is reported
-/// as wait_timeout with its current evidence instead of blocking 30s.
-async fn wait_tool_with_timeout(
-    hook: &DefraSessionHook,
-    internal_call_id: &str,
-    tool_call_id: &str,
-    timeout_secs: u64,
-) -> Value {
-    skip_reason_json(
-        accepted_call(
-            hook,
-            "wait_process",
-            Some(format!("model-{internal_call_id}")),
-            internal_call_id,
-            &json!({ "tool_call_id": tool_call_id, "timeout_secs": timeout_secs }).to_string(),
         )
         .await,
     )
@@ -427,35 +418,27 @@ async fn list_background_tools_reports_running_live_output_bytes() {
     // - `available_bytes` / `preview` expose the same canonical evidence
     //   and coordinate with read_process, which slices the identical
     //   rendering (agreement asserted below at the mid-run observation).
-    // Base behavior was timing-dependent: an early poll caught the 4-byte
-    // "live" Open observation while a poll after completion saw the full
-    // terminal rendering (53 in the failing run). The child is now gated
-    // by a release FILE (portable: no flock — separate-process flock -u
-    // cannot release the child fd, and macOS lacks flock): it prints
-    // "live", then polls for the release file's existence in a bounded
-    // loop, so the mid-run observation is deterministic. The parent writes
-    // the release file only after its assertions; if an assertion fails,
-    // the bounded loop expires and the child's tool timeout reaps it. No
-    // post-release byte arithmetic is asserted.
-    let release_path = tempdir.path().join("release-gate");
-    std::fs::create_dir_all(tempdir.path()).expect("tempdir exists");
+    // The child prints "live" and then holds its gate until the test removes
+    // the hold file, which the tempdir's removal also does if the test fails
+    // first. Neither side has a clock: a child-side bounded wait or tool
+    // timeout opens the gate whether or not the test released it, and a read
+    // after a running/4 listing then correctly reports "livedone"
+    // (tla/BackgroundLiveOutputObservation.tla, `Timed`). Without
+    // `timeout_secs` the run ends at the background lifetime.
+    let hold_path = tempdir.path().join("hold-gate");
+    std::fs::write(&hold_path, b"hold").expect("write hold file");
     // POSIX-safe single-quoted path (tempdir paths contain no single
     // quotes; assert to keep that invariant load-bearing).
-    assert!(!release_path.to_string_lossy().contains('\''));
-    // Simple approved executable invocation per TPM direction: the gate
-    // loop lives in a script file written by the test, invoked as
-    // command=/bin/sh with the script path as a separate argument. This
-    // avoids the /bin/sh -lc inline compound-string path (validator treats
-    // an empty `args` as a shell string; the identical-shape sleep command
-    // worked at combinedc3984a342, so the inline while compound is the
-    // remaining variable). The script content is the same gate: print
-    // live, bounded wait for the release file, print done.
+    assert!(!hold_path.to_string_lossy().contains('\''));
+    // Invoked as command=/bin/sh with the script path as its argument: an
+    // empty `args` would make the validator treat the command as a shell
+    // string.
     let script_path = tempdir.path().join("gate-child.sh");
     std::fs::write(
         &script_path,
         format!(
-            "#!/bin/sh\nprintf live\ni=0\nwhile [ ! -e '{release}' ] && [ \"$i\" -lt 200 ]; do\n  sleep 0.05\n  i=$((i+1))\ndone\nprintf done\n",
-            release = release_path.display()
+            "#!/bin/sh\nprintf live\nwhile [ -e '{hold}' ]; do\n  sleep 0.05\ndone\nprintf done\n",
+            hold = hold_path.display()
         ),
     )
     .expect("write gate script");
@@ -466,28 +449,19 @@ async fn list_background_tools_reports_running_live_output_bytes() {
         json!({
             "command": "/bin/sh",
             "args": [script_path.to_string_lossy().to_string()],
-            "timeout_secs": 20
         }),
     )
     .await;
     let tool_call_id = handle["tool_call_id"].as_str().unwrap();
 
-    // First observation happens while the child is gate-blocked after
-    // printing "live": exactly 4 canonical bytes are observable.
-    //
-    // Root-cause instrumentation (closeout-status-accounting failure at
-    // line 330): the previous loop ran only 40x50ms (2s) — shorter than
-    // the child's own gate budget — and on exhaustion the code asserted
-    // against an empty json!({}), discarding every actual response. The
-    // loop now spans the gate window (60x100ms = 6s < 10s gate ceiling)
-    // and, if no entry matches, panics with the LAST captured list
-    // response plus the tracked per-attempt observation of this
-    // tool_call_id (status and stdout_bytes over time), so failures are
-    // diagnosed from evidence, not inference.
-    let mut entry = json!({});
-    let mut last_response = json!(null);
+    // The gated child stays running with exactly the 4 bytes of "live" until
+    // the release, so the poll ends on that observation; a terminal row
+    // before it means the child ended on its own, which fails with the
+    // evidence (`NoWindowFailure`).
     let mut observations: Vec<(String, u64, String)> = Vec::new();
-    for attempt in 0..60 {
+    let mut attempt = 0;
+    let entry = loop {
+        attempt += 1;
         let result =
             list_background_tools(&hook, &format!("list-live-output-{attempt}"), json!({})).await;
         let entries = result["entries"].as_array().expect("entries");
@@ -495,64 +469,33 @@ async fn list_background_tools_reports_running_live_output_bytes() {
             .iter()
             .find(|entry| entry["tool_call_id"].as_str() == Some(tool_call_id))
         {
+            let status = candidate["status"].as_str().unwrap_or("<missing>");
             observations.push((
-                candidate["status"]
-                    .as_str()
-                    .unwrap_or("<missing>")
-                    .to_string(),
+                status.to_string(),
                 candidate["stdout_bytes"].as_u64().unwrap_or(u64::MAX),
                 candidate["available_bytes"]
                     .as_u64()
                     .map(|bytes| bytes.to_string())
                     .unwrap_or_else(|| "<missing>".to_string()),
             ));
-        }
-        last_response = result.clone();
-        if let Some(matched) = entries
-            .iter()
-            .find(|entry| entry["tool_call_id"].as_str() == Some(tool_call_id))
-            .filter(|entry| entry["status"].as_str() == Some("running"))
-            .filter(|entry| entry["stdout_bytes"].as_u64().unwrap_or_default() == 4)
-        {
-            entry = matched.clone();
-            break;
+            if status == "running" && candidate["stdout_bytes"].as_u64() == Some(4) {
+                break candidate.clone();
+            }
+            if status != "running" && status != "pending" {
+                let read_failure = read_tool(&hook, "read-failure", tool_call_id).await;
+                panic!(
+                    "the gated child ended before the release; per-attempt status/bytes: \
+                     {observations:?}; last response: {result}; persisted-row snapshot: {}; \
+                     bounded read (min 64 tokens): {}",
+                    serde_json::to_string(&persisted_row_snapshot(&hook, tool_call_id).await)
+                        .unwrap(),
+                    read_failure["output"].as_str().unwrap_or("<no output>")
+                );
+            }
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    // Failure diagnostics run BEFORE any observations/mid-run asserts and
-    // use an explicit found-boolean (entry starts as json!({}), so is_null
-    // can never be true - reviewer-caught bug in 452e0c4a).
-    let found = !entry.as_object().is_some_and(|o| o.is_empty());
-    if !found {
-        let waited_failure = wait_tool_with_timeout(
-            &hook,
-            "wait-failure",
-            tool_call_id,
-            1, // explicit timeout_secs=1: bounded, not 10 loops at the 30s default
-        )
-        .await;
-        let read_failure = read_tool(&hook, "read-failure", tool_call_id).await;
-        panic!(
-            "gate window closed with an empty observation list; \
-             tool_call_id {tool_call_id} never appeared in any list response; \
-             last response: {last_response}; \
-             persisted-row snapshot: {}; \
-             wait envelope (timeout_secs=1): {}; \
-             bounded read (min 64 tokens): {}",
-            serde_json::to_string(&persisted_row_snapshot(&hook, tool_call_id).await).unwrap(),
-            serde_json::to_string(&waited_failure).unwrap(),
-            read_failure["output"].as_str().unwrap_or("<no output>")
-        );
-    }
-    assert!(
-        !observations.is_empty(),
-        "tool_call_id {tool_call_id} never appeared in any list response; \
-         last response: {last_response}; \
-         persisted-row snapshot: {}",
-        serde_json::to_string(&persisted_row_snapshot(&hook, tool_call_id).await).unwrap()
-    );
-    assert_eq!(entry["tool_name"].as_str(), Some("bash_unrestricted"),
-        "no running observation with stdout_bytes==4 within the gate window; per-attempt status/bytes: {observations:?}; last response: {last_response}");
+    };
+    assert_eq!(entry["tool_name"].as_str(), Some("bash_unrestricted"));
     assert_eq!(entry["status"].as_str(), Some("running"));
     assert_eq!(
         entry["stdout_bytes"].as_u64(),
@@ -575,9 +518,9 @@ async fn list_background_tools_reports_running_live_output_bytes() {
     // Release the gate: the child observes the file, prints "done", and
     // completes. Its exit status is asserted via wait_process; no byte
     // count is asserted for the terminal state.
-    tokio::fs::write(&release_path, b"release")
+    tokio::fs::remove_file(&hold_path)
         .await
-        .expect("write release file");
+        .expect("remove hold file");
 
     let waited = wait_tool(&hook, "wait-live-output", tool_call_id).await;
     assert_eq!(

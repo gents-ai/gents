@@ -28,16 +28,37 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     let hook = &fixture.hook;
     accept_hook_tool_call(hook, "script", "plugin", "{}", None).await;
     assert!(matches!(
-        hook.on_tool_call("plugin", None, "script", "{}").await,
+        hook.on_tool_call(
+            "plugin",
+            None,
+            "script",
+            "{}",
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
+        .await,
         ToolCallHookAction::Continue
     ));
     let name = gents_protocol::tool_names::AGENT_NEW_TOOL_NAME;
     let args = json!({"agent":"general", "prompt":"work"}).to_string();
     let child = hook
-        .admit_tool_effect("script", 1, name, &args)
+        .admit_tool_effect(
+            "script",
+            1,
+            name,
+            &args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap();
-    let ToolCallHookAction::Skip { reason } = hook.on_tool_call(name, None, &child, &args).await
+    let ToolCallHookAction::Skip { reason } = hook
+        .on_tool_call(
+            name,
+            None,
+            &child,
+            &args,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
     else {
         panic!("agent_new did not return a receipt")
     };
@@ -169,6 +190,11 @@ async fn a_computing_background_guest_stops_at_its_declared_allowance() {
         gents_session::test_support::no_lifecycle_plugins(),
     )
     .await;
+    assert_eq!(
+        guest_allowances(&digest).await,
+        [std::time::Duration::from_secs(5)],
+        "the guest computes under its declared allowance"
+    );
     let cancelled = control(
         &fixture,
         "cancel-script",
@@ -176,9 +202,18 @@ async fn a_computing_background_guest_stops_at_its_declared_allowance() {
         json!({"tool_call_id": id}),
     )
     .await;
-    assert_eq!(cancelled["ok"], true, "{cancelled}");
+    // Nothing orders the cancel before the allowance (TLA
+    // `MCGuestAllowanceCancelLate`): a late cancel reports the ended process.
+    assert!(
+        cancelled["ok"] == true
+            || matches!(cancelled["status"].as_str(), Some(status) if status != "running" && status != "pending"),
+        "{cancelled}"
+    );
     executions.wait_for_completion(&id).await;
-    guest_stopped(&digest, std::time::Duration::from_secs(20)).await;
+    // The allowance is counted in wake-ups of the WASM host's epoch ticker,
+    // which a loaded host delays without bound (Lean `allowanceTicks`), so
+    // the stop is awaited, not timed.
+    guest_released(&digest).await;
     fixture.db.node.shutdown().await.unwrap();
 }
 

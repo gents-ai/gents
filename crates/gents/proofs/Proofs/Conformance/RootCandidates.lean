@@ -17,3 +17,4 @@ import Proofs.Conformance.ToolResultThreading
 import Proofs.Conformance.RepeatedFailureIdentity
 import Proofs.Conformance.ArgumentFailure
 import Proofs.Conformance.SelfConfigToolsRoot
+import Proofs.Conformance.RepeatedToolSuccess

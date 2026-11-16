@@ -95,10 +95,28 @@ where
     retry::classified_transaction_conflict(error).is_some()
 }
 
+/// For a typed DefraDB transaction conflict that outlasted the transaction
+/// owner's attempts, whether a client may repeat the failed operation (Lean
+/// `TransactionReplay.clientMayRepeat`); `None` when `error` is no conflict.
+pub fn classified_conflict_repeatable<E>(error: &E) -> Option<bool>
+where
+    E: TransactionFailure + ?Sized,
+{
+    error.config_client_error()?.conflict_repeatable()
+}
+
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn classified_conflict_for_test() -> ConfigClientError {
     retry::transaction_conflict(write_telemetry::ConflictSource::StructuredCode)
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn unconfirmed_commit_conflict_for_test() -> ConfigClientError {
+    let mut error = classified_conflict_for_test();
+    error.mark_unconfirmed_commit();
+    error
 }
 
 pub use authored_document::{
@@ -140,6 +158,7 @@ pub use txn::{
 pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
 pub use error::{ConfigClientError, RerunNote, RerunRequest, TransactionConflict};
 pub use relationships::ConfigRelationshipGrant;
+pub(crate) use retry::access_owner;
 pub use retry::TransactionFailure;
 pub use self_config_permission::{AgentSelfConfigPermission, AgentSelfConfigPermissionError};
 pub use write_telemetry::WriteTelemetryError;
@@ -622,6 +641,14 @@ impl ConfigAccess {
     pub fn managed_agent_signer(&self) -> Option<crate::identity::ManagedAgentSigner> {
         match self {
             Self::Local(local) => local.agent_signer(),
+            Self::Graphql(_) => None,
+        }
+    }
+
+    /// See [`LocalConfigAccess::begin_store_release`].
+    pub fn begin_store_release(&self) -> Option<crate::local::home::StoreRelease> {
+        match self {
+            Self::Local(local) => local.begin_store_release(),
             Self::Graphql(_) => None,
         }
     }

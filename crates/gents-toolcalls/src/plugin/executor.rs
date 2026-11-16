@@ -14,6 +14,7 @@ use super::data::{self, DataCaller};
 use super::job_calls::{self, JobCaller};
 use super::model_calls;
 use super::rounds::{self, HostCalls};
+use gents_loop::tool::ToolCallEnvelope;
 use gents_pack::plugin::allowed;
 use gents_pack::plugin::http_calls;
 use gents_pack::plugin::model_binding::ModelResolver;
@@ -29,6 +30,15 @@ struct Admitted {
     runner: Arc<PluginRunner>,
     budget: PluginBudget,
     bytes: u64,
+}
+
+/// How a model tool call reaches a plugin: the tool's working root, whether
+/// the plugin is granted `tool_calls`, and the envelope of the call.
+#[derive(Clone, Copy)]
+pub struct ToolInvocation<'a> {
+    pub tool_root: Option<&'a Path>,
+    pub tool_calls: bool,
+    pub context: &'a ToolCallEnvelope,
 }
 
 pub struct BindContext<'a> {
@@ -98,22 +108,35 @@ pub struct PluginCall {
     pub receipt: PluginExecutionReceipt,
 }
 
+/// Why a plugin call failed.
 #[derive(Debug, thiserror::Error)]
-#[error("{source:#}")]
-struct PluginAttemptError {
-    source: anyhow::Error,
-    receipt: PluginExecutionReceipt,
+pub(crate) enum RunError {
+    /// The call failed before it ran.
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Refused(#[from] anyhow::Error),
+    /// The call ran and failed; `receipt` records the attempt.
+    #[error("{source:#}")]
+    Attempt {
+        source: anyhow::Error,
+        receipt: Box<PluginExecutionReceipt>,
+    },
 }
 
-fn plugin_attempt_error(error: &anyhow::Error) -> Option<&PluginAttemptError> {
-    error.downcast_ref::<PluginAttemptError>()
-}
+impl RunError {
+    /// Whether the call failed because the plugin store was busy publishing.
+    pub(crate) fn publication_busy(&self) -> bool {
+        let (Self::Refused(error) | Self::Attempt { source: error, .. }) = self;
+        store::PublishedPluginReadError::error_chain_is_busy(error.as_ref())
+    }
 
-pub(crate) fn publication_busy(error: &anyhow::Error) -> bool {
-    store::PublishedPluginReadError::error_chain_is_busy(error.as_ref())
-        || plugin_attempt_error(error).is_some_and(|attempt| {
-            store::PublishedPluginReadError::error_chain_is_busy(attempt.source.as_ref())
-        })
+    /// A refusal is unwrapped rather than boxed, so a caller that asks the
+    /// erased error for the type raised before the call ran still finds it.
+    pub(crate) fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::Refused(error) => error,
+            attempt @ Self::Attempt { .. } => attempt.into(),
+        }
+    }
 }
 
 fn json_digest(value: &serde_json::Value) -> String {
@@ -301,6 +324,7 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: &serde_json::Value,
         context: &BindContext<'_>,
+        _call: &ToolCallEnvelope,
     ) -> Result<Option<BoundDir>, String> {
         let Some(binding) = &record.declaration.bind_dir else {
             return Ok(None);
@@ -407,10 +431,9 @@ impl PluginExecutor {
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
-        tool_root: Option<&Path>,
-        tool_calls: bool,
+        invocation: ToolInvocation<'_>,
     ) -> Result<PluginCall> {
-        self.call_data_bound_for(record, input, tool_root, tool_calls, None)
+        self.call_data_bound_for(record, input, invocation, None)
             .await
     }
 
@@ -420,11 +443,10 @@ impl PluginExecutor {
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
-        tool_root: Option<&Path>,
-        tool_calls: bool,
+        invocation: ToolInvocation<'_>,
         data: Option<DataCaller>,
     ) -> Result<PluginCall> {
-        self.call_data_bound_jobs(record, input, tool_root, tool_calls, data, None)
+        self.call_data_bound_jobs(record, input, invocation, data, None)
             .await
     }
 
@@ -434,29 +456,29 @@ impl PluginExecutor {
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
-        tool_root: Option<&Path>,
-        tool_calls: bool,
+        invocation: ToolInvocation<'_>,
         data: Option<DataCaller>,
         jobs: Option<JobCaller>,
     ) -> Result<PluginCall> {
-        self.call_data_bound_jobs_as(record, input, tool_root, tool_calls, data, jobs, None)
+        self.call_data_bound_jobs_as(record, input, invocation, data, jobs, None)
             .await
+            .map_err(RunError::into_anyhow)
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "call-scoped capabilities and actor travel together"
-    )]
     async fn call_data_bound_jobs_as(
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
-        tool_root: Option<&Path>,
-        tool_calls: bool,
+        invocation: ToolInvocation<'_>,
         data: Option<DataCaller>,
         jobs: Option<JobCaller>,
         actor: Option<identity::Did>,
-    ) -> Result<PluginCall> {
+    ) -> Result<PluginCall, RunError> {
+        let ToolInvocation {
+            tool_root,
+            tool_calls,
+            context: call,
+        } = invocation;
         let session = gents_tools::runtime_context::current_tool_runtime_context();
         let workdir = session
             .as_ref()
@@ -473,17 +495,18 @@ impl PluginExecutor {
             interactive: approval::interactive(),
         };
         let bound = self
-            .bind_input(record, &input, &context)
+            .bind_input(record, &input, &context, call)
             .await
             .map_err(anyhow::Error::msg)?;
         self.run(
             record,
             input,
             bound,
-            super::tool_calls::Session::for_call(tool_calls),
+            super::tool_calls::Session::for_call(tool_calls, call),
             data,
             jobs,
             actor,
+            call,
         )
         .await
     }
@@ -492,10 +515,9 @@ impl PluginExecutor {
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
-        tool_root: Option<&Path>,
-        tool_calls: bool,
+        invocation: ToolInvocation<'_>,
     ) -> (Result<PluginCall>, PluginExecutionReceipt) {
-        self.call_data_bound_with_receipt_for(record, input, tool_root, tool_calls, None)
+        self.call_data_bound_with_receipt_for(record, input, invocation, None)
             .await
     }
 
@@ -505,11 +527,10 @@ impl PluginExecutor {
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
-        tool_root: Option<&Path>,
-        tool_calls: bool,
+        invocation: ToolInvocation<'_>,
         data: Option<DataCaller>,
     ) -> (Result<PluginCall>, PluginExecutionReceipt) {
-        self.call_data_bound_with_receipt_as(record, input, tool_root, tool_calls, data, None)
+        self.call_data_bound_with_receipt_as(record, input, invocation, data, None)
             .await
     }
 
@@ -517,17 +538,16 @@ impl PluginExecutor {
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
-        tool_root: Option<&Path>,
-        tool_calls: bool,
+        invocation: ToolInvocation<'_>,
         data: Option<DataCaller>,
         actor: Option<identity::Did>,
     ) -> (Result<PluginCall>, PluginExecutionReceipt) {
         let refused = initial_receipt(record, &input);
         let result = self
-            .call_data_bound_jobs_as(record, input, tool_root, tool_calls, data, None, actor)
+            .call_data_bound_jobs_as(record, input, invocation, data, None, actor)
             .await;
         let receipt = receipt_of(&result, refused);
-        (result, receipt)
+        (result.map_err(RunError::into_anyhow), receipt)
     }
 
     /// [`Self::call_data_bound_jobs`] with the receipt of the attempt.
@@ -535,32 +555,32 @@ impl PluginExecutor {
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
-        tool_root: Option<&Path>,
-        tool_calls: bool,
+        invocation: ToolInvocation<'_>,
         data: Option<DataCaller>,
         jobs: Option<JobCaller>,
     ) -> (Result<PluginCall>, PluginExecutionReceipt) {
         let refused = initial_receipt(record, &input);
         let result = self
-            .call_data_bound_jobs(record, input, tool_root, tool_calls, data, jobs)
+            .call_data_bound_jobs_as(record, input, invocation, data, jobs, None)
             .await;
         let receipt = receipt_of(&result, refused);
-        (result, receipt)
+        (result.map_err(RunError::into_anyhow), receipt)
     }
 
     /// One job step of `record`, with the receipt of the attempt. A step
     /// never gets a tool dispatcher (Lean `job_step_has_no_dispatcher`), and
     /// is offered `data_calls` and `job_calls` when the plugin declares them.
-    pub async fn call_job_step_with_receipt(
+    pub(crate) async fn call_job_step_with_receipt(
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
         data: Option<DataCaller>,
         jobs: JobCaller,
-    ) -> (Result<PluginCall>, PluginExecutionReceipt) {
+        context: &ToolCallEnvelope,
+    ) -> (Result<PluginCall, RunError>, PluginExecutionReceipt) {
         let refused = initial_receipt(record, &input);
         let result = self
-            .run(record, input, None, None, data, Some(jobs), None)
+            .run(record, input, None, None, data, Some(jobs), None, context)
             .await;
         let receipt = receipt_of(&result, refused);
         (result, receipt)
@@ -609,8 +629,11 @@ impl PluginExecutor {
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,
+        context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, None, None, None, None, None).await
+        self.run(record, input, None, None, None, None, None, context)
+            .await
+            .map_err(RunError::into_anyhow)
     }
 
     /// [`Self::call`] offering `data_calls.query` as `caller` when the plugin
@@ -620,9 +643,11 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
         caller: DataCaller,
+        context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, None, None, Some(caller), None, None)
+        self.run(record, input, None, None, Some(caller), None, None, context)
             .await
+            .map_err(RunError::into_anyhow)
     }
 
     /// [`Self::call`] offering `job_calls` as `caller` when the plugin
@@ -632,9 +657,11 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
         caller: JobCaller,
+        context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, None, None, None, Some(caller), None)
+        self.run(record, input, None, None, None, Some(caller), None, context)
             .await
+            .map_err(RunError::into_anyhow)
     }
 
     pub async fn call_bound(
@@ -642,9 +669,11 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
         bound: BoundDir,
+        context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, Some(bound), None, None, None, None)
+        self.run(record, input, Some(bound), None, None, None, None, context)
             .await
+            .map_err(RunError::into_anyhow)
     }
 
     /// [`Self::call`] granting `bound` and offering `data_calls.query` as
@@ -655,8 +684,11 @@ impl PluginExecutor {
         input: serde_json::Value,
         bound: Option<BoundDir>,
         data: Option<DataCaller>,
+        context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, bound, None, data, None, None).await
+        self.run(record, input, bound, None, data, None, None, context)
+            .await
+            .map_err(RunError::into_anyhow)
     }
 
     pub async fn call_bound_data_as(
@@ -666,9 +698,11 @@ impl PluginExecutor {
         bound: Option<BoundDir>,
         data: Option<DataCaller>,
         actor: Option<identity::Did>,
+        context: &ToolCallEnvelope,
     ) -> Result<PluginCall> {
-        self.run(record, input, bound, None, data, None, actor)
+        self.run(record, input, bound, None, data, None, actor, context)
             .await
+            .map_err(RunError::into_anyhow)
     }
 
     #[expect(
@@ -684,7 +718,8 @@ impl PluginExecutor {
         data: Option<DataCaller>,
         jobs: Option<JobCaller>,
         actor: Option<identity::Did>,
-    ) -> Result<PluginCall> {
+        _context: &ToolCallEnvelope,
+    ) -> Result<PluginCall, RunError> {
         let mut receipt = initial_receipt(record, &input);
         let result: Result<PluginCall> = async {
             let coordinate = receipt.coordinate.clone();
@@ -754,7 +789,7 @@ impl PluginExecutor {
             let outcome = drive_with_calls(&coordinate, admitted.runner.clone(), bound, calls, input, budget, admitted.budget.wall_clock)
             .await
             .inspect_err(|error| {
-                if error.downcast_ref::<gents_pack::plugin::GuestTrap>().is_some() {
+                if gents_pack::plugin::GuestTrap::raised_by(error) {
                     receipt.verdict = PluginExecutionVerdict::Failed;
                 }
             })?;
@@ -770,7 +805,10 @@ impl PluginExecutor {
                 receipt: receipt.clone(),
             })
         }.await;
-        result.map_err(|source| PluginAttemptError { source, receipt }.into())
+        result.map_err(|source| RunError::Attempt {
+            source,
+            receipt: Box::new(receipt),
+        })
     }
 
     fn admit(&self, record: &InstalledPlugin) -> Result<Arc<Admitted>> {
@@ -875,7 +913,11 @@ impl gents_tools::plugin_host::PluginHost for PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
     ) -> Result<PluginOutcome> {
-        Ok(PluginExecutor::call(self, record, input).await?.outcome)
+        Ok(
+            PluginExecutor::call(self, record, input, &ToolCallEnvelope::ambient())
+                .await?
+                .outcome,
+        )
     }
 
     async fn run_plugin_once(
@@ -889,7 +931,7 @@ impl gents_tools::plugin_host::PluginHost for PluginExecutor {
     ) -> Result<(serde_json::Value, Option<String>, Option<String>)> {
         super::tool::PluginTool::for_run(self, coordinate, selected)?
             .with_agent_data(node, node_did, agent_did)?
-            .run_once(input)
+            .run_once(input, &ToolCallEnvelope::ambient())
             .await
     }
 
@@ -934,14 +976,13 @@ pub async fn call_runner(
 /// The receipt of a finished attempt: the call's own, the one its failure
 /// carries, or `refused` when it failed before running.
 fn receipt_of(
-    result: &Result<PluginCall>,
+    result: &Result<PluginCall, RunError>,
     refused: PluginExecutionReceipt,
 ) -> PluginExecutionReceipt {
     match result {
         Ok(call) => call.receipt.clone(),
-        Err(error) => plugin_attempt_error(error)
-            .map(|error| error.receipt.clone())
-            .unwrap_or(refused),
+        Err(RunError::Attempt { receipt, .. }) => receipt.as_ref().clone(),
+        Err(RunError::Refused(_)) => refused,
     }
 }
 

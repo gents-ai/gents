@@ -1,4 +1,5 @@
 pub mod client;
+pub mod runtime_publication;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use client::stage_request_relationships_in_txn;
 pub use client::{
@@ -27,6 +28,7 @@ use gents_protocol::row::AgentRequest;
 use gents_store::graphql::{escape_graphql_string, response_has_documents};
 
 pub mod backend_wait;
+pub mod presentation_origin;
 pub(crate) use backend_wait::{fresh_healthy, repark_expired_resume};
 mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
@@ -45,6 +47,8 @@ pub use execution_renewal::renew_once_at_with_access as renew_execution_lease_on
 pub(crate) use execution_renewal::renew_with_recheck_at;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use execution_renewal::RenewalAttemptOutcome;
+#[cfg(test)]
+pub(crate) use execution_renewal::RenewalError;
 mod terminal_binding;
 pub use terminal_binding::is_exact_invocation_reply;
 pub mod terminal_tools;
@@ -63,8 +67,10 @@ pub use terminal_tools::ToolAccountingRejection;
 pub mod manual;
 pub mod materialize;
 mod session_message_presentation;
-pub use session_message_presentation::session_message_display_body;
 pub(crate) use session_message_presentation::session_message_display_body_with_content;
+pub use session_message_presentation::{
+    session_message_display_body, signed_session_message_display_body,
+};
 pub mod query;
 pub mod queue;
 mod recovery;
@@ -256,21 +262,19 @@ pub fn request_origin(row: &gents_protocol::row::AgentRequestRow) -> RequestOrig
             .filter(|value| !value.is_empty())
     }
     let input = row.input.as_ref();
-    let source = input
-        .and_then(|input| input.queue.as_ref())
-        .map(|queue| queue.source);
     let continuation = input.and_then(|input| input.goal_continuation.as_ref());
-    if continuation.is_some() || source == Some(queue::QueueSource::Goal) {
+    let kind = presentation_origin::classify(presentation_origin::request_facts(row));
+    if kind == presentation_origin::Kind::GoalContinuation {
         return RequestOrigin::GoalContinuation {
             goal_id: present(&row.caused_by_trigger_id),
             sequence: continuation.map(|continuation| continuation.sequence),
             wrapup: continuation.map(|continuation| continuation.wrapup),
         };
     }
-    if source == Some(queue::QueueSource::BackgroundCompletion) {
+    if kind == presentation_origin::Kind::BackgroundWake {
         return RequestOrigin::BackgroundCompletion;
     }
-    if present(&row.caused_by_parent_tool_call_doc_id).is_some() {
+    if kind == presentation_origin::Kind::SessionMessage {
         return RequestOrigin::SessionMessage {
             parent_request_doc_id: present(&row.caused_by_parent_request_doc_id),
         };

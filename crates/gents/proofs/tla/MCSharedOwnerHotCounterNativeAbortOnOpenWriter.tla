@@ -1,0 +1,4 @@
+---- MODULE MCSharedOwnerHotCounterNativeAbortOnOpenWriter ----
+EXTENDS SharedOwnerHotCounter
+
+====

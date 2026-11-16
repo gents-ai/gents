@@ -1,3 +1,4 @@
+import Proofs.Conformance.BackendPreflight
 import Proofs.Conformance.Identity.SessionChild
 import Proofs.Conformance.RemoteDelivery
 import Proofs.Conformance.StagedPermissionObjects
@@ -47,6 +48,7 @@ import Proofs.Conformance.PluginHostCalls
 import Proofs.Conformance.CallbackAdmission
 import Proofs.Conformance.GoalResetAccount
 import Proofs.Conformance.WakeRedriveSweep
+import Proofs.Conformance.StreamBatch
 import Proofs.Conformance.ToolAdmission
 import Proofs.Conformance.StartupPublication
 import Proofs.Conformance.RequestRepairScope
@@ -198,6 +200,7 @@ import Proofs.Session.Identity.SessionInputEdit
 import Proofs.Automation.EventDelivery.WatcherConformance
 import Proofs.Conformance.WatcherActors
 import Proofs.Conformance.ClientInstallation
+import Proofs.Conformance.ClientIdentityMetadata
 import Proofs.Conformance.RuntimeServiceReplacement
 import Proofs.Conformance.ClientSettings
 import Proofs.Conformance.ClientRequestClosureCases
@@ -235,9 +238,11 @@ import Proofs.Conformance.Hooks
 import Proofs.Conformance.HookDecisions
 import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.TransactionReplay
+import Proofs.Conformance.ClientWindowScopeBound
 import Proofs.Conformance.SubscriptionStream
 import Proofs.Conformance.ReceiptRecovery
 import Proofs.Conformance.HomeRetirement
+import Proofs.Conformance.StoreHandoff
 import Proofs.Conformance.StoreKeyCustody
 import Proofs.Conformance.BackgroundExecutionRegistry
 import Proofs.Conformance.BackgroundWaitChange

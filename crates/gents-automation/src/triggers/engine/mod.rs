@@ -69,6 +69,27 @@ fn trigger_prompt_header(intent: &FireIntent) -> String {
     header + "]"
 }
 
+pub fn trigger_display_body(request: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
+    let gents_session::request::lifecycle::RequestOrigin::Trigger {
+        trigger_id,
+        trigger_kind,
+    } = gents_session::request::lifecycle::request_origin(request)
+    else {
+        return None;
+    };
+    let kind = if trigger_kind == Some("event") {
+        "event"
+    } else {
+        "scheduled"
+    };
+    request
+        .content
+        .as_deref()?
+        .strip_prefix(&format!("[{kind} trigger:{trigger_id} · task:"))?
+        .split_once("]\n\n")
+        .map(|(_, body)| body)
+}
+
 pub struct FireIntent {
     pub trigger_id: Option<String>,
     pub trigger_kind: TriggerKind,
@@ -115,24 +136,28 @@ pub(crate) struct MaterializeDuplicate {
     pub request_id: String,
 }
 
-pub(crate) fn fire_result_from_materialize(result: anyhow::Result<String>) -> FireResult {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum MaterializeError {
+    #[error(transparent)]
+    BudgetExhausted(#[from] MaterializeBudgetExhausted),
+    #[error(transparent)]
+    Duplicate(#[from] MaterializeDuplicate),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Other(#[from] anyhow::Error),
+}
+
+pub(crate) fn fire_result_from_materialize(result: Result<String, MaterializeError>) -> FireResult {
     match result {
         Ok(request_id) => FireResult::Fired { request_id },
-        Err(error) => {
-            if let Some(exhausted) = error.downcast_ref::<MaterializeBudgetExhausted>() {
-                FireResult::BudgetExhausted {
-                    reason: exhausted.reason.clone(),
-                }
-            } else if let Some(duplicate) = error.downcast_ref::<MaterializeDuplicate>() {
-                FireResult::Duplicate {
-                    request_id: duplicate.request_id.clone(),
-                }
-            } else {
-                FireResult::Errored {
-                    error: format!("materialize: {error}"),
-                }
-            }
-        }
+        Err(MaterializeError::BudgetExhausted(exhausted)) => FireResult::BudgetExhausted {
+            reason: exhausted.reason,
+        },
+        Err(MaterializeError::Duplicate(duplicate)) => FireResult::Duplicate {
+            request_id: duplicate.request_id,
+        },
+        Err(error) => FireResult::Errored {
+            error: format!("materialize: {error}"),
+        },
     }
 }
 
@@ -175,7 +200,9 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         durable_fire_key: &str,
         delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
         prepared_ids: Option<(&str, &str)>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<String, MaterializeError>> + Send + '_>,
+    >;
 
     /// Recovers an admitted fire as the Agent of the fire's Task. The fire's
     /// receipt and request are that Agent's rows, so recovery does not depend

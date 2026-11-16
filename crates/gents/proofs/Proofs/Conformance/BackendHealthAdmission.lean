@@ -1,5 +1,6 @@
 import Proofs.Conformance.ContractCases.BoundaryRuntime
 import Proofs.Conformance.Family
+import Proofs.Runtime.BackendHealth.State
 
 namespace Conformance.BackendHealthAdmission
 
@@ -42,5 +43,24 @@ example : backendHealthAdmissionCases.all fun c =>
 example : backendHealthAdmissionCases.all (·.observedDocumentOnly) := by decide
 
 example : backendHealthAdmissionCases.all (!·.externalEndpointFreshnessClaimed) := by decide
+
+structure FirstProbeInput where
+  enabled : Bool
+  probeStatus : String
+  measuredUnhealthy : Bool
+  deriving ToJson
+
+structure WaitingOutput where
+  waiting : Bool
+  deriving ToJson
+
+@[conformance_family]
+def firstProbe : Family FirstProbeInput WaitingOutput where
+  inputs := [false, true].flatMap fun enabled =>
+    Proofs.BackendHealth.HealthState.all.flatMap fun state =>
+      [false, true].map fun measuredUnhealthy =>
+        { enabled, probeStatus := state.toDefraDB, measuredUnhealthy }
+  model := fun i =>
+    { waiting := Proofs.BackendHealth.awaitingFirstProbe i.enabled i.probeStatus i.measuredUnhealthy }
 
 end Conformance.BackendHealthAdmission

@@ -202,16 +202,13 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
         if allowed {
             access
                 .transact_write("test.latest_delivery_session", |txn| {
-                    let (session, owner, agent_did) = (&next.session, &owner, &agent_did);
+                    let (session, owner) = (&next.session, &owner);
                     Box::pin(async move {
-                        gents_session::session::ensure_session_in_txn(
+                        gents_session::test_support::stage_agent_owned_session_in_txn(
                             txn,
-                            session,
                             owner,
-                            agent_did,
+                            session,
                             Some(owner.as_str()),
-                            None,
-                            None,
                             &chrono::Utc::now().to_rfc3339(),
                         )
                         .await
@@ -527,7 +524,7 @@ async fn restart_outcome_recovery_matches_modeled_crash_boundaries() {
         .await
         .unwrap();
         let node = db.node.clone();
-        crate::triggers::callback::seed_test_agent(&node, db.node_identity.did()).await;
+        crate::triggers::callback::seed_test_agent(&node, &fire.identity.owner_did).await;
         let agent = crate::triggers::callback::test_agent_identity();
         let terminal = request.terminal;
         let state = if terminal { "completed" } else { "pending" };
@@ -553,19 +550,10 @@ async fn restart_outcome_recovery_matches_modeled_crash_boundaries() {
         let access = crate::triggers::callback::test_agent_access(&node);
         access
             .transact_write("test.seed_terminal_outcome_boundary", |txn| {
-                let (fire, request_mutation, agent_did, goal_status) =
-                    (&fire, &request_mutation, &agent_did, &goal_status);
+                let (fire, request_mutation, goal_status) =
+                    (&fire, &request_mutation, &goal_status);
                 Box::pin(async move {
-                    gents_session::session::ensure_session_in_txn(
-                        txn,
-                        &fire.session_id,
-                        &fire.identity.owner_did,
-                        agent_did,
-                        None,
-                        None,
-                        None,
-                        "2026-01-01T00:00:00Z",
-                    )
+                    gents_session::test_support::stage_agent_owned_session_in_txn(txn, &fire.identity.owner_did, &fire.session_id, None, "2026-01-01T00:00:00Z")
                     .await?;
                     durable::stage_fire_request(txn, fire, request_mutation).await?;
                     if goal_status.is_some() || replaced {
@@ -703,17 +691,44 @@ async fn persisted_outcome_requests(
 async fn generated_terminal_outcome_action_traces_use_native_owners() {
     for case in gents_lean_vocab::families::trigger_delivery_outcome_trace::cases() {
         let name = &case.input.name;
-        let (db, _user, _access, binding) = crate::test_support::signed_test_node(name).await;
-        let node = db.node.clone();
-        let agent =
-            gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
-                .unwrap();
-        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-            node.clone(),
-            ::identity::Did::new(agent.did()).unwrap(),
-            agent.as_ref(),
-        )
+        let directory = tempfile::tempdir().unwrap();
+        let (root, key) = (
+            gents_store::identity::NodeIdentity::did(
+                &crate::triggers::callback::test_root_identity(),
+            )
+            .to_owned(),
+            directory.path().join("node.key"),
+        );
+        tokio::task::spawn_blocking(move || {
+            gents_store::test_support::write_held_identity_key(&root, &key)
+        })
+        .await
         .unwrap();
+        let db = gents_inference::test_support::test_db_at(
+            directory.path(),
+            None,
+            crate::lifecycle_hooks::composition(),
+        )
+        .await
+        .unwrap();
+        let node = db.node.clone();
+        let agent = crate::triggers::callback::test_agent_identity();
+        let access = crate::triggers::callback::test_agent_access(&node);
+        let owners: std::collections::BTreeSet<String> = case
+            .input
+            .actions
+            .iter()
+            .filter_map(|wire| {
+                let action: OutcomeAction = gents_lean_vocab::family::recode(wire);
+                match action {
+                    OutcomeAction::Admit { fire } => Some(fire.identity.owner_did),
+                    _ => None,
+                }
+            })
+            .collect();
+        for owner in &owners {
+            crate::triggers::callback::seed_test_agent(&node, owner).await;
+        }
         let mut terminal_states = std::collections::BTreeMap::new();
         let mut steps = Vec::new();
         let mut pre = observed_delivery_state(&access, FireIdentity::clone).await;
@@ -727,15 +742,11 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                         .transact_write("test.outcome_trace_admit", |txn| {
                             let receipt = &receipt;
                             let mutation = &mutation;
-                            let agent = agent.did();
                             Box::pin(async move {
-                                gents_session::session::ensure_session_in_txn(
+                                gents_session::test_support::stage_agent_owned_session_in_txn(
                                     txn,
-                                    &receipt.session_id,
                                     &receipt.identity.owner_did,
-                                    agent,
-                                    None,
-                                    None,
+                                    &receipt.session_id,
                                     None,
                                     &receipt.created_at,
                                 )
@@ -1712,7 +1723,7 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
         let exhausted = result
             .as_ref()
             .err()
-            .is_some_and(|error| error.downcast_ref::<MaterializeBudgetExhausted>().is_some());
+            .is_some_and(|error| matches!(error, MaterializeError::BudgetExhausted(_)));
         let row = client
             .execute(r#"{ Trigger(filter: {trigger_id: {_eq: "handoff"}}) { enabled last_status last_error } }"#)
             .await

@@ -433,9 +433,12 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         })
         .await?;
     let tools_id = format!("{}:tools", creator.agent_did);
-    tool.call(json!({"argv":["tools","update"],"set":{"display_name":"configured"}}).to_string())
-        .await
-        .map_err(|error| anyhow::anyhow!("{error:#}"))?;
+    tool.call(
+        json!({"argv":["tools","update"],"set":{"display_name":"configured"}}).to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("{error:#}"))?;
     let tools_query = format!(
         r#"{{ Tools(filter: {{tools_id: {{_eq: "{}"}}}}) {{ _docID display_name }} }}"#,
         gents_store::graphql::escape_graphql_string(&tools_id)
@@ -450,7 +453,10 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         )
         .await?;
     assert!(tool
-        .call(json!({"argv":["tools","update"],"set":{"display_name":"revoked"}}).to_string())
+        .call(
+            json!({"argv":["tools","update"],"set":{"display_name":"revoked"}}).to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
+        )
         .await
         .is_err());
     assert_eq!(user_access.execute(&tools_query).await?, configured);
@@ -467,7 +473,10 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     );
     let listed: Value = serde_json::from_str(
         &tool
-            .call(json!({"argv":["agent","list"]}).to_string())
+            .call(
+                json!({"argv":["agent","list"]}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .map_err(|error| anyhow::anyhow!("{error:#}"))?,
     )?;
@@ -479,7 +488,10 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .any(|agent| agent["agent_did"] == creator.agent_did && agent["is_default"] == true));
     let selected: Value = serde_json::from_str(
         &tool
-            .call(json!({"argv":["agent","get", creator.agent_did]}).to_string())
+            .call(
+                json!({"argv":["agent","get", creator.agent_did]}).to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .map_err(|error| anyhow::anyhow!("{error:#}"))?,
     )?;
@@ -522,6 +534,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
                 "options":{"display-name":"Child", "system-prompt":"Work", "profile":"profile"}
             })
             .to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
         )
         .await
         .is_err());
@@ -543,6 +556,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
                     "options":{"display-name":"Child", "system-prompt":"Work", "profile":"profile"}
                 })
                 .to_string(),
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
             .map_err(|error| anyhow::anyhow!("{error:#}"))?,
@@ -590,6 +604,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         json!({"argv":["agent","update"], "target_id":child,
         "set":{"display_name":"Tool-edited child"}})
         .to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .map_err(|error| anyhow::anyhow!("{error:#}"))?;
@@ -602,7 +617,8 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .call(
             json!({"argv":["agent","update"], "target_id":sibling.agent_did,
         "set":{"display_name":"Not allowed"}})
-            .to_string()
+            .to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient()
         )
         .await
         .is_err());
@@ -985,9 +1001,10 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     .declared_by(Some("fixture/surface".into()))
     .with_surface_owner(runtime.did().to_owned());
     let written = cached_write
-        .call(serde_json::from_value(
-            json!({"name":"selected-agent-write"}),
-        )?)
+        .call(
+            serde_json::from_value(json!({"name":"selected-agent-write"}))?,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .map_err(|error| anyhow::anyhow!("cached write failed: {error}"))?;
     let mut writes = std::collections::BTreeMap::new();
@@ -998,7 +1015,10 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     let (failed_write, mutations) =
         gents_store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
             Some(1),
-            cached_write.call(serde_json::from_value(json!({"name":"rolled-back-write"}))?),
+            cached_write.call(
+                serde_json::from_value(json!({"name":"rolled-back-write"}))?,
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            ),
         )
         .await;
     assert_eq!(mutations, 1);
@@ -1034,7 +1054,10 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         Some(write_signer.as_str())
     );
     let found = cached_tool
-        .call(gents_tools::builtin::defra_query::bounded::BoundedQueryParams(Default::default()))
+        .call(
+            gents_tools::builtin::defra_query::bounded::BoundedQueryParams(Default::default()),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .map_err(|error| anyhow::anyhow!("cached query failed: {error}"))?;
     assert!(found.contains("selected-agent-write"));
@@ -1068,6 +1091,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
                 payload: None,
                 question: None,
             },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
             &mailbox_context,
         )
         .await
@@ -1118,6 +1142,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
                     payload: None,
                     question: None,
                 },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
                 &rollback_context,
             ),
         )
@@ -1370,6 +1395,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     let error = gents_loop::tool::Tool::call(
         &cached_tool,
         gents_tools::builtin::defra_query::bounded::BoundedQueryParams(Default::default()),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
     )
     .await
     .unwrap_err();
@@ -1386,7 +1412,10 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .execute("{ MailboxItem { _docID title } }")
         .await?;
     let denied = cached_write
-        .call(serde_json::from_value(json!({"name":"denied"}))?)
+        .call(
+            serde_json::from_value(json!({"name":"denied"}))?,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -1403,6 +1432,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
                 payload: None,
                 question: None,
             },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
             &mailbox_context,
         )
         .await

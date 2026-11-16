@@ -109,7 +109,7 @@ impl gents_loop::tool::ToolDyn for PreInferenceBlockingTool {
     fn call<'a>(
         &'a self,
         _: String,
-    ) -> gents_loop::tool::BoxFuture<
+        _context: &'a gents_loop::tool::ToolCallEnvelope) -> gents_loop::tool::BoxFuture<
         'a,
         Result<String, gents_loop::tool::ToolError>,
     > {
@@ -632,18 +632,14 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
 
     let marker = probe.path().join("filter.pid");
     let filter = probe.path().join("park-filter");
-    std::fs::write(
+    gents_store::test_support::write_executable_script(
         &filter,
-        format!(
+        &format!(
             "#!/bin/sh\necho $$ > '{}.tmp' && mv '{0}.tmp' '{0}'\nexec sleep 30\n",
             marker.display()
         ),
     )
     .unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&filter, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
     git(
         dir,
         &["config", "filter.park.clean", filter.to_str().unwrap()],

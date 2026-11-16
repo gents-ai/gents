@@ -181,6 +181,7 @@ where
             tauri::async_runtime::handle().inner(),
             gents_server::server_host::ProvisionOptions {
                 home: node_home.clone(),
+                desktop_root: state.policy.desktop_paths.root().to_path_buf(),
                 node_name: node_name.to_string(),
                 tool_ceiling: runtime_tool_ceiling(authority.tool_ceiling),
                 tool_root: authority.tool_root.clone(),
@@ -237,7 +238,7 @@ where
                     }
                     .await;
                     initialized.map_err(|error| LaunchFailure {
-                        error,
+                        error: error.into(),
                         attempted_start: true,
                         preserve_runtime: false,
                         lifecycle: Some(lifecycle),
@@ -247,7 +248,7 @@ where
             }
         }
         Err(error) => Err(LaunchFailure {
-            error,
+            error: error.into(),
             attempted_start: false,
             preserve_runtime: false,
             lifecycle: Some(lifecycle),

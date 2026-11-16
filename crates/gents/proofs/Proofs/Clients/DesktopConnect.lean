@@ -32,6 +32,7 @@ structure Observation where
   node : NodeState
   identity : Bool
   routeSaved : Bool
+  /-- Current access to the selected Node root, not a cached enrollment lease. -/
   enrolled : Bool
   answered : Bool
   /-- Decision: a local desktop is approved the way the setup wizard's local path

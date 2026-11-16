@@ -225,22 +225,25 @@ async fn lsp_entries_start_servers_as_the_lean_model() {
                 .unwrap();
                 let positioned = file.is_some();
                 let result = tool
-                    .call(LspArgs {
-                        action: serde_json::to_value(action)
-                            .unwrap()
-                            .as_str()
-                            .unwrap()
-                            .into(),
-                        file,
-                        line: positioned.then_some(1),
-                        symbol: positioned.then(|| "x".to_string()),
-                        query: None,
-                        new_name: None,
-                        apply: None,
-                        payload: None,
-                        timeout: Some(5),
-                        limit: None,
-                    })
+                    .call(
+                        LspArgs {
+                            action: serde_json::to_value(action)
+                                .unwrap()
+                                .as_str()
+                                .unwrap()
+                                .into(),
+                            file,
+                            line: positioned.then_some(1),
+                            symbol: positioned.then(|| "x".to_string()),
+                            query: None,
+                            new_name: None,
+                            apply: None,
+                            payload: None,
+                            timeout: Some(5),
+                            limit: None,
+                        },
+                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    )
                     .await;
                 match result {
                     Ok(output) => {
@@ -308,7 +311,10 @@ async fn result_limit_is_parsed_and_rejected_outside_bounds() {
             "action": "status", "limit": limit,
         }))
         .unwrap();
-        let error = tool.call(args).await.unwrap_err();
+        let error = tool
+            .call(args, &gents_loop::tool::ToolCallEnvelope::ambient())
+            .await
+            .unwrap_err();
         assert!(
             error
                 .to_string()
@@ -415,50 +421,59 @@ async fn fixture_hover_definition_and_rename_preview() {
     )
     .unwrap();
     let hover = tool
-        .call(LspArgs {
-            action: "hover".into(),
-            file: Some("lib.rs".into()),
-            line: Some(1),
-            symbol: Some("x".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "hover".into(),
+                file: Some("lib.rs".into()),
+                line: Some(1),
+                symbol: Some("x".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("hover");
     assert!(hover.contains("hello hover"), "{hover}");
     let defn = tool
-        .call(LspArgs {
-            action: "definition".into(),
-            file: Some("lib.rs".into()),
-            line: Some(1),
-            symbol: Some("x".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "definition".into(),
+                file: Some("lib.rs".into()),
+                line: Some(1),
+                symbol: Some("x".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("definition");
     assert!(defn.contains("lib.rs") || defn.contains("Found"), "{defn}");
     let preview = tool
-        .call(LspArgs {
-            action: "rename".into(),
-            file: Some("lib.rs".into()),
-            line: Some(1),
-            symbol: Some("x".into()),
-            query: None,
-            new_name: Some("Z".into()),
-            apply: Some(false),
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "rename".into(),
+                file: Some("lib.rs".into()),
+                line: Some(1),
+                symbol: Some("x".into()),
+                query: None,
+                new_name: Some("Z".into()),
+                apply: Some(false),
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("rename preview");
     assert!(!preview.is_empty(), "{preview}");
@@ -489,18 +504,21 @@ async fn rename_file_allows_a_new_destination() {
     )
     .unwrap();
     let output = tool
-        .call(LspArgs {
-            action: "rename_file".into(),
-            file: Some("old.rs".into()),
-            line: None,
-            symbol: None,
-            query: None,
-            new_name: Some("new.rs".into()),
-            apply: Some(true),
-            payload: None,
-            timeout: Some(5),
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "rename_file".into(),
+                file: Some("old.rs".into()),
+                line: None,
+                symbol: None,
+                query: None,
+                new_name: Some("new.rs".into()),
+                apply: Some(true),
+                payload: None,
+                timeout: Some(5),
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("rename_file must admit a destination that does not exist yet");
     assert!(output.contains("Applied edit"), "{output}");
@@ -708,18 +726,21 @@ while True:
     )
     .unwrap();
     let out = tool
-        .call(LspArgs {
-            action: "definition".into(),
-            file: Some("lib.rs".into()),
-            line: Some(1),
-            symbol: Some("x".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "definition".into(),
+                file: Some("lib.rs".into()),
+                line: Some(1),
+                symbol: Some("x".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("definition completes");
     assert!(!out.contains("/etc/passwd"), "{out}");
@@ -815,18 +836,21 @@ while True:
     )
     .unwrap();
     let _ = tool
-        .call(LspArgs {
-            action: "hover".into(),
-            file: Some("lib.rs".into()),
-            line: Some(1),
-            symbol: Some("x".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "hover".into(),
+                file: Some("lib.rs".into()),
+                line: Some(1),
+                symbol: Some("x".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await;
     assert!(!target.exists(), "workspace/applyEdit must not write files");
 }
@@ -896,18 +920,21 @@ async fn execute_command_is_argument_invalid() {
     )
     .unwrap();
     let err = tool
-        .call(LspArgs {
-            action: "request".into(),
-            file: None,
-            line: None,
-            symbol: None,
-            query: Some("workspace/executeCommand".into()),
-            new_name: None,
-            apply: None,
-            payload: Some(r#"{"command":"evil"}"#.into()),
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "request".into(),
+                file: None,
+                line: None,
+                symbol: None,
+                query: Some("workspace/executeCommand".into()),
+                new_name: None,
+                apply: None,
+                payload: Some(r#"{"command":"evil"}"#.into()),
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .unwrap_err();
     let text = err.to_string();
@@ -1024,6 +1051,7 @@ async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent()
     let pool = LspPool::new();
     let initial = scope_request_tool_execution_with_workspace_overlay(
         None,
+        None,
         Default::default(),
         ToolWorkspaceScope {
             runtime_home: Some(first_home),
@@ -1043,6 +1071,7 @@ async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent()
         ..key.clone()
     };
     let next = scope_request_tool_execution_with_workspace_overlay(
+        None,
         None,
         Default::default(),
         ToolWorkspaceScope {
@@ -1148,6 +1177,7 @@ async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes()
     };
     let pool = LspPool::new();
     scope_request_tool_execution_with_workspace_overlay(
+        None,
         None,
         Default::default(),
         ToolWorkspaceScope {
@@ -2130,8 +2160,10 @@ async fn rust_analyzer_starts_and_reports_ready() {
     {
         return;
     }
-    let src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/lsp_rust_workspace");
+    let src = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("tests/fixtures/lsp_rust_workspace");
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join("src")).unwrap();
     // rust-analyzer prefers Cargo.toml over rust-project.json. An isolated
@@ -2149,7 +2181,9 @@ async fn rust_analyzer_starts_and_reports_ready() {
     // default toolchain with no rust-analyzer component installed.
     server.command = super::admit::admit_command(
         "rust-analyzer",
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+        &std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+        ),
     )
     .expect("repository rust-analyzer must pass host executable admission")
     .to_string_lossy()
@@ -2162,18 +2196,21 @@ async fn rust_analyzer_starts_and_reports_ready() {
     );
     let tool = LspTool::new(config, LspPool::new()).unwrap();
     let symbols = tool
-        .call(LspArgs {
-            action: "symbols".into(),
-            file: Some("src/lib.rs".into()),
-            line: None,
-            symbol: None,
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: Some(120),
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "symbols".into(),
+                file: Some("src/lib.rs".into()),
+                line: None,
+                symbol: None,
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: Some(120),
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("rust-analyzer must return document symbols after cold start");
     assert!(
@@ -2181,18 +2218,21 @@ async fn rust_analyzer_starts_and_reports_ready() {
         "document symbols must include add, got: {symbols}"
     );
     let hover = tool
-        .call(LspArgs {
-            action: "hover".into(),
-            file: Some("src/lib.rs".into()),
-            line: Some(4),
-            symbol: Some("add".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: Some(40),
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "hover".into(),
+                file: Some("src/lib.rs".into()),
+                line: Some(4),
+                symbol: Some("add".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: Some(40),
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("rust-analyzer must accept hover after start");
     assert!(
@@ -2201,18 +2241,21 @@ async fn rust_analyzer_starts_and_reports_ready() {
         "hover must include the add signature, got: {hover}"
     );
     let status = tool
-        .call(LspArgs {
-            action: "status".into(),
-            file: None,
-            line: None,
-            symbol: None,
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "status".into(),
+                file: None,
+                line: None,
+                symbol: None,
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("status");
     assert!(
@@ -2232,10 +2275,12 @@ async fn rust_analyzer_hover_on_gents_crate() {
     {
         return;
     }
-    let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("workspace root");
+    let workspace_root = std::path::PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("runtime CARGO_MANIFEST_DIR"),
+    )
+    .join("../..")
+    .canonicalize()
+    .expect("workspace root");
     let auth = workspace_root.join("crates/gents/src/tools/native/lsp/auth.rs");
     let policy = workspace_root.join("crates/gents-loop/src/tool_policy.rs");
     let advertised_line = first_line_containing(&auth, "pub fn lsp_advertised");
@@ -2260,18 +2305,21 @@ async fn rust_analyzer_hover_on_gents_crate() {
         ("crates/gents-loop/src/tool_policy.rs", "meet"),
     ] {
         let symbols = tool
-            .call(LspArgs {
-                action: "symbols".into(),
-                file: Some(file.into()),
-                line: None,
-                symbol: None,
-                query: None,
-                new_name: None,
-                apply: None,
-                payload: None,
-                timeout: Some(60),
-                limit: None,
-            })
+            .call(
+                LspArgs {
+                    action: "symbols".into(),
+                    file: Some(file.into()),
+                    line: None,
+                    symbol: None,
+                    query: None,
+                    new_name: None,
+                    apply: None,
+                    payload: None,
+                    timeout: Some(60),
+                    limit: None,
+                },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
+            )
             .await
             .unwrap_or_else(|err| panic!("document symbols for {file}: {err}"));
         assert!(
@@ -2281,18 +2329,21 @@ async fn rust_analyzer_hover_on_gents_crate() {
     }
 
     let advertised = tool
-        .call(LspArgs {
-            action: "hover".into(),
-            file: Some("crates/gents/src/tools/native/lsp/auth.rs".into()),
-            line: Some(advertised_line),
-            symbol: Some("lsp_advertised".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: Some(60),
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "hover".into(),
+                file: Some("crates/gents/src/tools/native/lsp/auth.rs".into()),
+                line: Some(advertised_line),
+                symbol: Some("lsp_advertised".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: Some(60),
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("hover lsp_advertised");
     assert!(
@@ -2301,18 +2352,21 @@ async fn rust_analyzer_hover_on_gents_crate() {
     );
 
     let meet = tool
-        .call(LspArgs {
-            action: "hover".into(),
-            file: Some("crates/gents-loop/src/tool_policy.rs".into()),
-            line: Some(meet_line),
-            symbol: Some("meet".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: Some(60),
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "hover".into(),
+                file: Some("crates/gents-loop/src/tool_policy.rs".into()),
+                line: Some(meet_line),
+                symbol: Some("meet".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: Some(60),
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("hover meet");
     assert!(
@@ -2321,18 +2375,21 @@ async fn rust_analyzer_hover_on_gents_crate() {
     );
 
     let status = tool
-        .call(LspArgs {
-            action: "status".into(),
-            file: None,
-            line: None,
-            symbol: None,
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "status".into(),
+                file: None,
+                line: None,
+                symbol: None,
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("status");
     assert!(
@@ -2513,12 +2570,10 @@ fn requested_result_limit_applies_to_diagnostics_symbols_and_references() {
 #[cfg(unix)]
 #[tokio::test]
 async fn linter_fallback_obeys_its_total_deadline() {
-    use std::os::unix::fs::PermissionsExt;
-
     let workspace = tempfile::tempdir().unwrap();
     let host = tempfile::tempdir().unwrap();
     let linter_path = host.path().join("hung-biome");
-    std::fs::write(
+    gents_store::test_support::write_executable_script(
         &linter_path,
         r#"#!/bin/sh
 : > "$0.started"
@@ -2526,9 +2581,6 @@ exec sleep 30
 "#,
     )
     .unwrap();
-    let mut permissions = std::fs::metadata(&linter_path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&linter_path, permissions).unwrap();
     let source = workspace.path().join("source.js");
     std::fs::write(&source, "const x = 1;\n").unwrap();
     std::fs::write(workspace.path().join("package.json"), "{}").unwrap();
@@ -2936,34 +2988,40 @@ async fn reload_retires_current_snapshot_clients() {
     );
     let tool = LspTool::new(config, pool.clone()).unwrap();
     let _ = tool
-        .call(LspArgs {
-            action: "hover".into(),
-            file: Some("lib.rs".into()),
-            line: Some(1),
-            symbol: Some("x".into()),
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "hover".into(),
+                file: Some("lib.rs".into()),
+                line: Some(1),
+                symbol: Some("x".into()),
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("hover starts client");
     assert_eq!(pool.live_count().await, 1);
     let out = tool
-        .call(LspArgs {
-            action: "reload".into(),
-            file: None,
-            line: None,
-            symbol: None,
-            query: None,
-            new_name: None,
-            apply: None,
-            payload: None,
-            timeout: None,
-            limit: None,
-        })
+        .call(
+            LspArgs {
+                action: "reload".into(),
+                file: None,
+                line: None,
+                symbol: None,
+                query: None,
+                new_name: None,
+                apply: None,
+                payload: None,
+                timeout: None,
+                limit: None,
+            },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await
         .expect("reload");
     assert!(out.contains("retired"), "{out}");
@@ -2995,6 +3053,7 @@ async fn overlay_read_write_meets_unrestricted_lsp_sandbox_to_workspace_write() 
         deny_git_metadata_writes: false,
     };
     let met = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
+        None,
         None,
         tokio_util::sync::CancellationToken::new(),
         crate::runtime_context::ToolWorkspaceScope {
@@ -3091,6 +3150,7 @@ async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch() -> Op
     };
     let spawned = crate::runtime_context::scope_request_tool_execution_with_workspace_overlay(
         None,
+        None,
         tokio_util::sync::CancellationToken::new(),
         crate::runtime_context::ToolWorkspaceScope {
             runtime_home: None,
@@ -3112,18 +3172,21 @@ async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch() -> Op
             let mut spawned = None;
             for tested_tool in [&tool, &artifact_tool] {
                 let result = tested_tool
-                    .call(LspArgs {
-                        action: "capabilities".into(),
-                        file: Some("README.md".into()),
-                        line: None,
-                        symbol: None,
-                        query: None,
-                        new_name: None,
-                        apply: None,
-                        payload: None,
-                        timeout: None,
-                        limit: None,
-                    })
+                    .call(
+                        LspArgs {
+                            action: "capabilities".into(),
+                            file: Some("README.md".into()),
+                            line: None,
+                            symbol: None,
+                            query: None,
+                            new_name: None,
+                            apply: None,
+                            payload: None,
+                            timeout: None,
+                            limit: None,
+                        },
+                        &gents_loop::tool::ToolCallEnvelope::ambient(),
+                    )
                     .await;
                 match result {
                     Ok(_) => {

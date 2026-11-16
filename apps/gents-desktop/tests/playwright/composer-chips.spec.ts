@@ -1,4 +1,11 @@
-import { expect, gotoHarness, openChat, test, type Page } from "./desktopTest";
+import {
+  expect,
+  gotoHarness,
+  openChat,
+  OWN_VIEWPORT,
+  test,
+  type Page,
+} from "./desktopTest";
 
 const PASTE = Array.from(
   { length: 8 },
@@ -27,7 +34,7 @@ async function paste(page: Page, text = PASTE) {
   }, text);
 }
 
-test.describe("paste chips in the composer", () => {
+test.describe("paste chips in the composer", { tag: OWN_VIEWPORT }, () => {
   /* wide enough that no line wraps: a soft wrap spends an arrow press */
   test.use({ viewport: { width: 1280, height: 900 } });
 
@@ -288,7 +295,7 @@ test("an @ inside a word opens no menu", async ({ page }) => {
   await expect(page.locator('[data-slot="composer-menu"]')).toHaveCount(0);
 });
 
-test.describe("on a touch screen", () => {
+test.describe("on a touch screen", { tag: OWN_VIEWPORT }, () => {
   test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
 
   test("a tap opens the chip's card, which stays open for its buttons", async ({
