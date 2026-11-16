@@ -75,15 +75,16 @@ impl GrantSet {
     /// The sets `recipient` receives (Lean `Identity.GrantSets.directSets` and
     /// `projectedSets`). Every admission that grants a recipient its sets asks
     /// here: init and trial installation for the init User and the default
-    /// Agent, enrollment for an enrolled User, and the tool permission
-    /// projection for every live managed Agent.
+    /// Agent, enrollment for an enrolled User, eval authoring for its scratch
+    /// home's operator, and the tool permission projection for every live
+    /// managed Agent.
     pub fn for_recipient(recipient: Recipient) -> RecipientGrants {
         match recipient {
             Recipient::InitUser => RecipientGrants {
                 direct: &[Self::HouseholdOwner],
                 projected: &[],
             },
-            Recipient::EnrolledUser => RecipientGrants {
+            Recipient::EnrolledUser | Recipient::AuthoringOperator => RecipientGrants {
                 direct: &[Self::OperatorUser],
                 projected: &[],
             },
@@ -169,20 +170,24 @@ impl GrantSet {
 /// Who receives grant sets (Lean `Identity.GrantSets.Recipient`). The init
 /// User creates the node (`gents init`'s client, or an evaluation trial's
 /// evaluator); the default Agent is the Agent init publishes or the subject
-/// Agent a trial selects; an enrolled User is admitted by verified enrollment.
+/// Agent a trial selects; an enrolled User is admitted by verified enrollment;
+/// the authoring operator is the operator's client an eval authoring scratch
+/// home admits to install and read back a drafted definition pack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Recipient {
     InitUser,
     EnrolledUser,
+    AuthoringOperator,
     DefaultAgent,
     Agent,
 }
 
 impl Recipient {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::InitUser,
         Self::EnrolledUser,
+        Self::AuthoringOperator,
         Self::DefaultAgent,
         Self::Agent,
     ];
@@ -191,6 +196,7 @@ impl Recipient {
         match self {
             Self::InitUser => "init-user",
             Self::EnrolledUser => "enrolled-user",
+            Self::AuthoringOperator => "authoring-operator",
             Self::DefaultAgent => "default-agent",
             Self::Agent => "agent",
         }

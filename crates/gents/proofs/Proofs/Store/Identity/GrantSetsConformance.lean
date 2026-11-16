@@ -4,7 +4,8 @@ import Lean
 namespace Identity.GrantSetsConformance
 open Lean Identity.GrantSets
 
-def recipients : List Recipient := [.initUser, .enrolledUser, .defaultAgent, .agent]
+def recipients : List Recipient :=
+  [.initUser, .enrolledUser, .authoringOperator, .defaultAgent, .agent]
 
 def relationName : Relation → String
   | .admin => "admin"
