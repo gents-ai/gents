@@ -342,6 +342,7 @@ pub(super) fn spawn_node_tasks(
         active_snapshot_rx,
         ..
     } = startup;
+    let p2p_intervals = agent.p2p_intervals();
     let completion_node = agent.node.clone();
     let completion_node_did = agent.node_did().to_string();
     let completion_background_executions = agent.background_execution_registry.clone();
@@ -374,6 +375,7 @@ pub(super) fn spawn_node_tasks(
                 enrollment_node,
                 enrollment_identity,
                 enrollment_owner,
+                p2p_intervals,
                 enrollment_cancel,
             )
             .await,
@@ -390,6 +392,7 @@ pub(super) fn spawn_node_tasks(
                 pairing_node,
                 pairing_identity,
                 pairing_enrollment,
+                p2p_intervals,
                 pairing_cancel,
             )
             .await,
@@ -405,6 +408,7 @@ pub(super) fn spawn_node_tasks(
                 registry_node,
                 registry_node_did,
                 gents_p2p::p2p_reconcile::resolve_network_id(),
+                p2p_intervals,
                 registry_cancel,
             )
             .await,
@@ -421,6 +425,7 @@ pub(super) fn spawn_node_tasks(
                 endpoint_node,
                 endpoint_identity,
                 advertised_graphql_url,
+                p2p_intervals,
                 endpoint_cancel,
             )
             .await,
@@ -437,6 +442,7 @@ pub(super) fn spawn_node_tasks(
                 session_command_node,
                 session_command_identity,
                 Some(session_command_agents),
+                p2p_intervals,
                 session_command_cancel,
             )
             .await,
@@ -457,6 +463,7 @@ pub(super) fn spawn_request_tasks(
         active_snapshot_rx,
         ..
     } = startup;
+    let p2p_intervals = agent.p2p_intervals();
     let control_node = agent.node.clone();
     let control_node_did = agent.node_did().to_owned();
     let control_executions = agent.background_execution_registry.clone();
@@ -472,7 +479,7 @@ pub(super) fn spawn_request_tasks(
                 control_node_did,
                 control_executions,
                 control_agents,
-                gents_p2p::p2p_reconcile::intervals::sweep_interval(),
+                p2p_intervals.pairing_sweep,
                 control_cancel,
             )
             .await,
@@ -487,6 +494,7 @@ pub(super) fn spawn_request_tasks(
             gents_p2p::directory_projection::run_directory_projection(
                 directory_node,
                 directory_source_did,
+                p2p_intervals,
                 directory_cancel,
             )
             .await,

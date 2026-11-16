@@ -78,8 +78,14 @@ async fn pairing_reconciler_retries_sweeps_as_the_lean_supervisor_model() {
         let subscription = event_bus.subscribe_collection_changes(Vec::new());
         let cancel = CancellationToken::new();
         let connections = event_bus.subscribe(&[events::EventName::PeerConnection]);
-        let reconciler =
-            run_pairing_reconciler_loop(&admin, &store, subscription, connections, &cancel);
+        let reconciler = run_pairing_reconciler_loop(
+            &admin,
+            &store,
+            subscription,
+            connections,
+            crate::p2p_reconcile::intervals::DEFAULT_SWEEP,
+            &cancel,
+        );
         tokio::pin!(reconciler);
         let started_at = tokio::time::Instant::now();
 
@@ -122,9 +128,10 @@ async fn pairing_reconciler_retries_sweeps_as_the_lean_supervisor_model() {
         );
 
         cancel.cancel();
-        let cancellation_prioritized = tokio::time::timeout(Duration::from_millis(100), &mut reconciler)
-            .await
-            .is_ok();
+        let cancellation_prioritized =
+            tokio::time::timeout(Duration::from_millis(100), &mut reconciler)
+                .await
+                .is_ok();
         case.check(
             gents_lean_vocab::families::pairing_reconcile_supervisor_sweep_retry::RetryOutput {
                 failure_terminal: terminated_before_enumeration || terminated_before_convergence,
@@ -234,8 +241,14 @@ async fn peer_reconnect_between_sweeps_replays_on_connection_event() {
     let subscription = event_bus.subscribe_collection_changes(Vec::new());
     let connections = event_bus.subscribe(&[events::EventName::PeerConnection]);
     let cancel = CancellationToken::new();
-    let reconciler =
-        run_pairing_reconciler_loop(&admin, &store, subscription, connections, &cancel);
+    let reconciler = run_pairing_reconciler_loop(
+        &admin,
+        &store,
+        subscription,
+        connections,
+        crate::p2p_reconcile::intervals::DEFAULT_SWEEP,
+        &cancel,
+    );
     tokio::pin!(reconciler);
 
     let startup_replay = installed.notified();

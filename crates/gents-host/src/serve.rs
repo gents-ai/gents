@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use axum::{routing::get, Router};
 use gents::defra_node::Node as EmbeddedNode;
 use gents::{DocumentRuntimeOptions, Gents, ProcessLifecycleObserver, ProcessLifecycleState};
+use gents_p2p::p2p_reconcile::intervals::P2pIntervals;
 use gents_store::{identity::KeyIdentity, identity::NodeIdentity};
 use gents_tools::mcp::pool::McpPool;
 use serde_json::{json, Value};
@@ -649,6 +650,7 @@ async fn serve_foreground(
     }
 
     let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
+    let p2p_intervals = resolve_p2p_intervals(&args)?;
     if let Some(config) = p2p_config.as_ref() {
         crate::p2p_relay::log_relay_mode_diagnostics(
             args.p2p_relay_mode
@@ -840,6 +842,7 @@ async fn serve_foreground(
                 tool_ceiling,
                 plugin_home: Some(home_dir.clone()),
                 backend_health: Some(backend_health.clone()),
+                p2p_intervals,
                 process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
                 runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
                     configuration_tx,
@@ -1537,6 +1540,23 @@ fn validate_p2p_admission_config(
     Ok(())
 }
 
+fn positive_millis(flag: &str, value: Option<u64>) -> Result<Option<Duration>> {
+    match value {
+        Some(0) => anyhow::bail!("--{flag} must be > 0"),
+        Some(ms) => Ok(Some(Duration::from_millis(ms))),
+        None => Ok(None),
+    }
+}
+
+fn resolve_p2p_intervals(args: &ServeArgs) -> Result<P2pIntervals> {
+    Ok(P2pIntervals::with_overrides(
+        positive_millis("p2p-registry-heartbeat-ms", args.p2p_registry_heartbeat_ms)?,
+        positive_millis("p2p-pairing-sweep-ms", args.p2p_pairing_sweep_ms)?,
+        positive_millis("p2p-endpoint-heartbeat-ms", args.p2p_endpoint_heartbeat_ms)?,
+        positive_millis("p2p-registry-stale-ms", args.p2p_registry_stale_ms)?,
+    ))
+}
+
 fn log_p2p_admission_config(config: &defra_node::P2PConfig) {
     tracing::info!(
         max_pending_dags = config.sync.max_pending_dags,
@@ -1644,6 +1664,29 @@ mod server_key_tests {
             Some(Command::Server(args)) => args,
             _ => panic!("expected `server`"),
         }
+    }
+
+    #[test]
+    fn p2p_intervals_default_and_reject_zero_overrides() {
+        let defaults = resolve_p2p_intervals(&parse_server(&[])).unwrap();
+        assert_eq!(defaults, P2pIntervals::default());
+
+        let overridden = resolve_p2p_intervals(&parse_server(&[
+            "--p2p-registry-heartbeat-ms",
+            "1000",
+            "--p2p-pairing-sweep-ms",
+            "500",
+        ]))
+        .unwrap();
+        assert_eq!(overridden.registry_heartbeat, Duration::from_millis(1000));
+        assert_eq!(overridden.endpoint_heartbeat, Duration::from_millis(1000));
+        assert_eq!(overridden.registry_stale_after, Duration::from_millis(3000));
+
+        let error =
+            resolve_p2p_intervals(&parse_server(&["--p2p-pairing-sweep-ms", "0"])).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("--p2p-pairing-sweep-ms must be > 0"));
     }
 
     #[cfg(unix)]
