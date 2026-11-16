@@ -28,7 +28,6 @@ import socket
 import subprocess
 import sys
 import time
-import tomllib
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 
@@ -88,6 +87,9 @@ def observe(policy, store, execution):
 
 
 def load_policy(path=POLICY_FILE):
+    # Imported here: gate.py imports this module on the Studios, whose Python
+    # predates tomllib (3.11), and only the Linux cache path reads the policy.
+    import tomllib
     data = tomllib.loads(path.read_text())
     excluded, binaries = {}, {}
     for entry in data.get("exclude", []):
