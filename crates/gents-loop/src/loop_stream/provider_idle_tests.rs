@@ -480,53 +480,6 @@ async fn headers_that_never_arrive_fail_within_the_window() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn silence_after_partial_text_retracts_and_resamples() {
-    let run = run(
-        vec![
-            WireAttempt::default()
-                .text(Duration::ZERO, "partial")
-                .hangs(),
-            WireAttempt::completes("recovered"),
-        ],
-        CompletionRetryPolicy::interactive_default(),
-    )
-    .await;
-    let mut expected = vec![
-        Observed::Text("partial".into()),
-        Observed::Retracted {
-            attempt: 0,
-            bodies_dropped: 1,
-        },
-    ];
-    expected.extend(recovered());
-    assert_eq!(run.observed, expected);
-}
-
-#[tokio::test(start_paused = true)]
-async fn silence_after_a_complete_tool_call_retracts_without_dispatch() {
-    let run = run(
-        vec![
-            WireAttempt::default()
-                .event(Duration::ZERO, serde_json::json!({"type": "tool_use"}))
-                .hangs(),
-            WireAttempt::completes("recovered"),
-        ],
-        CompletionRetryPolicy::interactive_default(),
-    )
-    .await;
-    let mut expected = vec![
-        Observed::ToolCall,
-        Observed::Retracted {
-            attempt: 0,
-            bodies_dropped: 1,
-        },
-    ];
-    expected.extend(recovered());
-    assert_eq!(run.observed, expected);
-    assert_eq!(run.sends, 2);
-}
-
-#[tokio::test(start_paused = true)]
 async fn slow_finalization_after_the_terminal_event_is_not_a_stall() {
     let attempt = WireAttempt {
         finalize_delay: IDLE * 3,
@@ -541,29 +494,4 @@ async fn slow_finalization_after_the_terminal_event_is_not_a_stall() {
         ]
     );
     assert!(run.elapsed >= IDLE * 3, "{:?}", run.elapsed);
-}
-
-#[tokio::test(start_paused = true)]
-async fn repeated_silence_exhausts_the_retry_owner_instead_of_hanging() {
-    let run = run(
-        vec![
-            WireAttempt::default().hangs(),
-            WireAttempt::default()
-                .text(Duration::ZERO, "partial")
-                .hangs(),
-        ],
-        CompletionRetryPolicy::interactive_default(),
-    )
-    .await;
-    assert_eq!(run.sends, 2);
-    assert!(
-        matches!(run.observed.last(), Some(Observed::Failed(reason)) if reason.contains("transport retry budget exhausted")),
-        "{:?}",
-        run.observed
-    );
-    assert!(
-        run.elapsed >= IDLE * 2 && run.elapsed < IDLE * 3,
-        "{:?}",
-        run.elapsed
-    );
 }

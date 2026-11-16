@@ -46,7 +46,32 @@ where
         .map_err(|_| anyhow::anyhow!("Sign-in cancelled."))
 }
 
-pub(crate) fn print_sign_in_notes(sign_in: &gents::inference::auth::credential::SignIn) {
+/// `accounts login` has no setup form behind it, so the provider's first sign-in is connected
+/// here. The sign-in is already stored: a failed connection is reported, not returned.
+pub(crate) async fn connect_first_sign_in(
+    access: &gents_store::config_client::ConfigAccess,
+    node_did: &str,
+    sign_in: &mut gents_inference::auth::credential::SignIn,
+) {
+    let credential = &sign_in.credential;
+    match crate::commands::shell::connect_first_sign_in(access, node_did, credential).await {
+        Ok(Some(saved)) => {
+            eprintln!(
+                "No backend read this provider's sign-ins, so one was made ({}). Run an agent \
+                 on it with profile `{}`; see `gents config profile list`.",
+                saved.notice, saved.profile
+            );
+            sign_in.profiles.push(saved.profile);
+        }
+        Ok(None) => {}
+        Err(error) => eprintln!(
+            "The sign-in is stored, but no backend could be made for it: {error:#}. Add one \
+             with `gents config backend set`."
+        ),
+    }
+}
+
+pub(crate) fn print_sign_in_notes(sign_in: &gents_inference::auth::credential::SignIn) {
     if let Some(hint) = sign_in.account_chooser_hint() {
         eprintln!("{hint}");
     }

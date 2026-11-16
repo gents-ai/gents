@@ -1,0 +1,4 @@
+---- MODULE MCNativeCompletionHandshake ----
+EXTENDS NativeCompletionHandshake
+
+====

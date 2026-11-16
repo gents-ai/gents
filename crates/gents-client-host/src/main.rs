@@ -59,7 +59,7 @@ fn main() -> Result<()> {
         return tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?
-            .block_on(gents_server::unlock_runtime_keys(home));
+            .block_on(gents_host::prepare_runtime::unlock_runtime_keys(home));
     }
     if let Some(directory) = args.editor_checkpoints {
         return editor_checkpoints::serve(

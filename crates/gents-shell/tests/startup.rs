@@ -1,13 +1,16 @@
 use std::process::{Command, Output, Stdio};
 
 fn run(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_gents-shell"))
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .expect("gents-shell runs")
+    Command::new(
+        std::env::var_os("CARGO_BIN_EXE_gents-shell")
+            .expect("cargo test and nextest set CARGO_BIN_EXE_gents-shell"),
+    )
+    .args(args)
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .output()
+    .expect("gents-shell runs")
 }
 
 fn assert_usage_error(out: &Output) {

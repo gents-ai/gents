@@ -1,4 +1,4 @@
-use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Context, Result};
@@ -12,10 +12,10 @@ pub(super) async fn canonical_stage_tool_rows(
     request_id: &str,
 ) -> Result<Vec<Value>> {
     let access = ConfigAccess::Graphql(graphql.clone());
-    let timeline = gents::observe::run_timeline_fetch::load_settled_run_timeline_rows(
+    let timeline = gents_observe::observe::run_timeline_fetch::load_settled_run_timeline_rows(
         &access,
         request_id,
-        gents::observe::run_timeline_fetch::RUN_TIMELINE_SETTLE_BOUND,
+        gents_observe::observe::run_timeline_fetch::RUN_TIMELINE_SETTLE_BOUND,
     )
     .await?;
     let request_doc_id = timeline
@@ -245,7 +245,7 @@ fn tool_call_matches(row: &Value, expected: &ToolCallExpectation) -> bool {
             return false;
         };
         let matches = if field == "file" {
-            gents::tools::native::result_path_matches(expected_value, actual)
+            gents_tools::native::result_path_matches(expected_value, actual)
         } else {
             actual == expected_value
         };
@@ -264,5 +264,5 @@ fn tool_call_matches(row: &Value, expected: &ToolCallExpectation) -> bool {
 }
 
 fn result_looks_failed(result: &str) -> bool {
-    gents::tools::native::result_looks_failed(result)
+    gents_tools::native::result_looks_failed(result)
 }

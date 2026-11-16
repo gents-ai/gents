@@ -1,0 +1,6 @@
+# Files the save cases write; the cases overwrite them on every run.
+*.svg
+*.png
+out/
+charts/
+graph/

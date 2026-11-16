@@ -42,16 +42,16 @@ fn input(value: serde_json::Value) -> Option<gents_protocol::request_input::Requ
 
 #[test]
 fn goal_continuation_exposes_recorded_wrapup_without_fabricating_older_values() {
-    let store = automated_store();
     let mut continuation = request("goal", "sess-1", 1);
     continuation.caused_by_trigger_id = Some("goal-1".into());
     continuation.input = input(serde_json::json!({
         "goal_continuation": { "sequence": 3, "wrapup": true }
     }));
-    let origin = crate::snapshot::session::request_origin_view(&store, &continuation).unwrap();
+    let origin = crate::snapshot::session::request_origin_view(&continuation).unwrap();
     assert_eq!(
         origin,
         RequestOriginView::GoalContinuation {
+            retry: None,
             goal_id: Some("goal-1".into()),
             sequence: Some(3),
             wrapup: Some(true),
@@ -60,10 +60,11 @@ fn goal_continuation_exposes_recorded_wrapup_without_fabricating_older_values() 
     continuation.input = input(serde_json::json!({
         "queue": { "source": "goal", "policy": "append" }
     }));
-    let origin = crate::snapshot::session::request_origin_view(&store, &continuation).unwrap();
+    let origin = crate::snapshot::session::request_origin_view(&continuation).unwrap();
     assert_eq!(
         origin,
         RequestOriginView::GoalContinuation {
+            retry: None,
             goal_id: Some("goal-1".into()),
             sequence: None,
             wrapup: None,
@@ -75,7 +76,16 @@ fn automated_store() -> ClientStore {
     let person = request("person", "sess-1", 0);
     let sender = request("sender", "sess-other", 1);
     let message = AgentRequestRow {
-        requester_did: Some("did:test:bob".into()),
+        requester_did: Some("did:test:amy:default".into()),
+        admission_signer_did: Some("did:test:amy:default".into()),
+        input: Some(gents_protocol::request_input::RequestInput {
+            started_by: Some(gents_protocol::session::SessionReference {
+                node_did: "did:test:amy".into(),
+                session_id: "sess-other".into(),
+                requester_did: None,
+            }),
+            ..Default::default()
+        }),
         caused_by_parent_request_id: Some("sender".into()),
         caused_by_parent_request_doc_id: Some("doc-sender".into()),
         caused_by_parent_tool_call_id: Some("call-1".into()),
@@ -98,7 +108,7 @@ fn automated_store() -> ClientStore {
             }
         })),
         content: Some(
-            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into(),
+            gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into(),
         ),
         ..request("wake", "sess-1", 4)
     };
@@ -164,7 +174,7 @@ fn automated_store() -> ClientStore {
             "doc-wake",
             7,
             MessageRole::User,
-            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         ),
         (
             "authored:doc-goal:prompt",
@@ -212,11 +222,12 @@ fn external_inputs_keep_their_sender_and_internal_inputs_remain_inspectable() {
                 RequestOriginView::SessionMessage { .. } => "automated:sessionMessage".into(),
                 RequestOriginView::Trigger { .. } => "automated:trigger".into(),
                 RequestOriginView::GoalContinuation { .. } => "automated:goal".into(),
-                RequestOriginView::BackgroundCompletion { notification: true } => {
-                    "automated:notification".into()
-                }
+                RequestOriginView::BackgroundCompletion {
+                    notification: true, ..
+                } => "automated:notification".into(),
                 RequestOriginView::BackgroundCompletion {
                     notification: false,
+                    ..
                 } => "automated:wake".into(),
             },
             other => format!("{other:?}"),
@@ -262,6 +273,7 @@ fn external_inputs_keep_their_sender_and_internal_inputs_remain_inspectable() {
     assert_eq!(
         automated[1].0,
         RequestOriginView::Trigger {
+            display_body: None,
             trigger_id: "nightly-report".into(),
             trigger_kind: Some("schedule".into()),
         }
@@ -279,7 +291,7 @@ fn external_inputs_keep_their_sender_and_internal_inputs_remain_inspectable() {
 }
 
 #[test]
-fn a_session_message_from_an_unreplicated_session_names_its_sending_agent() {
+fn a_session_message_keeps_its_recorded_source_when_the_parent_is_not_replicated() {
     let mut rows = automated_store().to_rows();
     rows.requests.retain(|row| row.request_id != "sender");
     let snapshot = build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", None)
@@ -290,11 +302,12 @@ fn a_session_message_from_an_unreplicated_session_names_its_sending_agent() {
             origin: RequestOriginView::SessionMessage {
                 display_body: None,
                 sender_node_did,
-                sender_session_id: None,
+                sender_session_id,
                 sender_request_id,
             },
             ..
-        } if sender_node_did.as_deref() == Some("did:test:bob")
+        } if sender_node_did.as_deref() == Some("did:test:amy")
+            && sender_session_id.as_deref() == Some("sess-other")
             && sender_request_id.as_deref() == Some("sender")
     )));
 }
@@ -359,18 +372,17 @@ fn automated_inputs_keep_request_identity_including_internal_controls() {
 }
 
 #[test]
-fn received_message_body_uses_readable_parent_identity_without_changing_signed_input() {
+fn received_message_body_uses_recorded_source_without_changing_signed_input() {
     let mut rows = automated_store().to_rows();
     let message = rows
         .requests
         .iter_mut()
         .find(|row| row.request_id == "message")
         .unwrap();
-    message.requester_did = Some("did:test:amy".into());
+    message.requester_did = Some("did:test:amy:default".into());
     message.content = Some("[message agent:default session:sess-other node:did:test:amy · at:2026-04-21T12:00:02Z · cause:sender]\n\nReview the layout.".into());
     let message = message.clone();
-    let store = ClientStore::from_rows(rows);
-    let origin = crate::snapshot::session::request_origin_view(&store, &message).unwrap();
+    let origin = crate::snapshot::session::request_origin_view(&message).unwrap();
     assert!(
         matches!(origin, RequestOriginView::SessionMessage { display_body: Some(body), .. } if body == "Review the layout.")
     );
@@ -396,7 +408,7 @@ fn active_background_request_keeps_interrupt_and_queue_visible_after_public_comp
             "key":"background_completion:sess-1", "background_completion_wake_version":1
         }})),
         content: Some(
-            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into(),
+            gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into(),
         ),
         ..request("wake", "sess-1", 1)
     };
@@ -437,7 +449,7 @@ fn active_background_request_keeps_interrupt_and_queue_visible_after_public_comp
     assert!(snapshot.pending_turn.is_none());
     let serialized = serde_json::to_string(&snapshot.timeline_items).unwrap();
     assert!(!serialized
-        .contains(gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT));
+        .contains(gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT));
     let summaries = session_summaries(&[header], &store.requests, "did:test:amy", &[], &[]);
     assert_eq!(summaries[0].latest_request_id.as_deref(), Some("wake"));
     assert_eq!(summaries[0].turn_state.as_deref(), Some("running"));
@@ -468,7 +480,7 @@ fn queued_and_folded_observations_retain_the_active_owners_trigger() {
             observed.lifecycle_state = Some(RequestLifecycleState::Superseded);
             observed.superseded_by_request = Some("owner".into());
             observed.superseded_by_request_doc_id = Some("doc-owner".into());
-            observed.failure_reason = Some(gents::request::lifecycle::FOLDED_REASON.into());
+            observed.failure_reason = Some(gents_session::request::lifecycle::FOLDED_REASON.into());
         }
         let mut header = session();
         header.observation = Some(SessionObservation {

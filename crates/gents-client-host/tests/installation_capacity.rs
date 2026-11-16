@@ -1,5 +1,3 @@
-#![cfg(any(unix, windows))]
-
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,8 +12,7 @@ use tokio::process::Command;
 use tokio_util::codec::{FramedRead, LengthDelimitedCodec};
 use tokio_util::sync::CancellationToken;
 
-#[path = "support/homes.rs"]
-mod homes;
+use crate::support::homes;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_full_listener_reports_a_retryable_initialization_failure_without_retiring_its_clients() {

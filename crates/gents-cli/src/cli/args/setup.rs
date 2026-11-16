@@ -1,9 +1,12 @@
+use gents_host::args::StoreKeyCustodyArg;
 use std::path::PathBuf;
 
 use clap::ValueEnum;
-use gents::inference::backends::registry::DEFAULT_MAX_QUEUE_DEPTH;
+use gents_documents::inference_defaults::DEFAULT_MAX_QUEUE_DEPTH;
 
-use super::{BackendPresetArg, OpenAiWireApiArg, ToolPackageArg};
+use gents_service::args::ToolPackageArg;
+
+use super::{BackendPresetArg, OpenAiWireApiArg};
 
 #[derive(clap::Args)]
 pub(crate) struct ProvisionArgs {
@@ -64,27 +67,6 @@ pub(crate) enum IdentityBackendArg {
     MacosSecureEnclave,
 }
 
-/// Custody of a new home's store encryption key (`gents::store::local::store_key`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum StoreKeyCustodyArg {
-    File,
-    Keychain,
-}
-
-pub(crate) fn store_key_custody(
-    arg: Option<StoreKeyCustodyArg>,
-) -> gents::store::local::store_key::StoreKeyCustodyChoice {
-    match arg {
-        Some(StoreKeyCustodyArg::File) => {
-            gents::store::local::store_key::StoreKeyCustodyChoice::File
-        }
-        Some(StoreKeyCustodyArg::Keychain) => {
-            gents::store::local::store_key::StoreKeyCustodyChoice::Keychain
-        }
-        None => gents::store::local::store_key::StoreKeyCustodyChoice::default(),
-    }
-}
-
 #[derive(clap::Args)]
 pub(crate) struct InitArgs {
     /// Set by the interactive menu, never by a flag.
@@ -112,7 +94,7 @@ pub(crate) struct InitArgs {
         help = "Create/load identity and write init.json without seeding runtime config documents"
     )]
     pub(crate) identity_only: bool,
-    #[arg(long, default_value = crate::DEFAULT_NODE_NAME, help = "Local display name and default key filename. The node DID is derived from the identity key.")]
+    #[arg(long, default_value = gents_host::defaults::DEFAULT_NODE_NAME, help = "Local display name and default key filename. The node DID is derived from the identity key.")]
     pub(crate) node_name: String,
     #[arg(long)]
     pub(crate) key_path: Option<PathBuf>,
@@ -237,21 +219,9 @@ pub(crate) struct InitArgs {
     #[arg(
         long,
         default_value_t = false,
-        requires = "engineer",
-        conflicts_with = "no_default_packs",
-        help = "With --engineer: approve the permissions the default packs' plugins request, without being asked. Without it and without a terminal, a pack that requests permissions is listed, not installed"
-    )]
-    pub(crate) approve_default_packs: bool,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "With --engineer: do not install the Engineer's default packs"
+        help = "With --engineer: do not install the Engineer's core packs (install them later with `gents config pack starter --enable <pack>`)"
     )]
     pub(crate) no_default_packs: bool,
-    /// The caller owns no terminal to ask on (the desktop's first run), so
-    /// init never prompts.
-    #[arg(skip)]
-    pub(crate) unattended: bool,
 }
 
 impl InitArgs {

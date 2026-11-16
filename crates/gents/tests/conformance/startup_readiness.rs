@@ -1,22 +1,8 @@
-use super::*;
-
 use gents::runtime::startup_readiness::{BuildOutcome, BuildStanding, StartupReadinessOptions};
 
 pub(super) fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
     assert!(StartupReadinessOptions::default().build_failure_budget > 0);
-    let cases = lean_startup_readiness_cases();
-    assert_eq!(
-        cases.len(),
-        6,
-        "the Lean startup-readiness contract must stay fully consumed"
-    );
-
-    for case in cases {
-        assert!(
-            !case.requires_restart,
-            "{}: release must follow from the budget or retirement, never a restart",
-            case.witness
-        );
+    gents_lean_vocab::families::contracts_startup_readiness::replay::<String>(|case| {
         let budget = u32::try_from(case.budget).expect("budget fits u32");
         assert!(
             budget > 0,
@@ -37,26 +23,14 @@ pub(super) fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
             standing = standing.retire();
         }
 
-        let observed = match standing {
+        let post_standing = match standing {
             BuildStanding::Pending { .. } => "pending",
             BuildStanding::Ready => "ready",
             BuildStanding::Demoted => "demoted",
             BuildStanding::Superseded => "superseded",
         };
-        assert_eq!(
-            observed, case.post_standing,
-            "{}: the runtime's standing must land where the model says",
-            case.witness
-        );
 
-        assert_eq!(
-            !standing.released(),
-            case.blocks_ready,
-            "{}: released() must agree with the model's Ready-blocking claim",
-            case.witness
-        );
-
-        if observed == "ready" {
+        if standing == BuildStanding::Ready {
             assert!(
                 case.outcomes.iter().any(|outcome| outcome == "started"),
                 "{}: ready without a started outcome would fake health",
@@ -74,5 +48,10 @@ pub(super) fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
                 case.witness
             );
         }
-    }
+
+        gents_lean_vocab::families::contracts_startup_readiness::StartupReadinessOutput {
+            post_standing: post_standing.to_string(),
+            blocks_ready: !standing.released(),
+        }
+    });
 }

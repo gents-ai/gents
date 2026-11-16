@@ -8,10 +8,10 @@ use super::*;
 
 #[test]
 fn authored_edit_uses_the_send_skill_parser() {
-    let mut edit = gents::request::lifecycle::PendingQueueEdit {
+    let mut edit = gents_session::request::lifecycle::PendingQueueEdit {
         expected_request_doc_ids: vec!["request".into()],
         selected_request_doc_ids: vec!["request".into()],
-        messages: vec![gents::request::lifecycle::PendingMessageEdit {
+        messages: vec![gents_session::request::lifecycle::PendingMessageEdit {
             request_doc_id: "request".into(),
             content: "/skill review\nPlease review".into(),
             authored_input: Some(Default::default()),
@@ -46,45 +46,108 @@ fn applied_receipt() -> SessionInputEditReceipt {
     }
 }
 
-fn modeled_command_outcome(case: &serde_json::Value) -> SessionInputEditOutcome {
-    serde_json::from_value(case["command_outcome"].clone()).expect("modeled receipt outcome")
+async fn seeded_projection_node(
+    request_id: &str,
+    node_did: &str,
+) -> (Arc<defra_node::Node>, ConfigAccess, String) {
+    use gents_store::identity::NodeIdentity as _;
+    let directory = tempfile::tempdir().expect("node key directory");
+    let identity =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)
+            .expect("node key");
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .expect("local projection node"),
+    );
+    crate::client::schema::ensure_runtime_schemas(node.as_ref())
+        .await
+        .expect("schemas");
+    let access = ConfigAccess::local_as(
+        node.clone(),
+        ::identity::Did::new(identity.did()).expect("node DID"),
+    );
+    let seed = access
+        .write(
+            "test.edit_projection_row",
+            &format!(
+                r#"mutation {{
+                create_AgentRequest(input: {{
+                    request_id: "{request_id}",
+                    purpose: "normal",
+                    node_did: "{node_did}",
+                    requester_did: "did:test:requester",
+                    agent_did: "default",
+                    session_id: "session",
+                    content: "projected row",
+                    lifecycle_state: "pending",
+                    execution_origin: "interactive",
+                    created_at: "2026-10-14T00:00:00Z"
+                }}) {{ _docID }}
+            }}"#
+            ),
+        )
+        .await
+        .expect("seed projection row");
+    let doc_id = seed["data"]["add_AgentRequest"][0]["_docID"]
+        .as_str()
+        .expect("physical ID")
+        .to_owned();
+    (node, access, doc_id)
 }
 
 #[tokio::test]
-async fn generated_accepted_receipt_survives_projection_refresh_failure() {
-    let contracts: serde_json::Value =
-        gents_lean_contract::load_contract_snapshot().expect("Lean contract snapshot");
-    let case = contracts["session_input_edit_client_observation_cases"]
-        .as_array()
-        .and_then(|cases| {
-            cases
-                .iter()
-                .find(|case| case["name"] == "applied_receipt_projection_failure")
-        })
-        .expect("modeled applied receipt with failed projection");
-    let (store, _version) = ObservedStore::new(ClientStore::default());
-    let before = store.projection_revision().store_version;
-    let receipt = applied_receipt();
-    let accepted = merge_accepted_edit_projection(
-        &ConfigAccess::Graphql(gents::store::config_client::GraphqlEndpoint::anonymous(
-            "invalid endpoint",
-        )),
-        store.as_ref(),
-        receipt,
-        &["selected-doc".to_string()],
-        "did:test:node",
-        "session",
-        "did:test:requester",
-    )
-    .await;
-
-    assert_eq!(
-        serde_json::to_value(accepted.outcome).expect("serialize outcome"),
-        serde_json::to_value(modeled_command_outcome(case)).expect("serialize modeled outcome")
-    );
-    assert_eq!(case["projection_fresh"], false);
-    assert_eq!(store.projection_revision().store_version, before);
-    assert!(store.snapshot().requests.is_empty());
+async fn generated_edit_receipt_outcome_survives_projection_refresh() {
+    use gents_lean_vocab::families::fold_queue_contracts_input_edit_client_observation as observation;
+    for case in
+        gents_lean_vocab::families::fold_queue_contracts_input_edit_client_observation::cases::<
+            SessionInputEditOutcome,
+        >()
+    {
+        let store = crate::client::observe::ObservedStores::new().ensure("did:test:node");
+        let before = store.projection_revision().store_version;
+        let mut receipt = applied_receipt();
+        receipt.outcome = case.input.receipt_outcome;
+        let mut _node = None;
+        let (access, selected) = if case.input.projection_refresh_succeeded {
+            let (node, access, doc_id) =
+                seeded_projection_node("replacement-request", "did:test:node").await;
+            _node = Some(node);
+            receipt.request_doc_ids = vec![doc_id];
+            (access, Vec::new())
+        } else {
+            (
+                ConfigAccess::Graphql(gents_store::config_client::GraphqlEndpoint::anonymous(
+                    "invalid endpoint",
+                )),
+                vec!["selected-doc".to_string()],
+            )
+        };
+        let (accepted, projection) = merge_accepted_edit_projection(
+            &access,
+            store.as_ref(),
+            receipt,
+            &selected,
+            "did:test:node",
+            "session",
+            "did:test:requester",
+        )
+        .await;
+        let projection_fresh = projection.is_ok();
+        if projection_fresh {
+            assert!(store.projection_revision().store_version > before);
+            assert_eq!(store.snapshot().requests.len(), 1);
+        } else {
+            assert_eq!(store.projection_revision().store_version, before);
+            assert!(store.snapshot().requests.is_empty());
+        }
+        case.check(observation::InputEditClientObservationOutput {
+            command_outcome: accepted.outcome,
+            projection_fresh,
+        });
+    }
 }
 
 #[tokio::test]
@@ -123,7 +186,7 @@ async fn incomplete_or_foreign_edit_projection_keeps_store_and_receipt() {
         .as_str()
         .expect("physical ID")
         .to_owned();
-    let (store, _version) = ObservedStore::new(ClientStore::default());
+    let store = crate::client::observe::ObservedStores::new().ensure("did:test:node");
     let before = store.projection_revision().store_version;
 
     let missing = merge_accepted_edit_projection(
@@ -160,7 +223,7 @@ async fn incomplete_or_foreign_edit_projection_keeps_store_and_receipt() {
     )
     .await;
 
-    for receipt in [missing, foreign, empty] {
+    for (receipt, _) in [missing, foreign, empty] {
         assert_eq!(receipt.outcome, SessionInputEditOutcome::Applied);
     }
     assert_eq!(store.projection_revision().store_version, before);

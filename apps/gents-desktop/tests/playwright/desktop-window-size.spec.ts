@@ -8,6 +8,7 @@ import {
   openChat,
   openConfig,
   openConfigSection,
+  OWN_VIEWPORT,
   test,
   type Page,
 } from "./desktopTest";
@@ -53,14 +54,7 @@ async function expectApart(
   expect(overlaps).toBe(false);
 }
 
-test.describe("half-screen window", () => {
-  test.beforeEach(() => {
-    test.skip(
-      test.info().project.name !== "chromium-desktop",
-      "Sets its own window sizes",
-    );
-  });
-
+test.describe("half-screen window", { tag: OWN_VIEWPORT }, () => {
   test("the window can snap to half of a 1440pt display", () => {
     expect(mainWindow.minWidth).toBeLessThanOrEqual(HALF_SCREEN.width);
   });
@@ -77,7 +71,7 @@ test.describe("half-screen window", () => {
       await expectInsideViewport(page, page.getByRole("button", { name: "Menu" }));
       await expectApart(
         header.getByRole("link", { name: "Nodes" }).first(),
-        header.getByRole("button", { name: /Sync healthy/ }),
+        header.getByRole("button", { name: /^Connected/ }),
       );
       await expectInsideViewport(
         page,
@@ -187,7 +181,7 @@ test.describe("half-screen window", () => {
   });
 });
 
-test.describe("nav modes", () => {
+test.describe("nav modes", { tag: OWN_VIEWPORT }, () => {
   test("the mark keeps its place in every nav mode", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await gotoHarness(page);
@@ -283,7 +277,7 @@ test.describe("nav modes", () => {
       expect(foot.y + foot.height).toBeLessThanOrEqual(520);
       /* the middle ends above the sync status, which nothing passes under */
       const sync = await boxOf(
-        page.getByRole("button", { name: /Show sync diagnostics/ }).last(),
+        page.getByRole("button", { name: /Show connection details/ }).last(),
       );
       const scroll = await boxOf(middle);
       expect(scroll.y + scroll.height).toBeLessThanOrEqual(sync.y + 1);

@@ -1,7 +1,7 @@
 name: Notarize staged signed macOS artifact (CI control)
 
 # Notarizes an already Developer-ID-signed macOS .app that an operator staged
-# as <inbox>/<sha256>.zip on the studio-1 runner host. No build, no re-signing,
+# as <inbox>/<sha256>.zip on the ci-notary runner host. No build, no re-signing,
 # no release/tag write. Verification runs without credentials; submission is
 # guarded by a durable host-state intent keyed by the full artifact SHA-256
 # (plus Apple history as a secondary check); the receipt is uploaded before
@@ -69,7 +69,7 @@ env:
 jobs:
   notarize:
     name: Verify, notarize and staple staged artifact
-    runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
+    runs-on: [self-hosted, macOS, ARM64, ci-notary]
     timeout-minutes: 150
     steps:
       # Runs BEFORE checkout so no untrusted ref executes repository code on

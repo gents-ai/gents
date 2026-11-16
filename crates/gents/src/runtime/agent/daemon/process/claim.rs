@@ -1,14 +1,13 @@
 use tracing::Instrument;
 
-use super::{
-    request_failure_reason, AgentDaemon, AgentRequest, DefraStreamWriter, ProviderModel,
-    RequestGuard, RequestLifecycle,
-};
-use crate::observe::runtime_trace::{
+use super::{request_failure_reason, AgentDaemon, AgentRequest, RequestGuard};
+use crate::runtime::agent::worker_capacity::WorkerTicket;
+use gents_inference::llm::rig_compat::ProviderModel;
+use gents_observe::observe::runtime_trace::{
     record_current_claim_outcome, record_current_failure_class, record_current_request_outcome,
 };
-use crate::request::lifecycle::ClaimOutcome;
-use crate::runtime::agent::worker_capacity::WorkerTicket;
+use gents_session::request::lifecycle::ClaimOutcome;
+use gents_session::{request::lifecycle::RequestLifecycle, request::streaming::DefraStreamWriter};
 
 impl<M> AgentDaemon<M>
 where
@@ -132,7 +131,7 @@ where
             Err(error) => {
                 record_current_claim_outcome("error");
                 let deterministic_rejection =
-                    crate::request::lifecycle::is_claim_admission_error(&error);
+                    gents_session::request::lifecycle::is_claim_admission_error(&error);
                 record_current_request_outcome(if deterministic_rejection {
                     "admission_rejected"
                 } else {
@@ -143,7 +142,7 @@ where
                     tracing::warn!(
                         agent_did = %self.agent_config.agent_did,
                         request_id = %request.request_id,
-                        error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+                        error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                         "rejecting request with an invalid canonical admission binding"
                     );
                     if let Err(rejection_error) = lifecycle
@@ -162,7 +161,7 @@ where
                 tracing::warn!(
                     agent_did = %self.agent_config.agent_did,
                     request_id = %request.request_id,
-                    error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+                    error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                     "failed to claim request; leaving it pending for retry"
                 );
                 return false;

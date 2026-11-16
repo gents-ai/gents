@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
-use gents::store::graphql::validate_collection_identifier;
-use gents::tools::builtin::defra_query::{unknown_collection_message, CollectionScope};
+use gents_store::graphql::validate_collection_identifier;
+use gents_tools::builtin::defra_query::{unknown_collection_message, CollectionScope};
 use serde_json::{json, Value};
 
 use crate::cli::args::{DocumentCommand, DocumentCreateArgs};
@@ -15,7 +15,7 @@ pub(crate) async fn dispatch(command: DocumentCommand) -> Result<()> {
 fn parse_fields(collection: &str, fields: &str) -> Result<Value> {
     validate_collection_identifier(collection)?;
     CollectionScope::all().ensure_allowed(collection)?;
-    if gents::Collection::ALL
+    if gents_store::collection::Collection::ALL
         .iter()
         .any(|owner| owner.graphql_type() == collection)
     {
@@ -88,7 +88,7 @@ async fn create(args: DocumentCreateArgs) -> Result<()> {
         .await
         .with_context(|| format!("reading authored SDL {}", args.schema.display()))?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let input_type = gents::store::graphql::escape_graphql_string(&format!(
+    let input_type = gents_store::graphql::escape_graphql_string(&format!(
         "{}MutationInputArg",
         args.collection
     ));
@@ -108,11 +108,11 @@ async fn create(args: DocumentCreateArgs) -> Result<()> {
         })
         .collect::<Result<Vec<_>>>()?;
     ensure_known_fields(&args.collection, &fields, &input_fields)?;
-    let doc_id = gents::store::config_client::create_authored_document(
+    let doc_id = gents_store::config_client::create_authored_document(
         &access,
         &args.collection,
         &fields,
-        gents::store::config_client::DocumentSchemaSource::UserAuthored,
+        gents_store::config_client::DocumentSchemaSource::UserAuthored,
         &authored_schema,
     )
     .await?;

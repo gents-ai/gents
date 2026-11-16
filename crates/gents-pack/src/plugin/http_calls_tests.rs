@@ -1,0 +1,506 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use serde_json::{json, Value};
+
+use super::*;
+use crate::plugin::http_test_server::Server;
+
+const PLUGIN: &str = "team/plugin";
+
+struct Static(Vec<IpAddr>, Arc<AtomicUsize>);
+
+impl Lookup for Static {
+    fn lookup(&self, _: String) -> BoxFuture<'static, std::io::Result<Vec<IpAddr>>> {
+        self.1.fetch_add(1, Ordering::SeqCst);
+        let addrs = self.0.clone();
+        Box::pin(async move { Ok(addrs) })
+    }
+}
+
+fn http_manifold(hosts: Option<Vec<String>>) -> Manifold {
+    Manifold {
+        net: NetAccess::OutboundHttp(hosts),
+        ..Manifold::sealed()
+    }
+}
+
+fn session(hosts: &[String]) -> Session {
+    Session::for_grant(PLUGIN, &http_manifold(Some(hosts.to_vec())))
+        .unwrap()
+        .unwrap()
+}
+
+fn session_resolving(hosts: &[String], addrs: Vec<IpAddr>) -> (Session, Arc<AtomicUsize>) {
+    let lookups = Arc::new(AtomicUsize::new(0));
+    let session = Session::with_lookup(
+        PLUGIN,
+        &http_manifold(Some(hosts.to_vec())),
+        Arc::new(Static(addrs, lookups.clone())),
+    )
+    .unwrap()
+    .unwrap();
+    (session, lookups)
+}
+
+async fn ask(session: &mut Session, requests: Value) -> Map<String, Value> {
+    let batch = parse_batch(&json!({"http_calls": {"requests": requests}}))
+        .unwrap()
+        .unwrap();
+    session
+        .serve(batch.requests, Instant::now() + Duration::from_secs(20))
+        .await
+}
+
+fn error(results: &Map<String, Value>, id: &str) -> String {
+    results[id]["error"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{id} was answered: {}", results[id]))
+        .to_owned()
+}
+
+#[test]
+fn network_admission_follows_the_lean_model() {
+    gents_lean_vocab::families::plugin_resources_network_admission::replay::<String>(|i| {
+        let net = match &i.grant {
+            None => NetAccess::None,
+            Some(grant) if grant.scope.is_some() => NetAccess::OutboundHttp(None),
+            Some(grant) => NetAccess::OutboundHttp(Some(grant.hosts.clone())),
+        };
+        let grant = net_grant(&net).unwrap();
+        let url = Url::parse(&i.url).unwrap();
+        let addrs: Vec<IpAddr> = i
+            .addresses
+            .iter()
+            .map(|addr| addr.parse().unwrap())
+            .collect();
+        let admitted = admit(&grant, &url, PLUGIN);
+        if let Ok(admission) = &admitted {
+            if let Some(literal) = admission.literal {
+                assert_eq!(addrs, [literal], "{i:?}");
+            }
+        }
+        admitted.is_ok_and(|admission| addresses_allowed(admission.explicit, &addrs))
+    });
+}
+
+#[test]
+fn address_publicity_follows_the_lean_model() {
+    gents_lean_vocab::families::plugin_resources_address_public::replay(|i| {
+        i.addresses
+            .iter()
+            .map(|addr| ip_public(&addr.parse::<IpAddr>().unwrap()))
+            .collect::<Vec<_>>()
+    });
+}
+
+#[test]
+fn allow_list_entries_parse_and_unservable_grants_are_refused() {
+    let grant = net_grant(&NetAccess::OutboundHttp(Some(vec![
+        "API.Example.com".into(),
+        "*.example.org".into(),
+        "http://[::1]:8080".into(),
+        "https://10.0.0.1:8443".into(),
+    ])))
+    .unwrap();
+    let NetGrant::Hosts(entries) = grant else {
+        panic!("{grant:?}")
+    };
+    assert_eq!(
+        entries[0].pattern,
+        HostPattern::Exact(TargetHost::Name("api.example.com".into()))
+    );
+    assert_eq!(
+        entries[1].pattern,
+        HostPattern::Suffix("example.org".into())
+    );
+    assert_eq!((entries[2].plaintext, entries[2].port), (true, Some(8080)));
+    assert_eq!((entries[3].plaintext, entries[3].port), (false, Some(8443)));
+    for bad in [
+        "*.1.2.3.4",
+        "example.com/path",
+        "user@example.com",
+        "*",
+        "",
+        "a.com:0",
+    ] {
+        assert!(
+            net_grant(&NetAccess::OutboundHttp(Some(vec![bad.into()]))).is_err(),
+            "{bad}"
+        );
+    }
+    let full = net_grant(&NetAccess::OutboundFull(None)).unwrap_err();
+    assert!(full.contains("OutboundHttp"), "{full}");
+    assert_eq!(
+        net_grant(&NetAccess::OutboundHttp(Some(Vec::new()))).unwrap(),
+        NetGrant::Sealed
+    );
+}
+
+fn declaring(manifold: &Manifold) -> crate::pack::PackPlugin {
+    let mut plugin: crate::pack::PackPlugin = serde_json::from_value(json!({
+        "name": "fetcher",
+        "description": "Fetches",
+        "artifact": "plugins/fetcher.afb",
+        "language": "rust",
+        "input_schema": {"type": "object"},
+    }))
+    .unwrap();
+    plugin.manifold = Some(serde_json::to_value(manifold).unwrap());
+    plugin
+}
+
+#[test]
+fn declared_network_grants_are_servable_exactly_when_the_model_says() {
+    gents_lean_vocab::families::plugin_grant_declaration_accepted::replay::<String>(|input| {
+        let net = match input.net.as_str() {
+            "no_net" => NetAccess::None,
+            "any_host" => NetAccess::OutboundHttp(None),
+            "hosts" => NetAccess::OutboundHttp(Some(
+                input
+                    .entries
+                    .iter()
+                    .map(|entry| match (entry.wildcard, entry.literal) {
+                        (true, true) => "*.10.0.0.1".to_owned(),
+                        (true, false) => "*.example.com".to_owned(),
+                        (false, true) => "10.0.0.1".to_owned(),
+                        (false, false) => "api.example.com".to_owned(),
+                    })
+                    .collect(),
+            )),
+            "raw_tcp" => NetAccess::OutboundFull(None),
+            other => panic!("unknown net kind {other}"),
+        };
+        let manifold = Manifold {
+            net,
+            http_timeout_ms: input.http_timeout_ms,
+            ..Manifold::sealed()
+        };
+        match declaring(&manifold).validate() {
+            Ok(()) => true,
+            Err(error) => {
+                assert!(
+                    format!("{error:#}").contains("network grant the host cannot serve"),
+                    "{error:#}"
+                );
+                false
+            }
+        }
+    });
+}
+
+#[test]
+fn a_sealed_or_empty_grant_offers_no_network() {
+    assert!(Session::for_grant(PLUGIN, &Manifold::sealed())
+        .unwrap()
+        .is_none());
+    assert!(Session::for_grant(PLUGIN, &http_manifold(Some(Vec::new())))
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn a_host_outside_the_allow_list_is_refused_with_the_next_step() {
+    let server = Server::start().await;
+    let mut session = session(&["api.example.com".into()]);
+    let results = ask(
+        &mut session,
+        json!([{"id": "a", "url": server.url("hello")}]),
+    )
+    .await;
+    let error = error(&results, "a");
+    assert!(
+        error.contains("is not in plugin team/plugin's granted network allow-list")
+            && error.contains("--grant-authority"),
+        "{error}"
+    );
+    let results = ask(
+        &mut session,
+        json!([
+            {"id": "plain", "url": "http://api.example.com/"},
+            {"id": "port", "url": "https://api.example.com:8443/"},
+        ]),
+    )
+    .await;
+    assert!(error_of(&results, "plain").contains("not in plugin"));
+    assert!(error_of(&results, "port").contains("not in plugin"));
+    assert!(server.hits().is_empty());
+}
+
+fn error_of(results: &Map<String, Value>, id: &str) -> String {
+    error(results, id)
+}
+
+#[tokio::test]
+async fn loopback_and_private_targets_are_refused_unless_named_literally() {
+    let server = Server::start().await;
+    let mut named = session(&[format!("http://localhost:{}", server.port)]);
+    let results = ask(
+        &mut named,
+        json!([{"id": "a", "url": format!("http://localhost:{}/hello", server.port)}]),
+    )
+    .await;
+    let refusal = error(&results, "a");
+    assert!(
+        refusal.contains("resolves to the internal address")
+            && refusal.contains("name the IP literal in the request URL"),
+        "{refusal}"
+    );
+
+    let mut any = Session::for_grant(PLUGIN, &http_manifold(None))
+        .unwrap()
+        .unwrap();
+    let results = ask(
+        &mut any,
+        json!([
+            {"id": "loopback", "url": "https://127.0.0.1/"},
+            {"id": "private", "url": "https://10.0.0.1/"},
+            {"id": "metadata", "url": "https://169.254.169.254/latest/meta-data"},
+            {"id": "mapped", "url": "https://[::ffff:127.0.0.1]/"},
+        ]),
+    )
+    .await;
+    for id in ["loopback", "private", "metadata", "mapped"] {
+        let refusal = error(&results, id);
+        assert!(refusal.contains("internal address"), "{id}: {refusal}");
+        assert!(refusal.contains("exact IP literal"), "{id}: {refusal}");
+    }
+    assert!(
+        error(&results, "mapped").contains("add [::ffff:127.0.0.1] to"),
+        "{}",
+        error(&results, "mapped")
+    );
+    assert!(server.hits().is_empty());
+}
+
+#[tokio::test]
+async fn a_rebinding_name_is_checked_on_the_addresses_the_connection_uses() {
+    let server = Server::start().await;
+    let grant = [format!("http://rebind.test:{}", server.port)];
+    let url = format!("http://rebind.test:{}/hello", server.port);
+    let (mut session, lookups) = session_resolving(&grant, vec!["127.0.0.1".parse().unwrap()]);
+    let results = ask(&mut session, json!([{"id": "a", "url": url}])).await;
+    let refusal = error(&results, "a");
+    assert!(
+        refusal.contains("rebind.test resolves to the internal address 127.0.0.1"),
+        "{refusal}"
+    );
+    assert_eq!(lookups.load(Ordering::SeqCst), 1);
+
+    let (mut mixed, _) = session_resolving(
+        &grant,
+        vec![
+            "93.184.216.34".parse().unwrap(),
+            "10.0.0.5".parse().unwrap(),
+        ],
+    );
+    let results = ask(&mut mixed, json!([{"id": "a", "url": url}])).await;
+    assert!(error(&results, "a").contains("internal address 10.0.0.5"));
+    assert!(server.hits().is_empty());
+}
+
+#[tokio::test]
+async fn a_redirect_comes_back_to_the_plugin() {
+    let server = Server::start().await;
+    let port = server.port;
+    let (mut session, _) = session_resolving(
+        &[server.literal(), format!("http://internal.test:{port}")],
+        vec!["127.0.0.1".parse().unwrap()],
+    );
+    let moved = format!("redirect/http/internal.test:{port}/hello");
+    let results = ask(
+        &mut session,
+        json!([{"id": "moved", "url": server.url(&moved), "method": "POST", "body": "x"}]),
+    )
+    .await;
+    assert_eq!(results["moved"]["status"], 302, "{}", results["moved"]);
+    let location = results["moved"]["headers"]["location"].as_str().unwrap();
+    assert_eq!(location, format!("http://internal.test:{port}/hello"));
+
+    let results = ask(
+        &mut session,
+        json!([
+            {"id": "to_private_name", "url": location},
+            {"id": "to_unlisted", "url": "http://10.0.0.1/hello"},
+        ]),
+    )
+    .await;
+    assert!(error(&results, "to_private_name")
+        .contains("internal.test resolves to the internal address"));
+    assert!(error(&results, "to_unlisted").contains("not in plugin"));
+    assert_eq!(server.hits(), [moved]);
+}
+
+#[tokio::test]
+async fn caps_bound_bodies_requests_and_time() {
+    let server = Server::start().await;
+    let mut session = Session::for_grant(
+        PLUGIN,
+        &Manifold {
+            http_timeout_ms: Some(300),
+            ..http_manifold(Some(vec![server.literal()]))
+        },
+    )
+    .unwrap()
+    .unwrap();
+    let results = ask(
+        &mut session,
+        json!([
+            {"id": "big", "url": server.url("big")},
+            {"id": "slow", "url": server.url("slow")},
+        ]),
+    )
+    .await;
+    assert!(error(&results, "big").contains("larger than"));
+    assert!(error(&results, "slow").contains("timed out"));
+
+    session.max_requests = session.requests_sent + 1;
+    let results = ask(
+        &mut session,
+        json!([
+            {"id": "a", "url": server.url("hello")},
+            {"id": "b", "url": server.url("hello")},
+        ]),
+    )
+    .await;
+    let answered = ["a", "b"]
+        .iter()
+        .filter(|id| results[**id].get("status").is_some())
+        .count();
+    assert_eq!(answered, 1, "{results:?}");
+
+    let mut session = session_bytes(&server, 8);
+    let results = ask(
+        &mut session,
+        json!([{"id": "a", "url": server.url("hello")}]),
+    )
+    .await;
+    assert_eq!(results["a"]["status"], 200);
+    let results = ask(
+        &mut session,
+        json!([{"id": "b", "url": server.url("hello")}]),
+    )
+    .await;
+    assert!(error(&results, "b").contains("response budget"));
+
+    let too_many: Vec<Value> = (0..=MAX_REQUESTS_PER_ROUND)
+        .map(|n| json!({"id": n.to_string(), "url": server.url("hello")}))
+        .collect();
+    let error = parse_batch(&json!({"http_calls": {"requests": too_many}}))
+        .err()
+        .unwrap();
+    assert!(error.contains("at most"), "{error}");
+    let body = "x".repeat(MAX_REQUEST_BODY_BYTES + 1);
+    let error = parse_batch(&json!({"http_calls": {"requests": [{"id": "a", "method": "POST", "url": server.url("hello"), "body": body}]}}))
+        .err()
+        .unwrap();
+    assert!(error.contains("larger than"), "{error}");
+}
+
+#[tokio::test]
+async fn the_response_budget_is_charged_as_bytes_are_read() {
+    let server = Server::start().await;
+    let mut session = session_bytes(&server, 8);
+    let results = ask(
+        &mut session,
+        json!([
+            {"id": "a", "url": server.url("hello")},
+            {"id": "b", "url": server.url("hello")},
+        ]),
+    )
+    .await;
+    let answered = ["a", "b"]
+        .iter()
+        .filter(|id| results[**id].get("status").is_some())
+        .count();
+    assert_eq!(answered, 1, "{results:?}");
+
+    let mut session = session_bytes(&server, MAX_RESPONSE_BYTES);
+    let results = ask(
+        &mut session,
+        json!([{"id": "big", "url": server.url("big")}]),
+    )
+    .await;
+    error(&results, "big");
+    let results = ask(
+        &mut session,
+        json!([{"id": "a", "url": server.url("hello")}]),
+    )
+    .await;
+    assert!(error(&results, "a").contains("was not sent"));
+    assert_eq!(server.hits(), ["hello", "hello", "big"]);
+
+    let mut session = session_bytes(&server, 4);
+    let round: Vec<Value> = (0..MAX_IN_FLIGHT + 4)
+        .map(|n| json!({"id": n.to_string(), "url": server.url("hello")}))
+        .collect();
+    let hits = server.hits().len();
+    let results = ask(&mut session, Value::Array(round)).await;
+    let unsent = results
+        .values()
+        .filter(|answer| {
+            answer["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("was not sent"))
+        })
+        .count();
+    assert_eq!(unsent, 4, "{results:?}");
+    assert_eq!(server.hits().len() - hits, MAX_IN_FLIGHT);
+}
+
+fn session_bytes(server: &Server, max_response_bytes: usize) -> Session {
+    let mut session = session(&[server.literal()]);
+    session.max_response_bytes = max_response_bytes;
+    session
+}
+
+#[tokio::test]
+async fn requests_carry_only_what_the_plugin_sets() {
+    let server = Server::start().await;
+    let mut session = session(&[server.literal()]);
+    let results = ask(
+        &mut session,
+        json!([{"id": "a", "url": server.url("cookie")}]),
+    )
+    .await;
+    assert_eq!(results["a"]["headers"]["set-cookie"], "session=1");
+    let results = ask(
+        &mut session,
+        json!([{"id": "b", "url": server.url("headers"), "headers": {"x-plugin": "1"}}]),
+    )
+    .await;
+    let seen: Value = serde_json::from_str(results["b"]["body"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        seen,
+        json!({"cookie": null, "authorization": null, "x-plugin": "1"})
+    );
+}
+
+#[test]
+fn malformed_http_calls_are_named() {
+    for (request, why) in [
+        (json!({"url": "https://a.test/"}), "non-empty string id"),
+        (json!({"id": "a"}), "needs a url"),
+        (
+            json!({"id": "a", "url": "https://a.test/", "method": "CONNECT"}),
+            "use GET",
+        ),
+        (
+            json!({"id": "a", "url": "https://a.test/", "headers": {"Host": "b"}}),
+            "set by the host",
+        ),
+        (
+            json!({"id": "a", "url": "https://a.test/", "headers": {"proxy-authorization": "b"}}),
+            "set by the host",
+        ),
+        (
+            json!({"id": "a", "url": "https://a.test/", "body": "x", "body_base64": "eA=="}),
+            "one string body",
+        ),
+    ] {
+        let error = parse_batch(&json!({"http_calls": {"requests": [request]}}))
+            .err()
+            .unwrap_or_else(|| panic!("{why}"));
+        assert!(error.contains(why), "{error}");
+    }
+    assert!(parse_batch(&json!({"http_calls": true})).unwrap().is_none());
+}

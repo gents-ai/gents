@@ -199,6 +199,10 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     });
   }
 
+  diagnostics() {
+    return { stdout: this.logs.stdoutTail(), stderr: this.logs.stderrTail() };
+  }
+
   async dispose() {
     await disposeRunnerProcess(this.process);
   }

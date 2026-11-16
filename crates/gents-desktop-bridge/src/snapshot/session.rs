@@ -2,8 +2,6 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use gents::store::config_client::{ConfigAccess, TransactionFailure};
-use gents::tools::background::job::view::{load_job_view, JobKey};
 use gents_desktop_core::client::{
     CanonicalTranscriptDependencies, ClientCore, ClientStore, SessionTranscriptQueryPage,
 };
@@ -13,6 +11,8 @@ use gents_protocol::output::rows::TranscriptMessageRow;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
 use gents_protocol::transcript::present_message;
+use gents_store::config_client::{ConfigAccess, TransactionFailure};
+use gents_toolcalls::background::job::view::{load_job_view, JobKey};
 
 use super::super::cause_derivation::{derive_tool_call_cause, RequestEvidence, ToolCallEvidence};
 use super::super::types::{
@@ -23,8 +23,8 @@ use super::super::types::{
     SessionContextView, SessionLiveDeltaView, SessionLiveTextPatchView,
     SessionProjectionRevisionView, SessionTimelinePageView, ToolCallView,
 };
+use super::request_matches_node;
 use super::timeline::build_rendered_timeline;
-use super::{request_matches_node, source_matches_node};
 
 pub(super) fn question_reply_view(
     store: &ClientStore,
@@ -49,8 +49,8 @@ pub(super) fn question_reply_view(
         });
     let source = gents_protocol::question_reply_source::question_reply_source(
         matches!(
-            gents::request::lifecycle::request_origin(request),
-            gents::request::lifecycle::RequestOrigin::Person
+            gents_session::request::lifecycle::request_origin(request),
+            gents_session::request::lifecycle::RequestOrigin::Person
         ),
         request.caused_by_source_doc_id.as_deref(),
         evidence.map(|reply| reply.source_doc_id.as_str()),
@@ -114,90 +114,145 @@ pub(super) fn message_is_runtime_control(
         .and_then(|request| request.input.as_ref())
         .cloned()
         .unwrap_or_default();
-    gents::request::lifecycle::is_runtime_control_message(&request_input, &message.message_key)
+    gents_session::request::lifecycle::is_runtime_control_message(
+        &request_input,
+        &message.message_key,
+    )
 }
 
-pub(super) fn request_origin_view(
-    store: &ClientStore,
-    request: &AgentRequestRow,
-) -> Option<RequestOriginView> {
-    use gents::request::lifecycle::RequestOrigin;
-    Some(match gents::request::lifecycle::request_origin(request) {
-        RequestOrigin::Person => return None,
-        RequestOrigin::SessionMessage {
-            parent_request_doc_id,
-        } => {
-            let parent = parent_request_doc_id.and_then(|doc_id| {
-                store
-                    .requests
-                    .iter()
-                    .find(|row| row.doc_id.as_deref() == Some(doc_id))
-            });
-            RequestOriginView::SessionMessage {
-                display_body: parent
-                    .and_then(|parent| {
-                        gents::request::lifecycle::session_message_display_body(request, parent)
-                    })
-                    .map(str::to_owned),
-                sender_node_did: parent
-                    .and_then(|row| normalize_optional(row.node_did.as_deref()))
-                    .or_else(|| normalize_optional(request.requester_did.as_deref())),
-                sender_session_id: parent
-                    .and_then(|row| normalize_optional(row.session_id.as_deref())),
-                sender_request_id: parent
-                    .map(|row| row.request_id.clone())
-                    .or_else(|| normalize_optional(request.caused_by_parent_request_id.as_deref())),
+pub(super) fn request_origin_view(request: &AgentRequestRow) -> Option<RequestOriginView> {
+    use gents_session::request::lifecycle::RequestOrigin;
+    Some(
+        match gents_session::request::lifecycle::request_origin(request) {
+            RequestOrigin::Person => return None,
+            RequestOrigin::SessionMessage { .. } => {
+                let source = request
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.started_by.as_ref());
+                RequestOriginView::SessionMessage {
+                    display_body:
+                        gents_session::request::lifecycle::signed_session_message_display_body(
+                            request,
+                        )
+                        .map(str::to_owned),
+                    sender_node_did: source.map(|source| source.node_did.clone()),
+                    sender_session_id: source.map(|source| source.session_id.clone()),
+                    sender_request_id: normalize_optional(
+                        request.caused_by_parent_request_id.as_deref(),
+                    ),
+                }
             }
-        }
-        RequestOrigin::Trigger {
-            trigger_id,
-            trigger_kind,
-        } => RequestOriginView::Trigger {
-            trigger_id: trigger_id.to_owned(),
-            trigger_kind: trigger_kind.map(str::to_owned),
+            RequestOrigin::Trigger {
+                trigger_id,
+                trigger_kind,
+            } => RequestOriginView::Trigger {
+                display_body: gents_automation::triggers::engine::trigger_display_body(request)
+                    .map(str::to_owned),
+                trigger_id: trigger_id.to_owned(),
+                trigger_kind: trigger_kind.map(str::to_owned),
+            },
+            RequestOrigin::GoalContinuation {
+                goal_id,
+                sequence,
+                wrapup,
+            } => RequestOriginView::GoalContinuation {
+                retry: gents_automation::triggers::engine::goal_source::goal_retry_presentation(
+                    request,
+                )
+                .map(|retry| crate::types::GoalRetryPresentationView {
+                    cause: retry.cause,
+                    attempt: retry.attempt,
+                    max: retry.max,
+                }),
+                goal_id: goal_id.map(str::to_owned),
+                sequence,
+                wrapup,
+            },
+            RequestOrigin::BackgroundCompletion => RequestOriginView::BackgroundCompletion {
+                notification: false,
+                tool_call_id: None,
+                reason: None,
+                result_range: None,
+                tool_call_doc_id: None,
+                tool_name: None,
+                status_kind: None,
+            },
         },
-        RequestOrigin::GoalContinuation {
-            goal_id,
-            sequence,
-            wrapup,
-        } => RequestOriginView::GoalContinuation {
-            goal_id: goal_id.map(str::to_owned),
-            sequence,
-            wrapup,
-        },
-        RequestOrigin::BackgroundCompletion => RequestOriginView::BackgroundCompletion {
-            notification: false,
-        },
-    })
+    )
 }
 
 pub(super) fn message_origin(
-    store: &ClientStore,
     message: &gents_protocol::output::TranscriptMessage,
     input_request: Option<&AgentRequestRow>,
 ) -> Option<RequestOriginView> {
-    if message.role != gents_protocol::output::MessageRole::User
-        || gents_protocol::output::authored::is_output_obligation(
-            message.role,
-            message.request_doc_id.as_deref(),
+    use gents_session::request::lifecycle::presentation_origin::{
+        classify, request_facts, Facts, Kind,
+    };
+    let mut facts = input_request.map(request_facts).unwrap_or(Facts {
+        user_role: true,
+        output_obligation: false,
+        completion_notification: false,
+        goal_continuation: false,
+        completion_wake: false,
+        parent_tool: false,
+        trigger: false,
+    });
+    facts.user_role = message.role == gents_protocol::output::MessageRole::User;
+    facts.output_obligation = gents_protocol::output::authored::is_output_obligation(
+        message.role,
+        message.request_doc_id.as_deref(),
+        &message.message_key,
+    );
+    facts.completion_notification =
+        gents_protocol::background_completion::is_background_completion_notification_message_key(
             &message.message_key,
-        )
-    {
+        );
+    let kind = classify(facts);
+    if matches!(kind, Kind::OtherRole | Kind::RuntimeControl) {
         return None;
     }
-    if gents::tools::background::completion::is_background_completion_notification_message_key(
-        &message.message_key,
-    ) {
-        return Some(RequestOriginView::BackgroundCompletion { notification: true });
+    if kind == Kind::BackgroundResult {
+        let tool_call_doc_id = match &message.publication {
+            gents_protocol::output::MessagePublication::ToolDelivery { tool_call_doc_id } => {
+                Some(tool_call_doc_id.clone())
+            }
+            _ => None,
+        };
+        let metadata = message.blocks.iter().find_map(|block| {
+            let gents_protocol::output::MessageBlock::Text { text } = block else {
+                return None;
+            };
+            let gents_protocol::output::PayloadPresentation::Composed { parts } =
+                &text.presentation
+            else {
+                return None;
+            };
+            gents_tools::rendering::completion_metadata(parts)
+        });
+        return Some(RequestOriginView::BackgroundCompletion {
+            notification: true,
+            tool_call_id: metadata.as_ref().map(|info| info.tool_call_id.clone()),
+            reason: metadata.as_ref().and_then(|info| info.reason.clone()),
+            result_range: metadata
+                .as_ref()
+                .map(|info| crate::types::CompletionResultRangeView {
+                    start_byte: info.result_start_byte,
+                    end_byte: info.result_end_byte,
+                }),
+            tool_call_doc_id,
+            tool_name: metadata.as_ref().map(|info| info.tool_name.clone()),
+            status_kind: metadata.as_ref().map(|info| info.status.clone()),
+        });
     }
-    input_request.and_then(|request| request_origin_view(store, request))
+    input_request.and_then(request_origin_view)
 }
 
 pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> bool {
     request
         .input
         .as_ref()
-        .is_some_and(gents::request::lifecycle::is_background_completion_request)
+        .is_some_and(gents_session::request::lifecycle::is_background_completion_request)
 }
 
 pub(super) fn authored_prompt_message_key(request_doc_id: &str) -> String {
@@ -310,7 +365,9 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     include_live_tail: bool,
     request_projection: Option<&[AgentRequestRow]>,
 ) -> anyhow::Result<Option<DesktopSessionSnapshot>> {
-    let (store, projection_revision) = core.store().snapshot_with_revision();
+    let (store, projection_revision) = core
+        .stores()
+        .snapshot_with_revision(node_did.unwrap_or_default());
     let observed_queue_ids = pending_queue_doc_ids(
         request_projection.unwrap_or(&store.requests),
         node_did,
@@ -1197,16 +1254,7 @@ mod paging_coverage_tests {
 
     #[test]
     fn paged_pending_prompt_uses_lean_read_coverage() {
-        let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = contract["session_document_cases"]["projection"]
-            .as_array()
-            .unwrap();
-        let mut count = 0;
-        for case in cases
-            .iter()
-            .filter(|case| case["operation"] == "tip_coverage")
-        {
-            count += 1;
+        gents_lean_vocab::families::contracts_tip_coverage::replay(|case| {
             let mut rows = ClientStoreRows {
                 requests: vec![AgentRequestRow {
                     doc_id: Some("request-doc".into()),
@@ -1220,7 +1268,7 @@ mod paging_coverage_tests {
                 }],
                 ..Default::default()
             };
-            if case["materialized"].as_bool().unwrap() {
+            if case.materialized {
                 rows.transcript_messages.push(TranscriptMessageRow {
                     doc_id: "prompt-doc".into(),
                     message: serde_json::from_value(serde_json::json!({
@@ -1234,8 +1282,8 @@ mod paging_coverage_tests {
             }
             let store = ClientStore::from_rows(rows);
             let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
-            if case["known"].as_bool().unwrap() {
-                let doc = if case["observed_request"].as_u64().unwrap() == 1 {
+            if case.known {
+                let doc = if case.observed_request == 1 {
                     "request-doc"
                 } else {
                     "other-request-doc"
@@ -1246,7 +1294,7 @@ mod paging_coverage_tests {
                         node_did: "node".into(),
                         session_id: "session".into(),
                         requester_did: None,
-                        materialized: case["materialized"].as_bool().unwrap(),
+                        materialized: case.materialized,
                         first_sequence: None,
                     },
                 );
@@ -1259,7 +1307,7 @@ mod paging_coverage_tests {
                 None,
                 Some(&ownership),
                 true,
-                case["complete"].as_bool().unwrap(),
+                case.complete,
                 false,
                 true,
                 Some("node"),
@@ -1269,15 +1317,12 @@ mod paging_coverage_tests {
             )
             .unwrap();
             assert_eq!(
-                snapshot.pending_turn.is_some(),
-                case["pending"].as_bool().unwrap(),
-                "{case}"
-            );
-            assert_eq!(
                 snapshot.context.transcript_totals_exact,
-                Some(case["complete"].as_bool().unwrap())
+                Some(case.complete)
             );
-        }
-        assert!(count > 0);
+            gents_lean_vocab::families::contracts_tip_coverage::TipCoverageOutput {
+                pending: snapshot.pending_turn.is_some(),
+            }
+        });
     }
 }

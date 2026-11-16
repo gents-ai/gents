@@ -1,11 +1,12 @@
-use std::path::{Path, PathBuf};
-
 use anyhow::Result;
-use gents::{cli_tool, BackendProviderKind, OpenAiWireApi};
+use gents_inference::backends::provider::BackendProviderKind;
+use gents_loop::openai_wire::OpenAiWireApi;
 
-use crate::cli::args::{BackendPresetArg, OpenAiWireApiArg, ToolCeilingArg, ToolPackageArg};
+use crate::cli::args::{BackendPresetArg, OpenAiWireApiArg};
 use crate::shared::ResolvedBackendConfig;
-use crate::{normalize_optional_string, DEFAULT_INIT_ENDPOINT};
+use crate::DEFAULT_INIT_ENDPOINT;
+use gents_host::http_client::normalize_optional_string;
+use gents_service::args::ToolPackageArg;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BackendResolutionMode {
@@ -112,49 +113,6 @@ fn resolve_backend_api_key_env_var(
             .flatten()
             .map(ToOwned::to_owned)
     })
-}
-
-pub(crate) fn parse_cli_tool_arg(value: &str) -> Result<gents::CliToolConfig> {
-    let (name, path) = value
-        .split_once('=')
-        .ok_or_else(|| anyhow::anyhow!("--cli-tool must be NAME=/absolute/path"))?;
-    let name = name.trim();
-    let path = path.trim();
-    if name.is_empty() || path.is_empty() {
-        anyhow::bail!("--cli-tool must be NAME=/absolute/path");
-    }
-
-    Ok(cli_tool(
-        name,
-        PathBuf::from(path),
-        format!("Run the approved {name} CLI."),
-    ))
-}
-
-/// The host ceiling a `gents runtime server` enforces for this mode and root. Serve
-/// resolves the readonly default root before calling; a readonly ceiling
-/// without one leaves file tools unrooted.
-pub(crate) fn host_tool_ceiling(
-    mode: ToolCeilingArg,
-    root: Option<&Path>,
-) -> Result<gents::ToolCeiling> {
-    Ok(match (mode, root) {
-        (ToolCeilingArg::MetaOnly, _) => gents::ToolCeiling::meta_only(),
-        (ToolCeilingArg::Readonly, Some(root)) => gents::ToolCeiling::readonly_at(root),
-        (ToolCeilingArg::Readonly, None) => gents::ToolCeiling::readonly(),
-        (ToolCeilingArg::Readwrite, Some(root)) => gents::ToolCeiling::readwrite(root),
-        (ToolCeilingArg::Readwrite, None) => {
-            anyhow::bail!("--tool-root is required when --tool-ceiling readwrite")
-        }
-    })
-}
-
-pub(crate) fn format_tool_ceiling(value: ToolCeilingArg) -> &'static str {
-    match value {
-        ToolCeilingArg::MetaOnly => "meta-only",
-        ToolCeilingArg::Readonly => "readonly",
-        ToolCeilingArg::Readwrite => "readwrite",
-    }
 }
 
 pub(crate) fn format_tool_package(value: ToolPackageArg) -> &'static str {

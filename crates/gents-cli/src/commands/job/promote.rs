@@ -3,22 +3,22 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::documents::Tools;
-use gents::pack::authoring::check_dir;
-use gents::pack::authoring::test::run_plugin_cases;
-use gents::store::config_client::ConfigAccess;
-use gents::tools::background::job::promote::{
+use gents_documents::Tools;
+use gents_pack::pack::authoring::check_dir;
+use gents_store::config_client::ConfigAccess;
+use gents_toolcalls::background::job::promote::{
     generate_pack, load_dynamic_run, validate_name, write_promotion, PromoteRefusal,
     PromotionRecord,
 };
-use gents::tools::background::job::view::JobKey;
+use gents_toolcalls::background::job::view::JobKey;
+use gents_toolcalls::plugin::authoring_test::run_plugin_cases;
 use serde::Serialize;
 use serde_json::Value;
 
 use super::resolve_job;
 use crate::cli::{PackDriftArgs, PackInstallArgs, ScopeArgs};
-use crate::commands::pack::wire::{wire_in, WireRequest};
 use crate::output_format::OutputFormat;
+use gents_pack::pack::plugin_wire::{wire_in, WireRequest};
 
 /// A stage of a promotion; `promote` reports each one before it starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +98,7 @@ pub fn refusal_code(error: &PromotionError) -> Option<&'static str> {
 
 /// The run's handle as the tool name, when it is a pack name.
 pub fn default_name(handle: &str) -> Option<String> {
-    gents::pack::is_valid_pack_name(handle).then(|| handle.to_owned())
+    gents_documents::pack_spec::is_valid_pack_name(handle).then(|| handle.to_owned())
 }
 
 /// Refuses an agent with no Tools document: wiring into it would fail after
@@ -139,10 +139,14 @@ fn reserve_promoted_dir(home: &Path, name: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
-fn javy_version() -> Result<String, JavyMissing> {
-    let javy = std::env::var("JAVY").unwrap_or_else(|_| "javy".into());
-    match gents::tools::exec::native_spawn::output_std(
-        std::process::Command::new(&javy).arg("--version"),
+/// The javy command promotion checks: `JAVY` when set, otherwise `javy` on PATH.
+pub fn javy_command() -> String {
+    std::env::var("JAVY").unwrap_or_else(|_| "javy".into())
+}
+
+fn javy_version(javy: &str) -> Result<String, JavyMissing> {
+    match gents_session::exec::native_spawn::output_std(
+        std::process::Command::new(javy).arg("--version"),
     ) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
@@ -155,6 +159,14 @@ fn javy_version() -> Result<String, JavyMissing> {
     }
 }
 
+/// The run to promote and the plugin it becomes.
+#[derive(Clone, Copy)]
+pub struct PromoteRequest<'a> {
+    pub selector: &'a str,
+    pub name: Option<&'a str>,
+    pub agent: Option<&'a str>,
+}
+
 /// Promotes the dynamic run `selector` names (its address
 /// `SESSION_ID:TOOL_CALL_ID` or tool call id) into the installed plugin
 /// `gents/<name>`, wired into `agent` (default: the agent that ran it). Every
@@ -164,13 +176,17 @@ pub async fn promote(
     access: &ConfigAccess,
     home: &Path,
     actor: &str,
-    selector: &str,
-    name: Option<&str>,
-    agent: Option<&str>,
+    request: &PromoteRequest<'_>,
+    javy: &str,
     report: &mut dyn FnMut(PromoteStep),
 ) -> Result<PromoteReport, PromotionError> {
+    let PromoteRequest {
+        selector,
+        name,
+        agent,
+    } = *request;
     report(PromoteStep::Javy);
-    let javy = javy_version()?;
+    let javy = javy_version(javy)?;
 
     report(PromoteStep::Load);
     let view = resolve_job(access, actor, selector, None).await?;
@@ -189,7 +205,7 @@ pub async fn promote(
             .transact_readonly("job.promote.agent_tools", move |txn| {
                 let (owner, agent_did) = (owner.clone(), agent_did.clone());
                 Box::pin(async move {
-                    gents::documents::load_agent_tools_in_txn(txn, &owner, &agent_did).await
+                    gents_documents::load_agent_tools_in_txn(txn, &owner, &agent_did).await
                 })
             })
             .await
@@ -261,10 +277,11 @@ pub async fn promote(
     };
     let installed = async {
         let source =
-            crate::commands::pack::resolve_pack_source(&install.package, None, home).await?;
+            gents_pack::pack::resolved_pack::resolve_pack_source(&install.package, None, home)
+                .await?;
         crate::commands::pack::install_documents_pack(access, actor, &source, &install, true)
             .await
-            .map_err(gents::pack::PackChangeError::into_anyhow)
+            .map_err(gents_pack::pack::PackChangeError::into_anyhow)
     }
     .await
     .context("promote install failed")?;
@@ -303,6 +320,7 @@ pub async fn promote(
             dynamic_consent: false,
             tool_calls_consent: false,
         },
+        gents_service::home_state::load_held_user_identity,
     )
     .await
     .with_context(|| format!("promote wire failed{recovery}"))?;
@@ -320,9 +338,9 @@ pub async fn promote(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::store::config_client::GraphqlEndpoint;
-    use gents::tools::background::job::promote::gate;
     use gents_protocol::job::{JobOrigin, JobPinSummary, JobScope, JobState, JobView};
+    use gents_store::config_client::GraphqlEndpoint;
+    use gents_toolcalls::background::job::promote::gate;
 
     fn view(state: JobState, origin: JobOrigin) -> JobView {
         JobView {
@@ -358,14 +376,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
     async fn javy_missing_is_the_first_refusal() {
-        // JAVY is process-wide; the compile lock keeps the build tests off it.
-        let _guard = crate::commands::afterburner_build::compile_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let saved = std::env::var_os("JAVY");
-        std::env::set_var("JAVY", "/nonexistent/javy");
         let home = tempfile::tempdir().unwrap();
         let access =
             ConfigAccess::Graphql(GraphqlEndpoint::anonymous("http://127.0.0.1:9/graphql"));
@@ -374,16 +385,15 @@ mod tests {
             &access,
             home.path(),
             "did:key:z6Mknode",
-            "no-such-job",
-            None,
-            None,
+            &PromoteRequest {
+                selector: "no-such-job",
+                name: None,
+                agent: None,
+            },
+            "/nonexistent/javy",
             &mut |step| steps.push(step),
         )
         .await;
-        match saved {
-            Some(value) => std::env::set_var("JAVY", value),
-            None => std::env::remove_var("JAVY"),
-        }
         let error = result.expect_err("a missing javy refuses");
         assert_eq!(refusal_code(&error), Some("promote_javy_missing"));
         let PromotionError::Javy(missing) = error else {

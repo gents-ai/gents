@@ -1,5 +1,6 @@
-import Proofs.Client.Types
-import Proofs.ClientShell.Projection
+import Proofs.Session.Client.Types
+import Proofs.Clients.ClientShell.Projection
+import Proofs.Conformance.Family
 
 namespace Conformance.ContractCases
 
@@ -12,14 +13,11 @@ structure LiveOverlayCase where
   turnLabel           : String
   hasContent          : Bool
   hasReasoning        : Bool
-  expectOverlay       : Bool
-  deriving Repr
+  deriving Repr, Lean.ToJson
 
 structure RequestProgressCase where
   name           : String
-  lifecycleState : String
-  label          : String
-  animated       : Bool
+  lifecycleState : RequestState
   deriving Repr
 
 structure PendingUserTurnCase where
@@ -52,11 +50,7 @@ def pendingUserTurnCases : List PendingUserTurnCase :=
 
 def requestProgressCase
     (name : String) (state : RequestState) : RequestProgressCase :=
-  let progress := projectRequestProgress state
-  { name := name
-  , lifecycleState := state.toDefraDB
-  , label := progress.label
-  , animated := progress.animated }
+  { name := name, lifecycleState := state }
 
 def requestProgressCases : List RequestProgressCase :=
   [ requestProgressCase "workspace_binding_pending_is_queued" .workspaceBindingPending
@@ -78,60 +72,76 @@ def liveOverlayCases : List LiveOverlayCase :=
     , hasDurableOwner := false
     , precedingToolCalls := 0
     , turnTerminal := false, turnLabel := "running"
-    , hasContent := true, hasReasoning := false
-    , expectOverlay := true }
+    , hasContent := true, hasReasoning := false }
   , { name := "post_tool_resumed"
     , liveOutputAvailable := true
     , hasDurableOwner := false
     , precedingToolCalls := 1
     , turnTerminal := false, turnLabel := "running"
-    , hasContent := true, hasReasoning := false
-    , expectOverlay := true }
+    , hasContent := true, hasReasoning := false }
   , { name := "interleaved_two_tools"
     , liveOutputAvailable := true
     , hasDurableOwner := false
     , precedingToolCalls := 2
     , turnTerminal := false, turnLabel := "running"
-    , hasContent := true, hasReasoning := false
-    , expectOverlay := true }
+    , hasContent := true, hasReasoning := false }
   , { name := "tool_first_no_pre_text"
     , liveOutputAvailable := true
     , hasDurableOwner := false
     , precedingToolCalls := 1
     , turnTerminal := false, turnLabel := "running"
-    , hasContent := false, hasReasoning := false
-    , expectOverlay := false }
+    , hasContent := false, hasReasoning := false }
   , { name := "interrupted_mid_stream"
     , liveOutputAvailable := true
     , hasDurableOwner := false
     , precedingToolCalls := 0
     , turnTerminal := true, turnLabel := "interrupted"
-    , hasContent := true, hasReasoning := false
-    , expectOverlay := false }
+    , hasContent := true, hasReasoning := false }
   , { name := "silent_running"
     , liveOutputAvailable := false
     , hasDurableOwner := false
     , precedingToolCalls := 0
     , turnTerminal := false, turnLabel := "running"
-    , hasContent := false, hasReasoning := false
-    , expectOverlay := false }
+    , hasContent := false, hasReasoning := false }
   , { name := "completed_before_output_arrival"
     , liveOutputAvailable := false
     , hasDurableOwner := true
     , precedingToolCalls := 0
     , turnTerminal := true, turnLabel := "completed"
-    , hasContent := false, hasReasoning := false
-    , expectOverlay := false }
+    , hasContent := false, hasReasoning := false }
   , { name := "replicated_stale_tail_has_durable_owner"
     , liveOutputAvailable := true
     , hasDurableOwner := true
     , precedingToolCalls := 2
     , turnTerminal := false, turnLabel := "running"
-    , hasContent := true, hasReasoning := false
-    , expectOverlay := false }
+    , hasContent := true, hasReasoning := false }
   ]
 
 def liveOverlayCaseNames : List String :=
   liveOverlayCases.map LiveOverlayCase.name
+
+def liveOverlayTurn : String → Option ClientTurnState
+  | "waitingForClaim" => some .waitingForClaim
+  | "running" => some .running
+  | "completed" => some .completed
+  | "failed" => some .failed
+  | "superseded" => some .superseded
+  | "interrupted" => some .interrupted
+  | _ => none
+
+structure LiveOverlayOutput where
+  expectOverlay : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def liveOverlay : Conformance.Family LiveOverlayCase LiveOverlayOutput where
+  inputs := liveOverlayCases
+  model := fun c =>
+    { expectOverlay := (projectActiveOverlay c.liveOutputAvailable (liveOverlayTurn c.turnLabel)
+        c.hasDurableOwner c.hasContent c.hasReasoning).isSome }
+
+example : liveOverlayCases.all fun c =>
+    (liveOverlayTurn c.turnLabel).map ClientTurnState.isTerminal == some c.turnTerminal := by
+  native_decide
 
 end Conformance.ContractCases

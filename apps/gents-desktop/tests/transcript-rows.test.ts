@@ -252,7 +252,12 @@ describe("rows held beyond the newest page", () => {
     });
 
     it("drops a pending trigger input once its published item is held", () => {
-      const origin = { kind: "trigger", triggerId: "nightly", triggerKind: "schedule" };
+      const origin = {
+        kind: "trigger",
+        displayBody: null,
+        triggerId: "nightly",
+        triggerKind: "schedule",
+      };
       const published = {
         kind: "automatedInput",
         itemKey: "authored:doc-t:prompt",

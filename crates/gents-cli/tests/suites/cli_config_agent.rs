@@ -247,3 +247,121 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_create_on_a_named_home_prints_a_grant_that_works_as_printed() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    std::fs::create_dir_all(&home_dir)?;
+    let node_home = tempdir.path().join("second-node");
+    let node_home_arg = node_home.to_str().context("node home utf8")?;
+
+    let model_name = format!("mock-agent-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--home",
+            node_home_arg,
+            "--node-name",
+            &format!("cli-agent-home-{}", Uuid::new_v4().simple()),
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let node_did = node_did_from_init(&init)?;
+    let profile_id = init
+        .get("inference_profile_id")
+        .and_then(Value::as_str)
+        .context("init output missing inference_profile_id")?
+        .to_string();
+    let tool_root = init
+        .get("tool_root")
+        .and_then(Value::as_str)
+        .context("init output missing tool_root")?
+        .to_string();
+    let (_serve, _) =
+        spawn_server_with_ready_json(&home_dir, port, &["--home", node_home_arg], &[])?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+
+    let created = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "agent",
+            "create",
+            "--home",
+            node_home_arg,
+            "--display-name",
+            "Helper",
+            "--system-prompt",
+            "Inspect the requested files and report findings without modifying them.",
+            "--preset",
+            "readonly",
+            "--root",
+            &tool_root,
+            "--profile-id",
+            &profile_id,
+        ],
+    )?;
+    let agent_did = created
+        .get("agent_did")
+        .and_then(Value::as_str)
+        .context("create output missing agent_did")?
+        .to_string();
+    assert_eq!(
+        created.pointer("/agent/node_did").and_then(Value::as_str),
+        Some(node_did.as_str())
+    );
+    let user_command = created
+        .pointer("/host_root_access/user_command")
+        .and_then(Value::as_str)
+        .context("create output missing the User's grant command")?;
+    assert_eq!(
+        user_command,
+        format!(
+            "gents config workspace-root grant-reader --path {tool_root} --agent-did {agent_did} --home {node_home_arg}"
+        )
+    );
+    let printed = user_command
+        .strip_prefix("gents ")
+        .context("user_command is a gents command")?
+        .split(' ')
+        .collect::<Vec<_>>();
+    let granted = run_cli_json(&home_dir, &printed)?;
+    assert_eq!(
+        granted.get("granted_agent").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+
+    let shown = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "agent",
+            "show",
+            &agent_did,
+            "--home",
+            node_home_arg,
+        ],
+    )?;
+    assert_eq!(
+        shown
+            .pointer("/resolved/preset_name")
+            .and_then(Value::as_str),
+        Some("readonly")
+    );
+    assert_eq!(
+        shown.pointer("/resolved/root").and_then(Value::as_str),
+        Some(tool_root.as_str())
+    );
+    assert!(
+        shown.pointer("/resolved/tools/updated_at").is_none(),
+        "{shown}"
+    );
+    Ok(())
+}

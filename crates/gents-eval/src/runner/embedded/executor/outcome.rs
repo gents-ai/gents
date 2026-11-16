@@ -5,8 +5,8 @@ use crate::runner::embedded::observe::{
 };
 use crate::{OutcomeKind, ProviderReason};
 use gents::defra_node::Node as EmbeddedNode;
-use gents::documents::TriggerObservation;
-use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents_documents::TriggerObservation;
+use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 /// External premise: an eval trial reads a request's persisted
 /// `failure_reason`, the only record of why inference failed; the durable
@@ -102,8 +102,8 @@ pub(super) async fn trigger_failure(
 ) -> Option<OutcomeKind> {
     let node_did = escape_graphql_string(node_did);
     let since = escape_graphql_string(since);
-    let unacknowledged = gents::triggers::UNACKNOWLEDGED_STATUS;
-    let budget_exhausted = gents::documents::BUDGET_EXHAUSTED_STATUS;
+    let unacknowledged = gents_automation::triggers::UNACKNOWLEDGED_STATUS;
+    let budget_exhausted = gents_documents::BUDGET_EXHAUSTED_STATUS;
     let source_filter = source_doc_id.map_or_else(String::new, |doc_id| {
         format!(
             r#", last_fired_source_doc_id: {{ _eq: "{}" }}"#,

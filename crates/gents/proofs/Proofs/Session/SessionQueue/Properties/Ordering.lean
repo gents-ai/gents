@@ -1,0 +1,225 @@
+import Proofs.Session.SessionQueue.Properties.Drain
+
+namespace SessionQueue
+
+theorem canAppendAfter_true
+    {entries : List QueueEntry}
+    {entry : QueueEntry}
+    (h_after : canAppendAfter entries entry = true) :
+    ∀ existing, existing ∈ entries → existing.orderKey ≤ entry.orderKey := by
+  induction entries with
+  | nil =>
+      intro existing h_mem
+      simp at h_mem
+  | cons head tail ih =>
+      by_cases h_head : head.orderKey ≤ entry.orderKey
+      · simp [canAppendAfter, h_head] at h_after
+        intro existing h_mem
+        simp at h_mem
+        rcases h_mem with h_eq | h_tail
+        · rw [h_eq]
+          exact h_head
+        · exact ih h_after existing h_tail
+      · simp [canAppendAfter, h_head] at h_after
+
+theorem head_earliest_of_createdOrdered
+    {entry : QueueEntry}
+    {rest : List QueueEntry}
+    (h_order : CreatedOrdered (entry :: rest)) :
+    ∀ other, other ∈ entry :: rest → entry.orderKey ≤ other.orderKey := by
+  intro other h_mem
+  simp [CreatedOrdered] at h_order
+  simp at h_mem
+  rcases h_mem with h_eq | h_tail
+  · rw [h_eq]
+  · exact h_order.1 other h_tail
+
+theorem claim_next_selects_earliest
+    {pre post : SessionQueueState}
+    (h_active : pre.active = none)
+    (h_order : CreatedOrdered pre.pending)
+    {entry : QueueEntry}
+    {rest : List QueueEntry}
+    (h_pending : pre.pending = entry :: rest)
+    (h_post : post = pre.claimHead entry rest) :
+    Transition pre post ∧
+    ∀ other, other ∈ pre.pending → entry.orderKey ≤ other.orderKey := by
+  constructor
+  · exact Transition.claim_next h_active h_pending h_post
+  · rw [h_pending] at h_order ⊢
+    exact head_earliest_of_createdOrdered h_order
+
+theorem pending_head_earliest
+    {pre : SessionQueueState}
+    {entry : QueueEntry}
+    {rest : List QueueEntry}
+    (h_order : CreatedOrdered pre.pending)
+    (h_pending : pre.pending = entry :: rest) :
+    ∀ other, other ∈ pre.pending → entry.orderKey ≤ other.orderKey := by
+  rw [h_pending] at h_order ⊢
+  exact head_earliest_of_createdOrdered h_order
+
+theorem createdOrdered_append_of_after
+    {entries : List QueueEntry}
+    {entry : QueueEntry}
+    (h_order : CreatedOrdered entries)
+    (h_after : ∀ existing, existing ∈ entries → existing.orderKey ≤ entry.orderKey) :
+    CreatedOrdered (entries ++ [entry]) := by
+  induction entries with
+  | nil =>
+      simp [CreatedOrdered]
+  | cons head tail ih =>
+      simp [CreatedOrdered] at h_order ⊢
+      constructor
+      · intro other h_mem
+        rcases h_mem with h_tail | h_eq
+        · exact h_order.1 other h_tail
+        · rw [h_eq]
+          exact h_after head (by simp)
+      · apply ih h_order.2
+        intro existing h_existing
+        exact h_after existing (by simp [h_existing])
+
+theorem createdOrdered_append
+    {entries : List QueueEntry}
+    {entry : QueueEntry}
+    (h_order : CreatedOrdered entries)
+    (h_after : canAppendAfter entries entry = true) :
+    CreatedOrdered (entries ++ [entry]) :=
+  createdOrdered_append_of_after h_order (canAppendAfter_true h_after)
+
+theorem createdOrdered_tail
+    {entry : QueueEntry}
+    {rest : List QueueEntry}
+    (h_order : CreatedOrdered (entry :: rest)) :
+    CreatedOrdered rest := by
+  simpa [CreatedOrdered] using h_order.2
+
+theorem createdOrdered_drop
+    {entries : List QueueEntry} (count : Nat)
+    (h_order : CreatedOrdered entries) :
+    CreatedOrdered (entries.drop count) := by
+  induction entries generalizing count with
+  | nil => simpa using h_order
+  | cons head tail ih =>
+      cases count with
+      | zero => simpa using h_order
+      | succ count =>
+          simpa using ih count (createdOrdered_tail h_order)
+
+theorem pendingAfterDrain_preserves_createdOrdered
+    {source : QueueSource}
+    {queueKey : Option QueueKey}
+    {entries : List QueueEntry}
+    (h_order : CreatedOrdered entries) :
+    CreatedOrdered (pendingAfterDrain source queueKey entries) := by
+  induction entries with
+  | nil =>
+      simp [CreatedOrdered]
+  | cons head tail ih =>
+      simp [CreatedOrdered] at h_order
+      by_cases h_match : head.matchesAutomatedWakeup source queueKey = true
+      · simp [h_match]
+        exact ih h_order.2
+      · simp [h_match, CreatedOrdered]
+        constructor
+        · intro other h_mem
+          exact h_order.1 other (pendingAfterDrain_mem_original h_mem)
+        · exact ih h_order.2
+
+theorem pendingAfterDrainMatching_preserves_createdOrdered
+    {source : QueueSource} {queueKey : Option QueueKey}
+    {allowed : QueueEntry → Bool} {entries : List QueueEntry}
+    (h_order : CreatedOrdered entries) :
+    CreatedOrdered (pendingAfterDrainMatching source queueKey allowed entries) := by
+  induction entries with
+  | nil => simp [pendingAfterDrainMatching, CreatedOrdered]
+  | cons head tail ih =>
+      simp [CreatedOrdered] at h_order
+      simp only [pendingAfterDrainMatching]
+      split
+      · exact ih h_order.2
+      · simp only [CreatedOrdered]
+        constructor
+        · intro other h_mem
+          exact h_order.1 other (pendingAfterDrainMatching_mem_original h_mem)
+        · exact ih h_order.2
+
+theorem createdOrdered_sublist
+    {entries smaller : List QueueEntry}
+    (h_sub : smaller.Sublist entries)
+    (h_order : CreatedOrdered entries) :
+    CreatedOrdered smaller := by
+  induction h_sub with
+  | slnil => exact h_order
+  | cons head _ ih => exact ih (createdOrdered_tail h_order)
+  | cons₂ head h_rest ih =>
+      simp only [CreatedOrdered] at h_order ⊢
+      exact ⟨fun other h_mem => h_order.1 other (h_rest.subset h_mem), ih h_order.2⟩
+
+theorem pendingAfterDrainMatching_sublist
+    (source : QueueSource) (queueKey : Option QueueKey)
+    (allowed : QueueEntry → Bool) (entries : List QueueEntry) :
+    (pendingAfterDrainMatching source queueKey allowed entries).Sublist entries := by
+  induction entries with
+  | nil => exact List.Sublist.slnil
+  | cons head tail ih =>
+      simp only [pendingAfterDrainMatching]
+      split
+      · exact ih.cons head
+      · exact ih.cons₂ head
+
+theorem transition_preserves_createdOrdered
+    {pre post : SessionQueueState}
+    (h_trans : Transition pre post)
+    (h_order : CreatedOrdered (pre.folding ++ pre.pending)) :
+    CreatedOrdered (post.folding ++ post.pending) := by
+  cases h_trans with
+  | append_pending _ _ _ h_after h_post =>
+      rw [h_post, SessionQueueState.appendPending, ← List.append_assoc]
+      exact createdOrdered_append h_order h_after
+  | coalesce_pending_new _ _ _ h_after h_post =>
+      rw [h_post, SessionQueueState.appendPending, ← List.append_assoc]
+      exact createdOrdered_append h_order h_after
+  | coalesce_pending_existing _ _ h_post =>
+      rw [h_post]
+      exact h_order
+  | claim_next _ h_pending h_post =>
+      rw [h_pending] at h_order
+      rw [h_post, SessionQueueState.claimHead]
+      exact createdOrdered_sublist
+        (List.Sublist.append_left ((List.sublist_cons_self _ _)) _) h_order
+  | claim_folding _ h_pending h_post =>
+      rw [h_pending] at h_order
+      rw [h_post, SessionQueueState.claimFolding]
+      simp only [foldRun_append_drop]
+      exact createdOrdered_sublist
+        ((List.sublist_cons_self _ _).trans (List.sublist_append_right _ _)) h_order
+  | consume_folded _ h_folding h_post =>
+      rw [h_folding] at h_order
+      rw [h_post, SessionQueueState.consumeFolded]
+      exact createdOrdered_tail h_order
+  | finish_active _ h_post =>
+      rw [h_post, SessionQueueState.finishActive]
+      simpa using h_order
+  | drain_automated _ h_post =>
+      rw [h_post, SessionQueueState.drainAutomatedWakeups]
+      exact createdOrdered_sublist
+        (List.Sublist.append_left (pendingAfterDrainMatching_sublist _ _ _ _) _) h_order
+  | drain_observed_automated _ h_post =>
+      rw [h_post, SessionQueueState.drainObservedAutomatedWakeups]
+      exact createdOrdered_sublist
+        (List.Sublist.append_left (pendingAfterDrainMatching_sublist _ _ _ _) _) h_order
+
+theorem trace_preserves_createdOrdered
+    {pre post : SessionQueueState}
+    (h_trace : Trace pre post)
+    (h_order : CreatedOrdered (pre.folding ++ pre.pending)) :
+    CreatedOrdered (post.folding ++ post.pending) := by
+  induction h_trace with
+  | refl =>
+      exact h_order
+  | step h_step _ ih =>
+      exact ih (transition_preserves_createdOrdered h_step h_order)
+
+end SessionQueue

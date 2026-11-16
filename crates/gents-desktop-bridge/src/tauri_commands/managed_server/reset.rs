@@ -1,19 +1,45 @@
-use super::authority::HomeIdentity;
+use super::native::service_action;
 use super::native::{native_service, run_native};
 use super::pairing::drain_managed_runtime_pairing;
 use super::port::{matching_external_server, user_status_signer};
-use super::preference::{load_preference, read_home_identity};
-use super::status::{emit_status, CrashLoopWatch};
+use super::status::emit_status;
 use crate::config::ManagedServerPolicy;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::tauri_commands::service_executable::resolve_service_executable;
 use crate::types::{HomeResetDisposition, ManagedServerResetResult};
 use gents_desktop_core::home_reset::*;
-use gents_desktop_core::preference::ReviewedHome;
+use gents_service::args::ServiceAction;
+use gents_service::repair::crash_loop::CrashLoopWatch;
+use gents_service::repair::port::read_initialized_did;
 use std::path::Path;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Runtime};
+
+/// Reads the facts `home_reset::local_setup_unfinished` judges: the configured
+/// home's recorded identity and this desktop's saved peers.
+pub(super) async fn unfinished_local_setup(
+    state: &DesktopAppState,
+    node_home: Option<&Path>,
+) -> bool {
+    let Some(node_home) = node_home else {
+        return false;
+    };
+    // Peers that cannot be read are not evidence that none exist, so an
+    // unreadable directory never offers to start over.
+    let Ok(peers) = gents_desktop_core::client::load_peer_records(
+        state.policy.desktop_paths.peer_directory_path(),
+    )
+    .await
+    else {
+        return false;
+    };
+    local_setup_unfinished(
+        node_home,
+        read_initialized_did(node_home).await.as_deref(),
+        peers.iter().map(|peer| peer.node_did.as_str()),
+    )
+}
 
 pub(super) async fn plan_state_reset(
     state: &DesktopAppState,
@@ -32,12 +58,12 @@ pub(super) async fn plan_state_reset(
                 "Full reset requires a locally managed runtime.",
             )
         })?;
-        let config = gents_server::native_service::NativeServiceConfig::new(
+        let config = gents_service::native_service::NativeServiceConfig::new(
             home.to_path_buf(),
             std::env::current_exe().map_err(|error| BridgeError::untyped(error.to_string()))?,
         )
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
-        let platform = gents_server::native_service::NativeServicePlatform::current()
+        let platform = gents_service::native_service::NativeServicePlatform::current()
             .map_err(|error| BridgeError::untyped(error.to_string()))?;
         return plan_full_reset(
             Some(home),
@@ -61,98 +87,32 @@ pub(super) async fn plan_state_reset(
         &state.policy.desktop_paths,
         &user_home,
         client_binding(state).await,
+        unfinished_local_setup(state, runtime_home).await,
     )
-}
-
-pub(super) fn classify_binding(
-    reviewed: Option<&ReviewedHome>,
-    configured: Option<&HomeIdentity>,
-    reviewed_home: Option<&HomeIdentity>,
-    reviewed_init_present: bool,
-) -> ClientBinding {
-    let Some(reviewed) = reviewed else {
-        return ClientBinding::Unbound;
-    };
-    if configured.is_some_and(|home| home.reviewed == *reviewed) {
-        return ClientBinding::BoundToHome;
-    }
-    if configured.is_some_and(|home| home.reviewed.node_did == reviewed.node_did) {
-        return ClientBinding::Unbound;
-    }
-    match reviewed_home {
-        Some(home) if home.reviewed.node_did == reviewed.node_did => ClientBinding::Unbound,
-        Some(_) => ClientBinding::Orphaned,
-        None if reviewed_init_present => ClientBinding::Unbound,
-        None => ClientBinding::Orphaned,
-    }
 }
 
 async fn client_binding(state: &DesktopAppState) -> ClientBinding {
-    let Some(node_home) = state.policy.node_home.as_deref() else {
-        return ClientBinding::Unbound;
-    };
-    let reviewed = match load_preference(state).await {
-        Ok(stored) => stored.and_then(|stored| stored.reviewed_for),
-        Err(error) => {
-            tracing::warn!(
-                target: "gents_desktop::managed_server",
-                error = %error.message,
-                "managed-server.json is unreadable; treating the client state as unbound"
-            );
-            None
-        }
-    };
-    let Some(reviewed) = reviewed else {
-        return ClientBinding::Unbound;
-    };
-    let configured = read_home_identity(node_home).await;
-    let reviewed_path = Path::new(&reviewed.node_home);
-    let reviewed_home = read_home_identity(reviewed_path).await;
-    let Ok(reviewed_init_present) =
-        present(&gents::store::local::home::init_config_path(reviewed_path))
-    else {
-        return ClientBinding::Unbound;
-    };
-    classify_binding(
-        Some(&reviewed),
-        configured.as_ref(),
-        reviewed_home.as_ref(),
-        reviewed_init_present,
+    gents_service::repair::client::binding_from_paths(
+        &state.policy.desktop_paths,
+        state.policy.node_home.as_deref(),
     )
+    .await
+    .unwrap_or(ClientBinding::Unbound)
 }
 
 pub(in crate::tauri_commands) async fn retire_orphaned_client_state(
     state: &DesktopAppState,
-) -> Result<Option<ManagedServerResetResult>, BridgeError> {
+) -> Result<gents_protocol::operations::install_repair::RepairClientReceipt, BridgeError> {
     if state.policy.managed_server != ManagedServerPolicy::Allowed {
-        return Ok(None);
+        return Ok(Default::default());
     }
     let _lifecycle = state.managed_server_lifecycle.lock().await;
-    if client_binding(state).await != ClientBinding::Orphaned {
-        return Ok(None);
-    }
-    drain_managed_runtime_pairing(state).await;
-    let _client = crate::tauri_commands::lifecycle::exclusion::exclude_client(state).await?;
-    let user_home = resolve_user_home(dirs::home_dir())?;
-    let plan = plan_home_reset(
-        None,
-        None,
-        None,
-        &state.policy.desktop_paths,
-        &user_home,
-        ClientBinding::Orphaned,
-    )?;
-    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ").to_string();
-    let backup = plan.backup_path(&stamp)?;
-    plan.preflight(&backup)?;
-    let result = plan.retire(HomeResetDisposition::Archive, Some(&backup))?;
-    tracing::info!(
-        target: "gents_desktop::managed_server",
-        backup = ?result.backup_path,
-        retired = result.retired_paths.len(),
-        "archived desktop client state paired with a node that is no longer here"
-    );
-    Ok(Some(result))
+    super::repair::repair_client_state(
+        state,
+        &mut Vec::new(),
+        gents_protocol::operations::install_repair::RepairClientScope::Orphaned,
+    )
+    .await
 }
 
 pub(super) async fn retire_incompatible_home<R>(
@@ -167,6 +127,10 @@ where
 {
     let plan = plan_state_reset(state, full_reset).await?;
     plan.check_confirmation(confirmation, disposition)?;
+    let retiring = match plan.runtime.as_ref() {
+        Some((home, _)) => Some((home.clone(), read_initialized_did(home).await)),
+        None => None,
+    };
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ").to_string();
     let backup = match disposition {
         HomeResetDisposition::Archive => {
@@ -178,14 +142,25 @@ where
     };
 
     if full_reset {
-        run_native(native_service(app, state)?, |service| service.stop(true)).await?;
+        run_native(native_service(app, state)?, |service| {
+            service_action(
+                &service,
+                ServiceAction::Stop {
+                    keep_enabled: false,
+                },
+            )
+        })
+        .await?;
         let native = run_native(native_service(app, state)?, |service| service.status()).await?;
         ensure_managed_runtime_stopped(native.is_active_or_transitioning())?;
     }
     let _store_lock = match plan.runtime.as_ref() {
         Some((home, _)) => {
             if !full_reset {
-                run_native(native_service(app, state)?, |service| service.uninstall()).await?;
+                run_native(native_service(app, state)?, |service| {
+                    service_action(&service, ServiceAction::Uninstall)
+                })
+                .await?;
             }
             let native =
                 run_native(native_service(app, state)?, |service| service.status()).await?;
@@ -224,7 +199,10 @@ where
         app.exit(0);
         return Ok(settled.preview());
     }
-    let result = settled.retire(disposition, backup.as_deref())?;
+    let mut result = settled.retire(disposition, backup.as_deref())?;
+    if let Some((home, node_did)) = retiring.as_ref() {
+        result.retired_pairings = retire_desktop_pairing(state, home, node_did.as_deref()).await;
+    }
     drop(_client);
     drop(_store_lock);
     {
@@ -244,7 +222,8 @@ where
         backup = ?result.backup_path,
         retired = result.retired_paths.len(),
         retained = result.retained_paths.len(),
-        "retired a local home this version cannot open"
+        pairings = result.retired_pairings,
+        "retired a local home and the desktop's pairing with it"
     );
     let _ = app.emit(
         crate::contract::CLIENT_UPDATED_EVENT,
@@ -252,6 +231,34 @@ where
     );
     emit_status(app, state).await;
     Ok(result)
+}
+
+/// The desktop's own node store is retired in this same operation and the
+/// client is still excluded here, so the pairing is dropped rather than queued.
+/// A failure leaves a stale record the user can see; the retirement itself has
+/// already completed and is not undone for it.
+pub(super) async fn retire_desktop_pairing(
+    state: &DesktopAppState,
+    node_home: &Path,
+    node_did: Option<&str>,
+) -> u32 {
+    match gents_desktop_core::client::retire_local_node_records(
+        state.policy.desktop_paths.peer_directory_path(),
+        node_home,
+        node_did,
+    )
+    .await
+    {
+        Ok(retired) => retired.len() as u32,
+        Err(error) => {
+            tracing::warn!(
+                target: "gents_desktop::managed_server",
+                ?error,
+                "the desktop's pairing with the retired node was left in place"
+            );
+            0
+        }
+    }
 }
 
 fn launch_reset_helper(
@@ -320,9 +327,9 @@ pub(super) fn launch_reset_helper_with_timeout(
 
 async fn ensure_home_not_served(
     home: &Path,
-    user: Option<&gents::store::config_client::ClientSigningCapability>,
+    user: Option<&gents_store::config_client::ClientSigningCapability>,
 ) -> Result<(), BridgeError> {
-    let config = gents_server::server_host::ServerConfig::standard(home.to_path_buf());
+    let config = gents_service::server_host::ServerConfig::standard(home.to_path_buf());
     let managed_address = std::net::SocketAddr::new(config.http_addr, config.http_port);
     if matching_external_server(home, user).await?.is_some() {
         return Err(BridgeError::new(

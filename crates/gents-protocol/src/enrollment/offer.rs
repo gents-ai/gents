@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use super::error::{EnrollmentError, Result};
 use super::{
     canonical::{canonical_domain_payload, validate_exact_field},
-    ENROLLMENT_PROTOCOL_VERSION, MAX_OFFER_TOKEN_BYTES, OFFER_SIGNATURE_DOMAIN,
+    ENROLLMENT_PROTOCOL_VERSION, MAX_LINKABLE_OFFER_CHARACTERS, MAX_OFFER_TOKEN_BYTES,
+    OFFER_SIGNATURE_DOMAIN,
 };
 
 const RENEWAL_CHALLENGE_DOMAIN: &str = "gents-enrollment-renewal-challenge-v1";
@@ -69,6 +70,7 @@ pub struct EnrollmentOfferRecord {
     pub owner_node_did: String,
     pub profile: String,
     pub schema_fingerprint: String,
+    pub live_schema_digest: String,
     pub issued_at: String,
     pub expires_at: String,
     pub admin_sig: Vec<u8>,
@@ -77,30 +79,38 @@ pub struct EnrollmentOfferRecord {
 impl EnrollmentOfferRecord {
     pub fn signing_payload(&self) -> Vec<u8> {
         let version = self.version.to_string();
-        canonical_domain_payload(
-            OFFER_SIGNATURE_DOMAIN,
-            [
-                version.as_str(),
-                &self.offer_id,
-                &self.challenge,
-                &self.network_id,
-                &self.admin_did,
-                &self.server_peer,
-                &self.server_ticket,
-                &self.owner_node_did,
-                &self.profile,
-                &self.schema_fingerprint,
-                &self.issued_at,
-                &self.expires_at,
-            ],
-        )
+        let mut fields = vec![
+            version.as_str(),
+            &self.offer_id,
+            &self.challenge,
+            &self.network_id,
+            &self.admin_did,
+            &self.server_peer,
+            &self.server_ticket,
+            &self.owner_node_did,
+            &self.profile,
+            &self.schema_fingerprint,
+            &self.issued_at,
+            &self.expires_at,
+        ];
+        fields.push("live-schema-v1");
+        fields.push(&self.live_schema_digest);
+        canonical_domain_payload(OFFER_SIGNATURE_DOMAIN, fields)
     }
+}
+
+pub fn linkable_offer_length(length: usize) -> bool {
+    length > 0 && length <= MAX_LINKABLE_OFFER_CHARACTERS
 }
 
 pub fn encode_offer(offer: &EnrollmentOfferRecord) -> Result<String> {
     let mut bytes = Vec::new();
     ciborium::ser::into_writer(offer, &mut bytes).map_err(EnrollmentError::EncodeOffer)?;
-    Ok(bs58::encode(bytes).into_string())
+    let encoded = bs58::encode(bytes).into_string();
+    if encoded.len() > MAX_OFFER_TOKEN_BYTES {
+        return Err(EnrollmentError::OfferTooLarge);
+    }
+    Ok(encoded)
 }
 
 pub fn decode_offer(encoded: &str) -> Result<EnrollmentOfferRecord> {
@@ -148,10 +158,89 @@ pub fn decode_offer(encoded: &str) -> Result<EnrollmentOfferRecord> {
     if offer.profile != "client" {
         return Err(EnrollmentError::UnsupportedOfferProfile);
     }
+    {
+        let digest = &offer.live_schema_digest;
+        let hex = digest
+            .strip_prefix("sha256:")
+            .ok_or(EnrollmentError::InvalidLiveSchemaDigest)?;
+        if hex.len() != 64
+            || !hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(EnrollmentError::InvalidLiveSchemaDigest);
+        }
+    }
     if offer.admin_sig.len() != 64 {
         return Err(EnrollmentError::OfferSignatureLength);
     }
     Ok(offer)
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    #[test]
+    fn link_lengths_match_the_executable_model() {
+        use gents_lean_vocab::families::enrollment_invite_linkable as family;
+        family::replay(|length| linkable_offer_length((*length).try_into().unwrap()));
+    }
+
+    #[test]
+    fn minted_token_is_url_safe_and_bounded() {
+        let offer = EnrollmentOfferRecord {
+            version: ENROLLMENT_PROTOCOL_VERSION,
+            offer_id: "offer".into(),
+            challenge: "challenge".into(),
+            network_id: "network".into(),
+            admin_did: "did:key:admin".into(),
+            server_peer: "peer".into(),
+            server_ticket: "t".repeat(400),
+            owner_node_did: "did:key:owner".into(),
+            profile: "client".into(),
+            schema_fingerprint: "schema".into(),
+            live_schema_digest: format!("sha256:{}", "a".repeat(64)),
+            issued_at: "2030-01-01T00:00:00Z".into(),
+            expires_at: "2030-01-01T01:00:00Z".into(),
+            admin_sig: vec![1; 64],
+        };
+        let token = encode_offer(&offer).unwrap();
+        let mut missing_schema = serde_json::to_value(&offer).unwrap();
+        missing_schema
+            .as_object_mut()
+            .unwrap()
+            .remove("live_schema_digest");
+        assert!(serde_json::from_value::<EnrollmentOfferRecord>(missing_schema).is_err());
+        assert!(token.len() <= MAX_LINKABLE_OFFER_CHARACTERS);
+        assert!(token.bytes().all(|byte| byte.is_ascii_alphanumeric()));
+        assert_eq!(decode_offer(&token).unwrap(), offer);
+        let mut with_schema = offer.clone();
+        with_schema.live_schema_digest = format!("sha256:{}", "b".repeat(64));
+        assert_ne!(offer.signing_payload(), with_schema.signing_payload());
+        let with_schema_token = encode_offer(&with_schema).unwrap();
+        assert_eq!(decode_offer(&with_schema_token).unwrap(), with_schema);
+        for invalid in ["", "sha256:abc", &format!("sha256:{}", "A".repeat(64))] {
+            let mut malformed = with_schema.clone();
+            malformed.live_schema_digest = invalid.to_owned();
+            let token = encode_offer(&malformed).unwrap();
+            assert!(matches!(
+                decode_offer(&token),
+                Err(EnrollmentError::InvalidLiveSchemaDigest)
+            ));
+        }
+        let mut large_status_offer = offer.clone();
+        large_status_offer.server_ticket = "t".repeat(3000);
+        let status_token = encode_offer(&large_status_offer).unwrap();
+        assert!(!linkable_offer_length(status_token.len()));
+        assert_eq!(decode_offer(&status_token).unwrap(), large_status_offer);
+        let mut oversized = offer;
+        oversized.server_ticket = "t".repeat(MAX_OFFER_TOKEN_BYTES);
+        assert!(matches!(
+            encode_offer(&oversized),
+            Err(EnrollmentError::OfferTooLarge)
+        ));
+    }
 }
 
 #[cfg(test)]

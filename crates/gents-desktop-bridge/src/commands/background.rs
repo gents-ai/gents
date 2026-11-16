@@ -7,7 +7,7 @@ pub async fn background_tool(
     core: &ClientCore,
     request: DesktopBackgroundToolRequest,
 ) -> Result<bool> {
-    gents::tools::background::status::request_foreground_backgrounding(
+    gents_toolcalls::background::status::request_foreground_backgrounding(
         &core.operator_access(&request.node_did)?,
         &request.node_did,
         &request.session_id,

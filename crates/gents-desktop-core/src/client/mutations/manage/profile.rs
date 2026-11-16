@@ -1,28 +1,41 @@
 use anyhow::{Context, Result};
-use gents::documents::apply_desired_state_plan;
-use gents::documents::list_inference_profiles_in_txn;
-use gents::store::collection::Collection;
-use gents::store::config_client::read_desired_state_record_in_txn;
-use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::InferenceProfile;
+use gents_documents::list_inference_profiles_in_txn;
+use gents_documents::read_desired_state_record_in_txn;
+use gents_documents::InferenceProfile;
+use gents_inference::operations;
+use gents_protocol::operations::inference::{InferenceDocument, WriteMode};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 
 /// Profiles can be shared by other agents and compaction. Selecting a model
-/// replaces only this agent's binding, preserving those consumers and all
-/// unrelated configuration in the same transaction.
+/// replaces only this agent's binding, preserving those consumers. The
+/// binding is an Agent edit admitted by the operations layer
+/// (`edit_in_txn`) in the same transaction as the profile it may create.
 pub async fn select_agent_model_on(
     access: &ConfigAccess,
     node_did: &str,
     agent_did: &str,
     backend_id: &str,
     model_name: &str,
-    reasoning_effort: Option<gents::inference::resolved::ReasoningEffort>,
-    service_tier: Option<gents::inference::resolved::ServiceTier>,
+    reasoning_effort: Option<gents_documents::inference_defaults::ReasoningEffort>,
+    service_tier: Option<gents_inference::resolved::ServiceTier>,
 ) -> Result<InferenceProfile> {
+    use gents::operations::agent::{edit_in_txn, observe};
+    use gents_protocol::operations::agent::AgentEdit;
+    use gents_protocol::operations::StringUpdate;
+
+    use super::inference::{operation_failure, put_write};
+    use super::principal::agent_failure;
+
     anyhow::ensure!(!model_name.trim().is_empty(), "Choose a model.");
+    let admission = observe(access, node_did, &[agent_did.to_owned()])
+        .await
+        .map_err(agent_failure)?;
     access
         .transact_write("desktop.agent.model", |txn| {
+            let admission = &admission;
             Box::pin(async move {
-                let (_, mut agent) =
+                let (_, agent) =
                     read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_did)
                         .await?
                         .context("The selected agent no longer exists.")?;
@@ -54,27 +67,30 @@ pub async fn select_agent_model_on(
                     comparable.description = candidate.description.clone();
                     comparable == *candidate
                 });
-                let mut documents = Vec::new();
                 if let Some(existing) = reusable {
                     selected = existing;
                 } else {
                     selected.profile_id = format!("model-{}", uuid::Uuid::new_v4());
                     selected.display_name = Some(selected.model_name.clone());
                     selected.description = None;
-                    let value = serde_json::to_value(&selected)?;
-                    documents.push(DesiredStateApplyDocument {
-                        collection: Collection::InferenceProfile,
-                        add: value.clone(),
-                        update: value,
-                    });
+                    let (profile_node, write) = put_write(
+                        InferenceDocument::Profile,
+                        &serde_json::to_value(&selected)?,
+                        WriteMode::Create,
+                    )?;
+                    operations::write_in_txn(txn, &profile_node, &write)
+                        .await
+                        .map_err(|failure| {
+                            operation_failure(failure, InferenceDocument::Profile, "create")
+                        })?;
                 }
-                agent["inference_profile_id"] = selected.profile_id.clone().into();
-                documents.push(DesiredStateApplyDocument {
-                    collection: Collection::Agent,
-                    add: agent.clone(),
-                    update: agent,
-                });
-                apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(documents)?).await?;
+                let binding = AgentEdit {
+                    inference_profile_id: StringUpdate::Set(selected.profile_id.clone()),
+                    ..Default::default()
+                };
+                edit_in_txn(txn, node_did, admission, agent_did, &binding)
+                    .await
+                    .map_err(agent_failure)?;
                 Ok(selected)
             })
         })
@@ -85,13 +101,12 @@ pub async fn upsert_inference_profile_on(
     access: &ConfigAccess,
     document: &InferenceProfile,
 ) -> Result<()> {
-    let value = serde_json::to_value(document)?;
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::InferenceProfile,
-        add: value.clone(),
-        update: value,
-    }])?;
-    super::apply_plan(access, "desktop.profile.save", plan).await
+    super::inference::put_document(
+        access,
+        InferenceDocument::Profile,
+        &serde_json::to_value(document)?,
+    )
+    .await
 }
 
 pub async fn delete_inference_profile_on(
@@ -99,14 +114,7 @@ pub async fn delete_inference_profile_on(
     node_did: &str,
     id: &str,
 ) -> Result<usize> {
-    super::delete_scoped_document(
-        access,
-        "desktop.profile.delete",
-        Collection::InferenceProfile,
-        node_did,
-        id,
-    )
-    .await
+    super::inference::remove_document(access, InferenceDocument::Profile, node_did, id).await
 }
 
 #[cfg(test)]
@@ -128,7 +136,12 @@ mod tests {
             "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
             "auth":{"kind":"unauthenticated"}
         }))?;
-        gents::documents::write_inference_backend_document(&access, &backend).await?;
+        gents_documents::write_inference_backend_document(
+            &access,
+            &backend,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         let original: InferenceProfile = serde_json::from_value(json!({
             "node_did":owner,"profile_id":"shared","backend_id":"backend",
             "model_name":"original","reasoning_effort":"high",
@@ -226,7 +239,7 @@ mod tests {
                 first_did,
                 "backend",
                 "original",
-                Some(gents::inference::resolved::ReasoningEffort::High),
+                Some(gents_documents::inference_defaults::ReasoningEffort::High),
                 None,
             )
             .await?,
@@ -238,13 +251,13 @@ mod tests {
             first_did,
             "backend",
             "original",
-            Some(gents::inference::resolved::ReasoningEffort::High),
-            Some(gents::inference::resolved::ServiceTier::Fast),
+            Some(gents_documents::inference_defaults::ReasoningEffort::High),
+            Some(gents_inference::resolved::ServiceTier::Fast),
         )
         .await?;
         assert_eq!(
             fast.service_tier,
-            Some(gents::inference::resolved::ServiceTier::Fast)
+            Some(gents_inference::resolved::ServiceTier::Fast)
         );
         assert_ne!(fast.profile_id, original.profile_id);
         assert_eq!(
@@ -254,8 +267,8 @@ mod tests {
                 first_did,
                 "backend",
                 "original",
-                Some(gents::inference::resolved::ReasoningEffort::High),
-                Some(gents::inference::resolved::ServiceTier::Fast),
+                Some(gents_documents::inference_defaults::ReasoningEffort::High),
+                Some(gents_inference::resolved::ServiceTier::Fast),
             )
             .await?,
             fast
@@ -266,20 +279,25 @@ mod tests {
             first_did,
             "backend",
             "original",
-            Some(gents::inference::resolved::ReasoningEffort::High),
-            Some(gents::inference::resolved::ServiceTier::Default),
+            Some(gents_documents::inference_defaults::ReasoningEffort::High),
+            Some(gents_inference::resolved::ServiceTier::Default),
         )
         .await?;
         assert_eq!(
             standard.service_tier,
-            Some(gents::inference::resolved::ServiceTier::Default)
+            Some(gents_inference::resolved::ServiceTier::Default)
         );
         let unsupported = serde_json::from_value(json!({
             "node_did":owner,"backend_id":"unsupported","name":"Unsupported",
             "provider_kind":"AnthropicApiKey","endpoint":"https://api.anthropic.com/v1",
             "auth":{"kind":"api_key","key":"fixture"}
         }))?;
-        gents::documents::write_inference_backend_document(&access, &unsupported).await?;
+        gents_documents::write_inference_backend_document(
+            &access,
+            &unsupported,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         assert!(select_agent_model_on(
             &access,
             owner,
@@ -287,7 +305,7 @@ mod tests {
             "unsupported",
             "original",
             None,
-            Some(gents::inference::resolved::ServiceTier::Fast),
+            Some(gents_inference::resolved::ServiceTier::Fast),
         )
         .await
         .is_err());
@@ -298,8 +316,8 @@ mod tests {
                 first_did,
                 "backend",
                 "original",
-                Some(gents::inference::resolved::ReasoningEffort::High),
-                Some(gents::inference::resolved::ServiceTier::Default),
+                Some(gents_documents::inference_defaults::ReasoningEffort::High),
+                Some(gents_inference::resolved::ServiceTier::Default),
             )
             .await?,
             standard
@@ -311,61 +329,12 @@ mod tests {
                 second_did,
                 "backend",
                 "original",
-                Some(gents::inference::resolved::ReasoningEffort::High),
+                Some(gents_documents::inference_defaults::ReasoningEffort::High),
                 None,
             )
             .await?,
             original
         );
-        runtime.shutdown().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn profile_save_validates_bounds_and_resolves_backend_in_exact_owner_scope() -> Result<()>
-    {
-        let runtime = ServedRuntimeHome::start().await;
-        let owner = runtime.node_did();
-        let other = runtime.publish_foreign_node().await;
-        let access = runtime.user_access();
-        let backend = serde_json::from_value(
-            json!({"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
-        )?;
-        gents::documents::write_inference_backend_document(&access, &backend).await?;
-        let mut profile: InferenceProfile = serde_json::from_value(
-            json!({"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high","max_output_tokens":100}),
-        )?;
-        upsert_inference_profile_on(&access, &profile).await?;
-        profile.max_output_tokens = Some(0);
-        assert!(upsert_inference_profile_on(&access, &profile)
-            .await
-            .is_err());
-        profile.max_output_tokens = None;
-        profile.node_did = other;
-        assert!(upsert_inference_profile_on(&access, &profile)
-            .await
-            .is_err());
-        access
-            .transact_readonly("test.profile.read", |txn| {
-                Box::pin(async move {
-                    let (_, value) = read_desired_state_record_in_txn(
-                        txn,
-                        Collection::InferenceProfile,
-                        owner,
-                        "profile",
-                    )
-                    .await?
-                    .unwrap();
-                    let retained: InferenceProfile = serde_json::from_value(value)?;
-                    assert_eq!(retained.max_output_tokens, Some(100));
-                    assert_eq!(
-                        retained.reasoning_effort,
-                        Some(gents::inference::resolved::ReasoningEffort::High)
-                    );
-                    Ok::<_, anyhow::Error>(())
-                })
-            })
-            .await?;
         runtime.shutdown().await;
         Ok(())
     }

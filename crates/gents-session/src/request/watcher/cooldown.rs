@@ -1,0 +1,139 @@
+use rapidhash::RapidHashMap;
+use std::time::{Duration, Instant};
+
+use super::AgentRequest;
+
+const MAX_PROCESSED_IDS: usize = 10_000;
+pub(crate) const GOSSIP_FALLBACK_POLL: Duration = Duration::from_secs(30);
+pub(super) const PROCESSED_REQUEST_COOLDOWN: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessedMark {
+    pub(super) at: Instant,
+    pub(super) queue_session: Option<String>,
+    pub(super) execution_generation: Option<String>,
+}
+
+pub(super) type ProcessedRequests = RapidHashMap<String, ProcessedMark>;
+
+pub(super) fn prune_processed_requests(
+    processed_request_ids: &mut ProcessedRequests,
+    now: Instant,
+) {
+    processed_request_ids
+        .retain(|_, mark| now.saturating_duration_since(mark.at) < PROCESSED_REQUEST_COOLDOWN);
+
+    if processed_request_ids.len() > MAX_PROCESSED_IDS {
+        tracing::info!(
+            count = processed_request_ids.len(),
+            "pruning processed request ID set"
+        );
+        processed_request_ids.clear();
+    }
+}
+
+pub(super) fn request_is_cooling_down(
+    processed_request_ids: &mut ProcessedRequests,
+    request: &AgentRequest,
+    now: Instant,
+) -> bool {
+    match processed_request_ids.get(&request.request_id) {
+        Some(mark)
+            if generation_mark_applies(
+                &mark.execution_generation,
+                &request.execution_generation,
+            ) && now.saturating_duration_since(mark.at) < PROCESSED_REQUEST_COOLDOWN =>
+        {
+            true
+        }
+        Some(_) => {
+            processed_request_ids.remove(&request.request_id);
+            false
+        }
+        None => false,
+    }
+}
+
+fn generation_mark_applies<T>(marked: &Option<T>, observed: &Option<T>) -> bool
+where
+    T: PartialEq,
+{
+    marked == observed
+}
+
+#[cfg(test)]
+#[test]
+fn generation_marks_match_the_generated_model() {
+    gents_lean_vocab::families::backend_wake_generation_mark::replay(|i| {
+        generation_mark_applies(&i.marked, &i.observed)
+    });
+}
+
+/// Lean `EventDelivery.Watcher.releasedBy`: delivering a session's queue head
+/// releases the marks of that session's other requests. A request delivered
+/// earlier and then overtaken by a same-second row that sorts ahead of it lost
+/// its claim as `Queued` and stays pending; without the release it would wait
+/// out the cooldown after its blocker terminalizes.
+fn mark_processed(
+    processed_request_ids: &mut ProcessedRequests,
+    request: &AgentRequest,
+    now: Instant,
+) {
+    let queue_session = (!request.purpose.is_auxiliary()).then(|| request.session_id.clone());
+    if let Some(session) = &queue_session {
+        processed_request_ids.retain(|request_id, mark| {
+            request_id == &request.request_id || mark.queue_session.as_ref() != Some(session)
+        });
+    }
+    processed_request_ids.insert(
+        request.request_id.clone(),
+        ProcessedMark {
+            at: now,
+            queue_session,
+            execution_generation: request.execution_generation.clone(),
+        },
+    );
+}
+
+pub(super) fn take_next_eligible_pending_request(
+    processed_request_ids: &mut ProcessedRequests,
+    requests: Vec<AgentRequest>,
+    now: Instant,
+) -> Option<AgentRequest> {
+    for request in requests {
+        if request_is_cooling_down(processed_request_ids, &request, now) {
+            continue;
+        }
+
+        mark_processed(processed_request_ids, &request, now);
+        return Some(request);
+    }
+
+    None
+}
+
+#[cfg(test)]
+#[test]
+fn generated_cooldown_pruning_ends_dedupe_epoch() {
+    use gents_lean_vocab::families::event_delivery_cooldown_pruning as family;
+    family::replay(|input| {
+        let marked_at = Instant::now();
+        let mut marks = (0..input.count)
+            .map(|index| {
+                (
+                    format!("request-{index}"),
+                    ProcessedMark {
+                        at: marked_at,
+                        queue_session: None,
+                        execution_generation: None,
+                    },
+                )
+            })
+            .collect::<ProcessedRequests>();
+        prune_processed_requests(
+            &mut marks,
+            marked_at + Duration::from_millis(input.age_millis),
+        );
+        marks.len() as u64
+    });
+}

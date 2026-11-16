@@ -1,0 +1,41 @@
+{
+  "agents": [
+    {
+      "agent_slot": "web-researcher",
+      "context_id": "web-researcher-context",
+      "display_name": "Web researcher",
+      "inference_profile_id": "gents:inference-slot:web_researcher"
+    }
+  ],
+  "node": {},
+  "contexts": [
+    {
+      "context_id": "web-researcher-context",
+      "display_name": "Web researcher",
+      "system_prompt": "./agent_behaviors/web_researcher/system_prompt.md",
+      "tools_id": "web-researcher-tools"
+    }
+  ],
+  "tools": [
+    {
+      "display_name": "Web search, reading and browser interaction",
+      "integrations": {
+        "plugins": [
+          {
+            "plugin": "gents/web_search"
+          },
+          {
+            "plugin": "gents/web_fetch"
+          },
+          {
+            "plugin": "gents/web_crawl"
+          },
+          {
+            "plugin": "gents/browser_exec"
+          }
+        ]
+      },
+      "tools_id": "web-researcher-tools"
+    }
+  ]
+}

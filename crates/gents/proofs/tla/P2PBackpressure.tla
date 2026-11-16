@@ -1,4 +1,6 @@
 ---- MODULE P2PBackpressure ----
+\* lean: none
+\* crates: gents-p2p
 EXTENDS Naturals, FiniteSets, TLC
 
 CONSTANTS

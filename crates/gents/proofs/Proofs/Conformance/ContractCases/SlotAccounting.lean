@@ -1,6 +1,6 @@
-import Proofs.Fleet
-import Proofs.InferenceCall.SlotAccounting
-import Proofs.Request
+import Proofs.Session.Fleet
+import Proofs.Inference.InferenceCall.SlotAccounting
+import Proofs.Session.Request
 import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases

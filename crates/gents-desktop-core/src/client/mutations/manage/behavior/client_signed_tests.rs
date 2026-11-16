@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use anyhow::{Context, Result};
-use gents::store::config_client::{
+use gents_store::config_client::{
     ConfigAccess, ConfigClientError, ConfigRelationshipGrant, GraphqlEndpoint,
 };
 use serde_json::{json, Value};
@@ -31,13 +31,13 @@ impl Fixture {
                 "test.signing.seed",
                 vec![
                     (
-                        gents::Collection::InferenceBackend,
+                        gents_store::collection::Collection::InferenceBackend,
                         json!({"node_did":node_did,"backend_id":"backend","name":"Backend",
                             "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
                             "auth":{"kind":"unauthenticated"}}),
                     ),
                     (
-                        gents::Collection::InferenceProfile,
+                        gents_store::collection::Collection::InferenceProfile,
                         json!({"node_did":node_did,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
                     ),
                 ],
@@ -47,7 +47,7 @@ impl Fixture {
             .user_access()
             .execute(&format!(
                 r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
-                gents::store::graphql::escape_graphql_string(&node_did)
+                gents_store::graphql::escape_graphql_string(&node_did)
             ))
             .await?;
         let parent_doc = nodes["data"]["Node"][0]["_docID"]
@@ -80,7 +80,7 @@ impl Fixture {
         })
     }
 
-    fn document(&self, context: Option<&str>) -> Result<gents::AgentDocument> {
+    fn document(&self, context: Option<&str>) -> Result<gents_documents::Agent> {
         Ok(serde_json::from_value(json!({
             "node_did": self.runtime.node_did(),
             "agent_did": self.agent.agent_did, "creation_nonce": self.agent.creation_nonce,

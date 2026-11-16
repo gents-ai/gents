@@ -1,0 +1,446 @@
+use std::hash::{Hash, Hasher};
+use std::sync::Mutex;
+
+use serde_json::Value;
+
+use super::effect::{
+    Access, DocRef, Effect, Grant, InvalidEffects, Manifest, Row, Subject, SubjectKind, Write,
+};
+use super::hook::{history_permitted, Direction, Query};
+use super::registry::{OperationContext, Registry};
+use super::stage::{ApplyFailure, HookError, Host};
+use gents_store::config_client::ConfigApplyTxn;
+use gents_store::graphql::escape_graphql_string;
+
+/// The lifecycle transaction as a `Host`.
+///
+/// A row's revision is a digest of the row as it was shown. A write is held
+/// only if the document, read again with the same selection, still has that
+/// digest, so a plugin cannot overwrite a row it was not shown or one that
+/// changed after it decided.
+///
+/// DefraDB decides document ACP for the transaction's actor when a write
+/// executes; `allowed` therefore admits every write and a denied one fails in
+/// `apply`. DefraDB has no savepoint, so a plugin can be skipped whole only
+/// while none of its effects has written (`ApplyFailure::clean`).
+pub(crate) struct TxnHost<'a, 'txn> {
+    txn: &'a ConfigApplyTxn<'txn>,
+    registry: &'a Registry,
+    context: OperationContext<'a>,
+    shown: Mutex<Vec<(DocRef, String)>>,
+}
+
+fn identifier(name: &str) -> Result<&str, HookError> {
+    let mut characters = name.chars();
+    let valid = characters
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|next| next.is_ascii_alphanumeric() || next == '_');
+    if valid {
+        Ok(name)
+    } else {
+        Err(HookError::Query(format!("`{name}` is not an identifier")))
+    }
+}
+
+fn selection(fields: &str) -> Result<String, HookError> {
+    if !fields.chars().all(|character| {
+        character.is_ascii_alphanumeric()
+            || character.is_ascii_whitespace()
+            || "_{}".contains(character)
+    }) {
+        return Err(HookError::Query("selection is not a field list".into()));
+    }
+    if fields
+        .split_ascii_whitespace()
+        .any(|field| field == "_docID")
+    {
+        Ok(fields.to_owned())
+    } else {
+        Ok(format!("_docID {fields}"))
+    }
+}
+
+fn literal(value: &Value) -> Result<String, HookError> {
+    match value {
+        Value::String(text) => Ok(format!("\"{}\"", escape_graphql_string(text))),
+        Value::Bool(_) | Value::Number(_) | Value::Null => Ok(value.to_string()),
+        Value::Array(_) | Value::Object(_) => Err(HookError::Query(
+            "a filter compares a field with a scalar".into(),
+        )),
+    }
+}
+
+fn render(query: &Query, fields: &str) -> Result<String, HookError> {
+    let mut arguments = Vec::new();
+    if !query.filter.is_empty() {
+        let mut filter = Vec::new();
+        for (field, value) in &query.filter {
+            filter.push(format!(
+                "{}: {{ _eq: {} }}",
+                identifier(field)?,
+                literal(value)?
+            ));
+        }
+        arguments.push(format!("filter: {{ {} }}", filter.join(", ")));
+    }
+    if !query.order.is_empty() {
+        let mut order = Vec::new();
+        for (field, direction) in &query.order {
+            let direction = match direction {
+                Direction::Ascending => "ASC",
+                Direction::Descending => "DESC",
+            };
+            order.push(format!("{{ {}: {direction} }}", identifier(field)?));
+        }
+        arguments.push(format!("order: [{}]", order.join(", ")));
+    }
+    if let Some(limit) = query.limit {
+        arguments.push(format!("limit: {limit}"));
+    }
+    let arguments = if arguments.is_empty() {
+        String::new()
+    } else {
+        format!("({})", arguments.join(", "))
+    };
+    Ok(format!(
+        "{{ {}{arguments} {{ {fields} }} }}",
+        identifier(&query.collection)?
+    ))
+}
+
+fn revision(value: &Value) -> u64 {
+    let mut hasher = rapidhash::fast::RapidHasher::default();
+    value.to_string().hash(&mut hasher);
+    hasher.finish()
+}
+
+fn returned(response: &Value, root: &str) -> usize {
+    response
+        .pointer(&format!("/data/{root}"))
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len)
+}
+
+impl<'a, 'txn> TxnHost<'a, 'txn> {
+    pub(crate) fn new(
+        txn: &'a ConfigApplyTxn<'txn>,
+        registry: &'a Registry,
+        context: OperationContext<'a>,
+    ) -> Self {
+        Self {
+            txn,
+            registry,
+            context,
+            shown: Mutex::new(Vec::new()),
+        }
+    }
+
+    async fn rows(&self, query: &Query, fields: &str) -> Result<Vec<Row>, HookError> {
+        let response = self.txn.execute(&render(query, fields)?).await?;
+        let rows = response
+            .pointer(&format!("/data/{}", query.collection))
+            .and_then(Value::as_array)
+            .ok_or_else(|| HookError::Query(format!("{} read omitted rows", query.collection)))?;
+        rows.iter()
+            .map(|row| {
+                let doc_id = row
+                    .get("_docID")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| HookError::Query("row has no document ID".into()))?;
+                Ok(Row {
+                    doc: DocRef::new(query.collection.clone(), doc_id),
+                    revision: revision(row),
+                    value: row.clone(),
+                })
+            })
+            .collect()
+    }
+
+    fn shown_with(&self, doc: &DocRef) -> Option<String> {
+        self.shown
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .rev()
+            .find(|(shown, _)| shown == doc)
+            .map(|(_, fields)| fields.clone())
+    }
+
+    /// Lean `Hooks.held`.
+    async fn held(&self, doc: &DocRef, expected: u64) -> Result<bool, HookError> {
+        let Some(fields) = self.shown_with(doc) else {
+            return Ok(false);
+        };
+        let current =
+            Query::select(doc.collection.clone(), fields.clone()).eq("_docID", doc.doc_id.clone());
+        let rows = self.rows(&current, &fields).await?;
+        Ok(matches!(rows.as_slice(), [row] if row.revision == expected))
+    }
+
+    async fn write(
+        &self,
+        plugin: &'static str,
+        manifest: &Manifest,
+        write: &Write,
+    ) -> Result<(), HookError> {
+        let doc = write.doc();
+        let collection = identifier(&doc.collection)?;
+        let schema = manifest.owned(collection).and_then(|owned| owned.schema);
+        let target = escape_graphql_string(&doc.doc_id);
+        match write {
+            Write::Create { value, grants, .. } => {
+                let document = format!(
+                    "mutation($input: {collection}MutationInputArg!) {{ create_{collection}(input: $input) {{ _docID }} }}"
+                );
+                let variables = serde_json::json!({ "input": value });
+                let response = match schema {
+                    Some(schema) => {
+                        self.txn
+                            .execute_client_signed_create(&document, &variables, schema)
+                            .await?
+                    }
+                    None => {
+                        self.txn
+                            .execute_with_variables(&document, &variables)
+                            .await?
+                    }
+                };
+                let created =
+                    gents_store::graphql::created_doc_id(&response, collection).map_err(|_| {
+                        HookError::Conflict {
+                            plugin,
+                            message: None,
+                        }
+                    })?;
+                if !doc.doc_id.is_empty() && created != doc.doc_id {
+                    return Err(HookError::Conflict {
+                        plugin,
+                        message: None,
+                    });
+                }
+                for grant in grants {
+                    self.grant(manifest, collection, &created, grant).await?;
+                }
+            }
+            Write::Update { value, .. } => {
+                let document = format!(
+                    "mutation($input: {collection}MutationInputArg!) {{ update_{collection}(filter: {{ _docID: {{ _eq: \"{target}\" }} }}, input: $input) {{ _docID }} }}"
+                );
+                let variables = serde_json::json!({ "input": value });
+                let response = match schema {
+                    Some(schema) => {
+                        self.txn
+                            .execute_client_signed_update(&document, &variables, schema)
+                            .await?
+                    }
+                    None => {
+                        self.txn
+                            .execute_with_variables(&document, &variables)
+                            .await?
+                    }
+                };
+                if returned(&response, &format!("update_{collection}")) != 1 {
+                    return Err(HookError::Conflict {
+                        plugin,
+                        message: write.conflict().map(str::to_owned),
+                    });
+                }
+            }
+            Write::Delete { .. } => {
+                let document = format!(
+                    "mutation {{ delete_{collection}(filter: {{ _docID: {{ _eq: \"{target}\" }} }}) {{ _docID }} }}"
+                );
+                let response = self.txn.execute(&document).await?;
+                if returned(&response, &format!("delete_{collection}")) != 1 {
+                    return Err(HookError::Conflict {
+                        plugin,
+                        message: write.conflict().map(str::to_owned),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Publishes one validated grant on the created document `doc_id` with the
+    /// transaction's relationship methods, under its actor.
+    async fn grant(
+        &self,
+        manifest: &Manifest,
+        collection: &str,
+        doc_id: &str,
+        grant: &Grant,
+    ) -> Result<(), HookError> {
+        let declared = manifest
+            .owned(collection)
+            .and_then(|owned| owned.grantable(grant))
+            .ok_or_else(|| HookError::Invalid {
+                plugin: manifest.name,
+                cause: InvalidEffects::UndeclaredGrant {
+                    collection: collection.to_owned(),
+                    relation: grant.relation.clone(),
+                },
+            })?;
+        match (&grant.subject, declared.subject) {
+            (Subject::Actor(did), SubjectKind::Actor) => {
+                let did = identity::Did::new(did.as_str()).map_err(|_| HookError::Invalid {
+                    plugin: manifest.name,
+                    cause: InvalidEffects::UnnamedGrantSubject {
+                        collection: collection.to_owned(),
+                        relation: grant.relation.clone(),
+                    },
+                })?;
+                self.txn
+                    .add_actor_relationship(collection, doc_id, &grant.relation, &did)
+                    .await?;
+            }
+            (Subject::Document(target), SubjectKind::Document { resource, .. }) => {
+                self.txn
+                    .add_resource_relationship(
+                        collection,
+                        doc_id,
+                        &grant.relation,
+                        resource,
+                        &target.doc_id,
+                    )
+                    .await?;
+            }
+            _ => {
+                return Err(HookError::Invalid {
+                    plugin: manifest.name,
+                    cause: InvalidEffects::UndeclaredGrant {
+                        collection: collection.to_owned(),
+                        relation: grant.relation.clone(),
+                    },
+                })
+            }
+        }
+        Ok(())
+    }
+
+    async fn effect(&self, manifest: &Manifest, effect: &Effect) -> Result<(), HookError> {
+        let plugin = manifest.name;
+        match effect {
+            Effect::Write(write) => self.write(plugin, manifest, write).await,
+            Effect::Core(requested) => {
+                let operation = self.registry.operation(&requested.name).ok_or_else(|| {
+                    HookError::UnknownOperation {
+                        plugin,
+                        operation: requested.name.clone(),
+                    }
+                })?;
+                operation
+                    .perform(self.txn, self.context, &requested.args)
+                    .await
+                    .map_err(HookError::Operation)
+            }
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Host for TxnHost<'_, '_> {
+    fn actor(&self) -> Option<String> {
+        self.txn.actor_did().map(str::to_owned)
+    }
+
+    async fn select(
+        &self,
+        manifest: &Manifest,
+        named: &[DocRef],
+        query: &Query,
+    ) -> Result<Vec<Row>, HookError> {
+        if let Some(args) = &query.core {
+            let read = self
+                .registry
+                .read(&query.collection)
+                .ok_or_else(|| HookError::UnknownRead(query.collection.clone()))?;
+            let values = read
+                .read(self.txn, args)
+                .await
+                .map_err(HookError::CoreRead)?;
+            return Ok(values
+                .into_iter()
+                .map(|value| Row {
+                    doc: DocRef::new(query.collection.clone(), ""),
+                    revision: revision(&value),
+                    value,
+                })
+                .collect());
+        }
+        if let Some(links) = &query.revisions {
+            if !history_permitted(manifest, named, query) {
+                return Err(HookError::UnboundedHistory {
+                    plugin: manifest.name,
+                    collection: query.collection.clone(),
+                });
+            }
+            identifier(&query.collection)?;
+            selection(&query.fields)?;
+            for (field, _) in &query.filter {
+                identifier(field)?;
+            }
+            return super::revisions::read(self.txn, query, links)
+                .await
+                .map_err(HookError::Revisions);
+        }
+        let fields = selection(&query.fields)?;
+        let rows = self.rows(query, &fields).await?;
+        let mut shown = self
+            .shown
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for row in &rows {
+            shown.push((row.doc.clone(), fields.clone()));
+        }
+        Ok(rows)
+    }
+
+    async fn allowed(&self, _access: Access, _doc: &DocRef) -> Result<bool, HookError> {
+        Ok(true)
+    }
+
+    /// Lean `Hooks.precheckedApply`: every revision is checked before the
+    /// first write, which equals the model's sequential check only because a
+    /// valid result writes each document once (`Hooks.prechecked_apply_is_apply`).
+    async fn apply(&self, manifest: &Manifest, effects: &[Effect]) -> Result<(), ApplyFailure> {
+        let plugin = manifest.name;
+        let clean = |error| ApplyFailure { clean: true, error };
+        for effect in effects {
+            let Effect::Core(requested) = effect else {
+                continue;
+            };
+            if self.registry.operation(&requested.name).is_none() {
+                return Err(clean(HookError::UnknownOperation {
+                    plugin,
+                    operation: requested.name.clone(),
+                }));
+            }
+        }
+        for effect in effects {
+            let Effect::Write(
+                write @ (Write::Update { expected, .. } | Write::Delete { expected, .. }),
+            ) = effect
+            else {
+                continue;
+            };
+            if !self.held(write.doc(), *expected).await.map_err(clean)? {
+                return Err(clean(HookError::Conflict {
+                    plugin,
+                    message: write.conflict().map(str::to_owned),
+                }));
+            }
+        }
+        let before = self.txn.affected_documents();
+        for effect in effects {
+            if let Err(error) = self.effect(manifest, effect).await {
+                return Err(ApplyFailure {
+                    clean: self.txn.affected_documents() == before,
+                    error,
+                });
+            }
+        }
+        Ok(())
+    }
+}

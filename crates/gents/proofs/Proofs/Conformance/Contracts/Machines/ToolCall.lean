@@ -1,4 +1,4 @@
-import Proofs.ToolExecution
+import Proofs.Session.ToolExecution
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.Contracts
@@ -14,12 +14,6 @@ def toolCallCancelCauses : List ToolExecution.CancelCause :=
 
 def toolCallCancelCauseNames : List String :=
   toolCallCancelCauses.map ToolExecution.CancelCause.toDefraDB
-
-def toolRetryDispositions : List ToolExecution.RetryDisposition :=
-  ToolExecution.RetryDisposition.all
-
-def toolRetryDispositionNames : List String :=
-  toolRetryDispositions.map ToolExecution.RetryDisposition.toDefraDB
 
 def failureClassNames : List String :=
   ToolExecution.FailureClass.all.map ToolExecution.FailureClass.toDefraDB

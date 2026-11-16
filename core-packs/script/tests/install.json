@@ -1,0 +1,3 @@
+{
+  "install": {"documents": ["Tools/script-compute", "Tools/script-tools"], "slots": [], "dependencies": [], "plugins": ["script"]}
+}

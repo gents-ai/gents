@@ -1,0 +1,13 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "bar",
+    "file": "header_only.csv"
+  },
+  "bind": "fixtures/hostile",
+  "expect": {
+    "chart": "bar",
+    "error": "the data has no rows to draw",
+    "warnings": []
+  }
+}

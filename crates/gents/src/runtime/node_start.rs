@@ -1,15 +1,15 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::plugin::store::{
+use gents_pack::plugin::store::{
     list_records, projected_plugins, try_lock_store_shared, PublishedPluginReadError, StoreGuard,
 };
-use crate::store::identity::NodeIdentity;
-use crate::store::local::backend_protection::{
+use gents_store::identity::NodeIdentity;
+use gents_store::local::backend_protection::{
     BackendAdmission, BackendProtectionError, PreflightProtectedBackendStore,
 };
-use crate::store::local::store_key::StoreKey;
-use crate::tools::surface::ToolCeiling;
+use gents_store::local::store_key::StoreKey;
+use gents_tools::surface::ToolCeiling;
 
 type Result<T> = std::result::Result<T, BackendProtectionError>;
 
@@ -41,6 +41,7 @@ pub async fn start_node(
             p2p,
             Arc::new(ceiling),
             projected_plugins(&plugins),
+            &gents_automation::lifecycle_hooks::composition(),
         )
         .await
 }
@@ -72,6 +73,7 @@ pub async fn start_node_under_plugin_store(
             p2p,
             Arc::new(ceiling),
             projected_plugins(&plugins),
+            &gents_automation::lifecycle_hooks::composition(),
         )
         .await
 }

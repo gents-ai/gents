@@ -1,0 +1,402 @@
+{
+  "input": {
+    "chart": "bar",
+    "title": "Ninety categories",
+    "output": "svg",
+    "width": 640,
+    "height": 360,
+    "data": {
+      "columns": [
+        "category",
+        "value"
+      ],
+      "rows": [
+        [
+          "category 0",
+          1
+        ],
+        [
+          "category 1",
+          8
+        ],
+        [
+          "category 2",
+          15
+        ],
+        [
+          "category 3",
+          22
+        ],
+        [
+          "category 4",
+          6
+        ],
+        [
+          "category 5",
+          13
+        ],
+        [
+          "category 6",
+          20
+        ],
+        [
+          "category 7",
+          4
+        ],
+        [
+          "category 8",
+          11
+        ],
+        [
+          "category 9",
+          18
+        ],
+        [
+          "category 10",
+          2
+        ],
+        [
+          "category 11",
+          9
+        ],
+        [
+          "category 12",
+          16
+        ],
+        [
+          "category 13",
+          23
+        ],
+        [
+          "category 14",
+          7
+        ],
+        [
+          "category 15",
+          14
+        ],
+        [
+          "category 16",
+          21
+        ],
+        [
+          "category 17",
+          5
+        ],
+        [
+          "category 18",
+          12
+        ],
+        [
+          "category 19",
+          19
+        ],
+        [
+          "category 20",
+          3
+        ],
+        [
+          "category 21",
+          10
+        ],
+        [
+          "category 22",
+          17
+        ],
+        [
+          "category 23",
+          1
+        ],
+        [
+          "category 24",
+          8
+        ],
+        [
+          "category 25",
+          15
+        ],
+        [
+          "category 26",
+          22
+        ],
+        [
+          "category 27",
+          6
+        ],
+        [
+          "category 28",
+          13
+        ],
+        [
+          "category 29",
+          20
+        ],
+        [
+          "category 30",
+          4
+        ],
+        [
+          "category 31",
+          11
+        ],
+        [
+          "category 32",
+          18
+        ],
+        [
+          "category 33",
+          2
+        ],
+        [
+          "category 34",
+          9
+        ],
+        [
+          "category 35",
+          16
+        ],
+        [
+          "category 36",
+          23
+        ],
+        [
+          "category 37",
+          7
+        ],
+        [
+          "category 38",
+          14
+        ],
+        [
+          "category 39",
+          21
+        ],
+        [
+          "category 40",
+          5
+        ],
+        [
+          "category 41",
+          12
+        ],
+        [
+          "category 42",
+          19
+        ],
+        [
+          "category 43",
+          3
+        ],
+        [
+          "category 44",
+          10
+        ],
+        [
+          "category 45",
+          17
+        ],
+        [
+          "category 46",
+          1
+        ],
+        [
+          "category 47",
+          8
+        ],
+        [
+          "category 48",
+          15
+        ],
+        [
+          "category 49",
+          22
+        ],
+        [
+          "category 50",
+          6
+        ],
+        [
+          "category 51",
+          13
+        ],
+        [
+          "category 52",
+          20
+        ],
+        [
+          "category 53",
+          4
+        ],
+        [
+          "category 54",
+          11
+        ],
+        [
+          "category 55",
+          18
+        ],
+        [
+          "category 56",
+          2
+        ],
+        [
+          "category 57",
+          9
+        ],
+        [
+          "category 58",
+          16
+        ],
+        [
+          "category 59",
+          23
+        ],
+        [
+          "category 60",
+          7
+        ],
+        [
+          "category 61",
+          14
+        ],
+        [
+          "category 62",
+          21
+        ],
+        [
+          "category 63",
+          5
+        ],
+        [
+          "category 64",
+          12
+        ],
+        [
+          "category 65",
+          19
+        ],
+        [
+          "category 66",
+          3
+        ],
+        [
+          "category 67",
+          10
+        ],
+        [
+          "category 68",
+          17
+        ],
+        [
+          "category 69",
+          1
+        ],
+        [
+          "category 70",
+          8
+        ],
+        [
+          "category 71",
+          15
+        ],
+        [
+          "category 72",
+          22
+        ],
+        [
+          "category 73",
+          6
+        ],
+        [
+          "category 74",
+          13
+        ],
+        [
+          "category 75",
+          20
+        ],
+        [
+          "category 76",
+          4
+        ],
+        [
+          "category 77",
+          11
+        ],
+        [
+          "category 78",
+          18
+        ],
+        [
+          "category 79",
+          2
+        ],
+        [
+          "category 80",
+          9
+        ],
+        [
+          "category 81",
+          16
+        ],
+        [
+          "category 82",
+          23
+        ],
+        [
+          "category 83",
+          7
+        ],
+        [
+          "category 84",
+          14
+        ],
+        [
+          "category 85",
+          21
+        ],
+        [
+          "category 86",
+          5
+        ],
+        [
+          "category 87",
+          12
+        ],
+        [
+          "category 88",
+          19
+        ],
+        [
+          "category 89",
+          3
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "response": {
+      "alt": "Bar chart titled \"Ninety categories\". 90 categories of category, from category 0 to category 89. Value axis: value, from 0 to 25. 1 series. \"value\" (bar): highest 23 at category 13, lowest 1 at category 0.",
+      "chart": "bar",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "bar",
+          "max": 23.0,
+          "min": 1.0,
+          "name": "value",
+          "points": 90,
+          "sum": 1077.0
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"640\" height=\"360\" viewBox=\"0 0 640 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Ninety categories</title><desc id=\"chart-desc\">Bar chart titled &quot;Ninety categories&quot;. 90 categories of category, from category 0 to category 89. Value axis: value, from 0 to 25. 1 series. &quot;value&quot; (bar): highest 23 at category 13, lowest 1 at category 0.</desc><rect x=\"0\" y=\"0\" width=\"640\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Ninety categories</text><line x1=\"53.24\" y1=\"224.5\" x2=\"624\" y2=\"224.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"180.5\" x2=\"624\" y2=\"180.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"137.5\" x2=\"624\" y2=\"137.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"93.5\" x2=\"624\" y2=\"93.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><rect x=\"54.12\" y=\"258.66\" width=\"4.57\" height=\"8.69\" fill=\"#0072b2\"><title>value, category 0: 1</title></rect><rect x=\"60.47\" y=\"197.8\" width=\"4.57\" height=\"69.55\" fill=\"#0072b2\"><title>value, category 1: 8</title></rect><rect x=\"66.81\" y=\"136.94\" width=\"4.57\" height=\"130.41\" fill=\"#0072b2\"><title>value, category 2: 15</title></rect><rect x=\"73.15\" y=\"76.08\" width=\"4.57\" height=\"191.27\" fill=\"#0072b2\"><title>value, category 3: 22</title></rect><rect x=\"79.49\" y=\"215.19\" width=\"4.57\" height=\"52.17\" fill=\"#0072b2\"><title>value, category 4: 6</title></rect><rect x=\"85.83\" y=\"154.33\" width=\"4.57\" height=\"113.02\" fill=\"#0072b2\"><title>value, category 5: 13</title></rect><rect x=\"92.17\" y=\"93.47\" width=\"4.57\" height=\"173.88\" fill=\"#0072b2\"><title>value, category 6: 20</title></rect><rect x=\"98.52\" y=\"232.58\" width=\"4.57\" height=\"34.78\" fill=\"#0072b2\"><title>value, category 7: 4</title></rect><rect x=\"104.86\" y=\"171.72\" width=\"4.57\" height=\"95.64\" fill=\"#0072b2\"><title>value, category 8: 11</title></rect><rect x=\"111.2\" y=\"110.86\" width=\"4.57\" height=\"156.5\" fill=\"#0072b2\"><title>value, category 9: 18</title></rect><rect x=\"117.54\" y=\"249.97\" width=\"4.57\" height=\"17.39\" fill=\"#0072b2\"><title>value, category 10: 2</title></rect><rect x=\"123.88\" y=\"189.11\" width=\"4.57\" height=\"78.25\" fill=\"#0072b2\"><title>value, category 11: 9</title></rect><rect x=\"130.23\" y=\"128.25\" width=\"4.57\" height=\"139.11\" fill=\"#0072b2\"><title>value, category 12: 16</title></rect><rect x=\"136.57\" y=\"67.39\" width=\"4.57\" height=\"199.97\" fill=\"#0072b2\"><title>value, category 13: 23</title></rect><rect x=\"142.91\" y=\"206.5\" width=\"4.57\" height=\"60.86\" fill=\"#0072b2\"><title>value, category 14: 7</title></rect><rect x=\"149.25\" y=\"145.64\" width=\"4.57\" height=\"121.72\" fill=\"#0072b2\"><title>value, category 15: 14</title></rect><rect x=\"155.59\" y=\"84.78\" width=\"4.57\" height=\"182.58\" fill=\"#0072b2\"><title>value, category 16: 21</title></rect><rect x=\"161.93\" y=\"223.88\" width=\"4.57\" height=\"43.47\" fill=\"#0072b2\"><title>value, category 17: 5</title></rect><rect x=\"168.28\" y=\"163.02\" width=\"4.57\" height=\"104.33\" fill=\"#0072b2\"><title>value, category 18: 12</title></rect><rect x=\"174.62\" y=\"102.17\" width=\"4.57\" height=\"165.19\" fill=\"#0072b2\"><title>value, category 19: 19</title></rect><rect x=\"180.96\" y=\"241.27\" width=\"4.57\" height=\"26.08\" fill=\"#0072b2\"><title>value, category 20: 3</title></rect><rect x=\"187.3\" y=\"180.41\" width=\"4.57\" height=\"86.94\" fill=\"#0072b2\"><title>value, category 21: 10</title></rect><rect x=\"193.64\" y=\"119.55\" width=\"4.57\" height=\"147.8\" fill=\"#0072b2\"><title>value, category 22: 17</title></rect><rect x=\"199.99\" y=\"258.66\" width=\"4.57\" height=\"8.69\" fill=\"#0072b2\"><title>value, category 23: 1</title></rect><rect x=\"206.33\" y=\"197.8\" width=\"4.57\" height=\"69.55\" fill=\"#0072b2\"><title>value, category 24: 8</title></rect><rect x=\"212.67\" y=\"136.94\" width=\"4.57\" height=\"130.41\" fill=\"#0072b2\"><title>value, category 25: 15</title></rect><rect x=\"219.01\" y=\"76.08\" width=\"4.57\" height=\"191.27\" fill=\"#0072b2\"><title>value, category 26: 22</title></rect><rect x=\"225.35\" y=\"215.19\" width=\"4.57\" height=\"52.17\" fill=\"#0072b2\"><title>value, category 27: 6</title></rect><rect x=\"231.69\" y=\"154.33\" width=\"4.57\" height=\"113.02\" fill=\"#0072b2\"><title>value, category 28: 13</title></rect><rect x=\"238.04\" y=\"93.47\" width=\"4.57\" height=\"173.88\" fill=\"#0072b2\"><title>value, category 29: 20</title></rect><rect x=\"244.38\" y=\"232.58\" width=\"4.57\" height=\"34.78\" fill=\"#0072b2\"><title>value, category 30: 4</title></rect><rect x=\"250.72\" y=\"171.72\" width=\"4.57\" height=\"95.64\" fill=\"#0072b2\"><title>value, category 31: 11</title></rect><rect x=\"257.06\" y=\"110.86\" width=\"4.57\" height=\"156.5\" fill=\"#0072b2\"><title>value, category 32: 18</title></rect><rect x=\"263.4\" y=\"249.97\" width=\"4.57\" height=\"17.39\" fill=\"#0072b2\"><title>value, category 33: 2</title></rect><rect x=\"269.75\" y=\"189.11\" width=\"4.57\" height=\"78.25\" fill=\"#0072b2\"><title>value, category 34: 9</title></rect><rect x=\"276.09\" y=\"128.25\" width=\"4.57\" height=\"139.11\" fill=\"#0072b2\"><title>value, category 35: 16</title></rect><rect x=\"282.43\" y=\"67.39\" width=\"4.57\" height=\"199.97\" fill=\"#0072b2\"><title>value, category 36: 23</title></rect><rect x=\"288.77\" y=\"206.5\" width=\"4.57\" height=\"60.86\" fill=\"#0072b2\"><title>value, category 37: 7</title></rect><rect x=\"295.11\" y=\"145.64\" width=\"4.57\" height=\"121.72\" fill=\"#0072b2\"><title>value, category 38: 14</title></rect><rect x=\"301.45\" y=\"84.78\" width=\"4.57\" height=\"182.58\" fill=\"#0072b2\"><title>value, category 39: 21</title></rect><rect x=\"307.8\" y=\"223.88\" width=\"4.57\" height=\"43.47\" fill=\"#0072b2\"><title>value, category 40: 5</title></rect><rect x=\"314.14\" y=\"163.02\" width=\"4.57\" height=\"104.33\" fill=\"#0072b2\"><title>value, category 41: 12</title></rect><rect x=\"320.48\" y=\"102.17\" width=\"4.57\" height=\"165.19\" fill=\"#0072b2\"><title>value, category 42: 19</title></rect><rect x=\"326.82\" y=\"241.27\" width=\"4.57\" height=\"26.08\" fill=\"#0072b2\"><title>value, category 43: 3</title></rect><rect x=\"333.16\" y=\"180.41\" width=\"4.57\" height=\"86.94\" fill=\"#0072b2\"><title>value, category 44: 10</title></rect><rect x=\"339.51\" y=\"119.55\" width=\"4.57\" height=\"147.8\" fill=\"#0072b2\"><title>value, category 45: 17</title></rect><rect x=\"345.85\" y=\"258.66\" width=\"4.57\" height=\"8.69\" fill=\"#0072b2\"><title>value, category 46: 1</title></rect><rect x=\"352.19\" y=\"197.8\" width=\"4.57\" height=\"69.55\" fill=\"#0072b2\"><title>value, category 47: 8</title></rect><rect x=\"358.53\" y=\"136.94\" width=\"4.57\" height=\"130.41\" fill=\"#0072b2\"><title>value, category 48: 15</title></rect><rect x=\"364.87\" y=\"76.08\" width=\"4.57\" height=\"191.27\" fill=\"#0072b2\"><title>value, category 49: 22</title></rect><rect x=\"371.21\" y=\"215.19\" width=\"4.57\" height=\"52.17\" fill=\"#0072b2\"><title>value, category 50: 6</title></rect><rect x=\"377.56\" y=\"154.33\" width=\"4.57\" height=\"113.02\" fill=\"#0072b2\"><title>value, category 51: 13</title></rect><rect x=\"383.9\" y=\"93.47\" width=\"4.57\" height=\"173.88\" fill=\"#0072b2\"><title>value, category 52: 20</title></rect><rect x=\"390.24\" y=\"232.58\" width=\"4.57\" height=\"34.78\" fill=\"#0072b2\"><title>value, category 53: 4</title></rect><rect x=\"396.58\" y=\"171.72\" width=\"4.57\" height=\"95.64\" fill=\"#0072b2\"><title>value, category 54: 11</title></rect><rect x=\"402.92\" y=\"110.86\" width=\"4.57\" height=\"156.5\" fill=\"#0072b2\"><title>value, category 55: 18</title></rect><rect x=\"409.27\" y=\"249.97\" width=\"4.57\" height=\"17.39\" fill=\"#0072b2\"><title>value, category 56: 2</title></rect><rect x=\"415.61\" y=\"189.11\" width=\"4.57\" height=\"78.25\" fill=\"#0072b2\"><title>value, category 57: 9</title></rect><rect x=\"421.95\" y=\"128.25\" width=\"4.57\" height=\"139.11\" fill=\"#0072b2\"><title>value, category 58: 16</title></rect><rect x=\"428.29\" y=\"67.39\" width=\"4.57\" height=\"199.97\" fill=\"#0072b2\"><title>value, category 59: 23</title></rect><rect x=\"434.63\" y=\"206.5\" width=\"4.57\" height=\"60.86\" fill=\"#0072b2\"><title>value, category 60: 7</title></rect><rect x=\"440.97\" y=\"145.64\" width=\"4.57\" height=\"121.72\" fill=\"#0072b2\"><title>value, category 61: 14</title></rect><rect x=\"447.32\" y=\"84.78\" width=\"4.57\" height=\"182.58\" fill=\"#0072b2\"><title>value, category 62: 21</title></rect><rect x=\"453.66\" y=\"223.88\" width=\"4.57\" height=\"43.47\" fill=\"#0072b2\"><title>value, category 63: 5</title></rect><rect x=\"460\" y=\"163.02\" width=\"4.57\" height=\"104.33\" fill=\"#0072b2\"><title>value, category 64: 12</title></rect><rect x=\"466.34\" y=\"102.17\" width=\"4.57\" height=\"165.19\" fill=\"#0072b2\"><title>value, category 65: 19</title></rect><rect x=\"472.68\" y=\"241.27\" width=\"4.57\" height=\"26.08\" fill=\"#0072b2\"><title>value, category 66: 3</title></rect><rect x=\"479.03\" y=\"180.41\" width=\"4.57\" height=\"86.94\" fill=\"#0072b2\"><title>value, category 67: 10</title></rect><rect x=\"485.37\" y=\"119.55\" width=\"4.57\" height=\"147.8\" fill=\"#0072b2\"><title>value, category 68: 17</title></rect><rect x=\"491.71\" y=\"258.66\" width=\"4.57\" height=\"8.69\" fill=\"#0072b2\"><title>value, category 69: 1</title></rect><rect x=\"498.05\" y=\"197.8\" width=\"4.57\" height=\"69.55\" fill=\"#0072b2\"><title>value, category 70: 8</title></rect><rect x=\"504.39\" y=\"136.94\" width=\"4.57\" height=\"130.41\" fill=\"#0072b2\"><title>value, category 71: 15</title></rect><rect x=\"510.73\" y=\"76.08\" width=\"4.57\" height=\"191.27\" fill=\"#0072b2\"><title>value, category 72: 22</title></rect><rect x=\"517.08\" y=\"215.19\" width=\"4.57\" height=\"52.17\" fill=\"#0072b2\"><title>value, category 73: 6</title></rect><rect x=\"523.42\" y=\"154.33\" width=\"4.57\" height=\"113.02\" fill=\"#0072b2\"><title>value, category 74: 13</title></rect><rect x=\"529.76\" y=\"93.47\" width=\"4.57\" height=\"173.88\" fill=\"#0072b2\"><title>value, category 75: 20</title></rect><rect x=\"536.1\" y=\"232.58\" width=\"4.57\" height=\"34.78\" fill=\"#0072b2\"><title>value, category 76: 4</title></rect><rect x=\"542.44\" y=\"171.72\" width=\"4.57\" height=\"95.64\" fill=\"#0072b2\"><title>value, category 77: 11</title></rect><rect x=\"548.79\" y=\"110.86\" width=\"4.57\" height=\"156.5\" fill=\"#0072b2\"><title>value, category 78: 18</title></rect><rect x=\"555.13\" y=\"249.97\" width=\"4.57\" height=\"17.39\" fill=\"#0072b2\"><title>value, category 79: 2</title></rect><rect x=\"561.47\" y=\"189.11\" width=\"4.57\" height=\"78.25\" fill=\"#0072b2\"><title>value, category 80: 9</title></rect><rect x=\"567.81\" y=\"128.25\" width=\"4.57\" height=\"139.11\" fill=\"#0072b2\"><title>value, category 81: 16</title></rect><rect x=\"574.15\" y=\"67.39\" width=\"4.57\" height=\"199.97\" fill=\"#0072b2\"><title>value, category 82: 23</title></rect><rect x=\"580.5\" y=\"206.5\" width=\"4.57\" height=\"60.86\" fill=\"#0072b2\"><title>value, category 83: 7</title></rect><rect x=\"586.84\" y=\"145.64\" width=\"4.57\" height=\"121.72\" fill=\"#0072b2\"><title>value, category 84: 14</title></rect><rect x=\"593.18\" y=\"84.78\" width=\"4.57\" height=\"182.58\" fill=\"#0072b2\"><title>value, category 85: 21</title></rect><rect x=\"599.52\" y=\"223.88\" width=\"4.57\" height=\"43.47\" fill=\"#0072b2\"><title>value, category 86: 5</title></rect><rect x=\"605.86\" y=\"163.02\" width=\"4.57\" height=\"104.33\" fill=\"#0072b2\"><title>value, category 87: 12</title></rect><rect x=\"612.2\" y=\"102.17\" width=\"4.57\" height=\"165.19\" fill=\"#0072b2\"><title>value, category 88: 19</title></rect><rect x=\"618.55\" y=\"241.27\" width=\"4.57\" height=\"26.08\" fill=\"#0072b2\"><title>value, category 89: 3</title></rect><line x1=\"53.24\" y1=\"267.85\" x2=\"624\" y2=\"267.85\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"52.74\" y1=\"50\" x2=\"52.74\" y2=\"267.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"56.5\" y1=\"267.35\" x2=\"56.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"59.41\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 59.41 280.35)\">category 0</text><line x1=\"82.5\" y1=\"267.35\" x2=\"82.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"84.77\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 84.77 280.35)\">category 4</text><line x1=\"107.5\" y1=\"267.35\" x2=\"107.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"110.14\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 110.14 280.35)\">category 8</text><line x1=\"133.5\" y1=\"267.35\" x2=\"133.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"135.51\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 135.51 280.35)\">category 12</text><line x1=\"158.5\" y1=\"267.35\" x2=\"158.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"160.88\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 160.88 280.35)\">category 16</text><line x1=\"183.5\" y1=\"267.35\" x2=\"183.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"186.24\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 186.24 280.35)\">category 20</text><line x1=\"209.5\" y1=\"267.35\" x2=\"209.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"211.61\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 211.61 280.35)\">category 24</text><line x1=\"234.5\" y1=\"267.35\" x2=\"234.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"236.98\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 236.98 280.35)\">category 28</text><line x1=\"259.5\" y1=\"267.35\" x2=\"259.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"262.34\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 262.34 280.35)\">category 32</text><line x1=\"285.5\" y1=\"267.35\" x2=\"285.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"287.71\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 287.71 280.35)\">category 36</text><line x1=\"310.5\" y1=\"267.35\" x2=\"310.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"313.08\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 313.08 280.35)\">category 40</text><line x1=\"335.5\" y1=\"267.35\" x2=\"335.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"338.45\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 338.45 280.35)\">category 44</text><line x1=\"361.5\" y1=\"267.35\" x2=\"361.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"363.81\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 363.81 280.35)\">category 48</text><line x1=\"386.5\" y1=\"267.35\" x2=\"386.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"389.18\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 389.18 280.35)\">category 52</text><line x1=\"412.5\" y1=\"267.35\" x2=\"412.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"414.55\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 414.55 280.35)\">category 56</text><line x1=\"437.5\" y1=\"267.35\" x2=\"437.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"439.92\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 439.92 280.35)\">category 60</text><line x1=\"462.5\" y1=\"267.35\" x2=\"462.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"465.28\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 465.28 280.35)\">category 64</text><line x1=\"488.5\" y1=\"267.35\" x2=\"488.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"490.65\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 490.65 280.35)\">category 68</text><line x1=\"513.5\" y1=\"267.35\" x2=\"513.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"516.02\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 516.02 280.35)\">category 72</text><line x1=\"538.5\" y1=\"267.35\" x2=\"538.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"541.39\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 541.39 280.35)\">category 76</text><line x1=\"564.5\" y1=\"267.35\" x2=\"564.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"566.75\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 566.75 280.35)\">category 80</text><line x1=\"589.5\" y1=\"267.35\" x2=\"589.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"592.12\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 592.12 280.35)\">category 84</text><line x1=\"614.5\" y1=\"267.35\" x2=\"614.5\" y2=\"271.35\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"617.49\" y=\"280.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\" transform=\"rotate(-45 617.49 280.35)\">category 88</text><line x1=\"49.24\" y1=\"267.5\" x2=\"53.24\" y2=\"267.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"271.35\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"49.24\" y1=\"224.5\" x2=\"53.24\" y2=\"224.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"227.88\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">5</text><line x1=\"49.24\" y1=\"180.5\" x2=\"53.24\" y2=\"180.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"184.41\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">10</text><line x1=\"49.24\" y1=\"137.5\" x2=\"53.24\" y2=\"137.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"140.94\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">15</text><line x1=\"49.24\" y1=\"93.5\" x2=\"53.24\" y2=\"93.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"97.47\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">20</text><line x1=\"49.24\" y1=\"50.5\" x2=\"53.24\" y2=\"50.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"54\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">25</text><text x=\"338.62\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">category</text><text x=\"27\" y=\"158.68\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 158.68)\">value</text></svg>",
+      "warnings": [
+        "only every 4th of 90 category labels is shown so they do not overlap; all values are drawn"
+      ],
+      "width": 640
+    }
+  }
+}

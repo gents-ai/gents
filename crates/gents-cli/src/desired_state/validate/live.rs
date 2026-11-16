@@ -20,7 +20,7 @@ pub(crate) async fn validate_manifest_against_live(
         if source_collection.is_empty() || source_id.is_empty() {
             continue;
         }
-        if let Err(error) = gents::store::graphql::validate_collection_identifier(source_collection)
+        if let Err(error) = gents_store::graphql::validate_collection_identifier(source_collection)
         {
             errors.push(format!(
                 "event source {} has invalid source_collection {:?}: {}",
@@ -31,7 +31,7 @@ pub(crate) async fn validate_manifest_against_live(
 
         if let Some(filter) = source.filter.as_deref().map(str::trim) {
             if !filter.is_empty() {
-                if let Err(err) = gents::store::graphql::validate_graphql_filter_fragment(filter) {
+                if let Err(err) = gents_store::graphql::validate_graphql_filter_fragment(filter) {
                     errors.push(format!(
                         "event source {} filter is not a valid filter fragment: {}",
                         source_id, err
@@ -59,7 +59,7 @@ pub(crate) async fn validate_manifest_against_live(
         for trigger in &manifest.triggers {
             if trigger.node_did != source.node_did
                 || !matches!(&trigger.source,
-                    gents::documents::TriggerSource::Event { event_source_id }
+                    gents_documents::TriggerSource::Event { event_source_id }
                     if event_source_id == &source.event_source_id)
             {
                 continue;
@@ -78,16 +78,15 @@ pub(crate) async fn validate_manifest_against_live(
             .as_ref()
             .and_then(|group| group.expected_count.as_ref())
             .and_then(|count| match count {
-                gents::documents::EventGroupCount::SourceField { source_field } => {
+                gents_documents::EventGroupCount::SourceField { source_field } => {
                     Some(source_field.as_str())
                 }
-                gents::documents::EventGroupCount::Fixed(_) => None,
+                gents_documents::EventGroupCount::Fixed(_) => None,
             });
         if source.correlation_field.is_none() && expected_count_field.is_none() {
             let mut walks_templates = false;
             for (trigger, task) in &joined {
-                match gents::store::config_client::event_trigger_document_field_names(trigger, task)
-                {
+                match gents_documents::event_trigger_document_field_names(trigger, task) {
                     Ok(names) if !names.is_empty() => walks_templates = true,
                     Err(error) => errors.push(format!("{error:#}")),
                     Ok(_) => {}
@@ -98,19 +97,18 @@ pub(crate) async fn validate_manifest_against_live(
             }
         }
 
-        let introspect =
-            match gents::store::config_client::schema_introspection::introspection_query(
-                source_collection,
-            ) {
-                Ok(introspect) => introspect,
-                Err(err) => {
-                    errors.push(format!(
-                        "event source {} has invalid source_collection {:?}: {}",
-                        source_id, source.source_collection, err
-                    ));
-                    continue;
-                }
-            };
+        let introspect = match gents_store::config_client::schema_introspection::introspection_query(
+            source_collection,
+        ) {
+            Ok(introspect) => introspect,
+            Err(err) => {
+                errors.push(format!(
+                    "event source {} has invalid source_collection {:?}: {}",
+                    source_id, source.source_collection, err
+                ));
+                continue;
+            }
+        };
         let response = match access.execute(&introspect).await {
             Ok(response) => response,
             Err(err) => {
@@ -122,7 +120,7 @@ pub(crate) async fn validate_manifest_against_live(
             }
         };
         let Some(schema) =
-            gents::store::config_client::schema_introspection::parse_collection_schema(
+            gents_store::config_client::schema_introspection::parse_collection_schema(
                 response.get("data"),
             )
         else {
@@ -134,14 +132,14 @@ pub(crate) async fn validate_manifest_against_live(
         };
         let declared: BTreeMap<
             String,
-            gents::store::config_client::schema_introspection::SchemaField,
+            gents_store::config_client::schema_introspection::SchemaField,
         > = schema
             .fields
             .into_iter()
             .map(|field| (field.name.clone(), field))
             .collect();
         for (trigger, task) in joined {
-            if let Err(error) = gents::store::config_client::validate_event_trigger_document_fields(
+            if let Err(error) = gents_documents::validate_event_trigger_document_fields(
                 trigger, task, source, &declared,
             ) {
                 errors.push(format!("{error:#}"));

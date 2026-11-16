@@ -1,0 +1,10 @@
+{
+ "ok": true,
+ "problems": [],
+ "per_key": {
+  "request_progress_cases": []
+ },
+ "notes": [
+  "contracts_request_progress: consumer packages/gents-desktop-chat/src/chat-shell.test.ts"
+ ]
+}

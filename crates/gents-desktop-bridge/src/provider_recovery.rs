@@ -1,5 +1,6 @@
-use anyhow::{Context, Result};
-use gents::store::config_client::ConfigAccess;
+use anyhow::Result;
+use gents_protocol::operations::request::RequestRef;
+use gents_store::config_client::ConfigAccess;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -92,23 +93,24 @@ pub enum ProviderRecoveryResult {
 }
 
 async fn validate_scope(access: &ConfigAccess, request: &ProviderRecoveryRequest) -> Result<()> {
-    use gents::store::graphql::escape_graphql_string;
     anyhow::ensure!(
         !request.node_did.trim().is_empty()
             && !request.session_id.trim().is_empty()
             && !request.request_id.trim().is_empty(),
         "node, session and stopped request are required"
     );
-    let response = access.execute(&format!(
-        "{{ AgentRequest(filter: {{ node_did: {{ _eq: \"{}\" }}, request_id: {{ _eq: \"{}\" }} }}, limit: 2) {{ session_id }} }}",
-        escape_graphql_string(&request.node_did), escape_graphql_string(&request.request_id),
-    )).await?;
-    let rows = response
-        .pointer("/data/AgentRequest")
-        .and_then(serde_json::Value::as_array)
-        .context("stopped request observation is unavailable")?;
+    let stopped = gents_session::operations::request::get(
+        access,
+        &RequestRef {
+            node_did: request.node_did.clone(),
+            requester_did: None,
+            request_id: request.request_id.clone(),
+        },
+    )
+    .await
+    .map_err(gents_desktop_core::error::request_operation_failure)?;
     anyhow::ensure!(
-        rows.len() == 1 && rows[0]["session_id"].as_str() == Some(&request.session_id),
+        stopped.session_id.as_deref() == Some(request.session_id.as_str()),
         "stopped request no longer belongs to the selected session"
     );
     Ok(())
@@ -119,15 +121,18 @@ pub async fn plan(
     request: &ProviderRecoveryRequest,
 ) -> Result<Option<ProviderRecoveryPlan>> {
     validate_scope(access, request).await?;
-    let Some(blocked) =
-        gents::goal::blocked_turn::blocked_turn(access, &request.node_did, &request.request_id)
-            .await?
+    let Some(blocked) = gents_automation::goal::blocked_turn::blocked_turn(
+        access,
+        &request.node_did,
+        &request.request_id,
+    )
+    .await?
     else {
         return Ok(None);
     };
     let goal = access
         .transact_readonly("desktop.provider_recovery.goal", |txn| {
-            Box::pin(gents::goal::load_canonical_goal_in_txn(
+            Box::pin(gents_automation::goal::load_canonical_goal_in_txn(
                 txn,
                 &request.node_did,
                 &request.session_id,
@@ -143,7 +148,7 @@ pub async fn plan(
     let mut companions = Vec::new();
     let mut unavailable = None;
     if let Some(profile) = blocked.profile.as_deref() {
-        match gents::inference::profile_switch::switch_candidates(
+        match gents_inference::profile_switch::switch_candidates(
             access,
             &request.node_did,
             profile,
@@ -175,10 +180,16 @@ pub async fn plan(
     }
     Ok(Some(ProviderRecoveryPlan {
         reason: match blocked.reason {
-            gents::goal::blocked_turn::BlockedReason::UsageLimit => "usage_limit",
-            gents::goal::blocked_turn::BlockedReason::AccountDisabled => "account_disabled",
-            gents::goal::blocked_turn::BlockedReason::AccountRemoved => "account_removed",
-            gents::goal::blocked_turn::BlockedReason::AccountSignedOut => "account_signed_out",
+            gents_automation::goal::blocked_turn::BlockedReason::UsageLimit => "usage_limit",
+            gents_automation::goal::blocked_turn::BlockedReason::AccountDisabled => {
+                "account_disabled"
+            }
+            gents_automation::goal::blocked_turn::BlockedReason::AccountRemoved => {
+                "account_removed"
+            }
+            gents_automation::goal::blocked_turn::BlockedReason::AccountSignedOut => {
+                "account_signed_out"
+            }
         }
         .into(),
         account_label: blocked.account.map(|account| account.label),
@@ -187,7 +198,7 @@ pub async fn plan(
         resets_at: blocked.resets_at.map(|time| time.to_rfc3339()),
         candidates,
         companion_profiles: companions,
-        switch_cost: gents::inference::profile_switch::SWITCH_COST.into(),
+        switch_cost: gents_inference::profile_switch::SWITCH_COST.into(),
         unavailable_reason: unavailable,
         goal,
     }))
@@ -195,7 +206,7 @@ pub async fn plan(
 
 pub async fn apply(
     access: &ConfigAccess,
-    identity: &dyn gents::NodeIdentity,
+    identity: &dyn gents_store::identity::NodeIdentity,
     request: &ProviderRecoveryApply,
 ) -> Result<ProviderRecoveryResult> {
     let Some(current) = plan(access, &request.scope).await? else {
@@ -224,7 +235,7 @@ pub async fn apply(
                     reason: "That account is no longer eligible for this model.".into(),
                 });
             }
-            gents::inference::profile_switch::switch_profile_account(
+            gents_inference::profile_switch::switch_profile_account(
                 access,
                 &scope.node_did,
                 profile_id,
@@ -258,7 +269,7 @@ pub async fn apply(
                     reason: "That account is no longer eligible for this model.".into(),
                 });
             }
-            gents::goal::resume_goal_on_account(
+            gents_automation::goal::resume_goal_on_account(
                 access,
                 identity,
                 &scope.node_did,
@@ -286,15 +297,22 @@ pub async fn apply(
                     reason: "The Goal changed. Refresh its reset setting.".into(),
                 });
             }
-            gents::goal::set_goal_auto_resume_from_access(
+            let input = gents_protocol::operations::goal::GoalSetInput {
+                auto_resume: Some(*enabled),
+                expected: Some(gents_protocol::operations::goal::GoalExpected::Goal(
+                    goal_id.clone(),
+                )),
+                ..Default::default()
+            };
+            gents_automation::operations::goal::set(
                 access,
                 &scope.node_did,
                 &scope.session_id,
-                goal_id,
-                *enabled,
+                &input,
             )
             .await
             .map(|_| ("Reset resume preference saved.".into(), None))
+            .map_err(anyhow::Error::from)
         }
     };
     Ok(match result {

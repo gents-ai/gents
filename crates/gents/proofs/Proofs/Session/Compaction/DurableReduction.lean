@@ -1,0 +1,377 @@
+import Proofs.Shared.Basic
+
+/-! Production binds the opaque source boundary to the exact request version and
+bounded canonical-message high-water identity, with the stored split retaining
+the exact source projection. Recovery restores that split without rerendering.
+Pair closure is a creation precondition; recovery never repairs an open pair. -/
+
+namespace Compaction.DurableReduction
+
+abbrev NodeDid := Nat
+abbrev ProducerCallId := Nat
+abbrev RequestDocId := Nat
+abbrev ClaimCommitId := Nat
+
+structure ReductionKey where
+  nodeDid : NodeDid
+  sessionId : SessionId
+  requestDocId : RequestDocId
+  turnIndex : Nat
+  ordinal : Nat
+  deriving DecidableEq, Repr
+
+structure SourceBoundary where
+  value : Nat
+  deriving DecidableEq, Repr
+
+structure Projection where
+  value : Nat
+  deriving DecidableEq, Repr
+
+structure Fact where
+  claimCommit : ClaimCommitId
+  sourceBoundary : SourceBoundary
+  sourceProjection : Projection
+  checkpoint : Projection
+  producerCall : Option ProducerCallId
+  parent : Option ReductionKey
+  pairClosed : Bool
+  deriving DecidableEq, Repr
+
+abbrev Store := ReductionKey → Option Fact
+
+namespace Store
+
+def empty : Store := fun _ => none
+
+def bind (store : Store) (key : ReductionKey) (fact : Fact) : Store :=
+  fun probe => if probe = key then some fact else store probe
+
+@[simp] theorem bind_self (store : Store) (key : ReductionKey) (fact : Fact) :
+    bind store key fact key = some fact := by
+  simp [bind]
+
+@[simp] theorem bind_other (store : Store) (key probe : ReductionKey) (fact : Fact)
+    (h : probe ≠ key) : bind store key fact probe = store probe := by
+  simp [bind, h]
+
+end Store
+
+inductive PersistOutcome where
+  | fresh
+  | idempotent
+  | conflict
+  | pairOpen
+  deriving DecidableEq, Repr
+
+namespace PersistOutcome
+
+def toContract : PersistOutcome → String
+  | .fresh => "fresh"
+  | .idempotent => "idempotent"
+  | .conflict => "conflict"
+  | .pairOpen => "pair_open"
+
+def durable : PersistOutcome → Bool
+  | .fresh | .idempotent => true
+  | .conflict | .pairOpen => false
+
+end PersistOutcome
+
+def persist (store : Store) (key : ReductionKey) (fact : Fact) :
+    PersistOutcome × Store :=
+  if fact.pairClosed then
+    match store key with
+    | none => (.fresh, Store.bind store key fact)
+    | some stored => if stored = fact then (.idempotent, store) else (.conflict, store)
+  else
+    (.pairOpen, store)
+
+theorem persist_idempotent (store : Store) (key : ReductionKey) (fact : Fact)
+    (hpairs : fact.pairClosed = true) (h : store key = some fact) :
+    persist store key fact = (.idempotent, store) := by
+  simp [persist, hpairs, h]
+
+theorem persist_rejects_rebinding (store : Store) (key : ReductionKey)
+    (stored fact : Fact) (hpairs : fact.pairClosed = true)
+    (h : store key = some stored) (hne : stored ≠ fact) :
+    persist store key fact = (.conflict, store) := by
+  simp [persist, hpairs, h, hne]
+
+theorem persist_durable_iff (store : Store) (key : ReductionKey) (fact : Fact) :
+    (persist store key fact).1.durable = true ↔
+      fact.pairClosed = true ∧ (persist store key fact).2 key = some fact := by
+  cases hpairs : fact.pairClosed <;> simp [persist, hpairs, PersistOutcome.durable]
+  cases h : store key with
+  | none => simp [persist, hpairs, h, PersistOutcome.durable]
+  | some stored =>
+      by_cases heq : stored = fact
+      · subst heq; simp [persist, hpairs, h, PersistOutcome.durable]
+      · simp [persist, hpairs, h, heq, PersistOutcome.durable]
+
+theorem turn_separates_reductions (key : ReductionKey) {a b : Nat} (h : a ≠ b) :
+    ({ key with turnIndex := a } : ReductionKey) ≠ { key with turnIndex := b } := by
+  intro heq
+  exact h (congrArg ReductionKey.turnIndex heq)
+
+theorem request_separates_concurrent_reductions
+    (key : ReductionKey) {a b : RequestDocId} (h : a ≠ b) :
+    ({ key with requestDocId := a } : ReductionKey) ≠ { key with requestDocId := b } := by
+  intro heq
+  exact h (congrArg ReductionKey.requestDocId heq)
+
+theorem fork_separates_reductions
+    (key : ReductionKey) {a b : SessionId} (h : a ≠ b) :
+    ({ key with sessionId := a } : ReductionKey) ≠ { key with sessionId := b } := by
+  intro heq
+  exact h (congrArg ReductionKey.sessionId heq)
+
+inductive CaptureKind where
+  | inference
+  | title
+  | compaction
+  deriving BEq, DecidableEq, Repr
+
+structure CaptureCitation where
+  kind : CaptureKind
+  supported : Bool
+  reductionKeys : List ReductionKey
+  deriving Repr
+
+def consumedBy (key : ReductionKey) (captures : List CaptureCitation) : Bool :=
+  captures.any fun capture =>
+    capture.supported &&
+      match capture.kind with
+      | .inference => decide (key ∈ capture.reductionKeys)
+      | .title | .compaction => false
+
+@[simp] theorem title_citation_does_not_consume (key : ReductionKey) :
+    consumedBy key [{ kind := .title, supported := true, reductionKeys := [key] }] = false := by
+  rfl
+
+@[simp] theorem inference_citation_consumes (key : ReductionKey) :
+    consumedBy key [{ kind := .inference, supported := true, reductionKeys := [key] }] = true := by
+  simp [consumedBy]
+
+@[simp] theorem unsupported_inference_does_not_consume (key : ReductionKey) :
+    consumedBy key
+      [{ kind := .inference, supported := false, reductionKeys := [key] }] = false := by
+  rfl
+
+def activeKeys : List ReductionKey → List ReductionKey
+  | [] => []
+  | key :: rest =>
+      match rest.getLast? with
+      | none => [key]
+      | some latest => [latest]
+
+@[simp] theorem activeKeys_singleton (key : ReductionKey) :
+    activeKeys [key] = [key] := by
+  rfl
+
+theorem activeKeys_append_nonempty (lineage : List ReductionKey) (key : ReductionKey) :
+    activeKeys (lineage ++ [key]) = [key] := by
+  cases lineage with
+  | nil => rfl
+  | cons head tail => simp [activeKeys]
+
+inductive Stage where
+  /-- Summary call returned, but its value is not accepted by the loop yet. -/
+  | summaryCompleted
+  | durable
+  | crashed
+  | recovered
+  | sent
+  deriving DecidableEq, Repr
+
+structure Machine where
+  store : Store
+  canonicalTranscript : Nat
+  stage : Stage
+  key : ReductionKey
+  fact : Fact
+  activeProjection : Option Projection
+
+def successfulReduction (machine : Machine) : Bool :=
+  machine.stage = .durable || machine.stage = .recovered || machine.stage = .sent
+
+inductive Step : Machine → Machine → Prop where
+  | persistFresh {pre post : Machine}
+      (hstage : pre.stage = .summaryCompleted)
+      (hunbound : pre.store pre.key = none)
+      (hpairs : pre.fact.pairClosed = true)
+      (hpost : post = { pre with
+        store := Store.bind pre.store pre.key pre.fact
+        stage := .durable
+        activeProjection := some pre.fact.checkpoint }) : Step pre post
+  | persistIdempotent {pre post : Machine}
+      (hstage : pre.stage = .summaryCompleted)
+      (hbound : pre.store pre.key = some pre.fact)
+      (hpairs : pre.fact.pairClosed = true)
+      (hpost : post = { pre with
+        stage := .durable
+        activeProjection := some pre.fact.checkpoint }) : Step pre post
+  | crash {pre post : Machine}
+      (hpost : post = { pre with stage := .crashed, activeProjection := none }) : Step pre post
+  | restore {pre post : Machine}
+      (hstage : pre.stage = .crashed)
+      (hbound : pre.store pre.key = some pre.fact)
+      (hpost : post = { pre with
+        stage := .recovered
+        activeProjection := some pre.fact.checkpoint }) : Step pre post
+  | sendDurable {pre post : Machine}
+      (hstage : pre.stage = .durable ∨ pre.stage = .recovered)
+      (hbound : pre.store pre.key = some pre.fact)
+      (hactive : pre.activeProjection = some pre.fact.checkpoint)
+      (hpost : post = { pre with stage := .sent }) : Step pre post
+
+theorem Step.canonical_transcript_immutable {pre post : Machine} (h : Step pre post) :
+    post.canonicalTranscript = pre.canonicalTranscript := by
+  cases h <;> simp_all
+
+theorem crash_before_persist_never_activates {pre post : Machine}
+    (hcrash : post = { pre with stage := .crashed, activeProjection := none }) :
+    successfulReduction post = false ∧ post.activeProjection = none := by
+  subst hcrash
+  simp [successfulReduction]
+
+theorem sent_step_requires_durable_fact {pre post : Machine} (h : Step pre post)
+    (hsent : post.stage = .sent) :
+    pre.store pre.key = some pre.fact ∧
+      pre.activeProjection = some pre.fact.checkpoint := by
+  cases h with
+  | persistFresh _ _ _ hpost => subst hpost; contradiction
+  | persistIdempotent _ _ _ hpost => subst hpost; contradiction
+  | crash hpost => subst hpost; contradiction
+  | restore _ _ hpost => subst hpost; contradiction
+  | sendDurable _ hbound hactive _ => exact ⟨hbound, hactive⟩
+
+theorem crash_then_restore_exact {durable crashed recovered : Machine}
+    (hdurable : durable.store durable.key = some durable.fact)
+    (hcrash : crashed = { durable with stage := .crashed, activeProjection := none })
+    (hrestore : recovered = { crashed with
+      stage := .recovered
+      activeProjection := some crashed.fact.checkpoint }) :
+    recovered.activeProjection = some durable.fact.checkpoint ∧
+      recovered.store recovered.key = some recovered.fact := by
+  subst hcrash
+  subst hrestore
+  simp_all
+
+def Store.PairClosed (store : Store) : Prop :=
+  ∀ key fact, store key = some fact → fact.pairClosed = true
+
+@[simp] theorem Store.empty_pairClosed : Store.PairClosed Store.empty := by
+  intro key fact h
+  simp [Store.empty] at h
+
+theorem Store.bind_pairClosed (store : Store) (key : ReductionKey) (fact : Fact)
+    (hstore : store.PairClosed) (hpairs : fact.pairClosed = true) :
+    (Store.bind store key fact).PairClosed := by
+  intro probe stored h
+  by_cases heq : probe = key
+  · subst heq
+    simp at h
+    cases h
+    exact hpairs
+  · exact hstore probe stored (by simpa [Store.bind, heq] using h)
+
+theorem Step.preserves_pairClosed_store {pre post : Machine}
+    (hstore : pre.store.PairClosed) (hstep : Step pre post) : post.store.PairClosed := by
+  cases hstep with
+  | persistFresh _ _ hpairs hpost =>
+      subst hpost
+      exact Store.bind_pairClosed _ _ _ hstore hpairs
+  | persistIdempotent _ _ _ hpost => subst hpost; exact hstore
+  | crash hpost => subst hpost; exact hstore
+  | restore _ _ hpost => subst hpost; exact hstore
+  | sendDurable _ _ _ hpost => subst hpost; exact hstore
+
+theorem active_checkpoint_pair_closed {pre post : Machine}
+    (hstore : pre.store.PairClosed) (hstep : Step pre post)
+    (hactive : successfulReduction post = true) : post.fact.pairClosed = true := by
+  cases hstep with
+  | persistFresh _ _ hpairs hpost => subst hpost; exact hpairs
+  | persistIdempotent _ _ hpairs hpost => subst hpost; exact hpairs
+  | crash hpost => subst hpost; simp [successfulReduction] at hactive
+  | restore _ hbound hpost => subst hpost; exact hstore _ _ hbound
+  | sendDurable _ hbound _ hpost => subst hpost; exact hstore _ _ hbound
+
+structure Scenario where
+  key : ReductionKey
+  fact : Fact
+  prior : Option Fact
+  deriving Repr
+
+namespace Scenario
+
+def store (scenario : Scenario) : Store :=
+  match scenario.prior with
+  | none => Store.empty
+  | some fact => Store.bind Store.empty scenario.key fact
+
+def outcome (scenario : Scenario) : PersistOutcome :=
+  (persist scenario.store scenario.key scenario.fact).1
+
+def durableAfter (scenario : Scenario) : Bool :=
+  decide ((persist scenario.store scenario.key scenario.fact).2 scenario.key = some scenario.fact)
+
+def sendPermitted (scenario : Scenario) : Bool :=
+  durableAfter scenario && scenario.fact.pairClosed
+
+end Scenario
+
+/-- A canonical transcript message as the source boundary reads it: its
+principal scope and its signed `sequence`. -/
+structure TranscriptMessage where
+  node : NodeDid
+  session : SessionId
+  requester : Option Nat
+  sequence : Int
+  deriving DecidableEq, Repr
+
+def TranscriptMessage.inScope (m : TranscriptMessage) (node : NodeDid) (session : SessionId)
+    (requester : Option Nat) : Bool :=
+  m.node == node && m.session == session && m.requester == requester
+
+/-- The bounded canonical high-water a source boundary pins: the greatest
+`sequence` among the owner's messages in the session; messages of another
+principal never raise it, and an empty owner transcript pins none. -/
+def canonicalHighWater (node : NodeDid) (session : SessionId) (requester : Option Nat) :
+    List TranscriptMessage → Option Int
+  | [] => none
+  | m :: rest =>
+      let below := canonicalHighWater node session requester rest
+      if m.inScope node session requester then
+        some (match below with
+          | none => m.sequence
+          | some high => max m.sequence high)
+      else below
+
+theorem canonicalHighWater_bounds (node : NodeDid) (session : SessionId)
+    (requester : Option Nat) (messages : List TranscriptMessage) (m : TranscriptMessage)
+    (hm : m ∈ messages) (hs : m.inScope node session requester = true) :
+    ∃ high, canonicalHighWater node session requester messages = some high ∧
+      m.sequence ≤ high := by
+  induction messages with
+  | nil => cases hm
+  | cons x rest ih =>
+    simp only [canonicalHighWater]
+    rcases List.mem_cons.mp hm with h | h
+    · subst h
+      rw [if_pos hs]
+      cases canonicalHighWater node session requester rest with
+      | none => refine ⟨_, rfl, ?_⟩; (try dsimp only); omega
+      | some high => refine ⟨_, rfl, ?_⟩; (try dsimp only); omega
+    · obtain ⟨high, hhigh, hle⟩ := ih h
+      rw [hhigh]
+      split
+      · refine ⟨_, rfl, ?_⟩; (try dsimp only); omega
+      · exact ⟨high, rfl, hle⟩
+
+theorem source_boundary_pins_bounded_canonical_high_water :
+    canonicalHighWater 1 1 none
+      [⟨1, 1, none, 2⟩, ⟨1, 1, none, 1⟩, ⟨2, 1, none, 3⟩] = some 2 := by
+  decide
+
+end Compaction.DurableReduction

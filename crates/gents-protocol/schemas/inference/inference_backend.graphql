@@ -1,4 +1,4 @@
-type InferenceBackend @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "secret_configuration") @index(fields: ["node_did", "backend_id"], unique: true) {
+type InferenceBackend @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "secret_configuration") @index(fields: ["node_did", "backend_id"], unique: true) {
     backend_id: String
     node_did: String @index
     name: String @index

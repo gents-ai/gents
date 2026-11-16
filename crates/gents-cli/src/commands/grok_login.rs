@@ -3,14 +3,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::inference::auth::xai_login::{poll_device_token, request_device_code};
+use gents_inference::auth::xai_login::{poll_device_token, request_device_code};
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::args::GrokLoginArgs;
-use crate::commands::login_wait::{print_sign_in_notes, until_cancelled};
+use crate::commands::login_wait::{connect_first_sign_in, print_sign_in_notes, until_cancelled};
 use crate::config_writes::ConfigAccess;
-use crate::{print_json, resolve_config_access, resolve_node_did};
+use crate::{print_json, resolve_config_access};
+use gents_service::home_state::resolve_node_did;
 
 pub(crate) struct GrokLoginOptions {
     pub(crate) provider: String,
@@ -18,14 +19,14 @@ pub(crate) struct GrokLoginOptions {
 }
 
 pub(crate) struct GrokLoginOutcome {
-    pub(crate) sign_in: gents::inference::auth::credential::SignIn,
+    pub(crate) sign_in: gents_inference::auth::credential::SignIn,
 }
 
 pub(crate) async fn grok_login(args: GrokLoginArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let node_did = resolve_node_did(Some(&home_dir), args.node_did.as_deref())?;
-    let outcome = run_grok_login(
+    let mut outcome = run_grok_login(
         &access,
         &node_did,
         &GrokLoginOptions {
@@ -37,6 +38,7 @@ pub(crate) async fn grok_login(args: GrokLoginArgs) -> Result<()> {
     )
     .await?;
     print_sign_in_notes(&outcome.sign_in);
+    connect_first_sign_in(&access, &node_did, &mut outcome.sign_in).await;
     print_json(&grok_login_result_json(&outcome))?;
     Ok(())
 }
@@ -61,7 +63,7 @@ pub(crate) async fn run_grok_login<O>(
 where
     O: FnOnce(&str, Option<&str>),
 {
-    let provider = gents::inference::clients::xai_grok::normalize_provider(&opts.provider);
+    let provider = gents_inference::clients::xai_grok::normalize_provider(&opts.provider);
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
@@ -85,18 +87,15 @@ where
     )
     .await?;
 
-    let credential = gents::inference::auth::xai_login::credential_from_login_tokens(
+    let credential = gents_inference::auth::xai_login::credential_from_login_tokens(
         node_did,
         &provider,
         &tokens,
         chrono::Utc::now(),
     );
-    let sign_in = gents::inference::auth::credential::store_sign_in(
-        access,
-        credential,
-        opts.label.as_deref(),
-    )
-    .await?;
+    let sign_in =
+        gents_inference::auth::credential::store_sign_in(access, credential, opts.label.as_deref())
+            .await?;
     Ok(GrokLoginOutcome { sign_in })
 }
 
@@ -104,7 +103,7 @@ pub(crate) fn grok_login_result_json(outcome: &GrokLoginOutcome) -> Value {
     let credential = &outcome.sign_in.credential;
     json!({
         "doc_id": outcome.sign_in.doc_id,
-        "label": gents::inference::auth::credential::effective_account_label(credential),
+        "label": gents_inference::auth::credential::effective_account_label(credential),
         "result": outcome.sign_in.result,
         "profiles": outcome.sign_in.profiles,
         "credential_id": credential.credential_id,

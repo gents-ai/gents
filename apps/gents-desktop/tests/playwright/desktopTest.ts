@@ -1,6 +1,13 @@
-import { expect, test as base, type Page, type TestInfo } from "@playwright/test";
+import {
+  expect,
+  test as base,
+  type Locator,
+  type Page,
+  type TestInfo,
+} from "@playwright/test";
 
 import type { DesktopUiHarnessScenario } from "../ui-harness/desktopHarness";
+import { OWN_VIEWPORT, PROJECT_SIZE_SENTINEL } from "./ownViewport";
 
 export type HarnessScenario = DesktopUiHarnessScenario;
 
@@ -8,9 +15,64 @@ export const PEER_ID = "peer-bombadil-local";
 
 type DesktopFixtures = {
   browserLogs: string[];
+  ownViewportGuard: void;
 };
 
+/* a tag is read from the test's details or from its title */
+function ownViewport(testInfo: TestInfo) {
+  return (
+    testInfo.tags.includes(OWN_VIEWPORT) ||
+    testInfo.titlePath.some((title) => title.split(/\s+/).includes(OWN_VIEWPORT))
+  );
+}
+
+function isSentinel(size: { width: number; height: number } | null) {
+  return (
+    size?.width === PROJECT_SIZE_SENTINEL.width &&
+    size?.height === PROJECT_SIZE_SENTINEL.height
+  );
+}
+
 export const test = base.extend<DesktopFixtures>({
+  /* a spec's own test.use({ viewport }) replaces this fixture, so only a
+     tagged test that sets no size of its own starts at the sentinel */
+  viewport: async ({ viewport }, use, testInfo) => {
+    await use(ownViewport(testInfo) ? PROJECT_SIZE_SENTINEL : viewport);
+  },
+  ownViewportGuard: [
+    async ({ page }, use, testInfo) => {
+      if (!ownViewport(testInfo)) {
+        await use();
+        return;
+      }
+      const size = page.viewportSize.bind(page);
+      const unsized: string[] = [];
+      const onNavigation = (frame: ReturnType<Page["mainFrame"]>) => {
+        if (frame === page.mainFrame() && isSentinel(size())) {
+          unsized.push(frame.url());
+        }
+      };
+      page.on("framenavigated", onNavigation);
+      page.viewportSize = () => {
+        const current = size();
+        if (isSentinel(current)) {
+          throw new Error(
+            `${OWN_VIEWPORT} test read the window size before setting its own; untag it so it runs on every project`,
+          );
+        }
+        return current;
+      };
+
+      await use();
+
+      page.off("framenavigated", onNavigation);
+      expect(
+        unsized,
+        `${OWN_VIEWPORT} test navigated before setting its own window size; untag it so it runs on every project`,
+      ).toEqual([]);
+    },
+    { auto: true },
+  ],
   browserLogs: [
     async ({ page }, use, testInfo) => {
       const logs: string[] = [];
@@ -38,7 +100,7 @@ export const test = base.extend<DesktopFixtures>({
   ],
 });
 
-export { expect };
+export { expect, OWN_VIEWPORT };
 export type { Page, TestInfo };
 
 const KIT_SURFACE = [
@@ -50,6 +112,36 @@ const KIT_SURFACE = [
 export async function gotoHarness(page: Page, scenario: HarnessScenario = "default") {
   await page.goto(`/tests/ui-harness/harness.html?scenario=${scenario}`);
   await expect(page.locator(KIT_SURFACE).first()).toBeVisible();
+}
+
+/** Resolves once the page has drawn `count` more frames. Headless WebKit draws
+    about 20 a second where Chromium draws 60 or more, and fewer still under
+    load, so work measured per frame is paced in frames, not milliseconds. */
+export async function framesDrawn(page: Page, count: number) {
+  await page.evaluate(
+    (count) =>
+      new Promise<void>((resolve) => {
+        let left = count;
+        const next = () => (--left > 0 ? requestAnimationFrame(next) : resolve());
+        requestAnimationFrame(next);
+      }),
+    count,
+  );
+}
+
+/** Resolves once `scroller` has kept its position across two drawn frames. A
+    wheel returns before the scroll it starts has landed, and an older page
+    landing above moves the position again. */
+export async function scrollAtRest(scroller: Locator) {
+  await scroller.evaluate(async (element) => {
+    const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    let top: number;
+    do {
+      top = element.scrollTop;
+      await frame();
+      await frame();
+    } while (element.scrollTop !== top);
+  });
 }
 
 /* an init script runs in every frame of the page, and a plugin frame's origin

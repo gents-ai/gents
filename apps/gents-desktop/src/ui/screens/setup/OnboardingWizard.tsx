@@ -1,7 +1,10 @@
 import { useEffect, useReducer, useState } from "react";
 import { useStore } from "zustand";
 import { ArrowRight, Server, Wifi } from "lucide-react";
-import { enrollmentActivationMessage } from "@source-inc/gents-desktop-client";
+import {
+  enrollmentActivationMessage,
+  isSavedRemote,
+} from "@source-inc/gents-desktop-client";
 import type {
   DesktopClientSnapshot,
   ManagedServerAuthorityInput,
@@ -17,7 +20,6 @@ import {
   type DesktopStartupPhase,
 } from "../../../lib/loadingStatus";
 import { SETUP_COMPLETE_DWELL_MS, StartupProgress } from "./StartupProgress";
-import { engineerPatches } from "@/lib/engineer";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import { AvatarRoll } from "@/screens/AvatarRoll";
 import { saveNodeAvatar } from "@/screens/agent/AgentCard";
@@ -195,6 +197,8 @@ export function OnboardingWizard({
     bootstrap?.initNodeName?.trim() || DEFAULT_NODE_NAME,
   );
   const existingName = existingHome ? bootstrap?.initNodeName?.trim() || null : null;
+  /* a home whose provisioning committed this name but never started it */
+  const unfinishedName = bootstrap?.localSetupUnfinished ? existingName : null;
   const nodeName = existingName ?? name;
   const [avatar, setAvatar] = useState<string | null>(null);
   /* until one is picked, the portrait rolls to the name's once typing pauses */
@@ -266,15 +270,7 @@ export function OnboardingWizard({
       throw new Error("The initialized node is not available in the client snapshot.");
     if (avatar)
       await saveNodeAvatar(changeConfig, nextDeployment, avatar).catch(() => undefined);
-    const engineer = engineerPatches(nextDeployment);
-    if (engineer.length) {
-      await changeConfig("patchConfigComponents", {
-        nodeDid: nextDeployment.nodeDid,
-        patches: engineer,
-      });
-    } else {
-      await refreshSnapshot();
-    }
+    await refreshSnapshot();
     dispatch({
       type: "provisioned",
       at: Date.now(),
@@ -485,25 +481,35 @@ export function OnboardingWizard({
         >
           {allowLocal ? "Let’s get set up" : "Connect to your node"}
         </Title>
-        {!allowLocal &&
-          snapshot?.client?.deployments
-            .filter((node) => node.chatSafe)
-            .map((node) => (
-              <Button
-                key={node.nodeDid}
-                className="mb-3 w-full"
-                variant="outline"
-                disabled={busy}
-                onClick={() => onDone(snapshot, node.nodeDid)}
-              >
-                <span className="truncate">Continue to {node.label}</span>
-              </Button>
-            ))}
+        {snapshot?.client?.deployments
+          .filter(
+            (node) =>
+              node.chatSafe &&
+              (!allowLocal ||
+                Boolean(
+                  bootstrap?.savedPeers.some(
+                    (peer) =>
+                      peer.nodeDid === node.nodeDid &&
+                      isSavedRemote(peer, bootstrap.initNodeDid),
+                  ),
+                )),
+          )
+          .map((node) => (
+            <Button
+              key={node.nodeDid}
+              className="mb-3 w-full"
+              variant="outline"
+              disabled={busy}
+              onClick={() => onDone(snapshot, node.nodeDid)}
+            >
+              <span className="truncate">Continue with {node.label}</span>
+            </Button>
+          ))}
         {!allowLocal && enrollmentRequests && enrollmentRequests.length > 0 && (
           <div className="mb-6 grid min-w-0 gap-2">
             <p className="text-sm text-muted-foreground">
               Saved access requests. If the administrator cannot find your request,
-              enter the node’s status address below to send it again.
+              enter the invitation or node address below to send it again.
             </p>
             {enrollmentRequests.map((request) => (
               <Button
@@ -537,39 +543,65 @@ export function OnboardingWizard({
               }
               icon={Server}
             >
-              <div className="flex items-center gap-4">
-                <AvatarRoll
-                  rollId={NAMING}
-                  name={nodeName}
-                  avatar={avatar}
-                  onChange={setAvatar}
-                  disabled={busy}
-                  className="ring-offset-raised"
-                />
-                <div className="min-w-0 flex-1">
-                  <Field
-                    label="Node name"
-                    htmlFor="setup-node-name"
-                    info={
-                      <>
-                        Its identity and data live in{" "}
-                        <span className="font-mono break-all">{root}</span>. Your
-                        operating system runs it as a background service: closing this
-                        window or quitting Desktop leaves it running, and the menu bar’s
-                        Stop Node stops it. Starting at login is a separate setting.
-                      </>
-                    }
-                  >
-                    <Input
-                      id="setup-node-name"
-                      value={nodeName}
-                      onChange={(event) => setName(event.target.value)}
-                      readOnly={existingName !== null}
-                      aria-readonly={existingName !== null}
-                    />
-                  </Field>
+              {unfinishedName ? (
+                <div className="grid gap-2" data-testid="setup-unfinished-home">
+                  <p className="text-sm font-medium text-heading">
+                    An earlier setup on this computer didn’t finish.
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    A node home named {unfinishedName} was created at{" "}
+                    <span className="font-mono break-all">{root}</span>, but it never
+                    started.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button disabled={busy} onClick={() => void createNode()}>
+                      Continue with {unfinishedName}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={busy || !incompatibleHome?.canReset}
+                      onClick={() => void incompatibleHome?.startOver()}
+                    >
+                      Start over with a new name
+                    </Button>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="flex items-center gap-4">
+                  <AvatarRoll
+                    rollId={NAMING}
+                    name={nodeName}
+                    avatar={avatar}
+                    onChange={setAvatar}
+                    disabled={busy}
+                    className="ring-offset-raised"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <Field
+                      label="Node name"
+                      htmlFor="setup-node-name"
+                      info={
+                        <>
+                          Its identity and data live in{" "}
+                          <span className="font-mono break-all">{root}</span>. Your
+                          operating system runs it as a background service: closing this
+                          window or quitting Desktop leaves it running, and the menu
+                          bar’s Stop Node stops it. Starting at login is a separate
+                          setting.
+                        </>
+                      }
+                    >
+                      <Input
+                        id="setup-node-name"
+                        value={nodeName}
+                        onChange={(event) => setName(event.target.value)}
+                        readOnly={existingName !== null}
+                        aria-readonly={existingName !== null}
+                      />
+                    </Field>
+                  </div>
+                </div>
+              )}
               <p className="text-xs text-muted-foreground">
                 Continuing connects this desktop and grants it access to the local node.
               </p>
@@ -639,7 +671,7 @@ export function OnboardingWizard({
                   if (!busy && address.trim()) void enrol();
                 }}
               >
-                <Field label="Server address">
+                <Field label="Invitation or server address">
                   <Input
                     inputMode="url"
                     disabled={busy}
@@ -648,7 +680,7 @@ export function OnboardingWizard({
                     autoCorrect="off"
                     value={address}
                     onChange={(event) => setAddress(event.target.value)}
-                    placeholder="https://gents.example.net:8787"
+                    placeholder="Paste an invitation or enter a server address"
                   />
                 </Field>
                 <Field label="Your name (optional)">
@@ -660,8 +692,8 @@ export function OnboardingWizard({
                 </Field>
                 <button type="submit" hidden />
                 <p className="text-xs text-muted-foreground">
-                  Enter the node’s status address, reachable from this device. The
-                  node’s administrator must approve this device’s access request.
+                  Paste an invitation or enter the node’s status address. The node’s
+                  administrator must approve this device’s access request.
                 </p>
               </form>
             </Option>

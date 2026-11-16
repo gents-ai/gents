@@ -1,0 +1,60 @@
+{
+  "expect": {
+    "markdown": "| table | source | rows | columns |\n| --- | --- | --- | --- |\n| a |  | 1 | column_1 |\n| b |  | 1 | k |",
+    "tables": [
+      {
+        "column_count": 1,
+        "columns": [
+          {
+            "name": "column_1",
+            "type": "int64"
+          }
+        ],
+        "format": "inline",
+        "name": "a",
+        "row_count": 1,
+        "source": ""
+      },
+      {
+        "column_count": 1,
+        "columns": [
+          {
+            "name": "k",
+            "type": "text"
+          }
+        ],
+        "format": "inline",
+        "name": "b",
+        "row_count": 1,
+        "source": ""
+      }
+    ],
+    "warnings": []
+  },
+  "input": {
+    "tables": [
+      {
+        "name": "a",
+        "rows": [
+          [
+            1
+          ]
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "k",
+            "type": "text"
+          }
+        ],
+        "name": "b",
+        "rows": [
+          [
+            "v"
+          ]
+        ]
+      }
+    ]
+  }
+}

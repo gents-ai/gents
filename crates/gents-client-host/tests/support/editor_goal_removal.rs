@@ -1,7 +1,7 @@
 use super::{fake_llm, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents::ConfigAccess;
 use gents_protocol::{request_lifecycle::RequestLifecycleState, row::AgentRequestRow};
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::Arc;
@@ -68,7 +68,7 @@ pub async fn verify(
     node: &str,
     author: &str,
 ) -> Result<Value> {
-    let node_literal = gents::store::graphql::escape_graphql_string(node);
+    let node_literal = gents_store::graphql::escape_graphql_string(node);
     let query = format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{node_literal}"}}, purpose: {{_eq: "normal"}}}}) {{ {} interrupt_requested_at }} Goal(filter: {{node_did: {{_eq: "{node_literal}"}}}}) {{ {} }} AgentSessionGoalControl(filter: {{node_did: {{_eq: "{node_literal}"}}}}) {{ intent_json }} }}"#,
         gents::SIGNED_REQUEST_FIELDS,
@@ -100,7 +100,7 @@ pub async fn verify(
         "initial chat, two goals and one queued follow-up required: {value}"
     );
     for row in &rows {
-        gents::verify_request_receipt_signature(row)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(row)?;
         ensure!(
             row.requester_did.as_deref() == Some(author)
                 && row.admission_signer_did.as_deref() == Some(author),

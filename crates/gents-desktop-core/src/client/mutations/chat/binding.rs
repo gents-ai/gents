@@ -18,17 +18,7 @@ pub(super) fn resolve_agent_binding(
         store
             .sessions
             .iter()
-            .enumerate()
-            .find(|(index, row)| {
-                row.session_id == session_id
-                    && row.node_did == node_did
-                    && store
-                        .session_source_node_dids
-                        .get(*index)
-                        .and_then(|source| source.as_deref())
-                        .is_none_or(|source| source == node_did)
-            })
-            .map(|(_index, row)| row)
+            .find(|row| row.session_id == session_id && row.node_did == node_did)
     });
 
     let agent_did = resolve_agent_did(
@@ -58,16 +48,10 @@ fn resolve_agent_did(
 
     let resolved = session_agent
         .or(requested)
-        .or_else(|| {
-            store
-                .nodes
-                .iter()
-                .find(|row| row.node_did == node_did)
-                .and_then(|row| normalize_optional_string(row.default_agent_did.as_deref()))
-        })
+        .or_else(|| store.selected_default_agent_did(node_did))
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "no agent is bound to this session and Node {node_did} has no default_agent_did"
+                "no agent is bound to this session and Node {node_did} has no default agent selection"
             )
         })?
         .to_owned();

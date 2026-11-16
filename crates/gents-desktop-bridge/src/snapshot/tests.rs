@@ -163,8 +163,6 @@ fn push_canonical_text_message_for_node(
 
 #[path = "tests/goal_provenance.rs"]
 mod goal_provenance;
-#[path = "../../../gents/src/lean_vocab_test/support.rs"]
-mod lean_vocab_test;
 #[path = "tests/mcp_health.rs"]
 mod mcp_health;
 #[path = "tests/runtime.rs"]

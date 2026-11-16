@@ -117,6 +117,7 @@ pub(super) async fn run(
         registry: deps.registry,
         cancel: deps.cancel.clone(),
         options,
+        proposer: None,
     };
     let mut futures = FuturesUnordered::new();
     for (index, (run_args, request, _)) in prepared.iter().enumerate() {

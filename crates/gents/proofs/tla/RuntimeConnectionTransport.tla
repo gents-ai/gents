@@ -1,4 +1,6 @@
 ---- MODULE RuntimeConnectionTransport ----
+\* lean: RuntimeConnectionObservation.reconnects, RuntimeConnectionObservation.failedSnapshot
+\* crates: gents-desktop-core
 (***************************************************************************)
 (* The desktop observer's connection to one runtime it reads over           *)
 (* authenticated HTTP as the User (gents-desktop-core client/observe).      *)
@@ -41,7 +43,7 @@
 (* (`FreshGen`). A tokio abort lands at the task's next await, so an        *)
 (* aborted task may still enqueue one notice (`Abort`).                     *)
 (***************************************************************************)
-EXTENDS Naturals, Sequences, FiniteSets
+EXTENDS Naturals, Sequences, FiniteSets, LeanDecision_RuntimeConnectionObservation
 
 CONSTANTS
   K,                  \* subscriptions armed per connection
@@ -322,24 +324,27 @@ Schedule ==
   /\ flatDials' = IF stable THEN 1
                   ELSE IF Delay(a) = 1 THEN Min({flatDials + 1, Flat + 1}) ELSE flatDials
 
+\* The Lean `Event` each notice kind carries.
+NoticeEvent == [ready |-> "subscriptions_ready", renewed |-> "renewed",
+                failed |-> "transport_failed", refused |-> "refused"]
+
+\* The Lean `SnapshotOutcome` event (`snapshotEvent`).
+SnapshotEvent == [succeeded |-> "snapshot_succeeded", refused |-> "refused",
+                  unreachable |-> "transport_failed"]
+
 Notice ==
   /\ Len(chan) > 0
   /\ LET n == Head(chan) IN
      /\ chan' = Tail(chan)
      /\ IF srcGen # 0 /\ ~srcRetrying /\ (n.gen = srcGen \/ ~GenerationCheck)
-          THEN CASE n.kind = "ready" ->
-                      /\ srcReady' = TRUE /\ pending' = TRUE
-                      /\ status' = IF status = "refused" THEN "refused" ELSE "connecting"
+          THEN IF reconnects("source", NoticeEvent[n.kind])
+                 THEN /\ Schedule
+                      /\ status' = IF n.kind = "refused" THEN "refused" ELSE "disconnected"
+                      /\ pending' = IF n.kind = "refused" THEN FALSE ELSE pending
+                 ELSE /\ srcReady' = TRUE /\ pending' = TRUE
+                      /\ status' = IF n.kind = "ready" /\ status # "refused"
+                                     THEN "connecting" ELSE status
                       /\ UNCHANGED <<srcRetrying, load, retryIn, attempts, stable, flatDials>>
-                 [] n.kind = "renewed" ->
-                      /\ srcReady' = TRUE /\ pending' = TRUE
-                      /\ UNCHANGED <<status, srcRetrying, load, retryIn, attempts, stable,
-                                     flatDials>>
-                 [] n.kind = "failed" ->
-                      /\ Schedule /\ status' = "disconnected"
-                      /\ UNCHANGED pending
-                 [] n.kind = "refused" ->
-                      /\ Schedule /\ status' = "refused" /\ pending' = FALSE
           ELSE UNCHANGED <<srcReady, srcRetrying, status, pending, load, retryIn, attempts,
                            stable, flatDials>>
   /\ UNCHANGED <<peer, grant, reachable, env, dirty, srcGen, srcEndpoint, tPhase,
@@ -356,18 +361,24 @@ StartLoad ==
 \* A served runtime answers a revoked User's read with the selected roots
 \* omitted, which the snapshot reader decodes as empty (Lean `SnapshotOutcome`
 \* has no withheld case); `OmittedIsEmpty = FALSE` is the rejected reading
-\* that treats it as a failure. A refused read (HTTP 403) aborts the source
-\* task and reconnects it. A read that failed for a transport reason leaves
-\* the streams armed and is retried (Lean `reconnects .snapshot
-\* .transportFailed = false`); it neither schedules a reconnect nor ends the
-\* task.
+\* that reads it as a refusal. An unreachable runtime fails the read with an
+\* unclassified failure, and a refusing runtime with HTTP 403; Lean
+\* `failedSnapshot` names the outcome and `reconnects` decides whether it
+\* aborts the source task and reconnects it. A read that does not reconnect
+\* leaves the streams armed and is retried.
+ReadOutcome ==
+  IF ~reachable THEN failedSnapshot("other")
+  ELSE IF ~grant /\ Revocation # "served" THEN failedSnapshot("forbidden")
+  ELSE IF ~grant /\ ~OmittedIsEmpty THEN "refused"
+  ELSE "succeeded"
+
 FinishLoad ==
   /\ load.gen # 0 /\ load.gen = srcGen
-  /\ IF ~reachable
+  /\ IF ReadOutcome # "succeeded" /\ ~reconnects("snapshot", SnapshotEvent[ReadOutcome])
        THEN /\ status' = "disconnected" /\ pending' = TRUE /\ load' = NoLoad
             /\ UNCHANGED <<srcReady, srcRetrying, retryIn, attempts, stable, fresh, tPhase,
                            causeless, flatDials>>
-       ELSE IF ~grant /\ (Revocation # "served" \/ ~OmittedIsEmpty)
+       ELSE IF ReadOutcome # "succeeded"
        THEN /\ Schedule /\ status' = "refused" /\ pending' = FALSE
             /\ tPhase' = "ended" /\ UNCHANGED fresh
             /\ causeless' = (causeless \/ ~HasCause)

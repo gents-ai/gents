@@ -1,4 +1,4 @@
-import Proofs.ClientShell.ObservationScope
+import Proofs.Clients.ClientShell.ObservationScope
 import Lean
 
 /-! Executes `ClientWindowScope` on the window traces a native test serializes.

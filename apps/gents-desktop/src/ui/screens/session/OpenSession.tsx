@@ -1,3 +1,4 @@
+import { href } from "@/lib/router";
 import { useCallback, useMemo, useRef, useState, type ComponentProps } from "react";
 import { toast } from "sonner";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
@@ -78,6 +79,15 @@ export function OpenSession() {
     },
     [loadSessionContextDetails, session?.nodeDid, session?.sessionId],
   );
+  const compactionSettings =
+    session?.agentDid && session.nodeDid
+      ? href({
+          name: "agent",
+          nodeDid: session.nodeDid,
+          section: "agents",
+          item: session.agentDid,
+        })
+      : undefined;
   const openCompaction = useCallback(
     (compaction: DesktopSessionSnapshot["context"]["compactions"][number]) => {
       if (!session || compaction.messageSequence == null) return;
@@ -253,6 +263,7 @@ export function OpenSession() {
                         context={session.context}
                         loadDetails={loadContextDetails}
                         onOpenCompaction={openCompaction}
+                        compactionSettings={compactionSettings}
                         compact
                       />
                     </div>
@@ -337,6 +348,7 @@ export function OpenSession() {
                         context={session.context}
                         loadDetails={loadContextDetails}
                         onOpenCompaction={openCompaction}
+                        compactionSettings={compactionSettings}
                       />
                     )}
                   </div>
@@ -420,7 +432,10 @@ function selectScreenFacts(session: DesktopSessionSnapshot | null): ScreenFacts 
 /* The turn the view goes to after a send from here, by key. The session's
    folds of what was sent are read as one string, so a snapshot that
    changes nothing about them re-renders nothing here. */
-function useSentTurnKey(sessionId: string | null, latestRequestId: string | null) {
+export function useSentTurnKey(
+  sessionId: string | null,
+  latestRequestId: string | null,
+) {
   const sentTurns = useView((view) => view.sentTurns);
   const { folds } = useSelectedSessionFields((held) => ({
     folds: JSON.stringify(

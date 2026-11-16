@@ -1,0 +1,129 @@
+{
+  "case_id": "form_tabs",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "prepare",
+      "prompt": "Open http://127.0.0.1:19472/invoices. Using the UI, navigate to page 3, inspect it, and leave this tab and browser session open for the next turn.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "browser_exec"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ],
+            "max_calls": 20
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "response.status",
+                "equals": "completed"
+              },
+              {
+                "field": "response.stdout",
+                "contains": "Page 3 of 3"
+              }
+            ]
+          },
+          "tier": "acceptance"
+        }
+      ]
+    },
+    {
+      "stage_id": "submit",
+      "prompt": "In the SAME browser session, open http://127.0.0.1:19472/request in a NEW tab, keeping the invoice tab intact. Submit exactly one delivery request for Casey, region West, service Express, reference BR-2048, and check the confirmation checkbox. Wait for the dependent service choices. Report the confirmation ID. Switch back to the existing invoice tab without navigating or reloading and report its current page.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "browser_exec"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ],
+            "max_calls": 20
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "final_message_matches",
+          "params": {
+            "all": [
+              "SHIP-0001"
+            ]
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "response.status",
+                "equals": "completed"
+              },
+              {
+                "field": "response.stdout",
+                "contains": "Page 3 of 3"
+              }
+            ]
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "captured_fields_match",
+          "params": {
+            "name": "website_state",
+            "min_rows": 1,
+            "max_rows": 1,
+            "expect": [
+              {
+                "field": "passed",
+                "equals": true
+              }
+            ]
+          },
+          "tier": "acceptance"
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "website_state",
+          "collection": "BrowserEvalObservation",
+          "filter": {
+            "trial_id": {
+              "_eq": "$trial"
+            },
+            "case_id": {
+              "_eq": "form_tabs"
+            },
+            "stage_id": {
+              "_eq": "submit"
+            }
+          },
+          "fields": [
+            "passed",
+            "details"
+          ]
+        }
+      ]
+    }
+  ]
+}

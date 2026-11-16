@@ -1,0 +1,4 @@
+---- MODULE MCBackgroundLiveOutputObservationTimeoutKill ----
+EXTENDS BackgroundLiveOutputObservation
+
+====

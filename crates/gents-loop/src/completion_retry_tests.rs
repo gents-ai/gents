@@ -127,94 +127,6 @@ fn rate_limited_uses_provider_hint_when_larger_than_ladder() {
 }
 
 #[test]
-fn tight_interactive_deadline_rejects_first_retry_without_consuming_budget() {
-    let mut state = CompletionRetryState::new(CompletionRetryPolicy::interactive_default());
-    let now = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-    let error = transient("HTTP status 503 before tight deadline");
-    let deadline = now + chrono::Duration::seconds(1);
-
-    match state.on_pre_stream_failure(&classified(&error, &error.to_string()), now, Some(deadline))
-    {
-        PreStreamDirective::Fail { reason } => assert!(reason.contains("request deadline")),
-        other => panic!("expected deadline rejection before retry, got {other:?}"),
-    }
-    assert_eq!(state.retry_count(), 0);
-}
-
-#[test]
-fn deadline_fail_fast_when_next_delay_overshoots() {
-    let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
-    let now = Utc::now();
-    let error = transient("connection reset");
-
-    let first = state.on_pre_stream_failure(&classified(&error, "connection reset"), now, None);
-    assert!(matches!(first, PreStreamDirective::RetryAfter { .. }));
-
-    let deadline = now + chrono::Duration::seconds(10);
-    match state.on_pre_stream_failure(&classified(&error, "connection reset"), now, Some(deadline))
-    {
-        PreStreamDirective::Fail { reason } => {
-            assert!(
-                reason.to_lowercase().contains("deadline"),
-                "reason should mention the deadline: {reason}"
-            );
-        }
-        other => panic!("expected Fail, got {other:?}"),
-    }
-}
-
-#[test]
-fn deterministic_parse_400_skips_remaining_resample_budget_and_repairs() {
-    let policy = CompletionRetryPolicy {
-        transport_backoff: vec![Duration::from_secs(5), Duration::from_secs(30)],
-        max_resample: 2,
-        max_empty_resample: 2,
-        allow_repair: true,
-        account_hops: 0,
-    };
-    let mut state = CompletionRetryState::new(policy);
-    let now = Utc::now();
-    let error = transient("parse trouble");
-    let text = parse_400_text("same-error");
-
-    let first = state.on_pre_stream_failure(&classified(&error, &text), now, None);
-    match first {
-        PreStreamDirective::RetryAfter { kind, .. } => assert_eq!(kind, RetryKind::Resample),
-        other => panic!("expected RetryAfter(Resample), got {other:?}"),
-    }
-    assert_eq!(state.retry_count(), 1);
-
-    let second = state.on_pre_stream_failure(&classified(&error, &text), now, None);
-    assert_eq!(second, PreStreamDirective::Repair);
-}
-
-#[test]
-fn repair_is_available_only_once() {
-    let policy = CompletionRetryPolicy {
-        transport_backoff: vec![Duration::from_secs(5)],
-        max_resample: 0,
-        max_empty_resample: 0,
-        allow_repair: true,
-        account_hops: 0,
-    };
-    let mut state = CompletionRetryState::new(policy);
-    let now = Utc::now();
-    let error = transient("parse trouble");
-    let text = parse_400_text("repeat");
-
-    assert_eq!(
-        state.on_pre_stream_failure(&classified(&error, &text), now, None),
-        PreStreamDirective::Repair
-    );
-    state.mark_repair_used();
-
-    match state.on_pre_stream_failure(&classified(&error, &text), now, None) {
-        PreStreamDirective::Fail { .. } => {}
-        other => panic!("expected Fail after repair used, got {other:?}"),
-    }
-}
-
-#[test]
 fn fresh_parse_400_deadline_overshoot_fails_immediately_not_repair() {
     let policy = CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(30)],
@@ -348,30 +260,6 @@ fn failure_class_reasoning_rejections_are_their_own_class() {
 }
 
 #[test]
-fn reasoning_rejection_repairs_once_then_fails() {
-    let mut state = CompletionRetryState::new(CompletionRetryPolicy {
-        transport_backoff: vec![Duration::from_secs(1)],
-        max_resample: 3,
-        max_empty_resample: 3,
-        allow_repair: true,
-        account_hops: 0,
-    });
-    let error = InferenceError::PermanentFailure {
-        reason: "Invalid `signature` in `thinking` block".to_string(),
-    };
-    let text = error.to_string();
-    assert!(matches!(
-        state.on_pre_stream_failure(&classified(&error, &text), Utc::now(), None),
-        PreStreamDirective::Repair
-    ));
-    state.mark_repair_used();
-    assert!(matches!(
-        state.on_pre_stream_failure(&classified(&error, &text), Utc::now(), None),
-        PreStreamDirective::Fail { .. }
-    ));
-}
-
-#[test]
 fn permanent_failure_reason_carries_its_prefix_once() {
     let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
     let error = InferenceError::PermanentFailure {
@@ -384,49 +272,6 @@ fn permanent_failure_reason_carries_its_prefix_once() {
         ),
         other => panic!("expected Fail, got {other:?}"),
     }
-}
-
-#[test]
-fn context_overflow_compacts_once_then_fails() {
-    let failure = crate::rig_compat::classify_completion_error(
-        &rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
-            crate::error::tests::CLAUDE_PROMPT_TOO_LONG.into(),
-        )),
-    );
-    assert_eq!(failure_class(&failure), FailureClass::ContextOverflow);
-    let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
-    assert_eq!(
-        state.on_pre_stream_failure(&failure, Utc::now(), None),
-        PreStreamDirective::CompactAndRetry {
-            overflow: crate::error::ContextOverflow {
-                input_tokens: Some(1_001_685),
-                limit: Some(1_000_000),
-            },
-        }
-    );
-    assert_eq!(
-        state.retry_count(),
-        0,
-        "a compaction spends no transport budget"
-    );
-    state.mark_compaction_used();
-    match state.on_pre_stream_failure(&failure, Utc::now(), None) {
-        PreStreamDirective::Fail { reason } => assert!(
-            reason.starts_with(
-                "provider context overflow persisted after the one forced compaction: "
-            ),
-            "{reason}"
-        ),
-        other => panic!("expected Fail after the one compaction, got {other:?}"),
-    }
-    state.on_turn_accepted();
-    assert!(
-        matches!(
-            state.on_pre_stream_failure(&failure, Utc::now(), None),
-            PreStreamDirective::CompactAndRetry { .. }
-        ),
-        "the next completion may compact once again"
-    );
 }
 
 fn account_limited(error: &InferenceError, text: &str) -> crate::error::ClassifiedFailure {

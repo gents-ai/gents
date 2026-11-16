@@ -1,6 +1,10 @@
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
 use clap::Parser;
-use gents::Collection;
 use gents_eval::checks::CheckRegistry;
+use gents_eval::optimization::{Proposal, Proposer, ScriptedProposer};
+use gents_store::collection::Collection;
 use tokio_util::sync::CancellationToken;
 
 use super::execute;
@@ -46,7 +50,7 @@ pub(crate) async fn optimization(fixture: &Fixture, argv: &[&str]) -> anyhow::Re
     .await
 }
 
-pub(crate) fn proposer_file(fixture: &Fixture) -> String {
+pub(crate) fn proposer_file(fixture: &Fixture) -> PathBuf {
     std::fs::create_dir_all(&fixture.ctx.home_dir).unwrap();
     let path = fixture.ctx.home_dir.join("proposals.json");
     let proposals: Vec<serde_json::Value> = (0..3)
@@ -58,15 +62,64 @@ pub(crate) fn proposer_file(fixture: &Fixture) -> String {
         })
         .collect();
     std::fs::write(&path, serde_json::to_vec(&proposals).unwrap()).unwrap();
-    format!("scripted:{}", path.display())
+    path
+}
+
+/// A proposer holding the fixture's three proposals, as a job's default
+/// `--rounds` consumes them.
+pub(crate) fn proposer(fixture: &Fixture) -> ScriptedProposer {
+    scripted_proposer(&proposer_file(fixture), 3).unwrap()
+}
+
+pub(crate) fn scripted_proposer(path: &Path, rounds: u32) -> Result<ScriptedProposer> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("reading proposer script {}", path.display()))?;
+    let proposals: Vec<Proposal> = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parsing proposer script {}", path.display()))?;
+    if proposals.len() < usize::try_from(rounds).unwrap_or(usize::MAX) {
+        anyhow::bail!(
+            "proposer script {} holds {} proposals, fewer than --rounds {rounds}",
+            path.display(),
+            proposals.len()
+        );
+    }
+    Ok(ScriptedProposer::new(
+        proposals
+            .into_iter()
+            .map(|proposal| (proposal.text, proposal.rationale))
+            .collect(),
+    ))
+}
+
+pub(crate) fn with_proposer<'a>(base: Deps<'a>, proposer: &'a dyn Proposer) -> Deps<'a> {
+    Deps {
+        proposer: Some(proposer),
+        ..base
+    }
+}
+
+/// Runs `argv` with the fixture's scripted proposer injected in place of a
+/// `--proposer` flag and the executor `scripted`.
+pub(crate) async fn optimization_scripted(
+    fixture: &Fixture,
+    argv: &[&str],
+    scripted: &dyn gents_eval::runner::TrialExecutor,
+    cancel: CancellationToken,
+) -> anyhow::Result<String> {
+    let proposer = proposer(fixture);
+    let registry = CheckRegistry::builtin();
+    optimization_with(
+        fixture,
+        argv,
+        &with_proposer(deps(scripted, &registry, cancel), &proposer),
+    )
+    .await
 }
 
 pub(crate) async fn accepted_job(fixture: &Fixture, job_id: &str) -> String {
     let scripted = executor(&VALIDATION_CASES);
-    let registry = CheckRegistry::builtin();
     let pack = fixture.pack_arg();
-    let proposer = proposer_file(fixture);
-    optimization_with(
+    optimization_scripted(
         fixture,
         &[
             "run",
@@ -75,34 +128,29 @@ pub(crate) async fn accepted_job(fixture: &Fixture, job_id: &str) -> String {
             pack.as_str(),
             "--profile",
             "local",
-            "--proposer",
-            proposer.as_str(),
             "--job-id",
             job_id,
         ],
-        &deps(&scripted, &registry, CancellationToken::new()),
+        &scripted,
+        CancellationToken::new(),
     )
     .await
     .unwrap()
 }
 
 pub(crate) async fn delete_definition(fixture: &Fixture) {
-    let owner = fixture.ctx.owner.as_str();
-    let deleted = fixture
-        .ctx
-        .access
-        .transact_write("cli.optimization.test_delete_definition", |txn| {
-            Box::pin(async move {
-                crate::config_import::apply_delete_collection(
-                    txn,
-                    Collection::EvalDefinition,
-                    owner,
-                    &[DEFINITION.to_owned()],
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
+    let deleted = gents_documents::operations::delete::delete(
+        &fixture.ctx.access,
+        "cli.optimization.test_delete_definition",
+        fixture.ctx.owner.as_str(),
+        &[(Collection::EvalDefinition, DEFINITION.to_owned())],
+        gents_protocol::operations::document::OperationActor::User,
+        None,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap()
+    .targets
+    .len();
     assert_eq!(deleted, 1, "the fixture's eval definition");
 }

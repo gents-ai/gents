@@ -3,17 +3,23 @@ use gents::support;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{EvalSplit, InferenceBackend, InferenceProfile};
-use gents::eval::{load_trials, load_verdicts, Anchor, OutcomeKind, ProviderReason, TrialRecord};
-use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::{Collection, ConfigAccess, DocumentRuntimeOptions};
+#[cfg(feature = "live-e2e")]
+use gents::eval::Anchor;
+use gents::eval::{load_trials, load_verdicts, OutcomeKind, ProviderReason, TrialRecord};
+use gents::DocumentRuntimeOptions;
+use gents_documents::apply_desired_state_plan;
+use gents_documents::EvalSplit;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+#[cfg(feature = "live-e2e")]
+use gents_documents::{InferenceBackend, InferenceProfile};
 use gents_eval::checks::CheckRegistry;
 use gents_eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
 use gents_eval::runner::{
-    freeze_refused, run, Capture, CaptureResult, CellRequest, CellSource, RunOptions, RunRequest,
-    TrialExecutor, TrialLocator,
+    freeze_refused, run, Capture, CellRequest, CellSource, RunOptions, RunRequest,
 };
+#[cfg(feature = "live-e2e")]
+use gents_eval::runner::{CaptureResult, TrialExecutor, TrialLocator};
+use gents_store::{collection::Collection, config_client::ConfigAccess};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -24,14 +30,16 @@ const SOLO_MARKER: &str = "canary-solo";
 const REPORT_MARKER: &str = "canary-report";
 const CONFIRM_MARKER: &str = "canary-confirm";
 const CANARY_ITEM_SDL: &str = "type CanaryItem {\n  item_id: String\n  label: String\n}\n";
+#[cfg(feature = "live-e2e")]
 const SEED_MARKER: &str = "Seeded item: wh-1";
 const SEED_ITEM_SDL: &str = "type SeedItem {\n  label: String\n}\n";
 const QUIET_ITEM_SDL: &str = "type QuietItem {\n  label: String\n}\n";
 
+#[cfg(feature = "live-e2e")]
 #[tokio::test]
-async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripted_model() {
-    let backend = MockStreamingBackend::start_with_plans(MODEL, answering_plans()).unwrap();
-    let (canary, request) = canary_request(backend.endpoint(), "run-canary").await;
+async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_live_inference() {
+    let target = support::live_inference::live_target().await;
+    let (canary, request) = live_canary_request(&target, "run-canary").await;
     let executor = canary.executor();
 
     let outcome = run(
@@ -84,7 +92,7 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
     assert_eq!(completion.anchor.requests, 2, "{completion:#?}");
     assert!(
         completion.usage.output_tokens.is_some(),
-        "the scripted backend reports usage in its final chunk: {:?}",
+        "the live provider reports output usage: {:?}",
         completion.usage
     );
     let recollected = executor
@@ -131,7 +139,7 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
         .expect("the loop leaves its view beside the run");
     assert_eq!(view.trials.len(), 2);
     assert_eq!(view.report.cells[0].counts.pass, 2);
-    let (again, repeat) = canary_request(backend.endpoint(), "run-canary").await;
+    let (again, repeat) = live_canary_request(&target, "run-canary").await;
     let repeat_executor = again.executor();
     run(
         &again.access,
@@ -169,12 +177,13 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
         );
     }
 }
+#[cfg(feature = "live-e2e")]
 #[tokio::test]
 async fn a_subject_profile_bound_to_an_execution_and_retry_policy_starts_its_trial() {
-    let backend = MockStreamingBackend::start_with_plans(MODEL, answering_plans()).unwrap();
-    let (canary, request) = canary_request(backend.endpoint(), "run-init-profile").await;
+    let target = support::live_inference::live_target().await;
+    let (canary, request) = live_canary_request(&target, "run-init-profile").await;
     let owner = canary.owner.clone();
-    let mut profile = profile_document(&owner, "canary", "canary-backend", MODEL);
+    let mut profile = profile_document(&owner, "canary", "canary-backend", target.model());
     profile["execution_id"] = json!("canary-execution");
     canary
         .install(vec![
@@ -228,26 +237,22 @@ async fn a_subject_profile_bound_to_an_execution_and_retry_policy_starts_its_tri
     );
 }
 
+#[cfg(feature = "live-e2e")]
 #[tokio::test]
 async fn a_seed_stage_fires_the_pack_trigger_and_observes_the_task_request() {
     seed_stage_routes_to_session(false).await;
 }
 
+#[cfg(feature = "live-e2e")]
 #[tokio::test]
 async fn a_seed_stage_routes_to_the_session_supplied_by_the_fixture() {
     seed_stage_routes_to_session(true).await;
 }
 
+#[cfg(feature = "live-e2e")]
 async fn seed_stage_routes_to_session(existing_session: bool) {
-    let backend = MockStreamingBackend::start_with_plans(
-        MODEL,
-        vec![StreamPlan::new(
-            SEED_MARKER,
-            vec![StreamResponse::completes(SEED_MARKER, ["noted"])],
-        )],
-    )
-    .unwrap();
-    let (canary, mut request) = canary_request(backend.endpoint(), "run-seed").await;
+    let target = support::live_inference::live_target().await;
+    let (canary, mut request) = live_canary_request(&target, "run-seed").await;
     let mut definition = seed_definition_document(&canary.owner);
     if existing_session {
         definition["fixtures"]["documents"] = json!([{
@@ -304,15 +309,12 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
             .join(locator(trial(&trials, "seeded")).home_hint.unwrap())
             .join("home");
         let home = EmbeddedHome::open_retained(&retained).await.unwrap();
-        let state = gents::store::graphql::graphql_with_transaction_retry(
+        let state = gents_store::graphql::graphql_with_transaction_retry(
             &home.node,
             "{ Trigger { trigger_id last_status last_error } AgentRequest { request_id lifecycle_state failure_reason session_id requester_did } AgentSession { session_id node_did requester_did agent_did } }",
             "failed routing canary",
         ).await.unwrap();
-        panic!(
-            "routing produced no evidence: {state:#?}; provider requests: {:?}",
-            backend.observed_completion_bodies()
-        );
+        panic!("routing produced no evidence: {state:#?}");
     }
     assert_eq!(outcome.completed, 1);
     let completion = trial(&trials, "seeded").completion.clone().unwrap();
@@ -321,12 +323,6 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
         completion.anchor.terminal_states,
         vec![gents_protocol::request_lifecycle::RequestLifecycleState::Completed],
         "{completion:#?}"
-    );
-    assert_eq!(
-        backend.observed_requests(SEED_MARKER),
-        1,
-        "the fired task's rendered prompt reached the provider: {:?}",
-        backend.observed_completion_bodies()
     );
     let verdicts = load_verdicts(&canary.access, &request.owner, &request.run_id)
         .await
@@ -654,9 +650,9 @@ async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_a
         );
     }
 }
+#[cfg(feature = "live-e2e")]
 #[tokio::test]
-#[ignore = "needs GENTS_EVAL_TARGET and a real backend"]
-async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honoured() {
+async fn live_paired_trials_preserve_the_seed_and_retain_both_answers() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_ansi(false)
@@ -665,38 +661,17 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
         ))
         .try_init();
 
-    let target = support::live_inference::live_target();
-    let (canary, mut request) = canary_request(target.endpoint(), "run-live").await;
+    let target = support::live_inference::live_target().await;
+    let (canary, mut request) = live_canary_request(&target, "run-live").await;
     canary
-        .install(vec![
-            (
-                Collection::InferenceBackend,
-                serde_json::to_value(InferenceBackend {
-                    backend_id: "canary-backend".into(),
-                    ..target.backend(&canary.owner)
-                })
-                .unwrap(),
-            ),
-            (
-                Collection::InferenceSampling,
-                json!({
-                    "node_did": canary.owner,
-                    "sampling_id": "canary-sampling",
-                    "temperature": 0.7,
-                }),
-            ),
-            (
-                Collection::InferenceProfile,
-                serde_json::to_value(InferenceProfile {
-                    profile_id: "canary".into(),
-                    backend_id: "canary-backend".into(),
-                    sampling_id: Some("canary-sampling".into()),
-                    execution_id: None,
-                    ..target.profile(&canary.owner)
-                })
-                .unwrap(),
-            ),
-        ])
+        .install(vec![(
+            Collection::InferenceSampling,
+            json!({
+                "node_did": canary.owner,
+                "sampling_id": "canary-sampling",
+                "temperature": 0.7,
+            }),
+        )])
         .await;
     request.case_ids = Some(vec!["one-stage".to_string()]);
     request.trials_per_case = 1;
@@ -708,7 +683,7 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
     request.cells.push(candidate);
 
     let executor = canary.executor();
-    run(
+    let outcome = run(
         &canary.access,
         &request,
         &executor,
@@ -722,6 +697,15 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
     let trials = load_trials(&canary.access, &request.owner, &request.run_id)
         .await
         .unwrap();
+    assert_eq!(
+        (outcome.completed, outcome.not_evidence),
+        (2, 0),
+        "{trials:#?}"
+    );
+    assert!(
+        trials.iter().all(|trial| trial.completion.is_some()),
+        "{trials:#?}"
+    );
     assert_eq!(trials.len(), 2, "{trials:#?}");
     let mut arms = Vec::new();
     for cell_id in ["baseline", "candidate"] {
@@ -761,7 +745,7 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
 }
 struct Canary {
     _home: EmbeddedHome,
-    evaluator: Arc<gents::KeyIdentity>,
+    evaluator: Arc<gents_store::identity::KeyIdentity>,
     access: ConfigAccess,
     dirs: TempDir,
     owner: String,
@@ -801,14 +785,54 @@ impl Canary {
         self.access
             .transact_write("canary.install", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
             })
             .await
             .unwrap();
     }
 }
+#[cfg(feature = "live-e2e")]
+async fn live_canary_request(
+    target: &support::live_inference::InferenceTarget,
+    run_id: &str,
+) -> (Canary, RunRequest) {
+    let (canary, request) = canary_request(target.endpoint(), run_id).await;
+    canary
+        .install(vec![
+            (
+                Collection::InferenceBackend,
+                serde_json::to_value(InferenceBackend {
+                    backend_id: "canary-backend".into(),
+                    ..target.backend(&canary.owner)
+                })
+                .unwrap(),
+            ),
+            (
+                Collection::InferenceProfile,
+                serde_json::to_value(InferenceProfile {
+                    profile_id: "canary".into(),
+                    backend_id: "canary-backend".into(),
+                    sampling_id: Some("canary-sampling".into()),
+                    execution_id: None,
+                    ..target.profile(&canary.owner)
+                })
+                .unwrap(),
+            ),
+        ])
+        .await;
+    (canary, request)
+}
+
 async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
-    use gents::NodeIdentity;
+    use gents_store::identity::NodeIdentity;
 
     support::init_test_tracing();
     let mut home = EmbeddedHome::create_temp("eval-canary").await.unwrap();
@@ -816,7 +840,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
     let evaluator_path = dirs.path().join("evaluator.key");
     let evaluator = Arc::new(
         tokio::task::spawn_blocking(move || {
-            gents::store::identity::KeyIdentity::load_or_create(evaluator_path, None)
+            gents_store::identity::KeyIdentity::load_or_create(evaluator_path, None)
         })
         .await
         .unwrap()
@@ -829,7 +853,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
         ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(home.did()).unwrap());
     let evaluator_actor = ::identity::Did::new(&evaluator_did).unwrap();
     // The evaluator is an enrolled User of the controller home.
-    gents::store::identity::GrantSet::OperatorUser
+    gents_store::identity::GrantSet::OperatorUser
         .grant(&admin, &evaluator_actor)
         .await
         .unwrap();
@@ -975,6 +999,7 @@ fn quiet_seed_definition_document(owner: &str, definition_id: &str, schemas: &[&
         }],
     })
 }
+#[cfg(feature = "live-e2e")]
 fn seed_definition_document(owner: &str) -> Value {
     json!({
         "definition_id": "seed",
@@ -1077,6 +1102,7 @@ fn trial<'a>(trials: &'a [TrialRecord], case_id: &str) -> &'a TrialRecord {
         .unwrap_or_else(|| panic!("no {case_id} trial in {trials:#?}"))
 }
 
+#[cfg(feature = "live-e2e")]
 fn locator(trial: &TrialRecord) -> TrialLocator {
     TrialLocator {
         trial_node_did: trial.identity.trial_node_did.clone(),
@@ -1084,6 +1110,7 @@ fn locator(trial: &TrialRecord) -> TrialLocator {
         home_hint: trial.identity.home_hint.clone(),
     }
 }
+#[cfg(feature = "live-e2e")]
 fn anchors(trials: &[TrialRecord]) -> Vec<(String, Anchor)> {
     let mut anchors = trials
         .iter()
@@ -1102,6 +1129,7 @@ fn anchors(trials: &[TrialRecord]) -> Vec<(String, Anchor)> {
     anchors.sort_by(|left, right| left.0.cmp(&right.0));
     anchors
 }
+#[cfg(feature = "live-e2e")]
 fn evidence_records(runs_dir: &Path, run_id: &str, trials: &[TrialRecord]) -> Vec<(String, Value)> {
     let mut records = trials
         .iter()

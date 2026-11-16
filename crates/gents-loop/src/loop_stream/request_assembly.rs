@@ -336,3 +336,6 @@ where
 #[cfg(test)]
 #[path = "request_assembly_dispatch_tests.rs"]
 mod dispatch_tests;
+
+#[cfg(test)]
+mod pushdown_tests;

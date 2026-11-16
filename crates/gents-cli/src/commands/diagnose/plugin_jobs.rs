@@ -1,10 +1,11 @@
 use std::path::Path;
 
-use gents::documents::{Agent, PluginToolRef, Tools};
-use gents::pack::home_install::recorded_provenance;
-use gents::pack::{read_home_install, InstalledVia, PackKind};
-use gents::plugin::store::{parse_coordinate, read_record};
-use gents::tools::surface::{BashMode, FileToolMode};
+use gents_documents::plugin_coordinate::parse_coordinate;
+use gents_documents::{Agent, PluginToolRef, Tools};
+use gents_documents::{BashMode, FileToolMode};
+use gents_pack::pack::home_install::recorded_provenance;
+use gents_pack::pack::{read_home_install, InstalledVia, PackKind};
+use gents_pack::plugin::store::read_record;
 use gents_protocol::job::PluginJobSettings;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -221,7 +222,7 @@ fn find_target<'a>(
     bundle: &'a ConfigExportBundle,
     agent: &Agent,
     id: &str,
-) -> Option<&'a gents::documents::AgentTargetDocument> {
+) -> Option<&'a gents_documents::AgentTargetDocument> {
     bundle
         .config
         .agent_targets
@@ -325,8 +326,8 @@ fn reads_files_and_reaches_network(tools: &Tools) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::documents::AgentContext;
-    use gents::plugin::store::write_record;
+    use gents_documents::AgentContext;
+    use gents_pack::plugin::store::write_record;
 
     const NODE: &str = "did:key:node";
 
@@ -383,7 +384,7 @@ mod tests {
         })
     }
 
-    fn plugin_record(job: bool) -> gents::plugin::store::InstalledPlugin {
+    fn plugin_record(job: bool) -> gents_pack::plugin::store::InstalledPlugin {
         serde_json::from_value(json!({
             "namespace": "acme", "name": "runner", "version": "1.0.0",
             "digest": "sha256:aa", "language": "rust",
@@ -397,7 +398,7 @@ mod tests {
     }
 
     fn install(home: &Path, coordinate: &str, via: InstalledVia) {
-        gents::pack::write_home_install(
+        gents_pack::pack::write_home_install(
             home,
             &serde_json::from_value(json!({
                 "coordinate": coordinate, "version": "1.0.0", "digest": "sha256:bb",
@@ -674,7 +675,7 @@ mod tests {
             node_did: NODE.into(),
             ..Tools::default()
         };
-        let (wired, _, report) = gents::documents::wire_plugin(
+        let (wired, _, report) = gents_pack::pack::wire_plugin(
             &empty,
             &context,
             &plugin,

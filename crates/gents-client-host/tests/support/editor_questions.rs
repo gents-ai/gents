@@ -1,7 +1,7 @@
 use super::{fake_llm, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents::ConfigAccess;
 use gents_protocol::{request_lifecycle::RequestLifecycleState, row::AgentRequestRow};
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 pub const CANCEL_PROMPT: &str = "Ask a question then wait for cancellation.";
@@ -37,7 +37,7 @@ pub fn reply(request: &Value) -> Option<ChatAction> {
         } else {
             ChatAction::Sse(fake_llm::tool_call_sse_with_id(
                 "question-cancel",
-                gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+                gents_documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME,
                 &json!({
                     "title":"Interrupted plan", "question": {
                         "version":3, "prompt":"Should this cancelled task proceed?",
@@ -74,7 +74,7 @@ pub fn reply(request: &Value) -> Option<ChatAction> {
     Some(ChatAction::Sse(if returned("question-approaches") {
         fake_llm::completion_text_sse("Choose the worker approach below.")
     } else {
-        fake_llm::tool_call_sse_with_id("question-approaches", gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME, &json!({
+        fake_llm::tool_call_sse_with_id("question-approaches", gents_documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME, &json!({
             "title":"Worker approach", "question":{
                 "version":3, "prompt":"What should the worker inspect?", "allow_free_text":true,
                 "options":[
@@ -93,11 +93,11 @@ pub async fn verify(
     session: &str,
     author: &str,
 ) -> Result<Value> {
-    use gents::store::graphql::escape_graphql_string as escape;
-    let response = access.execute(&format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ {} }} MailboxItem(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ {} }} }}", escape(node), gents::SIGNED_REQUEST_FIELDS, escape(node), escape(session), gents::session::mailbox::MAILBOX_FIELDS)).await?;
+    use gents_store::graphql::escape_graphql_string as escape;
+    let response = access.execute(&format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ {} }} MailboxItem(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ {} }} }}", escape(node), gents::SIGNED_REQUEST_FIELDS, escape(node), escape(session), gents_session::session::mailbox::MAILBOX_FIELDS)).await?;
     let rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
-    let questions: Vec<gents::session::mailbox::MailboxItem> =
+    let questions: Vec<gents_session::session::mailbox::MailboxItem> =
         serde_json::from_value(response["data"]["MailboxItem"].clone())?;
     ensure!(
         questions.len() == 2,
@@ -139,7 +139,7 @@ pub async fn verify(
         anyhow::bail!("expected one correlated answer");
     };
     for row in [*parent, *answer] {
-        gents::verify_request_receipt_signature(row)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(row)?;
         ensure!(
             row.requester_did.as_deref() == Some(author)
                 && row.session_id.as_deref() == Some(session),
@@ -185,7 +185,7 @@ pub async fn verify(
     let [worker] = workers.as_slice() else {
         anyhow::bail!("expected one native delegated request");
     };
-    gents::verify_request_receipt_signature(worker)?;
+    gents_store::identity::request_receipt::verify_request_receipt_signature(worker)?;
     ensure!(
         worker.caused_by_parent_request_doc_id == answer.doc_id
             && worker.caused_by_parent_tool_call_doc_id.is_some()
@@ -219,7 +219,7 @@ pub async fn verify(
     let [continuation] = continuations.as_slice() else {
         anyhow::bail!("expected exactly one automatic continuation after answering");
     };
-    gents::verify_request_receipt_signature(continuation)?;
+    gents_store::identity::request_receipt::verify_request_receipt_signature(continuation)?;
     ensure!(
         continuation.caused_by_parent_request_doc_id == answer.doc_id
             && continuation.lifecycle_state == Some(RequestLifecycleState::Completed),
@@ -248,7 +248,7 @@ pub async fn verify(
     let [cancelled] = cancelled.as_slice() else {
         anyhow::bail!("expected one cancelled asking request");
     };
-    gents::verify_request_receipt_signature(cancelled)?;
+    gents_store::identity::request_receipt::verify_request_receipt_signature(cancelled)?;
     ensure!(
         cancelled.lifecycle_state == Some(RequestLifecycleState::Interrupted),
         "Stop must interrupt the asking turn"

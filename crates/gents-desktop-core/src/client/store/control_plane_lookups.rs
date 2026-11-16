@@ -1,16 +1,19 @@
 use super::*;
 
 impl ClientStore {
-    pub fn default_agent_did_for_node(&self, node_did: &str) -> Option<&str> {
-        let from_node = self
-            .nodes
+    /// The Agent the Node's `DefaultAgentSelection` names, without the
+    /// single-enabled-agent fallback of [`Self::default_agent_did_for_node`].
+    pub fn selected_default_agent_did(&self, node_did: &str) -> Option<&str> {
+        self.default_agent_selections
             .iter()
             .find(|row| row.node_did == node_did)
-            .and_then(|row| row.default_agent_did.as_deref())
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if from_node.is_some() {
-            return from_node;
+            .and_then(|row| row.selected())
+    }
+
+    pub fn default_agent_did_for_node(&self, node_did: &str) -> Option<&str> {
+        let from_selection = self.selected_default_agent_did(node_did);
+        if from_selection.is_some() {
+            return from_selection;
         }
 
         let agents = self.agent_rows(node_did);
@@ -90,16 +93,7 @@ impl ClientStore {
             .filter_map(|trigger| {
                 self.trigger_observations
                     .iter()
-                    .enumerate()
-                    .find(|(index, observation)| {
-                        observation.trigger_id == trigger.trigger_id
-                            && self
-                                .trigger_observation_source_node_dids
-                                .get(*index)
-                                .and_then(|source| source.as_deref())
-                                == Some(trigger.node_did.as_str())
-                    })
-                    .map(|(_, observation)| observation)
+                    .find(|observation| observation.trigger_id == trigger.trigger_id)
             })
             .collect::<Vec<_>>();
 
@@ -140,17 +134,14 @@ impl ClientStore {
                 .filter(|trigger| {
                     matches!(
                         trigger.source,
-                        gents::documents::TriggerSource::Schedule { .. }
+                        gents_documents::TriggerSource::Schedule { .. }
                     )
                 })
                 .count(),
             event_count: triggers
                 .iter()
                 .filter(|trigger| {
-                    matches!(
-                        trigger.source,
-                        gents::documents::TriggerSource::Event { .. }
-                    )
+                    matches!(trigger.source, gents_documents::TriggerSource::Event { .. })
                 })
                 .count(),
         }

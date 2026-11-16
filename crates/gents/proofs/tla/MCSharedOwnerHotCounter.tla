@@ -1,0 +1,4 @@
+---- MODULE MCSharedOwnerHotCounter ----
+EXTENDS SharedOwnerHotCounter
+
+====

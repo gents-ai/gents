@@ -1,8 +1,8 @@
 use anyhow::Result;
-use gents::documents::{
+use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_documents::{
     Agent, InferenceBackend, InferenceProfile, Node, Schedule, SkillDocument, Task, Tools, Trigger,
 };
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -23,7 +23,7 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
     runtime.connect(&core).await;
     let node_did = runtime.node_did();
 
-    let mut node: Node = serde_json::from_value(json!({
+    let node: Node = serde_json::from_value(json!({
         "node_did": node_did,
         "display_name": "Amy",
         "tags": ["managed"]
@@ -80,17 +80,12 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
 
     let amy = core.provision_agent_identity(node_did).await?;
     let amy_default = amy.agent_did.as_str();
-    let agent: Agent = serde_json::from_value(json!({
-        "node_did": node_did,
-        "agent_did": amy_default,
-        "creation_nonce": amy.creation_nonce,
-        "display_name": "Amy Default",
-        "inference_profile_id": "profile-amy",
-        "tags": ["managed"]
-    }))?;
-    core.save_agent(&agent).await?;
-    node.default_agent_did = Some(amy_default.into());
-    core.save_node(&node).await?;
+    let mut agent = runtime.agent_value_for_create(&amy, "profile-amy").await;
+    agent["display_name"] = json!("Amy Default");
+    agent["tags"] = json!(["managed"]);
+    let agent: Agent = serde_json::from_value(agent)?;
+    core.save_agent(&agent, None).await?;
+    core.set_default_agent(node_did, amy_default).await?;
 
     let task: Task = serde_json::from_value(json!({
         "node_did": node_did,
@@ -111,6 +106,7 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
     }))?;
     core.save_schedule(&schedule).await?;
 
+    let mut publications = core.stores().subscribe();
     let trigger: Trigger = serde_json::from_value(json!({
         "node_did": node_did,
         "trigger_id": "trigger-amy-daily",
@@ -120,7 +116,18 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
     }))?;
     core.save_trigger(&trigger).await?;
 
-    let snapshot = core.store().snapshot();
+    loop {
+        let snapshot = core.stores().snapshot(node_did);
+        if snapshot
+            .triggers
+            .iter()
+            .any(|row| row.node_did == node_did && row.trigger_id == "trigger-amy-daily")
+        {
+            break;
+        }
+        publications.changed().await?;
+    }
+    let snapshot = core.stores().snapshot(node_did);
     assert!(snapshot
         .nodes
         .iter()
@@ -161,8 +168,8 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
 
     core.delete_skill("amy-skill", node_did).await?;
     assert!(!core
-        .store()
-        .snapshot()
+        .stores()
+        .snapshot(node_did)
         .skills
         .iter()
         .any(|row| row.node_did == node_did && row.skill_id == "amy-skill"));

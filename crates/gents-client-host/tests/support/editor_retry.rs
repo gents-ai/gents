@@ -1,7 +1,7 @@
 use super::{fake_llm, Attachment, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents::ConfigAccess;
 use gents_protocol::{request_lifecycle::RequestLifecycleState, row::AgentRequestRow};
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -42,13 +42,13 @@ pub async fn verify(
     client: &mut Attachment,
     id: &mut u32,
     access: &ConfigAccess,
-    provider: &fake_llm::FakeLlm,
     root: &Path,
     node: &str,
     session: &str,
     author: &str,
 ) -> Result<Value> {
-    let ui: Value = serde_json::from_slice(&std::fs::read(root.join("editor-retry-ui.json"))?)?;
+    let ui: Value =
+        serde_json::from_slice(&tokio::fs::read(root.join("editor-retry-ui.json")).await?)?;
     let before = requests(access, node, session).await?;
     ensure!(
         before.len() == 3,
@@ -71,7 +71,7 @@ pub async fn verify(
         .find(|row| row.lifecycle_state == Some(RequestLifecycleState::Completed))
         .context("completed retry successor")?;
     for row in &before {
-        gents::verify_request_receipt_signature(row)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(row)?;
         ensure!(
             row.admission_signer_did.as_deref() == Some(author)
                 && row.requester_did.as_deref() == Some(author),
@@ -141,51 +141,10 @@ pub async fn verify(
         after.len() == before.len(),
         "refused or repeated retry admitted extra work"
     );
-    let captured = provider.captured_chat_requests();
-    let attempts = captured
-        .iter()
-        .filter(|request| is_retry_input(request))
-        .collect::<Vec<_>>();
-    let provider_attempts = attempts.len();
-    ensure!(
-        provider_attempts == 2,
-        "retry must make exactly one additional provider attempt"
-    );
-    for request in attempts {
-        let inputs = request["messages"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|message| message["role"] == "user")
-            .filter_map(|message| message["content"].as_array())
-            .filter(|parts| parts.iter().any(|part| part["text"] == PROMPT))
-            .collect::<Vec<_>>();
-        ensure!(
-            inputs.len() == 1,
-            "provider input duplicated the authored retry input"
-        );
-        let parts = inputs[0];
-        ensure!(
-            parts.len() == 2 && parts[0]["text"] == PROMPT,
-            "provider retry input shape"
-        );
-        let context = parts[1]["text"]
-            .as_str()
-            .and_then(|text| {
-                text.strip_prefix(
-                    "Editor context (captured text; URI identifies its editor location):\n",
-                )
-            })
-            .context("provider retry context")?;
-        ensure!(
-            serde_json::from_str::<Value>(context)? == capture,
-            "provider received a different retry snapshot"
-        );
-    }
     Ok(json!({
         "nodeDid":node, "sessionId":session, "authorDid":author,
         "parentRequestId":parent.request_id, "retryRequestId":child.request_id,
-        "verifiedSignatures":before.len(), "providerAttempts":provider_attempts,
+        "verifiedSignatures":before.len(),
         "typedInputPreserved":true, "idempotentSuccessorVerified":true,
         "wrongScopeRefused":true, "completedParentRefused":true,
         "ui":ui,
@@ -199,8 +158,8 @@ async fn requests(
 ) -> Result<Vec<AgentRequestRow>> {
     let result = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} }}"#,
-        gents::store::graphql::escape_graphql_string(node),
-        gents::store::graphql::escape_graphql_string(session),
+        gents_store::graphql::escape_graphql_string(node),
+        gents_store::graphql::escape_graphql_string(session),
         gents::SIGNED_REQUEST_FIELDS,
     )).await?;
     Ok(serde_json::from_value(

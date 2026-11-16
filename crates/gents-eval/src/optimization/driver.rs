@@ -39,8 +39,8 @@ use crate::runner::{
     RunRequest, TrialExecutor,
 };
 use crate::{load_run, load_trials, DefinitionRef, RunOrigin, SubjectRef, TrialRecord};
-use gents::documents::{EvalDefinition, EvalSplit};
-use gents::store::config_client::ConfigAccess;
+use gents_documents::{EvalDefinition, EvalSplit};
+use gents_store::config_client::ConfigAccess;
 
 #[derive(Clone, Debug)]
 pub struct JobRequest {
@@ -878,10 +878,10 @@ async fn freeze_job(
             target.field.field_name()
         )));
     }
-    let installed = gents::pack::load_pack_install_config(
+    let installed = gents_pack::pack::load_pack_install_config(
         access,
         &source.manifest,
-        &gents::pack::PackInstallOptions {
+        &gents_pack::pack::PackInstallOptions {
             node_did: owner.to_owned(),
         },
         &|path| {
@@ -892,14 +892,14 @@ async fn freeze_job(
                 .with_context(|| format!("pack has no asset {path:?}"))
         },
         &|name| std::env::var(name).ok(),
-        gents::pack::InstalledVia::SelfConfig,
+        gents_pack::pack::InstalledVia::SelfConfig,
     )
     .await
     .context(
         "the optimization baseline must already be installed with its recorded agent bindings",
     )?;
     if let Err(error) = baseline_equivalence(
-        &gents::store::config_client::DesiredStateApplyPlan::from_pack_config(&installed.config)?,
+        &gents_documents::DesiredStateApplyPlan::from_pack_config(&installed.config)?,
         &closure,
     ) {
         return Err(match error.downcast::<BaselineMismatch>() {
