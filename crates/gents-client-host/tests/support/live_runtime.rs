@@ -114,7 +114,6 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     command
         .current_dir(root)
         .envs(homes.env())
-        .env_remove("GENTS_SYSTEM_LOG")
         .args(["init", "--store-key-custody", "file", "--home"])
         .arg(&home)
         .args([
@@ -158,7 +157,6 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     server
         .current_dir(root)
         .envs(homes.env())
-        .env_remove("GENTS_SYSTEM_LOG")
         .args(["server", "--home"])
         .arg(&home)
         .arg("--http-port")

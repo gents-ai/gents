@@ -390,7 +390,15 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     if let Some(home) = read_only_home {
         gents_service::repair::home::refuse_older_home(&resolve_home_dir(home.as_deref())).await?;
     }
-    let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER)?;
+    let system_log = match &command {
+        Command::Server(args) => args.system_log,
+        Command::PrepareRuntime(args) => args.serve.system_log,
+        Command::Runtime {
+            command: RuntimeCommand::Server(args),
+        } => args.system_log,
+        _ => false,
+    };
+    let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER, system_log)?;
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
         Command::Server(args) => {

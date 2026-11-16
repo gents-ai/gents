@@ -1081,7 +1081,7 @@ async fn serve_service_mode_writes_the_startup_diagnostic_to_stderr() -> Result<
     .await?;
 
     let port = allocate_port()?;
-    let stderr = run_cli_failure_stderr_with_env(
+    let stderr = run_cli_failure_stderr(
         &home_dir,
         &[
             "server",
@@ -1089,8 +1089,8 @@ async fn serve_service_mode_writes_the_startup_diagnostic_to_stderr() -> Result<
             &port.to_string(),
             "--tool-root",
             explicit_root,
+            "--system-log",
         ],
-        &[("GENTS_SYSTEM_LOG", "1")],
     )?;
 
     assert!(

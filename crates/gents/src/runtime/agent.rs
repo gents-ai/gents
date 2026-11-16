@@ -159,6 +159,10 @@ pub struct DocumentRuntimeOptions {
     pub health_checker_options: HealthCheckerOptions,
     pub backend_prober_options: BackendProberOptions,
     pub p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
+    /// The host routes tracing to the system log and keeps stderr for the
+    /// service manager, so operator-local startup diagnostics are mirrored
+    /// there (`gents server --system-log`).
+    pub system_log: bool,
     pub backend_health: Option<BackendHealthMap>,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     pub runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
@@ -225,6 +229,7 @@ pub struct Gents {
     backend_prober_options: BackendProberOptions,
     backend_health: BackendHealthMap,
     p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
+    system_log: bool,
     storage_fault: crate::runtime::storage_fault::StorageFaultObservation,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
@@ -323,6 +328,7 @@ impl Gents {
             health_checker_options: options.health_checker_options,
             backend_prober_options: options.backend_prober_options,
             p2p_intervals: options.p2p_intervals,
+            system_log: options.system_log,
             backend_health,
             storage_fault: crate::runtime::storage_fault::StorageFaultObservation::new(),
             process_state_observer: options.process_state_observer,
@@ -506,6 +512,10 @@ impl Gents {
 
     pub(crate) fn p2p_intervals(&self) -> gents_p2p::p2p_reconcile::intervals::P2pIntervals {
         self.p2p_intervals
+    }
+
+    pub(crate) fn system_log(&self) -> bool {
+        self.system_log
     }
 
     pub(crate) fn document_runtime_context(&self) -> Option<&DocumentResolveContext> {

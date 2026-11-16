@@ -153,9 +153,7 @@ where
                         .get_mut("EnvironmentVariables")
                         .and_then(plist::Value::as_dictionary_mut)
                         .context("service environment")?;
-                    env.retain(|key, _| {
-                        matches!(key.as_str(), "PATH" | "GENTS_SYSTEM_LOG" | "HOME")
-                    });
+                    env.retain(|key, _| matches!(key.as_str(), "PATH" | "HOME"));
                 }
                 let mut out = Vec::new();
                 value.to_writer_xml(&mut out)?;
@@ -424,7 +422,7 @@ mod tests {
                 .unwrap();
             let text = String::from_utf8(result).unwrap();
             assert!(!text.contains("FLEET_HOST"));
-            assert!(text.contains("GENTS_SYSTEM_LOG"));
+            assert!(text.contains(SYSTEM_LOG_FLAG));
             if platform == NativeServicePlatform::Macos {
                 let plist = plist::Value::from_reader_xml(text.as_bytes()).unwrap();
                 assert_eq!(

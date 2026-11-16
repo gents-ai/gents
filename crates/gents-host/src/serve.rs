@@ -652,6 +652,7 @@ async fn serve_foreground(
 
     let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
     let p2p_intervals = resolve_p2p_intervals(&args)?;
+    let system_log = args.system_log;
     if let Some(config) = p2p_config.as_ref() {
         crate::p2p_relay::log_relay_mode_diagnostics(
             args.p2p_relay_mode
@@ -844,6 +845,7 @@ async fn serve_foreground(
                 plugin_home: Some(home_dir.clone()),
                 backend_health: Some(backend_health.clone()),
                 p2p_intervals,
+                system_log,
                 process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
                 runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
                     configuration_tx,

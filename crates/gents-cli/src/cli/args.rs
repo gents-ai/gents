@@ -229,8 +229,8 @@ pub(crate) enum Command {
         hide = true
     )]
     Shell(ShellArgs),
-    /// Installed service definitions run `gents server --home`, so this name
-    /// outlives the binary that wrote them.
+    /// Installed service definitions run `gents server --home <HOME>
+    /// --system-log`, so this name outlives the binary that wrote them.
     #[command(name = "server", hide = true)]
     Server(ServeArgs),
     /// A running updater of another version runs the candidate's
