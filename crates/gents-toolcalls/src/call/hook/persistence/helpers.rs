@@ -13,6 +13,7 @@ pub(crate) enum BackgroundSlotRefusal {
 }
 
 impl BackgroundSlotRefusal {
+    #[cfg(test)]
     pub(crate) fn capacity(&self) -> Option<usize> {
         match self {
             Self::CapacityExceeded { admitted, .. } => Some(*admitted),
