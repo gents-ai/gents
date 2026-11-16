@@ -613,7 +613,7 @@ where
       if next = previous then collapseAfter previous rest else next :: collapseAfter next rest
 
 /-- The messages a printer meets on a holder that keeps the held error's text
-as its own message (`#[error(transparent)]`, `#[error("{0}")]`,
+as its own message (`#[error(transparent)]`, `#[error(fmt = error_chain::held)]`,
 `PassedThrough`), given those it meets on the held error. A transparent holder
 displays as the held error and forwards `source()` past it, so it takes the
 held error's place; a sourced or boxed holder is met above the held error. -/
