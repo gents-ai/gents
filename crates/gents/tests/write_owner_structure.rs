@@ -3355,8 +3355,8 @@ fn crate_layer_fence_flags_upward_peer_and_client_references() {
 /// Every other integration test is a module of that binary: each extra target
 /// relinks the crate's whole dependency graph. This allowlist only shrinks.
 const SEPARATE_TEST_TARGETS: &[(&str, &str)] = &[
-    // Sets GENTS_PAIRING_SWEEP_MS for the process, changing the sweep cadence
-    // of every runtime started after it.
+    // Holds no process-wide state since its runtimes take the pairing sweep
+    // as an argument; fold it into the crate's integration binary.
     ("gents", "e2e_triggers"),
     // A source scanner that links no runtime crate; run alone while editing ratchets.
     ("gents", "write_owner_structure"),
