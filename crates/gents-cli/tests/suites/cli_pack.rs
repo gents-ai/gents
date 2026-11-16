@@ -1732,12 +1732,10 @@ async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
         _ => anyhow::bail!("the not-enabled pack's worker is the one agent off: {status}"),
     };
     let (_, reason) = readiness_of(scratch, home_arg, &worker)?;
-    for case in
-        gents_lean_vocab::families::runtime_startup_degraded_init_agent_reason::cases::<
-            CorePack,
-            Reason,
-        >()
-    {
+    for case in gents_lean_vocab::families::runtime_startup_degraded_init_agent_reason::cases::<
+        CorePack,
+        Reason,
+    >() {
         if case.input.core_pack == CorePack::DynamicWorkflows {
             case.check(serde_json::from_value::<Option<Reason>>(
                 reason.clone().unwrap_or_default(),
@@ -1754,12 +1752,10 @@ async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     };
-    for case in
-        gents_lean_vocab::families::runtime_startup_degraded_enabled_agent_reason::cases::<
-            CorePack,
-            Reason,
-        >()
-    {
+    for case in gents_lean_vocab::families::runtime_startup_degraded_enabled_agent_reason::cases::<
+        CorePack,
+        Reason,
+    >() {
         if case.input.core_pack == CorePack::DynamicWorkflows {
             case.check(serde_json::from_value::<Option<Reason>>(
                 reason.clone().unwrap_or_default(),

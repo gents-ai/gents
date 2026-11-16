@@ -476,7 +476,6 @@ fn print_list_table(spec: ConfigDocumentSpec, rows: &[Value]) {
     print_document_table(spec.collection.unique_field(), rows);
 }
 
-
 /// A root listing as the operator reads it: each root's path with the Agents
 /// granted `reader` on it. An Agent with host tools and no reader cannot start,
 /// so the list states who can rather than leaving it to be discovered from a

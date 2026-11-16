@@ -451,10 +451,7 @@ fn the_reader_reasons_own_wording_names_the_cause_and_the_grant() {
         message.contains("gents config workspace-root list"),
         "the fix starts with the call that shows the roots and their readers: {message}"
     );
-    assert!(
-        message.contains("grant the reader it names"),
-        "{message}"
-    );
+    assert!(message.contains("grant the reader it names"), "{message}");
     assert!(
         message.contains("adding `--home` with this node's home"),
         "the fix says what a bare `gents` would miss, without a placeholder in the call: {message}"

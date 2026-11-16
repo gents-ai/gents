@@ -134,8 +134,10 @@ pub fn effective_agent_admission<'a>(
                 diagnostic: startup_diagnostic
                     .or_else(|| unavailable.map(|unavailable| unavailable.diagnostic.as_str()))
                     .expect("unavailable admission has a diagnostic source"),
-                rejection_text: unavailable
-                    .map_or_else(|| public_reason.public_message(), UnavailableAgent::rejection_text),
+                rejection_text: unavailable.map_or_else(
+                    || public_reason.public_message(),
+                    UnavailableAgent::rejection_text,
+                ),
             }
         }
         EffectiveAgentReadinessAdmission::Unassigned => EffectiveAgentAdmission::Unassigned,

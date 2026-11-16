@@ -180,13 +180,7 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
     // and its readers — with the empty set said in words.
     let table = run_cli_text(
         &home_dir,
-        &[
-            "config",
-            "workspace-root",
-            "list",
-            "--graphql",
-            &graphql,
-        ],
+        &["config", "workspace-root", "list", "--graphql", &graphql],
     )?;
     assert!(table.contains("ROOT"), "{table}");
     assert!(table.contains("ENABLED"), "{table}");
