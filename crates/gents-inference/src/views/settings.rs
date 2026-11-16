@@ -124,7 +124,8 @@ settings_view!(
         BACKOFF_MS,
         MAX_RESAMPLE_RETRIES,
         ALLOW_REPAIR,
-        INTERACTIVE_MAX_RETRIES,
+        INTERACTIVE_MAX_TRANSPORT_RETRIES,
+        MAX_RATE_LIMIT_WAIT_MS,
         TAGS
     ]
 );

@@ -134,6 +134,7 @@ fn fresh_parse_400_deadline_overshoot_fails_immediately_not_repair() {
         max_empty_resample: 1,
         allow_repair: true,
         account_hops: 0,
+        max_rate_limit_wait: crate::provider_limit::LONG_RATE_LIMIT_WAIT,
     };
     let mut state = CompletionRetryState::new(policy);
     let now = Utc::now();
