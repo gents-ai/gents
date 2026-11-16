@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "namespace": "gents",
   "name": "script",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "plugin_interface": 1,
   "kind": "documents",
   "description": "Sandboxed JavaScript with optional access to the caller's tools.",

@@ -169,6 +169,16 @@ where
         })
     }
 
+    fn definitions<'a>(&'a self) -> crate::tool::BoxFuture<'a, Vec<crate::tool::ToolDefinition>> {
+        Box::pin(async move {
+            let mut definitions = Vec::with_capacity(self.tools.len());
+            for tool in self.tools.iter() {
+                definitions.push(tool.definition(String::new()).await);
+            }
+            definitions
+        })
+    }
+
     fn settle_stopped<'a>(
         &'a self,
         stop: &'a ToolOutcome,
