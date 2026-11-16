@@ -185,7 +185,7 @@ pub async fn spawn_server_with_ready_json(
                 .push_str(&String::from_utf8_lossy(&buffer[..read]));
         }
     });
-    let served = crate::support::process::served_home_dir(home, args, envs);
+    let served = crate::support::process::served_home_dir(home, args);
     let home = home.to_owned();
     let envs = envs
         .iter()

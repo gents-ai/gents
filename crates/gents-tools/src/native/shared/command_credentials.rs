@@ -94,7 +94,9 @@ fn inactive_runtime_homes(homes: &[PathBuf]) -> Result<Vec<PathBuf>> {
     Ok(homes
         .iter()
         .map(|account| account.join(".gents"))
-        .chain(gents_store::local::home::default_home_dir()?)
+        .chain(std::iter::once(
+            gents_store::local::home::default_home_dir()?
+        ))
         .collect())
 }
 

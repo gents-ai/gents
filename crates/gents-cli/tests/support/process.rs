@@ -232,7 +232,7 @@ fn spawn_server_with_ready_json_inner(
             if let Some(value) = server_readiness_json(&stdout_so_far) {
                 super::graphql::register_served_home(
                     home_dir,
-                    &served_home_dir(home_dir, extra_args, envs),
+                    &served_home_dir(home_dir, extra_args),
                     envs,
                     port,
                 )?;
@@ -322,18 +322,14 @@ pub fn spawn_server_with_env(
     let child = command.spawn().context("spawning gents runtime server")?;
     super::graphql::register_served_home(
         home_dir,
-        &served_home_dir(home_dir, extra_args, envs),
+        &served_home_dir(home_dir, extra_args),
         envs,
         port,
     )?;
     Ok(ServeProcess::with_logs(child, stdout_log, stderr_log))
 }
 
-pub(crate) fn served_home_dir(
-    home_dir: &Path,
-    extra_args: &[&str],
-    envs: &[(&str, &str)],
-) -> PathBuf {
+pub(crate) fn served_home_dir(home_dir: &Path, extra_args: &[&str]) -> PathBuf {
     if let Some(index) = extra_args.iter().position(|arg| *arg == "--home") {
         if let Some(home) = extra_args.get(index + 1) {
             return PathBuf::from(home);
