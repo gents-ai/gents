@@ -158,10 +158,13 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
     ));
     let old = tokio::spawn(async move {
         listener
-            .serve(host, CancellationToken::new())
+            .serve(Arc::clone(&host), CancellationToken::new())
             .await
             .unwrap();
-        core.shutdown().await.unwrap();
+        // As `native::serve`: the retirement is answered once the store is closed.
+        let closed = core.shutdown().await;
+        host.acknowledge_retirement(&closed).await;
+        closed.unwrap();
     });
     let mut previous = LengthDelimitedCodec::builder()
         .max_frame_length(protocol::MAX_FRAME_BYTES)

@@ -236,8 +236,8 @@ impl std::fmt::Debug for TurnReductionCommit {
 pub enum TurnCompactionError {
     #[error(transparent)]
     Compaction(#[from] CompactionError),
-    #[error(transparent)]
-    Compactor(Box<dyn std::error::Error + Send + Sync>),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Compactor(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl TurnCompactionError {

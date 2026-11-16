@@ -55,3 +55,6 @@ pub(crate) mod test_support {
         defra_node::Node::builder().with_node_identity_did(identity.did())
     }
 }
+
+#[cfg(test)]
+mod access_classification_tests;

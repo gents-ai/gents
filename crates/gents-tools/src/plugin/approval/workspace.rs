@@ -417,7 +417,7 @@ pub(crate) enum BindingError {
     SelectionChanged(#[from] SelectionChanged),
     #[error(transparent)]
     PathChanged(#[from] gents_pack::plugin::allowed::PathChanged),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

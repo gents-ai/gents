@@ -271,10 +271,11 @@ pub async fn get(
         .filter(Filter::eq(fields::NODE_DID, owner).and(Filter::eq(fields::SKILL_ID, skill_id)))
         .limit(1)
         .render();
-    let response = access
-        .read(&rendered)
-        .await
-        .map_err(|error| DocumentOperationError::Passthrough(error.into()))?;
+    let response = access.read(&rendered).await.map_err(|error| {
+        DocumentOperationError::Passthrough(gents_protocol::error_chain::PassedThrough::error(
+            error,
+        ))
+    })?;
     response["data"]["Skill"]
         .as_array()
         .and_then(|rows| rows.first().cloned())

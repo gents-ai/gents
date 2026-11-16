@@ -1,5 +1,6 @@
 import Proofs.Automation.GoalAutomation.Edit
 import Proofs.Automation.GoalAutomation.OperatorResume
+import Proofs.Store.Identity.Household
 
 namespace GoalAutomation.ClientControl
 
@@ -212,5 +213,62 @@ theorem preserves_document_identity (s post : Snapshot) (expected : Revision) (n
             cases h
             rfl
           · contradiction
+
+/-- An idle client resume publishes its continuation through the claimed
+publication owner (`OperatorResume.commitClaimedRequest`): the selected Agent
+creates and signs it, so the Agent owns it, and the same native transaction
+links it to its physical Agent and session and grants that Agent
+`working_agent`. Resume grants the requester nothing: the requester reads the
+continuation through the session, the authority `Facts.authorized` already
+requires of it. A continuation created without these relationships is
+readable only by its owning Agent, so the person who resumed the Goal would
+never see the turn their resume started. -/
+def publishResumeContinuation (state : Identity.Household.State)
+    (request agent agentDoc sessionDoc : String) (commit : Bool) :
+    Identity.Household.State :=
+  if commit then
+    { state with
+      objects := ⟨"delivered_requests", request, agent⟩ :: state.objects
+      relations :=
+        ⟨"delivered_requests", request, "parent", .object "agents" agentDoc⟩ ::
+        ⟨"delivered_requests", request, "session", .object "sessions" sessionDoc⟩ ::
+        ⟨"delivered_requests", request, "working_agent", .actor agent⟩ :: state.relations }
+  else state
+
+theorem resume_continuation_abort (state : Identity.Household.State)
+    (request agent agentDoc sessionDoc : String) :
+    publishResumeContinuation state request agent agentDoc sessionDoc false = state := rfl
+
+theorem resume_continuation_grants_only_its_parents_and_agent
+    (state : Identity.Household.State) (request agent agentDoc sessionDoc : String) :
+    (publishResumeContinuation state request agent agentDoc sessionDoc true).relations =
+      ⟨"delivered_requests", request, "parent", .object "agents" agentDoc⟩ ::
+      ⟨"delivered_requests", request, "session", .object "sessions" sessionDoc⟩ ::
+      ⟨"delivered_requests", request, "working_agent", .actor agent⟩ :: state.relations := rfl
+
+/-- A requester's session, created with its Agent parent and working Agent. -/
+def resumeSession : Identity.Household.State :=
+  Identity.Household.commitUserSession
+    { objects := [⟨"agents", "agent-doc", "node"⟩], relations := [], enrolled := [] }
+    "session-doc" "requester" "agent" "agent-doc" true
+
+/-- The session after the requester's idle resume published its continuation. -/
+def resumedSession : Identity.Household.State :=
+  publishResumeContinuation resumeSession "continuation" "agent" "agent-doc" "session-doc" true
+
+/-- The requester, a session reader, sees the continuation; so does its Agent;
+an actor with no relation to the session does not. -/
+def resumeReaders : List String := ["requester", "agent", "outsider"]
+
+theorem resuming_requester_reads_its_continuation :
+    resumeReaders.map (fun reader =>
+      Identity.Household.allowed 5 resumedSession reader "delivered_requests" "continuation" "read") =
+      [true, true, false] := by native_decide
+
+theorem unlinked_continuation_hides_from_the_requester :
+    Identity.Household.allowed 5
+      { resumeSession with
+        objects := ⟨"delivered_requests", "continuation", "agent"⟩ :: resumeSession.objects }
+      "requester" "delivered_requests" "continuation" "read" = false := by native_decide
 
 end GoalAutomation.ClientControl
