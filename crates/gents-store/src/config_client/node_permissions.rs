@@ -209,7 +209,10 @@ impl ConfigAccess {
             Self::Local(local) if local.agent_signer().is_some() => {
                 self.list_document_relationships(collection, doc_id).await
             }
-            Self::Local(_) => self.list_document_relationships_unproved(collection, doc_id).await,
+            Self::Local(_) => {
+                self.list_document_relationships_unproved(collection, doc_id)
+                    .await
+            }
             Self::Graphql(_) => self.list_document_relationships(collection, doc_id).await,
         }
     }

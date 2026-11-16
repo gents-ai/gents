@@ -25,7 +25,5 @@ fn generated_tool_surface_reasons_match_the_rust_classifier() {
         AgentReadinessUnavailableReason,
         gents_tools::surface::RootDenialKind,
         gents_tools::surface::RootPublishing,
-    >(|input| {
-        gents_tools::surface::tool_surface_reason(input.publishing, input.denial)
-    });
+    >(|input| gents_tools::surface::tool_surface_reason(input.publishing, input.denial));
 }

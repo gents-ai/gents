@@ -385,10 +385,7 @@ pub const ROOT_READER_RELATION: &str = "reader";
 /// as the node's actor — the same caller `list` and `show` already run as —
 /// and Native DefraDB still decides whether that actor may see the
 /// relationships.
-async fn reader_agents_of(
-    access: &ConfigAccess,
-    doc_id: &str,
-) -> WorkspaceRootReaders {
+async fn reader_agents_of(access: &ConfigAccess, doc_id: &str) -> WorkspaceRootReaders {
     match access
         .list_document_relationships_as_node("WorkspaceRoot", doc_id)
         .await

@@ -1383,10 +1383,8 @@ async fn publish_workspace_root(
 ) {
     // The fixture's user_access is the GraphQL route, which cannot carry the
     // local Agent signer a write needs; the owner's local access can.
-    let access = gents_store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        node_did.parse().unwrap(),
-    );
+    let access =
+        gents_store::config_client::ConfigAccess::local_as(node.clone(), node_did.parse().unwrap());
     let response = access
         .write(
             "test.workspace.root",

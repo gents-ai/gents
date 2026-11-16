@@ -69,7 +69,9 @@ pub struct RootExecutionGuard {
 /// builder, then the readiness rejection) names the step instead of erasing it.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ToolRootRefusal {
-    #[error("workspace root requires the selected Agent identity, but the held identity is {held}")]
+    #[error(
+        "workspace root requires the selected Agent identity, but the held identity is {held}"
+    )]
     WrongAgentIdentity { held: String },
     #[error("agent {agent_did} has active host tools but no explicit root under current WorkspaceRoot policy; set Tools.host.root to an admitted absolute workspace path")]
     NoExplicitRoot { agent_did: String },
@@ -226,9 +228,10 @@ pub fn tool_surface_reason(
 ) -> gents_protocol::node_readiness::AgentReadinessUnavailableReason {
     use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
     match (publishing, denial) {
-        (RootPublishing::PublishedEnabled, RootDenialKind::NoAllowedRoots | RootDenialKind::Outside) => {
-            Reason::WorkspaceRootReaderMissing
-        }
+        (
+            RootPublishing::PublishedEnabled,
+            RootDenialKind::NoAllowedRoots | RootDenialKind::Outside,
+        ) => Reason::WorkspaceRootReaderMissing,
         _ => Reason::ToolSurfaceUnavailable,
     }
 }
@@ -289,7 +292,9 @@ impl RootExecutionGuard {
             RootAdmission::Denied {
                 reason: denial,
                 resolved_candidate,
-            } => Err(self.refusal_for_denial(node, resolved_candidate, denial).await),
+            } => Err(self
+                .refusal_for_denial(node, resolved_candidate, denial)
+                .await),
         }
     }
 
@@ -343,20 +348,19 @@ impl RootExecutionGuard {
             return Vec::new();
         };
         let owner = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor);
-        match owner
+        // The owner's view serves the refusal's wording alone: if it fails, the
+        // cause stays a plain denial rather than an error about a call the Agent
+        // cannot make.
+        owner
             .transact_readonly("workspace_root.owner_covering", |txn| {
                 let path = path.to_path_buf();
                 let node_did = node_did.clone();
-                Box::pin(async move { published_roots_covering_in_txn(txn, &node_did, &path).await })
+                Box::pin(
+                    async move { published_roots_covering_in_txn(txn, &node_did, &path).await },
+                )
             })
             .await
-        {
-            Ok(roots) => roots,
-            // The owner's view serves the refusal's wording alone: if it fails,
-            // the cause stays a plain denial rather than an error about a call
-            // the Agent cannot make.
-            Err(_) => Vec::new(),
-        }
+            .unwrap_or_default()
     }
 }
 

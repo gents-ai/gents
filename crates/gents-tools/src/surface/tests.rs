@@ -1,9 +1,9 @@
 use super::*;
 use crate::plugin_host::{NoPluginHost, PluginHost};
-use gents_pack::plugin::store::InstalledPlugin;
 use gents_documents::PluginToolRef;
-use identity::Did;
+use gents_pack::plugin::store::InstalledPlugin;
 use gents_pack::plugin::PluginOutcome;
+use identity::Did;
 
 async fn selected_surface_runtime() -> (gents_inference::test_support::TestDb, ToolRuntimeContext) {
     use gents_store::identity::NodeIdentity as _;
@@ -2022,9 +2022,7 @@ async fn tool_construction_without_the_root_reader_names_the_grant_that_fixes_it
     let refusal_text = error.to_string();
     assert_eq!(
         gents_protocol::node_readiness::workspace_root_reader_missing_message(
-            &agent_did,
-            &root_text,
-            &home_text
+            &agent_did, &root_text, &home_text
         ),
         refusal_text,
         "the refusal states the grant, its path and the Agent"
@@ -3101,11 +3099,7 @@ impl PluginHost for HomePluginHost {
     fn installed_record(&self, coordinate: &str) -> anyhow::Result<InstalledPlugin> {
         PluginHost::installed_record(&self.0, coordinate)
     }
-    fn resolve(
-        &self,
-        coordinate: &str,
-        pinned: Option<&str>,
-    ) -> anyhow::Result<InstalledPlugin> {
+    fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> anyhow::Result<InstalledPlugin> {
         PluginHost::resolve(&self.0, coordinate, pinned)
     }
     async fn call_outcome(
@@ -3159,7 +3153,8 @@ async fn build_tools_passes_the_nodes_home_into_the_refusal() {
     let root = ceiling.path().join("shared-root");
     std::fs::create_dir_all(&root).unwrap();
     let root_text = root.to_string_lossy().into_owned();
-    let home = std::fs::canonicalize(tempfile::tempdir().unwrap().path().to_path_buf()).unwrap();
+    let home_dir = tempfile::tempdir().unwrap();
+    let home = std::fs::canonicalize(home_dir.path()).unwrap();
     let home_text = home.to_string_lossy().into_owned();
     // Published with no reader, as an Agent created apart from its Tools leaves it.
     let publisher = gents_store::config_client::ConfigAccess::local_as(
@@ -3286,7 +3281,9 @@ async fn an_agent_reading_one_root_and_working_in_another_names_the_grant_on_b()
         "the grant names root B, not the root the Agent already reads"
     );
     assert!(
-        error.to_string().contains(&root_b.to_string_lossy().into_owned()),
+        error
+            .to_string()
+            .contains(&root_b.to_string_lossy().into_owned()),
         "{error}"
     );
     node.shutdown().await.unwrap();
@@ -3309,7 +3306,10 @@ async fn a_refusal_without_the_home_states_the_grant_and_says_to_add_the_home() 
         "{text}"
     );
     assert!(!text.contains("<this node's home>"), "{text}");
-    assert!(text.contains("adding `--home` with this node's home"), "{text}");
+    assert!(
+        text.contains("adding `--home` with this node's home"),
+        "{text}"
+    );
     assert_eq!(
         gents_protocol::node_readiness::unavailable_rejection_reason(&text),
         Some(gents_protocol::node_readiness::AgentReadinessUnavailableReason::WorkspaceRootReaderMissing),
