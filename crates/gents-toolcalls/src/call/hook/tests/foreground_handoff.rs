@@ -123,8 +123,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    let deadline = gents_store::test_support::unreached_deadline_at();
-    bind_interruptible_request(&hook, "handoff-parent", &session, deadline).await;
+    let deadline = bind_interruptible_request(&hook, "handoff-parent", &session).await;
     let mut lifecycle = accepted_hook_tool_lifecycle(
         &hook,
         "handoff-command",
@@ -360,8 +359,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
     let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    let deadline = gents_store::test_support::unreached_deadline_at();
-    bind_interruptible_request(&hook, "handoff-cancel-parent", &session, deadline).await;
+    let deadline = bind_interruptible_request(&hook, "handoff-cancel-parent", &session).await;
     let mut lifecycle = accepted_hook_tool_lifecycle(
         &hook,
         "handoff-cancel-command",
@@ -448,8 +446,7 @@ async fn refused_foreground_handoff_can_be_retried() {
     let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    let deadline = gents_store::test_support::unreached_deadline_at();
-    bind_interruptible_request(&hook, "retry-parent", &session, deadline).await;
+    let deadline = bind_interruptible_request(&hook, "retry-parent", &session).await;
     let mut lifecycle = accepted_hook_tool_lifecycle(
         &hook,
         "retry-command",
@@ -553,8 +550,7 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
     let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    let deadline = gents_store::test_support::unreached_deadline_at();
-    bind_interruptible_request(&hook, "concurrent-parent", &session, deadline).await;
+    let deadline = bind_interruptible_request(&hook, "concurrent-parent", &session).await;
     gents_lean_vocab::snapshot().await;
     let capacity = gents_lean_vocab::lean_r6_backgrounding_case(
         "background_tool_budget_count_8_rejects_spawn",
@@ -644,8 +640,7 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
     let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    let deadline = gents_store::test_support::unreached_deadline_at();
-    bind_interruptible_request(&hook, "unverified-parent", &session, deadline).await;
+    let deadline = bind_interruptible_request(&hook, "unverified-parent", &session).await;
     let recovery = gents_lean_vocab::lean_r6_backgrounding_case("recovery_transfer_at_capacity");
     for index in 0..recovery.pre_live_count {
         let mut occupied = accepted_hook_tool_lifecycle(
@@ -778,8 +773,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     let mut hook =
         DefraSessionHook::with_identity(node.clone(), root.did(), FailurePolicy::default());
     let session = hook.session_id().await.unwrap();
-    let deadline = gents_store::test_support::unreached_deadline_at();
-    bind_managed_hook_request(&mut hook, "recovery-parent", &root, deadline).await;
+    let deadline = bind_managed_hook_request(&mut hook, "recovery-parent", &root).await;
     let signer = hook_managed_identity(&hook, "recovery-parent").await;
     let mut lifecycle = accepted_hook_tool_lifecycle(
         &hook,
@@ -900,8 +894,7 @@ async fn confirmation_before_worker_release_keeps_typed_stop_receipt() {
     let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    let deadline = gents_store::test_support::unreached_deadline_at();
-    bind_interruptible_request(&hook, "early-confirm-parent", &session, deadline).await;
+    let deadline = bind_interruptible_request(&hook, "early-confirm-parent", &session).await;
     let mut lifecycle = accepted_hook_tool_lifecycle(
         &hook,
         "early-confirm",
@@ -959,8 +952,7 @@ async fn interrupt_sweep_preserves_confirmed_timeout_intent() {
     let node = node_db.node.clone();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
-    let deadline = gents_store::test_support::unreached_deadline_at();
-    bind_interruptible_request(&hook, "timeout-first-parent", &session, deadline).await;
+    let deadline = bind_interruptible_request(&hook, "timeout-first-parent", &session).await;
     let mut lifecycle = accepted_hook_tool_lifecycle(
         &hook,
         "timeout-first-sweep",

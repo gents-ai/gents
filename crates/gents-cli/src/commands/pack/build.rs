@@ -301,6 +301,11 @@ mod tests {
         std::fs::read(tmp.path().join("plugins/job_fixture.afb")).unwrap()
     }
 
+    /// The committed artifact is built on aarch64-apple-darwin. Cargo hashes
+    /// the host compiler's `rustc -vV` (its host triple included) into every
+    /// crate's `-C metadata`, so the same source built on another host
+    /// mangles every non-sysroot symbol differently and the bytes differ.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     #[test]
     fn committed_job_fixture_artifact_matches_its_source() {
         let committed = std::fs::read(committed_job_fixture_path()).unwrap_or_default();

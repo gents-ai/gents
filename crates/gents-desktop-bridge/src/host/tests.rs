@@ -693,8 +693,14 @@ async fn retirement_requires_the_current_installation_build_and_never_retires_an
     }
 }
 
+/// `tla/StoreHandoff.tla` `AckedHandoff`: the attachment that retires an
+/// installation starts its successor as soon as it reads the answer. The
+/// answer used to be sent when the retirement was accepted, while the core
+/// still held the store (BeginStop, Ack, Start, TryLock); it now waits for
+/// the installation's closed core, and the store is free when it arrives.
 #[tokio::test]
-async fn retirement_acknowledgement_is_flushed_before_the_attachment_closes() {
+async fn retirement_is_acknowledged_only_after_the_installation_closes_its_store() {
+    use futures::FutureExt as _;
     let (core, _directory) = crate::tests::support::boot_core().await;
     let host = Arc::new(ClientHost::for_installation(
         core.clone(),
@@ -702,7 +708,7 @@ async fn retirement_acknowledgement_is_flushed_before_the_attachment_closes() {
     ));
     let stop = CancellationToken::new();
     let (client, server) = tokio::io::duplex(64 * 1024);
-    let task = tokio::spawn(host.serve(server, stop.clone()));
+    let task = tokio::spawn(host.clone().serve(server, stop.clone()));
     let mut client = LengthDelimitedCodec::builder()
         .max_frame_length(protocol::MAX_FRAME_BYTES)
         .new_framed(client);
@@ -720,11 +726,21 @@ async fn retirement_acknowledgement_is_flushed_before_the_attachment_closes() {
         ))
         .await
         .unwrap();
+    task.await.unwrap().unwrap();
+    assert!(stop.is_cancelled());
+    assert!(
+        client.next().now_or_never().is_none(),
+        "the retirement was answered while the installation still held its store"
+    );
+
+    let paths = core.paths().clone();
+    let closed = core.shutdown().await;
+    let reopened = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir())
+        .expect("a closed installation has released its store");
+    drop(reopened);
+    host.acknowledge_retirement(&closed).await;
     let mut acknowledged = false;
-    while let Some(frame) = tokio::time::timeout(std::time::Duration::from_secs(5), client.next())
-        .await
-        .unwrap()
-    {
+    while let Some(frame) = client.next().await {
         let response: Value = serde_json::from_slice(&frame.unwrap()).unwrap();
         if response["kind"] == "response" && response["id"] == 1 {
             assert!(response["error"].is_null(), "{response}");
@@ -735,9 +751,6 @@ async fn retirement_acknowledgement_is_flushed_before_the_attachment_closes() {
         acknowledged,
         "retirement closed without its acknowledgement"
     );
-    assert!(stop.is_cancelled());
-    task.await.unwrap().unwrap();
-    core.shutdown().await.unwrap();
 }
 #[test]
 fn generated_storage_failures_keep_their_code_in_host_errors() {

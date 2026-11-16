@@ -58,13 +58,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
     let access = hook.actor_access().unwrap();
     let node_did = hook.node_did.clone();
     let requester = hook.actor.clone().unwrap().to_string();
-    bind_interruptible_request(
-        &hook,
-        "request",
-        &session_id,
-        Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "request", &session_id).await;
     let mut lifecycle = accepted_hook_tool_lifecycle(
         &hook,
         "large-output",
@@ -354,13 +348,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
     hook.on_completion_call(&user_text_message("race control completion"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
-    bind_interruptible_request(
-        &hook,
-        "request-control-race",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "request-control-race", &session_id).await;
     let mut loser = accepted_hook_tool_lifecycle(
         &hook,
         "wait-race-call",
@@ -463,10 +451,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     // The request has one deadline, fixed by its claim; the runtime binds the
     // hook from it (`tla/ToolDeadlineInheritance`).
     let lifecycle = claimed_hook_request(&hook, "req-deadline", &session_id).await;
-    let deadline = lifecycle
-        .claimed_deadline_at()
-        .expect("a claimed request carries its deadline");
-    bind_claimed_hook_request(&hook, lifecycle, deadline).await;
+    let deadline = bind_claimed_hook_request(&hook, lifecycle).await;
 
     accept_hook_tool_call(&hook, "internal-deadline", "read", "{}", None).await;
     assert!(matches!(
@@ -519,13 +504,7 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
     let context = user_text_message("<context>\nnow=2026-06-15T00:00:00Z\n</context>");
     let first_prompt = user_text_message("First request");
     assert!(hook_history(&hook, &session_id).await.unwrap().is_empty());
-    bind_interruptible_request(
-        &hook,
-        "context-request",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "context-request", &session_id).await;
     publish_claimed_authored_input(
         &hook,
         "context-request",
@@ -565,13 +544,7 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
 
     let hook1 = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook1.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook1,
-        "req-retry",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook1, "req-retry", &session_id).await;
     let request_doc_id = hook1.active_request_doc_id().await.unwrap();
     publish_claimed_authored_input(&hook1, "req-retry", Some(context.clone()), prompt.clone())
         .await;
@@ -647,13 +620,7 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
     let session_id = hook.session_id().await.expect("session id");
     let prompt = user_text_message("also check the staging config");
     assert!(hook_history(&hook, &session_id).await.unwrap().is_empty());
-    bind_interruptible_request(
-        &hook,
-        "req-steering",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "req-steering", &session_id).await;
     publish_claimed_authored_input(&hook, "req-steering", None, prompt.clone()).await;
     publish_claimed_authored_input(&hook, "req-steering", None, prompt.clone()).await;
 
@@ -708,8 +675,7 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
-    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(&hook, "req-timeout", &session_id, deadline).await;
+    let deadline = bind_interruptible_request(&hook, "req-timeout", &session_id).await;
 
     accept_hook_tool_call(&hook, "internal-timeout", "never", "{}", None).await;
     assert!(matches!(
@@ -772,13 +738,7 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook,
-        "req-unknown-tool",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "req-unknown-tool", &session_id).await;
 
     accept_hook_tool_call(&hook, "internal-unknown", "ghost_tool", "{}", None).await;
     assert!(matches!(
@@ -848,13 +808,7 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook,
-        "req-oversized",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "req-oversized", &session_id).await;
 
     let full_output = (0..2101)
         .map(|index| format!("line-{index}"))
@@ -910,7 +864,6 @@ async fn hook_interrupts_cancel_only_their_own_calls_as_the_lean_model_says() {
         )
         .await;
         let node = node_db.node.clone();
-        let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
         let mut hooks = Vec::new();
         for (label, calls) in [
             ("own", case.input.own_calls),
@@ -923,7 +876,7 @@ async fn hook_interrupts_cancel_only_their_own_calls_as_the_lean_model_says() {
                 HookAction::Continue
             ));
             let session = hook.session_id().await.expect("hook session");
-            bind_interruptible_request(&hook, &format!("req-{label}"), &session, deadline).await;
+            bind_interruptible_request(&hook, &format!("req-{label}"), &session).await;
             let mut ids = Vec::new();
             for call in 0..calls {
                 let id = format!("internal-{label}-{call}");
@@ -982,8 +935,7 @@ async fn interruption_leaves_background_workers_running() {
     hook.on_completion_call(&user_text_message("background work"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
-    let deadline = Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(&hook, "parent", &session_id, deadline).await;
+    let deadline = bind_interruptible_request(&hook, "parent", &session_id).await;
     let mut reservations = Vec::new();
     let mut tokens = Vec::new();
     for (id, detached) in [("owned", false), ("detached", true)] {
@@ -1019,19 +971,15 @@ async fn interruption_leaves_background_workers_running() {
     }
     let unrelated_hook = signed_hook(&node, FailurePolicy::default()).await;
     let unrelated_session_id = unrelated_hook.session_id().await.unwrap();
-    bind_interruptible_request(
-        &unrelated_hook,
-        "unrelated-parent",
-        &unrelated_session_id,
-        deadline,
-    )
-    .await;
+    let unrelated_deadline =
+        bind_interruptible_request(&unrelated_hook, "unrelated-parent", &unrelated_session_id)
+            .await;
     let mut unrelated = accepted_hook_tool_lifecycle(
         &unrelated_hook,
         "unrelated",
         "bash",
         "{}",
-        deadline,
+        unrelated_deadline,
         gents_protocol::tool_call::AwaitMode::Background,
     )
     .await;
@@ -1128,7 +1076,6 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
     )
     .await;
     let node = node_db.node.clone();
-    let deadline = Utc::now() + chrono::Duration::minutes(5);
     for case in
         gents_lean_vocab::families::contracts_interrupt_in_flight::cases::<String, String, String>()
     {
@@ -1139,7 +1086,7 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
             .await;
         let session_id = hook.session_id().await.unwrap();
         let parent_id = format!("parent-{name}");
-        bind_interruptible_request(&hook, &parent_id, &session_id, deadline).await;
+        let deadline = bind_interruptible_request(&hook, &parent_id, &session_id).await;
         let mut lifecycle =
             accepted_hook_tool_lifecycle(&hook, &name, "test_tool", "{}", deadline, await_mode)
                 .await;
@@ -1179,8 +1126,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.unwrap();
     let child_request_id = "child-mixed-tools";
-    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(&hook, "parent-mixed-tools", &session_id, deadline).await;
+    let deadline = bind_interruptible_request(&hook, "parent-mixed-tools", &session_id).await;
     let parent_doc_id = hook.active_request_doc_id().await.unwrap();
 
     let mut outer = accepted_hook_tool_lifecycle(
@@ -1316,13 +1262,7 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook,
-        "req-fail",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "req-fail", &session_id).await;
 
     accept_hook_tool_call(&hook, "internal-fail", "slow", "{}", None).await;
     assert!(matches!(
@@ -1372,13 +1312,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let user_prompt = user_text_message("Inspect /tmp/main.rs");
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook,
-        "request-streaming-turn",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "request-streaming-turn", &session_id).await;
     publish_claimed_authored_input(&hook, "request-streaming-turn", None, user_prompt).await;
 
     let tool_args = r#"{"file_path":"/tmp/main.rs"}"#;
@@ -1507,13 +1441,7 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let user_prompt = user_text_message("Explain the plan");
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook,
-        "request-durable-reasoning",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "request-durable-reasoning", &session_id).await;
     publish_claimed_authored_input(&hook, "request-durable-reasoning", None, user_prompt).await;
 
     publish_claimed_provider_turn(
@@ -1568,13 +1496,7 @@ async fn read_file_result_persists_raw_output() {
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook,
-        "request-read-file-observation",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "request-read-file-observation", &session_id).await;
     publish_claimed_authored_input(
         &hook,
         "request-read-file-observation",
@@ -1659,13 +1581,7 @@ async fn owned_tool_result_materializes_one_transcript_row() {
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook,
-        "request-tool-result-dedupe",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "request-tool-result-dedupe", &session_id).await;
     publish_claimed_authored_input(
         &hook,
         "request-tool-result-dedupe",
@@ -1802,13 +1718,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
 
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook,
-        "request-distinct-results",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "request-distinct-results", &session_id).await;
     publish_claimed_authored_input(
         &hook,
         "request-distinct-results",
@@ -1875,13 +1785,7 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let user_prompt = user_text_message("Inspect mini-1");
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook,
-        "request-tool-turn",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "request-tool-turn", &session_id).await;
     publish_claimed_authored_input(&hook, "request-tool-turn", None, user_prompt).await;
 
     accept_hook_tool_call(&hook, "internal-1", "first", "{}", Some("call-1")).await;
@@ -1979,13 +1883,7 @@ async fn remote_presentations_persist_the_same_selected_identity() {
                 }],
             }));
         let session = hook.session_id().await.unwrap();
-        bind_interruptible_request(
-            &hook,
-            &format!("remote-request-{index}"),
-            &session,
-            chrono::Utc::now() + chrono::Duration::minutes(1),
-        )
-        .await;
+        bind_interruptible_request(&hook, &format!("remote-request-{index}"), &session).await;
         let name = match style {
             RemoteToolStyle::Flat => {
                 gents_tools::mcp::meta::flat_tool_name("selected-service", "inspect")
@@ -2179,13 +2077,7 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook,
-        "req-forgery",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "req-forgery", &session_id).await;
 
     accept_hook_tool_call(&hook, "internal-forgery", "cat_log", "{}", None).await;
     assert!(matches!(
@@ -2259,13 +2151,7 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook,
-        "req-reported-failure",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "req-reported-failure", &session_id).await;
 
     accept_hook_tool_call(&hook, "internal-reported-failure", "bash", "{}", None).await;
     assert!(matches!(
@@ -2331,13 +2217,7 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook,
-        "req-cancelled-outcome",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "req-cancelled-outcome", &session_id).await;
 
     accept_hook_tool_call(&hook, "internal-cancelled", "slow", "{}", None).await;
     assert!(matches!(
@@ -2407,13 +2287,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook,
-        "req-real-denial",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, "req-real-denial", &session_id).await;
 
     accept_hook_tool_call(&hook, "internal-real-denial", "bash", "{}", None).await;
     assert!(matches!(
@@ -2502,21 +2376,7 @@ async fn plugin_child_requires_durable_completion_even_when_hook_is_fail_open() 
     hook.on_completion_call(&user_text_message("compose tools"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
-    bind_interruptible_request(
-        &hook,
-        "plugin-child-request",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
-    let claimed_deadline = {
-        let fixtures = hook_execution_fixtures().lock().await;
-        fixtures[&hook_execution_fixture_key(&hook, "plugin-child-request")]
-            .lifecycle
-            .claimed_deadline_at()
-            .unwrap()
-    };
-    hook.set_request_deadline_at(Some(claimed_deadline)).await;
+    bind_interruptible_request(&hook, "plugin-child-request", &session_id).await;
     accept_hook_tool_call(&hook, "plugin-parent", "plugin", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call(
@@ -2591,21 +2451,7 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
     hook.on_completion_call(&user_text_message("compose tools"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
-    bind_interruptible_request(
-        &hook,
-        "plugin-child-timeout-request",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
-    let claimed_deadline = {
-        let fixtures = hook_execution_fixtures().lock().await;
-        fixtures[&hook_execution_fixture_key(&hook, "plugin-child-timeout-request")]
-            .lifecycle
-            .claimed_deadline_at()
-            .unwrap()
-    };
-    hook.set_request_deadline_at(Some(claimed_deadline)).await;
+    bind_interruptible_request(&hook, "plugin-child-timeout-request", &session_id).await;
     accept_hook_tool_call(&hook, "plugin-parent", "plugin", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call(
@@ -2715,21 +2561,7 @@ async fn plugin_child_naming_a_job_tool_reaches_its_owner() {
     hook.on_completion_call(&user_text_message("compose tools"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
-    bind_interruptible_request(
-        &hook,
-        "plugin-child-job-tool-request",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
-    let claimed_deadline = {
-        let fixtures = hook_execution_fixtures().lock().await;
-        fixtures[&hook_execution_fixture_key(&hook, "plugin-child-job-tool-request")]
-            .lifecycle
-            .claimed_deadline_at()
-            .unwrap()
-    };
-    hook.set_request_deadline_at(Some(claimed_deadline)).await;
+    bind_interruptible_request(&hook, "plugin-child-job-tool-request", &session_id).await;
     accept_hook_tool_call(&hook, "plugin-parent", "plugin", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call(
