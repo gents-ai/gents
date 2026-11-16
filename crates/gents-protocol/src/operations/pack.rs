@@ -219,8 +219,8 @@ pub enum PackOperationError {
     SlotDuplicate(String),
     /// Another owner's failure (the pack engine, the registry, the store),
     /// unchanged.
-    #[error("{0}")]
-    Passthrough(#[source] Box<dyn Error + Send + Sync>),
+    #[error(transparent)]
+    Passthrough(crate::error_chain::PassedThrough),
 }
 
 impl PackOperationError {
@@ -254,7 +254,7 @@ impl PackOperationError {
     /// The other owner's failure a `Passthrough` carries. `source()` skips it.
     pub fn passthrough(&self) -> Option<&(dyn Error + Send + Sync + 'static)> {
         match self {
-            Self::Passthrough(error) => Some(error.as_ref()),
+            Self::Passthrough(error) => Some(error.get()),
             _ => None,
         }
     }

@@ -276,8 +276,8 @@ pub enum WorkspaceRootError {
     #[error("the Node actor cannot be a root reader; name the Agent that runs in the root")]
     NodeActor,
     /// Another owner's failure (identity, the store, ACP), unchanged.
-    #[error("{0}")]
-    Passthrough(#[source] Box<dyn Error + Send + Sync>),
+    #[error(transparent)]
+    Passthrough(crate::error_chain::PassedThrough),
 }
 
 impl WorkspaceRootError {
@@ -305,7 +305,7 @@ impl WorkspaceRootError {
 
     pub fn passthrough(&self) -> Option<&(dyn Error + Send + Sync + 'static)> {
         match self {
-            Self::Passthrough(error) => Some(error.as_ref()),
+            Self::Passthrough(error) => Some(error.get()),
             _ => None,
         }
     }

@@ -61,11 +61,12 @@ impl PassedThrough {
         Self(Box::new(error))
     }
 
-    pub fn boxed<E>(error: E) -> Box<dyn Error + Send + Sync>
+    /// Passes a typed owner error through as itself.
+    pub fn error<E>(error: E) -> Self
     where
-        E: PassedSource,
+        E: Error + Send + Sync + 'static,
     {
-        Box::new(Self::new(error))
+        Self::new(Box::new(error) as Box<dyn Error + Send + Sync>)
     }
 
     /// The passed-through error itself, the first error on its chain.

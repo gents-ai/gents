@@ -121,8 +121,8 @@ pub enum DocumentOperationError {
     },
     /// Another owner's failure (patch admission, plan validation, the store),
     /// unchanged.
-    #[error("{0}")]
-    Passthrough(#[source] Box<dyn Error + Send + Sync>),
+    #[error(transparent)]
+    Passthrough(crate::error_chain::PassedThrough),
 }
 
 impl DocumentOperationError {
@@ -244,8 +244,8 @@ pub enum DocumentDeleteError {
         id: String,
     },
     /// Another owner's failure (the store, plan construction), unchanged.
-    #[error("{0}")]
-    Passthrough(#[source] Box<dyn Error + Send + Sync>),
+    #[error(transparent)]
+    Passthrough(crate::error_chain::PassedThrough),
 }
 
 impl DocumentDeleteError {

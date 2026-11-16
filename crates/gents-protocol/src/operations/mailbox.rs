@@ -155,8 +155,8 @@ pub enum MailboxOperationError {
     #[error(transparent)]
     QuestionReply(#[from] MailboxQuestionReplyError),
     /// The store's failure, unchanged.
-    #[error("{0}")]
-    Passthrough(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error(transparent)]
+    Passthrough(crate::error_chain::PassedThrough),
 }
 
 impl MailboxOperationError {
@@ -193,7 +193,7 @@ impl MailboxOperationError {
 
     pub fn passthrough(&self) -> Option<&(dyn std::error::Error + Send + Sync + 'static)> {
         match self {
-            Self::Passthrough(error) => Some(error.as_ref()),
+            Self::Passthrough(error) => Some(error.get()),
             _ => None,
         }
     }
