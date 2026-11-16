@@ -6,10 +6,59 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
-- Every Goal a Task creates now pins the Task's `goal_blocked_audit_threshold`
-  and `goal_max_infrastructure_retries`, including Task messages to an Agent.
-  A Task that sets either without a goal objective is rejected. Goals a person
-  starts or the model creates keep the defaults. Goal snapshots report both.
+- Task `goal_blocked_audit_threshold` (positive, default 3) and
+  `goal_max_infrastructure_retries` (non-negative, default 2) replace the fixed
+  Goal limits for the Goals a Task creates. Every Goal a Task creates pins them,
+  including Task messages to an Agent. A Task that sets either without a goal
+  objective is rejected. Goals a person starts or the model creates keep the
+  defaults. Goal snapshots report both, and the desktop Tasks panel edits them.
+- InferenceExecution `max_invalid_tool_calls` (positive, default 8) and
+  `repeated_tool_failure_limit` (positive, default 3) replace the fixed loop
+  guards that end a turn after invalid or repeatedly failing tool calls. The
+  desktop profile editor sets both.
+- Breaking: InferenceRetryPolicy `interactive_max_retries` is renamed
+  `interactive_max_transport_retries`; a stored value under the old name no
+  longer applies. InferenceRetryPolicy `max_rate_limit_wait_ms` (positive,
+  default 300000) caps how long one provider throttle is waited out.
+- Plugin `limits.max_rounds` (default 64, at most 256) replaces the fixed
+  plugin round limit; a plugin may only raise it.
+- Breaking: P2P timing and the store's block cache are `gents server` flags
+  instead of environment variables: `--p2p-registry-heartbeat-ms`,
+  `--p2p-pairing-sweep-ms`, `--p2p-endpoint-heartbeat-ms` and
+  `--p2p-registry-stale-ms` (positive, defaults unchanged) replace
+  `GENTS_REGISTRY_HEARTBEAT_MS`, `GENTS_PAIRING_SWEEP_MS`,
+  `GENTS_ENDPOINT_HEARTBEAT_MS` and `GENTS_REGISTRY_STALE_MS`;
+  `--block-cache-mb` (positive, default 512) replaces `GENTS_BLOCK_CACHE_MB`;
+  and `--p2p-network-id` (not blank, default `default`) replaces
+  `GENTS_NETWORK_ID` as the registry partition.
+- Breaking: `gents server --system-log` replaces `GENTS_SYSTEM_LOG=1`. The
+  installed launchd and systemd definitions pass the flag, and a definition
+  without it is rewritten by `gents service repair`; a definition only moved
+  by a managed update keeps its arguments and logs to stderr until then.
+- Breaking: `gents init` and the interactive backend setup take the inference
+  endpoint only from `--inference-url` (or a preset); `INFERENCE_ENDPOINT` is
+  no longer read.
+- The desktop's console logging is the `--console-log` launch argument instead
+  of `GENTS_DESKTOP_CONSOLE_LOG`, and product telemetry reads
+  `GENTS_UMAMI_ENDPOINT` and `GENTS_UMAMI_WEBSITE_ID` only when the app is
+  built, not from the running app's environment.
+- Each Agent's request admission now checks a request's workspace and working
+  directory against that Agent's own operator tool root, instead of the root
+  the most recently started Agent in the process installed for all of them.
+- Test switches no longer reach shipped code through the environment:
+  `GENTS_FS_RUNNER_BLOCK_*`, `GENTS_TEST_STALL_AFTER_CLIENT_ACCESS`, the OAuth
+  token and device URL overrides (`GENTS_CLAUDE_OAUTH_TOKEN_URL`,
+  `GENTS_XAI_OAUTH_TOKEN_URL`, `GENTS_XAI_OAUTH_DEVICE_URL`,
+  `CODEX_REFRESH_TOKEN_URL_OVERRIDE`), the desktop's `GENTS_NATIVE_E2E` and
+  `GENTS_E2E_*` launch settings, the bridge runner's `GENTS_TAURI_LIVE`,
+  `GENTS_TAURI_LIVE_RETAIN_DATA`, `GENTS_DESKTOP_TEST_LOG`,
+  `GENTS_DESKTOP_LIVE_INFERENCE` and `GENTS_DESKTOP_LIVE_*BACKEND_*` reads, and
+  the fixture host's `FIXTURE_DOMAIN_HOME` are removed. Native E2E builds take
+  one `--native-e2e <json>` launch argument, the bridge runner takes
+  `--fixture-routes`, `--retain-data`, `--log-filter` and
+  `--inference-settings`, the fixture host takes `--domain-home`, and the
+  filesystem runner and `gents server` take hidden test flags; the test
+  harnesses map their own variables to these arguments.
 - InferenceRetryPolicy `max_rate_limit_wait_ms` is now the live threshold
   between a provider throttle and its usage limit: a provider wait beyond it
   fails the request as usage-limited (with its reset time) even when transport
