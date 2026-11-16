@@ -4947,6 +4947,13 @@ fn lease_starts_in_file(syntax: &syn::File) -> BTreeSet<String> {
             self.called(call.method.to_string());
             visit::visit_expr_method_call(self, call);
         }
+        fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+            let (mut parsed, mut loose) = (Vec::new(), Vec::new());
+            macro_expressions(invocation.tokens.clone(), &mut parsed, &mut loose);
+            for argument in &parsed {
+                self.visit_expr(argument);
+            }
+        }
     }
     let mut callees = Callees::default();
     callees.visit_file(syntax);
@@ -5033,6 +5040,14 @@ impl<'ast> Visit<'ast> for LeanReadAfterLeaseVisitor {
         }
         visit::visit_expr_method_call(self, call);
     }
+
+    fn visit_macro(&mut self, invocation: &'ast syn::Macro) {
+        let (mut parsed, mut loose) = (Vec::new(), Vec::new());
+        macro_expressions(invocation.tokens.clone(), &mut parsed, &mut loose);
+        for argument in &parsed {
+            self.visit_expr(argument);
+        }
+    }
 }
 
 fn lean_reads_after_lease(syntax: &syn::File) -> usize {
@@ -5048,8 +5063,9 @@ fn lean_reads_after_lease(syntax: &syn::File) -> usize {
 /// An async test that holds an execution lease awaits
 /// `gents_lean_vocab::snapshot()` before any synchronous model read, so the
 /// first load runs off its runtime (`LeaseRenewalStarvation.tla`,
-/// `OffRuntime`). Syntactic: fixtures are matched by name and macro arguments
-/// are not read.
+/// `OffRuntime`). Syntactic: fixtures are matched by name, a file's own
+/// functions that reach a lease start count as one, and macro input is read
+/// as [`macro_expressions`] reads it.
 #[test]
 fn lease_holders_await_the_lean_snapshot() {
     let root = repo_root();
@@ -5109,6 +5125,10 @@ fn lean_read_fence_counts_reads_after_a_lease_without_the_await() {
         (
             "async fn step0() { l.claim_with_identity().await; }\nasync fn f() { gents_lean_vocab::snapshot().await; step0().await; gents_lean_vocab::families::k::cases(); }",
             0,
+        ),
+        (
+            "async fn chain() { assert_eq!(l.claim_with_identity().await, Claimed); }\nasync fn f() { chain().await; assert!(gents_lean_vocab::families::k::cases().is_empty()); }",
+            1,
         ),
         (
             "async fn f() { gents_lean_vocab::lean_contract_snapshot(); l.claim_with_identity().await; gents_lean_vocab::lean_contract_snapshot(); }",
