@@ -34,18 +34,28 @@ pub struct AdmittedCompletionModel<M> {
     connection: Arc<str>,
     pub(crate) model_name: Option<String>,
     pub(crate) profile_id: Option<String>,
+    /// The agent's rate-limit wait cap, which the owned loop driving this
+    /// model holds; each call's permit records its provider-limit verdict
+    /// under it.
+    pub(crate) max_rate_limit_wait: std::time::Duration,
     pub(crate) separate_reasoning: bool,
     pub agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
 }
 
 impl<M> AdmittedCompletionModel<M> {
-    pub fn new(inner: M, admission: AdmissionRegistry, connection: impl Into<Arc<str>>) -> Self {
+    pub fn new(
+        inner: M,
+        admission: AdmissionRegistry,
+        connection: impl Into<Arc<str>>,
+        max_rate_limit_wait: std::time::Duration,
+    ) -> Self {
         Self {
             inner,
             admission,
             connection: connection.into(),
             model_name: None,
             profile_id: None,
+            max_rate_limit_wait,
             separate_reasoning: false,
             agent_signer: None,
         }
@@ -67,6 +77,7 @@ impl<M> AdmittedCompletionModel<M> {
                 &self.connection,
                 self.model_name.as_deref(),
                 self.profile_id.as_deref(),
+                self.max_rate_limit_wait,
                 self.agent_signer.clone(),
             )
             .await
@@ -180,6 +191,7 @@ impl AdmissionCallContext {
         runtime_instance_id: &str,
         model_name: Option<&str>,
         profile_id: Option<&str>,
+        max_rate_limit_wait: std::time::Duration,
         agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
     ) -> PendingCallMetadata {
         let call_seq = self.call_seq.fetch_add(1, Ordering::SeqCst) + 1;
@@ -194,6 +206,7 @@ impl AdmissionCallContext {
             requester_did: self.requester_did.clone(),
             model_name: model_name.map(str::to_owned),
             profile_id: profile_id.map(str::to_owned),
+            max_rate_limit_wait,
             call_seq,
             backend_id: self.backend_id.clone(),
             agent_did: self.agent_did.clone(),

@@ -329,7 +329,8 @@ async fn a_limit_like_label_is_not_a_limit() {
         assert!(first.starts_with("Grok account \"Grok\""), "{first}");
         assert!(!first.contains(label), "{first}");
         assert!(
-            gents_loop::provider_limit::classify_provider_limit(&first, Utc::now()).is_none(),
+            gents_loop::provider_limit::classify_attempt_provider_limit(&first, Utc::now())
+                .is_none(),
             "{first}"
         );
     }

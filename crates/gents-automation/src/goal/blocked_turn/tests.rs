@@ -1,7 +1,7 @@
 use std::sync::OnceLock;
 
 use chrono::{Duration, TimeZone};
-use gents_loop::provider_limit::{persisted_failure_reason, ProviderLimitHeaders};
+use gents_loop::provider_limit::ProviderLimitHeaders;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::{json, Value};
@@ -207,18 +207,21 @@ fn failed_request(failure_reason: &str) -> AgentRequestRow {
 
 fn call(backend_id: &str, call_kind: &str, failure_reason: String) -> FailedCall {
     let at = (now() - Duration::minutes(5)).to_rfc3339();
+    let (_, provider_limit, provider_limit_resets_at) = permit_recorded(&failure_reason, now());
     FailedCall {
         backend_id: Some(backend_id.into()),
         agent_did: Some(agent("x").agent_did.clone()),
         call_kind: Some(call_kind.into()),
         failure_reason: Some(failure_reason),
+        provider_limit,
+        provider_limit_resets_at,
         queued_at: Some(at.clone()),
         started_at: Some(at),
     }
 }
 
 fn recorded(text: &str) -> String {
-    persisted_failure_reason(text, now())
+    permit_recorded(text, now()).0
 }
 
 fn anthropic_rejected() -> String {
@@ -242,7 +245,7 @@ fn blocked(
     request: &AgentRequestRow,
     call: Option<&FailedCall>,
 ) -> Option<BlockedTurn> {
-    blocked_turn_from(references, accounts, request, call, now())
+    blocked_turn_from(references, accounts, request, call)
 }
 
 fn limit_on(main_backend: &str, failure_reason: String) -> Option<BlockedTurn> {
@@ -719,12 +722,14 @@ async fn embedded() -> (
     .unwrap();
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let failure = anthropic_rejected();
+    let (_, provider_limit, provider_limit_resets_at) = permit_recorded(&failure, now());
     let request_doc = lifecycle.request().doc_id.clone();
     let input = json!({
         "call_id": "call-1", "request_id": "request-1", "request_doc_id": request_doc,
         "session_id": "session-1", "node_did": node_did, "agent_did": agent.did(),
         "call_seq": 1, "backend_id": b_backend, "call_kind": "inference", "attempt": 1,
-        "call_state": "failed", "failure_reason": failure, "queued_at": at,
+        "call_state": "failed", "failure_reason": failure, "provider_limit": provider_limit,
+        "provider_limit_resets_at": provider_limit_resets_at, "queued_at": at,
         "started_at": at, "ended_at": at,
     });
     let session_doc = create.session_doc_id.as_deref().expect("reserved session");

@@ -83,7 +83,13 @@ async fn acquire_with_signer(
     let context = AdmissionCallContext::for_request(&request, signer.did(), backend_id);
     scope_request(
         context,
-        registry.acquire_current_call_with_signer(connection, None, None, Some(signer.clone())),
+        registry.acquire_current_call_with_signer(
+            connection,
+            None,
+            None,
+            gents_loop::provider_limit::LONG_RATE_LIMIT_WAIT,
+            Some(signer.clone()),
+        ),
     )
     .await
 }

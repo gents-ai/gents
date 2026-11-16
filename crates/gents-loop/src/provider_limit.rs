@@ -2,12 +2,10 @@ use std::fmt;
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
+use gents_protocol::provider_limit::{ProviderLimitVerdict, RecordedProviderLimit};
 
-/// The wait beyond which a recorded attempt's throttle reads as usage
-/// exhaustion, and the default `max_rate_limit_wait_ms`. A recorded failure
-/// carries no retry policy, so its readers cannot know the agent's cap; a live
-/// attempt is classified without it and the owned loop's
-/// `CompletionRetryPolicy::max_rate_limit_wait` decides
+/// The default `max_rate_limit_wait_ms`: the longest provider throttle the
+/// owned loop holds before the throttle is the provider's usage limit
 /// (Lean: `Runtime.CompletionConfig.defaultMaxWaitMs`).
 pub const LONG_RATE_LIMIT_WAIT: Duration = Duration::from_secs(5 * 60);
 
@@ -190,8 +188,10 @@ pub fn strip_provider_limit_marker(text: &str) -> &str {
     split_provider_limit_marker(text).0
 }
 
-pub fn persisted_failure_reason(text: &str, now: DateTime<Utc>) -> String {
-    match classify_provider_limit(text, now) {
+/// A failed call's recorded reason: the usage limit its verdict found,
+/// rendered, else its text without the provider-limit marker.
+pub fn recorded_failure_reason(text: &str, limit: Option<&ProviderLimit>) -> String {
+    match limit {
         Some(ProviderLimit::UsageExhausted(limit)) => limit.to_string(),
         _ => strip_provider_limit_marker(text).to_string(),
     }
@@ -234,23 +234,26 @@ pub enum ProviderLimit {
     UsageExhausted(UsageLimit),
 }
 
-/// A recorded failure's limit: a throttle beyond `LONG_RATE_LIMIT_WAIT` reads
-/// as usage exhaustion.
-pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<ProviderLimit> {
-    classify(text, now, Some(LONG_RATE_LIMIT_WAIT))
+impl ProviderLimit {
+    /// The verdict a failed call's row records for this limit.
+    pub fn recorded(&self) -> RecordedProviderLimit {
+        match self {
+            Self::Throttled { .. } => RecordedProviderLimit {
+                verdict: ProviderLimitVerdict::Throttled,
+                resets_at: None,
+            },
+            Self::UsageExhausted(limit) => RecordedProviderLimit {
+                verdict: ProviderLimitVerdict::UsageLimited,
+                resets_at: limit.resets_at,
+            },
+        }
+    }
 }
 
 /// A live attempt's limit: a throttle stays a throttle whatever its wait, and
-/// the owned loop's retry policy decides how long to hold it.
+/// the owned loop's retry policy decides how long to hold it
+/// (`completion_retry::provider_limit_verdict`).
 pub fn classify_attempt_provider_limit(text: &str, now: DateTime<Utc>) -> Option<ProviderLimit> {
-    classify(text, now, None)
-}
-
-fn classify(
-    text: &str,
-    now: DateTime<Utc>,
-    longest_throttle: Option<Duration>,
-) -> Option<ProviderLimit> {
     let (body, marker) = split_provider_limit_marker(text);
     let headers = ProviderLimitHeaders::parse_marker(marker).unwrap_or_default();
     let lower = body.to_ascii_lowercase();
@@ -286,15 +289,6 @@ fn classify(
         .retry_at
         .or_else(|| try_again_in(&lower).and_then(|wait| delay_after(now, wait.as_secs_f64())));
     let retry_after = retry_at.map(|at| (at - now).to_std().unwrap_or(Duration::ZERO));
-    if retry_after
-        .zip(longest_throttle)
-        .is_some_and(|(wait, longest)| wait > longest)
-    {
-        return Some(ProviderLimit::UsageExhausted(UsageLimit {
-            resets_at: retry_at,
-            detail: provider_detail(body, body_json.as_ref()),
-        }));
-    }
     Some(ProviderLimit::Throttled { retry_after })
 }
 
