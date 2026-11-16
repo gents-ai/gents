@@ -1253,6 +1253,7 @@ async fn initialize_runtime_home(
         auth: backend_auth,
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
+        request_timeout_secs: None,
         max_concurrent: choice
             .and_then(|choice| choice.max_concurrent)
             .or(args.max_concurrent),

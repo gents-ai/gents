@@ -25,7 +25,7 @@ use gents_inference::compaction::CompactionStrategy;
 use gents_inference::resolved::{
     ResolvedAgent, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME,
-    DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS, DEFAULT_TITLE_TIMEOUT_SECS,
 };
 use gents_loop::completion_retry::CompletionRetryProfileFields;
 use gents_store::identity::{NodeIdentity, RuntimeNode};
@@ -493,6 +493,11 @@ impl AgentBuilder {
         self
     }
 
+    pub fn title_timeout_secs(mut self, title_timeout_secs: u64) -> Self {
+        self.pending_agent.title_timeout = Duration::from_secs(title_timeout_secs);
+        self
+    }
+
     pub fn deadline_duration_secs(mut self, deadline_duration_secs: u64) -> Self {
         self.pending_agent.deadline_duration = Duration::from_secs(deadline_duration_secs);
         self
@@ -535,6 +540,7 @@ pub(crate) struct PendingAgent {
     stream_batch_ms: u64,
     stream_liveness_timeout: Duration,
     provider_idle_timeout: Duration,
+    title_timeout: Duration,
     deadline_duration: Duration,
     sampling: SamplingConfig,
     skills: Vec<gents_documents::skills::Skill>,
@@ -561,6 +567,7 @@ impl PendingAgent {
             stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
             stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
             provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
+            title_timeout: Duration::from_secs(DEFAULT_TITLE_TIMEOUT_SECS),
             deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
@@ -695,6 +702,7 @@ impl PendingAgent {
             stream_batch_ms: self.stream_batch_ms,
             stream_liveness_timeout: self.stream_liveness_timeout,
             provider_idle_timeout: self.provider_idle_timeout,
+            title_timeout: self.title_timeout,
             deadline_duration: self.deadline_duration,
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: self.sampling,

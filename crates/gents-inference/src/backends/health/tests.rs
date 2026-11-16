@@ -310,6 +310,7 @@ fn backend(backend_id: &str, endpoint: String) -> InferenceBackend {
         auth: gents_documents::BackendAuth::Unauthenticated,
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
+        request_timeout_secs: None,
         max_concurrent: Some(1),
         max_queue_depth: Some(DEFAULT_MAX_QUEUE_DEPTH),
         enabled: true,

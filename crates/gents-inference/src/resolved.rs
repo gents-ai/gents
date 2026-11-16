@@ -23,6 +23,8 @@ pub use gents_loop::compaction::{
     MAX_COMPACTION_SUMMARY_FILE_LIST_MAX, MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
 };
 pub const DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS: u64 = 300;
+/// Unset `title_timeout_secs` default: one title-generation attempt is bounded by this.
+pub const DEFAULT_TITLE_TIMEOUT_SECS: u64 = 10;
 pub const DEFAULT_MODEL_NAME: &str = "default";
 
 /// A static builder has no persisted configuration documents. Managed agents
@@ -102,6 +104,7 @@ pub struct ResolvedAgent {
     pub stream_batch_ms: u64,
     pub stream_liveness_timeout: Duration,
     pub provider_idle_timeout: Duration,
+    pub title_timeout: Duration,
     pub deadline_duration: Duration,
     pub completion_retry: CompletionRetryProfileFields,
     pub sampling: SamplingConfig,
@@ -383,6 +386,7 @@ impl std::fmt::Debug for ResolvedAgent {
             .field("stream_batch_ms", &self.stream_batch_ms)
             .field("stream_liveness_timeout", &self.stream_liveness_timeout)
             .field("provider_idle_timeout", &self.provider_idle_timeout)
+            .field("title_timeout", &self.title_timeout)
             .field("deadline_duration", &self.deadline_duration)
             .field("completion_retry", &self.completion_retry)
             .field("sampling", &self.sampling)
@@ -939,6 +943,7 @@ mod tests {
             stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
             stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
             provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
+            title_timeout: Duration::from_secs(DEFAULT_TITLE_TIMEOUT_SECS),
             deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),

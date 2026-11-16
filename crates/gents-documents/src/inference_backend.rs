@@ -158,6 +158,7 @@ pub struct InferenceBackendMetadata {
     pub claude_platform: Option<ClaudePlatform>,
     pub connect_timeout_secs: Option<i64>,
     pub discovery_timeout_secs: Option<i64>,
+    pub request_timeout_secs: Option<i64>,
     pub max_concurrent: Option<i64>,
     pub max_queue_depth: Option<i64>,
     #[serde(
@@ -227,6 +228,7 @@ impl InferenceBackendMetadata {
             claude_platform: backend.claude_platform,
             connect_timeout_secs: backend.connect_timeout_secs,
             discovery_timeout_secs: backend.discovery_timeout_secs,
+            request_timeout_secs: backend.request_timeout_secs,
             max_concurrent: backend.max_concurrent,
             max_queue_depth: backend.max_queue_depth,
             enabled: backend.enabled,
@@ -272,6 +274,7 @@ impl InferenceBackendMetadata {
             claude_platform: self.claude_platform,
             connect_timeout_secs: self.connect_timeout_secs,
             discovery_timeout_secs: self.discovery_timeout_secs,
+            request_timeout_secs: self.request_timeout_secs,
             max_concurrent: self.max_concurrent,
             max_queue_depth: self.max_queue_depth,
             enabled: self.enabled,
@@ -411,6 +414,10 @@ pub struct InferenceBackend {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub discovery_timeout_secs: Option<i64>,
+    /// Total plugin model-call timeout through this backend; default 120s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub request_timeout_secs: Option<i64>,
     /// Shared backend capacity across profiles; absent resolves to 1.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -510,6 +517,7 @@ impl InferenceBackend {
         for (name, value) in [
             ("connect_timeout_secs", self.connect_timeout_secs),
             ("discovery_timeout_secs", self.discovery_timeout_secs),
+            ("request_timeout_secs", self.request_timeout_secs),
         ] {
             if value.is_some_and(|value| value <= 0) {
                 violations.push(format!("{name} must be positive"));

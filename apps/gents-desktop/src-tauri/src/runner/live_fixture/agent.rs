@@ -322,6 +322,7 @@ fn live_backend_candidate(
         claude_platform: existing.and_then(|value| value.claude_platform),
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
+        request_timeout_secs: None,
         max_concurrent: Some(2),
         max_queue_depth: Some(100),
         enabled: true,

@@ -150,7 +150,7 @@ pub fn resolved_agent(
     use crate::resolved::{
         MaxTurnsProvenance, ResolvedAgent, ResolvedConfiguration, DEFAULT_CONTEXT_WINDOW,
         DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME,
-        DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
+        DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS, DEFAULT_TITLE_TIMEOUT_SECS,
     };
     use gents_documents::inference_defaults::{
         DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -194,6 +194,7 @@ pub fn resolved_agent(
         stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
         provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
+        title_timeout: Duration::from_secs(DEFAULT_TITLE_TIMEOUT_SECS),
         deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
         completion_retry: Default::default(),
         sampling: Default::default(),
