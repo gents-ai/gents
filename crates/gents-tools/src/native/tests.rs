@@ -251,12 +251,14 @@ fn background_tool_names_are_gated_by_allowlist() {
     let disabled = BackgroundToolConfig {
         allowlist: Vec::new(),
         timeouts: Default::default(),
+        ..Default::default()
     };
     assert!(background_tool_names(&disabled).is_empty());
 
     let enabled = BackgroundToolConfig {
         allowlist: vec!["bash".to_string()],
         timeouts: Default::default(),
+        ..Default::default()
     };
     assert_eq!(
         background_tool_names(&enabled),
@@ -278,6 +280,7 @@ async fn spawn_process_decodes_only_its_advertised_schema() {
     let tools = build_background_tools(BackgroundToolConfig {
         allowlist: vec!["bash_unrestricted".to_string()],
         timeouts: Default::default(),
+        ..Default::default()
     });
     let spawn = tools[0].definition(String::new()).await;
     assert_eq!(spawn.name, SPAWN_PROCESS_TOOL_NAME);

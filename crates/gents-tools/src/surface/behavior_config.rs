@@ -202,6 +202,7 @@ impl AgentToolSurfaceConfig {
             remote_tools,
             required_mcp_service_ids,
             backgroundable_tool_names,
+            max_background_tool_calls,
             enable_session_history_tool: _,
             enable_schema_tool: _,
             enable_p2p_tool: _,
@@ -349,6 +350,7 @@ impl AgentToolSurfaceConfig {
             background_tools: BackgroundToolConfig {
                 allowlist: background_allowlist,
                 timeouts: timeouts.background.clone(),
+                max_background_tool_calls,
             },
             background_plugins,
             custom_tools,

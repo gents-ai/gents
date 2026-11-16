@@ -28,6 +28,12 @@ export const BASH_OUTPUT_LIMIT = {
   fallback: "16000",
 } as const;
 
+export const BACKGROUND_TOOL_CALL_LIMIT = {
+  label: "Concurrent background calls per request",
+  max: 8,
+  fallback: "8",
+} as const;
+
 type RemoteService = NonNullable<NonNullable<Tools["remote"]>["services"]>[number];
 
 const REMOTE_TIMEOUTS = {
@@ -310,6 +316,17 @@ export function ToolGroupControls({
             update("host", { bash: { ...groups.host?.bash, max_timeout_secs } }),
           "Bash timeout, else host maximum",
         )}
+        <WholeNumberRow
+          id="tools-host-max-background-tool-calls"
+          label={BACKGROUND_TOOL_CALL_LIMIT.label}
+          value={groups.host?.max_background_tool_calls}
+          placeholder={BACKGROUND_TOOL_CALL_LIMIT.fallback}
+          max={BACKGROUND_TOOL_CALL_LIMIT.max}
+          onInvalid={onInvalid}
+          onChange={(max_background_tool_calls) =>
+            update("host", { max_background_tool_calls })
+          }
+        />
         {seconds(
           "tools-bash-background-timeout",
           "Background lifetime seconds",

@@ -93,7 +93,10 @@ pub use root_publication::{
 };
 pub use runtime_context::ToolRuntimeContext;
 pub use selection::BackgroundToolConfig;
-pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSelection};
+pub use selection::{
+    resolve_goal_capabilities, resolve_max_background_tool_calls, CustomToolFactory,
+    ResolvedToolSelection,
+};
 pub use timeouts::{BackgroundTimeoutPolicy, BackgroundTimeouts, BoundedTimeout, ToolTimeouts};
 
 use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};

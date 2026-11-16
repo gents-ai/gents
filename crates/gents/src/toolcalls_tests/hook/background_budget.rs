@@ -45,14 +45,37 @@ async fn assert_background_rows(
 #[tokio::test]
 async fn generated_background_budget_uses_accepted_dispatch() {
     let cases = gents_lean_vocab::families::contracts_background_admission_bound::cases();
-    assert_eq!(cases.len(), 1);
-    let case = &cases[0];
+    assert_eq!(cases.len(), 2);
+    let ceiling = gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT as u64;
+    assert!(cases.iter().any(|case| case.input.numeric_bound == ceiling));
+    assert!(cases.iter().any(|case| case.input.numeric_bound < ceiling));
+    for case in &cases {
+        admit_to_generated_bound(case, case.input.numeric_bound == ceiling).await;
+    }
+}
+
+/// Fills a request to the case's configured `host.max_background_tool_calls`
+/// and checks the refusal against the model; at the host ceiling it also
+/// replays the modeled concurrent admission schedule.
+async fn admit_to_generated_bound(
+    case: &gents_lean_vocab::family::Case<
+        gents_lean_vocab::families::contracts_background_admission_bound::Bound,
+        gents_lean_vocab::families::contracts_background_admission_bound::AdmissionObservation,
+    >,
+    replay_batch: bool,
+) {
     let bound = usize::try_from(case.input.numeric_bound).unwrap();
     let executions = BackgroundExecutionRegistry::default();
-    let registry =
-        BackgroundToolRegistry::from_tools(vec![Box::new(PendingTool)], &["slow_tool".into()]);
+    let registry = BackgroundToolRegistry::from_config(
+        vec![Box::new(PendingTool)],
+        &gents_tools::surface::BackgroundToolConfig {
+            allowlist: vec!["slow_tool".into()],
+            max_background_tool_calls: bound,
+            ..Default::default()
+        },
+    );
     let fixture = budget_hook_fixture(
-        "background-budget",
+        &format!("background-budget-{bound}"),
         registry,
         executions.clone(),
         gents_automation::lifecycle_hooks::composition(),
@@ -113,6 +136,14 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         executions.wait_for_completion(child).await;
     }
     assert_background_rows(&access, &request_id, bound, "cancelled").await;
+    if !replay_batch {
+        hook_execution_fixtures()
+            .lock()
+            .await
+            .remove(&hook_execution_fixture_key(&hook, &request_id));
+        node.shutdown().await.expect("shut down test node");
+        return;
+    }
     let batch = gents_lean_vocab::lean_r6_backgrounding_cases()
         .iter()
         .filter(|case| case.group == "budget_batch")

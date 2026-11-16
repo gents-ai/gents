@@ -112,3 +112,23 @@ fn rc0_eth_tool_ids_are_read_and_dropped_but_other_unknown_keys_still_fail() {
     });
     assert!(serde_json::from_value::<Tools>(unknown).is_err());
 }
+
+#[test]
+fn background_tool_call_limit_stays_within_the_host_ceiling() {
+    let ceiling = gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT as i64;
+    let limit = |value: i64| {
+        document(json!({"host": {"max_background_tool_calls": value}})).validation_violations()
+    };
+    assert!(limit(1).is_empty());
+    assert!(limit(ceiling).is_empty());
+    assert_eq!(
+        limit(0),
+        ["host.max_background_tool_calls must be positive"]
+    );
+    assert_eq!(
+        limit(ceiling + 1),
+        [format!(
+            "host.max_background_tool_calls must be at most {ceiling}"
+        )]
+    );
+}

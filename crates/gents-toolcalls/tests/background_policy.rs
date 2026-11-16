@@ -88,6 +88,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
     let config = gents_tools::surface::BackgroundToolConfig {
         allowlist: vec!["bash".into(), remote_name.clone()],
         timeouts: gents_tools::surface::ToolTimeouts::from_document(&tools).background,
+        ..Default::default()
     };
     let hook = hook
         .with_background_tool_registry(BackgroundToolRegistry::from_config(

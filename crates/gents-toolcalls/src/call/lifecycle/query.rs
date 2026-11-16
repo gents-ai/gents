@@ -451,6 +451,7 @@ impl ToolCallLifecycle {
             cancel_cause,
             selected_tool_identity,
             await_mode,
+            max_background_tool_calls: gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT,
         }))
     }
 }

@@ -844,6 +844,7 @@ mod tests {
                 (node_did.to_owned(), agent_did.to_owned()),
             )],
             live_background: 0,
+            background_limit: gents_protocol::job::MAX_BACKGROUNDED_TOOLS_PER_PARENT as u32,
             started_by_job: false,
             cwd_allowed: Vec::new(),
             within: Vec::new(),

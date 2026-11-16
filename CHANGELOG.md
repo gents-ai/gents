@@ -6,6 +6,11 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Tools `host.max_background_tool_calls` (1 to 8, default 8) bounds the background
+  calls one request holds at once: bash runs, remote service calls and plugin jobs
+  together. A call past it is refused with `background_tool_budget_exceeded`, which
+  now reports the configured limit. 8 stays the host ceiling because the store's
+  contention retries are sized from it.
 - InferenceExecution `title_timeout_secs` (default 10s) bounds one title-generation
   attempt, replacing the fixed title timeout. InferenceBackend `request_timeout_secs`
   (default 120s) bounds one plugin model call through that backend, replacing the fixed
