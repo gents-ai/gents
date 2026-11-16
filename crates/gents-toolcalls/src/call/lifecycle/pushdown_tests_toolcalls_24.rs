@@ -89,6 +89,7 @@ async fn request_deadline_presents_output_committed_before_the_cut() {
     let args = serde_json::json!({"argv": ["-c",
         "printf 'partial stdout'; printf 'partial stderr' >&2; sleep 30"]})
     .to_string();
+    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
     let dispatch =
         gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
             None,
@@ -103,7 +104,7 @@ async fn request_deadline_presents_output_committed_before_the_cut() {
                 args,
                 Some(writer),
                 None,
-                &gents_loop::tool::ToolCallEnvelope::ambient(),
+                &envelope,
             ),
         );
     tokio::pin!(dispatch);
@@ -175,6 +176,7 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
         let cli = CliTool::new(config(timeout_secs));
         let args = serde_json::json!({"argv": ["-c", script]}).to_string();
         let stop = tokio_util::sync::CancellationToken::new();
+        let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
         let call =
             gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
                 None,
@@ -183,7 +185,7 @@ async fn committed_output_reconstructs_completed_and_stopped_results() {
                 None,
                 Some(writer),
                 None,
-                cli.call(args, &gents_loop::tool::ToolCallEnvelope::ambient()),
+                cli.call(args, &envelope),
             );
         let dispatched = if name == "cli-stopped" {
             // The stop is driven, not raced (TLA+ `WallClockBound`
