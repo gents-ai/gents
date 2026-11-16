@@ -47,6 +47,8 @@ pub use execution_renewal::renew_once_at_with_access as renew_execution_lease_on
 pub(crate) use execution_renewal::renew_with_recheck_at;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use execution_renewal::RenewalAttemptOutcome;
+#[cfg(test)]
+pub(crate) use execution_renewal::RenewalError;
 mod terminal_binding;
 pub use terminal_binding::is_exact_invocation_reply;
 pub mod terminal_tools;

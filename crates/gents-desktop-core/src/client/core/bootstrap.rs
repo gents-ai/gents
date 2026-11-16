@@ -70,7 +70,12 @@ impl ClientCore {
         };
         paths.ensure_root_dirs().await?;
         gents_store::local::storage_backend::reject_legacy_store(paths.node_data_dir())?;
-        let store_lock = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir())?;
+        let store_lock = gents_store::local::home::acquire_store(
+            paths.root(),
+            paths.node_data_dir(),
+            super::CLIENT_START_STALL_TIMEOUT,
+        )
+        .await?;
         let store_key = open_or_create_client_store_key(&paths, &options, &mut checkpoint).await?;
         options.store_key_provider = None;
 

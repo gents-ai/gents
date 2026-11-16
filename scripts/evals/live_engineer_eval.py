@@ -363,6 +363,10 @@ def run(args):
     started = time.monotonic()
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
+    # The workflow reports result.json's reason with the exit status: one left by
+    # an earlier run must never stand for this one.
+    for stale in ("result.json", "summary.md"):
+        (out / stale).unlink(missing_ok=True)
     base_url, model = endpoint()
     result = base_result(args, model)
     blocked = probe(base_url, model)
@@ -371,7 +375,10 @@ def run(args):
         return SKIPPED
     home = args.home or out.parent / "live-eval-home"
     if home.exists():
-        raise SystemExit(f"{home} exists; the eval needs a fresh home")
+        reason = f"{home} exists; the eval needs a fresh home"
+        write_result(out, dict(result, outcome="error", reason=reason))
+        print(reason, file=sys.stderr)
+        return 1
     work = out.parent / "live-eval-inputs"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)

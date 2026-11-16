@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
-use gents_desktop_core::client::ClientCore;
+use gents_desktop_core::client::{ClientCore, CLIENT_START_STALL_TIMEOUT};
 use tokio::sync::watch;
 
 use super::ClientLifecycleGuard;
 use crate::error::{BridgeError, BridgeErrorCode};
 
 const CLIENT_START_STACK_SIZE: usize = 16 * 1024 * 1024;
-const CLIENT_START_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 pub(super) const NO_STAGE_COMPLETED: &str = "none";
 
 pub(super) const CLIENT_LIFECYCLE_WAIT: std::time::Duration = std::time::Duration::from_secs(15);

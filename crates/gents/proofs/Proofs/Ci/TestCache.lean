@@ -83,7 +83,17 @@ bytes (which fix the toolchain, target, profile, features and every crate it
 links), the policy version, the nextest version and the hash of its
 `ci` profile, and the behaviour-changing environment variables named in
 `scripts/ci/test-cache.toml`. Programs the test executes and files it reads are
-not here: they are trace queries. -/
+not here: they are trace queries.
+
+It also holds the platform: the operating system and the Rust target triple,
+and on macOS the OS build number. A test's behaviour depends on its system
+libraries and kernel. On Linux the libraries are files the dynamic loader
+opens, so each is a trace query. On macOS they live in the dyld shared cache,
+which the loader maps without a file read and which changes only with an OS
+update, so a key without the build number would vouch for a run on another
+system. The same commit's tests run on more than one platform (the portable
+groups on Linux, their scheduled uncached run on macOS); the platform keeps
+their records apart. -/
 abbrev StaticKey := String
 
 /-- Premise (a) and (b) as a hypothesis: what each test does given its key. -/

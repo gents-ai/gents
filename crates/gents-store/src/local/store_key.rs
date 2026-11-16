@@ -122,9 +122,9 @@ pub fn store_key_unavailable<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a StoreKeyUnavailable> {
     gents_protocol::error_chain::find_map_source(error, |cause| {
-        cause
-            .downcast_ref::<StoreKeyUnavailable>()
-            .or_else(|| cause.downcast_ref::<StoreKeyError>()?.unavailable())
+        gents_protocol::error_chain::as_owner::<StoreKeyUnavailable>(cause).or_else(|| {
+            gents_protocol::error_chain::as_owner::<StoreKeyError>(cause)?.unavailable()
+        })
     })
 }
 

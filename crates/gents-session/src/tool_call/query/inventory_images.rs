@@ -9,7 +9,7 @@ use super::result::{load_tool_file_change_observation, ToolFileChangeRead};
 pub enum InventoryImageError {
     #[error("The recorded file versions do not match the selected inventory.")]
     BindingMismatch,
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Read(#[from] anyhow::Error),
 }
 

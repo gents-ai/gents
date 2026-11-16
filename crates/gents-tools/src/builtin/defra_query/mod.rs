@@ -52,6 +52,8 @@ pub(crate) fn truncate_field_strings(value: &mut serde_json::Value) -> bool {
 
 pub mod bounded;
 mod command;
+#[cfg(test)]
+pub(crate) use command::QueryCommandError;
 mod field_page;
 pub(crate) use field_page::{utf8_page, Utf8PageError};
 mod native_filter;

@@ -109,7 +109,7 @@ fn paths_list(paths: &[std::path::PathBuf]) -> String {
 pub enum GrantError {
     #[error("plugin {plugin} asks for {asks}; install it with --grant-authority to allow that")]
     Ungranted { plugin: String, asks: String },
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

@@ -39,7 +39,7 @@ pub struct LocalListener {
 pub enum ListenerBindError {
     #[error("another process owns the client installation listener")]
     Held(#[source] std::fs::TryLockError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

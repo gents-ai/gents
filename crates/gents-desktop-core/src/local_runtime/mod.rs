@@ -408,7 +408,7 @@ pub enum HostedRuntimeStatusError {
     /// The runtime refused the User's signed status read.
     #[error("runtime {node_did} denied this client's status read (HTTP {status})")]
     Denied { node_did: String, status: u16 },
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Failed(#[from] anyhow::Error),
 }
 

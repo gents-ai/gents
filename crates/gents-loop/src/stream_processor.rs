@@ -72,12 +72,12 @@ pub enum StreamProcessorError {
     AttemptMismatch,
     #[error("queued provider audit caused an unexpected stream action")]
     QueuedAuditAction,
-    #[error(transparent)]
-    Writer(Box<dyn std::error::Error + Send + Sync>),
-    #[error(transparent)]
-    Hook(Box<dyn std::error::Error + Send + Sync>),
-    #[error(transparent)]
-    Lifecycle(Box<dyn std::error::Error + Send + Sync>),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Writer(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Hook(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Lifecycle(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("{context}: closing partial provider attempt")]
     PartialAttemptClose {
         context: String,
