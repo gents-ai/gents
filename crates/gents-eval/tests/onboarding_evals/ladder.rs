@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
-use gents::documents::{EvalCapture, EvalDefinition};
 use gents::eval::OutcomeKind;
-use gents::pack::{load_pack_config, PackInstallOptions, PackManifest};
+use gents_documents::{EvalCapture, EvalDefinition};
 use gents_eval::checks::CheckRegistry;
 use gents_eval::runner::{CaptureResult, ScriptedExecutor};
+use gents_pack::pack::{load_pack_config, PackInstallOptions, PackManifest};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -145,7 +145,7 @@ fn l2_checks_follow_selected_context_and_tools_and_reject_a_wrong_grant() {
     ]});
     evidence.captures.insert("tools".into(), CaptureResult::Documents { rows: vec![
         serde_json::json!({"tools_id":"analyst-tools", "host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}),
-        serde_json::to_value(serde_json::from_value::<gents::documents::Tools>(serde_json::json!({
+        serde_json::to_value(serde_json::from_value::<gents_documents::Tools>(serde_json::json!({
             "node_did": "did:key:eval-owner",
             "tools_id": "engineer-tools",
             "host": {"bash": {"mode":"Off"}, "root":"/eval/workspace"},
@@ -193,7 +193,7 @@ fn delegation_requires_delivery_of_the_matching_child_reply() {
     let stage = definition
         .cases
         .iter()
-        .find(|c| c.split == gents::documents::EvalSplit::Train)
+        .find(|c| c.split == gents_documents::EvalSplit::Train)
         .unwrap()
         .stages
         .iter()
@@ -354,7 +354,7 @@ fn parallel_automation_accepts_default_concurrency_and_still_checks_its_task() {
     let configured = &definition
         .cases
         .iter()
-        .find(|c| c.split == gents::documents::EvalSplit::Train)
+        .find(|c| c.split == gents_documents::EvalSplit::Train)
         .unwrap()
         .stages[0];
     let registry = CheckRegistry::builtin();
@@ -618,7 +618,7 @@ fn delegation_execution_allows_inspection_but_rejects_config_mutations() {
 
 #[test]
 fn automation_outcomes_accept_request_and_goal_success_but_reject_other_states() {
-    use gents::goal::GoalStatus;
+    use gents_protocol::goal_status::GoalStatus;
     use gents_protocol::request_lifecycle::RequestLifecycleState;
     use serde_json::json;
 

@@ -1,0 +1,59 @@
+{
+  "input": {
+    "chart": "bar",
+    "data": {
+      "columns": [
+        "k",
+        "v"
+      ],
+      "rows": [
+        [
+          "a",
+          1
+        ],
+        [
+          "b",
+          2
+        ],
+        [
+          "c",
+          3
+        ]
+      ]
+    },
+    "height": 150,
+    "output": "svg",
+    "subtitle": "s",
+    "title": "T",
+    "width": 200,
+    "x": "k",
+    "y": [
+      "v"
+    ]
+  },
+  "expect": {
+    "response": {
+      "alt": "Bar chart titled \"T\". 3 categories of k, from a to c. Value axis: v, from 0 to 4. 1 series. \"v\" (bar): highest 3 at c, lowest 1 at a.",
+      "chart": "bar",
+      "height": 150,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "bar",
+          "max": 3.0,
+          "min": 1.0,
+          "name": "v",
+          "points": 3,
+          "sum": 6.0
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"150\" viewBox=\"0 0 200 150\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">T</title><desc id=\"chart-desc\">Bar chart titled &quot;T&quot;. 3 categories of k, from a to c. Value axis: v, from 0 to 4. 1 series. &quot;v&quot; (bar): highest 3 at c, lowest 1 at a.</desc><rect x=\"0\" y=\"0\" width=\"200\" height=\"150\" fill=\"#ffffff\"/><line x1=\"47.12\" y1=\"57.5\" x2=\"184\" y2=\"57.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><rect x=\"53.51\" y=\"74.75\" width=\"32.85\" height=\"18.25\" fill=\"#0072b2\"><title>v, a: 1</title></rect><text x=\"69.93\" y=\"70.75\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">1</text><rect x=\"99.13\" y=\"56.5\" width=\"32.85\" height=\"36.5\" fill=\"#0072b2\"><title>v, b: 2</title></rect><text x=\"115.56\" y=\"52.5\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">2</text><rect x=\"144.76\" y=\"38.25\" width=\"32.85\" height=\"54.75\" fill=\"#0072b2\"><title>v, c: 3</title></rect><text x=\"161.19\" y=\"34.25\" font-size=\"10\" text-anchor=\"middle\" fill=\"#1f2328\">3</text><line x1=\"47.12\" y1=\"93.5\" x2=\"184\" y2=\"93.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"46.62\" y1=\"20\" x2=\"46.62\" y2=\"93\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"70.5\" y1=\"93\" x2=\"70.5\" y2=\"97\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"69.93\" y=\"109\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">a</text><line x1=\"116.5\" y1=\"93\" x2=\"116.5\" y2=\"97\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"115.56\" y=\"109\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">b</text><line x1=\"161.5\" y1=\"93\" x2=\"161.5\" y2=\"97\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"161.19\" y=\"109\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">c</text><line x1=\"43.12\" y1=\"93.5\" x2=\"47.12\" y2=\"93.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"97\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"43.12\" y1=\"57.5\" x2=\"47.12\" y2=\"57.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"60.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">2</text><line x1=\"43.12\" y1=\"20.5\" x2=\"47.12\" y2=\"20.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"39.12\" y=\"24\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">4</text><text x=\"115.56\" y=\"130\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">k</text><text x=\"27\" y=\"56.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 56.5)\">v</text></svg>",
+      "warnings": [
+        "the title and subtitle are left out because the image is too small for them; make it larger to show them"
+      ],
+      "width": 200
+    }
+  }
+}

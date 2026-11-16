@@ -19,7 +19,8 @@ pub async fn set_default_agent(core: &ClientCore, request: DefaultAgentSetReques
 }
 
 pub async fn save_agent_config(core: &ClientCore, request: AgentSaveRequest) -> Result<()> {
-    core.save_agent(&request.document).await
+    core.save_agent(&request.document, request.context_patch.as_ref())
+        .await
 }
 
 #[cfg_attr(test, allow(dead_code))]

@@ -1,7 +1,7 @@
 use crate::support::*;
 
 use anyhow::{Context, Result};
-use gents::ensure_runtime_schemas;
+use gents_store::schema::ensure_runtime_schemas;
 use serde_json::Value;
 
 #[tokio::test]

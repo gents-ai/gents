@@ -1,7 +1,7 @@
 use super::{fake_llm, read_session, Attachment};
 use anyhow::{ensure, Context, Result};
-use gents::ConfigAccess;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -408,10 +408,10 @@ async fn canonical_action_doc_id(
             _docID node_did session_id request_id request_doc_id requester_did
             tool_call_key tool_call_id tool_name lifecycle_state
         }} }}"#,
-            gents::store::graphql::escape_graphql_string(node),
-            gents::store::graphql::escape_graphql_string(session),
-            gents::store::graphql::escape_graphql_string(request_doc_id),
-            gents::store::graphql::escape_graphql_string(ACTION_CALL_ID),
+            gents_store::graphql::escape_graphql_string(node),
+            gents_store::graphql::escape_graphql_string(session),
+            gents_store::graphql::escape_graphql_string(request_doc_id),
+            gents_store::graphql::escape_graphql_string(ACTION_CALL_ID),
         ))
         .await?;
     let rows: Vec<gents_protocol::row::AgentToolCallRow> =
@@ -446,15 +446,15 @@ pub(super) async fn verified_requests(
 ) -> Result<Vec<gents_protocol::row::AgentRequestRow>> {
     let result = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} }}"#,
-        gents::store::graphql::escape_graphql_string(node),
-        gents::store::graphql::escape_graphql_string(session),
+        gents_store::graphql::escape_graphql_string(node),
+        gents_store::graphql::escape_graphql_string(session),
         gents::SIGNED_REQUEST_FIELDS,
     )).await?;
     let rows: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(result["data"]["AgentRequest"].clone())?;
     ensure!(rows.len() == expected, "unexpected history request count");
     for row in &rows {
-        gents::verify_request_receipt_signature(row)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(row)?;
         ensure!(
             row.admission_signer_did.as_deref() == Some(author)
                 && row.requester_did.as_deref() == Some(author)

@@ -1,6 +1,6 @@
 use super::{ControlUpdateOutcome, DocumentRuntimeView};
-use crate::store::collection::Collection;
 use anyhow::Result;
+use gents_store::collection::Collection;
 
 /// Runtime-observed collections that are not themselves configuration.
 /// PackInstallation is not itself configuration: a pack install or remove

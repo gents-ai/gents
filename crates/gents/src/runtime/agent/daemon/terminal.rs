@@ -1,11 +1,15 @@
 use anyhow::Result;
 
 use super::{AgentDaemon, RequestInterruptionSource};
-use crate::inference::llm::rig_compat::ProviderModel;
-use crate::observe::runtime_trace::{record_current_failure_class, record_current_request_outcome};
-use crate::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
-use crate::request::streaming::DefraStreamWriter;
+use gents_inference::llm::rig_compat::ProviderModel;
+use gents_observe::observe::runtime_trace::{
+    record_current_failure_class, record_current_request_outcome,
+};
 use gents_protocol::row::AgentRequest;
+use gents_session::request::lifecycle::{
+    RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
+};
+use gents_session::request::streaming::DefraStreamWriter;
 
 /// Only the winning terminal CAS authorizes follow-up effects.
 pub(super) async fn terminalize_request(
@@ -37,7 +41,7 @@ pub(super) async fn terminalize_request(
 /// the whole reason is capped: a cause can carry a whole provider response
 /// body, and the reason replicates.
 pub(super) fn request_failure_reason(error: &anyhow::Error) -> String {
-    crate::request::failure_text::bounded_error_chain(error.as_ref())
+    gents_protocol::failure_text::bounded_error_chain(error.as_ref())
 }
 
 pub(super) async fn finalize_request_failure(
@@ -58,7 +62,7 @@ pub(super) async fn finalize_request_failure(
         Err(error) => {
             record_current_request_outcome("terminalization_failed");
             record_current_failure_class(&error);
-            tracing::error!(request_id, error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+            tracing::error!(request_id, error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                 "failed to atomically terminalize request and response; durable lease recovery remains pending");
             false
         }
@@ -84,7 +88,7 @@ where
     }
 
     pub(super) async fn release_failed_writer_binding(&self, request: &AgentRequest) {
-        if let Err(error) = crate::tools::workspace::release_writer_binding(
+        if let Err(error) = gents_session::workspace::release_writer_binding(
             &self.node,
             self.agent_config.agent_identity.as_ref(),
             request,
@@ -93,7 +97,7 @@ where
         {
             tracing::warn!(
                 request_id = %request.request_id,
-                error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+                error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                 "failed to release writer workspace binding after failure"
             );
         }
@@ -115,7 +119,7 @@ where
         {
             record_current_request_outcome("interrupted");
             self.record_request_interruption(request, RequestInterruptionSource::Claimed);
-            crate::tools::workspace::release_writer_binding(
+            gents_session::workspace::release_writer_binding(
                 &self.node,
                 self.agent_config.agent_identity.as_ref(),
                 request,

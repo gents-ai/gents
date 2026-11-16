@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gents::store::config_client::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
 
 use super::{ensure_peer_chat_ready, ClientCore};
 use crate::client::observe::ObservedStore;
@@ -9,8 +9,9 @@ use crate::client::store::{ClientStore, ClientStoreRows};
 mod tests;
 
 /// A validated applied receipt is the command result. The local projection is
-/// a separate replica observation; if it is unavailable, the selected-session
-/// refresh and normal observer path reconcile it without inviting replay.
+/// a separate replica observation, returned beside it; if it is unavailable,
+/// the selected-session refresh and normal observer path reconcile it without
+/// inviting replay.
 async fn merge_accepted_edit_projection(
     access: &ConfigAccess,
     store: &ObservedStore,
@@ -19,7 +20,10 @@ async fn merge_accepted_edit_projection(
     node_did: &str,
     session_id: &str,
     requester_did: &str,
-) -> gents_protocol::session_input_edit::SessionInputEditReceipt {
+) -> (
+    gents_protocol::session_input_edit::SessionInputEditReceipt,
+    anyhow::Result<()>,
+) {
     let result = async {
         let mut doc_ids = selected_doc_ids.to_vec();
         doc_ids.extend(receipt.request_doc_ids.iter().cloned());
@@ -30,7 +34,7 @@ async fn merge_accepted_edit_projection(
             return anyhow::Result::<()>::Ok(());
         }
         let captured = store.capture_read();
-        let rows = crate::client::load_request_documents_on(access, &doc_ids).await?;
+        let rows = crate::client::load_request_documents_on(access, node_did, &doc_ids).await?;
         for row in &rows {
             anyhow::ensure!(
                 row.node_did.as_deref() == Some(node_did)
@@ -44,29 +48,19 @@ async fn merge_accepted_edit_projection(
             ..ClientStoreRows::default()
         });
         if store.merge_chat_patch_at_read(&captured, patch).is_none() {
-            store.request_resync(Some(node_did));
+            store.request_resync();
             anyhow::bail!("accepted edit projection read became stale before publication");
         }
         anyhow::Result::<()>::Ok(())
     }
     .await;
-    if let Err(error) = result {
-        tracing::warn!(
-            command_id = %receipt.command_id,
-            node_did,
-            session_id,
-            error = %error,
-            "accepted pending edit awaits local projection refresh"
-        );
-    }
-    receipt
+    (receipt, result)
 }
 
-fn normalize_pending_edit_skills(edit: &mut gents::request::lifecycle::PendingQueueEdit) {
+fn normalize_pending_edit_skills(edit: &mut gents_session::request::lifecycle::PendingQueueEdit) {
     for message in &mut edit.messages {
         if let Some(authored) = &mut message.authored_input {
-            let selection =
-                gents::documents::skills::prompt_slash_skill_selection(&message.content);
+            let selection = gents_documents::skills::prompt_slash_skill_selection(&message.content);
             if !selection.selected_skill_ids.is_empty() {
                 authored.selected_skill_ids = selection.selected_skill_ids;
                 message.content = selection.prompt;
@@ -76,21 +70,6 @@ fn normalize_pending_edit_skills(edit: &mut gents::request::lifecycle::PendingQu
 }
 
 impl ClientCore {
-    pub async fn prepare_user_message_input(
-        &self,
-        node_did: &str,
-        session_id: &str,
-        input: gents_protocol::request_input::RequestInput,
-    ) -> Result<gents_protocol::request_input::RequestInput> {
-        self.prepare_user_message_input_with_delivery(
-            node_did,
-            session_id,
-            input,
-            gents_protocol::request_input::QueueDelivery::Steer,
-        )
-        .await
-    }
-
     pub async fn prepare_user_message_input_with_delivery(
         &self,
         node_did: &str,
@@ -99,7 +78,7 @@ impl ClientCore {
         delivery: gents_protocol::request_input::QueueDelivery,
     ) -> Result<gents_protocol::request_input::RequestInput> {
         let input = self.prepare_goal_input(node_did, session_id, input).await?;
-        gents::request::lifecycle::prepare_user_message_input(
+        gents_session::request::lifecycle::prepare_user_message_input(
             &self.session_queue_access(node_did)?,
             node_did,
             session_id,
@@ -113,7 +92,7 @@ impl ClientCore {
         &self,
         node_did: &str,
         session_id: &str,
-    ) -> Result<gents::request::lifecycle::PendingQueueSnapshot> {
+    ) -> Result<gents_session::request::lifecycle::PendingQueueSnapshot> {
         Ok(self
             .pending_user_queue_projection(node_did, session_id, &[])
             .await?
@@ -125,14 +104,14 @@ impl ClientCore {
         node_did: &str,
         session_id: &str,
         observed_doc_ids: &[String],
-    ) -> Result<gents::request::lifecycle::PendingQueueProjection> {
+    ) -> Result<gents_session::request::lifecycle::PendingQueueProjection> {
         let record = self
             .sync_state
             .records()
             .into_iter()
             .find(|record| record.node_did == node_did)
             .context("no saved deployment route owns this node")?;
-        gents::request::lifecycle::pending_user_queue_projection(
+        gents_session::request::lifecycle::pending_user_queue_projection(
             &self.session_queue_access(node_did)?,
             node_did,
             session_id,
@@ -146,7 +125,7 @@ impl ClientCore {
         &self,
         node_did: &str,
         session_id: &str,
-        mut edit: gents::request::lifecycle::PendingQueueEdit,
+        mut edit: gents_session::request::lifecycle::PendingQueueEdit,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
         normalize_pending_edit_skills(&mut edit);
         self.apply_pending_queue_edit(node_did, session_id, edit, None, None)
@@ -162,7 +141,7 @@ impl ClientCore {
         request_id: Option<&str>,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
         let snapshot = self.pending_user_queue(node_did, session_id).await?;
-        let edit = gents::request::lifecycle::pending_steer_edit(
+        let edit = gents_session::request::lifecycle::pending_steer_edit(
             &snapshot,
             expected_request_doc_ids,
             request_doc_id,
@@ -175,7 +154,7 @@ impl ClientCore {
         &self,
         node_did: &str,
         session_id: &str,
-        edit: gents::request::lifecycle::PendingQueueEdit,
+        edit: gents_session::request::lifecycle::PendingQueueEdit,
         steer: Option<&str>,
         request_id: Option<&str>,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
@@ -193,7 +172,7 @@ impl ClientCore {
         let access = self.session_queue_access(node_did)?;
         let result = match steer {
             Some(request_doc_id) => {
-                gents::request::lifecycle::submit_pending_user_steer(
+                gents_session::request::lifecycle::submit_pending_user_steer(
                     &access,
                     signer.as_ref(),
                     admission,
@@ -206,7 +185,7 @@ impl ClientCore {
                 .await
             }
             None => {
-                gents::request::lifecycle::submit_pending_user_edit(
+                gents_session::request::lifecycle::submit_pending_user_edit(
                     &access,
                     signer.as_ref(),
                     admission,
@@ -223,9 +202,9 @@ impl ClientCore {
                     .as_ref()
                     .map(|record| self.requester_did(record))
                     .unwrap_or_else(|| self.node_identity.did().to_string());
-                let receipt = merge_accepted_edit_projection(
+                let (receipt, projection) = merge_accepted_edit_projection(
                     &self.session_queue_access(node_did)?,
-                    self.store.as_ref(),
+                    self.stores.ensure(node_did).as_ref(),
                     receipt,
                     &selected_doc_ids,
                     node_did,
@@ -233,6 +212,15 @@ impl ClientCore {
                     &requester_did,
                 )
                 .await;
+                if let Err(error) = projection {
+                    tracing::warn!(
+                        command_id = %receipt.command_id,
+                        node_did,
+                        session_id,
+                        error = %error,
+                        "accepted pending edit awaits local projection refresh"
+                    );
+                }
                 self.clear_mutation_error();
                 Ok(receipt)
             }

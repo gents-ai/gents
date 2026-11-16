@@ -1,37 +1,8 @@
 use super::*;
 use clap::Parser;
-use serde::Deserialize;
+use gents_lean_vocab::families::initialization_initial_inference as family;
 
-#[derive(Deserialize, Debug)]
-struct SeedCase {
-    engineer: bool,
-    requested_model: Option<String>,
-    local_default: String,
-    preset: Option<String>,
-    preset_default: Option<String>,
-    concurrent: Option<i64>,
-    expected: Option<SeedPlan>,
-}
-
-#[derive(Deserialize, Debug)]
-struct SeedPlan {
-    model: Option<String>,
-    enabled: bool,
-    concurrent: Option<i64>,
-    effective_concurrent: i64,
-    context_override: Option<i64>,
-    output_override: Option<i64>,
-    records_probe: bool,
-    unselected_model_reason: Option<String>,
-    enabled_unselected_model_reason: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct Snapshot {
-    initial_inference_cases: Vec<SeedCase>,
-}
-
-fn parse_case(case: &SeedCase) -> InitArgs {
+fn parse_case(case: &family::SeedInput) -> InitArgs {
     let mut argv = vec!["gents".to_string(), "init".to_string()];
     if case.engineer {
         argv.push("--engineer".into());
@@ -61,10 +32,8 @@ fn parse_case(case: &SeedCase) -> InitArgs {
 
 #[tokio::test]
 async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned() -> Result<()> {
-    let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot()?;
-    assert!(!snapshot.initial_inference_cases.is_empty());
-    for case in snapshot.initial_inference_cases {
-        let args = parse_case(&case);
+    for case in family::cases() {
+        let args = parse_case(&case.input);
         let home = gents::runtime::embedded::EmbeddedHome::create_temp("init-seed").await?;
         let identity = home.identity.clone();
         let owner = home.did();
@@ -73,7 +42,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
         let user_home = tempfile::tempdir()?;
         let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None)?;
         let binding = provision_fresh_home(&node, identity.as_ref(), user.did()).await?;
-        let access = crate::shared::test_support::user_access(graphql, &user);
+        let access = gents_host::test_support::user_access(graphql, &user);
         let initialized = initialize_runtime_home(
             &access,
             &node,
@@ -84,44 +53,25 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
             None,
         )
         .await;
-        let Some(expected) = &case.expected else {
-            assert!(initialized.is_err(), "{case:?}");
+        let Ok(summary) = initialized else {
             assert!(
-                gents::inference::backends::registry::list_all_backends(&node)
+                gents_inference::backends::registry::list_all_backends(&node)
                     .await?
                     .is_empty()
             );
             assert!(load_node(&node, owner).await?.is_none());
+            case.check(None);
             continue;
         };
-        let summary = initialized.with_context(|| format!("{case:?}"))?;
-        let backends = gents::inference::backends::registry::list_all_backends(&node).await?;
-        assert_eq!(backends.len(), 1, "{case:?}");
+        let backends = gents_inference::backends::registry::list_all_backends(&node).await?;
+        assert_eq!(backends.len(), 1);
         let backend = &backends[0];
-        assert_eq!(backend.enabled, expected.enabled, "{case:?}");
-        assert_eq!(backend.max_concurrent, expected.concurrent, "{case:?}");
-        assert_eq!(
-            backend.effective_max_concurrent(),
-            expected.effective_concurrent
-        );
         let profile =
-            gents::documents::load_inference_profile(&node, owner, &summary.inference_profile_id)
+            gents_documents::load_inference_profile(&node, owner, &summary.inference_profile_id)
                 .await?
                 .expect("the agent's profile exists even before model selection");
-        assert_eq!(
-            (!profile.model_name.is_empty()).then_some(profile.model_name.as_str()),
-            expected.model.as_deref(),
-            "{case:?}",
-        );
-        assert_eq!(
-            profile.context_window, expected.context_override,
-            "{case:?}"
-        );
-        assert_eq!(
-            profile.max_output_tokens, expected.output_override,
-            "{case:?}"
-        );
-        let observation = gents::inference::backends::registry::lookup_backend_observation(
+        let model = (!profile.model_name.is_empty()).then(|| profile.model_name.clone());
+        let observation = gents_inference::backends::registry::lookup_backend_observation(
             &node,
             owner,
             &summary.backend_id,
@@ -130,15 +80,11 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
         .expect("the backend exists");
         assert_eq!(
             observation.probe_status.is_some(),
-            expected.records_probe,
-            "{case:?}"
+            observation.last_probe.is_some()
         );
-        assert_eq!(
-            observation.last_probe.is_some(),
-            expected.records_probe,
-            "{case:?}"
-        );
-        if expected.model.is_none() {
+        let mut unselected_model_reason = None;
+        let mut enabled_unselected_model_reason = None;
+        if model.is_none() {
             let runtime = gents::Gents::from_default_agent_documents(
                 node.clone(),
                 identity.clone(),
@@ -153,11 +99,9 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                 .unavailable_agents()
                 .get(&summary.default_agent_did)
                 .expect("the unselected agent remains visible for setup");
-            assert_eq!(
-                serde_json::to_value(unavailable.public_reason)?.as_str(),
-                expected.unselected_model_reason.as_deref(),
-                "{case:?}",
-            );
+            unselected_model_reason = serde_json::to_value(unavailable.public_reason)?
+                .as_str()
+                .map(str::to_owned);
             drop(runtime);
             let mut enabled_backend = backend.clone();
             enabled_backend.enabled = true;
@@ -184,11 +128,9 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                 .unavailable_agents()
                 .get(&summary.default_agent_did)
                 .expect("an enabled backend still requires model selection");
-            assert_eq!(
-                serde_json::to_value(unavailable.public_reason)?.as_str(),
-                expected.enabled_unselected_model_reason.as_deref(),
-                "{case:?}",
-            );
+            enabled_unselected_model_reason = serde_json::to_value(unavailable.public_reason)?
+                .as_str()
+                .map(str::to_owned);
             drop(runtime);
             let steps = init_next_steps(&summary, Path::new("/srv/home"), false, false, false);
             assert!(
@@ -199,6 +141,17 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                 "{steps:?}"
             );
         }
+        case.check(Some(family::SeedPlan {
+            model,
+            enabled: backend.enabled,
+            concurrent: backend.max_concurrent,
+            effective_concurrent: backend.effective_max_concurrent() as u64,
+            context_override: profile.context_window,
+            output_override: profile.max_output_tokens,
+            records_probe: observation.probe_status.is_some(),
+            unselected_model_reason,
+            enabled_unselected_model_reason,
+        }));
     }
     Ok(())
 }
@@ -216,7 +169,7 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
     let user_home = tempfile::tempdir()?;
     let user = KeyIdentity::load_or_create(user_home.path().join("user.key"), None)?;
     let binding = provision_fresh_home(&node, identity.as_ref(), user.did()).await?;
-    let access = crate::shared::test_support::user_access(
+    let access = gents_host::test_support::user_access(
         home.graphql_endpoint().context("served init home")?,
         &user,
     );
@@ -230,11 +183,11 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
         None,
     )
     .await?;
-    let mut backend = gents::inference::backends::registry::list_all_backends(&node)
+    let mut backend = gents_inference::backends::registry::list_all_backends(&node)
         .await?
         .remove(0);
     let mut profile =
-        gents::documents::load_inference_profile(&node, owner, &summary.inference_profile_id)
+        gents_documents::load_inference_profile(&node, owner, &summary.inference_profile_id)
             .await?
             .unwrap();
     backend.enabled = true;
@@ -252,7 +205,7 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
         ],
     )
     .await?;
-    let advertised = gents::documents::AdvertisedModel {
+    let advertised = gents_documents::AdvertisedModel {
         model_name: profile.model_name.clone(),
         display_name: None,
         context_window: Some(1_048_576),
@@ -260,17 +213,17 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
         max_output_tokens: Some(65_536),
         reasoning_efforts: None,
     };
-    gents::inference::backends::registry::record_discovered_catalog_on(
+    gents_inference::backends::registry::record_discovered_catalog_on(
         &access,
         &backend,
         vec![advertised.clone()],
     )
     .await?;
-    gents::inference::backends::registry::set_backend_probe_status_with_last_probe_as(
-        &gents::ConfigAccess::local(node.clone()),
+    gents_inference::backends::registry::set_backend_probe_status_with_last_probe_as(
+        &gents_store::config_client::ConfigAccess::local(node.clone()),
         owner,
         &backend.backend_id,
-        gents::HEALTHY_PROBE_STATUS,
+        gents_inference::backends::registry::HEALTHY_PROBE_STATUS,
         chrono::Utc::now(),
     )
     .await?;
@@ -286,15 +239,15 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
     let resolved = runtime
         .agents()
         .iter()
-        .find(|agent| agent.agent_did == summary.default_agent_did)
+        .find(|agent| agent.agent.agent_did == summary.default_agent_did)
         .expect("explicit selection makes the configured agent available");
-    assert_eq!(resolved.model_name, advertised.model_name);
+    assert_eq!(resolved.agent.model_name, advertised.model_name);
     assert_eq!(
-        resolved.context_window as i64,
+        resolved.agent.context_window as i64,
         advertised.context_window.unwrap()
     );
     assert_eq!(
-        resolved.max_output_tokens as i64,
+        resolved.agent.max_output_tokens as i64,
         advertised.max_output_tokens.unwrap()
     );
     drop(runtime);

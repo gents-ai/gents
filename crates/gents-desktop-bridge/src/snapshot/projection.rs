@@ -116,7 +116,6 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         deployment.dial_succeeded = false;
         // `runtime_connection` stays: it is this client's own observation and
         // admission reads it (`RuntimeConnectionObservation.presentation`).
-        deployment.pairing_ready = None;
         deployment.last_error = None;
     }
 
@@ -232,6 +231,7 @@ mod tests {
                 diagnostics_hint: "native logging".into(),
                 node_home_exists: true,
                 client_state_exists: true,
+                local_setup_unfinished: false,
                 saved_peers: vec![SavedPeerView {
                     peer_id: "peer_1".into(),
                     label: "Remote".into(),
@@ -239,6 +239,7 @@ mod tests {
                     addr: "/ip4/10.0.0.1/tcp/1".into(),
                     source: Some("manual".into()),
                     graphql: Some("http://10.0.0.1/graphql".into()),
+                    local: false,
                 }],
             },
             client: Some(DesktopRuntimeSnapshot {
@@ -256,7 +257,8 @@ mod tests {
                     cause: None,
                     next_action: None,
                     last_error: None,
-                    connected_peer_count: 1,
+                    runtime_count: 1,
+                    connected_runtime_count: 1,
                     activation_error_count: 0,
                 },
                 enrollment_requests: Some(vec![EnrollmentRequestView {
@@ -284,7 +286,6 @@ mod tests {
                     runtime_connection: Some("connected".to_owned()),
                     chat_safe: true,
                     chat_refusal: None,
-                    pairing_ready: Some(true),
                     lease_expires_at: None,
                     operator_access: true,
                     last_error: None,
@@ -412,6 +413,7 @@ mod tests {
                 }],
                 ended_access: Vec::new(),
             }),
+            repair_note: None,
         }
     }
 

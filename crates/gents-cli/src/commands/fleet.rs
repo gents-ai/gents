@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::cli::args::{FleetCommand, FleetSlotsArgs};
-use crate::{http_get_json, print_json, resolve_graphql_endpoint};
+use crate::print_json;
+use gents_host::http_client::http_get_json;
+use gents_service::home_state::resolve_graphql_endpoint;
 
 pub(crate) async fn dispatch(command: FleetCommand) -> Result<()> {
     match command {
@@ -13,7 +15,7 @@ pub(crate) async fn dispatch(command: FleetCommand) -> Result<()> {
 /// A fleet snapshot comes from a live runtime endpoint; bound the wait when
 /// that endpoint is unavailable or does not respond.
 async fn fleet_slots(args: FleetSlotsArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let url = runtime_fleet_slots_url(graphql.url())?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))

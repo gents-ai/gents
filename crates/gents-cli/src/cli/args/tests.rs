@@ -19,7 +19,7 @@ fn init_uses_the_runtime_backend_defaults_and_preserves_overrides() {
     assert_eq!(defaults.max_concurrent, None);
     assert_eq!(
         defaults.max_queue_depth,
-        gents::inference::backends::registry::DEFAULT_MAX_QUEUE_DEPTH
+        gents_documents::inference_defaults::DEFAULT_MAX_QUEUE_DEPTH
     );
     let explicit = parse_init(&["--max-concurrent", "7", "--max-queue-depth", "0"]);
     assert_eq!(explicit.max_concurrent, Some(7));
@@ -229,19 +229,6 @@ fn old_names_stop_working() {
             Cli::try_parse_from(argv).is_err(),
             "`gents {path:?}` should no longer parse"
         );
-    }
-    for (former, now) in [
-        ("reset", "gents runtime reset"),
-        ("auth", "gents accounts"),
-        ("query", "gents utils data query"),
-        ("chat", "gents -p MESSAGE"),
-        ("codex", "gents shell"),
-    ] {
-        let refused = Cli::try_parse_from(["gents", former])
-            .err()
-            .expect("a former command's name is not sent as a prompt");
-        assert_eq!(refused.kind(), ErrorKind::ValueValidation, "{former}");
-        assert!(refused.to_string().contains(now), "{former}: {refused}");
     }
     let misplaced = Cli::try_parse_from(["gents", "--home", "h", "status"])
         .err()

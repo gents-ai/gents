@@ -8,6 +8,10 @@ use std::fmt::Write;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
+mod placement;
+
+use placement::{placement_of, remember, screens, Placement};
+
 pub(super) const LABEL_PREFIX: &str = "gents-plugin-";
 const MAX_ID: usize = 256;
 const MAX_NODE: usize = 512;
@@ -85,7 +89,15 @@ where
     R: Runtime,
 {
     checked(&plugin_id, node_did.as_deref(), title.as_deref())?;
-    open(&app, &plugin_id, node_did.as_deref(), title.as_deref()).map_err(|error| {
+    let place = placement_of(&app, &plugin_id).await;
+    open(
+        &app,
+        &plugin_id,
+        node_did.as_deref(),
+        title.as_deref(),
+        place,
+    )
+    .map_err(|error| {
         tracing::warn!(%error, plugin = %plugin_id, "could not open plugin window");
         error.to_string()
     })
@@ -96,6 +108,7 @@ fn open<R>(
     plugin_id: &str,
     node_did: Option<&str>,
     title: Option<&str>,
+    place: Option<Placement>,
 ) -> tauri::Result<()>
 where
     R: Runtime,
@@ -126,19 +139,61 @@ where
     config.hidden_title = false;
     config.tabbing_identifier = None;
     config.create = false;
-    config.visible = true;
+    config.visible = false;
+    if let Some(place) = place {
+        config.width = place.width;
+        config.height = place.height;
+        if place.on_screen(&screens(app)) {
+            config.x = Some(place.x);
+            config.y = Some(place.y);
+        }
+    }
     let window = gents_desktop_bridge::navigation::restrict_window(
         WebviewWindowBuilder::from_config(app, &config)?,
     )
     .build()?;
     let handle = app.clone();
     let id = plugin_id.to_owned();
-    window.on_window_event(move |event| {
-        if matches!(event, WindowEvent::Destroyed) {
-            tell_main(&handle, &id, false);
+    let placed = window.clone();
+    window.on_window_event(move |event| match event {
+        WindowEvent::CloseRequested { .. } => {
+            if let Some(place) = Placement::of(&placed) {
+                remember(&handle, id.clone(), place);
+            }
         }
+        WindowEvent::Destroyed => tell_main(&handle, &id, false),
+        _ => {}
     });
     tell_main(app, plugin_id, true);
+    show_untabbed(&window)
+}
+
+#[cfg(target_os = "macos")]
+fn show_untabbed<R>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()>
+where
+    R: Runtime,
+{
+    use objc2_app_kit::{NSWindow, NSWindowTabbingMode};
+    let target = window.clone();
+    window.run_on_main_thread(move || {
+        if let Ok(pointer) = target.ns_window() {
+            // SAFETY: Tauri keeps the window's NSWindow alive while the
+            // window exists, and this runs on the main thread.
+            let native = unsafe { &*pointer.cast::<NSWindow>() };
+            native.setTabbingMode(NSWindowTabbingMode::Disallowed);
+        }
+        if let Err(error) = target.show().and_then(|()| target.set_focus()) {
+            tracing::warn!(%error, "could not show a plugin window");
+        }
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn show_untabbed<R>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()>
+where
+    R: Runtime,
+{
+    window.show()?;
     window.set_focus()
 }
 

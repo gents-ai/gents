@@ -1,0 +1,1090 @@
+//! Canonical tool configuration with typed nested capability groups.
+//!
+//! Optional timeouts use the documented owner default when unset. Tool
+//! enable/allow/background flags default false; presence or references alone do
+//! not enable those flags. Foreground execution remains bounded by the
+//! enclosing request deadline. Background executions retain their own lifetime
+//! and cancellation owner. Wait timeouts return a running snapshot; they do not
+//! cancel the underlying work.
+
+use serde::{Deserialize, Serialize};
+
+use super::{BashMode, FileToolMode};
+use gents_loop::tool_policy::{CommandExecutionMode, CommandNetworkMode};
+pub use gents_protocol::row::RetiredKey;
+
+mod persistence;
+
+pub use persistence::{write_tools_document, write_tools_document_in_txn, ToolsWriteError};
+
+/// Tool capabilities, execution policies, and dependencies referenced by a context.
+/// Groups are embedded in this document and share its ownership. Missing groups
+/// expose no capabilities. External service, surface, and target refs remain explicit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct Tools {
+    pub tools_id: String,
+    pub node_did: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub host: Option<HostTools>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub remote: Option<RemoteTools>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub agents: Option<AgentTools>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub built_ins: Option<BuiltInTools>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub datastore: Option<DatastoreTools>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub integrations: Option<IntegrationTools>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub self_config: Option<SelfConfigTools>,
+    /// Optional UI/discovery labels. References, never tags, determine execution.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
+    pub tags: Vec<String>,
+}
+
+/// Access to the host running the agent, with nested capability settings.
+/// Missing groups and an empty CLI list expose no tools in that category.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct HostTools {
+    /// Unbound default cwd for files, bash, CLI tools, and LSP. A bound request
+    /// uses the validated IsolatedWorkspace overlay through its existing owner.
+    /// Absent uses runtime cwd; relative paths resolve against runtime cwd.
+    /// Task commands use this configured cwd. Existing tool limits and workspace authority
+    /// still apply; cwd itself is not a sandbox. Hook-driven workspace switching
+    /// remains a design TODO, not an implicit effect of command output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub files: Option<FileTools>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub bash: Option<BashTools>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null"
+    )]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<CliTool>>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
+    pub cli: Vec<CliTool>,
+}
+
+/// File access. The mode owns enablement; there is no separate enable flag.
+/// File operations are bounded by the enclosing request deadline. There is no
+/// per-operation timer: a write cannot be abandoned mid-flight without
+/// misreporting whether it landed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct FileTools {
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null"
+    )]
+    #[serde(skip_serializing_if = "is_default")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<FileToolMode>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
+    pub mode: FileToolMode,
+    /// UTF-8 bytes of content `read_file` returns (cut on a character
+    /// boundary) when a call omits `max_chars`, and the most a call can
+    /// request. Unset uses 32,000. Must be between 1 and 1,000,000.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_read_chars: Option<i64>,
+    /// Entries `list_files` returns when a call omits `max_entries`, and the
+    /// most a call can request. Unset uses 200. Must be between 1 and 5,000.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_list_entries: Option<i64>,
+    /// Matches `glob` and `grep` return when a call omits `max_matches`, and
+    /// the most a call can request. Unset uses 200. Must be between 1 and
+    /// 5,000.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_matches: Option<i64>,
+}
+
+/// Bash capability and command execution constraints.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct BashTools {
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null"
+    )]
+    #[serde(skip_serializing_if = "is_default")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<BashMode>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
+    pub mode: BashMode,
+    /// Execution restrictions, independent of which bash tool is exposed.
+    /// Unset retains the existing mode-derived execution policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub execution_mode: Option<CommandExecutionMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub network_mode: Option<CommandNetworkMode>,
+    /// Argv arrays, not shell strings. Nonempty means every command must match
+    /// an allowed prefix; in read-only execution this can also extend the base
+    /// executable allowlist. Empty/absent imposes no additional prefix gate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub allowed_argv_prefixes: Option<Vec<Vec<String>>>,
+    /// Always denied, even if an allowed prefix matches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub forbidden_argv_prefixes: Option<Vec<Vec<String>>>,
+    /// Nonempty replaces the existing read-only executable list. Empty/absent
+    /// preserves that default, matching the existing contract.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    #[schemars(schema_with = "crate::string_list_schema")]
+    pub read_only_commands: Option<Vec<String>>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null"
+    )]
+    #[serde(skip_serializing_if = "is_default")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
+    pub background_enabled: bool,
+    /// Foreground timeout when a call omits `timeout_secs`. Unset uses the
+    /// host's `--command-timeout-secs` (120s unless the host sets it). Clamped
+    /// to the effective maximum below.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub timeout_secs: Option<i64>,
+    /// Longest foreground timeout a call can request. Unset follows
+    /// `timeout_secs` when that is set, otherwise the host's maximum. Clamped
+    /// to the host's `--command-timeout-max-secs` (which defaults to its
+    /// `--command-timeout-secs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_timeout_secs: Option<i64>,
+    /// Lifetime of a bash run started with `spawn_process`; the run is timed
+    /// out when it expires. Unset uses 36,000s (10 hours); larger values are
+    /// clamped to 36,000s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub background_timeout_secs: Option<i64>,
+    /// `wait_process` wait on a bash run when the call omits `timeout_secs`.
+    /// Unset uses 30s. Clamped to the wait maximum. Waiting never stops the run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub wait_timeout_secs: Option<i64>,
+    /// Longest `wait_process` wait a call can request on a bash run. Unset
+    /// uses 600s; larger values are clamped to 600s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_wait_timeout_secs: Option<i64>,
+    /// Output budget for stdout and for stderr, each, in what a command shows
+    /// the model; the rest is truncated. Counted in UTF-8 bytes, cut on a
+    /// character boundary. Unset uses 16,000. Must be between 1 and 1,000,000.
+    /// It bounds a completed command's result and an interrupted command's
+    /// output tail, and a background completion notification summarizes at
+    /// most this much (never more than 4,000 bytes), using the value configured
+    /// when the output is presented.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_output_chars: Option<i64>,
+}
+
+/// Select one existing host-registered CLI tool. CLI tools currently do not
+/// support background execution; only bash does among native host tools.
+/// Binary, environment, and argument constraints remain owned by its existing
+/// host registration; this document does not introduce a second executor config.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct CliTool {
+    pub name: String,
+    /// Execution timeout. Unset keeps the host registration's timeout (10s for
+    /// every built-in registration). A set value replaces it, clamped to the
+    /// host's foreground maximum (`--command-timeout-max-secs`, which defaults
+    /// to `--command-timeout-secs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub timeout_secs: Option<i64>,
+    /// Output budget for stdout and for stderr, each, in what a call shows the
+    /// model; the rest is truncated. Counted in UTF-8 bytes, cut on a
+    /// character boundary. Unset keeps the host CLI registration's budget
+    /// (16,000 for every built-in registration). Must be between 1 and
+    /// 1,000,000. It bounds a completed call's result and an interrupted
+    /// call's output tail, using the value configured when the result is
+    /// presented, not at dispatch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_output_chars: Option<i64>,
+}
+
+/// How selected MCP tools are presented to the model.
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum RemoteToolStyle {
+    /// Include each selected tool and its schema in the provider request.
+    Flat,
+    /// Expose discovery, description, and invocation tools instead of the full catalog.
+    #[default]
+    Discovery,
+}
+
+impl RemoteToolStyle {
+    pub const ALL: [Self; 2] = [Self::Flat, Self::Discovery];
+}
+
+/// Select MCP services with per-service settings. Empty means no remote tools.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct RemoteTools {
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null"
+    )]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<RemoteServiceTools>>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
+    pub services: Vec<RemoteServiceTools>,
+}
+
+impl RemoteTools {
+    /// The single admission predicate for one service's selection: the one
+    /// place that decides whether a selection may be presented to a model or
+    /// invoked. A missing, duplicated or unpermitted service reference, an
+    /// empty `tool_names`, and a background name outside `tool_names` each
+    /// select nothing, in either presentation style.
+    pub fn selected_service(
+        &self,
+        mcp_service_id: &str,
+        allowed_mcp_service_ids: &[String],
+    ) -> Option<&RemoteServiceTools> {
+        let mut matches = self
+            .services
+            .iter()
+            .filter(|service| service.mcp_service_id == mcp_service_id);
+        let service = matches.next()?;
+        (matches.next().is_none()
+            && allowed_mcp_service_ids
+                .iter()
+                .any(|allowed| allowed == mcp_service_id)
+            && !service.tool_names.is_empty()
+            && service
+                .background_tool_names
+                .iter()
+                .all(|name| service.tool_names.contains(name)))
+        .then_some(service)
+    }
+}
+
+/// Tool selection and presentation for one MCP service.
+/// Service connectivity remains owned by the existing MCP service document.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct RemoteServiceTools {
+    pub mcp_service_id: String,
+    /// Exact MCP tool names, never wildcards. Empty permits no tools, and newly
+    /// discovered tools are not automatically selected. Selection is enforced at
+    /// invocation in both presentation styles, not just when building the catalog.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_string_vec_or_null"
+    )]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(schema_with = "crate::string_list_schema")]
+    pub tool_names: Vec<String>,
+    /// Presentation does not change permissions. Discovery is the default.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null"
+    )]
+    #[serde(skip_serializing_if = "is_default")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<RemoteToolStyle>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
+    pub style: RemoteToolStyle,
+    /// Required services must be available before agent admission of new work.
+    /// Optional service outages do not block admission; calls still require the
+    /// selected service and tool to be available. Malformed refs remain errors.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null"
+    )]
+    #[serde(skip_serializing_if = "is_default")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
+    pub required: bool,
+    /// Exact service-local names permitted to run in the background. Must be a
+    /// subset of tool_names; never the generic discovery invocation wrapper name.
+    /// Defaults to no background execution, independently of presentation style.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_string_vec_or_null"
+    )]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(schema_with = "crate::string_list_schema")]
+    pub background_tool_names: Vec<String>,
+    /// Connection/handshake timeout for this service; current default 15s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub connect_timeout_secs: Option<i64>,
+    /// Tool catalog discovery/preflight timeout; current default 30s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub discovery_timeout_secs: Option<i64>,
+    /// Per-call execution cap in either presentation style; current default 300s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub timeout_secs: Option<i64>,
+    /// Additional cap when service health is stale; current default 120s.
+    /// Cannot extend the normal per-call cap.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub stale_timeout_secs: Option<i64>,
+    /// Lifetime of a call to this service started with `spawn_process`. Unset
+    /// uses 36,000s; larger values are clamped to 36,000s. The per-call
+    /// `timeout_secs` still applies inside it; backgrounding bypasses neither.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub background_timeout_secs: Option<i64>,
+    /// `wait_process` wait on a background call to this service when the call
+    /// omits `timeout_secs`. Unset uses 30s. Clamped to the wait maximum.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub wait_timeout_secs: Option<i64>,
+    /// Longest `wait_process` wait a call can request on a background call to
+    /// this service. Unset uses 600s; larger values are clamped to 600s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_wait_timeout_secs: Option<i64>,
+}
+
+/// Session-message targets: the allowlist agent_new/agent_message address.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct AgentTools {
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_string_vec_or_null"
+    )]
+    /// References to same-owner AgentTarget documents. Empty selects no targets.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(schema_with = "crate::string_list_schema")]
+    pub target_ids: Vec<String>,
+    /// Exposes agent_new/agent_message over the allowlisted targets. Every
+    /// started session is a background tool row; there is no foreground wait,
+    /// workspace inheritance, cascade or cross-node switch. A target on
+    /// another node is admitted there as a Peer request under its ACP.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enabled: Option<bool>,
+}
+
+/// Agent runtime capabilities independent of host access or external integrations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct BuiltInTools {
+    /// Tools documents stored before graph tools were removed carry this key;
+    /// it is accepted and ignored, and the canonical serializer drops it on next write.
+    #[serde(default, rename = "enable_graph_tools", skip_serializing)]
+    #[cfg_attr(feature = "typescript", ts(skip))]
+    #[schemars(extend("deprecated" = true))]
+    pub retired_graph_tools: RetiredKey,
+    /// Independent goal get/update capability. Unset is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_goal_tools: Option<bool>,
+    /// Additional opt-in for model-facing goal creation. Unset is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_goal_creation: Option<bool>,
+    /// The `sessions` read tool. Unset is enabled: compaction stubs name its
+    /// `output` read as the way to recover a trimmed tool result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_session_history_tool: Option<bool>,
+    /// Node-wide schema administration, independent of config and document access.
+    /// DefraDB remains the schema authorization owner. Unset is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    /// Tools writers may configure this capability like other built-ins; an
+    /// operator that must forbid it must clamp the tool-policy ceiling.
+    pub enable_schema_tool: Option<bool>,
+    /// Native node P2P observations. Unset is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_p2p_tool: Option<bool>,
+    /// Native P2P changes also require enable_p2p_tool. Enrollment and DefraDB
+    /// remain the authorization owners. Unset is disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_p2p_mutations: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_context_budget: Option<bool>,
+}
+
+/// Schema-bounded access to the DefraDB datastore.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct DatastoreTools {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_defra_query: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    #[schemars(schema_with = "crate::string_list_schema")]
+    pub defra_query_collections: Option<Vec<String>>,
+    /// Bare `surface_id` refs to same-agent `DatastoreToolSurface` docs.
+    /// Expanded into create and query tools at snapshot build (fail-closed).
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    #[schemars(schema_with = "crate::string_list_schema")]
+    pub datastore_tool_surface_ids: Option<Vec<String>>,
+    /// Exact application collections granted to the generic write endpoint. Empty denies all.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    #[schemars(schema_with = "crate::string_list_schema")]
+    pub write_collections: Option<Vec<String>>,
+}
+
+/// Domain-specific external integrations. Extension design remains to be settled.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields, from = "IntegrationToolsStored")]
+#[schemars(!from, transform = IntegrationToolsStored::retired_keys)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct IntegrationTools {
+    /// Presence selects the LSP integration; absent means disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub lsp: Option<LspTools>,
+    /// Installed plugins offered to the model as tools, each named after its
+    /// plugin. Empty/absent = no plugin tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub plugins: Option<Vec<PluginToolRef>>,
+}
+
+/// What a stored `integrations` value may hold. v1.0.0-rc0 also accepted
+/// `eth_tool_ids` (refs to the since-removed `EthTool` collection), so a Tools
+/// document an RC0 node wrote can carry it. It is read and dropped, never
+/// written, so an upgraded node keeps loading that agent's tools instead of
+/// failing the whole document on a capability that no longer exists.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IntegrationToolsStored {
+    #[serde(default)]
+    lsp: Option<LspTools>,
+    #[serde(default)]
+    plugins: Option<Vec<PluginToolRef>>,
+    #[serde(default)]
+    eth_tool_ids: Option<serde_json::Value>,
+}
+
+impl IntegrationToolsStored {
+    /// The canonical schema plus the keys only this stored shape accepts.
+    fn retired_keys(schema: &mut schemars::Schema) {
+        if let Some(properties) = schema
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            properties.insert(
+                "eth_tool_ids".into(),
+                serde_json::json!({
+                    "description": "Accepted from v1.0.0-rc0 Tools documents and ignored.",
+                    "deprecated": true
+                }),
+            );
+        }
+    }
+}
+
+impl From<IntegrationToolsStored> for IntegrationTools {
+    fn from(stored: IntegrationToolsStored) -> Self {
+        let dropped = match &stored.eth_tool_ids {
+            Some(serde_json::Value::Array(ids)) => ids.len(),
+            Some(serde_json::Value::Null) | None => 0,
+            Some(_) => 1,
+        };
+        if dropped > 0 {
+            tracing::warn!(
+                dropped,
+                "ignoring integrations.eth_tool_ids from a v1.0.0-rc0 Tools document; Ethereum tools were removed from core"
+            );
+        }
+        Self {
+            lsp: stored.lsp,
+            plugins: stored.plugins,
+        }
+    }
+}
+
+/// One installed plugin offered to the model as a tool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct PluginToolRef {
+    /// `namespace/name` of the installed plugin; the tool is called `name`.
+    pub plugin: String,
+    /// `sha256:<hex>` of the artifact to run. When the installed plugin is a
+    /// different artifact, the tool is unavailable until the pin is updated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub digest: Option<String>,
+    /// Permit this installed plugin to call the current request's selected
+    /// tools through the owned loop. Child calls do not inherit this grant.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional))]
+    pub tool_calls: bool,
+    /// Trigger-owned String inputs hidden from the model. Resolution uses the
+    /// same correlation/source-field owner as bounded datastore tools; a caller
+    /// cannot supply or replace one of these fields.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<super::WriteToolField>>", optional = nullable))]
+    pub input_fields: Vec<super::WriteToolField>,
+    /// Lets this plugin run job steps within the block's ceiling; the installed
+    /// plugin must declare `job: true`. Absent means non-job verbs only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub job: Option<gents_protocol::job::PluginJobSettings>,
+}
+
+impl PluginToolRef {
+    /// The name the model calls this tool by.
+    pub fn tool_name(&self) -> &str {
+        self.plugin
+            .split_once('/')
+            .map_or(self.plugin.as_str(), |(_, name)| name)
+    }
+}
+
+/// Language-server settings embedded in `IntegrationTools`.
+/// The operator payload is validated with the rest of the tool document.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct LspTools {
+    /// Existing language-server flags and catalog overrides. Absent uses defaults.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub config: Option<String>,
+    /// Action timeout, including indexing retries, when a call omits
+    /// `timeout`. Unset uses 20s. Clamped to the maximum below.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub timeout_secs: Option<i64>,
+    /// Longest action timeout a call can request; calls ask for at least 5s.
+    /// Unset uses 300s; larger values are clamped to 300s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_timeout_secs: Option<i64>,
+}
+
+/// Existing self-configuration controls, grouped for a separate design review.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct SelfConfigTools {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_self_config: Option<bool>,
+    /// Self-config category allowlist; unset means the core spine
+    /// (agent, tools, profile). See `documents::patch`.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
+    )]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    #[schemars(schema_with = "crate::string_list_schema")]
+    pub self_config_categories: Option<Vec<String>>,
+    /// Opt-in guardrail: refuse self-config patches that would strip the
+    /// agent's own reconfigure ability.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub self_config_no_lockout: Option<bool>,
+    /// Grants the `preview` verb: `config` may validate a change and return
+    /// its diff without writing. It does not restrict writes; `edit` applies
+    /// whether or not previews are granted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub self_config_preview: Option<bool>,
+    /// Opt-in authority to install packs from the home store or registry for
+    /// this node. Disabled by absence and never implied by
+    /// general self-config.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_pack_install: Option<bool>,
+    /// Pack authority: an install grants what the pack's plugins ask for, and
+    /// `pack build` and `pack test` compile plugin source in the command
+    /// sandbox. The Engineer preset carries it; other agents have it only
+    /// through their own Tools, and a node owner narrows it by clearing it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_pack_authority: Option<bool>,
+}
+
+impl Tools {
+    /// Whether any selected tool works on the host filesystem and so needs
+    /// `host.root`: file tools, bash, a host CLI tool, or LSP.
+    pub fn requires_filesystem_root(&self) -> bool {
+        let host = self.host.as_ref();
+        host.and_then(|host| host.files.as_ref())
+            .is_some_and(|files| files.mode != FileToolMode::Off)
+            || host
+                .and_then(|host| host.bash.as_ref())
+                .is_some_and(|bash| bash.mode != BashMode::Off)
+            || host.is_some_and(|host| !host.cli.is_empty())
+            || self
+                .integrations
+                .as_ref()
+                .is_some_and(|group| group.lsp.is_some())
+    }
+
+    /// Validate this document's local settings. Referenced documents and runtime
+    /// availability are checked by their scoped resolution owners.
+    pub fn validation_violations(&self) -> Vec<String> {
+        fn positive(errors: &mut Vec<String>, field: &str, value: Option<i64>) {
+            if value.is_some_and(|value| value <= 0) {
+                errors.push(format!("{field} must be positive"));
+            }
+        }
+        fn at_most(errors: &mut Vec<String>, field: &str, value: Option<i64>, limit: usize) {
+            positive(errors, field, value);
+            if value.is_some_and(|value| value > limit as i64) {
+                errors.push(format!("{field} must be at most {limit}"));
+            }
+        }
+        fn output_chars(errors: &mut Vec<String>, field: &str, value: Option<i64>) {
+            at_most(
+                errors,
+                field,
+                value,
+                crate::tool_limits::MAX_CONFIGURED_COMMAND_CHARS,
+            );
+        }
+        fn bounded(
+            errors: &mut Vec<String>,
+            field: &str,
+            value: Option<i64>,
+            maximum: Option<i64>,
+            fallback: i64,
+            maximum_fallback: Option<i64>,
+        ) {
+            positive(errors, field, value);
+            positive(errors, &format!("{field} maximum"), maximum);
+            let value = value.unwrap_or(fallback);
+            let maximum = maximum.unwrap_or_else(|| maximum_fallback.unwrap_or(value));
+            if value > maximum {
+                errors.push(format!(
+                    "{field} maximum {maximum} must cover effective default {value}"
+                ));
+            }
+        }
+        fn names<'a>(
+            errors: &mut Vec<String>,
+            field: &str,
+            values: impl IntoIterator<Item = &'a str>,
+            exact_tools: bool,
+        ) {
+            let mut seen = rapidhash::RapidHashSet::default();
+            for value in values {
+                if value.trim().is_empty() {
+                    errors.push(format!("{field} contains a blank name"));
+                }
+                if exact_tools && (value.contains('*') || value.contains('?')) {
+                    errors.push(format!(
+                        "{field} requires explicit tool names, not wildcard {value:?}"
+                    ));
+                }
+                if !seen.insert(value) {
+                    errors.push(format!("{field} contains duplicate name {value:?}"));
+                }
+            }
+        }
+        let mut errors = Vec::new();
+        if let Some(host) = &self.host {
+            if let Some(files) = &host.files {
+                at_most(
+                    &mut errors,
+                    "host.files.max_read_chars",
+                    files.max_read_chars,
+                    crate::tool_limits::MAX_CONFIGURED_FILE_CHARS,
+                );
+                for (field, value) in [
+                    ("host.files.max_list_entries", files.max_list_entries),
+                    ("host.files.max_matches", files.max_matches),
+                ] {
+                    at_most(
+                        &mut errors,
+                        field,
+                        value,
+                        crate::tool_limits::MAX_CONFIGURED_FILE_RESULTS,
+                    );
+                }
+            }
+            if let Some(bash) = &host.bash {
+                bounded(
+                    &mut errors,
+                    "host.bash.timeout_secs",
+                    bash.timeout_secs,
+                    bash.max_timeout_secs,
+                    crate::tool_limits::DEFAULT_COMMAND_TIMEOUT_SECS as i64,
+                    None,
+                );
+                bounded(
+                    &mut errors,
+                    "host.bash.wait_timeout_secs",
+                    bash.wait_timeout_secs,
+                    bash.max_wait_timeout_secs,
+                    crate::tool_limits::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
+                    Some(crate::tool_limits::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
+                );
+                positive(
+                    &mut errors,
+                    "host.bash.background_timeout_secs",
+                    bash.background_timeout_secs,
+                );
+                output_chars(
+                    &mut errors,
+                    "host.bash.max_output_chars",
+                    bash.max_output_chars,
+                );
+                for (field, prefixes) in [
+                    (
+                        "host.bash.allowed_argv_prefixes",
+                        &bash.allowed_argv_prefixes,
+                    ),
+                    (
+                        "host.bash.forbidden_argv_prefixes",
+                        &bash.forbidden_argv_prefixes,
+                    ),
+                ] {
+                    for prefix in prefixes.iter().flatten() {
+                        if prefix
+                            .first()
+                            .is_none_or(|executable| executable.trim().is_empty())
+                        {
+                            errors.push(format!(
+                                "{field} requires a nonempty argv prefix with an executable"
+                            ));
+                        }
+                    }
+                }
+                names(
+                    &mut errors,
+                    "host.bash.read_only_commands",
+                    bash.read_only_commands.iter().flatten().map(String::as_str),
+                    false,
+                );
+            }
+            names(
+                &mut errors,
+                "host.cli",
+                host.cli.iter().map(|tool| tool.name.as_str()),
+                true,
+            );
+            for cli in &host.cli {
+                positive(
+                    &mut errors,
+                    &format!("host.cli[{}].timeout_secs", cli.name),
+                    cli.timeout_secs,
+                );
+                output_chars(
+                    &mut errors,
+                    &format!("host.cli[{}].max_output_chars", cli.name),
+                    cli.max_output_chars,
+                );
+            }
+        }
+        if let Some(remote) = &self.remote {
+            names(
+                &mut errors,
+                "remote.services",
+                remote
+                    .services
+                    .iter()
+                    .map(|service| service.mcp_service_id.as_str()),
+                false,
+            );
+            for service in &remote.services {
+                let field = format!("remote.services[{}]", service.mcp_service_id);
+                names(
+                    &mut errors,
+                    &format!("{field}.tool_names"),
+                    service.tool_names.iter().map(String::as_str),
+                    true,
+                );
+                names(
+                    &mut errors,
+                    &format!("{field}.background_tool_names"),
+                    service.background_tool_names.iter().map(String::as_str),
+                    true,
+                );
+                for background in &service.background_tool_names {
+                    if !service.tool_names.contains(background) {
+                        errors.push(format!(
+                            "{field}.background_tool_names contains unselected tool {background:?}"
+                        ));
+                    }
+                }
+                for (name, value) in [
+                    ("connect_timeout_secs", service.connect_timeout_secs),
+                    ("discovery_timeout_secs", service.discovery_timeout_secs),
+                    ("timeout_secs", service.timeout_secs),
+                    ("stale_timeout_secs", service.stale_timeout_secs),
+                    ("background_timeout_secs", service.background_timeout_secs),
+                ] {
+                    positive(&mut errors, &format!("{field}.{name}"), value);
+                }
+                // Stale/background caps are intersections at invocation, not
+                // requirements that authored ceilings be below the normal call cap.
+                bounded(
+                    &mut errors,
+                    &format!("{field}.wait_timeout_secs"),
+                    service.wait_timeout_secs,
+                    service.max_wait_timeout_secs,
+                    crate::tool_limits::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
+                    Some(crate::tool_limits::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
+                );
+            }
+        }
+        if let Some(agents) = &self.agents {
+            names(
+                &mut errors,
+                "agents.target_ids",
+                agents.target_ids.iter().map(String::as_str),
+                false,
+            );
+        }
+        if let Some(datastore) = &self.datastore {
+            names(
+                &mut errors,
+                "datastore.write_collections",
+                datastore
+                    .write_collections
+                    .iter()
+                    .flatten()
+                    .map(String::as_str),
+                false,
+            );
+            for collection in datastore.write_collections.iter().flatten() {
+                if let Err(error) = gents_store::graphql::validate_collection_identifier(collection)
+                {
+                    errors.push(format!("datastore.write_collections: {error}"));
+                }
+            }
+            names(
+                &mut errors,
+                "datastore.defra_query_collections",
+                datastore
+                    .defra_query_collections
+                    .iter()
+                    .flatten()
+                    .map(String::as_str),
+                false,
+            );
+            names(
+                &mut errors,
+                "datastore.datastore_tool_surface_ids",
+                datastore
+                    .datastore_tool_surface_ids
+                    .iter()
+                    .flatten()
+                    .map(String::as_str),
+                false,
+            );
+        }
+        if let Some(integrations) = &self.integrations {
+            let mut plugin_tool_names = std::collections::BTreeSet::new();
+            for plugin in integrations.plugins.iter().flatten() {
+                let mut inputs = std::collections::BTreeSet::new();
+                for field in &plugin.input_fields {
+                    if gents_store::graphql::validate_graphql_name(&field.name).is_err()
+                        || field.fill.is_none()
+                        || field.required
+                        || !inputs.insert(&field.name)
+                    {
+                        errors.push(format!(
+                            "integrations.plugins: {:?} input_fields must be distinct runtime-filled fields with required omitted",
+                            plugin.plugin
+                        ));
+                    }
+                }
+                if let Err(error) = crate::plugin_coordinate::parse_coordinate(&plugin.plugin) {
+                    errors.push(format!("integrations.plugins: {error}"));
+                } else if !plugin_tool_names.insert(plugin.tool_name()) {
+                    errors.push(format!(
+                        "integrations.plugins names two plugins called {:?}; a tool name must be unique",
+                        plugin.tool_name()
+                    ));
+                }
+                if let Some(job) = &plugin.job {
+                    for error in crate::plugin_job_settings::validate(job) {
+                        errors.push(format!("integrations.plugins[{}].{error}", plugin.plugin));
+                    }
+                }
+                if let Some(digest) = &plugin.digest {
+                    let hex = digest.strip_prefix("sha256:").unwrap_or_default();
+                    if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                        errors.push(format!(
+                            "integrations.plugins: {:?} pins {digest:?}, which is not sha256:<64 hex>",
+                            plugin.plugin
+                        ));
+                    }
+                }
+            }
+            if let Some(lsp) = &integrations.lsp {
+                bounded(
+                    &mut errors,
+                    "integrations.lsp.timeout_secs",
+                    lsp.timeout_secs,
+                    lsp.max_timeout_secs,
+                    crate::tool_limits::DEFAULT_ACTION_TIMEOUT_SECS as i64,
+                    Some(crate::tool_limits::MAX_ACTION_TIMEOUT_SECS as i64),
+                );
+                if let Err(error) = crate::LspConfigDocument::parse_operator(lsp.config.as_deref())
+                {
+                    errors.push(format!("invalid integrations.lsp.config: {error}"));
+                }
+            }
+        }
+        if let Some(self_config) = &self.self_config {
+            names(
+                &mut errors,
+                "self_config.self_config_categories",
+                self_config
+                    .self_config_categories
+                    .iter()
+                    .flatten()
+                    .map(String::as_str),
+                false,
+            );
+            for category in self_config.self_config_categories.iter().flatten() {
+                if !crate::patch::SELF_CONFIG_CATEGORIES.contains(&category.as_str()) {
+                    errors.push(format!("unknown self_config category {category:?}"));
+                }
+            }
+        }
+        errors
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let violations = self.validation_violations();
+        anyhow::ensure!(
+            violations.is_empty(),
+            "Tools {}: {}",
+            self.tools_id,
+            violations.join("; ")
+        );
+        Ok(())
+    }
+}
+
+/// The Tools document an agent selects, under its owner: agent ->
+/// context -> `tools_id`. `None` when the agent has no context or the
+/// context selects no Tools; a missing referenced document is an error.
+pub async fn load_agent_tools_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    agent_did: &str,
+) -> anyhow::Result<Option<Tools>> {
+    Ok(load_agent_context_and_tools_in_txn(txn, owner, agent_did)
+        .await?
+        .1)
+}
+
+/// [`load_agent_tools_in_txn`] that also returns the agent's context: the
+/// context is `None` when the agent has none, the Tools when the context
+/// selects none; a missing referenced document is an error.
+pub async fn load_agent_context_and_tools_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    agent_did: &str,
+) -> anyhow::Result<(Option<super::AgentContext>, Option<Tools>)> {
+    use crate::read_desired_state_document_in_txn as read;
+    use anyhow::Context as _;
+    use gents_store::collection::Collection;
+    let agent: super::Agent = serde_json::from_value(
+        read(txn, Collection::Agent, owner, agent_did)
+            .await?
+            .with_context(|| format!("Agent {agent_did} not found for {owner}"))?,
+    )?;
+    let Some(context_id) = agent.context_id else {
+        return Ok((None, None));
+    };
+    let context: super::AgentContext = serde_json::from_value(
+        read(txn, Collection::AgentContext, owner, &context_id)
+            .await?
+            .with_context(|| format!("AgentContext {context_id} not found for {owner}"))?,
+    )?;
+    let Some(tools_id) = context.tools_id.as_deref() else {
+        return Ok((Some(context), None));
+    };
+    let tools = serde_json::from_value(
+        read(txn, Collection::Tools, owner, tools_id)
+            .await?
+            .with_context(|| format!("Tools {tools_id} not found for {owner}"))?,
+    )?;
+    Ok((Some(context), Some(tools)))
+}
+
+/// Compact full-document serialization. Explicit sparse patches use a separate
+/// representation so an omitted field is not confused with clearing a field.
+fn is_default<T>(value: &T) -> bool
+where
+    T: Default + PartialEq,
+{
+    value == &T::default()
+}
+
+#[cfg(test)]
+mod tests;

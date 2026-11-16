@@ -129,7 +129,7 @@ pub(super) async fn run_detached_client_start<R>(
         let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
         bridge.incompatible_client_store = match &start_result {
             Ok(_) => None,
-            Err((_, incompatible)) => incompatible.clone(),
+            Err((_, incompatible)) => incompatible.as_deref().cloned(),
         };
     }
     let start_result = start_result.map_err(|(error, _)| error);
@@ -206,7 +206,7 @@ async fn reserve_client_listener(
     policy: &crate::config::ResolvedBridgePolicy,
 ) -> Result<
     (
-        Option<gents::store::local::file_lock::FileLock>,
+        Option<gents_store::local::file_lock::FileLock>,
         Option<crate::host::local::LocalListener>,
     ),
     BridgeError,

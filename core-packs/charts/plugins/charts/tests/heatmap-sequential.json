@@ -1,0 +1,90 @@
+{
+  "input": {
+    "chart": "heatmap",
+    "x": "quarter",
+    "y": [
+      "region"
+    ],
+    "value": "sales",
+    "title": "Sales by region and quarter",
+    "output": "svg",
+    "width": 560,
+    "height": 360,
+    "data": {
+      "columns": [
+        "region",
+        "quarter",
+        "sales"
+      ],
+      "rows": [
+        [
+          "N",
+          "Q1",
+          10
+        ],
+        [
+          "N",
+          "Q2",
+          14
+        ],
+        [
+          "N",
+          "Q3",
+          9
+        ],
+        [
+          "S",
+          "Q1",
+          20
+        ],
+        [
+          "S",
+          "Q2",
+          5
+        ],
+        [
+          "S",
+          "Q3",
+          12
+        ],
+        [
+          "E",
+          "Q1",
+          7
+        ],
+        [
+          "E",
+          "Q2",
+          30
+        ]
+      ]
+    }
+  },
+  "expect": {
+    "response": {
+      "alt": "Heatmap titled \"Sales by region and quarter\". 3 columns of quarter by 3 rows of region, coloured by sales from 5 to 30. Highest 30 at Q2 and E; lowest 5 at Q2 and S.",
+      "chart": "heatmap",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#fde725",
+          "columns": 3,
+          "empty_cells": 1,
+          "gaps": 1,
+          "mark": "cell",
+          "max": 30.0,
+          "min": 5.0,
+          "name": "sales",
+          "points": 8,
+          "rows": 3
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Sales by region and quarter</title><desc id=\"chart-desc\">Heatmap titled &quot;Sales by region and quarter&quot;. 3 columns of quarter by 3 rows of region, coloured by sales from 5 to 30. Highest 30 at Q2 and E; lowest 5 at Q2 and S.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Sales by region and quarter</text><rect x=\"49.44\" y=\"50.5\" width=\"136.02\" height=\"83.33\" fill=\"#404386\"><title>N, Q1: 10</title></rect><text x=\"117.45\" y=\"96.17\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">10</text><rect x=\"186.46\" y=\"50.5\" width=\"136.02\" height=\"83.33\" fill=\"#2e6e8e\"><title>N, Q2: 14</title></rect><text x=\"254.47\" y=\"96.17\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">14</text><rect x=\"323.48\" y=\"50.5\" width=\"136.02\" height=\"83.33\" fill=\"#44377f\"><title>N, Q3: 9</title></rect><text x=\"391.49\" y=\"96.17\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">9</text><rect x=\"49.44\" y=\"134.83\" width=\"136.02\" height=\"83.33\" fill=\"#28a883\"><title>S, Q1: 20</title></rect><text x=\"117.45\" y=\"180.5\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">20</text><rect x=\"186.46\" y=\"134.83\" width=\"136.02\" height=\"83.33\" fill=\"#440154\"><title>S, Q2: 5</title></rect><text x=\"254.47\" y=\"180.5\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">5</text><rect x=\"323.48\" y=\"134.83\" width=\"136.02\" height=\"83.33\" fill=\"#375a8c\"><title>S, Q3: 12</title></rect><text x=\"391.49\" y=\"180.5\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">12</text><rect x=\"49.44\" y=\"219.17\" width=\"136.02\" height=\"83.33\" fill=\"#471d6e\"><title>E, Q1: 7</title></rect><text x=\"117.45\" y=\"264.83\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#ffffff\">7</text><rect x=\"186.46\" y=\"219.17\" width=\"136.02\" height=\"83.33\" fill=\"#fde725\"><title>E, Q2: 30</title></rect><text x=\"254.47\" y=\"264.83\" font-size=\"10.5\" text-anchor=\"middle\" fill=\"#111111\">30</text><line x1=\"323.48\" y1=\"302.5\" x2=\"459.5\" y2=\"219.17\" fill=\"none\" stroke=\"#57606a\" stroke-width=\"0.75\"/><rect x=\"323.48\" y=\"219.17\" width=\"136.02\" height=\"83.33\" fill=\"none\" stroke=\"#57606a\" stroke-width=\"0.75\" stroke-dasharray=\"3 2\"><title>E, Q3: no value</title></rect><line x1=\"48.94\" y1=\"303.5\" x2=\"460\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"48.44\" y1=\"50\" x2=\"48.44\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"117.5\" y1=\"303\" x2=\"117.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"117.45\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Q1</text><line x1=\"254.5\" y1=\"303\" x2=\"254.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"254.47\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Q2</text><line x1=\"391.5\" y1=\"303\" x2=\"391.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"391.49\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">Q3</text><line x1=\"44.94\" y1=\"92.5\" x2=\"48.94\" y2=\"92.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"40.94\" y=\"96.17\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">N</text><line x1=\"44.94\" y1=\"177.5\" x2=\"48.94\" y2=\"177.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"40.94\" y=\"180.5\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">S</text><line x1=\"44.94\" y1=\"261.5\" x2=\"48.94\" y2=\"261.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"40.94\" y=\"264.83\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">E</text><text x=\"254.47\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">quarter</text><text x=\"27\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 176.5)\">region</text><linearGradient id=\"scale\" x1=\"0\" y1=\"1\" x2=\"0\" y2=\"0\"><stop offset=\"0\" stop-color=\"#440154\"/><stop offset=\"0.1\" stop-color=\"#482474\"/><stop offset=\"0.2\" stop-color=\"#404386\"/><stop offset=\"0.3\" stop-color=\"#355f8d\"/><stop offset=\"0.4\" stop-color=\"#2a788e\"/><stop offset=\"0.5\" stop-color=\"#23908c\"/><stop offset=\"0.6\" stop-color=\"#28a883\"/><stop offset=\"0.7\" stop-color=\"#46be6f\"/><stop offset=\"0.8\" stop-color=\"#7bd050\"/><stop offset=\"0.9\" stop-color=\"#bbdf2b\"/><stop offset=\"1\" stop-color=\"#fde725\"/></linearGradient><rect x=\"476\" y=\"50\" width=\"14\" height=\"225\" fill=\"url(#scale)\"/><line x1=\"490\" y1=\"275\" x2=\"494\" y2=\"275\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"498\" y=\"278.5\" font-size=\"10\" fill=\"#57606a\">5</text><line x1=\"490\" y1=\"230\" x2=\"494\" y2=\"230\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"498\" y=\"233.5\" font-size=\"10\" fill=\"#57606a\">10</text><line x1=\"490\" y1=\"185\" x2=\"494\" y2=\"185\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"498\" y=\"188.5\" font-size=\"10\" fill=\"#57606a\">15</text><line x1=\"490\" y1=\"140\" x2=\"494\" y2=\"140\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"498\" y=\"143.5\" font-size=\"10\" fill=\"#57606a\">20</text><line x1=\"490\" y1=\"95\" x2=\"494\" y2=\"95\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"498\" y=\"98.5\" font-size=\"10\" fill=\"#57606a\">25</text><line x1=\"490\" y1=\"50\" x2=\"494\" y2=\"50\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"498\" y=\"53.5\" font-size=\"10\" fill=\"#57606a\">30</text><line x1=\"476\" y1=\"297\" x2=\"490\" y2=\"287\" fill=\"none\" stroke=\"#57606a\" stroke-width=\"0.75\"/><rect x=\"476\" y=\"287\" width=\"14\" height=\"10\" fill=\"none\" stroke=\"#57606a\" stroke-width=\"0.75\" stroke-dasharray=\"3 2\"><title>no value</title></rect><text x=\"498\" y=\"295.5\" font-size=\"10\" fill=\"#57606a\">no value</text></svg>",
+      "warnings": [
+        "1 cell has no value and is drawn empty"
+      ],
+      "width": 560
+    }
+  }
+}

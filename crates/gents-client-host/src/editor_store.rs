@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use gents::store::local::store_key::{StoreEncryption, StoreKey, StoreKeyCustody};
 use gents_desktop_bridge::{BridgeError, BridgeErrorCode};
 use gents_desktop_core::client::{ClientStoreKeyProvider, DesktopPaths};
+use gents_store::local::store_key::{StoreEncryption, StoreKey, StoreKeyCustody};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
@@ -124,13 +124,13 @@ where
 
     pub async fn failed(&self, error: &anyhow::Error) -> Result<()> {
         let (code, message) = if error.downcast_ref::<HistoryUnlockRequired>().is_some()
-            || gents::store::local::store_key::store_key_unavailable(error.as_ref()).is_some()
+            || gents_store::local::store_key::store_key_unavailable(error.as_ref()).is_some()
         {
             (
                     BridgeErrorCode::LocalHistoryLocked,
                     "Unlock local history to cache its encryption key in VS Code. Your chats are unchanged.",
                 )
-        } else if gents::store::local::storage_backend::incompatible_store(
+        } else if gents_store::local::storage_backend::incompatible_store(
             error.as_ref(),
             DesktopPaths::from_root(&self.home).node_data_dir(),
         )
@@ -168,7 +168,7 @@ where
         fresh: bool,
     ) -> Result<StoreKey> {
         anyhow::ensure!(
-            record.version == gents::store::local::store_key::STORE_ENCRYPTION_VERSION,
+            record.version == gents_store::local::store_key::STORE_ENCRYPTION_VERSION,
             "unsupported editor store encryption version"
         );
         if matches!(record.custody, StoreKeyCustody::File) {
@@ -228,6 +228,10 @@ where
     }
 }
 
+/// An editor-store process already prohibits system interaction for its whole
+/// lifetime, which makes `prevent_prompts` redundant there; it is retained
+/// because this is also reached from callers that hold no process guard, and
+/// because fresh custody must be created with dialogs disabled whoever calls.
 async fn native_key(
     record: &StoreEncryption,
     key_file: &Path,
@@ -394,12 +398,11 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let (native, editor) = tokio::io::duplex(MAX_FRAME_BYTES);
         let provider = Provider::new(home.path().to_owned(), false, native);
-        let failure =
-            anyhow::Error::from(gents::store::local::storage_backend::IncompatibleStore {
-                kind: gents::store::local::storage_backend::IncompatibleStoreKind::ForeignVersion,
-                data_path: PathBuf::from("/private/retained-history"),
-            })
-            .context("sensitive native cause");
+        let failure = anyhow::Error::from(gents_protocol::operations::install_repair::IncompatibleStore {
+            kind: gents_protocol::operations::install_repair::IncompatibleStoreKind::ForeignVersion,
+            data_path: PathBuf::from("/private/retained-history"),
+        })
+        .context("sensitive native cause");
         provider.failed(&failure).await.unwrap();
         let Message::Error { error } = read_message(&mut frames(editor)).await else {
             panic!("expected a typed startup failure");

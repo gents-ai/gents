@@ -10,5 +10,3 @@ pub(super) fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
         (!trimmed.is_empty()).then_some(trimmed)
     })
 }
-
-pub(super) use gents_protocol::graphql::escape_graphql_string;

@@ -1,5 +1,3 @@
-#![cfg(all(target_os = "macos", feature = "native-e2e", debug_assertions))]
-
 /// A plugin page's sandboxed frame reaches none of the app's IPC routes in
 /// the real webview, while the page around it does (#3483).
 #[test]

@@ -6,7 +6,7 @@
 export type SelfConfigTools = { enable_self_config?: boolean | null,
 /**
  * Self-config category allowlist; unset means the core spine
- * (agent, tools, profile). See `config_client::patch`.
+ * (agent, tools, profile). See `documents::patch`.
  */
 self_config_categories?: Array<string> | null,
 /**

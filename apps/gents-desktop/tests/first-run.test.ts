@@ -40,7 +40,7 @@ describe("first-run inference gate", () => {
   });
 
   it("treats only a persisted non-local enrollment as a saved remote setup", () => {
-    const saved = [{ ...deployment, source: "enrollment" }];
+    const saved = [{ ...deployment, source: "enrollment", local: false }];
     expect(
       hasSavedRemote({
         bootstrap: { ...bootstrap, initNodeDid: null, savedPeers: saved },
@@ -56,7 +56,16 @@ describe("first-run inference gate", () => {
         bootstrap: {
           ...bootstrap,
           initNodeDid: null,
-          savedPeers: [{ ...deployment, source: "paired-remote" }],
+          savedPeers: [{ ...deployment, source: "paired-remote", local: false }],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      hasSavedRemote({
+        bootstrap: {
+          ...bootstrap,
+          initNodeDid: null,
+          savedPeers: [{ ...deployment, source: "enrollment", local: true }],
         },
       }),
     ).toBe(false);

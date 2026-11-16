@@ -3,7 +3,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use gents::store::config_client::GraphqlEndpoint;
+use gents::support::live_inference::wait_for_request_terminal;
 use gents_protocol::serve_lifecycle::{
     control::{
         RuntimeControlCommand, RuntimeControlDisposition, RuntimeControlReceipt, RuntimeOperation,
@@ -14,6 +14,7 @@ use gents_protocol::serve_lifecycle::{
         RuntimePreparationResult, RUNTIME_PREPARATION_VERSION,
     },
 };
+use gents_store::config_client::GraphqlEndpoint;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::process::{Child as PreparationChild, Command};
@@ -24,15 +25,11 @@ const AFTER_UPDATE: &str = "Continue in the same chat after the runtime update."
 
 pub async fn refuse_busy(binary: &Path, home: &Path) -> Result<()> {
     let before = tokio::fs::read(home.join("runtime.json")).await?;
+    let homes = command_homes(home.parent().context("runtime home parent")?).await?;
     let output = tokio::time::timeout(
         Duration::from_secs(30),
         Command::new(binary)
-            .envs(
-                super::support::homes::ProcessHomes::under(
-                    home.parent().context("runtime home parent")?,
-                )
-                .env(),
-            )
+            .envs(homes.env())
             .args(["prepare-runtime", "--home"])
             .arg(home)
             .kill_on_drop(true)
@@ -77,7 +74,7 @@ pub struct Fixture<'a> {
     pub session: &'a str,
     pub client_did: &'a str,
     pub original_doc_id: &'a str,
-    pub access: &'a gents::ConfigAccess,
+    pub access: &'a gents_store::config_client::ConfigAccess,
 }
 
 impl Fixture<'_> {
@@ -87,26 +84,34 @@ impl Fixture<'_> {
         &self,
         original: &mut Child,
         client: &mut Attachment,
+        updates: &mut Attachment,
         id: &mut u32,
     ) -> Result<()> {
         let init = tokio::fs::read(self.home.join("init.json")).await?;
-        let routing_before: Value =
-            serde_json::from_slice(&tokio::fs::read(self.home.join("runtime.json")).await?)?;
         let config: Value = serde_json::from_slice(&init)?;
         let key_path = Path::new(config["key_path"].as_str().context("runtime key path")?);
         let key = tokio::fs::read(key_path).await?;
         let p2p_secret = tokio::fs::read(
             self.home
-                .join(gents::store::local::home::P2P_SECRET_KEY_FILE_NAME),
+                .join(gents_store::local::home::P2P_SECRET_KEY_FILE_NAME),
         )
         .await?;
-        let provider_query = format!("{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ _docID backend_id provider_kind endpoint }} }}", gents::store::graphql::escape_graphql_string(self.node_did));
+        let provider_query = format!("{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ _docID backend_id provider_kind endpoint }} }}", gents_store::graphql::escape_graphql_string(self.node_did));
         let providers = rows(
             self.access.execute(&provider_query).await?,
             "InferenceBackend",
         )?;
-        let session_query = format!("{{ AgentSession(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ _docID node_did session_id requester_did agent_did created_at }} }}", gents::store::graphql::escape_graphql_string(self.node_did), gents::store::graphql::escape_graphql_string(self.session));
+        let session_query = format!("{{ AgentSession(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ _docID node_did session_id requester_did agent_did created_at }} }}", gents_store::graphql::escape_graphql_string(self.node_did), gents_store::graphql::escape_graphql_string(self.session));
         let sessions = rows(self.access.execute(&session_query).await?, "AgentSession")?;
+        let before = super::live_runtime::wait_client(
+            client,
+            updates,
+            id,
+            "desktop_session_snapshot",
+            json!({"nodeDid":self.node_did,"sessionId":self.session,"timelineLimit":40}),
+            |view| view["turnState"] == "completed",
+        )
+        .await?;
         let (mut replacement, ready) = self.start_replacement(original).await?;
         let RuntimePreparationResult::Ready {
             outcome,
@@ -137,15 +142,18 @@ impl Fixture<'_> {
             stopped.success(),
             "original runtime did not exit cleanly: {stopped}"
         );
-        let retained = super::read_session(client, id, self.node_did, self.session).await?;
+        let retained = super::live_runtime::wait_client(
+            client,
+            updates,
+            id,
+            "desktop_session_snapshot",
+            json!({"nodeDid":self.node_did,"sessionId":self.session,"timelineLimit":40}),
+            |view| view["turnState"] == "completed",
+        )
+        .await?;
         ensure!(
-            retained["timelineItems"]
-                .as_array()
-                .is_some_and(
-                    |items| items.iter().any(|item| item["kind"] == "assistantMessage"
-                        && item["content"] == "First part and final part.")
-                ),
-            "the original transcript was not retained: {retained}"
+            retained["timelineItems"] == before["timelineItems"],
+            "replacement changed the durable transcript"
         );
         ensure!(
             rows(self.access.execute(&session_query).await?, "AgentSession")? == sessions,
@@ -158,7 +166,22 @@ impl Fixture<'_> {
             )? == providers,
             "replacement changed provider settings"
         );
-        super::wait_chat_deployment(client, id, self.node_did, self.access).await?;
+        super::live_runtime::wait_client(
+            client,
+            updates,
+            id,
+            "desktop_client_snapshot",
+            json!({}),
+            |snapshot| {
+                snapshot["client"]["deployments"]
+                    .as_array()
+                    .is_some_and(|rows| {
+                        rows.iter()
+                            .any(|row| row["nodeDid"] == self.node_did && row["chatSafe"] == true)
+                    })
+            },
+        )
+        .await?;
         let receipt = client
             .call(
                 *id,
@@ -177,27 +200,28 @@ impl Fixture<'_> {
         let followup = receipt["requestId"]
             .as_str()
             .context("follow-up request id")?;
-        let completion = tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                let output = client.call(*id, "desktop_request_output", json!({"nodeDid":self.node_did,"sessionId":self.session,"requestId":followup})).await;
-                *id += 1;
-                if output["output"]["kind"] == "terminalMessage" {
-                    ensure!(output["output"]["content"] == "First part and final part.", "follow-up output: {output}");
-                    return Ok::<_, anyhow::Error>(());
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        }).await;
-        if !matches!(&completion, Ok(Ok(()))) {
-            let query = format!("{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{ _docID request_id lifecycle_state content admission_signer_did }} }}", gents::store::graphql::escape_graphql_string(followup));
-            let observed = self.access.execute(&query).await;
-            *id += 1;
-            let snapshot = client.snapshot(*id).await;
-            *id += 1;
-            let routing_after = tokio::fs::read_to_string(self.home.join("runtime.json")).await?;
-            anyhow::bail!("retained follow-up did not complete: {completion:?}; native input: {observed:?}; routing before: {routing_before}; routing after: {routing_after}; client: {snapshot}");
-        }
-        let requests_query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{ {} }} }}", gents::store::graphql::escape_graphql_string(self.node_did), gents::store::graphql::escape_graphql_string(self.session), gents::SIGNED_REQUEST_FIELDS);
+        ensure!(
+            wait_for_request_terminal(self.access, followup, Duration::from_secs(30)).await
+                == "completed"
+        );
+        let followup_view = super::live_runtime::wait_client(
+            client,
+            updates,
+            id,
+            "desktop_session_snapshot",
+            json!({"nodeDid":self.node_did,"sessionId":self.session,"timelineLimit":40}),
+            |view| view["latestRequestId"] == followup && view["turnState"] == "completed",
+        )
+        .await?;
+        ensure!(followup_view["timelineItems"]
+            .as_array()
+            .is_some_and(
+                |items| items.iter().any(|item| item["kind"] == "assistantMessage"
+                    && item["content"]
+                        .as_str()
+                        .is_some_and(|text| !text.trim().is_empty()))
+            ));
+        let requests_query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{ {} }} }}", gents_store::graphql::escape_graphql_string(self.node_did), gents_store::graphql::escape_graphql_string(self.session), gents::SIGNED_REQUEST_FIELDS);
         let requests = self.access.execute(&requests_query).await?;
         let requests: Vec<gents_protocol::row::AgentRequestRow> =
             serde_json::from_value(requests["data"]["AgentRequest"].clone())?;
@@ -223,25 +247,29 @@ impl Fixture<'_> {
                 request.admission_signer_did.as_deref() == Some(self.client_did),
                 "replacement changed the enrolled requester"
             );
-            gents::verify_request_receipt_signature(request)?;
+            gents_store::identity::request_receipt::verify_request_receipt_signature(request)?;
         }
         ensure!(tokio::fs::read(self.home.join("init.json")).await? == init);
         ensure!(tokio::fs::read(key_path).await? == key);
         ensure!(
             tokio::fs::read(
                 self.home
-                    .join(gents::store::local::home::P2P_SECRET_KEY_FILE_NAME)
+                    .join(gents_store::local::home::P2P_SECRET_KEY_FILE_NAME)
             )
             .await?
                 == p2p_secret
         );
-        let reused = Command::new(self.binary)
-            .envs(super::support::homes::ProcessHomes::under(self.root).env())
-            .args(["prepare-runtime", "--home"])
-            .arg(self.home)
-            .kill_on_drop(true)
-            .output()
-            .await?;
+        let homes = command_homes(self.root).await?;
+        let reused = tokio::time::timeout(
+            Duration::from_secs(30),
+            Command::new(self.binary)
+                .envs(homes.env())
+                .args(["prepare-runtime", "--home"])
+                .arg(self.home)
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await??;
         ensure!(
             reused.status.success(),
             "reuse failed: {}",
@@ -279,59 +307,54 @@ impl Fixture<'_> {
         &self,
         original: &mut Child,
     ) -> Result<(PreparationChild, RuntimePreparationResult)> {
-        tokio::time::timeout(Duration::from_secs(60), async {
-            loop {
-                ensure!(
-                    original.try_wait()?.is_none(),
-                    "original runtime exited before authenticated replacement"
-                );
-                let mut child = Command::new(self.binary)
-                    .envs(super::support::homes::ProcessHomes::under(self.root).env())
-                    .args(["prepare-runtime", "--home"])
-                    .arg(self.home)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::from(
-                        std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(self.root.join("runtime-replacement.err"))?,
-                    ))
-                    .kill_on_drop(true)
-                    .spawn()?;
-                let stdout = child.stdout.take().context("preparation stdout")?;
-                let mut lines = BufReader::new(stdout).lines();
-                let frame = lines
-                    .next_line()
-                    .await?
-                    .context("replacement exited without a receipt")?;
-                let report: RuntimePreparationReport = serde_json::from_str(&frame)?;
-                ensure!(report.version == RUNTIME_PREPARATION_VERSION);
-                match report.result {
-                    RuntimePreparationResult::Refused {
-                        reason: RuntimePreparationRefusal::Busy,
-                        ..
-                    } => {
-                        ensure!(!child.wait().await?.success());
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                    }
-                    ready @ RuntimePreparationResult::Ready { .. } => return Ok((child, ready)),
-                    refused => anyhow::bail!("replacement refused: {refused:?}"),
-                }
-            }
-        })
-        .await
-        .context("runtime did not finish its owned cleanup before replacement")?
+        ensure!(
+            original.try_wait()?.is_none(),
+            "original runtime exited before replacement"
+        );
+        let homes = command_homes(self.root).await?;
+        let log = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.root.join("runtime-replacement.err"))
+            .await?
+            .into_std()
+            .await;
+        let mut child = Command::new(self.binary)
+            .envs(homes.env())
+            .args(["prepare-runtime", "--home"])
+            .arg(self.home)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::from(log))
+            .kill_on_drop(true)
+            .spawn()?;
+        let stdout = child.stdout.take().context("preparation stdout")?;
+        let mut lines = BufReader::new(stdout).lines();
+        let frame = tokio::time::timeout(Duration::from_secs(60), lines.next_line())
+            .await
+            .context("replacement readiness deadline")??
+            .context("replacement exited without a receipt")?;
+        let report: RuntimePreparationReport = serde_json::from_str(&frame)?;
+        ensure!(report.version == RUNTIME_PREPARATION_VERSION);
+        ensure!(
+            matches!(report.result, RuntimePreparationResult::Ready { .. }),
+            "replacement refused: {:?}",
+            report.result
+        );
+        Ok((child, report.result))
     }
 
     async fn retire_replacement(&self, graphql: &str, build: &str) -> Result<()> {
-        // Runtime control is authorized by a bearer token signed with the Node's held key.
         let config: Value =
             serde_json::from_slice(&tokio::fs::read(self.home.join("init.json")).await?)?;
-        let identity = gents::KeyIdentity::load_or_create(
-            config["key_path"].as_str().context("runtime key path")?,
-            None,
-        )?;
+        let key_path = config["key_path"]
+            .as_str()
+            .context("runtime key path")?
+            .to_owned();
+        let identity = tokio::task::spawn_blocking(move || {
+            gents_store::identity::KeyIdentity::load_or_create(key_path, None)
+        })
+        .await??;
         let endpoint = GraphqlEndpoint::as_principal(graphql, self.node_did)
             .with_client_signing_capability(identity.client_signing_capability()?)?;
         let mut url = reqwest::Url::parse(graphql)?;
@@ -340,36 +363,32 @@ impl Fixture<'_> {
             .no_proxy()
             .timeout(Duration::from_secs(5))
             .build()?;
-        tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                let command = RuntimeControlCommand {
-                    version: RUNTIME_CONTROL_VERSION,
-                    node_did: self.node_did.to_owned(),
-                    nonce: uuid::Uuid::new_v4().to_string(),
-                    issued_at: chrono::Utc::now().to_rfc3339(),
-                    operation: RuntimeOperation::Retire {
-                        expected_build: build.to_owned(),
-                    },
-                };
-                let receipt: RuntimeControlReceipt = endpoint
-                    .authorize(client.post(url.clone()).json(&command))?
-                    .send()
-                    .await?
-                    .error_for_status()?
-                    .json()
-                    .await?;
-                gents::runtime::service::verify_control_receipt(&command, &receipt)?;
-                match receipt.disposition {
-                    RuntimeControlDisposition::Retiring => return Ok::<_, anyhow::Error>(()),
-                    RuntimeControlDisposition::Busy => {
-                        tokio::time::sleep(Duration::from_millis(50)).await
-                    }
-                    other => anyhow::bail!("replacement cleanup refused: {other:?}"),
-                }
-            }
-        })
-        .await
-        .context("replacement did not finish owned work before cleanup")?
+        let command = RuntimeControlCommand {
+            version: RUNTIME_CONTROL_VERSION,
+            node_did: self.node_did.to_owned(),
+            nonce: uuid::Uuid::new_v4().to_string(),
+            issued_at: chrono::Utc::now().to_rfc3339(),
+            operation: RuntimeOperation::Retire {
+                expected_build: build.to_owned(),
+            },
+        };
+        let receipt: RuntimeControlReceipt = endpoint
+            .authorize(client.post(url).json(&command))?
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        gents_store::service::verify_control_receipt(&command, &receipt)?;
+        ensure!(
+            matches!(
+                receipt.disposition,
+                RuntimeControlDisposition::Retiring | RuntimeControlDisposition::Stopping
+            ),
+            "replacement cleanup refused: {:?}",
+            receipt.disposition
+        );
+        Ok(())
     }
 }
 
@@ -380,4 +399,12 @@ fn rows(response: Value, collection: &str) -> Result<Vec<Value>> {
         .clone();
     rows.sort_by(|left, right| left["_docID"].as_str().cmp(&right["_docID"].as_str()));
     Ok(rows)
+}
+
+async fn command_homes(root: &Path) -> Result<super::support::homes::ProcessHomes> {
+    let root = root.to_owned();
+    Ok(
+        tokio::task::spawn_blocking(move || super::support::homes::ProcessHomes::under(&root))
+            .await?,
+    )
 }

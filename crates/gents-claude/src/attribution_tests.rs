@@ -1,23 +1,5 @@
 use super::*;
 
-fn provider(name: &str) -> Provider {
-    match name {
-        "firstParty" => Provider::FirstParty,
-        "vertex" => Provider::Vertex,
-        "bedrock" => Provider::Bedrock,
-        "anthropicAws" => Provider::AnthropicAws,
-        "anthropicGoogleCloud" => Provider::AnthropicGoogleCloud,
-        "foundry" => Provider::Foundry,
-        "mantle" => Provider::Mantle,
-        "gateway" => Provider::Gateway,
-        other => panic!("unknown provider {other}"),
-    }
-}
-
-fn text(case: &serde_json::Value, key: &str) -> Option<String> {
-    case[key].as_str().map(str::to_owned)
-}
-
 fn base() -> Fields {
     Fields {
         version: "2.1.311".into(),
@@ -38,40 +20,11 @@ fn base() -> Fields {
 }
 
 #[test]
-fn generated_attribution_cases_render_the_header() {
-    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contract["prompt_assembly_claude_attribution_cases"]
-        .as_array()
-        .unwrap();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let project = match (text(case, "project_id"), text(case, "project_source")) {
-            (Some(id), Some(source)) => Some(Project { id, source }),
-            _ => None,
-        };
-        let fields = Fields {
-            version: text(case, "version").unwrap(),
-            fingerprint: text(case, "fingerprint").unwrap(),
-            entrypoint: text(case, "entrypoint").unwrap(),
-            provider: provider(case["provider"].as_str().unwrap()),
-            first_party_base_url: case["first_party_base_url"].as_bool().unwrap(),
-            workload: text(case, "workload"),
-            subagent: case["subagent"].as_bool().unwrap(),
-            previous_request_id: text(case, "previous_request_id"),
-            prompt_id: text(case, "prompt_id"),
-            turn_origin: text(case, "turn_origin"),
-            prompt_index: case["prompt_index"].as_u64(),
-            turn_index: case["turn_index"].as_u64(),
-            gateway: text(case, "gateway"),
-            project,
-        };
-        assert_eq!(
-            header(&fields),
-            case["header"].as_str().unwrap(),
-            "{}",
-            case["name"]
-        );
-    }
+fn attribution_headers_match_lean() {
+    gents_lean_vocab::families::claude_prompt_assembly_attribution::replay::<Provider>(|i| {
+        let fields: Fields = gents_lean_vocab::family::recode(i);
+        header(&fields)
+    });
 }
 
 #[test]

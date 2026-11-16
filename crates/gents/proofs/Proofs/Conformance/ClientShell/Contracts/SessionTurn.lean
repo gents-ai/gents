@@ -1,5 +1,6 @@
-import Proofs.ClientShell.SessionTurn
+import Proofs.Clients.ClientShell.SessionTurn
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.ClientShellContracts.SessionTurnCases
 
@@ -103,8 +104,6 @@ def scenarios : List (String × List Row) :=
         , row 2 100 .active
         , row 3 200 .unclaimed (queuedAfter := some 100) ])]
 
-def newest (rows : List Row) : Option Row := rows.getLast?
-
 def stateName : RowState → String
   | .unclaimed => "unclaimed"
   | .active    => "active"
@@ -113,9 +112,6 @@ def stateName : RowState → String
 def optNat : Option Nat → String
   | some n => toString n
   | none   => "null"
-
-def natList (values : List Nat) : String :=
-  "[" ++ String.intercalate "," (values.map toString) ++ "]"
 
 def rowJson (r : Row) : String :=
   "{\"doc\":" ++ toString r.doc ++
@@ -136,105 +132,185 @@ def rowJson (r : Row) : String :=
 def rowsJson (rows : List Row) : String :=
   "[" ++ String.intercalate "," (rows.map rowJson) ++ "]"
 
-def caseJsonWithSelection (name : String) (rows : List Row) (pageRequestDocs : List Nat)
-    (selectedDoc : Option Nat := none) : String :=
-  match newest rows with
-  | none => "null"
-  | some last =>
-    let selected := (selectedDoc.bind (fun doc => rows.find? (fun row => row.doc == doc))).getD last
-    let turn := turnOf rows selected
-    let display := displayTurn rows selected
-    let readRows := requestReadRows rows selected.requester selected.doc selected.doc pageRequestDocs
-    "{\"name\":" ++ jsonString name ++
-    ",\"rows\":" ++ rowsJson rows ++
-    ",\"selected_doc\":" ++ toString selected.doc ++
-    ",\"page_request_docs\":" ++ natList pageRequestDocs ++
-    ",\"seed_docs\":" ++ natList ((requestReadSeeds rows selected.requester selected.doc selected.doc pageRequestDocs).map (·.doc)) ++
-    ",\"native_completion_premise\":" ++ (if nativeCompletionPremise rows then "true" else "false") ++
-    ",\"expected_display_turn_doc\":" ++ toString display.doc ++
-    ",\"expected_read_docs\":" ++ natList (readRows.map (·.doc)) ++
-    ",\"expected_turn_doc\":" ++ toString turn.doc ++
-    ",\"expected_answer_doc\":" ++ toString (answerOf rows selected).doc ++
-    ",\"expected_queued_docs\":" ++ natList ((queuedBehind rows display).map (·.doc)) ++
-    ",\"expected_folded_requests\":" ++
-      natList ((foldedIn rows selected.requester).map (·.request)) ++ "}"
+deriving instance Lean.ToJson for RowState, Row
 
-def caseJsonWithPage (name : String) (rows : List Row) (pageRequestDocs : List Nat) : String :=
-  caseJsonWithSelection name rows pageRequestDocs
+instance : Inhabited Row := ⟨row 0 0 .terminal⟩
 
-def caseJson (entry : String × List Row) : String :=
-  caseJsonWithPage entry.1 entry.2 []
+structure CaseInput where
+  name : String
+  rows : List Row
+  selectedDoc : Nat
+  pageRequestDocs : List Nat
+  deriving Lean.ToJson
 
-def casesJson : String :=
+def pageCase (name : String) (rows : List Row) (pageRequestDocs : List Nat) : CaseInput :=
+  { name, rows, selectedDoc := ((rows.getLast?).map (·.doc)).getD 0, pageRequestDocs }
+
+def selectedCase (name : String) (rows : List Row) (selectedDoc : Nat) : CaseInput :=
+  { name, rows, selectedDoc, pageRequestDocs := [] }
+
+def sessionCases : List CaseInput :=
   let pageRows :=
     [ row 1 100 .terminal (completed := true) (authoredInputMaterialized := true)
     , row 2 101 .active ]
-  "[" ++ String.intercalate "," (scenarios.map caseJson ++
-    [caseJsonWithPage "page_request_is_retained" pageRows [1],
-     caseJsonWithSelection "stale_terminal_observation_yields_to_active_background_turn"
-       [row 1 100 .terminal, row 2 101 .active (backgroundWake := true),
-        row 3 102 .terminal (foldedInto := some 2)] [] (some 1),
-     caseJsonWithSelection "stale_terminal_observation_keeps_active_background_without_new_input"
-       [row 1 100 .terminal, row 2 101 .active (backgroundWake := true)] [] (some 1),
-     caseJsonWithSelection "active_background_keeps_queued_user_messages_interruptible"
-       [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
-        row 2 101 .active (backgroundWake := true),
-        row 3 102 .unclaimed (queuedAfter := some 101)] [] (some 1),
-     caseJsonWithSelection "non_normal_selected_row_cannot_anchor_a_later_active_turn"
-       [row 1 100 .terminal (publicInput := false), row 2 101 .active] [] (some 1),
-     caseJsonWithSelection "active_turn_does_not_cross_requester_scope"
-       [row 1 100 .terminal, row 2 101 .active (requester := 2)] [] (some 1),
-     caseJsonWithSelection "active_observed_turn_is_preserved"
-       [row 1 100 .active, row 2 101 .active] [] (some 1),
-     caseJsonWithSelection "unclaimed_observed_turn_is_preserved"
-       [row 1 100 .unclaimed, row 2 101 .active] [] (some 1),
-     caseJsonWithSelection "title_audit_does_not_replace_a_terminal_observation"
-       [row 1 100 .terminal, row 2 101 .active (publicInput := false)] [] (some 1),
-     caseJsonWithSelection "completed_background_does_not_restore_an_older_stopped_notice"
-       [row 1 100 .terminal,
-        row 2 101 .terminal (completed := true) (backgroundWake := true)
-          (authoredInputMaterialized := true)] [] (some 1),
-     caseJsonWithSelection "completed_background_keeps_its_folded_input_owner"
-       [row 1 100 .terminal,
-        row 2 101 .terminal (completed := true) (backgroundWake := true)
-          (authoredInputMaterialized := true),
-        row 3 102 .terminal (foldedInto := some 2)] [] (some 1),
-     caseJsonWithSelection "replaced_queue_input_resolves_to_completed_fold_owner"
-       [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
-        row 2 101 .terminal (replacedBy := some 3),
-        row 3 102 .terminal (foldedInto := some 1)] [] (some 2),
-     caseJsonWithSelection "replaced_queue_input_resolves_to_active_fold_owner"
-       [row 1 100 .active, row 2 101 .terminal (replacedBy := some 3),
-        row 3 102 .terminal (foldedInto := some 1)] [] (some 2),
-     caseJsonWithSelection "edited_input_waits_without_becoming_folded"
-       [row 1 100 .active, row 2 101 .terminal (replacedBy := some 3),
-        row 3 102 .unclaimed (queuedAfter := some 100)] [] (some 2),
-     caseJsonWithSelection "replacement_missing_successor_does_not_guess"
-       [row 1 100 .terminal (replacedBy := some 9)] [] (some 1),
-     caseJsonWithSelection "replacement_cannot_follow_foreign_requester"
-       [row 1 100 .terminal (replacedBy := some 2),
-        row 2 101 .active (requester := 2)] [] (some 1),
-     caseJsonWithSelection "replacement_cycle_is_bounded"
-       [row 1 100 .terminal (replacedBy := some 2),
-        row 2 101 .terminal (replacedBy := some 1)] [] (some 1),
-     caseJsonWithSelection "replacement_keeps_physical_successor_among_logical_twins"
-       [row 1 100 .terminal (replacedBy := some 3),
-        row 2 101 .active (requester := 2), row 3 101 .unclaimed] [] (some 1),
-     caseJsonWithSelection "replacement_sorted_after_successor_preserves_completed_turn"
-       [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
-        row 3 102 .terminal (foldedInto := some 1),
-        row 2 101 .terminal (replacedBy := some 3)] [] (some 2),
-     caseJsonWithSelection "replacement_retains_omittable_completed_successor"
-       [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
-        row 2 101 .terminal (replacedBy := some 1)] [] (some 2),
-     caseJsonWithSelection "replacement_chain_preserves_completed_turn"
-       [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
-        row 2 101 .terminal (replacedBy := some 3),
-        row 3 102 .terminal (replacedBy := some 4),
-        row 4 103 .terminal (foldedInto := some 1)] [] (some 2),
-     caseJsonWithSelection "older_active_row_does_not_revive_a_newer_terminal_turn"
-       [row 1 100 .active, row 2 101 .terminal] [] (some 2)]) ++ "]"
+  scenarios.map (fun (name, rows) => pageCase name rows []) ++
+  [ pageCase "page_request_is_retained" pageRows [1],
+    selectedCase "stale_terminal_observation_yields_to_active_background_turn"
+      [row 1 100 .terminal, row 2 101 .active (backgroundWake := true),
+       row 3 102 .terminal (foldedInto := some 2)] 1,
+    selectedCase "stale_terminal_observation_keeps_active_background_without_new_input"
+      [row 1 100 .terminal, row 2 101 .active (backgroundWake := true)] 1,
+    selectedCase "active_background_keeps_queued_user_messages_interruptible"
+      [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
+       row 2 101 .active (backgroundWake := true),
+       row 3 102 .unclaimed (queuedAfter := some 101)] 1,
+    selectedCase "non_normal_selected_row_cannot_anchor_a_later_active_turn"
+      [row 1 100 .terminal (publicInput := false), row 2 101 .active] 1,
+    selectedCase "active_turn_does_not_cross_requester_scope"
+      [row 1 100 .terminal, row 2 101 .active (requester := 2)] 1,
+    selectedCase "active_observed_turn_is_preserved"
+      [row 1 100 .active, row 2 101 .active] 1,
+    selectedCase "unclaimed_observed_turn_is_preserved"
+      [row 1 100 .unclaimed, row 2 101 .active] 1,
+    selectedCase "title_audit_does_not_replace_a_terminal_observation"
+      [row 1 100 .terminal, row 2 101 .active (publicInput := false)] 1,
+    selectedCase "completed_background_does_not_restore_an_older_stopped_notice"
+      [row 1 100 .terminal,
+       row 2 101 .terminal (completed := true) (backgroundWake := true)
+         (authoredInputMaterialized := true)] 1,
+    selectedCase "completed_background_keeps_its_folded_input_owner"
+      [row 1 100 .terminal,
+       row 2 101 .terminal (completed := true) (backgroundWake := true)
+         (authoredInputMaterialized := true),
+       row 3 102 .terminal (foldedInto := some 2)] 1,
+    selectedCase "replaced_queue_input_resolves_to_completed_fold_owner"
+      [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
+       row 2 101 .terminal (replacedBy := some 3),
+       row 3 102 .terminal (foldedInto := some 1)] 2,
+    selectedCase "replaced_queue_input_resolves_to_active_fold_owner"
+      [row 1 100 .active, row 2 101 .terminal (replacedBy := some 3),
+       row 3 102 .terminal (foldedInto := some 1)] 2,
+    selectedCase "edited_input_waits_without_becoming_folded"
+      [row 1 100 .active, row 2 101 .terminal (replacedBy := some 3),
+       row 3 102 .unclaimed (queuedAfter := some 100)] 2,
+    selectedCase "replacement_missing_successor_does_not_guess"
+      [row 1 100 .terminal (replacedBy := some 9)] 1,
+    selectedCase "replacement_cannot_follow_foreign_requester"
+      [row 1 100 .terminal (replacedBy := some 2),
+       row 2 101 .active (requester := 2)] 1,
+    selectedCase "replacement_cycle_is_bounded"
+      [row 1 100 .terminal (replacedBy := some 2),
+       row 2 101 .terminal (replacedBy := some 1)] 1,
+    selectedCase "replacement_keeps_physical_successor_among_logical_twins"
+      [row 1 100 .terminal (replacedBy := some 3),
+       row 2 101 .active (requester := 2), row 3 101 .unclaimed] 1,
+    selectedCase "replacement_sorted_after_successor_preserves_completed_turn"
+      [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
+       row 3 102 .terminal (foldedInto := some 1),
+       row 2 101 .terminal (replacedBy := some 3)] 2,
+    selectedCase "replacement_retains_omittable_completed_successor"
+      [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
+       row 2 101 .terminal (replacedBy := some 1)] 2,
+    selectedCase "replacement_chain_preserves_completed_turn"
+      [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
+       row 2 101 .terminal (replacedBy := some 3),
+       row 3 102 .terminal (replacedBy := some 4),
+       row 4 103 .terminal (foldedInto := some 1)] 2,
+    selectedCase "older_active_row_does_not_revive_a_newer_terminal_turn"
+      [row 1 100 .active, row 2 101 .terminal] 2]
 
-def caseCount : Nat := scenarios.length + 22
+def selectedRow (rows : List Row) (selectedDoc : Nat) : Row :=
+  (rows.find? (fun row => row.doc == selectedDoc)).getD default
+
+def readRows (rows : List Row) (selectedDoc : Nat) (pageRequestDocs : List Nat) : List Row :=
+  let selected := selectedRow rows selectedDoc
+  requestReadRows rows selected.requester selected.doc selected.doc pageRequestDocs
+
+def readSeeds (rows : List Row) (selectedDoc : Nat) (pageRequestDocs : List Nat) : List Row :=
+  let selected := selectedRow rows selectedDoc
+  requestReadSeeds rows selected.requester selected.doc selected.doc pageRequestDocs
+
+structure SelectionOutput where
+  displayTurnDoc : Nat
+  turnDoc : Nat
+  answerDoc : Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def selection : Family CaseInput SelectionOutput where
+  inputs := sessionCases
+  model := fun i =>
+    let selected := selectedRow i.rows i.selectedDoc
+    { displayTurnDoc := (displayTurn i.rows selected).doc
+      turnDoc := (turnOf i.rows selected).doc
+      answerDoc := (answerOf i.rows selected).doc }
+
+/-- The native seed query reads completed public rows only through the
+publication evidence `nativeCompletionPremise` names; a case without it binds
+the general read-closure owner from the modeled seeds instead
+(`Conformance.ClientRequestClosure.closed`). -/
+def nativeReadCases : List CaseInput :=
+  sessionCases.filter (fun i => nativeCompletionPremise i.rows)
+
+def seededReadCases : List CaseInput :=
+  sessionCases.filter (fun i => !nativeCompletionPremise i.rows)
+
+example : seededReadCases.map (·.name) = ["completed_without_authored_input_is_retained"] := by
+  native_decide
+
+structure ReadOutput where
+  readDocs : List Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def read : Family CaseInput ReadOutput where
+  inputs := nativeReadCases
+  model := fun i => { readDocs := (readRows i.rows i.selectedDoc i.pageRequestDocs).map (·.doc) }
+
+structure ProjectionInput where
+  name : String
+  rows : List Row
+  selectedDoc : Nat
+  pageRequestDocs : List Nat
+  /-- The modeled read closure (`requestReadRows`): the session projection built
+  from only these rows must equal the projection built from every row. -/
+  readDocs : List Nat
+  deriving Lean.ToJson
+
+structure ProjectionOutput where
+  displayTurnDoc : Nat
+  queuedDocs : List Nat
+  foldedRequests : List Nat
+  deriving Lean.ToJson
+
+/-- A session snapshot is built for its observed latest request, and that
+observation names a normal-purpose request: a title-audit row never anchors a
+session observation, so the snapshot projection replays the cases whose
+selected row is public input. -/
+def projectionCases : List ProjectionInput :=
+  (sessionCases.filter (fun i => i.rows.any (fun row => row.doc == i.selectedDoc && row.publicInput))).map
+    (fun i => { name := i.name, rows := i.rows, selectedDoc := i.selectedDoc,
+                pageRequestDocs := i.pageRequestDocs,
+                readDocs := (readRows i.rows i.selectedDoc i.pageRequestDocs).map (·.doc) })
+
+example : projectionCases.all (fun c =>
+    let requester := (selectedRow c.rows c.selectedDoc).requester
+    c.rows.all (fun row => row.requester != requester || !row.publicInput ||
+      c.readDocs.contains row.doc || mayOmitCompletedPublicInput row)) := by
+  native_decide
+
+example : projectionCases.all (fun c =>
+    (c.rows.filter (fun row => c.readDocs.contains row.doc)).length == c.readDocs.length) := by
+  native_decide
+
+@[conformance_family]
+def projection : Family ProjectionInput ProjectionOutput where
+  inputs := projectionCases
+  model := fun i =>
+    let selected := selectedRow i.rows i.selectedDoc
+    let display := displayTurn i.rows selected
+    { displayTurnDoc := display.doc
+      queuedDocs := (queuedBehind i.rows display).map (·.doc)
+      foldedRequests := (foldedIn i.rows selected.requester).map (·.request) }
 
 end Conformance.ClientShellContracts.SessionTurnCases

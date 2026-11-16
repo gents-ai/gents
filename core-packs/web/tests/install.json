@@ -1,0 +1,18 @@
+{
+  "install": {
+    "documents": [
+      "Agent/web-researcher",
+      "AgentContext/web-researcher-context",
+      "Tools/web-researcher-tools"
+    ],
+    "plugins": [
+      "web_crawl",
+      "web_fetch",
+      "web_search",
+      "browser_exec"
+    ],
+    "slots": [
+      "web_researcher"
+    ]
+  }
+}

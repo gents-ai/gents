@@ -44,11 +44,14 @@ pub(crate) mod test_support {
     }
 
     pub(crate) fn node_builder() -> defra_node::NodeBuilder {
-        use gents::NodeIdentity as _;
+        use gents_store::identity::NodeIdentity as _;
 
         let directory = tempfile::tempdir().unwrap();
-        let identity =
-            gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+        let identity = gents_store::identity::KeyIdentity::load_or_create(
+            directory.path().join("node.key"),
+            None,
+        )
+        .unwrap();
         defra_node::Node::builder().with_node_identity_did(identity.did())
     }
 }

@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 
-use crate::commands::chat::{
-    chat_turn_text_content, load_existing_tool_call_keys, stream_turn_progress,
-};
-use crate::request_helpers::wait_for_terminal_response;
-use crate::{create_agent_request, RequestSubmitOptions};
+use gents_protocol::operations::request::MessageSendInput;
+use gents_store::config_client::ConfigAccess;
+
+use crate::commands::chat::{chat_turn_text_content, stream_turn_progress};
+use crate::operation_failure::OperationFailure;
+use crate::request_helpers::{client_signer, request_ref, wait_for_request};
 
 #[async_trait::async_trait]
 pub(crate) trait Turn {
@@ -14,7 +15,7 @@ pub(crate) trait Turn {
 }
 
 pub(crate) struct LiveTurn {
-    pub(crate) graphql: gents::store::config_client::GraphqlEndpoint,
+    pub(crate) graphql: gents_store::config_client::GraphqlEndpoint,
     pub(crate) node_did: String,
     pub(crate) agent_did: String,
     pub(crate) session_id: String,
@@ -26,28 +27,48 @@ pub(crate) struct LiveTurn {
 #[async_trait::async_trait]
 impl Turn for LiveTurn {
     async fn send(&mut self, content: &str) -> Result<String> {
-        let submitted = create_agent_request(
-            &self.graphql,
-            &self.node_did,
-            content,
-            Some(&self.session_id),
-            Some(&self.agent_did),
-            RequestSubmitOptions::default(),
+        let access = ConfigAccess::Graphql(self.graphql.clone());
+        let signer = client_signer(&access)?;
+        let submitted = gents::operations::request::send(
+            &access,
+            &signer,
+            MessageSendInput {
+                node_did: self.node_did.clone(),
+                session_id: Some(self.session_id.clone()),
+                agent_did: Some(self.agent_did.clone()),
+                content: content.to_owned(),
+                ..Default::default()
+            },
         )
         .await
+        .map_err(OperationFailure::from)
         .with_context(|| format!("submitting the {} turn", self.agent_did))?;
         let response = if self.quiet {
-            wait_for_terminal_response(
-                &self.graphql,
-                &submitted.request_id,
+            wait_for_request(
+                &access,
+                request_ref(&submitted.node_did, &submitted.request_id),
                 self.timeout_secs,
                 self.poll_secs,
+                || async { Ok(false) },
             )
             .await?
         } else {
-            let known = load_existing_tool_call_keys(&self.graphql, &self.session_id).await?;
+            let known = access
+                .read_view(&gents_session::views::transcript::ToolCallRows::new(
+                    gents_session::views::transcript::Scope::Session(
+                        gents_protocol::session::SessionScope {
+                            node_did: submitted.node_did.clone(),
+                            session_id: submitted.session_id.clone(),
+                            requester_did: submitted.requester_did.clone(),
+                        },
+                    ),
+                ))
+                .await?
+                .into_iter()
+                .map(|row| (row.tool_call_key, row.status.unwrap_or_default()))
+                .collect();
             stream_turn_progress(
-                &self.graphql,
+                &access,
                 &submitted,
                 known,
                 self.timeout_secs,

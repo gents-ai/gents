@@ -136,6 +136,9 @@ export interface UxNotifyRequest {
   target?: string;
 }
 
+export type UxNotifyOutcome =
+  { status: "sent"; via: "system" | "app" } | { status: "blocked" };
+
 export interface UxContext {
   /** the resolved source tag, `'plugin:<id>'` */
   readonly source: string;
@@ -161,11 +164,8 @@ export interface UxContext {
   plugin: (name: string, input: unknown) => Promise<unknown>;
   /** see UxShell.send */
   send: (content: string) => Promise<void>;
-  /** tells the person through the system's notifications, or in the app
-      while its window is in front; rejects with the reason when the kind is
-      undeclared or switched off, the request is malformed or too frequent,
-      or the app doesn't let plugins notify */
-  notify: (request: UxNotifyRequest) => Promise<void>;
+
+  notify: (request: UxNotifyRequest) => Promise<UxNotifyOutcome>;
   shell: UxShell;
   storage: UxStorage;
   os: UxOs;

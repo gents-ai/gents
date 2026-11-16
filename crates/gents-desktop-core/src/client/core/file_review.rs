@@ -2,9 +2,11 @@ use super::bootstrap::normalize_required;
 use super::ClientCore;
 use crate::error::{BridgeError, BridgeErrorCode};
 use anyhow::{Context, Result};
-use gents::store::config_client::ConfigAccess;
-use gents::tools::call::lifecycle::{load_tool_file_change_observation, ToolFileChangeRead};
 use gents_protocol::file_changes::ToolFileChanges;
+use gents_session::tool_call::query::result::{
+    load_tool_file_change_observation, ToolFileChangeRead,
+};
+use gents_store::config_client::ConfigAccess;
 
 mod inventory;
 mod scope;

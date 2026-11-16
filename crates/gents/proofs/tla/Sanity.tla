@@ -1,4 +1,6 @@
 ---- MODULE Sanity ----
+\* lean: none
+\* crates: none
 EXTENDS Naturals
 
 VARIABLE x

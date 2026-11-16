@@ -9,7 +9,8 @@ import { createChatDelivery } from "./chatDelivery";
 import { loadChatDrafts, removeChatDraft, type ChatDraft } from "./chatDrafts";
 import { actionFailure, shownFailure } from "./actionFailure";
 import { selection } from "./selectionStore";
-import { writeSession } from "./sessionStore";
+import { keepSelectedSession } from "./sessionStore";
+import type { SendAttachmentStore } from "./sendAttachments";
 import type { ShellStores } from "./shellProjection";
 
 type MailboxActionParams = {
@@ -17,6 +18,7 @@ type MailboxActionParams = {
   stores: ShellStores;
   refreshSnapshot: () => Promise<void>;
   reportFailure: (message: string) => void;
+  sendAttachments: SendAttachmentStore;
 };
 
 export function createMailboxActions({
@@ -24,14 +26,18 @@ export function createMailboxActions({
   stores,
   refreshSnapshot,
   reportFailure,
+  sendAttachments,
 }: MailboxActionParams) {
   const store = stores.selection;
-  const delivery = createChatDelivery(api, stores);
-  async function openMailboxItem(itemId: string): Promise<MailboxItemView | null> {
+  const delivery = createChatDelivery(api, stores, sendAttachments);
+  async function openMailboxItem(
+    itemId: string,
+    nodeDid?: string | null,
+  ): Promise<MailboxItemView | null> {
     selection.advanceIntent(store);
     const captured = selection.captureIntent(store);
     try {
-      const item = await api.startMailboxRequest(itemId);
+      const item = await api.startMailboxRequest(itemId, nodeDid);
       if (!selection.acceptsIntent(store, captured)) return null;
       selection.openMailboxRoute(store, {
         itemId: item.itemId,
@@ -39,7 +45,8 @@ export function createMailboxActions({
         agentDid: item.targetAgentDid,
         sessionId: item.sessionId ?? null,
       });
-      writeSession(stores.session, null);
+      const selected = store.getState();
+      keepSelectedSession(stores.session, selected.sessionId, selected.nodeDid);
       return item;
     } catch (error) {
       if (!selection.acceptsIntent(store, captured)) return null;
@@ -48,11 +55,11 @@ export function createMailboxActions({
     }
   }
 
-  async function dismissMailboxItem(itemId: string) {
+  async function dismissMailboxItem(itemId: string, nodeDid?: string | null) {
     const clientDid = stores.client.getState().snapshot?.client?.clientDid;
     const intent = selection.captureIntent(store);
     try {
-      await api.dismissMailboxItem(itemId);
+      await api.dismissMailboxItem(itemId, nodeDid);
       if (stores.client.getState().snapshot?.client?.clientDid !== clientDid) return;
       for (const draft of loadChatDrafts().chatDrafts) {
         if (

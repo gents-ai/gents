@@ -1,0 +1,72 @@
+{
+  "input": {
+    "chart": "pie",
+    "data": {
+      "columns": [
+        "k",
+        "v"
+      ],
+      "rows": [
+        [
+          "a",
+          2
+        ],
+        [
+          "b",
+          3
+        ]
+      ]
+    },
+    "save": "inline",
+    "output": "svg",
+    "width": 300,
+    "height": 220
+  },
+  "bind": "save",
+  "expect": {
+    "response": {
+      "alt": "Pie chart. 2 slices of v, total 5. \"a\" 2 (40%). \"b\" 3 (60%).",
+      "chart": "pie",
+      "files": [
+        {
+          "bytes": 1198,
+          "path": "inline.svg"
+        },
+        {
+          "bytes": 6004,
+          "path": "inline.png"
+        }
+      ],
+      "height": 220,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 2.0,
+          "min": 2.0,
+          "name": "a",
+          "points": 1,
+          "share": 0.4,
+          "value": 2.0
+        },
+        {
+          "axis": "left",
+          "color": "#e69f00",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 3.0,
+          "min": 3.0,
+          "name": "b",
+          "points": 1,
+          "share": 0.6,
+          "value": 3.0
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"300\" height=\"220\" viewBox=\"0 0 300 220\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">pie chart</title><desc id=\"chart-desc\">Pie chart. 2 slices of v, total 5. &quot;a&quot; 2 (40%). &quot;b&quot; 3 (60%).</desc><rect x=\"0\" y=\"0\" width=\"300\" height=\"220\" fill=\"#ffffff\"/><path d=\"M 117.49,100.5 L 117.49,22 A 78.5,78.5 0 0 1 163.63,164.01 Z\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>a: 2 (40%)</title></path><text x=\"166.77\" y=\"88.49\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#ffffff\">40%</text><path d=\"M 117.49,100.5 L 163.63,164.01 A 78.5,78.5 0 1 1 117.49,22 Z\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>b: 3 (60%)</title></path><text x=\"68.22\" y=\"120.51\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">60%</text><rect x=\"223.98\" y=\"19\" width=\"12\" height=\"12\" fill=\"#0072b2\"/><text x=\"243.98\" y=\"29\" font-size=\"12\" fill=\"#1f2328\">a (40%)</text><rect x=\"223.98\" y=\"37\" width=\"12\" height=\"12\" fill=\"#e69f00\"/><text x=\"243.98\" y=\"47\" font-size=\"12\" fill=\"#1f2328\">b (60%)</text></svg>",
+      "warnings": [],
+      "width": 300
+    }
+  }
+}

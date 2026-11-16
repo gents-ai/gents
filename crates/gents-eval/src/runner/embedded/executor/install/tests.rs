@@ -7,21 +7,23 @@ use gents::DocumentRuntimeOptions;
 
 fn bind_test_evaluator(spec: &mut TrialSpec, home: &mut EmbeddedHome) {
     let identity = std::sync::Arc::new(
-        gents::KeyIdentity::load_or_create(home.path().join("evaluator.key"), None).unwrap(),
+        gents_store::identity::KeyIdentity::load_or_create(home.path().join("evaluator.key"), None)
+            .unwrap(),
     );
-    spec.evaluator_did = gents::NodeIdentity::did(identity.as_ref()).to_owned();
+    spec.evaluator_did = gents_store::identity::NodeIdentity::did(identity.as_ref()).to_owned();
     let capability = identity.client_signing_capability().unwrap();
     home.set_evaluator(identity, capability);
 }
 
 #[tokio::test]
 async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_arrivals() {
-    use gents::request::lifecycle::{
-        build_signed_request, task_fire_key, ExecutionOrigin, RequestSigner, TriggerLineage,
-    };
-    use gents::test_support::checkpoint_prefix;
+    use gents_automation::test_support::checkpoint_prefix;
+    use gents_automation::triggers::task_fire_key;
     use gents_protocol::event_delivery::EventConsumer;
     use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
+    use gents_session::request::lifecycle::{
+        build_signed_request, ExecutionOrigin, RequestSigner, TriggerLineage,
+    };
 
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("pack");
@@ -47,7 +49,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
         serde_json::from_value(agent_row["data"]["Agent"][0].clone()).unwrap();
     assert_eq!(binding.agent_did, agent_did);
     let agent_identity =
-        gents::store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
+        gents_store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
     let agent = ConfigAccess::local_managed_agent(
         home.node.clone(),
         ::identity::Did::new(&agent_did).unwrap(),
@@ -71,7 +73,14 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
     evaluator
         .transact_write("test.checkpoint.config", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -91,7 +100,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
         access: &ConfigAccess,
         node: &std::sync::Arc<gents::defra_node::Node>,
         owner: &str,
-        agent: &dyn gents::NodeIdentity,
+        agent: &dyn gents_store::identity::NodeIdentity,
         source_doc: &str,
     ) {
         let identity = FireIdentity {
@@ -128,7 +137,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             .as_str()
             .unwrap();
         let task_doc_id = response["data"]["Task"][0]["_docID"].as_str().unwrap();
-        let spec = gents::test_support::pending_agent_request_spec(
+        let spec = gents_automation::test_support::pending_agent_request_spec(
             owner,
             agent.did(),
             "work",
@@ -152,25 +161,25 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
         let create = build_signed_request(spec, RequestSigner::Identity(agent))
             .await
             .unwrap();
-        let generation = gents::test_support::event_admission_generation(
+        let generation = gents_automation::test_support::event_admission_generation(
             &serde_json::from_value(json!({"node_did":owner, "event_source_id":"source", "source_collection":"CheckpointWork", "event_kind":"created"})).unwrap(),
             &serde_json::from_value(json!({"node_did":owner, "trigger_id":"trigger", "task_id":"task", "enabled":true, "concurrency":"queued_serial", "source":{"kind":"event", "event_source_id":"source"}})).unwrap(),
             &serde_json::from_value(json!({"node_did":owner, "task_id":"task", "agent_did":agent.did(), "prompt_template":"work"})).unwrap(),
-            &gents::test_support::EventConfigDocIds {
+            &gents_automation::test_support::EventConfigDocIds {
                 trigger: trigger_doc,
                 source: source_doc_id,
                 task: task_doc_id,
             },
         ).unwrap();
-        let prepared = gents::test_support::PreparedFire {
+        let prepared = gents_automation::test_support::PreparedFire {
             receipt: fire,
             target_existing: false,
             create_session: false,
-            max_fires_per_hour: gents::documents::DEFAULT_MAX_FIRES_PER_HOUR,
+            max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
             replace_prior: false,
             event_source_generation: Some(generation),
         };
-        gents::test_support::write_trigger_delivery_with_identity(
+        gents_automation::test_support::write_trigger_delivery_with_identity(
             node,
             ::identity::Did::new(agent.did()).unwrap(),
             &prepared,
@@ -208,7 +217,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             .unwrap()
             .is_none()
     );
-    let fixture = crate::lean_vocab_test::lean_identity_household_cases()
+    let fixture = gents_lean_vocab::lean_identity_household_cases()
         .first()
         .unwrap();
     let modeled_agent = &fixture
@@ -326,7 +335,7 @@ async fn every_installed_trial_agent_can_read_its_operational_collections() {
     assert!(agents.iter().any(|agent| agent["agent_did"] == selected));
     // The selected default Agent can project the baseline of an Agent it creates.
     let selected_did = ::identity::Did::new(&selected).unwrap();
-    for permission in gents::store::identity::GrantSet::PolicyDelegate.permissions() {
+    for permission in gents_store::identity::GrantSet::PolicyDelegate.permissions() {
         assert!(
             home.node
                 .nac_manager()
@@ -336,6 +345,13 @@ async fn every_installed_trial_agent_can_read_its_operational_collections() {
             "the selected trial Agent lacks {permission:?}"
         );
     }
+    gents_store::identity::provision_agent_identity_authorized(
+        &home.node,
+        home.identity.as_ref(),
+        &selected_did,
+    )
+    .await
+    .expect("the trial Engineer holds the agent catalog");
     home.node.shutdown().await.unwrap();
 }
 
@@ -381,7 +397,7 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
             let agent_did = &agent_did;
             let node_did = &node_did;
             Box::pin(async move {
-                let (node, _) = gents::store::config_client::read_desired_state_record_in_txn(
+                let (node, _) = gents_documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::Node,
                     node_did,
@@ -389,7 +405,7 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
                 )
                 .await?
                 .unwrap();
-                let (agent, _) = gents::store::config_client::read_desired_state_record_in_txn(
+                let (agent, _) = gents_documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::Agent,
                     node_did,
@@ -443,7 +459,7 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
     )
     .unwrap();
     let agent_identity =
-        gents::store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
+        gents_store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
     let actor = ConfigAccess::local_managed_agent(
         home.node.clone(),
         ::identity::Did::new(&agent_did).unwrap(),
@@ -480,7 +496,7 @@ async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
     owner
         .grant_node_permission(
             &outsider_did,
-            gents::store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::DocumentRead,
         )
         .await
         .unwrap();
@@ -537,7 +553,7 @@ async fn a_trial_subject_supplies_an_omitted_default_agent() {
     write_slot_pack(&pack_dir, "gents:inference-slot:primary");
     let path = pack_dir.join("pack_config.json");
     let config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert!(config["node"].get("default_agent_did").is_none());
+    assert!(config.get("default_agent_selection").is_none());
     let bytes = serde_json::to_vec(&config).unwrap();
     std::fs::write(&path, &bytes).unwrap();
     let mut spec = TrialSpec {
@@ -555,10 +571,13 @@ async fn a_trial_subject_supplies_an_omitted_default_agent() {
 
     let access = ConfigAccess::local(home.node.clone());
     let response = access
-        .execute("query { Node { default_agent_did } }")
+        .execute("query { DefaultAgentSelection { default_agent_did } }")
         .await
         .unwrap();
-    assert_eq!(response["data"]["Node"][0]["default_agent_did"], agent_did);
+    assert_eq!(
+        response["data"]["DefaultAgentSelection"][0]["default_agent_did"],
+        agent_did
+    );
     let agent = gents::Gents::from_default_agent_documents(
         home.node.clone(),
         home.identity.clone(),
@@ -868,12 +887,15 @@ async fn session_fixtures_publish_only_declared_cross_agent_readers() {
 
 #[tokio::test]
 async fn expired_request_fixtures_are_signed_published_and_expired_without_inference() {
-    let transition = crate::lean_vocab_test::lean_request_transition_cases()
-        .iter()
-        .find(|case| case.from == "pending" && case.to == "dead")
-        .expect("Lean models pending expiry");
-    assert_eq!(transition.classification, "legal");
-    assert_eq!(transition.action.as_deref(), Some("expire"));
+    let transition = gents_protocol::request_lifecycle::RequestLifecycleState::Pending
+        .transition_to(gents_protocol::request_lifecycle::RequestLifecycleState::Dead)
+        .expect("the request transition owner permits pending expiry");
+    assert_eq!(
+        transition.classification(),
+        gents_protocol::request_lifecycle::RequestTransitionClassification::Legal(
+            gents_protocol::request_lifecycle::RequestTransitionAction::Expire
+        )
+    );
     let dir = tempfile::tempdir().unwrap();
     let pack_dir = dir.path().join("pack");
     write_slot_pack(&pack_dir, "gents:inference-slot:primary");
@@ -913,14 +935,14 @@ async fn expired_request_fixtures_are_signed_published_and_expired_without_infer
     assert_eq!(requests.len(), 2);
     let mut ids = Vec::new();
     for row in requests {
-        assert_eq!(row["lifecycle_state"], transition.to);
+        assert_eq!(row["lifecycle_state"], transition.to().as_str());
         assert_eq!(row["relationships_pending"], false);
         assert!(row["claimed_at"].is_null());
         assert_eq!(row["requester_did"], spec.evaluator_did);
         assert_eq!(row["agent_did"], agent);
         let native: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(row.clone()).unwrap();
-        gents::verify_request_receipt_signature(&native).unwrap();
+        gents_store::identity::request_receipt::verify_request_receipt_signature(&native).unwrap();
         ids.push(native.doc_id.unwrap());
     }
     assert!(rows["data"]["InferenceCall"].as_array().unwrap().is_empty());

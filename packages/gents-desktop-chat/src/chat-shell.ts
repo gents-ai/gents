@@ -347,7 +347,7 @@ function activityStatusFor(
       return {
         kind: "syncing",
         label: "Syncing turn status…",
-        detail: "Waiting for local and replicated turn records to agree.",
+        detail: "Waiting for the node to report this turn's status.",
         animated: true,
       };
   }
@@ -494,7 +494,8 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
             ? "nodeNotSelected"
             : admissionStatus === input.operationalState?.connection
               ? "runtimeNotConnected"
-              : admissionStatus.layer === "p2p" || admissionStatus.layer === "route"
+              : admissionStatus.layer === "p2p" ||
+                  admissionStatus.layer === "route"
                 ? "routeNotReady"
                 : "agentUnavailable";
       return {

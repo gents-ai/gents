@@ -12,7 +12,7 @@ async fn goal_control_failures_pause_after_two_retries_even_with_generated_text(
         .as_str()
         .unwrap()
         .to_owned();
-    let goal = set_goal_from_access(
+    let goal = seed_goal_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -24,7 +24,7 @@ async fn goal_control_failures_pause_after_two_retries_even_with_generated_text(
     .await
     .unwrap();
     let (mut source, _snapshot) = source_for_agent(&db, &agent).await;
-    for retry in 0..=gents::goal::MAX_INFRASTRUCTURE_RETRIES {
+    for retry in 0..=gents_automation::goal::MAX_INFRASTRUCTURE_RETRIES {
         failed_control_as(
             &access,
             &agent,
@@ -45,7 +45,7 @@ async fn goal_control_failures_pause_after_two_retries_even_with_generated_text(
             db.node_identity.did(),
         )
         .await;
-        if retry == gents::goal::MAX_INFRASTRUCTURE_RETRIES {
+        if retry == gents_automation::goal::MAX_INFRASTRUCTURE_RETRIES {
             let paused = wait_for_goal_transition_as(
                 &access,
                 &db.node,
@@ -71,7 +71,7 @@ async fn goal_control_failures_pause_after_two_retries_even_with_generated_text(
                     .is_err()
             );
             assert_eq!(goal_children_from_access(&access).await.len() as i64, retry);
-            let recovered = gents::goal::resume_goal_request(
+            let recovered = gents_automation::goal::resume_goal_request(
                 &db.client_access(&user),
                 &user,
                 db.node_identity.did(),
@@ -141,7 +141,7 @@ async fn unrelated_or_foreign_tool_failures_do_not_consume_goal_control_retries(
             .as_str()
             .unwrap()
             .to_owned();
-        set_goal_from_access(
+        seed_goal_from_access(
             &access,
             db.node_identity.did(),
             SESSION,
@@ -153,8 +153,11 @@ async fn unrelated_or_foreign_tool_failures_do_not_consume_goal_control_retries(
         .await
         .unwrap();
         let keys = tempfile::tempdir().unwrap();
-        let foreign_node =
-            gents::KeyIdentity::load_or_create(keys.path().join("foreign-node.key"), None).unwrap();
+        let foreign_node = gents_store::identity::KeyIdentity::load_or_create(
+            keys.path().join("foreign-node.key"),
+            None,
+        )
+        .unwrap();
         let scope = if foreign {
             foreign_node.did()
         } else {
@@ -211,7 +214,7 @@ async fn failed_control_as(
                 "request_id":request_id,"request_doc_id":parent,"tool_name":tool,
                 "status":"completed","lifecycle_state":"failed","tool_failure_class":"serviceUnavailable"});
             let result = txn.execute_with_variables("mutation($input: AgentToolCallMutationInputArg!) {create_AgentToolCall(input:$input) {_docID}}", &serde_json::json!({"input": input})).await?;
-            let doc = gents::store::graphql::created_doc_id(&result, "AgentToolCall")?;
+            let doc = gents_store::graphql::created_doc_id(&result, "AgentToolCall")?;
             txn.add_resource_relationship("AgentToolCall", &doc, "parent", "sessions", session).await?;
             txn.add_actor_relationship("AgentToolCall", &doc, "working_agent", &agent.did().parse()?).await?;
             Ok::<_, anyhow::Error>(doc)

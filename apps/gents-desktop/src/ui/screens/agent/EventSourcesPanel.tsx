@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { NodeView } from "../../../hooks/fleetStore";
 import type { EventSource } from "@source-inc/gents-desktop-client";
 import { dependentsWarning } from "./dependents";
@@ -21,6 +22,8 @@ import {
   problemOf,
   type Problems,
 } from "./draft";
+import { NEW_ITEM } from "./draftItems";
+import { NewItemPage, type ItemDraft } from "./NewItemPage";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { RowMenu } from "./RowMenu";
@@ -101,10 +104,13 @@ export function EventSourceEditor({
   deployment,
   source,
   embedded = false,
+  draft,
 }: {
   deployment: NodeView;
   source: EventSource;
   embedded?: boolean;
+
+  draft?: ItemDraft;
 }) {
   const { changeConfig } = useApp().actions;
   const base = {
@@ -171,13 +177,19 @@ export function EventSourceEditor({
         },
       });
     },
-    { problems: eventSourceProblems },
+    { isNew: draft !== undefined, problems: eventSourceProblems },
   );
   const id = (f: string) => `${source.event_source_id}-${f}`;
   return (
     <>
       <Group
-        title={embedded ? undefined : (source.display_name ?? source.event_source_id)}
+        title={
+          embedded
+            ? undefined
+            : draft
+              ? "New event source"
+              : (source.display_name ?? source.event_source_id)
+        }
       >
         <FactRow label="Event source ID" mono>
           {source.event_source_id}
@@ -280,8 +292,15 @@ export function EventSourceEditor({
           timeoutSecs: id("timeout"),
           minCount: id("min-count"),
         }}
+        {...(draft && {
+          saveLabel: "Create event source",
+          onSave: async () => {
+            if (await d.save()) draft.onSaved(source.event_source_id);
+          },
+          onCancel: draft.onCancel,
+        })}
       />
-      {!embedded && (
+      {!embedded && !draft && (
         <DeleteButton
           label={source.display_name ?? source.event_source_id}
           warning={dependentsWarning(
@@ -315,6 +334,17 @@ export function EventSourcesPanel({
     nodeDid: deployment.nodeDid,
     section: "event-sources",
   };
+  if (
+    item === NEW_ITEM &&
+    !deployment.eventSources.some((s) => s.event_source_id === NEW_ITEM)
+  )
+    return (
+      <NewEventSourcePage
+        key={deployment.nodeDid}
+        deployment={deployment}
+        base={base}
+      />
+    );
   return (
     <ListDetail
       base={base}
@@ -354,24 +384,7 @@ export function EventSourcesPanel({
       }))}
       createLabel="New event source"
       empty="No event sources. A trigger binds a task to a reusable source."
-      onCreate={async () => {
-        const event_source_id = newId("evsrc");
-        await changeConfig("saveEventSourceConfig", {
-          document: {
-            node_did: deployment.nodeDid,
-            event_source_id,
-            display_name: "New event source",
-            source_collection: "AgentRequest",
-            event_kind: "created",
-          },
-        });
-        navigate({
-          name: "agent",
-          nodeDid: deployment.nodeDid,
-          section: "event-sources",
-          item: event_source_id,
-        });
-      }}
+      onCreate={() => navigate({ ...base, item: NEW_ITEM })}
       detail={(id) => {
         const source = deployment.eventSources.find((s) => s.event_source_id === id)!;
         return (
@@ -383,5 +396,28 @@ export function EventSourcesPanel({
         );
       }}
     />
+  );
+}
+
+function NewEventSourcePage({
+  deployment,
+  base,
+}: {
+  deployment: NodeView;
+  base: { name: "agent"; nodeDid: string; section: string };
+}) {
+  const [source] = useState<EventSource>(() => ({
+    node_did: deployment.nodeDid,
+    event_source_id: newId("evsrc"),
+    display_name: "New event source",
+    source_collection: "AgentRequest",
+    event_kind: "created",
+  }));
+  return (
+    <NewItemPage base={base} back="Event sources">
+      {(draft) => (
+        <EventSourceEditor deployment={deployment} source={source} draft={draft} />
+      )}
+    </NewItemPage>
   );
 }

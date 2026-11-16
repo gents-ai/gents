@@ -25,7 +25,7 @@ import type { ToolServiceRegistry } from "./ToolServiceRegistry.js";
 import type { Tools } from "./Tools.js";
 import type { TriggerView } from "./TriggerView.js";
 
-export type DeploymentView = { peerId: string, label: string, nodeDid: string, addr: string, source: string | null, graphql: string | null, dialSucceeded: boolean, runtimeConnection?: string, chatSafe: boolean, chatRefusal: ChatRefusalView | null, pairingReady?: boolean,
+export type DeploymentView = { peerId: string, label: string, nodeDid: string, addr: string, source: string | null, graphql: string | null, dialSucceeded: boolean, runtimeConnection?: string, chatSafe: boolean, chatRefusal: ChatRefusalView | null,
 /**
  * When this desktop's enrollment authorization on a joined node runs
  * out, after which reconciliation removes the node from this desktop;

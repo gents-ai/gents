@@ -1,0 +1,19 @@
+{
+  "bind": "fixtures/wide",
+  "expect": {
+    "markdown": "| table | source | rows | columns |\n| --- | --- | --- | --- |\n| toowide | toowide.csv | unknown | error: toowide.csv has 2001 columns, over the 2000 one table may have |",
+    "tables": [
+      {
+        "error": "toowide.csv has 2001 columns, over the 2000 one table may have",
+        "format": "csv",
+        "name": "toowide",
+        "source": "toowide.csv"
+      }
+    ],
+    "warnings": []
+  },
+  "input": {
+    "mode": "tables",
+    "table": "toowide"
+  }
+}

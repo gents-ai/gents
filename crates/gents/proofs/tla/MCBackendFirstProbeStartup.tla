@@ -1,0 +1,3 @@
+---- MODULE MCBackendFirstProbeStartup ----
+EXTENDS BackendFirstProbe
+====

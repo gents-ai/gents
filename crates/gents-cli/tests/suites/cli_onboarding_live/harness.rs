@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
+use tokio::sync::Notify;
+use tokio::time::Instant;
 
 use anyhow::{bail, ensure, Context, Result};
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
@@ -122,7 +124,12 @@ impl LiveBox {
     }
 
     pub(super) fn gents(&self) -> Command {
-        let mut command = Command::new(cli_bin());
+        self.gents_from(cli_bin())
+    }
+
+    /// `gents` as run from another copy of the binary.
+    pub(super) fn gents_from(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
+        let mut command = Command::new(program);
         command
             .current_dir(&self.root)
             .env("HOME", &self.root)
@@ -283,6 +290,7 @@ pub(super) struct Terminal {
     input: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
     transcript: Arc<Mutex<Vec<u8>>>,
     drained: Arc<AtomicBool>,
+    changes: Arc<Notify>,
     cursor: usize,
     _master: Box<dyn MasterPty + Send>,
 }
@@ -311,6 +319,8 @@ impl Terminal {
         let input = Arc::new(Mutex::new(pair.master.take_writer()?));
         let transcript = Arc::new(Mutex::new(Vec::new()));
         let drained = Arc::new(AtomicBool::new(false));
+        let changes = Arc::new(Notify::new());
+        let changed = changes.clone();
         let replies = Arc::downgrade(&input);
         let output = transcript.clone();
         let finished = drained.clone();
@@ -331,6 +341,7 @@ impl Terminal {
                         .lock()
                         .expect("transcript lock")
                         .extend_from_slice(&buffer[..read]);
+                    changed.notify_one();
                     for &byte in &buffer[..read] {
                         for (index, (query, reply)) in TERMINAL_QUERIES.iter().enumerate() {
                             if byte != query[matched[index]] {
@@ -350,6 +361,7 @@ impl Terminal {
                     }
                 }
                 finished.store(true, Ordering::SeqCst);
+                changed.notify_one();
             })?;
         let child = pair
             .slave
@@ -361,6 +373,7 @@ impl Terminal {
             input,
             transcript,
             drained,
+            changes,
             cursor: 0,
             _master: pair.master,
         })
@@ -396,7 +409,7 @@ impl Terminal {
                     self.transcript()
                 );
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = tokio::time::timeout_at(deadline, self.changes.notified()).await;
         }
     }
 
@@ -424,12 +437,60 @@ impl Terminal {
         endpoint: &str,
         model: &str,
     ) -> Result<()> {
+        self.answer_scanned_inference_until(endpoint, model, SHELL_UP)
+            .await
+    }
+
+    /// As [`Self::answer_scanned_inference`], returning once `until` is printed instead of
+    /// the shell, without consuming it.
+    pub(super) async fn answer_scanned_inference_until(
+        &mut self,
+        endpoint: &str,
+        model: &str,
+        until: &str,
+    ) -> Result<()> {
         self.answer(ROOT_QUESTION, WORK_FOLDER).await?;
         self.answer(INFERENCE_QUESTION, LOCAL_PROVIDER).await?;
         self.answer("Server base URL", endpoint).await?;
         self.answer("part of a name", model).await?;
-        self.answer("Temperature", "").await?;
-        self.answer("Top-p", "").await
+        let deadline = Instant::now() + RUNTIME_UP;
+        let prompts = ["Reasoning effort", "Temperature", "Top-p", until];
+        loop {
+            let next = {
+                let transcript = self.transcript.lock().expect("transcript lock");
+                prompts
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, prompt)| {
+                        transcript[self.cursor..]
+                            .windows(prompt.len())
+                            .position(|window| window == prompt.as_bytes())
+                            .map(|offset| (offset, index))
+                    })
+                    .min()
+            };
+            if let Some((offset, index)) = next {
+                if prompts[index] == until {
+                    return Ok(());
+                }
+                self.cursor += offset + prompts[index].len();
+                self.send("\r")?;
+                continue;
+            }
+            ensure!(
+                !self.drained.load(Ordering::SeqCst),
+                "setup closed before printing {until:?}: {}",
+                self.transcript()
+            );
+            tokio::time::timeout_at(deadline, self.changes.notified())
+                .await
+                .with_context(|| {
+                    format!(
+                        "setup did not finish its model settings: {}",
+                        self.transcript()
+                    )
+                })?;
+        }
     }
 
     /// Every question `init` needs, for a setup that fails before it reaches the model.
@@ -455,7 +516,7 @@ impl Terminal {
         loop {
             if let Some(status) = self.child.try_wait()? {
                 while !self.drained.load(Ordering::SeqCst) && Instant::now() < deadline {
-                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    let _ = tokio::time::timeout_at(deadline, self.changes.notified()).await;
                 }
                 return Ok(status.exit_code());
             }
@@ -465,7 +526,7 @@ impl Terminal {
                     self.transcript()
                 );
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = tokio::time::timeout_at(deadline, self.changes.notified()).await;
         }
     }
 
@@ -507,22 +568,8 @@ impl Drop for Terminal {
 
 /// The configured model server, checked before anything is installed.
 pub(super) async fn live_model() -> Result<(String, String)> {
-    let endpoint = std::env::var("GENTS_CLI_E2E_MODEL_ENDPOINT")
-        .context("with_model tests read GENTS_CLI_E2E_MODEL_ENDPOINT")?;
-    let model = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
-        .context("with_model tests read GENTS_CLI_E2E_MODEL_NAME")?;
-    let models = format!("{}/models", endpoint.trim_end_matches('/'));
-    reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(10))
-        .build()?
-        .get(&models)
-        .send()
-        .await
-        .with_context(|| format!("the model server at {models} is unreachable"))?
-        .error_for_status()
-        .with_context(|| format!("the model server at {models} refused the request"))?;
-    Ok((endpoint, model))
+    let target = gents::support::live_inference::live_target().await;
+    Ok((target.endpoint().to_owned(), target.model().to_owned()))
 }
 
 pub(super) fn node_did_of(home: &Path) -> Result<String> {

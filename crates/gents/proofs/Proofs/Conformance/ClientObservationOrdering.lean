@@ -1,4 +1,4 @@
-import Proofs.ClientShell.ObservationOrdering
+import Proofs.Clients.ClientShell.ObservationOrdering
 import Proofs.Conformance.ClientLiveDelta
 
 open ClientObservationOrdering
@@ -41,13 +41,19 @@ def main : IO Unit := do
         [false, true].flatMap fun needsSetup =>
           [false, true].flatMap fun authoritative =>
             [false, true].flatMap fun localRuntimeAllowed =>
-              [false, true].map fun remoteConfigured =>
-                let expected := ClientSnapshotObservation.observeFirstRun phase snapshotReady initStatus needsSetup authoritative localRuntimeAllowed remoteConfigured
-                "{\"phase\":\"" ++ firstRunName phase ++ "\",\"snapshotReady\":" ++ toString snapshotReady ++
-                ",\"initConfigStatus\":\"" ++ initName ++ "\",\"needsSetup\":" ++ toString needsSetup ++
-                ",\"authoritative\":" ++ toString authoritative ++ ",\"localRuntimeAllowed\":" ++ toString localRuntimeAllowed ++
-                ",\"remoteConfigured\":" ++ toString remoteConfigured ++ ",\"expected\":\"" ++ firstRunName expected ++ "\"}"
+              [false, true].flatMap fun remoteConfigured =>
+                [false, true].map fun localHomeLost =>
+                  let expected := ClientSnapshotObservation.observeFirstRun phase snapshotReady initStatus needsSetup authoritative localRuntimeAllowed remoteConfigured localHomeLost
+                  "{\"phase\":\"" ++ firstRunName phase ++ "\",\"snapshotReady\":" ++ toString snapshotReady ++
+                  ",\"initConfigStatus\":\"" ++ initName ++ "\",\"needsSetup\":" ++ toString needsSetup ++
+                  ",\"authoritative\":" ++ toString authoritative ++ ",\"localRuntimeAllowed\":" ++ toString localRuntimeAllowed ++
+                  ",\"remoteConfigured\":" ++ toString remoteConfigured ++ ",\"localHomeLost\":" ++ toString localHomeLost ++
+                  ",\"expected\":\"" ++ firstRunName expected ++ "\"}"
+  let family := Conformance.ClientLiveDeltaContracts.cursor
+  let liveDeltas := Lean.Json.arr (family.inputs.map fun i => Lean.Json.mkObj
+    [("base", Lean.toJson i.base), ("current", Lean.toJson i.current),
+     ("terminal", Lean.toJson i.terminal), ("accepted", Lean.toJson (family.model i).accepted)]).toArray
   IO.println ("{\"fences\":[" ++ String.intercalate "," rows ++
     "],\"startup\":[" ++ String.intercalate "," startupRows ++
     "],\"firstRun\":[" ++ String.intercalate "," firstRunRows ++
-    "],\"liveDeltas\":" ++ Conformance.ClientLiveDeltaContracts.casesJson ++ "}")
+    "],\"liveDeltas\":" ++ liveDeltas.compress ++ "}")

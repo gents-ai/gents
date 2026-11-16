@@ -83,7 +83,6 @@ export type {
   InferenceProbeRequest,
   InferenceProfileSaveRequest,
   EnrollmentStatusRequest,
-  PeerStatusFetchRequest,
   ScheduleRunRequest,
   ScheduleSaveRequest,
   SkillDeleteRequest,

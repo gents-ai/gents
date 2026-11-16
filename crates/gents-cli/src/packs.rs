@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use gents::pack::PackChangeError;
-use gents::ConfigAccess;
+use gents_pack::pack::PackChangeError;
+use gents_protocol::operations::pack::EditedDocuments;
+use gents_store::config_client::ConfigAccess;
 use serde_json::Value;
 
 use crate::cli::args::{JobPromoteArgs, PluginBindArgs, PluginCommand, PluginUnbindArgs};
@@ -13,16 +14,6 @@ use crate::cli::{
 use crate::commands::pack as command;
 use crate::output_format::OutputFormat;
 use crate::request_helpers::capture_report;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub enum EditedDocuments {
-    #[default]
-    Refuse,
-    Overwrite,
-    Keep,
-}
 
 fn drift(edited: EditedDocuments) -> PackDriftArgs {
     PackDriftArgs {
@@ -115,38 +106,50 @@ pub async fn install(
     .await
 }
 
-/// The Engineer's default packs as `home` has them: installed, waiting on an
-/// approval (with what its plugins request and the archive an approval
-/// installs), ready to install, or unavailable. Read through whatever serves
-/// the home, so it works while the runtime runs.
-pub async fn default_packs(home: PathBuf, registry: Option<String>) -> Result<Value> {
+/// The Engineer's core packs as `home` has them: `installed`, installed and
+/// not turned on (`not_enabled`), `missing` from the home and installable
+/// from this release, or `unavailable` in this build. Read through whatever
+/// serves the home, so it works while the runtime runs.
+pub async fn core_packs(home: PathBuf) -> Result<Value> {
+    core_packs_from(home, gents_core_packs::archives()).await
+}
+
+/// [`core_packs`], with `archives` as the release's `(coordinate, .pack
+/// bytes)`.
+pub async fn core_packs_from(home: PathBuf, archives: &[(&str, &[u8])]) -> Result<Value> {
     use crate::commands::init::default_packs as owner;
-    let packs = owner::status(&home, owner::ENGINEER_DEFAULT_PACKS, registry.as_deref()).await?;
+    let packs = owner::status(&home, archives).await?;
     Ok(serde_json::json!({ "packs": packs }))
 }
 
-/// Installs each `(pack, digest)` of `approved` for `home`'s Engineer, as
-/// `init --engineer` installs a default pack it was told to approve: the
-/// Engineer owns what the pack ships, its plugins are wired and its skills
-/// attached. Only a default pack, at the archive its status showed. The
-/// home's own store is opened, so the caller stops the runtime first.
-pub async fn approve_default_packs(
+/// Turns on each of `packs` (core pack coordinates) for `home`'s Engineer,
+/// installing one the home lacks from this release: the Engineer owns what
+/// the pack ships, its plugins are wired and its skills attached as enabling
+/// says. Returns `{enabled, failed}`. An installed pack is enabled through
+/// the runtime serving the home when one does; a pack the home lacks needs
+/// the home's own store, so it is refused while a runtime serves the home.
+pub async fn enable_core_packs(home: PathBuf, packs: Vec<String>) -> Result<Value> {
+    enable_core_packs_from(home, packs, gents_core_packs::archives()).await
+}
+
+/// [`enable_core_packs`], with `archives` as the release's.
+pub async fn enable_core_packs_from(
     home: PathBuf,
-    approved: Vec<(String, String)>,
-    registry: Option<String>,
+    packs: Vec<String>,
+    archives: &[(&str, &[u8])],
 ) -> Result<Value> {
     use crate::commands::init::default_packs as owner;
-    let approved: Vec<_> = approved
-        .into_iter()
-        .map(|(pack, digest)| (pack, Some(digest)))
-        .collect();
-    owner::approve(
-        &home,
-        owner::ENGINEER_DEFAULT_PACKS,
-        &approved,
-        registry.as_deref(),
-    )
-    .await
+    let packs = packs
+        .iter()
+        .map(|pack| owner::core_pack(&home, pack))
+        .collect::<Result<Vec<_>>>()?;
+    owner::enable(&home, archives, &packs).await
+}
+
+/// Installs each core pack `home` lacks from `archives`, as `init
+/// --engineer` leaves it. Returns `{installed, not_installed}`.
+pub async fn install_core_packs_from(home: PathBuf, archives: &[(&str, &[u8])]) -> Result<Value> {
+    crate::commands::init::default_packs::install_missing(&home, archives).await
 }
 
 /// Wires the installed `plugin` into `agent`'s Tools and Context (or with
@@ -193,8 +196,8 @@ pub async fn promote(
 /// runs and the tools it was promoted to. Runs that failed, were cancelled or
 /// timed out are not promotable (`promote::gate`) and are left out.
 pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
-    use gents::tools::background::job::view::{list_jobs, JobFilter, StateFilter};
     use gents_protocol::job::{JobState, JobView};
+    use gents_toolcalls::background::job::view::{list_jobs, JobFilter, StateFilter};
     let (access, home) = crate::resolve_config_access(Some(&home), None).await?;
     let views = list_jobs(
         &access,
@@ -206,11 +209,11 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
     )
     .await
     .map_err(crate::commands::job::read_error)?;
-    let promotions = gents::tools::background::job::promote::list_promotions(&home)?;
+    let promotions = gents_toolcalls::background::job::promote::list_promotions(&home)?;
     let mut scripts: std::collections::BTreeMap<&str, Vec<&JobView>> = Default::default();
     for view in views
         .iter()
-        .filter(|view| gents::tools::background::job::promote::gate(view).is_ok())
+        .filter(|view| gents_toolcalls::background::job::promote::gate(view).is_ok())
     {
         scripts.entry(&view.pin.script_id).or_default().push(view);
     }
@@ -220,7 +223,7 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
             .iter()
             .max_by_key(|view| view.created_at)
             .expect("a group has a run");
-        let agent_did = gents::session::origin::load_session(
+        let agent_did = gents_session::session::origin::load_session(
             &access,
             &latest.session_id,
             latest.scope.requester_did.as_deref(),
@@ -239,7 +242,7 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
     }
     workflows.sort_by_key(|workflow| std::cmp::Reverse(workflow["last_run_at"].as_u64()));
     // Installed workflows are the home's job plugins.
-    let installed: Vec<Value> = gents::plugin::store::list_records(&home)?
+    let installed: Vec<Value> = gents_pack::plugin::store::list_records(&home)?
         .into_iter()
         .filter(|record| record.declaration.job.0)
         .map(|record| {
@@ -257,15 +260,15 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
 /// One dynamic run, selected by its address (SESSION_ID:TOOL_CALL_ID) or tool
 /// call id: its view, script and promotions.
 pub async fn dynamic_workflow(home: PathBuf, selector: String) -> Result<Value> {
-    let actor = crate::home_state::resolve_node_did(Some(&home), None)?;
+    let actor = gents_service::home_state::resolve_node_did(Some(&home), None)?;
     let (access, home) = crate::resolve_config_access(Some(&home), None).await?;
     let view = crate::commands::job::resolve_job(&access, &actor, &selector, None).await?;
-    let run = gents::tools::background::job::promote::load_dynamic_run(
+    let run = gents_toolcalls::background::job::promote::load_dynamic_run(
         &access,
-        gents::tools::background::job::view::JobKey::RowDocId(view.row_doc_id),
+        gents_toolcalls::background::job::view::JobKey::RowDocId(view.row_doc_id),
     )
     .await?;
-    let promotions = gents::tools::background::job::promote::list_promotions(&home)?;
+    let promotions = gents_toolcalls::background::job::promote::list_promotions(&home)?;
     Ok(serde_json::json!({
         "promoted_as": promoted_as(&promotions, &run.view.pin.script_id),
         "view": run.view,
@@ -274,7 +277,7 @@ pub async fn dynamic_workflow(home: PathBuf, selector: String) -> Result<Value> 
 }
 
 fn promoted_as(
-    promotions: &[gents::tools::background::job::promote::PromotionRecord],
+    promotions: &[gents_toolcalls::background::job::promote::PromotionRecord],
     script_id: &str,
 ) -> Vec<String> {
     promotions
@@ -285,7 +288,7 @@ fn promoted_as(
 }
 
 pub async fn plugin_slots(home: PathBuf) -> Result<Value> {
-    let plugins = gents::plugin::store::list_records(&home)?
+    let plugins = gents_pack::plugin::store::list_records(&home)?
         .into_iter()
         .filter_map(|record| {
             let slot = record.declaration.model_slot.clone()?;
@@ -300,14 +303,14 @@ pub async fn plugin_slots(home: PathBuf) -> Result<Value> {
         return Ok(serde_json::json!({"plugins": plugins, "profiles": []}));
     }
     let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
-    let profiles = gents::pack::inference_profile_options(&access, &owner).await?;
+    let profiles = gents_pack::pack::inference_profile_options(&access, &owner).await?;
     Ok(serde_json::json!({"plugins": plugins, "profiles": profiles}))
 }
 
 /// What a person can wire: every installed plugin with its pack and whether
 /// it declares jobs, and the installed packs that ship AgentTargets.
 pub async fn wire_sources(home: PathBuf) -> Result<Value> {
-    let plugins = gents::plugin::store::list_records(&home)?
+    let plugins = gents_pack::plugin::store::list_records(&home)?
         .into_iter()
         .map(|record| {
             serde_json::json!({
@@ -319,12 +322,12 @@ pub async fn wire_sources(home: PathBuf) -> Result<Value> {
         .collect::<Vec<_>>();
     let (access, owner) = command::resolve_scope_owner(&scope(home.clone())).await?;
     let mut target_packs = Vec::new();
-    for pack in gents::pack::installed_packs(Some(&home), Some((&access, &owner))).await? {
-        let targets = gents::pack::installed_pack_documents(&access, &owner, &pack.coordinate)
+    for pack in gents_pack::pack::installed_packs(Some(&home), Some((&access, &owner))).await? {
+        let targets = gents_pack::pack::installed_pack_documents(&access, &owner, &pack.coordinate)
             .await?
             .into_iter()
             .filter(|(collection, _)| {
-                *collection == gents::store::collection::Collection::AgentTarget
+                *collection == gents_store::collection::Collection::AgentTarget
             })
             .map(|(_, id)| id)
             .collect::<Vec<_>>();
@@ -419,7 +422,7 @@ pub async fn whoami(home: PathBuf, registry: Option<String>) -> Result<Value> {
 pub async fn plugin_build(dir: PathBuf, run_cases: bool) -> Result<()> {
     let build_dir = dir.clone();
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let manifest = gents::pack::authoring::read_manifest(&build_dir)?;
+        let manifest = gents_pack::pack::authoring::read_manifest(&build_dir)?;
         for plugin in &manifest.metadata.plugins {
             command::build::build_plugin(&build_dir, &manifest, plugin)?;
         }
@@ -428,7 +431,7 @@ pub async fn plugin_build(dir: PathBuf, run_cases: bool) -> Result<()> {
     .await
     .context("the plugin build task did not finish")??;
     let cases = if run_cases {
-        Some(gents::pack::authoring::run_plugin_cases(&dir).await?)
+        Some(gents_toolcalls::plugin::authoring_test::run_plugin_cases(&dir).await?)
     } else {
         None
     };
@@ -438,21 +441,21 @@ pub async fn plugin_build(dir: PathBuf, run_cases: bool) -> Result<()> {
 /* ---- UX plugins: what the desktop's doors read ---- */
 
 /// Every UX plugin on disk under `home` (dev folder and installed packs).
-pub fn ux_list(home: &std::path::Path) -> Result<Vec<gents::plugin::ux::UxListing>> {
-    gents::plugin::ux::list(home)
+pub fn ux_list(home: &std::path::Path) -> Result<Vec<gents_pack::plugin::ux::UxListing>> {
+    gents_pack::plugin::ux::list(home)
 }
 
 /// The module for the UX plugin `id`, produced from its file or by running
 /// the pack's own `.afb` producer under the installed plugin's bounds.
-pub async fn ux_module(home: PathBuf, id: String) -> Result<gents::plugin::ux::UxModule> {
-    let listing = gents::plugin::ux::find(&home, &id)?;
+pub async fn ux_module(home: PathBuf, id: String) -> Result<gents_pack::plugin::ux::UxModule> {
+    let listing = gents_pack::plugin::ux::find(&home, &id)?;
     let home_for_run = home.clone();
-    gents::plugin::ux::resolve_module(&home, &listing, |namespace, plugin| async move {
+    gents_pack::plugin::ux::resolve_module(&home, &listing, |namespace, plugin| async move {
         crate::commands::plugin::call_installed(
             &home_for_run,
             &namespace,
             &plugin,
-            gents::plugin::ux::producer_input(),
+            gents_pack::plugin::ux::producer_input(),
         )
         .await
     })
@@ -463,20 +466,20 @@ pub async fn ux_module(home: PathBuf, id: String) -> Result<gents::plugin::ux::U
 /// document door (`gents::plugin::ux::page`), beside what [`ux_list`] reads
 /// from a home.
 pub async fn ux_pages(
-    access: gents::ConfigAccess,
+    access: gents_store::config_client::ConfigAccess,
     node_did: String,
-) -> Result<Vec<gents::plugin::ux::UxListing>> {
-    gents::plugin::ux::page::list(&access, &node_did).await
+) -> Result<Vec<gents_pack::plugin::ux::UxListing>> {
+    gents_pack::plugin::ux::page::list(&access, &node_did).await
 }
 
 /// The module of the page document listed as `id` on `node_did`.
 pub async fn ux_page_module(
-    access: gents::ConfigAccess,
+    access: gents_store::config_client::ConfigAccess,
     node_did: String,
     id: String,
-) -> Result<gents::plugin::ux::UxModule> {
-    let page = gents::plugin::ux::page::find(&access, &node_did, &id).await?;
-    Ok(gents::plugin::ux::page::module(&page))
+) -> Result<gents_pack::plugin::ux::UxModule> {
+    let page = gents_pack::plugin::ux::page::find(&access, &node_did, &id).await?;
+    Ok(gents_pack::plugin::ux::page::module(&page))
 }
 
 /// The pack behind the UX plugin listed as `ux`, once it ships an `.afb`
@@ -486,13 +489,13 @@ pub async fn ux_page_module(
 /// asked, so this binds a call to a pack, not to a caller; the webview
 /// keeps a plugin to its own listing by offering it no other verb.
 pub fn plugin_call_target(home: &std::path::Path, ux: &str, name: &str) -> Result<String> {
-    let listing = gents::plugin::ux::find(home, ux)?;
+    let listing = gents_pack::plugin::ux::find(home, ux)?;
     let coordinate = listing.pack.ok_or_else(|| {
         anyhow::anyhow!(
             "ux plugin {ux:?} ships in no pack; ctx.plugin reaches a pack's own .afb plugins only"
         )
     })?;
-    let record = gents::pack::read_home_install(home, &coordinate)?
+    let record = gents_pack::pack::read_home_install(home, &coordinate)?
         .ok_or_else(|| anyhow::anyhow!("pack {coordinate} is not installed"))?;
     anyhow::ensure!(
         record.plugins.iter().any(|p| p.name == name),
@@ -503,14 +506,16 @@ pub fn plugin_call_target(home: &std::path::Path, ux: &str, name: &str) -> Resul
 
 pub fn plugin_call_uses_data(home: &std::path::Path, ux: &str, name: &str) -> Result<bool> {
     let coordinate = plugin_call_target(home, ux, name)?;
-    let (namespace, _) = gents::pack::registry::split_pack_coordinate(&coordinate);
-    Ok(gents::plugin::store::read_record(home, namespace, name)?
-        .data_grant()
-        .is_some())
+    let (namespace, _) = gents_pack::pack::registry::split_pack_coordinate(&coordinate);
+    Ok(
+        gents_pack::plugin::store::read_record(home, namespace, name)?
+            .data_grant()
+            .is_some(),
+    )
 }
 
 pub fn ux_installing_node(home: &std::path::Path) -> Result<String> {
-    let config = crate::home_state::read_init_config(home)?.ok_or_else(|| {
+    let config = gents_service::home_state::read_init_config(home)?.ok_or_else(|| {
         anyhow::anyhow!("the local node that installed this app is not initialized")
     })?;
     let node_did = config.node_did.trim();
@@ -532,12 +537,12 @@ pub async fn plugin_call(
     ux: String,
     name: String,
     input: Value,
-    operator: Option<(gents::ConfigAccess, String)>,
+    operator: Option<(gents_store::config_client::ConfigAccess, String)>,
 ) -> Result<Value> {
     let coordinate = plugin_call_target(&home, &ux, &name)?;
-    let (namespace, _) = gents::pack::registry::split_pack_coordinate(&coordinate);
+    let (namespace, _) = gents_pack::pack::registry::split_pack_coordinate(&coordinate);
     tracing::info!(ux = %ux, pack = %coordinate, plugin = %name, "ux plugin call");
-    gents::plugin::approval::scope_interactive(
+    gents_tools::plugin::approval::scope_interactive(
         true,
         crate::commands::plugin::call_installed_for_operator(
             &home, namespace, &name, input, operator,
@@ -554,9 +559,9 @@ pub async fn plugin_call(
 pub async fn ux_data_call(
     home: PathBuf,
     access: ConfigAccess,
-    request: gents::observe::ux_data::UxDataCall,
+    request: gents_tools::ux_data::UxDataCall,
 ) -> Result<Value> {
-    gents::observe::ux_data::call(&home, &access, request).await
+    gents_tools::ux_data::call(&home, &access, request).await
 }
 
 /// The surfaces and tools the UX plugin listed as `ux` may call on the
@@ -567,7 +572,7 @@ pub async fn ux_data_surfaces(
     ux: String,
     node_did: String,
 ) -> Result<Value> {
-    gents::observe::ux_data::surfaces(&home, &access, &ux, &node_did).await
+    gents_tools::ux_data::surfaces(&home, &access, &ux, &node_did).await
 }
 
 #[cfg(test)]
@@ -578,9 +583,9 @@ mod tests {
     fn ux_plugin_data_uses_the_installing_home_node() {
         let home = tempfile::tempdir().unwrap();
         assert!(ux_installing_node(home.path()).is_err());
-        crate::home_state::write_init_config(
+        gents_service::home_state::write_init_config(
             home.path(),
-            &crate::shared::StoredInitConfig {
+            &gents_service::state::StoredInitConfig {
                 home: home.path().display().to_string(),
                 node_name: "local".into(),
                 node_did: "did:key:local".into(),
@@ -589,7 +594,7 @@ mod tests {
                 keychain_label: None,
                 secure_enclave_label: None,
                 tool_package: None,
-                tool_ceiling: crate::cli::args::ToolCeilingArg::Readonly,
+                tool_ceiling: gents_service::args::ToolCeilingArg::Readonly,
                 tool_root: None,
                 store_encryption: None,
             },
@@ -603,17 +608,21 @@ mod tests {
     /// not ship are each refused by name; the pack's own plugin resolves.
     #[test]
     fn a_plugin_call_resolves_the_pack_from_the_callers_listing() {
-        use gents::pack::{
+        use gents_pack::pack::{
             write_home_install, HomePackInstall, InstalledPackPlugin, PackKind, PackUxPlugin,
             UxContributions,
         };
         let home = tempfile::tempdir().unwrap();
         let dev = home
             .path()
-            .join(gents::store::local::home::UX_PLUGINS_DIR_NAME)
+            .join(gents_store::local::home::UX_PLUGINS_DIR_NAME)
             .join("loose");
         std::fs::create_dir_all(&dev).unwrap();
-        std::fs::write(dev.join(gents::plugin::ux::DEV_ENTRY), "export default {}").unwrap();
+        std::fs::write(
+            dev.join(gents_pack::plugin::ux::DEV_ENTRY),
+            "export default {}",
+        )
+        .unwrap();
         let assets = "packs/.materialized/examples/board_pack/deadbeef";
         std::fs::create_dir_all(home.path().join(assets).join("ux/board")).unwrap();
         std::fs::write(
@@ -671,7 +680,7 @@ mod tests {
             plugin_call_target(home.path(), "examples/board_pack/board", "board_store").unwrap(),
             "examples/board_pack"
         );
-        let mut record = gents::pack::read_home_install(home.path(), "examples/board_pack")
+        let mut record = gents_pack::pack::read_home_install(home.path(), "examples/board_pack")
             .unwrap()
             .unwrap();
         record.kind = PackKind::Documents;

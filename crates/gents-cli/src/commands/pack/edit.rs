@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-pub(super) use gents::pack::authoring::PackEdit;
-use gents::pack::authoring::{PackAddition, PackPart as Part};
+pub(super) use gents_pack::pack::authoring::PackEdit;
+use gents_pack::pack::authoring::{PackAddition, PackPart as Part};
 
 use crate::cli::{PackAddArgs, PackAddCommand, PackFmtArgs, PackPart, PackRemovePartArgs};
 

@@ -339,7 +339,7 @@ pub(crate) fn parse_run_purpose(raw: &str) -> Result<String, String> {
     Ok(raw.to_owned())
 }
 
-pub(crate) fn parse_split(raw: &str) -> Result<gents::documents::EvalSplit, String> {
+pub(crate) fn parse_split(raw: &str) -> Result<gents_documents::EvalSplit, String> {
     serde_json::from_value(serde_json::Value::String(raw.trim().to_owned()))
         .map_err(|_| format!("unknown split {raw:?}; expected train, validation or held_out"))
 }
@@ -376,7 +376,7 @@ pub(crate) struct EvalRunArgs {
     #[arg(long = "profile", value_parser = parse_assignment)]
     pub(crate) profiles: Vec<(String, String)>,
     #[arg(long, value_parser = parse_split, default_value = "validation")]
-    pub(crate) split: gents::documents::EvalSplit,
+    pub(crate) split: gents_documents::EvalSplit,
     #[arg(long, default_value_t = 2)]
     pub(crate) trials: u32,
     #[arg(long, default_value_t = 1000)]
@@ -499,29 +499,18 @@ pub(crate) fn parse_target(raw: &str) -> Result<JobTarget, String> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ProposerArg {
-    /// A script of proposals, one per round.
-    Scripted(PathBuf),
-    /// An agent of a pack asked once per round; without a
-    /// agent, the pack's only inference-slot agent.
-    Agent { pack: String, agent: Option<String> },
+/// An agent of a pack asked once per round; without an agent, the pack's only
+/// inference-slot agent.
+pub(crate) struct ProposerArg {
+    pub(crate) pack: String,
+    pub(crate) agent: Option<String>,
 }
 
 pub(crate) fn parse_proposer(raw: &str) -> Result<ProposerArg, String> {
-    let usage = || {
-        format!(
-            "unknown proposer {raw:?}; pass --proposer scripted:<file> or --proposer agent:<pack>[:<agent>]"
-        )
-    };
-    if let Some(path) = raw.strip_prefix("scripted:") {
-        return match path.trim() {
-            "" => Err(usage()),
-            path => Ok(ProposerArg::Scripted(PathBuf::from(path))),
-        };
-    }
+    let usage = || format!("unknown proposer {raw:?}; pass --proposer agent:<pack>[:<agent>]");
     let Some(target) = raw.strip_prefix("agent:") else {
         return Err(usage());
     };
     let SubjectArg { pack, agent } = parse_subject(target).map_err(|_| usage())?;
-    Ok(ProposerArg::Agent { pack, agent })
+    Ok(ProposerArg { pack, agent })
 }

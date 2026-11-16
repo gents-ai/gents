@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::documents::InferenceBackend;
-use gents::store::config_client::ConfigAccess;
+use gents_documents::InferenceBackend;
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 use crate::shared::ConfigExportBundle;
@@ -11,7 +11,7 @@ use crate::shared::ConfigExportBundle;
 pub(super) async fn diagnose_backends(
     access: &ConfigAccess,
     bundle: &ConfigExportBundle,
-    accounts: &[gents::inference::auth::credential::AccountSummary],
+    accounts: &[gents_inference::auth::credential::AccountSummary],
     runtime_probes: &BTreeMap<String, Value>,
 ) -> Vec<Value> {
     let mut models = BTreeMap::<&str, BTreeSet<&str>>::new();
@@ -62,11 +62,12 @@ pub(super) async fn diagnose_backends(
             .iter()
             .filter(|profile| profile.backend_id == backend.backend_id)
             .filter_map(|profile| {
-                gents::inference::resolved::unsent_reasoning_effort(
+                gents_inference::resolved::unsent_reasoning_effort(
                     backend,
                     profile,
                     observation.as_ref(),
                 )
+                .map(|unsent| unsent.to_string())
             })
             .collect::<Vec<_>>();
         if !warnings.is_empty() {
@@ -99,7 +100,10 @@ async fn backend_check(
         if offline_unprobed {
             backend.enabled
         } else {
-            gents::document_configured_from_fields(backend.enabled, probe_status)
+            gents_inference::admission::document_configured_from_fields(
+                backend.enabled,
+                probe_status,
+            )
         },
         "backend is disabled or has no healthy probe observation"
     );
@@ -109,14 +113,14 @@ async fn backend_check(
     }
     if matches!(
         &backend.auth,
-        gents::documents::BackendAuth::Credential { .. }
+        gents_documents::BackendAuth::Credential { .. }
     ) {
         let discovered = if access.local_node().is_some() {
             anyhow::ensure!(
                 access.actor_did().is_some(),
                 "runtime credential diagnosis requires an authenticated actor"
             );
-            gents::inference::backends::registry::discover_runtime_backend_models(access, backend)
+            gents_inference::backends::registry::discover_runtime_backend_models(access, backend)
                 .await?
         } else {
             observation
@@ -151,7 +155,7 @@ async fn backend_check(
         .build()
         .context("building backend discovery client")?;
     let key = backend.auth.resolve_api_key()?;
-    let discovered = gents::discover_backend_models(
+    let discovered = gents_inference::backends::provider::discover_models(
         &client,
         backend.provider_kind,
         &backend.endpoint,
@@ -190,9 +194,9 @@ fn with_runtime_probe_reason(message: String, runtime_probe: Option<&Value>) -> 
 
 fn account_field(
     backend: &InferenceBackend,
-    accounts: &[gents::inference::auth::credential::AccountSummary],
+    accounts: &[gents_inference::auth::credential::AccountSummary],
 ) -> Option<Value> {
-    gents::inference::auth::credential::backend_account(backend, accounts)
+    gents_inference::auth::credential::backend_account(backend, accounts)
         .map(|account| account.map_or(Value::Null, |account| json!(account.label)))
 }
 
@@ -202,22 +206,26 @@ const OAUTH_CREDENTIAL_DISCOVERY_NOTE: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::documents::BackendAuth;
+    use gents_documents::BackendAuth;
     use std::sync::Arc;
 
-    const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+    const OWNER: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
 
     async fn seed_backend(access: &ConfigAccess, backend: &InferenceBackend, status: Option<&str>) {
-        crate::shared::test_support::publish_test_node_as(
+        gents_host::test_support::publish_test_node_as(
             access.local_node().unwrap(),
             &backend.node_did,
         )
         .await;
-        gents::documents::write_inference_backend_document(access, backend)
-            .await
-            .unwrap();
+        gents_documents::write_inference_backend_document(
+            access,
+            backend,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
         if let Some(status) = status {
-            gents::inference::backends::registry::set_backend_probe_status_as(
+            gents_inference::backends::registry::set_backend_probe_status_as(
                 access,
                 &backend.node_did,
                 &backend.backend_id,
@@ -249,12 +257,14 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let node = Arc::new(
-            crate::shared::test_support::fixture_node_builder()
+            gents_host::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
+        gents_store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         let backend: InferenceBackend = serde_json::from_value(json!({
             "node_did":OWNER, "backend_id":"offline-backend", "name":"Local",
             "provider_kind":"OpenAiCompatible", "endpoint":format!("http://{address}/v1"),
@@ -290,7 +300,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        gents::inference::backends::registry::set_backend_probe_status_as(
+        gents_inference::backends::registry::set_backend_probe_status_as(
             &access,
             &backend.node_did,
             &backend.backend_id,
@@ -307,14 +317,17 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_backend_uses_exact_owner_observation_without_discovery() {
-        use gents::documents::apply_desired_state_plan;
-        use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-        let client = crate::shared::test_support::ClientHome::new().await;
+        use gents_documents::apply_desired_state_plan;
+        use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        let client = gents_host::test_support::ClientHome::new().await;
         let owner = client.node_did().to_owned();
         let peer_dir = tempfile::tempdir().unwrap();
-        let peer =
-            gents::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None).unwrap();
-        let foreign = gents::NodeIdentity::did(&peer).to_owned();
+        let peer = gents_store::identity::KeyIdentity::load_or_create(
+            peer_dir.path().join("peer.key"),
+            None,
+        )
+        .unwrap();
+        let foreign = gents_store::identity::NodeIdentity::did(&peer).to_owned();
         let backend: InferenceBackend = serde_json::from_value(json!({
             "node_did": owner, "backend_id": "claude-max", "name": "Claude",
             "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
@@ -324,7 +337,7 @@ mod tests {
         let access = client.access.clone();
         let node = json!({"node_did": foreign});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: gents::Collection::Node,
+            collection: gents_store::collection::Collection::Node,
             add: node.clone(),
             update: node,
         }])
@@ -332,17 +345,28 @@ mod tests {
         access
             .transact_write("test.diagnose.foreign_node", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();
         for (owner, status) in [(owner.as_str(), "healthy"), (foreign.as_str(), "unhealthy")] {
             let mut value = backend.clone();
             value.node_did = owner.to_owned();
-            gents::documents::write_inference_backend_document(&access, &value)
-                .await
-                .unwrap();
-            gents::inference::backends::registry::set_backend_probe_status_as(
+            gents_documents::write_inference_backend_document(
+                &access,
+                &value,
+                &gents_inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .unwrap();
+            gents_inference::backends::registry::set_backend_probe_status_as(
                 &access,
                 &value.node_did,
                 &value.backend_id,
@@ -367,12 +391,14 @@ mod tests {
     async fn unprobed_oauth_backend_reports_the_runtime_probe_reason() {
         let owner = OWNER;
         let node = Arc::new(
-            crate::shared::test_support::fixture_node_builder()
+            gents_host::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
         );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
+        gents_store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         let backend = json!({
             "node_did": owner, "backend_id": "claude-max", "name": "Claude",
             "provider_kind": "ClaudeCliSubscription", "endpoint": "https://api.anthropic.com",
@@ -416,9 +442,9 @@ mod tests {
 
     #[tokio::test]
     async fn diagnose_reports_an_xai_effort_that_will_not_be_sent() {
-        let (access, owner) = crate::shared::test_support::seed_unsent_xai_effort().await;
+        let (access, owner) = gents_host::test_support::seed_unsent_xai_effort().await;
         let owner = owner.as_str();
-        let mut backend = crate::shared::test_support::xai_effort_backend(owner);
+        let mut backend = gents_host::test_support::xai_effort_backend(owner);
         let object = backend.as_object_mut().unwrap();
         object.remove("catalogs");
         object.remove("probe_status");
@@ -426,7 +452,7 @@ mod tests {
             "format": "test", "node_did": owner, "exported_at": "2026-01-01T00:00:00Z",
             "access_mode": "local", "node": {"node_did": owner},
             "inference_backends": [backend],
-            "inference_profiles": [crate::shared::test_support::xai_effort_profile(owner)],
+            "inference_profiles": [gents_host::test_support::xai_effort_profile(owner)],
         }))
         .unwrap();
         let reports = diagnose_backends(&access, &bundle, &[], &BTreeMap::new()).await;

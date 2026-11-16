@@ -1,0 +1,13 @@
+{
+  "input": {
+    "run_id": "r1",
+    "chart": "bar",
+    "file": "binary.csv"
+  },
+  "bind": "fixtures/hostile",
+  "expect": {
+    "chart": "bar",
+    "error": "the file looks binary, not CSV or JSON data; give a .csv or .json file",
+    "warnings": []
+  }
+}

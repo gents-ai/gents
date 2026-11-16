@@ -1,5 +1,3 @@
-#![cfg(any(unix, windows))]
-
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,7 +11,7 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 use tokio_util::codec::{Framed, FramedRead, LengthDelimitedCodec};
 
-mod support;
+use crate::support;
 use support::Attachment;
 
 type Connection = Framed<local::Connection, LengthDelimitedCodec>;
@@ -61,8 +59,8 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
             .unwrap(),
     );
     let client_did = seed.node_identity().did().to_owned();
-    let did = gents::store::graphql::escape_graphql_string(&client_did);
-    gents::store::config_client::ConfigAccess::write_local(
+    let did = gents_store::graphql::escape_graphql_string(&client_did);
+    gents_store::config_client::ConfigAccess::write_local(
         &seed.node_arc(),
         "installation_handoff.seed",
         &format!(
@@ -162,7 +160,7 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
         }
         assert!(acknowledged);
         loop {
-            match gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
+            match gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
                 Ok(lock) => {
                     drop(lock);
                     break;
@@ -182,7 +180,7 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
             .unwrap(),
     );
     assert_eq!(reopened.node_identity().did(), client_did);
-    let data = gents::store::config_client::ConfigAccess::local(reopened.node_arc())
+    let data = gents_store::config_client::ConfigAccess::local(reopened.node_arc())
         .execute("{ AgentSession { session_id } }")
         .await
         .unwrap();

@@ -1,0 +1,4 @@
+---- MODULE MCNativeCompletionHandshakeTelemetrySignal ----
+EXTENDS NativeCompletionHandshake
+
+====

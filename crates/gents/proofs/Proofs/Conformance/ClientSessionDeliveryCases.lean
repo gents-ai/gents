@@ -1,28 +1,25 @@
-import Proofs.Client.Types
-import Proofs.Conformance.ContractTypes
+import Proofs.Session.Client.Types
+import Proofs.Conformance.Family
 
 namespace Conformance.ClientSessionDelivery
 
-open Conformance.Contracts
+open Lean
 
-def sessionRows : List SessionRowObservation :=
-  [.absent, .canonical, .duplicate, .outOfScope]
+deriving instance ToJson for SessionRowObservation, DirectSessionRead
 
-def sessionRowJson : SessionRowObservation → String
-  | .absent => "absent"
-  | .canonical => "canonical"
-  | .duplicate => "duplicate"
-  | .outOfScope => "out_of_scope"
+structure ReadInput where
+  sessionRow : SessionRowObservation
+  deriving ToJson
 
-def directReadJson : DirectSessionRead → String
-  | .empty => "empty"
-  | .visible => "visible"
-  | .integrityFault => "integrity_fault"
+structure ReadOutput where
+  expected : DirectSessionRead
+  deriving ToJson
 
-def directCaseJson (row : SessionRowObservation) : String :=
-  "{\"session_row\":" ++ jsonString (sessionRowJson row) ++
-  ",\"expected\":" ++ jsonString (directReadJson (directSessionRead row)) ++ "}"
-
-def directCasesJson : String := jsonArray (sessionRows.map directCaseJson)
+@[conformance_family]
+def directRead : Conformance.Family ReadInput ReadOutput where
+  inputs :=
+    ([.absent, .canonical, .duplicate, .outOfScope] : List SessionRowObservation).map
+      fun sessionRow => { sessionRow }
+  model := fun i => { expected := directSessionRead i.sessionRow }
 
 end Conformance.ClientSessionDelivery

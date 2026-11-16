@@ -8,12 +8,10 @@ export function AgentSheet({
   deployment,
   open,
   onClose,
-  enabled = false,
 }: {
   deployment: NodeView;
   open: boolean;
   onClose: (agentDid: string | null) => void;
-  enabled?: boolean;
 }) {
   const [draft, setDraft] = useState(() => newAgentView(deployment));
   const close = (id: string | null) => {
@@ -32,7 +30,7 @@ export function AgentSheet({
           key={draft.agentDid}
           deployment={deployment}
           agent={draft}
-          draft={{ onSaved: (id) => close(id), onCancel: () => close(null), enabled }}
+          draft={{ onSaved: (id) => close(id), onCancel: () => close(null) }}
           embedded
         />
       )}

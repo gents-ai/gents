@@ -101,7 +101,7 @@ async fn stamp_terminal_message(
     message_doc_id: &str,
     lifecycle_state: RequestLifecycleState,
 ) -> Result<()> {
-    use gents::store::config_client::ConfigAccess;
+    use gents_store::config_client::ConfigAccess;
 
     let selection = serde_json::to_value(TerminalOutput::Message {
         message_doc_id: message_doc_id.to_owned(),
@@ -130,11 +130,11 @@ async fn insert_materialized_response(
     runtime: &ResponseTestRuntime,
     fixture: MaterializedResponse<'_>,
 ) -> Result<String> {
-    use gents::store::config_client::ConfigAccess;
     use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
+    use gents_store::config_client::ConfigAccess;
 
     let MaterializedResponse {
         request_id,
@@ -243,7 +243,12 @@ async fn insert_materialized_response(
     }
     let header = TranscriptMessage {
         native_request_id: None,
-        message_key: gents::session::sequence_message_key(&runtime.node_did, session_id, None, 1),
+        message_key: gents_session::session::sequence_message_key(
+            &runtime.node_did,
+            session_id,
+            None,
+            1,
+        ),
         session_id: session_id.to_owned(),
         node_did: runtime.node_did.clone(),
         requester_did: None,
@@ -344,7 +349,7 @@ async fn assert_invalid_terminal_selection(
     let wait_error = response_wait_failure(runtime, request_id, "5")?;
     assert!(
         wait_error.contains(&format!(
-            "canonical output for request {request_id} is invalid"
+            "request {request_id} reached its end but its answer is invalid"
         )),
         "wait must report the invalid canonical observation: {wait_error}"
     );
@@ -492,7 +497,7 @@ async fn response_show_diagnoses_missing_materialized_message() -> Result<()> {
     );
     let loading_wait_error = response_wait_failure(&runtime, &loading_request_id, "1")?;
     assert!(
-        loading_wait_error.contains("timed out waiting for materialized AgentMessage"),
+        loading_wait_error.contains("did not reach a terminal state within 1s"),
         "wait must report the materialization timeout, got: {loading_wait_error}"
     );
     assert!(loading_wait_error.contains(&loading_request_id));

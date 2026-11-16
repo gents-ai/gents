@@ -1,4 +1,4 @@
-import Proofs.PromptAssembly.ToolArgumentFailure
+import Proofs.Session.PromptAssembly.ToolArgumentFailure
 import Lean
 
 namespace Conformance.ToolArgumentFailure

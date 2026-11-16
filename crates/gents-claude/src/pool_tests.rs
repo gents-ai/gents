@@ -145,13 +145,6 @@ fn overage_only_when_policy_allows() {
 }
 
 #[test]
-fn default_and_debug_report_counts_only() {
-    let p = AccountPool::<String>::default();
-    pick(&p, &keys(2), "s");
-    assert_eq!(format!("{p:?}"), "AccountPool { accounts: 0, sessions: 1 }");
-}
-
-#[test]
 fn limits_are_family_scoped() {
     let (p, a) = (pool(), keys(2));
     let c = pick(&p, &a, "s");

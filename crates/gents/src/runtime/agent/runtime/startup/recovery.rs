@@ -2,8 +2,8 @@ pub(super) async fn log_recovery(
     node: &std::sync::Arc<defra_node::Node>,
     node_did: &str,
     default_agent_did: &str,
-    identities: &[std::sync::Arc<dyn crate::store::identity::NodeIdentity>],
-    executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
+    identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
+    executions: &gents_toolcalls::call::hook::BackgroundExecutionRegistry,
 ) {
     // The inference-call sweep is parent-gated and must run after request repair.
     let outcome =
@@ -15,7 +15,7 @@ pub(super) async fn log_recovery(
         let agent_did = identity.did();
         let resolved = (|| {
             let actor = identity::Did::new(agent_did)?;
-            let access = crate::ConfigAccess::local_managed_agent(
+            let access = gents_store::config_client::ConfigAccess::local_managed_agent(
                 node.clone(),
                 actor.clone(),
                 identity.as_ref(),
@@ -30,24 +30,25 @@ pub(super) async fn log_recovery(
             }
         };
         if let Err(error) =
-            crate::store::config_client::session_children::recover_agent_session_child_relationships_with_access(
+            gents_store::config_client::session_children::recover_agent_session_child_relationships_with_access(
                 &access, node_did, &actor,
             )
             .await
         {
             tracing::warn!(%agent_did, %error, "session child relationship recovery failed");
         }
-        if let Err(error) = crate::session::recover_agent_session_relationships_with_access(
+        if let Err(error) = gents_session::session::recover_agent_session_relationships_with_access(
             &access, node_did, &actor,
         )
         .await
         {
             tracing::warn!(%agent_did, %error, "session relationship recovery failed");
         }
-        if let Err(error) = crate::triggers::engine::durable::recover_outcomes_with_access(
-            &access, node_did, agent_did,
-        )
-        .await
+        if let Err(error) =
+            gents_automation::triggers::engine::durable::recover_outcomes_with_access(
+                &access, node_did, agent_did,
+            )
+            .await
         {
             tracing::warn!(%agent_did, %error, "agent trigger outcome recovery failed");
         }

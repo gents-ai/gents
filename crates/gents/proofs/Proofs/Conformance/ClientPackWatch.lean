@@ -1,5 +1,5 @@
 import Lean
-import Proofs.ClientShell.PackWatch
+import Proofs.Clients.ClientShell.PackWatch
 
 namespace Conformance.ClientPackWatch
 open Lean ClientShell.PackWatch

@@ -26,6 +26,10 @@ import { cn } from "@gents/ui/lib/utils";
 import { navigate, type Route } from "@/lib/router";
 import { isLocalNode } from "@/lib/firstRun";
 import { shownNodes, useHidden } from "@/lib/hidden";
+import {
+  projectRuntimeConnectionStatus,
+  runtimeConnectionBlocksAdmission,
+} from "@source-inc/gents-desktop-client";
 import { switchToNode } from "@/app/NodeSwitcher";
 import { previousNode } from "../../hooks/activeNode";
 import { NodeAvatar } from "./AgentAvatar";
@@ -224,7 +228,9 @@ function useEntries(): SearchEntry[] {
           name: nodeName(n.nodeDid),
           avatar: n.nodeConfig?.avatar ?? null,
           place: isLocalNode(n, homeDid) ? "Local" : "Remote",
-          offline: !n.dialSucceeded,
+          connection: runtimeConnectionBlocksAdmission(n.runtimeConnection)
+            ? projectRuntimeConnectionStatus(n.runtimeConnection).shortLabel
+            : null,
           current: n.nodeDid === selected,
           last: n.nodeDid === last,
         })),

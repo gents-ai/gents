@@ -1,413 +1,16 @@
-use crate::lean_vocab_test::{lean_identity_permission_cases, LeanIdentityPermissionCase};
-use acp::{
-    AcpStore, DocumentACP, DocumentPermission, Identity, LocalDocumentACP, MemoryAcpStore,
-    RelationTuple, READER_RELATION,
-};
+use acp::{DocumentPermission, Identity};
 use identity::Did;
-use std::sync::Arc;
-
-const IDENTITY_PERMISSION_POLICY_ID: &str = "identity-permission-cases";
-const IDENTITY_PERMISSION_RESOURCE_NAME: &str = "row";
-
-async fn build_local_acp_from_lean_case(
-    case: &LeanIdentityPermissionCase,
-) -> anyhow::Result<LocalDocumentACP> {
-    assert!(
-        case.permission.ends_with(".read"),
-        "case {:?}: only .read permission fixtures are supported by this ACP witness, got {:?}",
-        case.name,
-        case.permission
-    );
-    assert!(
-        case.permission
-            .starts_with(format!("row:{}:", case.row_owner).as_str()),
-        "case {:?}: permission {:?} must be scoped to row owner {:?}",
-        case.name,
-        case.permission,
-        case.row_owner
-    );
-
-    let store = Arc::new(MemoryAcpStore::new());
-    let acp = LocalDocumentACP::new(store.clone());
-    let row_owner = did_from_lean_case(&case.row_owner, case, "row_owner");
-
-    acp.register_doc_object(
-        &row_owner,
-        IDENTITY_PERMISSION_POLICY_ID,
-        IDENTITY_PERMISSION_RESOURCE_NAME,
-        &case.row_owner,
-    )
-    .await?;
-
-    let namespaced_resource =
-        format!("{IDENTITY_PERMISSION_POLICY_ID}:{IDENTITY_PERMISSION_RESOURCE_NAME}");
-    for grant in &case.grants {
-        assert_eq!(
-            grant.permission, case.permission,
-            "case {:?}: grant {:?} targets a different permission than the row under test",
-            case.name, grant
-        );
-        let node = did_from_lean_case(&grant.actor, case, "grant.actor");
-        let tuple = RelationTuple::try_new(
-            node,
-            READER_RELATION,
-            namespaced_resource.as_str(),
-            case.row_owner.as_str(),
-        )?;
-        store.put_tuple(&tuple).await?;
-    }
-
-    Ok(acp)
-}
-
-fn did_from_lean_case(value: &str, case: &LeanIdentityPermissionCase, field: &str) -> Did {
-    Did::new(value).unwrap_or_else(|error| {
-        panic!(
-            "case {:?}: {field} {:?} is not a valid DefraDB identity DID: {error}",
-            case.name, value
-        )
-    })
-}
-
-#[tokio::test]
-async fn resolved_identity_permission_cases_drive_defra_acp() -> anyhow::Result<()> {
-    for case in lean_identity_permission_cases() {
-        if case.expected_actor_did.is_none() || case.expected_peer_did.is_none() {
-            continue;
-        }
-        let acp = build_local_acp_from_lean_case(case).await?;
-        let actor = Identity::Authenticated(did_from_lean_case(
-            case.expected_actor_did.as_deref().expect("resolved actor"),
-            case,
-            "expected_actor_did",
-        ));
-        let peer = Identity::Authenticated(did_from_lean_case(
-            case.expected_peer_did.as_deref().expect("resolved peer"),
-            case,
-            "expected_peer_did",
-        ));
-        let actor_allowed = acp
-            .check_doc_access(
-                &actor,
-                DocumentPermission::Read,
-                IDENTITY_PERMISSION_POLICY_ID,
-                IDENTITY_PERMISSION_RESOURCE_NAME,
-                &case.row_owner,
-            )
-            .await?;
-        let peer_allowed = acp
-            .check_doc_access(
-                &peer,
-                DocumentPermission::Read,
-                IDENTITY_PERMISSION_POLICY_ID,
-                IDENTITY_PERMISSION_RESOURCE_NAME,
-                &case.row_owner,
-            )
-            .await?;
-        assert_eq!(
-            actor_allowed, case.expected_actor_allowed,
-            "{}: actor ACP permission",
-            case.name
-        );
-        assert_eq!(
-            peer_allowed, case.expected_peer_allowed,
-            "{}: peer ACP permission",
-            case.name
-        );
-        assert_eq!(
-            actor_allowed == peer_allowed,
-            case.expected_decisions_equal,
-            "{}: ACP decision equality",
-            case.name
-        );
-    }
-    Ok(())
-}
-
-fn household_subject(
-    subject: &crate::lean_vocab_test::LeanIdentitySubject,
-) -> anyhow::Result<acp::Subject> {
-    use crate::lean_vocab_test::LeanIdentitySubject;
-    Ok(match subject {
-        LeanIdentitySubject::Actor { actor } => acp::Subject::Entity(Did::new(actor)?),
-        LeanIdentitySubject::Object { resource, id } => acp::Subject::entity_set(resource, id, ""),
-        LeanIdentitySubject::EntitySet {
-            resource,
-            id,
-            target_relation,
-        } => acp::Subject::entity_set(resource, id, target_relation),
-    })
-}
-
-async fn household_relationship(
-    acp: &acp::ZanzibarDocumentACP<acp::MemoryZanzibarStore>,
-    policy_id: &str,
-    case: &crate::lean_vocab_test::LeanIdentityHouseholdCase,
-    relation: &crate::lean_vocab_test::LeanIdentityRelation,
-    grant: bool,
-) -> anyhow::Result<()> {
-    use anyhow::Context;
-    let object = case
-        .objects
-        .iter()
-        .find(|object| object.resource == relation.resource && object.id == relation.id)
-        .context("modeled relationship has no registered object")?;
-    let owner = Did::new(&object.owner)?;
-    let subject = household_subject(&relation.subject)?;
-    let changed = if grant {
-        acp.add_relationship(
-            &owner,
-            subject,
-            policy_id,
-            &relation.resource,
-            &relation.id,
-            &relation.relation,
-            &[],
-        )
-        .await?
-    } else {
-        acp.delete_relationship(
-            &owner,
-            subject,
-            policy_id,
-            &relation.resource,
-            &relation.id,
-            &relation.relation,
-            &[],
-        )
-        .await?
-    };
-    anyhow::ensure!(
-        changed,
-        "{}: modeled relationship action was not applied",
-        case.name
-    );
-    Ok(())
-}
-
-async fn household_relationship_as(
-    acp: &acp::ZanzibarDocumentACP<acp::MemoryZanzibarStore>,
-    policy_id: &str,
-    actor: &str,
-    relation: &crate::lean_vocab_test::LeanIdentityRelation,
-    grant: bool,
-    expected: bool,
-) -> anyhow::Result<()> {
-    let actor = Did::new(actor)?;
-    let subject = household_subject(&relation.subject)?;
-    let result = if grant {
-        acp.add_relationship(
-            &actor,
-            subject,
-            policy_id,
-            &relation.resource,
-            &relation.id,
-            &relation.relation,
-            &[],
-        )
-        .await
-    } else {
-        acp.delete_relationship(
-            &actor,
-            subject,
-            policy_id,
-            &relation.resource,
-            &relation.id,
-            &relation.relation,
-            &[],
-        )
-        .await
-    };
-    match result {
-        Ok(changed) => {
-            anyhow::ensure!(
-                expected && changed,
-                "unexpected relationship mutation by {actor}"
-            );
-        }
-        Err(acp::Error::NotOwner { .. } | acp::Error::NotManager { .. }) if !expected => (),
-        Err(error) => return Err(error.into()),
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn household_policy_actions_drive_native_acp() -> anyhow::Result<()> {
-    use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentityAction};
-    use acp::{
-        policy_yaml::{build_policy, parse_policy_yaml},
-        MemoryZanzibarStore, ZanzibarDocumentACP, ZanzibarStore,
-    };
-    for contract in crate::lean_vocab_test::lean_identity_contracts() {
-        assert_eq!(
-            contract.schema_actor, contract.runtime_actor,
-            "schema installation and updates use the modeled runtime actor"
-        );
-        for collection in &contract.node_local_collections {
-            let schema = match collection.as_str() {
-                "Agent" => gents_protocol::schemas::AGENT,
-                "CallbackBinding" => gents_protocol::schemas::CALLBACK_BINDING,
-                "CallbackInvocation" => gents_protocol::schemas::CALLBACK_INVOCATION,
-                "CallbackResult" => gents_protocol::schemas::CALLBACK_RESULT,
-                other => anyhow::bail!("unknown modeled local collection {other}"),
-            };
-            assert!(
-                !schema.contains("@branchable"),
-                "{collection} must remain local"
-            );
-            assert!(gents_protocol::schemas::is_local_only_collection(
-                collection
-            ));
-            for template in gents::runtime::agent::p2p_reconcile::templates::builtin_templates() {
-                assert!(
-                    !template.collections.contains(&collection.as_str()),
-                    "{} must not replicate {collection}",
-                    template.id
-                );
-            }
-        }
-    }
-    let cases = lean_identity_household_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        assert_eq!(
-            case.policy_yaml,
-            gents_protocol::schemas::AGENT_OWNERSHIP_POLICY,
-            "the policy wired to AgentSession must match the executable household model"
-        );
-        let parsed = parse_policy_yaml(&case.policy_yaml).map_err(anyhow::Error::msg)?;
-        let policy = build_policy(&parsed, 0)?;
-        for registration in &case.policy_registrations {
-            let candidate = build_policy(
-                &parse_policy_yaml(&registration.candidate_yaml).map_err(anyhow::Error::msg)?,
-                0,
-            )?;
-            assert_eq!(
-                policy.id == candidate.id,
-                registration.same_id,
-                "{}: policy ID",
-                registration.name
-            );
-            let registry = acp::PersistentZanzibarStore::from_store(Arc::new(
-                storage::RegolithStore::in_memory()?,
-            ));
-            registry.store_policy(&policy).await?;
-            let result = registry.store_policy(&candidate).await;
-            assert_eq!(
-                result.is_ok(),
-                registration.accepted,
-                "{}: {result:?}",
-                registration.name
-            );
-            let retained = registry
-                .get_policy(&policy.id)
-                .await?
-                .expect("registered policy");
-            assert_eq!(
-                serde_json::to_value(retained)?,
-                serde_json::to_value(&policy)?,
-                "{}: registration must retain the original definition",
-                registration.name
-            );
-        }
-        let store = Arc::new(MemoryZanzibarStore::new());
-        store.store_policy(&policy).await?;
-        let acp = ZanzibarDocumentACP::new(Arc::clone(&store));
-        let mut engine = acp::PermissionEngine::new(store);
-        engine.add_policy(&policy);
-        for object in &case.objects {
-            acp.register_doc_object(
-                &Did::new(&object.owner)?,
-                &policy.id,
-                &object.resource,
-                &object.id,
-            )
-            .await?;
-        }
-        for relation in &case.relations {
-            household_relationship(&acp, &policy.id, case, relation, true).await?;
-        }
-        for enrolled in &case.enrolled {
-            Did::new(enrolled)?;
-        }
-        for (step, action) in case.actions.iter().enumerate() {
-            match action {
-                LeanIdentityAction::Grant { relation } => {
-                    household_relationship(&acp, &policy.id, case, relation, true).await?;
-                }
-                LeanIdentityAction::Revoke { relation } => {
-                    household_relationship(&acp, &policy.id, case, relation, false).await?;
-                }
-                LeanIdentityAction::GrantAs {
-                    actor,
-                    relation,
-                    expected,
-                } => {
-                    household_relationship_as(&acp, &policy.id, actor, relation, true, *expected)
-                        .await?;
-                }
-                LeanIdentityAction::RevokeAs {
-                    actor,
-                    relation,
-                    expected,
-                } => {
-                    household_relationship_as(&acp, &policy.id, actor, relation, false, *expected)
-                        .await?;
-                }
-                LeanIdentityAction::Check {
-                    actor,
-                    resource,
-                    id,
-                    permission,
-                    expected,
-                } => {
-                    let actor = Did::new(actor)?;
-                    let allowed = match permission.as_str() {
-                        "read" | "update" | "delete" => {
-                            let native = match permission.as_str() {
-                                "read" => DocumentPermission::Read,
-                                "update" => DocumentPermission::Update,
-                                _ => DocumentPermission::Delete,
-                            };
-                            acp.check_doc_access(
-                                &Identity::Authenticated(actor),
-                                native,
-                                &policy.id,
-                                resource,
-                                id,
-                            )
-                            .await?
-                        }
-                        "invoke" => {
-                            engine
-                                .check(&policy.id, resource, id, permission, &actor)
-                                .await?
-                        }
-                        other => anyhow::bail!("unknown modeled native permission {other}"),
-                    };
-                    assert_eq!(
-                        allowed, *expected,
-                        "{} step {step}: document ACP",
-                        case.name
-                    );
-                }
-            }
-        }
-    }
-    Ok(())
-}
 
 #[tokio::test]
 async fn modeled_configuration_grants_use_authenticated_native_relations() -> anyhow::Result<()> {
-    use crate::lean_vocab_test::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents_lean_vocab::{
         lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
     };
-    use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
-        DesiredStateApplyDocument, DesiredStateApplyPlan, NodePermission,
-    };
-    use gents::store::graphql::{created_doc_id, escape_graphql_string};
-    use gents::NodeIdentity;
+    use gents_store::config_client::NodePermission;
+    use gents_store::graphql::{created_doc_id, escape_graphql_string};
+    use gents_store::identity::NodeIdentity;
 
     let case = lean_identity_household_cases()
         .iter()
@@ -455,27 +58,26 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
     let node = db.node.clone();
     let node_did = db.node_identity.did();
     let user_access = fixture.access.clone();
-    let agent_access = gents::ConfigAccess::local_managed_agent(
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         Did::new(fixture.agent.did())?,
         fixture.agent.as_ref(),
     )?;
-    let sibling_binding = gents::store::identity::provision_agent_identity_authorized(
+    let sibling_binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         db.node_identity.as_ref(),
         &Did::new(fixture.user.did())?,
     )
     .await?;
-    let sibling_signer = gents::store::identity::resolve_agent_identity(
-        db.node_identity.as_ref(),
-        &sibling_binding,
-    )?;
-    let sibling_access = gents::ConfigAccess::local_managed_agent(
+    let sibling_signer =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &sibling_binding)?;
+    let sibling_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         Did::new(sibling_signer.did())?,
         sibling_signer.as_ref(),
     )?;
-    let runtime_access = gents::ConfigAccess::local_as(node.clone(), Did::new(node_did)?);
+    let runtime_access =
+        gents_store::config_client::ConfigAccess::local_as(node.clone(), Did::new(node_did)?);
     for actual in [
         fixture.user.did(),
         fixture.agent.did(),
@@ -507,7 +109,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
         };
         Ok(Did::new(actual)?)
     };
-    let access_for = |modeled: &str| -> anyhow::Result<gents::ConfigAccess> {
+    let access_for = |modeled: &str| -> anyhow::Result<gents_store::config_client::ConfigAccess> {
         if modeled == owner {
             Ok(user_access.clone())
         } else if modeled == agent {
@@ -527,14 +129,21 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
     let selected =
         serde_json::json!({"node_did":node_did,"tools_id":"selected", "display_name":"initial"});
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents::Collection::Tools,
+        collection: gents_store::collection::Collection::Tools,
         add: selected.clone(),
         update: selected,
     }])?;
     user_access
         .transact_write("test.configuration.selected", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let query = |id: &str| {
@@ -556,9 +165,9 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
         .transact_readonly("test.configuration.node", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::store::config_client::read_desired_state_record_in_txn(
+                    gents_documents::read_desired_state_record_in_txn(
                         txn,
-                        gents::Collection::Node,
+                        gents_store::collection::Collection::Node,
                         node_did,
                         node_did,
                     )
@@ -633,14 +242,21 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                     let document =
                         serde_json::json!({"node_did":node_did,"tools_id":id,"display_name":value});
                     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                        collection: gents::Collection::Tools,
+                        collection: gents_store::collection::Collection::Tools,
                         add: document.clone(),
                         update: document,
                     }])?;
                     access
                         .transact_write("test.configuration.update", |txn| {
                             let plan = &plan;
-                            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                            Box::pin(async move {
+                                apply_desired_state_plan(
+                                    txn,
+                                    plan,
+                                    &gents_inference::resolved::ProviderProfilePolicy,
+                                )
+                                .await
+                            })
                         })
                         .await
                         .is_ok()
@@ -676,7 +292,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
         let commit = observation["commit"].as_bool().unwrap();
         let document = serde_json::json!({"node_did":node_did,"tools_id":"atomic"});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: gents::Collection::Tools,
+            collection: gents_store::collection::Collection::Tools,
             add: document.clone(),
             update: document,
         }])?;
@@ -685,10 +301,15 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                 let plan = &plan;
                 let actual_agent = &actual_agent;
                 Box::pin(async move {
-                    apply_desired_state_plan(txn, plan).await?;
-                    let (doc, _) = gents::store::config_client::read_desired_state_record_in_txn(
+                    apply_desired_state_plan(
                         txn,
-                        gents::Collection::Tools,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
+                    let (doc, _) = gents_documents::read_desired_state_record_in_txn(
+                        txn,
+                        gents_store::collection::Collection::Tools,
                         node_did,
                         "atomic",
                     )
@@ -728,12 +349,12 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
 
 #[tokio::test]
 async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyhow::Result<()> {
-    use crate::lean_vocab_test::{
+    use anyhow::Context;
+    use gents_lean_vocab::{
         lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
     };
-    use anyhow::Context;
-    use gents::store::config_client::AgentSelfConfigPermission;
-    use gents::NodeIdentity;
+    use gents_store::config_client::AgentSelfConfigPermission;
+    use gents_store::identity::NodeIdentity;
 
     let case = lean_identity_household_cases()
         .first()
@@ -771,34 +392,34 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
     let user_access = fixture.access.clone();
     let agent = &fixture.binding;
     let agent_signer = fixture.agent.clone();
-    let sibling = gents::store::identity::provision_agent_identity_authorized(
+    let sibling = gents_store::identity::provision_agent_identity_authorized(
         &node,
         runtime.as_ref(),
         &Did::new(user.did())?,
     )
     .await?;
-    let sibling_signer =
-        gents::store::identity::resolve_agent_identity(runtime.as_ref(), &sibling)?;
-    let node_admin = gents::ConfigAccess::local_as(node.clone(), Did::new(runtime.did())?);
+    let sibling_signer = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &sibling)?;
+    let node_admin =
+        gents_store::config_client::ConfigAccess::local_as(node.clone(), Did::new(runtime.did())?);
     for actor in [user.did(), agent_signer.did(), sibling_signer.did()] {
         for permission in [
-            gents::store::config_client::NodePermission::DocumentRead,
-            gents::store::config_client::NodePermission::DocumentUpdate,
-            gents::store::config_client::NodePermission::CollectionGet,
-            gents::store::config_client::NodePermission::DacRelationAdd,
-            gents::store::config_client::NodePermission::DacRelationDelete,
+            gents_store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::DocumentUpdate,
+            gents_store::config_client::NodePermission::CollectionGet,
+            gents_store::config_client::NodePermission::DacRelationAdd,
+            gents_store::config_client::NodePermission::DacRelationDelete,
         ] {
             node_admin
                 .grant_node_permission(&Did::new(actor)?, permission)
                 .await?;
         }
     }
-    let agent_access = gents::ConfigAccess::local_managed_agent(
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         Did::new(agent_signer.did())?,
         agent_signer.as_ref(),
     )?;
-    let sibling_access = gents::ConfigAccess::local_managed_agent(
+    let sibling_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         Did::new(sibling_signer.did())?,
         sibling_signer.as_ref(),
@@ -807,9 +428,9 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
         .transact_readonly("test.self_config.agent", |txn| {
             let runtime = &runtime;
             Box::pin(async move {
-                gents::store::config_client::read_desired_state_record_in_txn(
+                gents_documents::read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::Agent,
+                    gents_store::collection::Collection::Agent,
                     runtime.did(),
                     &agent.agent_did,
                 )
@@ -818,7 +439,7 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
             })
         })
         .await?;
-    let access_for = |did: &str| -> anyhow::Result<gents::ConfigAccess> {
+    let access_for = |did: &str| -> anyhow::Result<gents_store::config_client::ConfigAccess> {
         if did == user.did() {
             Ok(user_access.clone())
         } else if did == agent_signer.did() {
@@ -866,16 +487,16 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
             .await
         {
             Ok(()) => "applied",
-            Err(gents::store::config_client::AgentSelfConfigPermissionError::AgentUnavailable) => {
+            Err(gents_store::config_client::AgentSelfConfigPermissionError::AgentUnavailable) => {
                 "unavailable"
             }
-            Err(gents::store::config_client::AgentSelfConfigPermissionError::Access(
-                gents::store::config_client::ConfigClientError::DocumentRelationshipStatus {
+            Err(gents_store::config_client::AgentSelfConfigPermissionError::Access(
+                gents_store::config_client::ConfigClientError::DocumentRelationshipStatus {
                     status,
                     ..
                 },
             )) if status.is_client_error() => "denied",
-            Err(gents::store::config_client::AgentSelfConfigPermissionError::Access(error))
+            Err(gents_store::config_client::AgentSelfConfigPermissionError::Access(error))
                 if error.is_permission_denied() =>
             {
                 "denied"
@@ -940,9 +561,9 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                 let response = if actor(modeled)?.as_str() == user.did() {
                     let mut updated = agent_value.clone();
                     updated["description"] = serde_json::json!("configured");
-                    let plan = gents::store::config_client::DesiredStateApplyPlan::new(vec![
-                        gents::store::config_client::DesiredStateApplyDocument {
-                            collection: gents::Collection::Agent,
+                    let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+                        gents_documents::DesiredStateApplyDocument {
+                            collection: gents_store::collection::Collection::Agent,
                             add: agent_value.clone(),
                             update: updated,
                         },
@@ -951,7 +572,12 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                         .transact_write("test.self_config.update", |txn| {
                             let plan = &plan;
                             Box::pin(async move {
-                                gents::documents::apply_desired_state_plan(txn, plan).await
+                                gents_documents::apply_desired_state_plan(
+                                    txn,
+                                    plan,
+                                    &gents_inference::resolved::ProviderProfilePolicy,
+                                )
+                                .await
                             })
                         })
                         .await

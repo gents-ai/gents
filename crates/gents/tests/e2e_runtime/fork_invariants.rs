@@ -1,10 +1,10 @@
-use gents::session::{fork_on, ForkError, ForkOutcome, ForkParams};
-use gents::store::graphql::escape_graphql_string;
-use gents::NodeIdentity;
 use gents_protocol::output::rows::{
     decode_transcript_message_row, TranscriptMessageRow, AGENT_MESSAGE_FIELDS,
 };
 use gents_protocol::output::*;
+use gents_session::session::{fork_on, ForkError, ForkOutcome, ForkParams};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
 
 use crate::support::agent_requests::{canonical_now, RequestActors, RequestSeed};
 use crate::support::agent_transcript::{self, Imported, Source};
@@ -54,7 +54,7 @@ impl Fixture {
     fn params<'a>(&'a self, source: &'a str, requester: &'a str, turn: u32) -> ForkParams<'a> {
         ForkParams {
             source_session_id: source,
-            boundary: gents::session::ForkBoundary::UserTurn(turn),
+            boundary: gents_session::session::ForkBoundary::UserTurn(turn),
             caller_node_did: self.node_did(),
             caller_requester_did: Some(requester),
             target_agent_did: None,
@@ -90,8 +90,59 @@ impl Fixture {
             .collect()
     }
 
+    /// Every copied child carries its native parent and working-Agent
+    /// relationships, published by the forking Agent; the node's User, which
+    /// does not manage the Agent's children, cannot remove them.
+    async fn assert_children_linked(&self, session: &str) {
+        let escaped = escape_graphql_string(session);
+        let data = self.rows(&format!(r#"{{ AgentSession(filter: {{session_id: {{_eq: "{escaped}"}}}}) {{_docID}} AgentMessage(filter: {{session_id: {{_eq: "{escaped}"}}}}) {{_docID parent_linked}} AgentOutputSegment(filter: {{session_id: {{_eq: "{escaped}"}}}}) {{_docID parent_linked}} }}"#)).await;
+        let session_doc = data["AgentSession"][0]["_docID"].as_str().unwrap();
+        let mut linked = 0;
+        for collection in ["AgentMessage", "AgentOutputSegment"] {
+            for row in data[collection].as_array().unwrap() {
+                assert_eq!(row["parent_linked"], true, "{collection} {row}");
+                let doc = row["_docID"].as_str().unwrap();
+                let relationships = self
+                    .actors
+                    .agent_access
+                    .list_document_relationships(collection, doc)
+                    .await
+                    .unwrap();
+                assert!(
+                    relationships
+                        .iter()
+                        .any(|relationship| relationship.relation == "parent"
+                            && relationship.subject.contains(session_doc)),
+                    "{collection} {doc} lacks its fork parent: {relationships:?}"
+                );
+                assert!(
+                    relationships
+                        .iter()
+                        .any(|relationship| relationship.relation == "working_agent"
+                            && relationship.subject == self.agent_did()),
+                    "{collection} {doc} lacks its working Agent: {relationships:?}"
+                );
+                assert!(self
+                    .actors
+                    .fixture
+                    .access
+                    .delete_resource_relationship(
+                        collection,
+                        doc,
+                        "parent",
+                        "sessions",
+                        session_doc
+                    )
+                    .await
+                    .is_err());
+                linked += 1;
+            }
+        }
+        assert!(linked > 0, "the fork copied no children");
+    }
+
     async fn body(&self, header: &str, requester: &str) -> String {
-        let (_, native) = gents::session::load_canonical_message(
+        let (_, native) = gents_session::session::load_canonical_message(
             &self.actors.agent_access,
             header,
             self.node_did(),
@@ -131,6 +182,7 @@ async fn fork_copies_exact_header_prefix_by_reference() {
         ),
         (2, 0, 0)
     );
+    f.assert_children_linked(&outcome.session_id).await;
     let copied = f.headers(&outcome.session_id).await;
     let unchanged_parent = f.headers("parent").await;
     assert_eq!(unchanged_parent.len(), 3);
@@ -184,7 +236,7 @@ async fn fork_via_http_uses_same_header_contract() {
     let parent = f.source("parent-http").await;
     let source = f.import(&parent, 1, MessageRole::User, "u", true).await;
     let agent = f.actors.agent();
-    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+    let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
         f.db.client_endpoint(),
         agent.did(),
     )
@@ -192,7 +244,7 @@ async fn fork_via_http_uses_same_header_contract() {
     .unwrap()
     .with_client_signed_agent_creates();
     let outcome = fork_on(
-        &gents::store::config_client::ConfigAccess::Graphql(endpoint),
+        &gents_store::config_client::ConfigAccess::Graphql(endpoint),
         f.own("parent-http", 1),
     )
     .await
@@ -201,6 +253,7 @@ async fn fork_via_http_uses_same_header_contract() {
     assert!(
         matches!(&copied[0].message.publication, MessagePublication::Fork { origin_message_doc_id } if origin_message_doc_id == &source.header)
     );
+    f.assert_children_linked(&outcome.session_id).await;
 }
 
 #[tokio::test]

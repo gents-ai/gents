@@ -1,61 +1,15 @@
-use gents::request::lifecycle::{
+use gents::runtime::agent::session_commands::run_session_command_reconciler;
+use gents_protocol::request_admission::AgentRequestAdmissionRecord;
+use gents_protocol::request_input::QueueDelivery;
+use gents_protocol::session_input_edit::SessionInputEditReceipt;
+use gents_session::request::lifecycle::{
     pending_steer_edit, pending_user_queue, submit_pending_user_edit, submit_pending_user_steer,
     PendingMessageEdit, PendingQueueEdit,
 };
-use gents::runtime::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
-use gents::store::graphql::escape_graphql_string;
-use gents::NodeIdentity;
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
-use gents_protocol::request_input::QueueDelivery;
-use gents_protocol::session_input_edit::SessionInputEditReceipt;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
 
 use crate::support::{self, test_db, TestDb};
-
-pub(super) async fn insert_signed_as(
-    fixture: &support::ManagedAgentFixture,
-    mut request: AgentRequestCreate,
-) -> String {
-    request.session_doc_id = Some(
-        gents::request::lifecycle::reserve_goal_session(&fixture.access, &request)
-            .await
-            .unwrap(),
-    );
-    request.agent_doc_id = Some(
-        fixture
-            .access
-            .transact_readonly("test.queue.selected_agent", |txn| {
-                Box::pin(async {
-                    Ok::<_, anyhow::Error>(
-                        gents::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            gents::Collection::Agent,
-                            &request.node_did,
-                            &request.agent_did,
-                        )
-                        .await?
-                        .expect("selected Agent")
-                        .0,
-                    )
-                })
-            })
-            .await
-            .unwrap(),
-    );
-    gents::sign_agent_request_create(&fixture.user, &mut request)
-        .await
-        .unwrap();
-    gents::request::lifecycle::submit_client_request(&fixture.access, &request)
-        .await
-        .unwrap();
-    let response = fixture.access.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
-        escape_graphql_string(&request.request_id),
-    )).await.unwrap();
-    response["data"]["AgentRequest"][0]["_docID"]
-        .as_str()
-        .unwrap()
-        .into()
-}
 
 pub(super) async fn enqueue_owned(
     db: &TestDb,
@@ -156,8 +110,8 @@ pub(super) async fn row_as(fixture: &support::ManagedAgentFixture, doc: &str) ->
 }
 
 async fn install_review_skill(db: &TestDb, fixture: &support::ManagedAgentFixture) {
-    use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let owner = db.node_identity.did();
@@ -165,23 +119,23 @@ async fn install_review_skill(db: &TestDb, fixture: &support::ManagedAgentFixtur
     fixture.access.transact_write("test.queue_review_skill", |txn| {
         Box::pin(async move {
             let (_, mut agent) = read_desired_state_record_in_txn(
-                txn, gents::Collection::Agent, owner, selected,
+                txn, gents_store::collection::Collection::Agent, owner, selected,
             ).await?.expect("selected Agent");
             agent["context_id"] = "test-context".into();
             let documents = [
-                (gents::Collection::Skill, serde_json::json!({
+                (gents_store::collection::Collection::Skill, serde_json::json!({
                     "node_did": owner, "skill_id": "review", "name": "review",
                     "description": "test", "instructions": "review", "enabled": true,
                 })),
-                (gents::Collection::AgentContext, serde_json::json!({
+                (gents_store::collection::Collection::AgentContext, serde_json::json!({
                     "node_did": owner, "context_id": "test-context", "skill_ids": ["review"],
                 })),
-                (gents::Collection::Agent, agent),
+                (gents_store::collection::Collection::Agent, agent),
             ];
             let plan = DesiredStateApplyPlan::new(documents.into_iter().map(|(collection, value)| {
                 DesiredStateApplyDocument { collection, add: value.clone(), update: value }
             }).collect())?;
-            apply_desired_state_plan(txn, &plan).await
+            apply_desired_state_plan(txn, &plan, &gents_inference::resolved::ProviderProfilePolicy).await
         })
     }).await.expect("install User-authored review skill");
 }
@@ -428,40 +382,66 @@ async fn invalid_edited_attachment_does_not_supersede_the_original() {
 }
 
 #[tokio::test]
-async fn edited_skill_outside_context_does_not_supersede_the_original() {
-    let db = test_db("invalid-edited-skill").await;
-    let fixture = support::managed_agent_fixture(&db).await;
-    let original = enqueue_owned(
-        &db,
-        &fixture,
-        "invalid-skill-session",
-        "original",
-        "original message",
-        QueueDelivery::Queue,
-    )
-    .await;
-    let before = row_as(&fixture, &original).await;
-    let error = submit_edit(
-        &db,
-        &fixture,
-        "invalid-skill-session",
-        PendingQueueEdit {
-            expected_request_doc_ids: vec![original.clone()],
-            selected_request_doc_ids: vec![original.clone()],
-            messages: vec![PendingMessageEdit {
-                request_doc_id: original.clone(),
-                content: "changed".into(),
-                authored_input: Some(gents_protocol::request_input::AuthoredRequestInput {
-                    selected_skill_ids: vec!["unavailable".into()],
-                    ..Default::default()
-                }),
-            }],
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("skill"));
-    assert_eq!(row_as(&fixture, &original).await, before);
+async fn queue_edit_skill_context_matches_the_lean_model() {
+    let cases =
+        gents_lean_vocab::families::queue_edit_skill_context_edit::cases::<String, String>();
+    for (index, case) in cases.iter().enumerate() {
+        let db = test_db(&format!("queue-edit-skill-context-{index}")).await;
+        let fixture = support::managed_agent_fixture(&db).await;
+        match case.input.context_skill_ids.as_slice() {
+            [] => {}
+            [skill] if skill.as_str() == "review" => install_review_skill(&db, &fixture).await,
+            other => panic!("this fixture installs only the review skill: {other:?}"),
+        }
+        let session = format!("queue-edit-skill-context-session-{index}");
+        let original = enqueue_owned(
+            &db,
+            &fixture,
+            &session,
+            "original",
+            "original message",
+            QueueDelivery::Queue,
+        )
+        .await;
+        let before = row_as(&fixture, &original).await;
+        let edit = submit_edit(
+            &db,
+            &fixture,
+            &session,
+            PendingQueueEdit {
+                expected_request_doc_ids: vec![original.clone()],
+                selected_request_doc_ids: vec![original.clone()],
+                messages: vec![PendingMessageEdit {
+                    request_doc_id: original.clone(),
+                    content: "changed".into(),
+                    authored_input: Some(gents_protocol::request_input::AuthoredRequestInput {
+                        selected_skill_ids: case.input.selected_skill_ids.clone(),
+                        ..Default::default()
+                    }),
+                }],
+            },
+        )
+        .await;
+        let result = match &edit {
+            Ok(_) => "accepted".to_string(),
+            Err(error) if error.to_string().contains("skill") => "refused_skill".to_string(),
+            Err(_) => "refused_other".to_string(),
+        };
+        let after = row_as(&fixture, &original).await;
+        let original_state = if after["lifecycle_state"] == "superseded" {
+            "superseded"
+        } else if after == before {
+            "unchanged"
+        } else {
+            "altered"
+        };
+        case.check(
+            gents_lean_vocab::families::queue_edit_skill_context_edit::EditOutput {
+                result,
+                original: original_state.to_string(),
+            },
+        );
+    }
 }
 
 #[tokio::test]
@@ -583,65 +563,6 @@ async fn authored_edit_changes_allowed_skills_without_losing_queue_position() {
 }
 
 #[tokio::test]
-async fn queued_edit_accepts_skill_only_but_rejects_truly_empty_input() {
-    let db = test_db("skill-only-queue-edit").await;
-    let fixture = support::managed_agent_fixture(&db).await;
-    let did = db.node_identity.did();
-    let access = fixture.access.clone();
-    install_review_skill(&db, &fixture).await;
-    let original = enqueue_owned(
-        &db,
-        &fixture,
-        "skill-only-session",
-        "original",
-        "original message",
-        QueueDelivery::Queue,
-    )
-    .await;
-    let edit = |skills: Vec<String>| PendingQueueEdit {
-        expected_request_doc_ids: vec![original.clone()],
-        selected_request_doc_ids: vec![original.clone()],
-        messages: vec![PendingMessageEdit {
-            request_doc_id: original.clone(),
-            content: String::new(),
-            authored_input: Some(gents_protocol::request_input::AuthoredRequestInput {
-                selected_skill_ids: skills,
-                ..Default::default()
-            }),
-        }],
-    };
-    let error = submit_edit(&db, &fixture, "skill-only-session", edit(vec![]))
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("A message cannot be empty"));
-    let receipt = submit_edit(
-        &db,
-        &fixture,
-        "skill-only-session",
-        edit(vec!["review".into()]),
-    )
-    .await
-    .unwrap();
-    let pending = pending_user_queue(&access, did, "skill-only-session", fixture.user.did())
-        .await
-        .unwrap();
-    assert_eq!(pending.entries.len(), 1);
-    assert_eq!(
-        pending.entries[0].request_doc_id,
-        receipt.request_doc_ids[0]
-    );
-    assert_eq!(pending.entries[0].content, "");
-    assert_eq!(pending.entries[0].selected_skill_ids, ["review"]);
-    let replacement = row_as(&fixture, &receipt.request_doc_ids[0]).await;
-    let input: gents_protocol::request_input::RequestInput =
-        serde_json::from_value(replacement["input"].clone()).unwrap();
-    assert_eq!(
-        input.queue.unwrap().position.unwrap().slot_request_doc_id,
-        original
-    );
-}
-
-#[tokio::test]
 async fn signed_pending_replacement_authenticates_delivery_and_each_position_field() {
     let db = test_db("queue-signature-tampering").await;
     let fixture = support::managed_agent_fixture(&db).await;
@@ -685,7 +606,7 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
         serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();
     assert_eq!(rows.len(), 1);
     let signed = &rows[0];
-    gents::verify_request_receipt_signature(signed)
+    gents_store::identity::request_receipt::verify_request_receipt_signature(signed)
         .expect("the actual replacement signed by the user must authenticate");
     let queue = signed.input.as_ref().unwrap().queue.as_ref().unwrap();
     assert_eq!(queue.delivery, QueueDelivery::Steer);
@@ -731,11 +652,13 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
         ("slot_request_doc_id", changed_slot),
         ("replaces_request_doc_id", changed_predecessor),
     ] {
-        let error = gents::verify_request_receipt_signature(&tampered).expect_err(field);
+        let error =
+            gents_store::identity::request_receipt::verify_request_receipt_signature(&tampered)
+                .expect_err(field);
         let chain = gents_protocol::error_chain::ErrorChain(&error).to_string();
         assert!(chain.contains("signature"), "{field}: {chain}");
     }
-    gents::verify_request_receipt_signature(signed)
+    gents_store::identity::request_receipt::verify_request_receipt_signature(signed)
         .expect("tampering clones must not change the persisted signed replacement");
 }
 

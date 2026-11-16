@@ -9,11 +9,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents::observe::run_timeline::{RunTimelineRows, TimelineToolCallRow};
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
+use gents_observe::observe::run_timeline::{RunTimelineRows, TimelineToolCallRow};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 #[cfg(test)]
-use gents::store::graphql::{first_row, graphql_with_transaction_retry};
+use gents_store::graphql::{first_row, graphql_with_transaction_retry};
 
 #[async_trait::async_trait]
 pub trait ObservationHook: Send + Sync {
@@ -119,7 +119,8 @@ async fn await_terminal_inner(
     hook: &dyn ObservationHook,
     mut must_be_visible: bool,
 ) -> Result<TerminalObservation> {
-    let mut changes = gents::subscribe_collections(node, ["AgentRequest"])?;
+    let mut changes =
+        gents_store::subscription_source::subscribe_collections(node, ["AgentRequest"])?;
     let started = std::time::Instant::now();
     let mut interrupted_on_deadline = false;
     let mut interrupted_for_backend = false;
@@ -171,7 +172,7 @@ async fn await_terminal_inner(
             let row = row
                 .as_ref()
                 .context("request is unavailable at evaluation deadline")?;
-            gents::request::interrupt::interrupt_request_by_doc_id_with_access(
+            gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
                 access,
                 row.doc_id
                     .as_deref()
@@ -235,10 +236,10 @@ pub(crate) async fn collect_request_evidence_with_access(
         .get("data")
         .cloned()
         .context("collect request evidence returned no data")?;
-    let timeline = gents::observe::run_timeline_fetch::load_settled_run_timeline_rows(
+    let timeline = gents_observe::observe::run_timeline_fetch::load_settled_run_timeline_rows(
         access,
         request_id,
-        gents::observe::run_timeline_fetch::RUN_TIMELINE_SETTLE_BOUND,
+        gents_observe::observe::run_timeline_fetch::RUN_TIMELINE_SETTLE_BOUND,
     )
     .await
     .context("load request run timeline")?;
@@ -538,7 +539,8 @@ mod tests {
         )))
         .unwrap();
         assert_eq!(cases.len(), 656);
-        let native_ownership_loss = gents::test_support::execution_ownership_lost_reason();
+        let native_ownership_loss =
+            gents_automation::test_support::execution_ownership_lost_reason();
         assert!(cases.iter().any(|case| {
             case.request_reason.as_deref() == Some(native_ownership_loss.as_str())
                 && case.outcome.as_deref() == Some("infrastructure")
@@ -627,9 +629,9 @@ mod tests {
     }
 
     async fn insert_request(home: &EmbeddedHome, request_id: &str, lifecycle_state: &str) {
-        let request_id = gents::store::graphql::escape_graphql_string(request_id);
-        let node_did = gents::store::graphql::escape_graphql_string(home.did());
-        let lifecycle_state = gents::store::graphql::escape_graphql_string(lifecycle_state);
+        let request_id = gents_store::graphql::escape_graphql_string(request_id);
+        let node_did = gents_store::graphql::escape_graphql_string(home.did());
+        let lifecycle_state = gents_store::graphql::escape_graphql_string(lifecycle_state);
         let mutation = format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", node_did: "{node_did}", requester_did: "{node_did}", agent_did: "observe", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "{lifecycle_state}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
         );
@@ -639,16 +641,16 @@ mod tests {
 
     #[tokio::test]
     async fn request_evidence_maps_every_source_it_reads() {
-        use gents::request::lifecycle::RequestTerminalOutcome;
-        use gents::request::streaming::DefraStreamWriter;
-        use gents::tools::call::lifecycle::admission_fixture::{
-            pending_client_fixture_request, publish_accepted_on_claimed_request,
-        };
-        use gents::tools::call::lifecycle::FailureClass;
-        use gents::NodeIdentity;
+        use gents_loop::tool_call_lifecycle::FailureClass;
         use gents_protocol::message::{AssistantContent, Message, Text};
         use gents_protocol::output::TerminalOutput;
         use gents_protocol::tool_call::AwaitMode;
+        use gents_session::request::lifecycle::RequestTerminalOutcome;
+        use gents_session::request::streaming::DefraStreamWriter;
+        use gents_store::identity::NodeIdentity;
+        use gents_toolcalls::call::lifecycle::admission_fixture::{
+            pending_client_fixture_request, publish_accepted_on_claimed_request,
+        };
         let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();
         let db = crate::support::test_db_from_home(home);
         let (db, user, client, binding) =
@@ -661,7 +663,7 @@ mod tests {
         .await
         .unwrap();
         let agent_identity =
-            gents::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+            gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();
         let agent_access = ConfigAccess::local_managed_agent(
             db.node.clone(),
@@ -693,7 +695,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             request.claim_with_identity().await.unwrap(),
-            gents::request::lifecycle::ClaimOutcome::Claimed
+            gents_session::request::lifecycle::ClaimOutcome::Claimed
         );
         let sessions = client
             .execute("{ AgentSession(filter: {session_id: {_eq: \"s-evidence\"}}) { _docID } }")
@@ -725,7 +727,7 @@ mod tests {
             Duration::from_millis(1),
         )
         .unwrap();
-        let answer = gents::test_support::publish_provider_message(
+        let answer = gents_session::test_support::publish_provider_message(
             &writer,
             &request,
             1,
@@ -750,7 +752,7 @@ mod tests {
                 let session_doc = &session_doc;
                 Box::pin(async move {
                     let response = txn.execute(mutation).await?;
-                    let doc = gents::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                    let doc = gents_store::graphql::created_doc_id(&response, "InferenceCall")?;
                     txn.add_resource_relationship(
                         "InferenceCall",
                         &doc,
@@ -1069,9 +1071,13 @@ mod tests {
             .unwrap()
             .to_owned();
         let key_dir = tempfile::tempdir().unwrap();
-        let reader =
-            gents::KeyIdentity::load_or_create(key_dir.path().join("reader.key"), None).unwrap();
-        let reader_did = identity::Did::new(gents::NodeIdentity::did(&reader)).unwrap();
+        let reader = gents_store::identity::KeyIdentity::load_or_create(
+            key_dir.path().join("reader.key"),
+            None,
+        )
+        .unwrap();
+        let reader_did =
+            identity::Did::new(gents_store::identity::NodeIdentity::did(&reader)).unwrap();
         owner
             .add_actor_relationship("AgentRequest", &doc, "reader", &reader_did)
             .await
@@ -1117,7 +1123,7 @@ mod tests {
         .unwrap();
         assert!(observed.interrupted_on_deadline);
         assert_eq!(observed.terminal_state, None);
-        let request_id = gents::store::graphql::escape_graphql_string("req-stuck");
+        let request_id = gents_store::graphql::escape_graphql_string("req-stuck");
         let query = format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ interrupt_requested_at }} }}"#
         );

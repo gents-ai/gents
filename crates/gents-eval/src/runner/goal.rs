@@ -6,7 +6,7 @@ use crate::checks::captured_rows_count::{required_rows, CapturedRowsCount};
 use crate::checks::{range_label, Check};
 use crate::runner::executor::Capture;
 use crate::runner::progress::LiveSnapshot;
-use gents::documents::{EvalCapture, EvalCase};
+use gents_documents::{EvalCapture, EvalCase};
 
 /// The key of a case goal that counts the schemas the subject registered.
 pub const SCHEMAS_GOAL: &str = "schemas";

@@ -90,22 +90,13 @@ fn delta(store: &ClientStore, cursor: &str) -> SessionLiveDeltaView {
 
 #[test]
 fn generated_live_cursor_contract() {
-    let data = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
-    let cases = data["client_live_delta_cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 18);
-    for case in cases {
-        let base = case["base"].as_u64().map(|v| v.to_string());
-        let current = case["current"].as_u64().map(|v| v.to_string());
-        assert_eq!(
-            accepts_live_cursor(
-                base.as_deref(),
-                current.as_deref(),
-                case["terminal"].as_bool().unwrap()
-            ),
-            case["accepted"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
+    gents_lean_vocab::families::client_live_delta_contracts_cursor::replay(|i| {
+        let base = i.base.map(|v| v.to_string());
+        let current = i.current.map(|v| v.to_string());
+        gents_lean_vocab::families::client_live_delta_contracts_cursor::CursorOutput {
+            accepted: accepts_live_cursor(base.as_deref(), current.as_deref(), i.terminal),
+        }
+    });
 }
 
 #[test]
@@ -113,7 +104,8 @@ fn observed_store_can_stay_payload_free_while_scoped_rows_produce_a_verified_suf
     let mut rows = rows();
     let initial = ClientStore::from_rows(rows.clone());
     let cursor = cursor(&initial);
-    let (observed, _) = gents_desktop_core::client::ObservedStore::new(initial);
+    let observed = gents_desktop_core::client::ObservedStores::new().ensure("did:test:node");
+    observed.replace_snapshot(initial);
     assert!(observed.snapshot().output_segments.is_empty());
     rows.output_segments.push(segment(1, " world 🌍"));
     let store = ClientStore::from_rows(rows);
@@ -298,8 +290,10 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
         observation: None,
     });
     let full = ClientStore::from_rows(rows.clone());
-    core.store().merge_observer_patch(full.clone());
-    let observed = core.store().snapshot();
+    core.stores()
+        .ensure(&node_did)
+        .merge_chat_patch(full.clone());
+    let observed = core.stores().snapshot(&node_did);
     assert!(observed.output_segments.is_empty());
     let cursor = canonical_live_text(&observed, &full, "session", Some(&node_did), "logical")
         .unwrap()
@@ -318,18 +312,30 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
             value
         })
         .collect();
-    let mut body = serde_json::json!({"data": {
+    let mut held = serde_json::json!({
         "AgentRequest": rows.requests,
-        "AgentMessage": [],
         "AgentOutputSegment": segments,
-    }});
-    body["data"]["AgentRequest"][0]["_docID"] = serde_json::json!(full.requests[0].doc_id);
+    });
+    held["AgentRequest"][0]["_docID"] = serde_json::json!(full.requests[0].doc_id);
+    fn tip(
+        held: serde_json::Value,
+    ) -> impl Fn(&wiremock::Request) -> wiremock::ResponseTemplate + Send + Sync + 'static {
+        move |request| {
+            let body: serde_json::Value = request.body_json().unwrap();
+            wiremock::ResponseTemplate::new(200).set_body_json(
+                gents_store::test_support::wire_database::answer(
+                    &held,
+                    body["query"].as_str().unwrap_or_default(),
+                ),
+            )
+        }
+    }
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/api/v0/graphql"))
         .and(wiremock::matchers::body_string_contains(
-            "DesktopSessionTip",
+            ": AgentOutputSegment(",
         ))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(&body))
+        .respond_with(tip(held.clone()))
         .expect(1)
         .mount(&server)
         .await;
@@ -421,13 +427,13 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     assert!(!denied.message.contains("private metadata"));
     server.verify().await;
     server.reset().await;
-    body["data"]["AgentRequest"][0]["lifecycle_state"] = serde_json::json!("completed");
+    held["AgentRequest"][0]["lifecycle_state"] = serde_json::json!("completed");
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/api/v0/graphql"))
         .and(wiremock::matchers::body_string_contains(
-            "DesktopSessionTip",
+            ": AgentOutputSegment(",
         ))
-        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
+        .respond_with(tip(held))
         .expect(1)
         .mount(&server)
         .await;
@@ -445,6 +451,6 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     .await
     .unwrap();
     assert_eq!(terminal.outcome, "snapshotRequired");
-    assert!(core.store().snapshot().output_segments.is_empty());
+    assert!(core.stores().snapshot(&node_did).output_segments.is_empty());
     Arc::new(core).shutdown().await.unwrap();
 }

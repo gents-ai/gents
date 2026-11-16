@@ -6,24 +6,20 @@ use super::{ClientStore, ClientStoreRows};
 pub(super) fn normalize_rows(rows: &mut ClientStoreRows) {
     rows.requests
         .retain(|row| gents_protocol::request_admission::RequestPurpose::is_public(row.purpose));
-    sort_rows_with_sources(
-        &mut rows.sessions,
-        &mut rows.session_source_node_dids,
-        |left, right| {
-            cmp_opt_str_desc(
-                left.observation
-                    .as_ref()
-                    .map(|observation| observation.last_activity_at.as_str()),
-                right
-                    .observation
-                    .as_ref()
-                    .map(|observation| observation.last_activity_at.as_str()),
-            )
-            .then_with(|| right.created_at.cmp(&left.created_at))
-            .then_with(|| left.node_did.cmp(&right.node_did))
-            .then_with(|| left.session_id.cmp(&right.session_id))
-        },
-    );
+    rows.sessions.sort_by(|left, right| {
+        cmp_opt_str_desc(
+            left.observation
+                .as_ref()
+                .map(|observation| observation.last_activity_at.as_str()),
+            right
+                .observation
+                .as_ref()
+                .map(|observation| observation.last_activity_at.as_str()),
+        )
+        .then_with(|| right.created_at.cmp(&left.created_at))
+        .then_with(|| left.node_did.cmp(&right.node_did))
+        .then_with(|| left.session_id.cmp(&right.session_id))
+    });
     rows.transcript_messages.sort_by(|left, right| {
         left.message
             .session_id
@@ -63,89 +59,22 @@ pub(super) fn normalize_rows(rows: &mut ClientStoreRows) {
     rows.goals.dedup_by(|right, left| {
         right.node_did == left.node_did && right.session_id == left.session_id
     });
-    sort_rows_with_sources(
-        &mut rows.tool_calls,
-        &mut rows.tool_call_source_node_dids,
-        |left, right| {
-            left.session_id
-                .cmp(&right.session_id)
-                .then_with(|| {
-                    left.message_sequence
-                        .unwrap_or_default()
-                        .cmp(&right.message_sequence.unwrap_or_default())
-                })
-                .then_with(|| {
-                    cmp_opt_str_asc(left.started_at.as_deref(), right.started_at.as_deref())
-                })
-                .then_with(|| left.tool_call_key.cmp(&right.tool_call_key))
-        },
-    );
-
-    normalize_source_node_dids(
-        &mut rows.compaction_entry_source_node_dids,
-        rows.compaction_entries.len(),
-    );
-    normalize_source_node_dids(&mut rows.task_source_node_dids, rows.tasks.len());
-    normalize_source_node_dids(&mut rows.schedule_source_node_dids, rows.schedules.len());
-    normalize_source_node_dids(
-        &mut rows.schedule_observation_source_node_dids,
-        rows.schedule_observations.len(),
-    );
-    normalize_source_node_dids(&mut rows.trigger_source_node_dids, rows.triggers.len());
-    normalize_source_node_dids(
-        &mut rows.trigger_observation_source_node_dids,
-        rows.trigger_observations.len(),
-    );
-    normalize_source_node_dids(&mut rows.skill_source_node_dids, rows.skills.len());
-    normalize_source_node_dids(&mut rows.tools_source_node_dids, rows.tools.len());
-    normalize_source_node_dids(&mut rows.context_source_node_dids, rows.contexts.len());
-    normalize_source_node_dids(
-        &mut rows.compaction_source_node_dids,
-        rows.compactions.len(),
-    );
-    normalize_source_node_dids(
-        &mut rows.inference_backend_source_node_dids,
-        rows.inference_backends.len(),
-    );
-    normalize_source_node_dids(
-        &mut rows.backend_observation_source_node_dids,
-        rows.backend_observations.len(),
-    );
-    normalize_source_node_dids(
-        &mut rows.inference_profile_source_node_dids,
-        rows.inference_profiles.len(),
-    );
-    normalize_source_node_dids(
-        &mut rows.inference_sampling_source_node_dids,
-        rows.inference_sampling.len(),
-    );
-    normalize_source_node_dids(
-        &mut rows.inference_execution_source_node_dids,
-        rows.inference_execution.len(),
-    );
-    normalize_source_node_dids(
-        &mut rows.tool_service_registry_source_node_dids,
-        rows.tool_service_registries.len(),
-    );
-    normalize_source_node_dids(
-        &mut rows.event_source_source_node_dids,
-        rows.event_sources.len(),
-    );
-    normalize_source_node_dids(
-        &mut rows.agent_target_source_node_dids,
-        rows.agent_targets.len(),
-    );
-    normalize_source_node_dids(
-        &mut rows.datastore_tool_surface_source_node_dids,
-        rows.datastore_tool_surfaces.len(),
-    );
+    rows.tool_calls.sort_by(|left, right| {
+        left.session_id
+            .cmp(&right.session_id)
+            .then_with(|| {
+                left.message_sequence
+                    .unwrap_or_default()
+                    .cmp(&right.message_sequence.unwrap_or_default())
+            })
+            .then_with(|| cmp_opt_str_asc(left.started_at.as_deref(), right.started_at.as_deref()))
+            .then_with(|| left.tool_call_key.cmp(&right.tool_call_key))
+    });
 }
 
 impl ClientStore {
     pub fn from_rows(mut rows: ClientStoreRows) -> Self {
         normalize_rows(&mut rows);
-        let (request_index_by_doc_id, unscoped_placeholder_request_ids, mailbox_index_by_doc_id) =
-            Self::build_scope_indexes(&rows);
 
         let transcript_messages_by_session_id = build_vec_index(&rows.transcript_messages, |row| {
             Some(row.message.session_id.as_str())
@@ -168,12 +97,17 @@ impl ClientStore {
         }
 
         let mut request_index_by_id = RapidHashMap::new();
+        let mut request_index_by_doc_id = RapidHashMap::new();
         for (index, row) in rows.requests.iter().enumerate() {
             request_index_by_id.insert(row.request_id.clone(), index);
+            if let Some(doc_id) = clean_string(row.doc_id.as_deref()) {
+                request_index_by_doc_id.entry(doc_id).or_insert(index);
+            }
         }
 
         Self {
             nodes: rows.nodes,
+            default_agent_selections: rows.default_agent_selections,
             agents: rows.agents,
             runtimes: rows.runtimes,
             node_readiness: rows.node_readiness,
@@ -185,27 +119,15 @@ impl ClientStore {
             goals: rows.goals,
             tool_calls: rows.tool_calls,
             compaction_entries: rows.compaction_entries,
-            session_source_node_dids: rows.session_source_node_dids,
-            tool_call_source_node_dids: rows.tool_call_source_node_dids,
-            compaction_entry_source_node_dids: rows.compaction_entry_source_node_dids,
             tasks: rows.tasks,
             schedules: rows.schedules,
             schedule_observations: rows.schedule_observations,
             triggers: rows.triggers,
             trigger_observations: rows.trigger_observations,
-            task_source_node_dids: rows.task_source_node_dids,
-            schedule_source_node_dids: rows.schedule_source_node_dids,
-            schedule_observation_source_node_dids: rows.schedule_observation_source_node_dids,
-            trigger_source_node_dids: rows.trigger_source_node_dids,
-            trigger_observation_source_node_dids: rows.trigger_observation_source_node_dids,
             skills: rows.skills,
-            skill_source_node_dids: rows.skill_source_node_dids,
             tools: rows.tools,
-            tools_source_node_dids: rows.tools_source_node_dids,
             contexts: rows.contexts,
-            context_source_node_dids: rows.context_source_node_dids,
             compactions: rows.compactions,
-            compaction_source_node_dids: rows.compaction_source_node_dids,
             inference_backends: rows.inference_backends,
             backend_observations: rows.backend_observations,
             inference_profiles: rows.inference_profiles,
@@ -215,15 +137,6 @@ impl ClientStore {
             event_sources: rows.event_sources,
             agent_targets: rows.agent_targets,
             datastore_tool_surfaces: rows.datastore_tool_surfaces,
-            inference_backend_source_node_dids: rows.inference_backend_source_node_dids,
-            backend_observation_source_node_dids: rows.backend_observation_source_node_dids,
-            inference_profile_source_node_dids: rows.inference_profile_source_node_dids,
-            inference_sampling_source_node_dids: rows.inference_sampling_source_node_dids,
-            inference_execution_source_node_dids: rows.inference_execution_source_node_dids,
-            tool_service_registry_source_node_dids: rows.tool_service_registry_source_node_dids,
-            event_source_source_node_dids: rows.event_source_source_node_dids,
-            agent_target_source_node_dids: rows.agent_target_source_node_dids,
-            datastore_tool_surface_source_node_dids: rows.datastore_tool_surface_source_node_dids,
             operator_config_authoritative_node_dids: rows.operator_config_authoritative_node_dids,
             transcript_messages_by_session_id,
             output_segments_by_request_doc_id,
@@ -233,32 +146,8 @@ impl ClientStore {
             node_readiness_by_node_did,
             request_index_by_id,
             request_index_by_doc_id,
-            unscoped_placeholder_request_ids,
-            mailbox_index_by_doc_id,
         }
     }
-}
-
-fn normalize_source_node_dids(sources: &mut Vec<Option<String>>, row_count: usize) {
-    sources.truncate(row_count);
-    sources.resize_with(row_count, || None);
-}
-
-fn sort_rows_with_sources<T>(
-    rows: &mut Vec<T>,
-    sources: &mut Vec<Option<String>>,
-    compare: impl Fn(&T, &T) -> std::cmp::Ordering,
-) {
-    normalize_source_node_dids(sources, rows.len());
-    let mut paired = rows
-        .drain(..)
-        .zip(sources.drain(..))
-        .collect::<Vec<(T, Option<String>)>>();
-    paired.sort_by(|(left, _), (right, _)| compare(left, right));
-    rows.extend(paired.into_iter().map(|(row, source)| {
-        sources.push(source);
-        row
-    }));
 }
 
 pub(super) fn build_vec_index<T>(

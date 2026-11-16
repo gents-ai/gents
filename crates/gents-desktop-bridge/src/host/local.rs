@@ -2,9 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::store::local::file_lock::FileLock;
 use gents_desktop_core::client::DesktopPaths;
 use gents_protocol::client_installation::{Action, Phase, State};
+use gents_store::local::file_lock::FileLock;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 

@@ -1,0 +1,49 @@
+{
+  "expect": {
+    "columns": [
+      {
+        "name": "s",
+        "type": "uint64"
+      }
+    ],
+    "markdown": "| s |\n| --- |\n| 5 |\n| 18446744073709551615 |",
+    "offset": 0,
+    "order": "query",
+    "row_count": 2,
+    "rows": [
+      [
+        5
+      ],
+      [
+        "18446744073709551615"
+      ]
+    ],
+    "warnings": [
+      "1 integers beyond 2^53 appear as strings so no digit is lost"
+    ]
+  },
+  "input": {
+    "sql": "SELECT s FROM r WHERE s > 4 ORDER BY s",
+    "tables": {
+      "r": {
+        "columns": [
+          {
+            "name": "s",
+            "type": "uint64"
+          }
+        ],
+        "rows": [
+          [
+            "18446744073709551615"
+          ],
+          [
+            5
+          ],
+          [
+            null
+          ]
+        ]
+      }
+    }
+  }
+}

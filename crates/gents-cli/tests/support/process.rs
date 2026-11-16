@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
+use gents_store::test_support::bounded_process::{BoundedProcess, Exited};
 use serde_json::Value;
 
 use super::fs::read_captured_log;
@@ -161,9 +162,10 @@ pub fn spawn_server(home_dir: &Path, port: u16) -> Result<ServeProcess> {
     spawn_server_with_env(home_dir, port, &[], &[])
 }
 
-/// Spawn a `gents runtime server` and wait for its readiness JSON. Never replaces a
-/// raced-away port: a caller holding this signature cannot observe a port
-/// change, so moving the server would strand it on a dead port.
+/// Spawn a `gents runtime server` and wait for its readiness JSON, failing only
+/// when the process exits or writes nothing for the suite's stall ceiling.
+/// Never replaces a raced-away port: a caller holding this signature cannot
+/// observe a port change, so moving the server would strand it on a dead port.
 pub fn spawn_server_with_ready_json(
     home_dir: &Path,
     port: u16,
@@ -204,8 +206,9 @@ fn spawn_server_with_ready_json_inner(
     } else {
         0
     };
-    let deadline = Instant::now() + Duration::from_secs(30);
     'attempt: loop {
+        let mut progress = (0, 0);
+        let mut progressed_at = Instant::now();
         let stdout_log = tempfile::NamedTempFile::new().context("creating gents stdout log")?;
         let stderr_log = tempfile::NamedTempFile::new().context("creating gents stderr log")?;
         let stdout = stdout_log.reopen().context("opening gents stdout log")?;
@@ -236,11 +239,19 @@ fn spawn_server_with_ready_json_inner(
                 )?;
                 return Ok((serve, port, value));
             }
+            let output = (
+                stdout_so_far.len(),
+                read_captured_log(serve.stderr_log.as_ref())?.len(),
+            );
+            if output != progress {
+                progress = output;
+                progressed_at = Instant::now();
+            }
             let exited = serve
                 .child
                 .try_wait()
                 .context("checking serve child status")?;
-            let timed_out = Instant::now() >= deadline;
+            let timed_out = progressed_at.elapsed() >= super::waits::STALL_CEILING;
             if exited.is_some() || timed_out {
                 let (stdout, stderr) = serve.captured_output()?;
                 let addr = format!("127.0.0.1:{port}");
@@ -263,7 +274,8 @@ fn spawn_server_with_ready_json_inner(
                     );
                 }
                 bail!(
-                    "timed out waiting for gents server readiness JSON\nstdout:\n{}\nstderr:\n{}",
+                    "gents server wrote nothing for {:?} before its readiness JSON\nstdout:\n{}\nstderr:\n{}",
+                    super::waits::STALL_CEILING,
                     stdout,
                     stderr
                 );
@@ -399,6 +411,56 @@ pub fn spawn_cli(home_dir: &Path, args: &[&str]) -> Result<Child> {
         .with_context(|| format!("spawning gents {}", args.join(" ")))
 }
 
+/// A backstop, not an expectation: it turns a command that would hang until
+/// the harness kills the whole test process into one attributed failure.
+const CLI_DEADLINE: Duration = Duration::from_secs(600);
+
+/// Init stage boundaries stay visible so a timed-out initialization names the
+/// stage it stopped in.
+const CLI_LOG: &str = "error,gents_server::commands::init=info";
+
+fn cli_command(home_dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Command {
+    let mut command = Command::new(cli_bin());
+    command
+        .env("HOME", home_dir)
+        .env("RUST_LOG", CLI_LOG)
+        .args(args);
+    for (name, value) in envs {
+        command.env(name, value);
+    }
+    command
+}
+
+fn run_bounded(mut command: Command, args: &[&str]) -> Result<Exited> {
+    let what = format!("gents {}", args.join(" "));
+    let capture = tempfile::tempdir().context("creating a CLI capture directory")?;
+    BoundedProcess::spawn(&mut command, capture.path(), "cli", &what)?.exit(CLI_DEADLINE)
+}
+
+fn succeeded(exited: Exited, args: &[&str]) -> Result<Vec<u8>> {
+    if !exited.status.success() {
+        bail!(
+            "gents {} failed\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&exited.stdout),
+            String::from_utf8_lossy(&exited.stderr)
+        );
+    }
+    Ok(exited.stdout)
+}
+
+fn failed(exited: Exited, args: &[&str]) -> Result<Exited> {
+    if exited.status.success() {
+        bail!(
+            "expected gents {} to fail\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&exited.stdout),
+            String::from_utf8_lossy(&exited.stderr)
+        );
+    }
+    Ok(exited)
+}
+
 pub fn run_cli_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
     run_cli_json_with_env(home_dir, args, &[])
 }
@@ -408,48 +470,16 @@ pub fn run_cli_json_with_env(
     args: &[&str],
     envs: &[(&str, &str)],
 ) -> Result<Value> {
-    let mut command = Command::new(cli_bin());
-    command
-        .env("HOME", home_dir)
-        .env("RUST_LOG", "error")
-        .current_dir(home_dir)
-        .args(args);
-    for (name, value) in envs {
-        command.env(name, value);
-    }
-    let output = command
-        .output()
-        .with_context(|| format!("running gents {}", args.join(" ")))?;
-    if !output.status.success() {
-        bail!(
-            "gents {} failed\nstdout:\n{}\nstderr:\n{}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    serde_json::from_slice(&output.stdout)
+    let mut command = cli_command(home_dir, args, envs);
+    command.current_dir(home_dir);
+    let stdout = succeeded(run_bounded(command, args)?, args)?;
+    serde_json::from_slice(&stdout)
         .with_context(|| format!("parsing JSON from gents {}", args.join(" ")))
 }
 
 pub fn run_cli_text(home_dir: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new(cli_bin())
-        .env("HOME", home_dir)
-        .env("RUST_LOG", "error")
-        .args(args)
-        .output()
-        .with_context(|| format!("running gents {}", args.join(" ")))?;
-    if !output.status.success() {
-        bail!(
-            "gents {} failed\nstdout:\n{}\nstderr:\n{}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    String::from_utf8(output.stdout)
+    let stdout = succeeded(run_bounded(cli_command(home_dir, args, &[]), args)?, args)?;
+    String::from_utf8(stdout)
         .with_context(|| format!("parsing stdout from gents {}", args.join(" ")))
 }
 
@@ -462,53 +492,21 @@ pub fn run_cli_failure_stderr_with_env(
     args: &[&str],
     envs: &[(&str, &str)],
 ) -> Result<String> {
-    let mut command = Command::new(cli_bin());
-    command
-        .env("HOME", home_dir)
-        .env("RUST_LOG", "error")
-        .args(args);
-    for (name, value) in envs {
-        command.env(name, value);
-    }
-    let output = command
-        .output()
-        .with_context(|| format!("running gents {}", args.join(" ")))?;
-    if output.status.success() {
-        bail!(
-            "expected gents {} to fail\nstdout:\n{}\nstderr:\n{}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    String::from_utf8(output.stderr)
+    let exited = failed(run_bounded(cli_command(home_dir, args, envs), args)?, args)?;
+    String::from_utf8(exited.stderr)
         .with_context(|| format!("parsing stderr from gents {}", args.join(" ")))
 }
 
 pub fn run_cli_failure_stdout_json(home_dir: &Path, args: &[&str]) -> Result<Value> {
-    let output = Command::new(cli_bin())
-        .env("HOME", home_dir)
-        .env("RUST_LOG", "error")
-        .current_dir(home_dir)
-        .args(args)
-        .output()
-        .with_context(|| format!("running gents {}", args.join(" ")))?;
-    if output.status.success() {
-        bail!(
-            "expected gents {} to fail\nstdout:\n{}\nstderr:\n{}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    serde_json::from_slice(&output.stdout).with_context(|| {
+    let mut command = cli_command(home_dir, args, &[]);
+    command.current_dir(home_dir);
+    let exited = failed(run_bounded(command, args)?, args)?;
+    serde_json::from_slice(&exited.stdout).with_context(|| {
         format!(
             "parsing failure JSON from gents {}\nstdout:\n{}\nstderr:\n{}",
             args.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+            String::from_utf8_lossy(&exited.stdout),
+            String::from_utf8_lossy(&exited.stderr)
         )
     })
 }

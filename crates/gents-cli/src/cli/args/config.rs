@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Subcommand, ValueEnum};
-use serde::{Deserialize, Serialize};
+use clap::Subcommand;
 
 use super::{
     BackendDiscoverModelsArgs, BackendPoolArgs, BackendSetArgs, ConfigApplyArgs, ConfigDiffArgs,
@@ -73,22 +72,6 @@ pub(crate) enum ConfigCommand {
     },
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum, PartialEq, Eq)]
-pub enum ToolCeilingArg {
-    MetaOnly,
-    Readonly,
-    Readwrite,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum, PartialEq, Eq)]
-pub(crate) enum ToolPackageArg {
-    Minimal,
-    Introspection,
-    Readonly,
-    Write,
-    Yolo,
-}
-
 #[derive(Subcommand)]
 pub(crate) enum BackendCommand {
     #[command(name = "set")]
@@ -128,6 +111,12 @@ pub(crate) enum AgentCommand {
     )]
     Disable(AgentDisableArgs),
     #[command(
+        name = "default",
+        about = "Choose the Agent that serves requests that name none",
+        long_about = "Choose the Node's default Agent through the shared agent materializer. The acting actor needs the agent catalog (manage_agents on the Node). The default must stay enabled; pass --enable to enable a disabled Agent in the same edit."
+    )]
+    Default(AgentDefaultArgs),
+    #[command(
         name = "grant-self-config",
         about = "Grant an agent permission to update its own Agent document"
     )]
@@ -137,10 +126,22 @@ pub(crate) enum AgentCommand {
         about = "Revoke an agent's permission to update its own Agent document"
     )]
     RevokeSelfConfig(AgentSelfConfigPermissionArgs),
+    #[command(
+        name = "grant-catalog",
+        about = "Let an agent create and clone agents and choose the node's default agent",
+        long_about = "Let an agent create and clone agents and choose the node's default agent. This grants the manage_agents permission on the Node (the agent_manager relation) and nothing else."
+    )]
+    GrantCatalog(AgentCatalogPermissionArgs),
+    #[command(
+        name = "revoke-catalog",
+        about = "Withdraw an agent's permission to create and clone agents and choose the default agent",
+        long_about = "Withdraw the manage_agents permission on the Node (the agent_manager relation) from an agent: it can no longer create or clone agents or choose the node's default agent. Nothing else changes."
+    )]
+    RevokeCatalog(AgentCatalogPermissionArgs),
     #[command(name = "list", about = "List Agent documents")]
     List(ConfigListArgs),
     #[command(name = "show", about = "Show an Agent document")]
-    Show(ConfigShowArgs),
+    Show(AgentShowArgs),
     #[command(name = "rm", about = "Delete an Agent document")]
     Rm(ConfigShowArgs),
 }
@@ -274,8 +275,14 @@ pub(crate) struct SkillAddArgs {
     pub(crate) tool_refs: Vec<String>,
     #[arg(long)]
     pub(crate) display_name: Option<String>,
-    #[arg(long, default_value_t = true)]
-    pub(crate) enabled: bool,
+    /// Enable the skill, or disable it with `--enabled=false`. Omitted, a
+    /// new skill starts enabled and a stored one keeps its state.
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    pub(crate) enabled: Option<bool>,
+    /// Clear a stored field (repeatable): name, description, instructions,
+    /// display_name or tool_refs. A field no flag names keeps its value.
+    #[arg(long = "clear", value_name = "FIELD")]
+    pub(crate) clear: Vec<String>,
 }
 
 #[derive(clap::Args)]
@@ -294,6 +301,9 @@ pub(crate) struct SkillImportArgs {
     /// Parse and report what would be imported without writing.
     #[arg(long)]
     pub(crate) dry_run: bool,
+    /// Replace a skill that is already stored under the same ID.
+    #[arg(long)]
+    pub(crate) overwrite: bool,
 }
 
 #[derive(clap::Args)]
@@ -322,6 +332,9 @@ pub(crate) struct SkillShowArgs {
     pub(crate) graphql: String,
     #[arg(long)]
     pub(crate) skill_id: String,
+    /// The owning Node. Needed only when more than one owner holds this ID.
+    #[arg(long)]
+    pub(crate) node_did: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -330,6 +343,9 @@ pub(crate) struct SkillRefArgs {
     pub(crate) graphql: String,
     #[arg(long)]
     pub(crate) skill_id: String,
+    /// The owning Node. Needed only when more than one owner holds this ID.
+    #[arg(long)]
+    pub(crate) node_did: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -357,6 +373,18 @@ pub(crate) struct ConfigShowArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct AgentShowArgs {
+    #[command(flatten)]
+    pub(crate) show: ConfigShowArgs,
+    #[arg(
+        long,
+        value_name = "NODE_DID",
+        help = "The node that owns the Agent; required when several nodes hold the ID"
+    )]
+    pub(crate) node_did: Option<String>,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct WorkspaceRootUpsertArgs {
     #[arg(long)]
     pub(crate) graphql: String,
@@ -373,15 +401,19 @@ pub(crate) struct WorkspaceRootUpsertArgs {
     pub(crate) display_name: Option<String>,
     #[arg(
         long,
-        help = "Register the root disabled; excluded from allowed_roots until re-enabled"
+        help = "Disable the root; excluded from allowed_roots until re-enabled. An existing root keeps its state when neither --disabled nor --enabled is given"
     )]
     pub(crate) disabled: bool,
+    #[arg(long, conflicts_with = "disabled", help = "Re-enable a disabled root")]
+    pub(crate) enabled: bool,
 }
 
 #[derive(clap::Args)]
 pub(crate) struct WorkspaceRootReaderArgs {
     #[arg(long)]
-    pub(crate) graphql: String,
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
     #[arg(long)]
     pub(crate) path: PathBuf,
     #[arg(long)]
@@ -420,10 +452,13 @@ pub(crate) struct AgentUpsertArgs {
 pub(crate) struct AgentCreateArgs {
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: String,
-    #[arg(long)]
-    pub(crate) node_did: String,
+    #[arg(
+        long,
+        help = "Runtime GraphQL endpoint; defaults to the home's running runtime"
+    )]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Owning node; defaults to the home's node")]
+    pub(crate) node_did: Option<String>,
     #[arg(long, help = "Agent display name")]
     pub(crate) display_name: String,
     #[arg(long, help = "Concise purpose for the created agent")]
@@ -456,8 +491,11 @@ pub(crate) struct AgentCreateArgs {
 pub(crate) struct AgentCloneArgs {
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: String,
+    #[arg(
+        long,
+        help = "Runtime GraphQL endpoint; defaults to the home's running runtime"
+    )]
+    pub(crate) graphql: Option<String>,
     #[arg(value_name = "SOURCE_AGENT_DID")]
     pub(crate) source_agent_did: String,
     #[arg(long, help = "Display name for the cloned agent")]
@@ -486,7 +524,32 @@ pub(crate) struct AgentDisableArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct AgentDefaultArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(
+        long,
+        help = "Enable the Agent in the same edit, so a disabled Agent can become the default"
+    )]
+    pub(crate) enable: bool,
+    #[arg(value_name = "AGENT_DID")]
+    pub(crate) agent_did: String,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct AgentSelfConfigPermissionArgs {
+    #[arg(long)]
+    pub(crate) graphql: String,
+    #[arg(long)]
+    pub(crate) node_did: String,
+    #[arg(value_name = "AGENT_DID")]
+    pub(crate) agent_did: String,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct AgentCatalogPermissionArgs {
     #[arg(long)]
     pub(crate) graphql: String,
     #[arg(long)]
@@ -501,6 +564,16 @@ pub(crate) struct ToolsSetArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    #[arg(long, help = "Canonical Tools JSON document to create or replace")]
+    #[arg(
+        long,
+        help = "Tools JSON naming tools_id and node_did. Each group in the file is set, a null group is cleared, and a group the file omits is kept"
+    )]
     pub(crate) file: PathBuf,
+    /// Groups whose stored settings this save may drop (repeatable or
+    /// comma-separated).
+    #[arg(long = "allow-drop", value_name = "GROUP")]
+    pub(crate) allow_drop: Vec<String>,
+    /// Accept that the save changes every agent that selects these Tools.
+    #[arg(long)]
+    pub(crate) shared_acknowledge: bool,
 }

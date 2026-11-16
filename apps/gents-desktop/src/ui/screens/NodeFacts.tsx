@@ -3,8 +3,11 @@
 import { cn } from "@gents/ui/lib/utils";
 import type { NodeView } from "../../hooks/fleetStore";
 import { providerLogo } from "@/lib/provider";
+import type { OperationalStatusKind } from "@source-inc/gents-desktop-client";
+import { nodeConnectionState } from "@/lib/nodeConnection";
 import { ProviderLogo } from "./ProviderLogo";
 import { healthy } from "./agent/inferenceKinds";
+import { useStoppedLocalNode } from "./agent/LocalServer";
 
 type Backends = NodeView["inferenceBackends"];
 
@@ -14,23 +17,49 @@ export const counted = (n: number, one: string, many = `${one}s`) =>
 
 export type Tone = "good" | "busy" | "bad" | "idle";
 
-export function StateDot({ tone }: { tone: Tone }) {
+export const statusTone = (kind: OperationalStatusKind): Tone =>
+  kind === "ready" ? "good" : kind === "blocked" ? "bad" : "idle";
+
+export function StateDot({
+  tone,
+  label,
+  className,
+}: {
+  tone: Tone;
+  label?: string;
+  className?: string;
+}) {
   return (
     <span
-      aria-hidden
+      {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
       className={cn(
         "size-1.5 shrink-0 rounded-full",
         tone === "bad" ? "bg-destructive" : tone === "idle" ? "bg-border" : "bg-brand",
+        className,
       )}
     />
   );
 }
 
-export function OnlineStatus({ online }: { online: boolean }) {
+export function nodeConnection(
+  deployment: Pick<NodeView, "runtimeConnection">,
+  stopped: boolean,
+) {
+  const state = nodeConnectionState(deployment, stopped);
+  const tone: Tone = stopped ? "idle" : statusTone(state.status.kind);
+  return { ...state, tone, stopped };
+}
+
+export function useNodeConnection(deployment: NodeView) {
+  return nodeConnection(deployment, useStoppedLocalNode(deployment) !== null);
+}
+
+export function OnlineStatus({ deployment }: { deployment: NodeView }) {
+  const { tone, label } = useNodeConnection(deployment);
   return (
     <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-      <StateDot tone={online ? "good" : "bad"} />
-      {online ? "Online" : "Offline"}
+      <StateDot tone={tone} />
+      {label}
     </span>
   );
 }

@@ -104,7 +104,7 @@ fn check_datastore_grant(
     tally: &mut Tally,
 ) {
     let rows = |name: &str| capture_rows(stage, name);
-    use gents::documents::{DatastoreToolSurfaceDocument, SurfaceToolDecl};
+    use gents_documents::{DatastoreToolSurfaceDocument, SurfaceToolDecl};
     let selected = tools_row.map(|t| lookup(t, "datastore.datastore_tool_surface_ids"));
     let mut creates = BTreeSet::new();
     let mut queries = BTreeSet::new();

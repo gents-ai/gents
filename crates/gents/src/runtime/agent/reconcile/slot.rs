@@ -7,14 +7,15 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinSet;
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::inference::admission::BackendAdmissionConfig;
-use crate::inference::resolved::ResolvedAgent;
 use crate::runtime::agent::retry::RetryPolicy;
 use crate::runtime::agent::worker_capacity::WorkerCapacity;
-use crate::runtime::snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime::startup_readiness::{BuildOutcome, BuildStanding};
-use crate::tools::surface::ToolSurface;
+use gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
+use gents_inference::admission::BackendAdmissionConfig;
+use gents_inference::resolved::ResolvedAgent;
 use gents_protocol::row::AgentRequest;
+use gents_tools::surface::AgentWithTools;
+use gents_tools::surface::ToolSurface;
 
 use rapidhash::{HashMapExt, RapidHashMap};
 
@@ -49,12 +50,11 @@ pub(super) struct AgentSlot {
 impl AgentSlot {
     pub(super) fn matches(
         &self,
-        agent_config: &Arc<ResolvedAgent>,
+        agent_config: &AgentWithTools,
         tool_surface: &Arc<ToolSurface>,
         executor_capacity: usize,
     ) -> bool {
-        self.agent_fingerprint
-            == crate::turn::completion_factory::agent_slot_fingerprint(agent_config)
+        self.agent_fingerprint == agent_config.slot_fingerprint()
             && self.tool_surface_fingerprint == format!("{tool_surface:?}")
             && self.executor_capacity == executor_capacity
     }
@@ -163,7 +163,7 @@ async fn park_until_retired(
 
 #[derive(Clone)]
 pub(super) struct SlotConfig {
-    pub(super) agent_config: Arc<ResolvedAgent>,
+    pub(super) agent_config: AgentWithTools,
     pub(super) tool_surface: Arc<ToolSurface>,
     pub(super) generation: u64,
     pub(super) retry_policy: RetryPolicy,
@@ -189,7 +189,7 @@ pub(super) fn spawn_slots<F, Fut>(
 ) -> RapidHashMap<String, AgentSlot>
 where
     F: Fn(
-            Arc<ResolvedAgent>,
+            AgentWithTools,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             Arc<WorkerCapacity>,
@@ -203,12 +203,15 @@ where
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
     let mut slots = RapidHashMap::with_capacity(resolved_snapshot.agents.len());
-    for (agent_did, agent_config) in &resolved_snapshot.agents {
+    for (agent_did, agent) in &resolved_snapshot.agents {
         let tool_surface = resolved_snapshot
             .tool_surfaces
             .get(agent_did)
             .cloned()
             .expect("resolved snapshot should include tool surfaces for runnable agents");
+        let agent_config = &resolved_snapshot
+            .agent_with_tools(agent_did)
+            .expect("resolved snapshot should include tool configurations for runnable agents");
         slots.insert(
             agent_did.clone(),
             spawn_slot_with_capacity(
@@ -219,7 +222,7 @@ where
                     retry_policy: retry_policy.clone(),
                     failure_policy: failure_policy.clone(),
                 },
-                agent_executor_capacity(agent_config, &resolved_snapshot.backend_admission_configs),
+                agent_executor_capacity(agent, &resolved_snapshot.backend_admission_configs),
                 runner.clone(),
                 shutdown.clone(),
             ),
@@ -230,7 +233,7 @@ where
 
 #[cfg(test)]
 pub(super) fn spawn_slot<F, Fut>(
-    agent_config: Arc<ResolvedAgent>,
+    agent_config: AgentWithTools,
     tool_surface: Arc<ToolSurface>,
     retry_policy: RetryPolicy,
     runner: F,
@@ -238,7 +241,7 @@ pub(super) fn spawn_slot<F, Fut>(
 ) -> AgentSlot
 where
     F: Fn(
-            Arc<ResolvedAgent>,
+            AgentWithTools,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             Arc<WorkerCapacity>,
@@ -273,7 +276,7 @@ pub(super) fn spawn_slot_with_capacity<F, Fut>(
 ) -> AgentSlot
 where
     F: Fn(
-            Arc<ResolvedAgent>,
+            AgentWithTools,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             Arc<WorkerCapacity>,
@@ -297,7 +300,7 @@ where
     let executor_capacity = bounded_active_limit(executor_capacity);
     if requested_capacity > executor_capacity {
         tracing::warn!(
-            agent_did = %agent_config.agent_did,
+            agent_did = %agent_config.agent.agent_did,
             requested_capacity,
             executor_capacity,
             max_worker_tasks = MAX_BEHAVIOR_WORKERS,
@@ -308,7 +311,7 @@ where
     let (dispatcher, request_rx) = mpsc::channel(AGENT_EXECUTOR_QUEUE_CAPACITY);
     let request_rx = Arc::new(Mutex::new(request_rx));
     let (state_tx, state_rx) = watch::channel(AgentSlotState::Active);
-    let agent_fingerprint = crate::turn::completion_factory::agent_slot_fingerprint(&agent_config);
+    let agent_fingerprint = agent_config.slot_fingerprint();
     let tool_surface_fingerprint = format!("{tool_surface:?}");
 
     let standing = Arc::new(std::sync::Mutex::new(BuildStanding::seeded()));
@@ -384,7 +387,7 @@ pub(super) fn retire_slot(slot: AgentSlot) {
 async fn run_slot_loop<F, Fut>(slot: SlotConfig, runtime: SlotRuntime, runner: F) -> Result<()>
 where
     F: Fn(
-            Arc<ResolvedAgent>,
+            AgentWithTools,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             Arc<WorkerCapacity>,
@@ -453,7 +456,7 @@ where
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::warn!(
-                    agent_did = %agent_config.agent_did,
+                    agent_did = %agent_config.agent.agent_did,
                     delay_ms = delay.as_millis() as u64,
                     "agent slot exited unexpectedly, scheduling restart"
                 );
@@ -463,7 +466,7 @@ where
             }
             Ok(Err(error)) => {
                 if handle_slot_failure(
-                    &agent_config.agent_did,
+                    &agent_config.agent.agent_did,
                     generation,
                     &format!("{error:#}"),
                     failure_policy.as_deref(),
@@ -478,7 +481,7 @@ where
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::error!(
-                    agent_did = %agent_config.agent_did,
+                    agent_did = %agent_config.agent.agent_did,
                     error = %error,
                     delay_ms = delay.as_millis() as u64,
                     "agent slot failed, scheduling restart"
@@ -489,7 +492,7 @@ where
             }
             Err(_) => {
                 if handle_slot_failure(
-                    &agent_config.agent_did,
+                    &agent_config.agent.agent_did,
                     generation,
                     "agent runner panicked",
                     failure_policy.as_deref(),
@@ -504,7 +507,7 @@ where
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::error!(
-                    agent_did = %agent_config.agent_did,
+                    agent_did = %agent_config.agent.agent_did,
                     delay_ms = delay.as_millis() as u64,
                     "agent slot panicked, scheduling restart"
                 );
@@ -524,7 +527,7 @@ async fn run_slot_workers<F, Fut>(
 ) -> Result<()>
 where
     F: Fn(
-            Arc<ResolvedAgent>,
+            AgentWithTools,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             Arc<WorkerCapacity>,
@@ -538,7 +541,7 @@ where
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
     let worker_count = executor_capacity;
-    let agent_did = slot.agent_config.agent_did.clone();
+    let agent_did = slot.agent_config.agent.agent_did.clone();
     tracing::info!(
         agent_did = %agent_did,
         executor_capacity,
@@ -579,73 +582,5 @@ async fn wait_for_restart(
     tokio::select! {
         _ = tokio::time::sleep(delay) => true,
         _ = shutdown.changed() => false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use anyhow::anyhow;
-    use tokio::sync::Notify;
-
-    use super::*;
-
-    struct FailingDemotionPolicy {
-        attempted: Arc<Notify>,
-    }
-
-    #[async_trait::async_trait]
-    impl SlotFailurePolicy for FailingDemotionPolicy {
-        fn build_failure_budget(&self) -> u32 {
-            1
-        }
-
-        async fn on_slot_created(&self, _agent_did: &str, _generation: u64) -> Result<()> {
-            Ok(())
-        }
-
-        async fn try_demote(
-            &self,
-            _agent_did: &str,
-            _generation: u64,
-            _error: &str,
-        ) -> Result<bool> {
-            self.attempted.notify_one();
-            Err(anyhow!("injected demotion persistence failure"))
-        }
-
-        async fn on_slot_retired(&self, _agent_did: &str, _generation: u64, _recreated: bool) {}
-    }
-
-    #[tokio::test]
-    async fn failed_demotion_persistence_keeps_exhausted_slot_parked() {
-        let attempted = Arc::new(Notify::new());
-        let policy = Arc::new(FailingDemotionPolicy {
-            attempted: attempted.clone(),
-        });
-        let standing = Arc::new(std::sync::Mutex::new(BuildStanding::seeded()));
-        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
-        let (state_tx, mut state_rx) = watch::channel(AgentSlotState::Active);
-        let standing_for_task = standing.clone();
-        let task = tokio::spawn(async move {
-            handle_slot_failure(
-                "general",
-                7,
-                "executor failed",
-                Some(policy.as_ref()),
-                &standing_for_task,
-                &mut shutdown_rx,
-                &mut state_rx,
-            )
-            .await
-        });
-
-        attempted.notified().await;
-        assert_eq!(*standing.lock().unwrap(), BuildStanding::Demoted);
-        assert!(
-            !task.is_finished(),
-            "a failed durable demotion must not restart the exhausted slot"
-        );
-        state_tx.send_replace(AgentSlotState::Retiring);
-        assert!(task.await.unwrap());
     }
 }

@@ -75,6 +75,8 @@ function preview(
     browserPaths: [],
     clearedBrowserPaths: [],
     retainedPaths: [`${HOME}/grok-port-home`],
+    reason: "incompatibleStore",
+    retiredPairings: 0,
     ...overrides,
   };
 }
@@ -103,6 +105,7 @@ function snapshot(configured: boolean): DesktopClientSnapshot {
               addr: deployment.addr,
               source: deployment.source,
               graphql: deployment.graphql,
+              local: false,
             },
           ]
         : [],
@@ -258,30 +261,49 @@ describe("a home this version cannot open", () => {
     expect(run.resetManagedServer).toHaveBeenCalledWith();
   });
 
-  it("offers the panel when a restart hits the refused store", async () => {
-    const restartManagedServer = vi.fn(async () => {
-      throw incompatible();
+  it("sets aside a refused older home a start reported, then opens setup with the note", async () => {
+    const note =
+      "This version couldn't open the data from an older Gents version, so it was set aside at /Users/test/.gents.from-older-2026-11-12-120000";
+    let setAside = false;
+    const repairManagedServer = vi.fn(async () => {
+      const outcome = setAside ? ("ready" as const) : ("needsSetup" as const);
+      const repaired = setAside ? [] : [note];
+      setAside = true;
+      return { repaired, outcome, blocker: null, savedPeers: [], localNodeLost: false };
     });
-    const run = harness({
-      managedServerStatus: vi.fn(async () =>
-        managedStatus({
-          state: "failed",
-          nodeName: "Forge",
-          effectiveToolCeiling: "readwrite",
-          effectiveToolRoot: "/Users/test",
-          error: "The background node keeps exiting before it becomes ready.",
-        }),
-      ),
-      restartManagedServer,
+    const resetManagedServer = vi.fn();
+    const app = testApp({
+      api: {
+        repairManagedServer,
+        managedServerStatus: vi.fn(async () => managedStatus({ state: "stopped" })),
+        resetManagedServer,
+      },
+      supportsManagedServer: true,
     });
+    const adopted = await app.lifecycle.home.adopt(
+      incompatible("refused by an older Gents version"),
+    );
+    expect(adopted).toBe(true);
+    await waitFor(() =>
+      expect(app.stores.client.getState().repairNotes).toContain(note),
+    );
+    expect(resetManagedServer).not.toHaveBeenCalled();
+  });
 
-    await userEvent.click(await screen.findByTestId("startup-restart-managed-server"));
-    await screen.findByTestId("incompatible-home");
-    expect(restartManagedServer).toHaveBeenCalledWith("Forge", {
-      toolCeiling: "readwrite",
-      toolRoot: "/Users/test",
+  it("still offers the panel when the repair reports ready", async () => {
+    harness({
+      repairManagedServer: vi.fn(async () => ({
+        repaired: [],
+        outcome: "ready" as const,
+        blocker: null,
+        savedPeers: [],
+        localNodeLost: false,
+      })),
+      managedServerStatus: vi.fn(async () =>
+        managedStatus({ state: "failed", errorCode: "incompatibleLocalStore" }),
+      ),
     });
-    expect(run.resetManagedServer).toHaveBeenCalledWith();
+    await screen.findByTestId("incompatible-home");
   });
 
   it("offers the panel when the desktop client store is the one refused", async () => {

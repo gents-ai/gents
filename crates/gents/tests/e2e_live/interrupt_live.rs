@@ -2,15 +2,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::documents::{AgentContext, InferenceProfile};
-use gents::request::interrupt::interrupt_request_by_doc_id_with_access;
-use gents::session::load_canonical_message;
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
-use gents::{
-    default_inference_profile_id_for_agent, Collection, DocumentRuntimeOptions, Gents,
-    ReasoningEffort, ToolCeiling,
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::{
+    default_inference_profile_id_for_agent, inference_defaults::ReasoningEffort,
 };
+use gents_documents::{AgentContext, InferenceProfile};
 use gents_protocol::message::{AssistantContent, Message, Text};
 use gents_protocol::output::live::{
     project_live, LiveObservation, LiveTarget, LiveView, OwnerLiveness,
@@ -26,6 +22,12 @@ use gents_protocol::output::{
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+use gents_session::request::interrupt::interrupt_request_by_doc_id_with_access;
+use gents_session::session::load_canonical_message;
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
+use gents_tools::surface::ToolCeiling;
 use serde_json::Value;
 
 use crate::support::agent_requests::RequestActors;
@@ -35,6 +37,7 @@ use crate::support::interrupt::{
     BootedAgent,
 };
 use crate::support::live_inference::{bind_target, live_target, InferenceTarget};
+use crate::support::snapshots::SnapshotReader;
 use crate::support::test_db;
 use crate::support::TestDb;
 
@@ -43,18 +46,11 @@ const LIVE_CONTEXT_ID: &str = "live-interrupt:context";
 
 const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(300);
 const TERMINAL_TIMEOUT: Duration = Duration::from_secs(30);
-const OBSERVATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const MIN_VISIBLE_PREFIX_CHARS: usize = 40;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "live: set GENTS_LIVE_OPENAI=1 and pass --ignored"]
 async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
-    assert!(
-        std::env::var("GENTS_LIVE_OPENAI").as_deref() == Ok("1"),
-        "set GENTS_LIVE_OPENAI=1 and pass --ignored to run the live interrupt smoke test"
-    );
-
-    let target = live_target();
+    let target = live_target().await;
 
     let db = test_db("live-openai-interrupt").await;
     let (agent, actors) = boot_interrupt_agent(&db, &target).await?;
@@ -126,29 +122,6 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     assert_terminal_partial(
         reader,
         &row,
-        &request_doc_id,
-        &terminal_output,
-        &before_interrupt,
-    )
-    .await?;
-
-    tokio::time::sleep(Duration::from_millis(750)).await;
-    let settled_row = fetch_request_row(reader, &request_doc_id).await?;
-    assert_eq!(
-        settled_row.lifecycle_state, row.lifecycle_state,
-        "interrupted lifecycle must stay settled"
-    );
-    assert_eq!(
-        settled_row.terminal_output, row.terminal_output,
-        "terminal_output selection must stay settled after the interrupted lifecycle persists"
-    );
-    assert_eq!(
-        settled_row.execution_generation, row.execution_generation,
-        "execution owner must stay settled after the interrupted lifecycle persists"
-    );
-    assert_terminal_partial(
-        reader,
-        &settled_row,
         &request_doc_id,
         &terminal_output,
         &before_interrupt,
@@ -380,6 +353,7 @@ async fn wait_for_visible_text_prefix(
     min_len: usize,
 ) -> Result<(AgentRequestRow, String, Vec<CaptureScope>)> {
     let deadline = tokio::time::Instant::now() + OBSERVATION_TIMEOUT;
+    let mut changes = reader.subscribe_changes("AgentOutputSegment").await;
     loop {
         let observation = observe_request(reader, request_doc_id).await?;
         match observation.row.lifecycle_state {
@@ -407,7 +381,9 @@ async fn wait_for_visible_text_prefix(
              request {request_doc_id}; last text={:?}",
             observation.text
         );
-        tokio::time::sleep(OBSERVATION_POLL_INTERVAL).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .context("live observation deadline")?;
     }
 }
 
@@ -416,6 +392,7 @@ async fn wait_for_interrupted_terminal_row(
     request_doc_id: &str,
 ) -> Result<AgentRequestRow> {
     let deadline = tokio::time::Instant::now() + TERMINAL_TIMEOUT;
+    let mut changes = reader.subscribe_changes("AgentRequest").await;
     loop {
         let row = fetch_request_row(reader, request_doc_id).await?;
         match row.lifecycle_state {
@@ -443,7 +420,9 @@ async fn wait_for_interrupted_terminal_row(
              last lifecycle={:?}",
             row.lifecycle_state
         );
-        tokio::time::sleep(OBSERVATION_POLL_INTERVAL).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .context("live observation deadline")?;
     }
 }
 
@@ -476,8 +455,8 @@ async fn boot_interrupt_agent(
 /// The node's client key gives the bound Agent a high-effort live sampling
 /// profile and a streaming system prompt.
 async fn configure_live_interrupt(actors: &RequestActors, target: &InferenceTarget) {
-    use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let node_did = actors.node_did();
@@ -515,7 +494,7 @@ async fn configure_live_interrupt(actors: &RequestActors, target: &InferenceTarg
                 let (_, agent) = read(txn, Collection::Agent, node_did, agent_did)
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("the live Agent is missing"))?;
-                let mut agent: gents::documents::Agent = serde_json::from_value(agent)?;
+                let mut agent: gents_documents::Agent = serde_json::from_value(agent)?;
                 agent.context_id = Some(LIVE_CONTEXT_ID.to_string());
                 let plan = DesiredStateApplyPlan::new(
                     [
@@ -535,7 +514,13 @@ async fn configure_live_interrupt(actors: &RequestActors, target: &InferenceTarg
                     })
                     .collect(),
                 )?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await

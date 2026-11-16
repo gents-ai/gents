@@ -1,13 +1,13 @@
 use anyhow::Result;
 use gents_protocol::graphql::{
     graphql_endpoint_available as shared_graphql_endpoint_available, graphql_rows_from_response,
-    graphql_string_list_literal as shared_graphql_string_list_literal, GraphqlRequestOptions,
+    GraphqlRequestOptions,
 };
 use serde_json::Value;
 
 use crate::config_writes::ConfigAccess;
 
-pub(crate) use gents::store::config_client::{graphql_api_base, post_graphql};
+pub(crate) use gents_store::config_client::{graphql_api_base, post_graphql};
 
 /// Availability probing is a single bounded request so a stale endpoint does
 /// not indefinitely delay the caller's choice of access path.
@@ -49,8 +49,4 @@ pub(crate) fn is_collection_missing_error(collection_name: &str, error: &anyhow:
         collection_name,
         &error.to_string(),
     )
-}
-
-pub(crate) fn graphql_string_list_literal(values: &[String]) -> String {
-    shared_graphql_string_list_literal(values)
 }

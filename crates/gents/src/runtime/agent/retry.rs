@@ -3,7 +3,7 @@ use std::time::Duration;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::error::InferenceError;
+use gents_loop::error::InferenceError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

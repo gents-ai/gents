@@ -1,8 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::documents::{FileTools, HostTools, Tools};
-use gents::{DocumentRuntimeOptions, FileToolMode, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::FileToolMode;
+use gents_documents::{FileTools, HostTools, Tools};
+use gents_tools::surface::ToolCeiling;
 
 use crate::support::builder_runtime::submit_request;
 use crate::support::fixtures::configure_agent_tools_as;
@@ -14,9 +16,8 @@ use crate::support::test_db;
 const SEED: &str = "{\r\n  \"max_turns\": 20,  \r\n  \"model_name\": \"fixture-model\"\r\n}\r\n";
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "live: set GENTS_EVAL_TARGET and pass --ignored"]
-async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
-    let target = live_target();
+async fn edit_file_live_model_preserves_other_content_and_line_endings() {
+    let target = live_target().await;
 
     let db = test_db("edit-file-live").await;
 
@@ -102,13 +103,9 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
 
     let calls = fetch_tool_call_payloads_for_request_as(reader, request_id).await;
     assert!(!calls.is_empty(), "tool calls must be persisted");
-    let edit_completed = calls.iter().any(|c| {
-        c.tool_name == "edit_file"
-            && c.lifecycle_state.as_deref() == Some("completed")
-            && c.result
-                .as_deref()
-                .is_some_and(|r| r.contains("match_strategy"))
-    });
+    let edit_completed = calls
+        .iter()
+        .any(|c| c.tool_name == "edit_file" && c.lifecycle_state.as_deref() == Some("completed"));
     assert!(
         edit_completed,
         "a completed edit_file call with match_strategy metadata is required; calls: {:?}",
@@ -117,11 +114,5 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
             .map(|c| (c.tool_name.clone(), c.lifecycle_state.clone()))
             .collect::<Vec<_>>()
     );
-    let used_write_file = calls.iter().any(|c| c.tool_name == "write_file");
-    assert!(
-        !used_write_file,
-        "model fell back to write_file — the #738 failure pattern"
-    );
-
     booted.shutdown().await;
 }

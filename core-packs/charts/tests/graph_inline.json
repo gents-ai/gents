@@ -1,0 +1,35 @@
+{
+  "runtime": {
+    "repository": {
+      "files": {
+        "README.md": "A repository the server runs in; the chart below carries its own data.\n"
+      }
+    },
+    "seed": {
+      "collection": "ChartRequest",
+      "fields": {
+        "run_id": "run-${ATTEMPT}",
+        "chart": "pie",
+        "data": "k,v\na,3\nb,1\n",
+        "title": "Inline",
+        "output": "svg"
+      }
+    },
+    "taken": {
+      "collection": "ChartResult",
+      "fields": {
+        "chart": "pie"
+      }
+    },
+    "expect": [
+      {
+        "collection": "ChartResult",
+        "fields": {
+          "chart": "pie",
+          "width": 800,
+          "height": 520
+        }
+      }
+    ]
+  }
+}

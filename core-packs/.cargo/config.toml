@@ -1,0 +1,8 @@
+# Plugins build under packs/gents/<pack>/target/plugins/<name>/, below this
+# file. wasm32 SIMD lets regex and memchr use their vector paths: the
+# security_scan pre-scan runs 2.8x faster with identical output. The runtime
+# (wasmtime, through afterburner) accepts relaxed SIMD, which the ocr
+# plugin's matrix kernels use for fused multiply-add: its OCR runs about a
+# quarter faster with identical text on the pack's fixtures.
+[target.wasm32-wasip1]
+rustflags = ["-C", "target-feature=+simd128,+relaxed-simd"]

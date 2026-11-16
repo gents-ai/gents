@@ -122,21 +122,20 @@ mod tests {
 
     #[test]
     fn generated_storage_failures_preserve_recovery_evidence() {
-        let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = contract["storage_failure_cases"].as_array().unwrap();
-        assert!(!cases.is_empty());
-        for case in cases {
+        gents_lean_vocab::families::storage_failure_contracts_classification::replay(|i| {
             let error = Outer(GraphqlFailure::new(
                 "test",
                 serde_json::json!([{
-                    "message": case["message"], "extensions": { "code": case["code"] }
+                    "message": i.message, "extensions": { "code": i.code }
                 }]),
             ));
-            assert_eq!(is_storage_full(&error), case["full"].as_bool().unwrap());
             #[cfg(feature = "native")]
             if is_storage_full(&error) {
                 assert!(!crate::graphql::graphql_error_is_retryable(&error));
             }
-        }
+            gents_lean_vocab::families::storage_failure_contracts_classification::ClassificationOutput {
+                full: is_storage_full(&error),
+            }
+        });
     }
 }
