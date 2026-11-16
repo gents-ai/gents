@@ -14,6 +14,7 @@ function backend(overrides: Partial<InferenceBackendView>): InferenceBackendView
     connectTimeoutSecs: null,
     discoveryTimeoutSecs: null,
     requestTimeoutSecs: null,
+    clientVersion: null,
     apiKeyConfigured: false,
     apiKeyEnvVar: null,
     maxConcurrent: null,

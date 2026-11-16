@@ -91,6 +91,7 @@ pub fn normalize_provider(provider: &str) -> String {
 pub fn build_chatgpt_codex_headers(
     account_id: Option<&str>,
     is_fedramp: bool,
+    client_version: Option<&str>,
 ) -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     headers.insert("originator", HeaderValue::from_static("codex_cli_rs"));
@@ -112,22 +113,18 @@ pub fn build_chatgpt_codex_headers(
     }
     headers.insert(
         "version",
-        HeaderValue::from_str(&chatgpt_codex_client_version())
+        HeaderValue::from_str(&chatgpt_codex_client_version(client_version))
             .context("ChatGPT Codex client version could not be encoded as an HTTP header")?,
     );
     Ok(headers)
 }
 
-pub fn chatgpt_codex_client_version() -> String {
-    std::env::var(CHATGPT_CODEX_CLIENT_VERSION_ENV)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| CHATGPT_CODEX_CLIENT_VERSION.to_string())
+/// The `version` the Codex backend is asked to accept; `None` is the built-in version.
+pub fn chatgpt_codex_client_version(client_version: Option<&str>) -> String {
+    client_version.map_or_else(|| CHATGPT_CODEX_CLIENT_VERSION.to_string(), str::to_string)
 }
 
 const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.160.0";
-const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSION";
 
 #[derive(Clone, Default)]
 pub struct ChatGptCodexPolicy {
@@ -368,6 +365,7 @@ pub async fn build_responses_client(
     account_ref: Option<&str>,
     endpoint: &str,
     service_tier: Option<crate::resolved::ServiceTier>,
+    client_version: Option<&str>,
 ) -> Result<
     rig::providers::openai::Client<
         ChatGptCodexHttpClient<
@@ -388,8 +386,11 @@ pub async fn build_responses_client(
         crate::auth::credential::AccountPick::Reference(account_ref),
     )
     .await?;
-    let headers =
-        build_chatgpt_codex_headers(credential.account_id.as_deref(), credential.is_fedramp)?;
+    let headers = build_chatgpt_codex_headers(
+        credential.account_id.as_deref(),
+        credential.is_fedramp,
+        client_version,
+    )?;
     let endpoint = normalize_endpoint(endpoint);
     let usage = crate::usage_observation::UsageReporter::new(
         cache,

@@ -131,6 +131,7 @@ export function BackendEditor({
     connectTimeoutSecs: str(backend.connectTimeoutSecs),
     discoveryTimeoutSecs: str(backend.discoveryTimeoutSecs),
     requestTimeoutSecs: str(backend.requestTimeoutSecs),
+    clientVersion: backend.clientVersion ?? "",
     maxConcurrent: str(backend.maxConcurrent),
     maxQueueDepth: str(backend.maxQueueDepth),
     enabled: backend.enabled ?? true,
@@ -168,6 +169,11 @@ export function BackendEditor({
       optionalInteger("Plugin request timeout seconds", next.requestTimeoutSecs, {
         min: 1,
       }),
+    clientVersion: () => {
+      const version = next.clientVersion.trim();
+      if (/\s/.test(version)) throw new Error("Client version must not contain spaces");
+      return version || null;
+    },
   });
   const d = useDraft(
     saved,
@@ -180,6 +186,7 @@ export function BackendEditor({
       const connectTimeoutSecs = value.connectTimeoutSecs();
       const discoveryTimeoutSecs = value.discoveryTimeoutSecs();
       const requestTimeoutSecs = value.requestTimeoutSecs();
+      const clientVersion = value.clientVersion();
       const auth = authChange(backend, saved, next, isSubscriptionKind);
 
       const changes: Partial<Omit<InferenceBackend, "node_did" | "backend_id">> = {
@@ -190,6 +197,7 @@ export function BackendEditor({
         connect_timeout_secs: connectTimeoutSecs,
         discovery_timeout_secs: discoveryTimeoutSecs,
         request_timeout_secs: requestTimeoutSecs,
+        client_version: clientVersion,
         max_concurrent: maxConcurrent,
         max_queue_depth: maxQueueDepth,
         enabled: next.enabled,
@@ -621,6 +629,16 @@ export function BackendEditor({
           placeholder="Runtime default (120)"
           onChange={(v) => d.set("requestTimeoutSecs", v)}
         />
+        <TextRow
+          id={id("client-version")}
+          label="Client version"
+          description="Version a ChatGPT or Grok sign-in advertises to its provider; blank uses the built-in version."
+          value={d.draft.clientVersion}
+          error={d.problems.clientVersion}
+          onChange={(v) => d.set("clientVersion", v)}
+          placeholder="Built-in version"
+          mono
+        />
         <NumberRow
           id={id("conc")}
           label="Max concurrent"
@@ -664,6 +682,7 @@ export function BackendEditor({
           connectTimeoutSecs: id("connect-timeout"),
           discoveryTimeoutSecs: id("discovery-timeout"),
           requestTimeoutSecs: id("request-timeout"),
+          clientVersion: id("client-version"),
           maxConcurrent: id("conc"),
           maxQueueDepth: id("queue"),
         }}

@@ -257,6 +257,7 @@ pub async fn build_backend_client(
                     agent.backend_auth.oauth_account_ref(),
                     &agent.backend_endpoint,
                     agent.service_tier,
+                    agent.client_version.as_deref(),
                 ),
             )
             .await
@@ -292,6 +293,7 @@ pub async fn build_backend_client(
                         agent.node_did(),
                         agent.backend_auth.oauth_account_ref(),
                         &agent.backend_endpoint,
+                        agent.client_version.as_deref(),
                     ),
                 )
                 .await
@@ -307,6 +309,7 @@ pub async fn build_backend_client(
                         agent.node_did(),
                         agent.backend_auth.oauth_account_ref(),
                         &agent.backend_endpoint,
+                        agent.client_version.as_deref(),
                     ),
                 )
                 .await

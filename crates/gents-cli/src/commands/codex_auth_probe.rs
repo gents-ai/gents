@@ -68,12 +68,13 @@ async fn probe_account(
         .get(&models_url)
         .query(&[(
             "client_version",
-            gents_inference::clients::chatgpt_codex::chatgpt_codex_client_version(),
+            gents_inference::clients::chatgpt_codex::chatgpt_codex_client_version(None),
         )])
         .bearer_auth(&credential.access_token);
     for (name, value) in gents_inference::clients::chatgpt_codex::build_chatgpt_codex_headers(
         credential.account_id.as_deref(),
         credential.is_fedramp,
+        None,
     )? {
         if let Some(name) = name {
             request = request.header(name, value);

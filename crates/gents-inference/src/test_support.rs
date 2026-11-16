@@ -180,6 +180,7 @@ pub fn resolved_agent(
         backend_endpoint: "http://127.0.0.1:1/v1".to_string(),
         backend_auth: gents_documents::BackendAuth::Unauthenticated,
         claude_platform: None,
+        client_version: None,
         model_name: DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
         resolved_reasoning_efforts: None,

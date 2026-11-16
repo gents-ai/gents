@@ -685,6 +685,7 @@ impl PendingAgent {
             backend_endpoint: backend_fields.backend_endpoint,
             backend_auth: backend_fields.backend_auth,
             claude_platform: backend_fields.claude_platform,
+            client_version: backend_fields.client_version,
             model_name: self.model_name,
             service_tier: None,
             resolved_reasoning_efforts: None,
@@ -763,6 +764,7 @@ impl PendingAgent {
                 backend_endpoint,
                 backend_auth: gents_documents::BackendAuth::Unauthenticated,
                 claude_platform: None,
+                client_version: None,
             },
             &ToolCeiling::meta_only(),
         )

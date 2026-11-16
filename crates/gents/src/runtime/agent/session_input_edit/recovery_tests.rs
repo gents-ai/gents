@@ -62,6 +62,7 @@ async fn active_agents(
         backend_endpoint: String::new(),
         backend_auth: gents_documents::BackendAuth::Unauthenticated,
         claude_platform: None,
+        client_version: None,
         model_name: String::new(),
         profile_id: None,
         service_tier: None,
