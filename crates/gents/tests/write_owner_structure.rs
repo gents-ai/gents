@@ -1594,7 +1594,52 @@ fn item_cfg_test(item: &syn::Item) -> bool {
         syn::Item::Use(item) => &item.attrs,
         _ => return false,
     };
-    cfg_test(attributes)
+    cfg_test(attributes) || attributes.iter().any(cfg_requires_test)
+}
+
+/// Whether a `#[cfg(..)]` compiles its item only under `test`: the predicate
+/// is `test` or an `all(..)` with a conjunct that requires it.
+fn cfg_requires_test(attribute: &syn::Attribute) -> bool {
+    attribute.path().is_ident("cfg")
+        && attribute
+            .parse_args::<syn::Meta>()
+            .is_ok_and(|predicate| predicate_requires_test(&predicate))
+}
+
+fn predicate_requires_test(predicate: &syn::Meta) -> bool {
+    match predicate {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::List(list) if list.path.is_ident("all") => list
+            .parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|conjuncts| conjuncts.iter().any(predicate_requires_test)),
+        _ => false,
+    }
+}
+
+#[test]
+fn item_cfg_test_excludes_items_whose_cfg_requires_test() {
+    let syntax = syn::parse_file(
+        r#"
+        #[cfg(test)] fn a() {}
+        #[cfg(any(test, feature = "test-fixtures"))] fn b() {}
+        #[cfg(all(test, unix))] mod c {}
+        #[cfg(all(unix, all(target_os = "macos", test)))] fn d() {}
+        #[cfg(unix)] fn e() {}
+        #[cfg(any(test, unix))] fn f() {}
+        #[cfg(not(test))] fn g() {}
+        #[cfg(all(unix, not(test)))] fn h() {}
+        #[cfg(all(any(test, feature = "test-fixtures"), unix))] fn i() {}
+        fn j() {}
+        "#,
+    )
+    .expect("parse snippet");
+    let excluded = syntax.items.iter().map(item_cfg_test).collect::<Vec<_>>();
+    assert_eq!(
+        excluded,
+        [true, true, true, true, false, false, false, false, false, false]
+    );
 }
 
 impl<'ast> Visit<'ast> for RigPathVisitor {
@@ -2087,8 +2132,8 @@ fn ambient_context_counts_statics_outside_test_items() {
 /// Application code takes its behaviour from configuration documents and
 /// command-line flags, never from the process environment: an environment
 /// variable is invisible to the store, to other clients and to the model, and
-/// request context read from it is lost across a spawn. Build scripts are
-/// exempt. Entries name why each remaining production read stays or what
+/// request context read from it is lost across a spawn. Build scripts and the
+/// Lean decoders, which link only into tests, are exempt. Entries name why each remaining production read stays or what
 /// replaces it; the list only shrinks (#1764).
 #[rustfmt::skip]
 const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
@@ -2125,16 +2170,10 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-eval/src/optimization/driver.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables"),
     ("crates/gents-eval/src/runner/embedded/executor/install.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables"),
     ("crates/gents-eval/src/runner/freeze/pack.rs", 1, "pack manifest ${VAR} interpolation: the pack author names operator-supplied variables"),
-    ("crates/gents-fs-runner/src/traversal/common.rs", 5, "GENTS_FS_RUNNER_BLOCK_* pause a traversal for race tests; test seam in production code: move behind a test fixture"),
-    ("crates/gents-host/src/serve.rs", 3, "the secret named by the metrics token flag, HOME for home discovery, and GENTS_TEST_STALL_AFTER_CLIENT_ACCESS: test seam in production code: move behind a test fixture"),
-    ("crates/gents-inference/src/auth/credential/token_endpoint.rs", 1, "OAuth token URL overrides point refresh at a local token server in tests; test seam in production code: move behind a test fixture"),
-    ("crates/gents-inference/src/auth/xai_login.rs", 2, "xAI OAuth device and token URL overrides for a local server in tests; test seam in production code: move behind a test fixture"),
+    ("crates/gents-host/src/serve.rs", 2, "the secret named by the metrics token flag, and HOME for home discovery"),
     ("crates/gents-inference/src/clients/chatgpt_codex.rs", 1, "GENTS_CHATGPT_CODEX_CLIENT_VERSION overrides the wire client version the provider requires; candidate for an InferenceBackend field"),
     ("crates/gents-inference/src/clients/claude_messages/transport.rs", 2, "HTTPS_PROXY/https_proxy and NO_PROXY: standard proxy convention for the Claude Messages transport"),
     ("crates/gents-inference/src/clients/xai_grok.rs", 1, "GENTS_XAI_GROK_CLIENT_VERSION overrides the wire client version the provider requires; candidate for an InferenceBackend field"),
-    ("crates/gents-lean-contract/src/lib.rs", 2, "CARGO_MANIFEST_DIR and CARGO_MANIFEST_PATH: Cargo-supplied anchor for the Lean contract source in test runs"),
-    ("crates/gents-lean-vocab/src/family.rs", 1, "GENTS_FAMILY_MUTATION: mutation-testing switch for conformance families; test seam in production code: move behind a test fixture"),
-    ("crates/gents-lean-vocab/src/lib.rs", 1, "GENTS_SNAPSHOT_MUTATION: mutation-testing switch for the Lean snapshot; test seam in production code: move behind a test fixture"),
     ("crates/gents-p2p/src/p2p_reconcile/registry.rs", 1, "GENTS_NETWORK_ID partitions the P2P registry; changes behaviour and belongs on a serve flag"),
     ("crates/gents-pack/src/operations/pack.rs", 2, "pack variables whose declared source is the operator's environment"),
     ("crates/gents-pack/src/pack/install_flow.rs", 1, "pack variables whose declared source is the operator's environment"),
@@ -2143,7 +2182,6 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-pack/src/plugin/host_imports.rs", 2, "passes the variables an installed plugin's consented manifold env access names into its sandbox"),
     ("crates/gents-service/src/lifecycle.rs", 2, "GENTS_CALLER_RUNTIME_HOME: caller provenance the agent command launcher sets on a shell-launched CLI; no argument channel crosses the shell"),
     ("crates/gents-service/src/native_service.rs", 7, "HOME, XDG_CONFIG_HOME, PATH, APPDIR and APPIMAGE: platform discovery of the service unit paths and the AppImage probe"),
-    ("crates/gents-service/src/process_resources.rs", 2, "child-process markers inside #[cfg(all(test, unix))] tests, which the scanner counts; test seam in production code: move behind a test fixture"),
     ("crates/gents-service/src/service_update/stage.rs", 2, "GENTS_CALLER_SESSION_ID and GENTS_CALLER_REQUEST_ID: caller provenance set by the agent command launcher; replacing it needs a transport design (#1764)"),
     ("crates/gents-service/src/telemetry.rs", 1, "OTEL_EXPORTER_OTLP_* and OTEL_SERVICE_NAME: standard OpenTelemetry convention"),
     ("crates/gents-session/src/workspace/adapter.rs", 1, "inherits the process environment for a managed git child, minus the git variables it overrides"),
@@ -2193,6 +2231,7 @@ fn runtime_environment_reads_only_shrink() {
     let actual = parse_production(&root, production_sources(&root))
         .into_iter()
         .filter(|(relative, _)| !relative.ends_with("build.rs"))
+        .filter(|(relative, _)| !test_only_decoder_source(relative))
         .map(|(relative, syntax)| (relative, environment_read_sites(&syntax)))
         .filter(|(_, sites)| *sites > 0)
         .collect::<BTreeMap<_, _>>();
@@ -2239,6 +2278,8 @@ fn environment_reads_count_calls_outside_test_items() {
         fn d() { let _ = std::env::var("G"); }
         #[cfg(test)]
         mod tests { fn e() { let _ = std::env::var("H"); } }
+        #[cfg(all(test, unix))]
+        mod unix_tests { fn f() { let _ = std::env::var("I"); } }
         "#,
     )
     .expect("parse snippet");
@@ -3328,6 +3369,132 @@ fn crate_dependency_violations(
         }
     }
     violations
+}
+
+/// Sources of the Lean decoders, which link only into tests
+/// (`test_only_decoders_link_only_into_tests`).
+fn test_only_decoder_source(relative: &str) -> bool {
+    TEST_ONLY_DECODERS
+        .iter()
+        .any(|name| relative.starts_with(&format!("crates/{name}/")))
+}
+
+/// Normal or build dependencies on a Lean decoder that could reach a shipped
+/// build: each must be optional and enabled only by `test-fixtures`.
+fn test_only_decoder_violations(
+    name: &str,
+    manifest: &toml::Table,
+    inherited: &toml::Table,
+) -> Vec<String> {
+    if TEST_ONLY_DECODERS.contains(&name) {
+        return Vec::new();
+    }
+    let mut tables = vec![manifest];
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        tables.extend(targets.values().filter_map(toml::Value::as_table));
+    }
+    let features = manifest
+        .get("features")
+        .and_then(toml::Value::as_table)
+        .cloned()
+        .unwrap_or_default();
+    let mut violations = Vec::new();
+    for table in tables {
+        for kind in ["dependencies", "build-dependencies"] {
+            let Some(dependencies) = table.get(kind).and_then(toml::Value::as_table) else {
+                continue;
+            };
+            for (key, specification) in dependencies {
+                let dependency = package_name(key, specification, inherited);
+                if !TEST_ONLY_DECODERS.contains(&dependency.as_str()) {
+                    continue;
+                }
+                if kind == "build-dependencies"
+                    || specification.get("optional").and_then(toml::Value::as_bool) != Some(true)
+                {
+                    violations.push(format!(
+                        "{name} [{kind}] names {dependency} unconditionally"
+                    ));
+                    continue;
+                }
+                let enabling = [format!("dep:{key}"), key.clone()];
+                for (feature, members) in &features {
+                    let enables = members.as_array().is_some_and(|members| {
+                        members
+                            .iter()
+                            .filter_map(toml::Value::as_str)
+                            .any(|member| enabling.iter().any(|enabled| enabled == member))
+                    });
+                    if enables && feature != "test-fixtures" {
+                        violations.push(format!(
+                            "{name} feature {feature} enables {dependency} outside test-fixtures"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    violations
+}
+
+#[test]
+fn test_only_decoders_link_only_into_tests() {
+    let root = repo_root();
+    let workspace = toml_file(&root.join("Cargo.toml"));
+    let inherited = workspace["workspace"]
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+        .cloned()
+        .unwrap_or_default();
+    let mut violations = Vec::new();
+    for member in workspace["workspace"]["members"]
+        .as_array()
+        .expect("workspace members")
+    {
+        let manifest = toml_file(
+            &root
+                .join(member.as_str().expect("member path"))
+                .join("Cargo.toml"),
+        );
+        let name = manifest["package"]["name"]
+            .as_str()
+            .expect("package name")
+            .to_string();
+        violations.extend(test_only_decoder_violations(&name, &manifest, &inherited));
+    }
+    assert!(
+        violations.is_empty(),
+        "Lean decoders must stay out of shipped builds:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn test_only_decoder_fence_flags_shipped_dependencies() {
+    let check = |manifest: &str| {
+        let manifest: toml::Table = manifest.parse().expect("parse snippet");
+        test_only_decoder_violations("x", &manifest, &toml::Table::new()).len()
+    };
+    assert_eq!(check("[dev-dependencies]\ngents-lean-vocab = \"1\"\n"), 0);
+    assert_eq!(
+        check(
+            "[features]\ntest-fixtures = [\"dep:gents-lean-vocab\"]\n\
+             [dependencies]\ngents-lean-vocab = { version = \"1\", optional = true }\n"
+        ),
+        0
+    );
+    assert_eq!(check("[dependencies]\ngents-lean-vocab = \"1\"\n"), 1);
+    assert_eq!(
+        check(
+            "[features]\ndefault = [\"dep:gents-lean-contract\"]\n\
+             [dependencies]\ngents-lean-contract = { version = \"1\", optional = true }\n"
+        ),
+        1
+    );
+    assert_eq!(
+        check("[target.'cfg(unix)'.build-dependencies]\ngents-lean-vocab = \"1\"\n"),
+        1
+    );
 }
 
 #[test]
