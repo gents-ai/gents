@@ -135,6 +135,26 @@ def orderResolution : Family OrderResolutionInput (Option (List Nat)) where
   model := fun i => Order.resolve i.windows
 
 deriving instance Lean.ToJson for FileImages.Scope
+
+structure ImageReadScopeInput where
+  selected : FileImages.Scope
+  source : FileImages.Scope
+  bindingMatches : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def imageReadScope : Family ImageReadScopeInput (Option FileImages.Scope) where
+  inputs := [true, false].flatMap fun binding =>
+    ["reader", "other", ""].flatMap fun requester =>
+      ["node", "other", ""].flatMap fun node =>
+        ["source", "fork", ""].flatMap fun selectedSession =>
+          ["source", ""].flatMap fun sourceSession =>
+            ["reader", ""].flatMap fun selectedRequester =>
+              ["node", ""].map fun selectedNode =>
+                ⟨⟨selectedRequester, selectedNode, selectedSession⟩,
+                  ⟨requester, node, sourceSession⟩, binding⟩
+  model := fun i => FileImages.readScope i.selected i.source i.bindingMatches
+
 deriving instance Lean.ToJson for Coverage
 
 private def failureOfName (name : String) : ImageFailure :=
