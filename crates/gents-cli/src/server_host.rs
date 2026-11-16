@@ -103,9 +103,12 @@ async fn ensure_standard_home_inner(
         unreachable!("standard provision argv must parse as init")
     };
     args.no_default_packs = !options.default_packs;
-    let initialized = crate::commands::init::init_home_with_core_packs(args, archives)
-        .await
-        .map_err(crate::commands::init::default_packs::desktop_error)?;
+    let initialized = crate::commands::init::init_home_for_entry(
+        args,
+        archives,
+        crate::commands::init::default_packs::InitEntryPoint::Desktop,
+    )
+    .await?;
     for pack in initialized["default_packs"]["not_installed"]
         .as_array()
         .into_iter()

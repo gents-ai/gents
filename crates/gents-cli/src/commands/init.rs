@@ -188,8 +188,16 @@ pub(crate) async fn init_home(args: InitArgs) -> Result<Value> {
 /// claim; aborting background tasks without awaiting them can retain the
 /// database.
 pub(crate) async fn init_home_with_core_packs(
+    args: InitArgs,
+    core_packs: default_packs::Archives<'_>,
+) -> Result<Value> {
+    init_home_for_entry(args, core_packs, default_packs::InitEntryPoint::Cli).await
+}
+
+pub(crate) async fn init_home_for_entry(
     mut args: InitArgs,
     core_packs: default_packs::Archives<'_>,
+    entry: default_packs::InitEntryPoint,
 ) -> Result<Value> {
     let started = Instant::now();
     let stage = |name: &'static str| {
@@ -302,7 +310,7 @@ pub(crate) async fn init_home_with_core_packs(
         !args.no_default_packs,
         default_packs::all_archives_present(core_packs),
     ) {
-        default_packs::require_archives(core_packs)?;
+        default_packs::require_archives(core_packs, entry)?;
     }
     if fresh_store {
         reserve_fresh_bootstrap(&home_dir).await?;

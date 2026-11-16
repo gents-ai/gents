@@ -87,13 +87,11 @@ pub(crate) struct MissingCorePackArchives {
     opt_out: &'static str,
 }
 
-impl MissingCorePackArchives {
-    pub(crate) fn managed(&self, advice: &'static str) -> Self {
-        Self {
-            opt_out: advice,
-            ..self.clone()
-        }
-    }
+#[derive(Clone, Copy)]
+pub(crate) enum InitEntryPoint {
+    Cli,
+    Start,
+    Desktop,
 }
 
 /// Refuse a fresh Engineer before bootstrap reservation if the build cannot
@@ -104,7 +102,7 @@ pub(crate) fn all_archives_present(archives: Archives<'_>) -> bool {
         .all(|pack| release_archive(archives, pack).is_some())
 }
 
-pub(crate) fn require_archives(archives: Archives<'_>) -> Result<()> {
+pub(crate) fn require_archives(archives: Archives<'_>, entry: InitEntryPoint) -> Result<()> {
     let missing: Vec<_> = CorePack::ALL
         .into_iter()
         .filter(|&pack| release_archive(archives, pack).is_none())
@@ -113,28 +111,15 @@ pub(crate) fn require_archives(archives: Archives<'_>) -> Result<()> {
     if !missing.is_empty() {
         return Err(MissingCorePackArchives {
             missing: missing.join(", "),
-            opt_out:
-                "; run `make core-packs && make build-cli` and retry, or pass `--no-default-packs` to opt out, leaving the Engineer without skills",
+            opt_out: match entry {
+                InitEntryPoint::Cli => "; run `make core-packs && make build-cli` and retry, or pass `--no-default-packs` to opt out, leaving the Engineer without skills",
+                InitEntryPoint::Start => "; run `make core-packs && make build-cli` and retry",
+                InitEntryPoint::Desktop => "; this desktop dev build is incomplete; run `make core-packs && make desktop-native-dev`",
+            },
         }
         .into());
     }
     Ok(())
-}
-
-pub(crate) fn start_error(error: anyhow::Error) -> anyhow::Error {
-    match error.downcast_ref::<MissingCorePackArchives>() {
-        Some(missing) => missing
-            .managed("; run `make core-packs && make build-cli` and retry")
-            .into(),
-        None => error,
-    }
-}
-
-pub(crate) fn desktop_error(error: anyhow::Error) -> anyhow::Error {
-    match error.downcast_ref::<MissingCorePackArchives>() {
-        Some(missing) => missing.managed("; this desktop dev build is incomplete; run `make core-packs && make desktop-native-dev`").into(),
-        None => error,
-    }
 }
 
 fn not_carried(pack: CorePack) -> String {
@@ -1186,7 +1171,7 @@ mod tests {
         );
         assert!(message.contains("--no-default-packs"), "{message}");
         assert!(message.contains("without skills"), "{message}");
-        let managed = start_error(error);
+        let managed = require_archives(&[], InitEntryPoint::Start).unwrap_err();
         assert!(managed.downcast_ref::<MissingCorePackArchives>().is_some());
         let managed_message = managed.to_string();
         assert!(managed_message.contains("make core-packs && make build-cli"));
@@ -1229,7 +1214,7 @@ mod tests {
     #[test]
     fn partial_archive_set_reports_only_missing_packs() {
         let archives = [("gents/pack_builder", &b"fixture"[..])];
-        let error = require_archives(&archives).unwrap_err();
+        let error = require_archives(&archives, InitEntryPoint::Cli).unwrap_err();
         let typed = error.downcast_ref::<MissingCorePackArchives>().unwrap();
         assert!(!typed.missing.contains("gents/pack_builder"));
         assert!(typed.missing.contains("gents/script"));
