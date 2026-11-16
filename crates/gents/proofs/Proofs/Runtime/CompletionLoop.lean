@@ -123,7 +123,7 @@ context overflow is retried at once on the compacted input, at most once per
 turn, and the compacted input no longer threads the tool results it replaced;
 without a compactor it ends the run as that overflow. -/
 def run (input : Input) : Observation := Id.run do
-  let budget : Budget := ⟨input.transport, input.resample, 1, input.repair, 0⟩
+  let budget : Budget := ⟨input.transport, input.resample, 1, input.repair, 0, none⟩
   let mut state := { baseState with phase := .issuing, now := 0, budget := budget, deadline := if input.deadlineFits then none else some 0 }
   let mut result : Observation := {}
   let mut dirty := input.initialDirty

@@ -118,6 +118,16 @@ theorem scheduled_backoff_fits_deadline {s s' : State} {wake : Time}
   all_goals subst s'
   all_goals simp_all
 
+theorem transport_backoff_within_max_wait {s s' : State} {error : String} {wake : Time}
+    (hphase : s.phase = .retracted .transport error wake)
+    (h : step? s .schedule = some s')
+    (hbackoff : s'.phase = .backingOff wake) :
+    withinMaxWait s.now wake s.budget.maxWait := by
+  simp only [step?, hphase] at h
+  split at h <;> simp only [Option.some.injEq] at h <;> subst s'
+  · simp_all
+  · simp at hbackoff
+
 theorem successful_wake_uses_observed_time {s s' : State} {observed : Time}
     (h : step? s (.wake observed) = some s') :
     ∃ scheduled, s.phase = .backingOff scheduled ∧ scheduled ≤ observed ∧

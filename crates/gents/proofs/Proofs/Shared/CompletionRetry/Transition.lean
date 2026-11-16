@@ -48,7 +48,8 @@ def step? (s : State) : Action → Option State
       match s.phase with
       | .retracted .transport _ wake =>
           if s.transportUsed < s.budget.transportRetries ∧
-              fitsDeadline wake s.deadline ∧ s.now ≤ wake then
+              fitsDeadline wake s.deadline ∧ s.now ≤ wake ∧
+              withinMaxWait s.now wake s.budget.maxWait then
             some { s with phase := .backingOff wake,
                           transportUsed := s.transportUsed + 1,
                           attempt := s.attempt + 1 }
