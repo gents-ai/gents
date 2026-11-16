@@ -559,7 +559,10 @@ fn first_run_step(user_home: &Path, home: &Path, step: &str, graphql: &str) -> R
         ])
         .env("HOME", user_home)
         .env_remove("GENTS_HOME")
-        .env_remove(gents_desktop_core::client::DESKTOP_HOME_ENV)
+        .env(
+            gents_desktop_core::client::DESKTOP_HOME_ENV,
+            user_home.join("selected-desktop"),
+        )
         .env(FIRST_RUN_HOME_ENV, home)
         .env(FIRST_RUN_STEP_ENV, step)
         .env(FIRST_RUN_GRAPHQL_ENV, graphql)
@@ -591,7 +594,13 @@ async fn desktop_first_run_without_inference_sets_up_the_engineer() -> Result<()
         user_home,
         port,
         &["--home", home.to_str().context("home path")?],
-        &[],
+        &[(
+            gents_desktop_core::client::DESKTOP_HOME_ENV,
+            user_home
+                .join("selected-desktop")
+                .to_str()
+                .context("desktop root path")?,
+        )],
     )?;
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(
@@ -601,6 +610,21 @@ async fn desktop_first_run_without_inference_sets_up_the_engineer() -> Result<()
     )
     .await?;
     first_run_step(user_home, &home, "desktop", &graphql)?;
+    let desktop =
+        gents_desktop_core::client::DesktopPaths::from_root(user_home.join("selected-desktop"));
+    anyhow::ensure!(
+        desktop.cli_client().identity_key_path().is_file(),
+        "the selected desktop root has no administrator key"
+    );
+    let fallback = if cfg!(target_os = "macos") {
+        user_home.join("Library/Application Support/gents/desktop")
+    } else {
+        user_home.join(".local/share/gents/desktop")
+    };
+    anyhow::ensure!(
+        !fallback.exists(),
+        "first-run wrote an unselected desktop root"
+    );
     Ok(())
 }
 
@@ -663,6 +687,12 @@ async fn desktop_first_run_in_fixture_home() -> Result<()> {
     let stored = gents_service::home_state::read_init_config(&home)?.context("initialized home")?;
     let owner = stored.node_did.as_str();
     let user = gents_service::home_state::client_identity_for(&home).await?;
+    let desktop_user =
+        gents_desktop_core::client::PrincipalIdentity::load_existing(&resolved.cli_client())?;
+    anyhow::ensure!(
+        desktop_user.did() == user.did(),
+        "the status signer differs from the provisioned administrator"
+    );
     let access = gents_store::config_client::ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(graphql, user.did())
             .with_client_signing_capability(
