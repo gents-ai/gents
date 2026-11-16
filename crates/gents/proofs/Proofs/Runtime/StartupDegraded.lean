@@ -8,16 +8,19 @@ inductive Reason where
   | agentDisabled | backendNotConfigured | backendDisabled
   | backendTemporarilyUnavailable | credentialsRequired
   | runtimeConfigurationInvalid | subscriptionNotEntitled | inferenceProfileInvalid
-  | toolConfigurationInvalid | toolSurfaceUnavailable | executorStartFailed
+  | toolConfigurationInvalid | toolSurfaceUnavailable | workspaceRootReaderMissing
+  | executorStartFailed
   deriving ToJson, DecidableEq, Repr
 
 /-- Configuration availability may defer an Agent while the node starts.
-An unusable tool surface is a failed admission, rather than deferred availability. -/
+An unusable tool surface, or host tools whose root the Agent cannot read, is a
+failed admission, rather than deferred availability. -/
 def allowsStartup : Reason → Bool
   | .agentDisabled | .backendNotConfigured | .backendDisabled
   | .backendTemporarilyUnavailable | .credentialsRequired => true
   | .runtimeConfigurationInvalid | .subscriptionNotEntitled | .inferenceProfileInvalid
-  | .toolConfigurationInvalid | .toolSurfaceUnavailable | .executorStartFailed => false
+  | .toolConfigurationInvalid | .toolSurfaceUnavailable | .workspaceRootReaderMissing
+  | .executorStartFailed => false
 
 /-- Whether an unavailable Agent makes the node report itself degraded. A
 disabled Agent is off by choice, its owner's or a not-enabled pack's
@@ -35,11 +38,11 @@ def nodeReady (unavailable : List Reason) : Bool :=
 /-- How an agent a core pack ships stands in the node's readiness under what
 the pack leaves, given whether its Tools run host tools, which read the
 Engineer's tool root only with a reader on it: disabled while the pack's
-agents are not active, without a tool surface when enabled without that
-reader, ready otherwise. -/
+agents are not active, without the reader its host tools need when enabled
+without one, ready otherwise. -/
 def packAgentReason (wiring : Pack.CorePacks.Wiring) (hostTools : Bool) : Option Reason :=
   if !wiring.agentsActive then some .agentDisabled
-  else if hostTools && !wiring.rootReaders then some .toolSurfaceUnavailable
+  else if hostTools && !wiring.rootReaders then some .workspaceRootReaderMissing
   else none
 
 def initAgentReason (corePack : Pack.CorePacks.CorePack) (hostTools : Bool) : Option Reason :=

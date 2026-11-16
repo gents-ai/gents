@@ -79,7 +79,8 @@ pub use root_admission::{
     refuse_too_broad_root, TooBroadRoot, WorkspaceRootDocument, WorkspaceRootPolicy,
 };
 pub use root_admission::{
-    agent_tool_root_reader, agents_tool_root_readers, tool_root_reader, ToolRootReader,
+    agent_tool_root_reader, agents_tool_root_readers, tool_root_reader, tool_root_refusal,
+    ToolRootReader, ToolRootRefusal,
 };
 pub(crate) use root_admission::{
     load_workspace_root_policy_in_txn, published_root_covering_in_txn, reader_grant_step,
@@ -87,9 +88,10 @@ pub(crate) use root_admission::{
 };
 pub use root_publication::{
     change_workspace_root_reader, delete_workspace_root, grant_workspace_root_reader,
-    list_workspace_roots, publish_workspace_root, remove_workspace_root,
-    revoke_workspace_root_reader, set_workspace_root, set_workspace_root_with_readers,
-    show_workspace_root, WorkspaceRootWriteError,
+    list_workspace_roots, list_workspace_roots_with_readers, publish_workspace_root,
+    remove_workspace_root, revoke_workspace_root_reader, set_workspace_root,
+    set_workspace_root_with_readers, show_workspace_root, show_workspace_root_with_readers,
+    WorkspaceRootWriteError,
 };
 pub use runtime_context::ToolRuntimeContext;
 pub use selection::BackgroundToolConfig;
@@ -372,6 +374,10 @@ impl ToolSurface {
                 .agent_identity
                 .as_deref()
                 .context("workspace root requires a held Agent identity")?;
+            // The runtime's home belongs to the run, not to the parsed document:
+            // a refusal names it so a grant is applied to this node's home.
+            let mut guard = guard.clone();
+            guard.node_home = runtime.plugin_home().map(std::path::Path::to_path_buf);
             guard.validate(&runtime.node, agent).await?;
         }
         let writethrough = self.lsp.as_ref().map(|config| {

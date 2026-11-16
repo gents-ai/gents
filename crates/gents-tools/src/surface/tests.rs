@@ -1915,10 +1915,191 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
         Ok(_) => panic!("fresh tool construction must observe root revocation"),
         Err(error) => error,
     };
+    // The refusal is the typed root refusal and names the root it could not
+    // admit; a disabled root is the operator's switch, not the Agent's reader.
+    let resolved = std::fs::canonicalize(&selected).unwrap();
     assert!(
-        error.to_string().contains("current WorkspaceRoot policy"),
+        matches!(
+            tool_root_refusal(error.as_ref()),
+            Some(ToolRootRefusal::Denied { root, .. }) if root == &resolved
+        ),
         "{error:#}"
     );
+}
+
+/// The reported failure: an Agent created on its own, with a read-only Tools
+/// document and host tools under a published root it holds no `reader` on. The
+/// tool surface cannot admit the root, and the refusal must name that cause —
+/// not "tool surface is unavailable" — with the grant that fixes it, including
+/// this node's `--home`, since a grant applied to another node's home leaves
+/// this one exactly as it was.
+#[tokio::test]
+async fn tool_construction_without_the_root_reader_names_the_grant_that_fixes_it() {
+    let (db, mut runtime) = selected_surface_runtime().await;
+    let node = db.node.clone();
+    let ceiling = tempfile::tempdir().unwrap();
+    let root = ceiling.path().join("shared-root");
+    std::fs::create_dir_all(&root).unwrap();
+    let root_text = root.to_string_lossy().into_owned();
+
+    // Publish the root with no reader: the state an Agent created separately
+    // from its Tools document is in.
+    let publisher = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        runtime.node_did.parse().unwrap(),
+    );
+    let published = publisher
+        .write(
+            "test.workspace.root",
+            &format!(
+                r#"mutation {{ create_WorkspaceRoot(input: {{node_did:"{}", root_path:"{}", enabled:true}}) {{_docID}} }}"#,
+                gents_store::graphql::escape_graphql_string(&runtime.node_did),
+                gents_store::graphql::escape_graphql_string(&root_text),
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(
+        gents_store::graphql::created_doc_id(&published, "WorkspaceRoot").is_ok(),
+        "the root is published"
+    );
+
+    let home = tempfile::tempdir().unwrap();
+    let home_text = std::fs::canonicalize(home.path())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    // The runtime carries its home, as `serve` hands the home to the plugin
+    // host, so the refusal names this node's `--home`.
+    runtime.plugins = std::sync::Arc::new(crate::plugin_host::NoPluginHost);
+    let agent_did = runtime.agent_identity.as_ref().unwrap().did().to_owned();
+    let document = preset_tools_document("reader-missing", "ReadOnly", "Off", false, false);
+    let mut document = document;
+    document.host.as_mut().unwrap().root = Some(root_text.clone());
+    let config = AgentToolSurfaceConfig::from_tools_document(
+        &agent_did,
+        &document,
+        &ToolCeiling::readonly_at(ceiling.path()),
+        Vec::new(),
+    )
+    .unwrap();
+    let surface = config
+        .resolve(&node, &runtime.node_did, &crate::plugin_host::NoPluginHost)
+        .await
+        .unwrap();
+    let mut guard = surface
+        .root_execution_guard()
+        .cloned()
+        .expect("host tools carry a root guard");
+    assert!(
+        guard.node_home.is_none(),
+        "the parsed document carries no home; the runtime supplies it"
+    );
+    // What `build_tools` does from the runtime's plugin host before it
+    // validates: the home is the run's, not the document's.
+    guard.node_home = Some(std::path::PathBuf::from(&home_text));
+    let held = runtime.agent_identity.clone().unwrap();
+    let error = guard
+        .validate(&node, held.as_ref())
+        .await
+        .expect_err("an Agent with no reader on its root cannot admit it");
+    let refusal = tool_root_refusal(error.as_ref()).expect("the refusal is typed");
+    let ToolRootRefusal::ReaderMissing {
+        root: named_root,
+        home: named_home,
+        ..
+    } = refusal
+    else {
+        panic!("a published root the Agent cannot read is the reader-missing cause: {error:#}");
+    };
+    assert_eq!(
+        named_root,
+        &std::path::PathBuf::from(&root_text),
+        "the refusal names the published root the grant matches"
+    );
+    let refusal_text = error.to_string();
+    assert_eq!(
+        gents_protocol::node_readiness::workspace_root_reader_missing_message(
+            &agent_did,
+            &root_text,
+            &home_text
+        ),
+        refusal_text,
+        "the refusal states the grant, its path and the Agent"
+    );
+    assert!(
+        refusal_text.contains(&format!("--home {home_text}")),
+        "the grant names this node's home: {refusal_text}"
+    );
+    assert!(
+        !refusal_text.eq("tool surface is unavailable"),
+        "the generic wording is not the cause"
+    );
+    assert!(
+        gents_protocol::node_readiness::unavailable_rejection_reason(&refusal_text)
+            .is_some_and(|reason| reason
+                == gents_protocol::node_readiness::AgentReadinessUnavailableReason::WorkspaceRootReaderMissing),
+        "a rejection carrying this text reads back as the reader-missing cause: {refusal_text}"
+    );
+    node.shutdown().await.unwrap();
+}
+
+/// A grant on the root admits the same Tools the refusal came from, so the
+/// named fix is the one that works.
+#[tokio::test]
+async fn granting_the_named_reader_admits_the_same_tools() {
+    let (db, runtime) = selected_surface_runtime().await;
+    let node = db.node.clone();
+    let ceiling = tempfile::tempdir().unwrap();
+    let root = ceiling.path().join("shared-root");
+    std::fs::create_dir_all(&root).unwrap();
+    let root_text = root.to_string_lossy().into_owned();
+    let (access, root_doc) = publish_test_root(&node, &runtime, &root_text).await;
+    let agent = runtime.agent_identity.clone().unwrap();
+    access
+        .delete_actor_relationship(
+            "WorkspaceRoot",
+            &root_doc,
+            "reader",
+            &agent.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut document = preset_tools_document("reader-granted", "ReadOnly", "Off", false, false);
+    document.host.as_mut().unwrap().root = Some(root_text.clone());
+    let config = AgentToolSurfaceConfig::from_tools_document(
+        agent.did(),
+        &document,
+        &ToolCeiling::readonly_at(ceiling.path()),
+        Vec::new(),
+    )
+    .unwrap();
+    let surface = config
+        .resolve(&node, &runtime.node_did, &crate::plugin_host::NoPluginHost)
+        .await
+        .unwrap();
+    let guard = surface.root_execution_guard().cloned().unwrap();
+    let before = guard.validate(&node, agent.as_ref()).await;
+    assert!(
+        before.as_ref().is_err_and(|error| {
+            tool_root_refusal(error.as_ref()).is_some_and(ToolRootRefusal::is_reader_missing)
+        }),
+        "without the reader the guard names the reader: {before:?}"
+    );
+    access
+        .add_actor_relationship(
+            "WorkspaceRoot",
+            &root_doc,
+            "reader",
+            &agent.did().parse().unwrap(),
+        )
+        .await
+        .unwrap();
+    guard
+        .validate(&node, agent.as_ref())
+        .await
+        .expect("the grant the refusal named admits the same root");
+    node.shutdown().await.unwrap();
 }
 
 #[tokio::test]
