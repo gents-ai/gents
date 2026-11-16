@@ -73,8 +73,8 @@ pub(super) fn user_message_error(error: UserMessageInputError) -> RequestOperati
         UserMessageInputError::ConflictingActiveRequests { session_id } => {
             RequestOperationError::ConflictingActiveRequests { session_id }
         }
-        UserMessageInputError::Read(source) => RequestOperationError::passthrough(source),
-        UserMessageInputError::Decode(source) => RequestOperationError::passthrough(source),
+        UserMessageInputError::Read(source) => RequestOperationError::passthrough_error(source),
+        UserMessageInputError::Decode(source) => RequestOperationError::passthrough_error(source),
     }
 }
 
@@ -131,7 +131,7 @@ pub(super) async fn resolve_agent(
     let response = access
         .read(&rendered)
         .await
-        .map_err(RequestOperationError::passthrough)?;
+        .map_err(RequestOperationError::passthrough_error)?;
     let node_rows = rows(&response, node::Doc::NAME);
     if node_rows.len() != 1 || field(&node_rows[0], node::ENABLED) != Some(true) {
         return Err(RequestOperationError::NodeUnavailable {

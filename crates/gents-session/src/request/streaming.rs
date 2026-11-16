@@ -9,6 +9,8 @@ use tokio::sync::Mutex;
 pub mod auxiliary;
 #[cfg(test)]
 mod auxiliary_tests;
+#[cfg(test)]
+mod batch_tests;
 pub mod canonical;
 #[cfg(test)]
 mod canonical_tests;
@@ -82,6 +84,29 @@ struct StreamBuffer {
 }
 
 impl StreamBuffer {
+    /// The write verdict of the Lean `StreamBatch.plan`: the snapshot a write
+    /// flushes now, if any. `force` is a flush the drive or a boundary asks for.
+    fn due_snapshot(&self, batch_interval: Duration, force: bool) -> Option<StreamBufferSnapshot> {
+        let first_visible_content = self.current.first_visible_since(&self.persisted);
+        if !force
+            && !first_visible_content
+            && self.last_flush_at.elapsed() < self.flush_interval(batch_interval)
+        {
+            return None;
+        }
+        (self.current != self.persisted).then(|| self.current.clone())
+    }
+
+    /// The deadline of the Lean `StreamBatch.plan`: armed whenever anything is
+    /// pending, so produced output never waits for a later provider event.
+    fn flush_deadline(&self, batch_interval: Duration) -> Option<Instant> {
+        if self.current == self.persisted {
+            return None;
+        }
+        self.last_flush_at
+            .checked_add(self.flush_interval(batch_interval))
+    }
+
     fn flush_interval(&self, batch_interval: Duration) -> Duration {
         let reasoning_only = self.current.content_bytes == self.persisted.content_bytes
             && self.current.visible_progress_seq == self.persisted.visible_progress_seq;
@@ -543,13 +568,9 @@ impl DefraStreamWriter {
 
     pub(crate) async fn next_flush_deadline(&self, doc_id: &str) -> Option<tokio::time::Instant> {
         let buffers = self.buffers.lock().await;
-        let buffer = buffers.get(doc_id)?;
-        if buffer.current == buffer.persisted {
-            return None;
-        }
-        buffer
-            .last_flush_at
-            .checked_add(buffer.flush_interval(self.batch_interval))
+        buffers
+            .get(doc_id)?
+            .flush_deadline(self.batch_interval)
             .map(tokio::time::Instant::from_std)
     }
 
@@ -627,19 +648,11 @@ impl DefraStreamWriter {
         doc_id: &str,
         force: bool,
     ) -> Result<Option<StreamBufferSnapshot>> {
-        let mut buffers = self.buffers.lock().await;
+        let buffers = self.buffers.lock().await;
         let buf = buffers
-            .get_mut(doc_id)
+            .get(doc_id)
             .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
-        let first_visible_content = buf.current.first_visible_since(&buf.persisted);
-        if !force
-            && !first_visible_content
-            && buf.last_flush_at.elapsed() < buf.flush_interval(self.batch_interval)
-        {
-            return Ok(None);
-        }
-        let snapshot = buf.current.clone();
-        Ok((snapshot != buf.persisted).then_some(snapshot))
+        Ok(buf.due_snapshot(self.batch_interval, force))
     }
 
     pub async fn reset_tail(&self, doc_id: &str) -> Result<()> {

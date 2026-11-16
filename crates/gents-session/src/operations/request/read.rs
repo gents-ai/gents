@@ -30,10 +30,12 @@ pub(super) async fn read_rows(
     let response = access
         .read(query)
         .await
-        .map_err(RequestOperationError::passthrough)?;
+        .map_err(RequestOperationError::passthrough_error)?;
     rows(&response, Doc::NAME)
         .iter()
-        .map(|row| serde_json::from_value(row.clone()).map_err(RequestOperationError::passthrough))
+        .map(|row| {
+            serde_json::from_value(row.clone()).map_err(RequestOperationError::passthrough_error)
+        })
         .collect()
 }
 
@@ -99,7 +101,7 @@ pub(super) async fn receipt(
         ));
     }
     gents_store::identity::request_receipt::verify_request_receipt_signature(&row)
-        .map_err(RequestOperationError::passthrough)?;
+        .map_err(RequestOperationError::passthrough_error)?;
     if let Some(create) = signed {
         if row.admission_signer_did.as_deref() != Some(create.admission.signer_did.as_str()) {
             return Err(mismatch("another identity signed it"));
@@ -137,7 +139,7 @@ pub(super) async fn latest_session_request(
     let response = access
         .read(&query)
         .await
-        .map_err(RequestOperationError::passthrough)?;
+        .map_err(RequestOperationError::passthrough_error)?;
     Ok(rows(&response, Doc::NAME)
         .iter()
         .filter_map(|row| {
@@ -163,7 +165,7 @@ pub(super) async fn ensure_request_id_fresh(
     let response = access
         .read(&query)
         .await
-        .map_err(RequestOperationError::passthrough)?;
+        .map_err(RequestOperationError::passthrough_error)?;
     if rows(&response, Doc::NAME).is_empty() {
         return Ok(());
     }
