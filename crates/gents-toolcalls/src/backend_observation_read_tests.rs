@@ -54,6 +54,7 @@ async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
     };
     let access = ConfigAccess::local(Arc::clone(&node));
     let missing_docs = [missing_doc];
+    let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
     let observations = tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         tokio::join!(
             lookup_backend_observation(&node, &owner, "missing"),
@@ -61,7 +62,7 @@ async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
             gents_session::session::load_session_current_hop(&node, &actor, &owner, "missing"),
             crate::background::status::load_caused_request_terminals(&access, &missing_docs),
             gents_documents::load_inference_profile(&node, &owner, "missing"),
-            Tool::call(&query, query_args),
+            Tool::call(&query, query_args, &envelope),
         )
     })
     .await;

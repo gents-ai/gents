@@ -29,6 +29,14 @@ pub enum CanonicalOutputReadError {
     AmbiguousCanonicalHeader { header_doc_id: String },
 }
 
+impl CanonicalOutputReadError {
+    /// The header read failure carried as the root or a context of an
+    /// erased canonical read error.
+    pub fn in_error(error: &anyhow::Error) -> Option<&Self> {
+        error.downcast_ref::<Self>()
+    }
+}
+
 /// The physical request and node scope supplied by the owned restore.
 /// Its commit CID is a historical request version, not the latest lease write.
 #[derive(Clone, Copy)]

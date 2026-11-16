@@ -96,7 +96,7 @@ where
                         async {
                             match processor.validate_execution().await.map_err(RuntimeSeamError::into_inner) {
                                 Ok(()) => {}
-                                Err(error) if error.is::<gents_session::request::lifecycle::ExecutionOwnershipLost>() => {
+                                Err(error) if gents_session::request::lifecycle::ExecutionOwnershipLost::occurs_in(&error) => {
                                     tracing::warn!(
                                         request_id = %request_id,
                                         session_id = %session_id,
@@ -161,7 +161,7 @@ where
                 let stream = &mut stream;
                 let (flushed, item) = box_stream_branch(move || async move {
                     let progress = async {
-                        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(None,
                             request_deadline,
                             request_token.clone(),
                             None,
@@ -188,7 +188,7 @@ where
             }
             result = await_with_request_deadline(
                 request_deadline,
-                gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(None,
                     request_deadline,
                     request_token.clone(),
                     None,

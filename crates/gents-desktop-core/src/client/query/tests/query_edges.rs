@@ -466,6 +466,13 @@ async fn load_node_scoped_snapshot_excludes_other_nodes() {
         .expect("schemas");
 
     let mutation = r#"mutation {
+        root: create_Node(input: {
+            node_did: "did:alpha",
+            display_name: "alpha",
+            enabled: true,
+            created_at: "2026-05-07T00:00:00Z",
+            created_by: "user"
+        }) { _docID }
         alpha: create_AgentSession(input: {
             session_id: "alpha-1",
             node_did: "did:alpha",

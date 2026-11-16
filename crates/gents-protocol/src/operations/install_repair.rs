@@ -50,6 +50,12 @@ pub struct IncompatibleStore {
 }
 
 impl IncompatibleStore {
+    /// Only `cause` itself, not its sources: callers walk the chain and ask
+    /// the wrappers that carry a store refusal at each step, in their order.
+    pub fn of<'a>(cause: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        cause.downcast_ref::<Self>()
+    }
+
     /// The report for the desktop app's own client store, which is not a
     /// node's home: no older Gents serves it and no `gents` command sets it
     /// up, so the advice for a home does not apply. The startup screen that

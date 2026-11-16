@@ -142,23 +142,15 @@ pub fn check_plugin_ownership(
     }
 }
 
-fn any_error<E>(
-    error: &(dyn std::error::Error + 'static),
-    mut predicate: impl FnMut(&E) -> bool,
-) -> bool
-where
-    E: std::error::Error + 'static,
-{
-    gents_protocol::error_chain::find_map_source(error, |cause| {
-        cause.downcast_ref::<E>().filter(|error| predicate(error))
+/// External premise: a missing record file reaches here only as a
+/// `std::io::Error` of kind `NotFound` in the erased chain.
+pub(crate) fn is_not_found(error: &anyhow::Error) -> bool {
+    gents_protocol::error_chain::find_map_source(error.as_ref(), |cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .filter(|io| io.kind() == std::io::ErrorKind::NotFound)
     })
     .is_some()
-}
-
-pub(crate) fn is_not_found(error: &anyhow::Error) -> bool {
-    any_error::<std::io::Error>(error.as_ref(), |io| {
-        io.kind() == std::io::ErrorKind::NotFound
-    })
 }
 
 pub fn owns_plugin_record(
@@ -339,7 +331,10 @@ impl PublishedPluginReadError {
     }
 
     pub fn error_chain_is_busy(error: &(dyn std::error::Error + 'static)) -> bool {
-        any_error::<Self>(error, Self::is_busy)
+        gents_protocol::error_chain::find_map_source(error, |cause| {
+            cause.downcast_ref::<Self>().filter(|read| read.is_busy())
+        })
+        .is_some()
     }
 }
 
@@ -657,8 +652,9 @@ mod tests {
 
         let claimant = "acme/widget";
         let artifact = format!("sha256:{}", "a".repeat(64));
-        let unreadable =
-            |error: &anyhow::Error| any_error::<serde_json::Error>(error.as_ref(), |_| true);
+        let unreadable = |error: &anyhow::Error| {
+            gents_protocol::error_chain::find_source::<serde_json::Error>(error.as_ref()).is_some()
+        };
         family::replay::<Admission, Record, Removal>(|input| {
             let home = tempfile::tempdir().unwrap();
             let path = record_path(home.path(), "acme", "echo").unwrap();
