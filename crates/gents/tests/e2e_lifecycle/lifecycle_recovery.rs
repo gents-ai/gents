@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use crate::support::agent_requests::{RequestActors, RequestSeed};
 use crate::support::fixtures::bind_managed_agent_backend;
+use crate::support::fixtures::set_managed_agent_max_request_retries;
 use crate::support::fixtures::configure_agent_tools;
 use crate::support::live_inference::rows_when;
 use crate::support::{
@@ -502,6 +503,10 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         "wake-backoff-model",
     )
     .await;
+    // A lineage budget above the wake's prior attempts keeps the failed wake
+    // eligible, so it waits in its persisted backoff.
+    set_managed_agent_max_request_retries(&db, &actors.fixture, "wake-backoff-execution", 6)
+        .await;
     actors
         .set_session_title(
             session_id,
@@ -524,9 +529,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         AgentRequestAdmissionRecord::runtime_local_control(agent_did, source_request_id);
     wake.caused_by_parent_request_id = Some(source_request_id.into());
     wake.caused_by_parent_request_doc_id = Some(source_doc_id);
-    // Its claim pins the default budget of 3; two prior attempts keep it
-    // within budget and inside its backoff window.
-    wake.retry_count = 2;
+    wake.retry_count = 4;
     actors.create_signed(wake).await;
     let prepared = PreparedAcceptedTurn { backend };
     const WAKE_INPUT_MARKER: &str = "Review the background execution results above.";

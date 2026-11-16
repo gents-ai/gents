@@ -472,6 +472,73 @@ pub async fn bind_managed_agent_backend(
     .await;
 }
 
+/// Gives the managed Agent's inference profile an `InferenceExecution` with
+/// `max_request_retries`, after `bind_managed_agent_backend`.
+pub async fn set_managed_agent_max_request_retries(
+    db: &super::TestDb,
+    fixture: &super::ManagedAgentFixture,
+    execution_id: &str,
+    max_request_retries: i64,
+) {
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
+        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+    use gents_store::collection::Collection;
+
+    let owner = db.node_identity.did();
+    let agent_did = fixture.binding.agent_did.as_str();
+    fixture
+        .access
+        .transact_signed_conflict_rebuild("test.set_managed_agent_max_request_retries", |txn| {
+            Box::pin(async move {
+                let (_, agent) =
+                    read_desired_state_record_in_txn(txn, Collection::Agent, owner, agent_did)
+                        .await?
+                        .expect("managed test Agent must exist");
+                let profile_id = agent["inference_profile_id"]
+                    .as_str()
+                    .expect("managed Agent inference profile")
+                    .to_owned();
+                let (_, mut profile) = read_desired_state_record_in_txn(
+                    txn,
+                    Collection::InferenceProfile,
+                    owner,
+                    &profile_id,
+                )
+                .await?
+                .expect("managed Agent profile must be bound");
+                profile["execution_id"] = execution_id.into();
+                let execution = serde_json::json!({
+                    "node_did": owner,
+                    "execution_id": execution_id,
+                    "max_request_retries": max_request_retries,
+                });
+                let plan = DesiredStateApplyPlan::new(
+                    [
+                        (Collection::InferenceExecution, execution),
+                        (Collection::InferenceProfile, profile),
+                    ]
+                    .into_iter()
+                    .map(|(collection, value)| DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    })
+                    .collect(),
+                )?;
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .expect("set managed Agent max_request_retries as held user");
+}
+
 pub async fn bind_selected_managed_agent_backend(
     db: &super::TestDb,
     fixture: &super::ManagedAgentFixture,
