@@ -176,6 +176,12 @@ pub struct ServeArgs {
     pub p2p_secret_key_path: Option<PathBuf>,
     #[arg(
         long,
+        value_name = "MIB",
+        help = "Store block cache size in whole MiB. Omitted or invalid values (not a whole number of MiB at least 1) use the 512 MiB default"
+    )]
+    pub block_cache_mb: Option<String>,
+    #[arg(
+        long,
         value_enum,
         help = "P2P relay mode. Defaults to the home's network.json, else disabled"
     )]

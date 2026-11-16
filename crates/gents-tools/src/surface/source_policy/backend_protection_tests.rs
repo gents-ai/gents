@@ -65,7 +65,11 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
     assert!(FreshBackendStore::observe(&data, &lock).await.is_err());
     let protected = ProtectedBackendStore::open(&data, &key, &lock)
         .await?
-        .preflight(&key, Some(&did))
+        .preflight(
+            &key,
+            Some(&did),
+            gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
         .await?;
     let (node, admission) = protected
         .start_node_with_projection(
@@ -138,7 +142,11 @@ async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Re
             .await?;
         let (node, admission) = ProtectedBackendStore::open(&data, &key, &lock)
             .await?
-            .preflight(&key, Some(&did))
+            .preflight(
+                &key,
+                Some(&did),
+                gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+            )
             .await?
             .start_node_with_projection(
                 &key,
@@ -171,7 +179,7 @@ async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Re
         drop(node);
         let restarted = match ProtectedBackendStore::open(&data, &key, &lock)
             .await?
-            .preflight(&key, Some(&did))
+            .preflight(&key, Some(&did), gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES)
             .await
         {
             Ok(_) => true,

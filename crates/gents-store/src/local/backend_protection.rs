@@ -129,8 +129,12 @@ impl<'a> FreshBackendStore<'a> {
         let did = node_did
             .filter(|did| !did.is_empty())
             .ok_or(BackendProtectionError::InvalidProvenance)?;
-        let mut builder = super::store_key::persistent_builder(&self.data, key)
-            .map_err(|error| BackendProtectionError::Schema(error.into()))?;
+        let mut builder = super::store_key::persistent_builder(
+            &self.data,
+            key,
+            crate::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )
+        .map_err(|error| BackendProtectionError::Schema(error.into()))?;
         builder = builder
             .with_node_identity_did(did.to_owned())
             .with_node_acp_enabled();
@@ -205,6 +209,7 @@ impl<'a> ProtectedBackendStore<'a> {
         self,
         key: &StoreKey,
         node_did: Option<&str>,
+        block_cache_bytes: usize,
     ) -> Result<PreflightProtectedBackendStore<'a>> {
         let did = node_did
             .filter(|did| !did.is_empty())
@@ -216,7 +221,7 @@ impl<'a> ProtectedBackendStore<'a> {
                 super::store_compat::check_copy(&self.data, key).await,
             )?;
         }
-        let mut builder = super::store_key::persistent_builder(&self.data, key)
+        let mut builder = super::store_key::persistent_builder(&self.data, key, block_cache_bytes)
             .map_err(|error| BackendProtectionError::Schema(error.into()))?;
         builder = builder
             .with_node_identity_did(did.to_owned())
@@ -240,6 +245,7 @@ impl<'a> ProtectedBackendStore<'a> {
         Ok(PreflightProtectedBackendStore {
             store: self,
             node_did: did.to_owned(),
+            block_cache_bytes,
         })
     }
 }
@@ -247,6 +253,7 @@ impl<'a> ProtectedBackendStore<'a> {
 pub struct PreflightProtectedBackendStore<'a> {
     store: ProtectedBackendStore<'a>,
     node_did: String,
+    block_cache_bytes: usize,
 }
 
 impl PreflightProtectedBackendStore<'_> {
@@ -291,11 +298,12 @@ impl PreflightProtectedBackendStore<'_> {
     ) -> Result<(Arc<defra_node::Node>, BackendAdmission)> {
         let projection = super::document_projector_with_installed_plugins(runtime, policy, plugins)
             .map_err(|error| BackendProtectionError::Schema(error.into()))?;
-        let mut builder = super::store_key::persistent_builder(&self.store.data, key)
-            .map_err(|error| BackendProtectionError::Schema(error.into()))?
-            .with_document_projector(projection)
-            .with_node_identity_did(self.node_did)
-            .with_node_acp_enabled();
+        let mut builder =
+            super::store_key::persistent_builder(&self.store.data, key, self.block_cache_bytes)
+                .map_err(|error| BackendProtectionError::Schema(error.into()))?
+                .with_document_projector(projection)
+                .with_node_identity_did(self.node_did)
+                .with_node_acp_enabled();
         if let Some(http) = http {
             builder = builder.with_http(http);
         }

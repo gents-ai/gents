@@ -171,7 +171,11 @@ async fn start(
     let protected =
         gents_store::local::backend_protection::ProtectedBackendStore::open(data_path, key, lock)
             .await?
-            .preflight(key, Some(&did))
+            .preflight(
+                key,
+                Some(&did),
+                gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+            )
             .await?;
     let served: ServedNode = ServedNode::default();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

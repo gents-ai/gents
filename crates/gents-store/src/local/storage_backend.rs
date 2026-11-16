@@ -44,15 +44,13 @@ type Result<T, E = StorageBackendError> = std::result::Result<T, E>;
 /// durability; the upstream embedded profile restricts document sizes and
 /// disables background compaction. These are per-store working-set targets,
 /// not a process RSS limit.
-pub fn regolith_options() -> storage::RegolithStoreOptions {
+pub fn regolith_options(block_cache_bytes: usize) -> storage::RegolithStoreOptions {
     let mut options = storage::RegolithStoreOptions::default();
     options.engine = options
         .engine
         .write_buffer_size(32 * 1024 * 1024)
         .max_write_buffer_number(2)
-        .block_cache_size(block_cache_size(
-            std::env::var("GENTS_BLOCK_CACHE_MB").ok().as_deref(),
-        ));
+        .block_cache_size(block_cache_bytes);
     options
 }
 
@@ -62,9 +60,9 @@ pub fn regolith_options() -> storage::RegolithStoreOptions {
 /// evicted blocks.
 pub const DEFAULT_BLOCK_CACHE_BYTES: usize = 512 * 1024 * 1024;
 
-/// The block cache size `GENTS_BLOCK_CACHE_MB` asks for (whole MiB, at least
-/// one), else [`DEFAULT_BLOCK_CACHE_BYTES`].
-fn block_cache_size(mib: Option<&str>) -> usize {
+/// The block cache size the `--block-cache-mb` flag asks for (whole MiB, at
+/// least one), else [`DEFAULT_BLOCK_CACHE_BYTES`].
+pub fn block_cache_size(mib: Option<&str>) -> usize {
     mib.and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|mib| *mib > 0)
         .and_then(|mib| mib.checked_mul(1024 * 1024))
@@ -134,7 +132,7 @@ pub async fn refuse_other_version_schema(
     let builder = defra_node::Node::builder()
         .data_path(data_path)
         .with_storage_backend(defra_node::StorageBackend::Regolith)
-        .with_regolith_options(regolith_options());
+        .with_regolith_options(regolith_options(DEFAULT_BLOCK_CACHE_BYTES));
     let builder = match key {
         Some(key) => key.encrypt(builder),
         None => builder,
@@ -372,13 +370,10 @@ mod tests {
     #[test]
     fn in_process_budget_preserves_server_acceptance_and_commit_settings() {
         let server = storage::RegolithStoreOptions::default();
-        let local = regolith_options();
+        let local = regolith_options(block_cache_size(Some("128")));
         assert_eq!(local.engine.get_write_buffer_size(), 32 * 1024 * 1024);
         assert_eq!(local.engine.get_max_write_buffer_number(), 2);
-        assert_eq!(
-            local.engine.get_block_cache_size(),
-            block_cache_size(std::env::var("GENTS_BLOCK_CACHE_MB").ok().as_deref())
-        );
+        assert_eq!(local.engine.get_block_cache_size(), 128 * 1024 * 1024);
         assert_eq!(
             local.engine.get_max_key_size(),
             server.engine.get_max_key_size()
@@ -587,7 +582,7 @@ mod tests {
         crate::test_support::node_builder()
             .data_path(data)
             .with_storage_backend(defra_node::StorageBackend::Regolith)
-            .with_regolith_options(regolith_options())
+            .with_regolith_options(regolith_options(DEFAULT_BLOCK_CACHE_BYTES))
             .build()
             .await
             .unwrap()

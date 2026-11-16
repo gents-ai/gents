@@ -80,14 +80,17 @@ impl ClientCore {
             Arc::new(node_identity.clone()),
             std::sync::Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
         )?;
-        let mut node_builder =
-            gents_store::local::store_key::persistent_builder(paths.node_data_dir(), &store_key)?
-                .with_p2p(desktop_p2p_config(&paths, &options))
-                .with_signing_key(defra_node::SigningKey::Ed25519(
-                    node_identity.private_key_bytes().to_vec(),
-                ))
-                .with_document_projector(projection)
-                .with_node_acp_enabled();
+        let mut node_builder = gents_store::local::store_key::persistent_builder(
+            paths.node_data_dir(),
+            &store_key,
+            gents_store::local::storage_backend::DEFAULT_BLOCK_CACHE_BYTES,
+        )?
+        .with_p2p(desktop_p2p_config(&paths, &options))
+        .with_signing_key(defra_node::SigningKey::Ed25519(
+            node_identity.private_key_bytes().to_vec(),
+        ))
+        .with_document_projector(projection)
+        .with_node_acp_enabled();
         if let Some(http_addr) = options.http_addr {
             node_builder = node_builder.with_http(HttpConfig::with_addr(http_addr));
         }
