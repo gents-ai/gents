@@ -593,7 +593,7 @@ try {
     ? {
         binary: issuer.binary,
         home: reconnectFixture.home,
-        env: { ...process.env, GENTS_DESKTOP_HOME: reconnectFixture.owner },
+        env: { ...process.env, HOME: reconnectFixture.owner },
       }
     : issuer;
   const serverAddress = reconnectFixture?.statusUrl ?? enrollmentServerAddress();

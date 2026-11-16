@@ -10,8 +10,8 @@ use crate::cli::{Cli, Command};
 pub struct ProvisionOptions {
     pub home: PathBuf,
     /// The caller's desktop root. Provisioning writes the CLI client key that
-    /// becomes the new home's administrator under the root this process
-    /// resolves, so a caller holding another root is refused.
+    /// becomes the new home's administrator under the default desktop root,
+    /// so a caller holding another root is refused.
     pub desktop_root: PathBuf,
     pub node_name: String,
     pub tool_ceiling: ToolCeilingArg,
@@ -50,12 +50,10 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
         gents_desktop_core::client::DesktopPaths::from_root(&options.desktop_root).cli_client();
     if resolved.root() != held.root() {
         anyhow::bail!(
-            "provisioning {} would keep its administrator key in {}, but the caller's desktop root keeps it in {}; start this process with {} set to {}",
+            "provisioning {} would keep its administrator key in {}, but the caller's desktop root keeps it in {}; the CLI keeps its key under the default desktop home, so provision from a desktop started without --desktop-home",
             options.home.display(),
             resolved.root().display(),
             held.root().display(),
-            gents_desktop_core::client::DESKTOP_HOME_ENV,
-            options.desktop_root.display(),
         );
     }
 

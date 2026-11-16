@@ -340,6 +340,8 @@ fn client_signed_endpoint(
 }
 
 /// The CLI is a separate client principal, even when desktop and CLI share a user home.
+/// It lives under the default desktop root, which follows the user's `HOME`; a
+/// desktop started with `--desktop-home` does not move it.
 pub fn cli_identity_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
     Ok(cli_identity_paths_under(&desktop_paths()?))
 }
@@ -352,7 +354,7 @@ fn desktop_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
             homes.path().join("desktop"),
         ));
     }
-    gents_desktop_core::client::DesktopPaths::discover()
+    gents_desktop_core::client::DesktopPaths::discover(None)
 }
 
 fn cli_identity_paths_under(

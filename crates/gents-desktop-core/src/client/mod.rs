@@ -33,7 +33,7 @@ pub use observe::{
     ObservedStore, ObservedStores, ObserverHandle, ObserverMetricsSnapshot,
     RuntimeConnectionStatus, StoreProjectionRevision, StoreUpdateNotice,
 };
-pub use paths::{DesktopPaths, DESKTOP_HOME_ENV};
+pub use paths::DesktopPaths;
 pub(crate) use peer_directory::PeerDirectory;
 pub use peer_directory::{
     initialize_local_standard_peer, load_peer_records, retire_local_node_records,

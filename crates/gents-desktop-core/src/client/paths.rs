@@ -1,9 +1,6 @@
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
-
-pub const DESKTOP_HOME_ENV: &str = "GENTS_DESKTOP_HOME";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopPaths {
@@ -18,19 +15,17 @@ pub struct DesktopPaths {
 }
 
 impl DesktopPaths {
-    pub fn discover() -> Result<Self> {
-        Self::discover_with_env(std::env::var_os(DESKTOP_HOME_ENV))
-    }
-
-    fn discover_with_env(env_root: Option<OsString>) -> Result<Self> {
-        let root = match env_root.filter(|value| !value.is_empty()) {
-            Some(root) => PathBuf::from(root),
+    /// `root` is the process's `--desktop-home`; without one the client lives
+    /// in the platform's local application data folder.
+    pub fn discover(root: Option<PathBuf>) -> Result<Self> {
+        let root = match root {
+            Some(root) => root,
             None => dirs::data_local_dir()
                 .ok_or_else(|| anyhow!("unable to resolve a local application data directory"))?
                 .join("gents")
                 .join("desktop"),
         };
-        gents_store::local::home::refuse_real_gents_home(&root, DESKTOP_HOME_ENV);
+        gents_store::local::home::refuse_real_gents_home(&root, "--desktop-home");
         Ok(Self::from_root(root))
     }
 

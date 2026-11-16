@@ -52,10 +52,7 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
     let owner_home = temp.join("owner");
     fs::create_dir_all(&home)?;
     let home_arg = home.to_str().context("runtime home UTF-8")?;
-    let owner_env = [(
-        "GENTS_DESKTOP_HOME",
-        owner_home.to_str().context("owner home UTF-8")?,
-    )];
+    let owner_env = [("HOME", owner_home.to_str().context("owner home UTF-8")?)];
     let init = run_cli_json_with_env(
         &home,
         &[

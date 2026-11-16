@@ -279,7 +279,7 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
     let foreign_identities_text = foreign_identities
         .to_str()
         .context("utf-8 foreign identities")?;
-    let foreign_env = [("GENTS_DESKTOP_HOME", foreign_identities_text)];
+    let foreign_env = [("HOME", foreign_identities_text)];
     let keyless = run_cli_json_with_env(&elsewhere, &remote_args, &foreign_env)
         .expect_err("a machine without a client identity is refused for a set-up home");
     assert!(
@@ -288,8 +288,7 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
         )),
         "{keyless:#}"
     );
-    let foreign_paths =
-        gents_desktop_core::client::DesktopPaths::from_root(foreign_identities.join("cli"));
+    let foreign_paths = crate::support::graphql::cli_client_paths(&foreign_identities, &[]);
     assert!(
         !foreign_paths.identity_key_path().exists(),
         "the refused command minted a client identity"

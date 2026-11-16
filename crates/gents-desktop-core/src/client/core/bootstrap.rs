@@ -26,11 +26,6 @@ use super::{
 };
 
 impl ClientCore {
-    pub async fn start() -> Result<Self> {
-        let paths = DesktopPaths::discover()?;
-        Self::start_with_paths(paths).await
-    }
-
     pub async fn start_with_paths(paths: DesktopPaths) -> Result<Self> {
         Self::start_with_paths_and_options(paths, ClientCoreOptions::default()).await
     }

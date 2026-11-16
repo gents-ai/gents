@@ -19,7 +19,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
     fs::create_dir_all(&runtime_home)?;
     let home = runtime_home.to_str().context("runtime home UTF-8")?;
     let owner_home_arg = owner_home.to_str().context("owner home UTF-8")?;
-    let owner_env = [("GENTS_DESKTOP_HOME", owner_home_arg)];
+    let owner_env = [("HOME", owner_home_arg)];
     let init = run_cli_json_with_env(
         &runtime_home,
         &[

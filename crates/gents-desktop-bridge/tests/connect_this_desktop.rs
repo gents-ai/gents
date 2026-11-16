@@ -73,7 +73,7 @@ fn terminal_home(home: &Path) {
         tauri::async_runtime::handle().inner(),
         gents_server::server_host::ProvisionOptions {
             home: home.to_path_buf(),
-            desktop_root: DesktopPaths::discover().unwrap().root().to_path_buf(),
+            desktop_root: DesktopPaths::discover(None).unwrap().root().to_path_buf(),
             node_name: "Anvil".to_owned(),
             tool_ceiling: gents_service::args::ToolCeilingArg::Readonly,
             tool_root: None,
@@ -337,13 +337,10 @@ fn connect_this_desktop_joins_a_terminal_node_and_reads_its_settings() {
     std::fs::create_dir_all(path("user/.local/share")).unwrap();
     std::fs::create_dir_all(path("user/.config")).unwrap();
     std::env::set_var("HOME", path("user"));
-    std::env::set_var(
-        gents_desktop_core::client::DESKTOP_HOME_ENV,
-        path("desktop"),
-    );
     std::env::set_var("XDG_DATA_HOME", path("user/.local/share"));
     std::env::set_var("XDG_CONFIG_HOME", path("user/.config"));
     gents_desktop_bridge::install_runtime();
+    let default_desktop = DesktopPaths::discover(None).unwrap().root().to_path_buf();
 
     let served_home = path("anvil");
     let stopped_home = path("stopped");
@@ -355,7 +352,7 @@ fn connect_this_desktop_joins_a_terminal_node_and_reads_its_settings() {
     let mut connected = 0;
     for (index, case) in cases.into_iter().enumerate() {
         let desktop = path(&format!("case-{index}"));
-        copy_cli_client(&path("desktop"), &desktop);
+        copy_cli_client(&default_desktop, &desktop);
         let serving = case.input.node == "serving";
         let (home, live) = if serving {
             (&served_home, Some(&served))
@@ -442,7 +439,7 @@ fn connect_this_desktop_joins_a_terminal_node_and_reads_its_settings() {
         "the node's agents are untouched"
     );
     let desktop = path("revoked-desktop");
-    copy_cli_client(&path("desktop"), &desktop);
+    copy_cli_client(&default_desktop, &desktop);
     let app = desktop_app(&desktop, &served_home);
     connect(&app).unwrap();
     let core = current_core(&app.state::<DesktopAppState>()).unwrap();

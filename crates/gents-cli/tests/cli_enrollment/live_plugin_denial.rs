@@ -187,10 +187,7 @@ async fn live_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Result<()
     let owner = temp.join("owner");
     fs::create_dir_all(&home)?;
     let home_arg = home.to_str().context("runtime home UTF-8")?;
-    let owner_env = [(
-        "GENTS_DESKTOP_HOME",
-        owner.to_str().context("owner home UTF-8")?,
-    )];
+    let owner_env = [("HOME", owner.to_str().context("owner home UTF-8")?)];
     let init = run_cli_json_with_env(
         &home,
         &[

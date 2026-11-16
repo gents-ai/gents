@@ -38,6 +38,13 @@ source consistency checks, not a separate runtime compatibility version.
   possibly restart the runtime) for it. A lifecycle refusal for a caller whose ancestry
   cannot be read now says so instead of claiming the action would end the
   caller's runtime.
+- Breaking: `GENTS_DESKTOP_HOME` is no longer read. The desktop app takes
+  `--desktop-home PATH` as a launch argument; `gents-desktop init` and
+  `gents runtime desktop reset` keep their `--desktop-home`, and
+  `gents-client-host` its `--home`. Without one, desktop state is in the
+  platform's app data folder. The CLI's own client key always lives under that
+  default desktop home, which follows `HOME`, so a desktop started with another
+  `--desktop-home` cannot provision a managed home.
 - Breaking: `GENTS_HOME` is no longer read. `--home` is the only way to choose a
   node home; without it commands use the folder chosen at setup, then `~/.gents`.
   The macOS uninstall script takes `--home DIR` instead.
