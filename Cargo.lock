@@ -4940,6 +4940,7 @@ name = "gents-fs-runner"
 version = "1.0.0-rc2"
 dependencies = [
  "anyhow",
+ "gents-fs-runner",
  "globset",
  "ignore",
  "regex",

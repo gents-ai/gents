@@ -8,6 +8,8 @@ description = "The runtime host: serving, runtime preparation and the runtime's 
 
 [features]
 test-fixtures = ["gents-session/test-fixtures", "gents-service/test-home-guard"]
+# Hidden `gents server` test seams; off in every non-test build.
+test-seams = []
 
 [dependencies]
 gents = { path = "../gents" }
@@ -68,7 +70,7 @@ uuid.workspace = true
 libc = "0.2"
 
 [dev-dependencies]
-gents-host = { path = ".", features = ["test-fixtures"] }
+gents-host = { path = ".", features = ["test-fixtures", "test-seams"] }
 gents-desktop-core = { workspace = true, features = ["test-fixtures", "typescript"] }
 gents-workspace-hack = { workspace = true }
 gents = { path = "../gents", features = ["test-fixtures", "typescript"] }

@@ -2,12 +2,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
+#[cfg(feature = "test-seams")]
 use crate::blocker::TraversalBlocker;
 
 #[derive(Clone)]
 pub(crate) struct RunnerContext {
     root: PathBuf,
     base: PathBuf,
+    #[cfg(feature = "test-seams")]
     blocker: Option<TraversalBlocker>,
 }
 
@@ -33,15 +35,18 @@ impl RunnerContext {
         Ok(Self {
             root,
             base,
+            #[cfg(feature = "test-seams")]
             blocker: None,
         })
     }
 
+    #[cfg(feature = "test-seams")]
     pub(crate) fn with_blocker(mut self, blocker: Option<TraversalBlocker>) -> Self {
         self.blocker = blocker;
         self
     }
 
+    #[cfg(feature = "test-seams")]
     pub(crate) fn blocker(&self) -> Option<&TraversalBlocker> {
         self.blocker.as_ref()
     }
