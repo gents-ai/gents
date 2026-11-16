@@ -3,10 +3,9 @@ use crate::request::lifecycle::test_support::{
     hints, parent_request, test_db, wake_queue_input, TestDb,
 };
 
-use crate::request::lifecycle::{
-    extract_single_doc_id, ClaimOutcome, RequestLifecycle, DEFAULT_REQUEST_MAX_RETRIES,
-};
+use crate::request::lifecycle::{extract_single_doc_id, ClaimOutcome, RequestLifecycle};
 use crate::request::streaming::DefraStreamWriter;
+use gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use std::time::Duration;

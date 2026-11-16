@@ -111,11 +111,6 @@ pub use queue::{FOLDED_REASON, REMOVED_REASON, REPLACED_REASON};
 pub use task_title::task_goal_session_title;
 pub use task_title::task_session_title;
 
-/// Fresh normal requests start with this signed `AgentRequest.max_retries`;
-/// retry descendants retain their parent's budget. Provider transport retries
-/// are separately controlled by `InferenceRetryPolicy`.
-pub const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
-
 /// The claim path and the watcher's pre-claim scans must both fail closed on
 /// `Malformed` — a request whose TTL cannot be interpreted must not be silently
 /// claimed as if `valid_until` were unset.
@@ -578,6 +573,7 @@ pub struct RequestLifecycle {
     request_commit_cid: Option<String>,
     deadline_duration_secs: u64,
     configured_max_total_tokens: Option<u64>,
+    configured_max_request_retries: u64,
     claimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
     background_completion_input_through_sequence: Option<u32>,
     pub state: LocalLifecycleState,
@@ -735,6 +731,17 @@ impl RequestLifecycle {
             "configure token limit before claim"
         );
         self.configured_max_total_tokens = limit;
+    }
+
+    /// The claiming Agent's resolved `InferenceExecution.max_request_retries`,
+    /// supplied by the runtime; only the first claim pins a budget from it.
+    pub fn set_configured_max_request_retries(&mut self, budget: u64) {
+        assert_eq!(
+            self.state,
+            LocalLifecycleState::Pending,
+            "configure request retry budget before claim"
+        );
+        self.configured_max_request_retries = budget;
     }
 
     pub fn input_publication_before_deadline(

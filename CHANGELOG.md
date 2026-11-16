@@ -6,6 +6,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Breaking: the successor budget of a request lineage (operator reissues and
+  background wake redrives) is InferenceExecution `max_request_retries`
+  (non-negative, default 3, zero allows none) instead of a value clients sign.
+  `AgentRequest.max_retries` is no longer signed or written by clients: a
+  request's first claim pins it from the claiming Agent's configuration, a
+  retry successor inherits its parent's pin, and title and access-review
+  requests take zero. A request that never reached a claim may still be
+  reissued by an operator but is not redriven automatically.
+  `ReissueReceipt.max_retries` is absent until the lineage has been claimed.
 - InferenceExecution `title_timeout_secs` (default 10s) bounds one title-generation
   attempt, replacing the fixed title timeout. InferenceBackend `request_timeout_secs`
   (default 120s) bounds one plugin model call through that backend, replacing the fixed

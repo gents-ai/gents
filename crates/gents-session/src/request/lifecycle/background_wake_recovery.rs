@@ -99,7 +99,7 @@ impl RequestLifecycle {
                         request_id,
                         session_id = required_str(candidate.session_id.as_deref(), "session_id")?,
                         retry_count = required_i64(candidate.retry_count, "retry_count")? + 1,
-                        max_retries = required_i64(candidate.max_retries, "max_retries")?,
+                        max_retries = ?candidate.max_retries,
                         "redrove failed background-completion wake"
                     );
                 }
@@ -234,7 +234,6 @@ fn validate_failed_wake(candidate: &AgentRequestRow) -> Result<()> {
     required_str(candidate.agent_did.as_deref(), "agent_did")?;
     required_str(candidate.session_id.as_deref(), "session_id")?;
     required_i64(candidate.retry_count, "retry_count")?;
-    required_i64(candidate.max_retries, "max_retries")?;
     candidate
         .request_hop
         .map(u32::try_from)
@@ -256,8 +255,11 @@ fn automated_queue_key(queue: &RequestQueue) -> Option<String> {
 
 fn eligible_queue_key(candidate: &AgentRequestRow) -> Result<Option<String>> {
     let retry_count = required_i64(candidate.retry_count, "retry_count")?;
-    let max_retries = required_i64(candidate.max_retries, "max_retries")?;
-    if retry_count < 0 || retry_count >= max_retries {
+    if !crate::request::retry_budget::successor_budget_remains(
+        true,
+        retry_count,
+        candidate.max_retries,
+    ) {
         return Ok(None);
     }
     Ok(candidate
@@ -478,7 +480,6 @@ async fn build_redrive_request(
     let session_id = required_str(candidate.session_id.as_deref(), "session_id")?;
     let doc_id = required_str(candidate.doc_id.as_deref(), "_docID")?;
     let retry_count = required_i64(candidate.retry_count, "retry_count")?;
-    let max_retries = required_i64(candidate.max_retries, "max_retries")?;
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
             agent_did,
@@ -507,7 +508,6 @@ async fn build_redrive_request(
             parent_request_doc_id: Some(doc_id.to_string()),
             root_request_id: retry_root.to_string(),
             retry_count: retry_count + 1,
-            max_retries,
         }),
         input: candidate.input.clone().unwrap_or_default(),
         retry_key: Some(retry_key.to_string()),

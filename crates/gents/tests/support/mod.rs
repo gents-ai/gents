@@ -555,7 +555,7 @@ pub async fn create_request_for_agent_with_signed_fields(
                 request_hop: 0
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(
@@ -659,7 +659,7 @@ pub async fn create_retry_request(node: &EmbeddedNode, spec: &RetryRequestSpec<'
                 max_retries: {max_retries}
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(
