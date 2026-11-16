@@ -1254,9 +1254,10 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .execute("{ FixtureEntry { _docID name } }")
         .await?;
     let revoked_write = cached_write
-        .call(serde_json::from_value(
-            json!({"name":"revoked-source-write"}),
-        )?)
+        .call(
+            serde_json::from_value(json!({"name":"revoked-source-write"}))?,
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
         .await;
     writes.insert("source-revoked", revoked_write.is_ok());
     if revoked_write.is_err() {

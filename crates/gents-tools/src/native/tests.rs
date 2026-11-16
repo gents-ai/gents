@@ -2855,10 +2855,11 @@ async fn native_tool_blocking_calls_register_their_managed_executor() {
             other => panic!("no native tool scenario for {other}"),
         };
         let token = tokio_util::sync::CancellationToken::new();
+        let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
         let call = crate::runtime_context::scope_request_tool_execution(
             None,
             token.clone(),
-            crate::runtime_context::call_tool_managed(tool.as_ref(), args),
+            crate::runtime_context::call_tool_managed(tool.as_ref(), args, &envelope),
         );
         let observe = async {
             let observed = tokio::time::timeout(NATIVE_BLOCKER_HANG_BOUND, async {

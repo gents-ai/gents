@@ -1587,6 +1587,7 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
 
 #[tokio::test]
 async fn modeled_inputs_survive_publication_replay_and_forks() {
+    gents_lean_vocab::snapshot().await;
     use gents_protocol::request_input::RequestInput;
     const SESSION: &str = "captured-documents";
     let (node, path, mut lifecycle, writer) = fixture_with_ids(

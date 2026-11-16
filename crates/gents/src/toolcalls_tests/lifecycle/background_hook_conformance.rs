@@ -103,6 +103,7 @@ async fn publish_hook_call(
 
 #[tokio::test]
 async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
+    gents_lean_vocab::snapshot().await;
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
