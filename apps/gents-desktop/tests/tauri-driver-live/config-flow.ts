@@ -74,6 +74,13 @@ async function chooseField(driver: LiveDesktopDriver, id: string, option: RegExp
   await driver.user.click(await screen.findByRole("option", { name: option }));
 }
 
+async function draftItemId() {
+  const page = await screen.findByTestId("new-item-page", {}, { timeout: 30_000 });
+  const name = page.querySelector<HTMLElement>('[id$="-name"]');
+  if (!name) throw new Error("The new item's name field is missing");
+  return name.id.slice(0, -"-name".length);
+}
+
 async function saveEditor(driver: LiveDesktopDriver) {
   await driver.user.click(screen.getByRole("button", { name: "Save" }));
 }
@@ -201,20 +208,9 @@ export async function createInferenceProfile({
 }
 
 export async function createToolService({ runner, driver, ids }: ConfigFlowContext) {
-  const before = new Set(
-    (await runner.fetchSnapshot()).client?.deployments[0]?.toolServiceRegistries.map(
-      (service) => service.service_id,
-    ),
-  );
   await driver.openConfigSection("tool-services");
   await driver.user.click(screen.getByRole("button", { name: "New remote tools" }));
-  await waitForDeploymentDocument(runner, (current) => {
-    const created = current.toolServiceRegistries.find(
-      (service) => !before.has(service.service_id),
-    );
-    expect(created).toBeDefined();
-    ids.toolServiceId = created!.service_id;
-  });
+  ids.toolServiceId = await draftItemId();
   await waitForField(`${ids.toolServiceId}-name`);
   changeField(`${ids.toolServiceId}-name`, "HTTP MCP Service");
   changeField(
@@ -225,7 +221,7 @@ export async function createToolService({ runner, driver, ids }: ConfigFlowConte
   changeField(`${ids.toolServiceId}-tailscale`, "100.73.235.38");
   changeField(`${ids.toolServiceId}-port`, "8000");
   changeField(`${ids.toolServiceId}-path`, "/mcp");
-  await saveEditor(driver);
+  await driver.user.click(screen.getByRole("button", { name: "Add remote tools" }));
   await waitForDeploymentDocument(runner, (current) => {
     const service = current.toolServiceRegistries.find(
       (candidate) => candidate.service_id === ids.toolServiceId,
@@ -241,18 +237,9 @@ export async function createTools({
   ids,
   fileToolRoot,
 }: ToolsConfigFlowContext) {
-  const before = new Set(
-    (await runner.fetchSnapshot()).client?.deployments[0]?.tools.map(
-      (tools) => tools.tools_id,
-    ),
-  );
   await driver.openConfigSection("tools");
   await driver.user.click(screen.getByRole("button", { name: "New tools" }));
-  await waitForDeploymentDocument(runner, (current) => {
-    const created = current.tools.find((tools) => !before.has(tools.tools_id));
-    expect(created).toBeDefined();
-    ids.toolsId = created!.tools_id;
-  });
+  ids.toolsId = await draftItemId();
   await waitForField(`${ids.toolsId}-name`);
   changeField(`${ids.toolsId}-name`, "Repo Audit Readonly Tools");
   changeField(`${ids.toolsId}-root`, fileToolRoot);
@@ -264,7 +251,7 @@ export async function createTools({
   const serviceOption = screen.getByText("HTTP MCP Service").closest("label");
   if (!serviceOption) throw new Error("Remote service selection is missing");
   await driver.user.click(serviceOption);
-  await saveEditor(driver);
+  await driver.user.click(screen.getByRole("button", { name: "Create" }));
   await waitForDeploymentDocument(runner, (current) => {
     const tools = current.tools.find((candidate) => candidate.tools_id === ids.toolsId);
     expect(tools).toBeDefined();
@@ -281,22 +268,26 @@ export async function createTools({
 }
 
 export async function createAgent({ runner, driver, ids }: ConfigFlowContext) {
+  const before = new Set(
+    (await runner.fetchSnapshot()).client?.deployments[0]?.agents.map(
+      (agent) => agent.agentDid,
+    ),
+  );
   await driver.openConfigSection("agents");
   await driver.user.click(screen.getByRole("button", { name: "New agent" }));
   const name = screen.getByRole("textbox", { name: "Display name" });
-  ids.agentDid = name.id.replace(/-name$/, "");
+  const draftId = name.id.replace(/-name$/, "");
   fireEvent.change(name, { target: { value: "Desktop Live Agent" } });
-  changeField(
-    `${ids.agentDid}-prompt`,
+  await driver.replaceContextSystemPrompt(
     `You are Amy running a desktop config acceptance flow. Include sentinel ${ids.suffix} when asked about this test.`,
   );
-  await chooseField(driver, `${ids.agentDid}-tools`, /^Repo Audit Readonly Tools/);
-  await chooseField(driver, `${ids.agentDid}-profile`, /Desktop Live Profile/);
+  await chooseField(driver, `${draftId}-tools`, /^Repo Audit Readonly Tools/);
+  await chooseField(driver, `${draftId}-profile`, /Desktop Live Profile/);
   await driver.user.click(screen.getByRole("button", { name: "Create" }));
   await waitForDeploymentDocument(runner, (current) => {
-    expect(
-      current.agents.some((candidate) => candidate.agentDid === ids.agentDid),
-    ).toBe(true);
+    const created = current.agents.find((candidate) => !before.has(candidate.agentDid));
+    expect(created).toBeDefined();
+    ids.agentDid = created!.agentDid;
   });
   await driver.user.click(
     await screen.findByRole("switch", { name: "Desktop Live Agent is disabled" }),
@@ -313,6 +304,11 @@ export async function createAgent({ runner, driver, ids }: ConfigFlowContext) {
     expect(context?.tools_id).toBe(ids.toolsId);
     expect(context?.system_prompt).toContain(`${ids.suffix}`);
   });
+  await runner.adapter.selectAgentWorkspaceRoot!(
+    runner.nodeDid,
+    ids.agentDid,
+    `${runner.toolRoot}/workspace`,
+  );
 }
 
 export async function createTask({ runner, driver, ids }: ConfigFlowContext) {
@@ -324,11 +320,14 @@ export async function createTask({ runner, driver, ids }: ConfigFlowContext) {
   await driver.openConfigSection("tasks");
   await driver.user.click(screen.getByRole("button", { name: "New task" }));
   changeField("auto-name", "Config Flow Smoke Task");
-  changeField(
-    "auto-prompt",
-    `In one short paragraph, say the desktop config flow reached task execution and include sentinel ${ids.suffix}.`,
-  );
-  await chooseField(driver, "auto-agent", /^Desktop Live Agent/);
+  const dialog = within(screen.getByRole("dialog", { name: "New task" }));
+  fireEvent.change(dialog.getByLabelText("What the agent should do"), {
+    target: {
+      value: `In one short paragraph, say the desktop config flow reached task execution and include sentinel ${ids.suffix}.`,
+    },
+  });
+  await driver.user.click(dialog.getByRole("button", { name: "Agent" }));
+  await driver.user.click(screen.getByRole("option", { name: /^Desktop Live Agent/ }));
   await driver.user.click(
     within(screen.getByRole("dialog", { name: "New task" })).getByRole("button", {
       name: "Create",
@@ -349,25 +348,14 @@ export async function createTask({ runner, driver, ids }: ConfigFlowContext) {
 }
 
 export async function createSchedule({ runner, driver, ids }: ConfigFlowContext) {
-  const before = new Set(
-    (await runner.fetchSnapshot()).client?.deployments[0]?.schedules.map(
-      (schedule) => schedule.schedule_id,
-    ),
-  );
   await driver.openConfigSection("schedules");
   await driver.user.click(screen.getByRole("button", { name: "New schedule" }));
-  await waitForDeploymentDocument(runner, (current) => {
-    const created = current.schedules.find(
-      (schedule) => !before.has(schedule.schedule_id),
-    );
-    expect(created).toBeDefined();
-    ids.scheduleId = created!.schedule_id;
-  });
+  ids.scheduleId = await draftItemId();
   await waitForField(`${ids.scheduleId}-name`);
   changeField(`${ids.scheduleId}-name`, "Config Flow Hourly");
   await chooseField(driver, `${ids.scheduleId}-cadence`, /^Interval$/);
   changeField(`${ids.scheduleId}-interval`, "3600");
-  await saveEditor(driver);
+  await driver.user.click(screen.getByRole("button", { name: "Create schedule" }));
   await waitForDeploymentDocument(runner, (current) => {
     const schedule = current.schedules.find(
       (candidate) => candidate.schedule_id === ids.scheduleId,
@@ -380,23 +368,12 @@ export async function createSchedule({ runner, driver, ids }: ConfigFlowContext)
 }
 
 export async function createEventSource({ runner, driver, ids }: ConfigFlowContext) {
-  const before = new Set(
-    (await runner.fetchSnapshot()).client?.deployments[0]?.eventSources.map(
-      (source) => source.event_source_id,
-    ),
-  );
   await driver.openConfigSection("event-sources");
   await driver.user.click(screen.getByRole("button", { name: "New event source" }));
-  await waitForDeploymentDocument(runner, (current) => {
-    const created = current.eventSources.find(
-      (source) => !before.has(source.event_source_id),
-    );
-    expect(created).toBeDefined();
-    ids.eventSourceId = created!.event_source_id;
-  });
+  ids.eventSourceId = await draftItemId();
   await waitForField(`${ids.eventSourceId}-name`);
   changeField(`${ids.eventSourceId}-name`, "Config Flow Events");
-  await saveEditor(driver);
+  await driver.user.click(screen.getByRole("button", { name: "Create event source" }));
   await waitForDeploymentDocument(runner, (current) => {
     const eventSource = current.eventSources.find(
       (candidate) => candidate.event_source_id === ids.eventSourceId,
@@ -479,7 +456,7 @@ export async function waitForConfigFlowReady(
     const current = (await runner.fetchSnapshot()).client?.deployments[0];
     const health = await runner.adapter.listBackendsWithHealth();
     throw new Error(
-      `Config agent did not become ready: ${String(error).split("\n")[0]}; readiness=${JSON.stringify(current?.nodeReadiness)}; backendHealth=${JSON.stringify(health)}`,
+      `Config agent did not become ready: ${String(error).split("\n")[0]}; readiness=${JSON.stringify(current?.nodeReadiness)}; backendHealth=${JSON.stringify(health)}; runtimeLogs=${JSON.stringify(runner.diagnostics())}`,
     );
   }
 }

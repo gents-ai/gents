@@ -7,11 +7,17 @@ mkdir -p "$elan_home"
 
 # Re-enter under a host lock so concurrent self-hosted runner processes share
 # one atomic install.
-if [[ "${GENTS_ELAN_INSTALL_LOCKED:-0}" != "1" ]] && command -v lockf >/dev/null 2>&1; then
+# flock on Linux, lockf on macOS.
+if [[ "${GENTS_ELAN_INSTALL_LOCKED:-0}" != "1" ]]; then
   script_dir="$(cd "$(dirname "$0")" && pwd)"
-  exec lockf -k "$elan_home/.gents-install.lock" \
-    env GENTS_ELAN_INSTALL_LOCKED=1 ELAN_HOME="$elan_home" \
-    "$script_dir/$(basename "$0")" "$@"
+  lock_file="$elan_home/.gents-install.lock"
+  if command -v flock >/dev/null 2>&1; then
+    exec flock "$lock_file" env GENTS_ELAN_INSTALL_LOCKED=1 ELAN_HOME="$elan_home" \
+      "$script_dir/$(basename "$0")" "$@"
+  elif command -v lockf >/dev/null 2>&1; then
+    exec lockf -k "$lock_file" env GENTS_ELAN_INSTALL_LOCKED=1 ELAN_HOME="$elan_home" \
+      "$script_dir/$(basename "$0")" "$@"
+  fi
 fi
 
 if [[ ! -x "$elan_home/bin/elan" ]]; then

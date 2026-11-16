@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn the_log_tail_is_read_once_per_exit() {
+    let exit = |restarts| gents_service::native_service::ServiceExit {
+        reason: "exited with code 1".to_string(),
+        restarts,
+        clean: false,
+        code: Some(1),
+    };
+    let is_new = super::super::status::exit_is_new;
+    assert!(is_new(None, Some(&exit(3))));
+    assert!(!is_new(Some(&exit(3)), Some(&exit(3))));
+    assert!(is_new(Some(&exit(3)), Some(&exit(4))));
+    assert!(!is_new(Some(&exit(3)), None));
+}
+
+#[test]
 fn status_priority_is_starting_then_failed_then_stopped_then_disabled() {
     let stored = StoredManagedServer {
         node_name: "local".to_string(),
@@ -23,7 +38,7 @@ fn status_priority_is_starting_then_failed_then_stopped_then_disabled() {
         ManagedServerState::Failed
     );
     runtime.last_error = None;
-    let installed = gents_server::native_service::NativeServiceStatus {
+    let installed = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: false,
         job_loaded: false,
@@ -60,8 +75,9 @@ fn idle_status_reprobes_and_preserves_an_external_runtime_identity() {
             runtime_booting: false,
             error: None,
             error_code: None,
+            deleted_home: None,
         },
-        &gents_server::native_service::NativeServiceStatus {
+        &gents_service::native_service::NativeServiceStatus {
             installed: true,
             running: false,
             job_loaded: false,
@@ -80,7 +96,7 @@ fn idle_status_reprobes_and_preserves_an_external_runtime_identity() {
 
 #[test]
 fn native_running_without_endpoint_readiness_is_starting() {
-    let native = gents_server::native_service::NativeServiceStatus {
+    let native = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: true,
         job_loaded: true,
@@ -114,6 +130,7 @@ fn native_running_without_endpoint_readiness_is_starting() {
             runtime_booting: false,
             error: None,
             error_code: None,
+            deleted_home: None,
         },
         &native,
     );
@@ -122,7 +139,7 @@ fn native_running_without_endpoint_readiness_is_starting() {
 
 #[test]
 fn loaded_native_job_owns_a_ready_endpoint_between_process_states() {
-    let native = gents_server::native_service::NativeServiceStatus {
+    let native = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: false,
         job_loaded: true,
@@ -147,11 +164,51 @@ fn loaded_native_job_owns_a_ready_endpoint_between_process_states() {
             runtime_booting: false,
             error: None,
             error_code: None,
+            deleted_home: None,
         },
         &native,
     );
     assert_eq!(observed.state, ManagedServerState::Running);
     assert!(!observed.auto_start);
+}
+
+#[tokio::test]
+async fn a_deleted_home_is_reported_until_a_new_setup_writes_its_init_json() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join(".gents");
+    let exit = |code| gents_service::native_service::ServiceExit {
+        reason: format!("exited with code {code}"),
+        restarts: 0,
+        clean: false,
+        code: Some(code),
+    };
+    let home_gone = exit(gents_service::native_service::HOME_GONE_EXIT_CODE);
+
+    assert_eq!(deleted_home(None, Some(&exit(1)), false, &home).await, None);
+    let deleted = deleted_home(None, Some(&home_gone), false, &home).await;
+    assert_eq!(deleted.as_deref(), Some(home.as_path()));
+    // A respawn that finds the directory recreated mid-delete fails plainly.
+    let deleted = deleted_home(deleted, Some(&exit(1)), false, &home).await;
+    assert_eq!(deleted.as_deref(), Some(home.as_path()));
+    let deleted = deleted_home(deleted, None, false, &home).await;
+    assert_eq!(deleted.as_deref(), Some(home.as_path()));
+    // A read that lands while launchd respawns the node sees no exit at all.
+    assert_eq!(
+        deleted_home(None, None, true, &home).await.as_deref(),
+        Some(home.as_path())
+    );
+
+    write(&home.join("init.json"), r#"{"node_did":"did:key:new"}"#);
+    assert_eq!(deleted_home(deleted, None, true, &home).await, None);
+
+    let runtime = ManagedServerRuntimeState {
+        deleted_home: Some(home.clone()),
+        ..Default::default()
+    };
+    assert_eq!(
+        status_from(&runtime, None, None, None, None).deleted_home,
+        Some(home.display().to_string())
+    );
 }
 
 #[test]
@@ -228,14 +285,26 @@ async fn reviewed_preference_is_written_before_native_restart_attempt() {
 
 #[test]
 fn external_server_rejects_a_different_initialized_identity() {
-    let error = ensure_matching_identity(Some("did:key:local"), "did:key:other", 9191)
-        .expect_err("different identity must be rejected");
-    assert_eq!(error.code, BridgeErrorCode::InvalidArgument);
-    assert!(error.message.contains("port 9191"));
-    ensure_matching_identity(Some("did:key:local"), "did:key:local", 9191).unwrap();
-    assert!(ensure_matching_identity(None, "did:key:local", 9191).is_err());
-    assert!(ensure_matching_identity(Some(""), "did:key:local", 9191).is_err());
-    assert!(ensure_matching_identity(Some("did:key:local"), "", 9191).is_err());
+    use gents_service::repair::port::{served_identity, ServedIdentity};
+    let live = |did: &str| serde_json::json!({ "node_did": did });
+    assert_eq!(
+        served_identity(Some("did:key:local"), &live("did:key:local")),
+        ServedIdentity::Matches
+    );
+    for (initialized, did) in [
+        (Some("did:key:local"), "did:key:other"),
+        (None, "did:key:local"),
+        (Some(""), "did:key:local"),
+        (Some("did:key:local"), ""),
+    ] {
+        assert!(
+            matches!(
+                served_identity(initialized, &live(did)),
+                ServedIdentity::Different { .. }
+            ),
+            "{initialized:?} vs {did:?}"
+        );
+    }
 }
 
 #[test]
@@ -272,6 +341,7 @@ fn ready_runtime_requires_live_status_to_carry_reviewed_authority() {
         runtime_booting: false,
         error: None,
         error_code: None,
+        deleted_home: None,
     };
     let error = validate_ready_runtime(&missing_authority, &authority, temp.path())
         .expect_err("missing /status authority must fail closed");
@@ -289,11 +359,13 @@ fn ready_runtime_requires_live_status_to_carry_reviewed_authority() {
 fn request_visibility_race_is_retriable() {
     use gents_protocol::enrollment::EnrollmentDecisionRefusalCode;
     let rejected = |status, code| {
-        anyhow::Error::new(gents_server::server_host::EnrollmentDecisionRejected {
-            status,
-            message: "refused".into(),
-            code,
-        })
+        anyhow::Error::new(
+            gents_service::enrollment_admin::EnrollmentDecisionRejected {
+                status,
+                message: "refused".into(),
+                code,
+            },
+        )
         .context("approving desktop enrollment on managed runtime")
     };
     assert!(enrollment_request_is_not_visible_yet(&rejected(
@@ -334,7 +406,7 @@ fn restart_command_validates_reviewed_authority_through_tauri_ipc() {
             snapshot_grants: SnapshotGrants::core_only(),
             managed_server: ManagedServerPolicy::Allowed,
             client_host: false,
-            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
         },
         None,
     )

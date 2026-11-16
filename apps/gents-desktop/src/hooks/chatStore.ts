@@ -6,6 +6,7 @@ import {
   type OptimisticPendingTurn,
 } from "@source-inc/gents-desktop-chat";
 
+import { turnKey, type SentTurn } from "./sentTurns";
 import { loadChatFolders, type ChatFolders } from "./chatFolders";
 import { createSelectors, type WithSelectors } from "./createSelectors";
 import { loadGoalDrafts, type GoalDraft } from "./goalDrafts";
@@ -18,11 +19,11 @@ export type ChatState = {
     nodeDid: string;
     sessionId: string | null;
     message: string;
+
+    requestId?: string;
   } | null;
   optimisticPendingTurn: OptimisticPendingTurn | null;
-  /** the messages sent from here, newest last, and whether each queued
-      behind a running turn: kept after the transcript holds them, for
-      what follows a send (the view going to the turn once it begins) */
+
   sentTurns: readonly SentTurn[];
   folders: ChatFolders;
   goalDrafts: GoalDraft[];
@@ -30,9 +31,20 @@ export type ChatState = {
   goalCommandsInFlight: ReadonlySet<string>;
   chatDrafts: ChatDraft[];
   chatDraftError: string | null;
+
+  sendDeadlineTick: number;
+
+  storingSend: string | null;
+
+  transcriptDraws: TranscriptDraws | null;
 };
 
-export type SentTurn = { sessionId: string; requestId: string; queued: boolean };
+export type TranscriptDraws = {
+  nodeDid: string | null;
+  sessionId: string;
+  requestIds: readonly string[];
+};
+
 /* enough for a run of sends queued behind one turn */
 const SENT_TURNS_KEPT = 16;
 
@@ -50,9 +62,20 @@ export function createChatStore(initial: Partial<ChatState> = {}) {
       ...loadGoalDrafts(),
       goalCommandsInFlight: new Set(),
       ...loadChatDrafts(),
+      sendDeadlineTick: 0,
+      storingSend: null,
+      transcriptDraws: null,
       ...initial,
     })),
   );
+}
+
+function withSentTurn(sent: readonly SentTurn[], turn: SentTurn): readonly SentTurn[] {
+  return sent.some(
+    (held) => held.requestId === turn.requestId && held.sessionId === turn.sessionId,
+  )
+    ? sent
+    : [...sent.slice(-(SENT_TURNS_KEPT - 1)), turn];
 }
 
 const READY: ChatWorkflowState = { kind: "ready" };
@@ -95,11 +118,31 @@ export const chat = {
   showPendingTurn(store: ChatStore, turn: OptimisticPendingTurn, queued = false) {
     store.setState((state) => ({
       optimisticPendingTurn: turn,
-      sentTurns: [
-        ...state.sentTurns.slice(-(SENT_TURNS_KEPT - 1)),
-        { sessionId: turn.sessionId, requestId: turn.requestId, queued },
-      ],
+      sentTurns: withSentTurn(state.sentTurns, {
+        sessionId: turn.sessionId,
+        requestId: turn.requestId,
+        queued,
+      }),
     }));
+  },
+
+  tookSentTurn(store: ChatStore, key: string) {
+    store.setState((state) =>
+      state.sentTurns.some((turn) => !turn.taken && turnKey(turn.requestId) === key)
+        ? {
+            sentTurns: state.sentTurns.map((turn) =>
+              turnKey(turn.requestId) === key ? { ...turn, taken: true } : turn,
+            ),
+          }
+        : state,
+    );
+  },
+
+  noteSentTurn(store: ChatStore, turn: SentTurn) {
+    store.setState((state) => {
+      const sentTurns = withSentTurn(state.sentTurns, turn);
+      return sentTurns === state.sentTurns ? state : { sentTurns };
+    });
   },
   endPendingTurn(store: ChatStore, requestId: string) {
     if (store.getState().optimisticPendingTurn?.requestId === requestId)

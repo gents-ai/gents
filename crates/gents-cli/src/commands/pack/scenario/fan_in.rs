@@ -1,11 +1,11 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
 use super::manifest::FanInExpectation;
 use super::results::graphql_rows;
-use gents::store::graphql::{escape_graphql_string, validate_collection_identifier};
+use gents_store::graphql::{escape_graphql_string, validate_collection_identifier};
 
 #[derive(Debug, Clone)]
 pub(super) struct FanInEvidence {
@@ -37,10 +37,10 @@ pub(super) async fn verify_fan_in(
         validate_collection_identifier(collection)?;
     }
     for field in [&expected.correlation_field, &expected.expected_count_field] {
-        gents::store::graphql::validate_graphql_name(field)?;
+        gents_store::graphql::validate_graphql_name(field)?;
     }
     for field in &expected.member_required_fields {
-        gents::store::graphql::validate_graphql_name(field)?;
+        gents_store::graphql::validate_graphql_name(field)?;
     }
     if let Some(verification) = &expected.verification {
         for collection in [
@@ -58,7 +58,7 @@ pub(super) async fn verify_fan_in(
             &verification.confirmed_count_field,
             &verification.refuted_count_field,
         ] {
-            gents::store::graphql::validate_graphql_name(field)?;
+            gents_store::graphql::validate_graphql_name(field)?;
         }
     }
 

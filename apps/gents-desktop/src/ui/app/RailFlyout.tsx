@@ -429,9 +429,16 @@ export function RailFlyout({
   const [portal, setPortal] = useState<HTMLElement | null>(null);
   const timer = useRef<number | null>(null);
   const pointerInside = useRef(false);
+  /* a press holds the panel as it was when the press began: one drawn over
+     the rail between press and release takes the release, and the click
+     is lost to both. Input runs before a pending render, so an open whose
+     timer fired but has not drawn is withdrawn by the press */
+  const pressed = useRef(false);
   const later = (next: boolean, ms: number) => {
     if (timer.current) window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setOpen(next), ms);
+    timer.current = window.setTimeout(() => {
+      if (!(next && pressed.current)) setOpen(next);
+    }, ms);
   };
   useEffect(
     () => () => {
@@ -469,13 +476,27 @@ export function RailFlyout({
       }}
       onPointerLeave={() => {
         pointerInside.current = false;
+        pressed.current = false;
         if (hover) later(false, CLOSE_AFTER);
       }}
       onPointerDown={() => {
         if (timer.current) window.clearTimeout(timer.current);
+        pressed.current = true;
+        if (!open) setOpen(false);
       }}
-      onPointerUp={(e) => hover && e.pointerType === "mouse" && later(true, OPEN_AFTER)}
-      onFocus={(e) => hover && e.target.matches(":focus-visible") && later(true, 0)}
+      onPointerUp={(e) => {
+        pressed.current = false;
+        if (hover && e.pointerType === "mouse") later(true, OPEN_AFTER);
+      }}
+      onPointerCancel={() => {
+        pressed.current = false;
+      }}
+      onFocus={(e) =>
+        hover &&
+        !pressed.current &&
+        e.target.matches(":focus-visible") &&
+        later(true, 0)
+      }
       onBlur={(e) => {
         /* focus leaving closes it for the keyboard; a page that focuses its
            own field, as a session's composer does, mustn't close it under

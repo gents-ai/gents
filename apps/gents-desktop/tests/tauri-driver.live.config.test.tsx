@@ -51,7 +51,7 @@ describeLive("Tauri app live bridge runner config flow", () => {
 
       await driver.openConfigSection("tasks");
       await driver.openConfigItem(ids.taskId);
-      await driver.user.click(screen.getByRole("button", { name: "Run task" }));
+      await driver.user.click(screen.getByRole("button", { name: "Run" }));
       await waitFor(() => {
         expect(runner.taskRunResults).toHaveLength(1);
       });

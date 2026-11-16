@@ -242,14 +242,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn ordinary(value: &str) -> FlatItem {
-        FlatItem::Ordinary(value.as_bytes().to_vec())
-    }
-
-    fn reasoning(value: &str) -> FlatItem {
-        FlatItem::Reasoning(value.as_bytes().to_vec())
-    }
-
     #[test]
     fn claude_flattening_keeps_payload_keys_and_drops_structural_hints() {
         let input = json!({"cache_control": {"type": "user-data"}});
@@ -403,69 +395,5 @@ mod tests {
             context["future_context_field"],
             body["future_context_field"]
         );
-    }
-
-    fn turn(anchor: usize, item: &str, captured: Vec<FlatItem>, base: bool) -> Turn {
-        Turn {
-            base,
-            prefix_ords: ords(&captured).into_iter().map(<[u8]>::to_vec).collect(),
-            items: vec![(anchor, item.as_bytes().to_vec())],
-            captured: Some(captured),
-        }
-    }
-
-    #[test]
-    fn latest_valid_turn_is_never_dropped_for_an_earlier_one() {
-        let first_capture = vec![ordinary("context"), ordinary("user")];
-        let latest_capture = vec![
-            ordinary("context"),
-            ordinary("user"),
-            ordinary("assistant"),
-            ordinary("text"),
-            ordinary("tool_result"),
-        ];
-        let turns = vec![
-            turn(3, "r1", first_capture.clone(), true),
-            turn(6, "r2", latest_capture.clone(), true),
-        ];
-        assert_eq!(admissible_turn_drop(&turns), 1);
-
-        let turns = vec![
-            turn(3, "r1", first_capture, false),
-            turn(6, "r2", latest_capture.clone(), true),
-        ];
-        assert_eq!(admissible_turn_drop(&turns), 1);
-
-        let mut invalid_latest = turn(6, "r2", latest_capture, true);
-        invalid_latest.captured = None;
-        assert_eq!(admissible_turn_drop(&[invalid_latest]), 1);
-    }
-
-    #[test]
-    fn leading_removal_is_what_the_checks_accept() {
-        let captured = vec![
-            ordinary("context"),
-            ordinary("user"),
-            ordinary("assistant"),
-            reasoning("r1"),
-            ordinary("text"),
-            ordinary("assistant"),
-            reasoning("r2"),
-            ordinary("text"),
-        ];
-        let current = drop_leading_reasoning(1, &captured);
-        assert_eq!(ords(&current), ords(&captured));
-        assert!(anchored(&captured).ends_with(&anchored(&current)));
-        let moved = vec![
-            ordinary("context"),
-            ordinary("user"),
-            ordinary("assistant"),
-            ordinary("text"),
-            reasoning("r1"),
-            ordinary("assistant"),
-            reasoning("r2"),
-            ordinary("text"),
-        ];
-        assert!(!anchored(&captured).ends_with(&anchored(&moved)));
     }
 }

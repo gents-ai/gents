@@ -6,7 +6,7 @@ use std::sync::Arc;
 /// endpoint, as `desktop_provider_recovery_*` reach it.
 struct Fixture {
     _runtime: gents_desktop_core::test_fixtures::ServedRuntimeHome,
-    identity: Arc<dyn gents::NodeIdentity>,
+    identity: Arc<dyn gents_store::identity::NodeIdentity>,
     access: ConfigAccess,
     scope: ProviderRecoveryRequest,
 }
@@ -24,15 +24,19 @@ impl Fixture {
             ("disabled", "Disabled", false, "model-a"),
             ("wrong-model", "Wrong model", true, "model-b"),
         ] {
-            let backend: gents::InferenceBackend = serde_json::from_value(json!({
+            let backend: gents_documents::InferenceBackend = serde_json::from_value(json!({
                 "node_did": owner, "backend_id": id, "name": name,
                 "provider_kind": "AnthropicApiKey", "endpoint": "https://api.anthropic.com/v1",
                 "enabled": enabled, "auth": {"kind":"api_key", "key":format!("TOKEN-SECRET-{id}")},
             }))
             .unwrap();
-            gents::documents::write_inference_backend_document(&access, &backend)
-                .await
-                .unwrap();
+            gents_documents::write_inference_backend_document(
+                &access,
+                &backend,
+                &gents_inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .unwrap();
             // Catalog discovery is the runtime's own observation.
             observer
                 .transact_write("test.recovery.catalog", |txn| {
@@ -40,23 +44,23 @@ impl Fixture {
                     Box::pin(async move {
                         // Discovery observes the stored connection, whose key
                         // the runtime moved into a node credential.
-                        let (_, stored) =
-                            gents::store::config_client::read_desired_state_record_in_txn(
-                                txn,
-                                gents::Collection::InferenceBackend,
-                                &backend.node_did,
-                                &backend.backend_id,
-                            )
-                            .await?
-                            .expect("stored backend");
-                        let stored: gents::InferenceBackend = serde_json::from_value(stored)?;
-                        gents::record_model_catalog_in_txn(
+                        let (_, stored) = gents_documents::read_desired_state_record_in_txn(
+                            txn,
+                            gents_store::collection::Collection::InferenceBackend,
+                            &backend.node_did,
+                            &backend.backend_id,
+                        )
+                        .await?
+                        .expect("stored backend");
+                        let stored: gents_documents::InferenceBackend =
+                            serde_json::from_value(stored)?;
+                        gents_inference::backends::registry::record_model_catalog_in_txn(
                             txn,
                             &stored,
-                            gents::documents::BackendModelCatalog {
+                            gents_documents::BackendModelCatalog {
                                 node_did: backend.catalog_scope().map(str::to_owned),
                                 observed_at: chrono::Utc::now().to_rfc3339(),
-                                models: vec![gents::documents::AdvertisedModel {
+                                models: vec![gents_documents::AdvertisedModel {
                                     model_name: model.into(),
                                     display_name: None,
                                     context_window: None,
@@ -76,15 +80,23 @@ impl Fixture {
             "node_did":owner, "profile_id":"profile-a", "backend_id":"main", "model_name":"model-a",
         }))
         .unwrap();
-        gents::documents::write_inference_profile_document(&access, &profile)
-            .await
-            .unwrap();
+        gents_documents::write_inference_profile_document(
+            &access,
+            &profile,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
         let engineer = runtime.provision_agent().await;
         for binding in [&engineer, &runtime.provision_agent().await] {
             let agent = serde_json::from_value(runtime.agent_value(binding, "profile-a")).unwrap();
-            gents::documents::write_agent_document(&access, &agent)
-                .await
-                .unwrap();
+            gents_documents::write_agent_document(
+                &access,
+                &agent,
+                &gents_inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .unwrap();
         }
         let reason = if reset {
             "HttpError: Invalid status code 429 Too Many Requests with message: {\"error\":{\"type\":\"usage_limit_reached\",\"resets_at\":4102444800}}"
@@ -103,15 +115,19 @@ impl Fixture {
             "2026-10-23T11:00:00Z",
             gents_protocol::request_admission::AgentRequestAdmissionRecord::client(identity.did()),
         );
-        let session_doc = gents::request::lifecycle::reserve_goal_session(&access, &request)
-            .await
-            .unwrap();
+        let session_doc =
+            gents_session::request::lifecycle::reserve_goal_session(&access, &request)
+                .await
+                .unwrap();
         request.session_doc_id = Some(session_doc.clone());
         request.agent_doc_id = Some(runtime.agent_doc_id(&engineer).await);
-        gents::sign_agent_request_create(identity.as_ref(), &mut request)
-            .await
-            .unwrap();
-        gents::request::lifecycle::submit_client_request(&access, &request)
+        gents_session::request::admission::sign_agent_request_create(
+            identity.as_ref(),
+            &mut request,
+        )
+        .await
+        .unwrap();
+        gents_session::request::lifecycle::submit_client_request(&access, &request)
             .await
             .unwrap();
         let request_doc = runtime
@@ -149,7 +165,7 @@ impl Fixture {
                                 &json!({"input": call}),
                             )
                             .await?;
-                        let doc = gents::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                        let doc = gents_store::graphql::created_doc_id(&response, "InferenceCall")?;
                         txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc)
                             .await?;
                     }
@@ -159,7 +175,7 @@ impl Fixture {
             .await
             .unwrap();
         crate::tests::support::reject_admission(&runtime, &engineer, &request_doc, reason).await;
-        gents::goal::set_goal_from_access(
+        gents_automation::goal::seed_goal_from_access(
             &access,
             &owner,
             "session",
@@ -170,12 +186,12 @@ impl Fixture {
         )
         .await
         .unwrap();
-        gents::goal::set_goal_from_access(
+        gents_automation::goal::seed_goal_from_access(
             &access,
             &owner,
             "session",
             None,
-            Some(gents::goal::GoalStatus::UsageLimited),
+            Some(gents_protocol::goal_status::GoalStatus::UsageLimited),
             None,
             None,
         )

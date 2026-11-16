@@ -1,0 +1,33 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "a",
+        "type": "int64"
+      },
+      {
+        "name": "b",
+        "type": "text"
+      }
+    ],
+    "markdown": "| a | b |\n| --- | --- |\n| 1 | x |\n| 2 | y |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 2,
+    "rows": [
+      [
+        1,
+        "x"
+      ],
+      [
+        2,
+        "y"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT * FROM pipes"
+  }
+}

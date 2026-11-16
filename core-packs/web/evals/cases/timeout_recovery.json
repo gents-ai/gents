@@ -1,0 +1,121 @@
+{
+  "case_id": "timeout_recovery",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "prepare",
+      "prompt": "Open http://127.0.0.1:19472/invoices and inspect the page title. Leave this browser session open for subsequent turns.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "browser_exec"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ],
+            "max_calls": 20
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "response.status",
+                "equals": "completed"
+              },
+              {
+                "field": "response.stdout",
+                "contains": "Gents browser practice desk"
+              }
+            ]
+          },
+          "tier": "acceptance"
+        }
+      ]
+    },
+    {
+      "stage_id": "timeout",
+      "prompt": "In the same browser session deliberately run Python import time; time.sleep(5) with browser_exec timeout_s=1. Read and report the timeout result. Do not retry the timed-out code.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "browser_exec"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ],
+            "max_calls": 20
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "response.status",
+                "equals": "timeout"
+              }
+            ]
+          },
+          "tier": "acceptance"
+        }
+      ]
+    },
+    {
+      "stage_id": "recover",
+      "prompt": "Using the SAME browser session, inspect the current page title and visible invoice content. Do not navigate, reload, or submit anything. Report whether the page survived.",
+      "deadline_secs": 300,
+      "checks": [
+        {
+          "check": "tool_calls_expected",
+          "params": {
+            "required": [
+              "browser_exec"
+            ],
+            "forbidden": [
+              "bash",
+              "query",
+              "config"
+            ],
+            "max_calls": 20
+          },
+          "tier": "acceptance"
+        },
+        {
+          "check": "tool_result_matches",
+          "params": {
+            "expect": [
+              {
+                "field": "response.status",
+                "equals": "completed"
+              },
+              {
+                "field": "response.stdout",
+                "contains": "Gents browser practice desk"
+              },
+              {
+                "field": "response.stdout",
+                "contains": "INV-101"
+              }
+            ]
+          },
+          "tier": "acceptance"
+        }
+      ]
+    }
+  ]
+}

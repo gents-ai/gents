@@ -6,16 +6,16 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::{JoinError, JoinSet};
 use tracing::Instrument;
 
-use crate::inference::admission::AdmissionRegistry;
-use crate::inference::resolved::ResolvedAgent;
 use crate::runtime::agent::retry::RetryPolicy;
 use crate::runtime::agent::worker_capacity::WorkerCapacity;
-use crate::runtime::snapshot::ActiveRuntimeSnapshot;
-use crate::runtime::snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime::status::RuntimeStatusHandle;
-use crate::tools::surface::ToolSurface;
+use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
+use gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
+use gents_inference::admission::AdmissionRegistry;
 use gents_protocol::node_readiness::ReconcilePhase;
 use gents_protocol::row::AgentRequest;
+use gents_tools::surface::AgentWithTools;
+use gents_tools::surface::ToolSurface;
 
 mod diff;
 mod slot;
@@ -29,6 +29,11 @@ use slot::{
 
 #[derive(Debug)]
 struct ActiveSnapshotReceiverClosed;
+
+/// The generation a successfully applied proposal publishes.
+pub(crate) fn next_generation(current: u64) -> u64 {
+    current + 1
+}
 
 impl std::fmt::Display for ActiveSnapshotReceiverClosed {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -121,7 +126,7 @@ impl StagedSlots {
 impl<F, Fut> GenerationSupervisor<F>
 where
     F: Fn(
-            Arc<ResolvedAgent>,
+            AgentWithTools,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             Arc<WorkerCapacity>,
@@ -216,7 +221,7 @@ where
                         break;
                     };
                     let current_generation = self.current_snapshot.generation;
-                    let next_generation = current_generation + 1;
+                    let next_generation = next_generation(current_generation);
                     let proposed_agent_count = proposal.agents.len();
                     let proposed_unavailable_agent_count = proposal.unavailable_agents.len();
                     let proposed_default_agent_did = proposal.default_agent_did.clone();
@@ -271,7 +276,7 @@ where
         }
 
         let diff = diff_counts(&self.current_snapshot, &proposal);
-        let next_generation = self.current_snapshot.generation + 1;
+        let next_generation = next_generation(self.current_snapshot.generation);
         self.runtime_status
             .set_reconcile_phase(ReconcilePhase::Applying)
             .await;
@@ -349,10 +354,13 @@ where
                 .expect("validated runnable/tool-surface keyset parity");
             let executor_capacity =
                 agent_executor_capacity(agent, &resolved_snapshot.backend_admission_configs);
+            let agent = resolved_snapshot
+                .agent_with_tools(agent_did)
+                .expect("validated runnable/tool-configuration keyset parity");
             if self
                 .active_slots
                 .get(agent_did)
-                .is_none_or(|slot| !slot.matches(agent, tool_surface, executor_capacity))
+                .is_none_or(|slot| !slot.matches(&agent, tool_surface, executor_capacity))
             {
                 recreated_agent_dids.push(agent_did.clone());
             }
@@ -387,7 +395,9 @@ where
                 agent_did.clone(),
                 spawn_slot_with_capacity(
                     SlotConfig {
-                        agent_config: agent.clone(),
+                        agent_config: resolved_snapshot
+                            .agent_with_tools(agent_did)
+                            .expect("validated runnable/tool-configuration keyset parity"),
                         tool_surface,
                         generation,
                         retry_policy: self.retry_policy.clone(),

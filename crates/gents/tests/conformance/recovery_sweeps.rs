@@ -1,9 +1,4 @@
 use super::*;
-use crate::lean_vocab_test::{lean_plugin_job_recovery_cases, LeanPluginJobRecoveryRow};
-use gents::tools::background::job::admit::{is_stalled, Refusal};
-use gents::tools::background::job::recovery::{
-    step_invocation_allowed, tick_action, RecoveryFacts, TickAction,
-};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use std::collections::BTreeMap;
 use support::agent_requests::{RequestActors, RequestSeed};
@@ -15,7 +10,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     let cases = lean_recovery_sweep_cases();
     assert_eq!(
         cases.len(),
-        55,
+        60,
         "Lean should emit one row per registered recovery predicate witness"
     );
 
@@ -29,6 +24,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
         PLUGIN_JOB_SWEEP_ID,
         "inference_call_recover_all_stale_calls",
         "task_hook_recover_interrupted_cleanup",
+        "lifecycle_hook_redrive_owed_deliveries",
     ]
     .into_iter()
     .collect::<BTreeSet<_>>();
@@ -53,110 +49,7 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     }
 }
 
-/// One tick of the row: the owner's `tick_action` is the first application of
-/// Lean's `pluginJobRecover`; a `Step` receives every terminal, and the stall
-/// rule over that step's output (`is_stalled`, the admission owner) is the
-/// second. Returns the owner action and the row after it.
-pub(super) fn tick_row(row: LeanPluginJobRecoveryRow) -> (TickAction, LeanPluginJobRecoveryRow) {
-    let facts = RecoveryFacts {
-        running: row.running,
-        session_stopped: row.session_stopped,
-        terminal_children: row.terminal_children,
-        observed: row.observed,
-        live: row.live,
-        step_new: row.step_new,
-        deadline_expired: row.deadline_expired,
-        available: if row.available {
-            Ok(())
-        } else {
-            Err(Refusal::NotAvailable)
-        },
-        stepped: row.stepped,
-        in_flight: row.step_in_flight,
-    };
-    let action = tick_action(&facts);
-    let after = match action {
-        TickAction::Untouched => row,
-        TickAction::Kill(_) => LeanPluginJobRecoveryRow {
-            running: false,
-            ..row
-        },
-        TickAction::Step => {
-            let observed = row.terminal_children;
-            let stalled = is_stalled(row.live, observed, row.terminal_children, row.step_new);
-            LeanPluginJobRecoveryRow {
-                running: !stalled,
-                observed,
-                stepped: true,
-                ..row
-            }
-        }
-    };
-    (action, after)
-}
-
-/// Lean `pluginJobRecoverySweep` ticks (`pluginJobStale`, then
-/// `pluginJobRecover ∘ pluginJobRecover`) through the owner's first-application
-/// decision `plugin_job::recovery::tick_action`, which
-/// `redrive_running_jobs` applies to each running job row: a stale row is
-/// killed or re-driven one step, and a row that is not stale is untouched.
-/// Lean's measures stay with its own `recovery_regressions`.
-#[tokio::test]
-async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
-    let cases = lean_plugin_job_recovery_cases();
-    assert_eq!(
-        cases.len(),
-        13,
-        "Lean should emit the plugin-job recovery rows"
-    );
-    let sweep_cases = lean_recovery_sweep_cases()
-        .iter()
-        .filter(|case| case.sweep_id == PLUGIN_JOB_SWEEP_ID)
-        .map(|case| case.name.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        sweep_cases,
-        cases
-            .iter()
-            .map(|case| case.name.as_str())
-            .collect::<Vec<_>>(),
-        "the registered sweep's witnesses are the plugin-job tick rows"
-    );
-    for case in cases {
-        let name = case.name.as_str();
-        assert_eq!(case.sweep_id, PLUGIN_JOB_SWEEP_ID, "{name}");
-        assert_eq!(
-            case.rust_function, "plugin_job::recovery::redrive_running_jobs",
-            "{name}"
-        );
-        let (action, after) = tick_row(case.row);
-        assert_eq!(
-            matches!(action, TickAction::Untouched),
-            !case.stale,
-            "{name}: stale flag"
-        );
-        assert_eq!(after, case.expected_row, "{name}: row after one tick");
-        assert_eq!(
-            case.step_commit_allowed,
-            step_invocation_allowed(true, case.row.session_stopped),
-            "{name}: model-driven step commit gate"
-        );
-        assert_eq!(
-            case.step_invocation_allowed,
-            step_invocation_allowed(case.row.running, case.row.session_stopped),
-            "{name}: model-driven guest invocation gate"
-        );
-        if case.row.session_stopped {
-            assert_eq!(
-                action,
-                TickAction::Kill(gents::tools::background::job::control::KillCause::Stop),
-                "{name}"
-            );
-        }
-    }
-}
-
-fn assert_recovery_case_metadata(case: &lean_vocab_test::LeanRecoverySweepCase) {
+fn assert_recovery_case_metadata(case: &gents_lean_vocab::LeanRecoverySweepCase) {
     let expected_cadence = if rust_periodic_recovery_sweep_ids().contains(case.sweep_id.as_str()) {
         "periodic"
     } else {
@@ -199,7 +92,7 @@ fn assert_recovery_case_metadata(case: &lean_vocab_test::LeanRecoverySweepCase) 
 }
 
 fn assert_periodic_recovery_registry_matches_lean(
-    cases: &[lean_vocab_test::LeanRecoverySweepCase],
+    cases: &[gents_lean_vocab::LeanRecoverySweepCase],
 ) {
     let mut lean_periodic_by_id = BTreeMap::new();
     for case in cases.iter().filter(|case| case.cadence == "periodic") {
@@ -216,7 +109,7 @@ fn assert_periodic_recovery_registry_matches_lean(
     }
 
     let mut rust_periodic_by_id = BTreeMap::new();
-    for metadata in gents::periodic_recovery_sweep_metadata() {
+    for metadata in gents_toolcalls::call::periodic_recovery::periodic_recovery_sweep_metadata() {
         assert!(
             !metadata.sweep_ids.is_empty(),
             "periodic recovery registry entry {} must name at least one Lean sweep id",
@@ -247,17 +140,22 @@ fn assert_periodic_recovery_registry_matches_lean(
 }
 
 fn rust_periodic_recovery_sweep_ids() -> BTreeSet<&'static str> {
-    gents::periodic_recovery_sweep_metadata()
+    gents_toolcalls::call::periodic_recovery::periodic_recovery_sweep_metadata()
         .iter()
         .flat_map(|metadata| metadata.sweep_ids.iter().copied())
         .collect()
 }
 
-async fn drive_recovery_sweep_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
+async fn drive_recovery_sweep_case(case: &gents_lean_vocab::LeanRecoverySweepCase) {
     if case.collection == "AgentToolCall" {
         return;
     }
     if case.collection == "TaskHookRecord" {
+        return;
+    }
+    // Owed-delivery rows are driven through the production record by
+    // `owed_delivery_traces_follow_the_lean_model`.
+    if case.collection == "OwedDelivery" {
         return;
     }
     match (case.collection.as_str(), case.sweep_id.as_str()) {
@@ -381,15 +279,17 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
                 .calls_recovered,
             0
         );
-        let registry = gents::BackgroundExecutionRegistry::default();
-        let live = gents::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
-            &db.node,
-            db.node_identity.did(),
-            std::slice::from_ref(&agent),
-            &registry,
-        )
-        .await
-        .expect("live periodic recovery");
+        let registry = gents_toolcalls::call::hook::BackgroundExecutionRegistry::default();
+        let live =
+            gents_toolcalls::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+                &db.node,
+                db.node_identity.did(),
+                std::slice::from_ref(&agent),
+                &registry,
+                &gents_automation::goal::session_message::SessionGoals,
+            )
+            .await
+            .expect("live periodic recovery");
         assert!(
             live.iter().all(|run| run.is_noop()),
             "live lease must preserve both rows: {live:?}"
@@ -415,11 +315,12 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             )
             .await;
         let repaired =
-            gents::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+            gents_toolcalls::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
                 &db.node,
                 db.node_identity.did(),
                 std::slice::from_ref(&agent),
                 &registry,
+                &gents_automation::goal::session_message::SessionGoals,
             )
             .await
             .expect("expired periodic recovery");
@@ -439,13 +340,16 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             call.call_state, terminal_call_state,
             "periodic registry must recover the inference row after its parent"
         );
-        assert!(!gents::call_state_holds_backend_slot(&call.call_state));
+        assert!(!gents_inference::admission::call_state_holds_backend_slot(
+            &call.call_state
+        ));
         let second =
-            gents::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+            gents_toolcalls::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
                 &db.node,
                 db.node_identity.did(),
                 std::slice::from_ref(&agent),
                 &registry,
+                &gents_automation::goal::session_message::SessionGoals,
             )
             .await
             .expect("second periodic recovery");
@@ -456,7 +360,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
     }
 }
 
-async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
+async fn drive_request_recovery_case(case: &gents_lean_vocab::LeanRecoverySweepCase) {
     let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
     let actors = RequestActors::new(&db).await;
     let request_id = format!("{}-request", case.name);
@@ -505,7 +409,7 @@ async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCa
     );
 }
 
-async fn drive_inference_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCase) {
+async fn drive_inference_call_recovery_case(case: &gents_lean_vocab::LeanRecoverySweepCase) {
     let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
     let actors = RequestActors::new(&db).await;
     let request_id = format!("{}-request", case.name);
@@ -758,7 +662,7 @@ async fn own_child_fixture(
     );
     assert_eq!(owner.claim().await.unwrap(), ClaimOutcome::Claimed);
     if processing {
-        let writer = gents::DefraStreamWriter::new_managed(
+        let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
             actors.node.clone(),
             actors.agent().as_ref(),
             std::time::Duration::ZERO,

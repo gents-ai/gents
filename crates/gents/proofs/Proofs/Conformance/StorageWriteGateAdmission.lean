@@ -1,8 +1,8 @@
-import Proofs.StorageWriteGate
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Store.StorageWriteGate
+import Proofs.Conformance.Family
 
 namespace Conformance.StorageWriteGateAdmission
-open StorageWriteGate StorageWriteGate.Admission Conformance.Contracts
+open StorageWriteGate StorageWriteGate.Admission
 
 inductive Action where
   | request (owner : Nat)
@@ -10,12 +10,36 @@ inductive Action where
   | release (owner : Nat)
   deriving DecidableEq, Repr
 
-structure Case where
+inductive StepKind where
+  | request | observe | release
+  deriving DecidableEq, Repr
+
+deriving instance Lean.ToJson for StepKind, StorageWriteGate.Event
+
+structure Step where
+  kind : StepKind
+  owner : Nat
+  event : Option StorageWriteGate.Event
+  deriving Lean.ToJson
+
+def Action.toStep : Action → Step
+  | .request owner => ⟨.request, owner, none⟩
+  | .observe owner event => ⟨.observe, owner, some event⟩
+  | .release owner => ⟨.release, owner, none⟩
+
+/-- An observation without an event is the identity `elapsed`. -/
+def Step.toAction (step : Step) : Action :=
+  match step.kind, step.event with
+  | .request, _ => .request step.owner
+  | .release, _ => .release step.owner
+  | .observe, some event => .observe step.owner event
+  | .observe, none => .observe step.owner .elapsed
+
+structure Input where
   name : String
   initialClaimed : Bool
-  actions : List Action
-  checkpoints : List Nat
-  deriving DecidableEq, Repr
+  actions : List Step
+  deriving Lean.ToJson
 
 def independentLeaseActions : List Action :=
   [ .request 1
@@ -28,13 +52,13 @@ def independentLeaseActions : List Action :=
 def capacityActions : List Action :=
   (List.range (capacity + 1)).map Action.request
 
-def cases : List Case :=
-  [ ⟨"independent_leases_survive_sibling_completion", false,
-      independentLeaseActions,
-      (List.range independentLeaseActions.length).map Nat.succ⟩
-  , ⟨"sixty_fifth_request_waits_at_capacity", true,
-      capacityActions, (List.range capacityActions.length).map Nat.succ⟩
-  ]
+def cases : List Input :=
+  [ { name := "independent_leases_survive_sibling_completion"
+      initialClaimed := false
+      actions := independentLeaseActions.map Action.toStep }
+  , { name := "sixty_fifth_request_waits_at_capacity"
+      initialClaimed := true
+      actions := capacityActions.map Action.toStep } ]
 
 def applyAction (pool : Pool) : Action → Pool
   | .request owner =>
@@ -49,65 +73,36 @@ def trace (initial : Pool) : List Action → List Pool
   | [] => [initial]
   | action :: rest => initial :: trace (applyAction initial action) rest
 
-def initialPool (testCase : Case) : Pool :=
+def initialPool (testCase : Input) : Pool :=
   if testCase.initialClaimed then claimed else empty
 
-def phaseName : Phase → String
-  | .storage => "storage"
-  | .cleanup => "cleanup"
-  | .dropping => "dropping"
-  | .releasable => "releasable"
-  | .released => "released"
+structure Snapshot where
+  activeCount : Nat
+  activeOwners : List Nat
+  waiting : List Nat
+  storeClaimHeld : Bool
+  deriving Lean.ToJson
 
-def eventName : Event → String
-  | .siblingWait => "sibling_wait"
-  | .elapsed => "elapsed"
-  | .rollbackOwnerScheduled => "rollback_owner_scheduled"
-  | .storageReturned => "storage_returned"
-  | .deadlineObserved => "deadline_observed"
-  | .cleanupReturned => "cleanup_returned"
-  | .cleanupDeadlineObserved => "cleanup_deadline_observed"
-  | .dropReturned => "drop_returned"
-  | .release => "release"
+structure Output where
+  capacity : Nat
+  snapshots : List Snapshot
+  deriving Lean.ToJson
 
-def natArray (values : List Nat) : String :=
-  jsonArray (values.map toString)
+def snapshot (pool : Pool) : Snapshot :=
+  { activeCount := activeCount pool
+    activeOwners := pool.active.map Prod.fst
+    waiting := pool.waiting
+    storeClaimHeld := pool.storeClaimHeld }
 
-def actionJson : Action → String
-  | .request owner =>
-      "{\"kind\":\"request\",\"owner\":" ++ toString owner ++ "}"
-  | .observe owner event =>
-      "{\"kind\":\"observe\",\"owner\":" ++ toString owner ++
-        ",\"event\":" ++ jsonString (eventName event) ++ "}"
-  | .release owner =>
-      "{\"kind\":\"release\",\"owner\":" ++ toString owner ++ "}"
-
-def leaseJson (entry : Nat × State) : String :=
-  "{\"owner\":" ++ toString entry.1 ++
-    ",\"phase\":" ++ jsonString (phaseName entry.2.phase) ++ "}"
-
-def snapshotJson (afterActions : Nat) (pool : Pool) : String :=
-  "{\"after_actions\":" ++ toString afterActions ++
-    ",\"active_count\":" ++ toString (activeCount pool) ++
-    ",\"active_owners\":" ++ natArray (pool.active.map Prod.fst) ++
-    ",\"waiting\":" ++ natArray pool.waiting ++
-    ",\"leases\":" ++ jsonArray (pool.active.map leaseJson) ++
-    ",\"store_claim_held\":" ++ (if pool.storeClaimHeld then "true" else "false") ++
-    "}"
-
-def checkpointJson (testCase : Case) (states : List Pool) (index : Nat) : String :=
-  snapshotJson index (states.getD index (initialPool testCase))
-
-def caseJson (testCase : Case) : String :=
-  let states := trace (initialPool testCase) testCase.actions
-  "{\"name\":" ++ jsonString testCase.name ++
-    ",\"capacity\":" ++ toString capacity ++
-    ",\"initial_claimed\":" ++ (if testCase.initialClaimed then "true" else "false") ++
-    ",\"actions\":" ++ jsonArray (testCase.actions.map actionJson) ++
-    ",\"checkpoints\":" ++ jsonArray
-      (testCase.checkpoints.map (checkpointJson testCase states)) ++ "}"
-
-def casesJson : String := jsonArray (cases.map caseJson)
+@[conformance_family]
+def leaseTrace : Conformance.Family Input Output where
+  inputs := cases
+  model := fun i =>
+    let initial := initialPool i
+    let states := trace initial (i.actions.map Step.toAction)
+    { capacity := StorageWriteGate.Admission.capacity
+      snapshots := (List.range i.actions.length).map fun index =>
+        snapshot (states.getD (index + 1) initial) }
 
 theorem independent_lease_trace_is_derived_from_model :
     let states := trace empty independentLeaseActions
@@ -124,6 +119,17 @@ theorem capacity_trace_keeps_sixty_fifth_waiting :
       final.storeClaimHeld := by
   decide
 
-end Conformance.StorageWriteGateAdmission
+deriving instance Lean.ToJson for StorageWriteGate.Admission.Operation
 
-def main : IO Unit := IO.println Conformance.StorageWriteGateAdmission.casesJson
+structure EntryInput where
+  operation : Operation
+  held : Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def entry : Conformance.Family EntryInput Bool where
+  inputs := [Operation.write, .readOnly].flatMap fun operation =>
+    [0, capacity - 1, capacity].map fun held => { operation, held }
+  model := fun i => proceedsImmediately i.operation i.held
+
+end Conformance.StorageWriteGateAdmission

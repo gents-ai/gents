@@ -23,7 +23,7 @@ async fn an_existing_listener_reservation_prevents_desktop_from_opening_the_stor
             home: HomePolicy::FixedRoot(temp.path().join("client")),
             bootstrap: BootstrapPolicy::PairedRemoteOnly,
             client_host: true,
-            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             ..Default::default()
         },
         None,
@@ -41,7 +41,7 @@ async fn an_existing_listener_reservation_prevents_desktop_from_opening_the_stor
     assert_eq!(error.code, BridgeErrorCode::ClientStartFailed);
     assert!(current_core(&app.state::<DesktopAppState>()).is_none());
     assert!(!paths.principal_metadata_path().exists());
-    let claim = gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
+    let claim = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
     drop(claim);
     drop(listener);
     let (progress, receiver) = watch::channel(ClientStartProgress::Pending);
@@ -62,7 +62,7 @@ async fn desktop_start_publishes_its_client_and_exclusion_closes_attachments_bef
             home: HomePolicy::FixedRoot(temp.path().join("client")),
             bootstrap: BootstrapPolicy::PairedRemoteOnly,
             client_host: true,
-            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             ..Default::default()
         },
         None,
@@ -79,7 +79,6 @@ async fn desktop_start_publishes_its_client_and_exclusion_closes_attachments_bef
     let state = app.state::<DesktopAppState>();
     let core = current_core(&state).unwrap();
     let client_did = core.node_identity().did().to_owned();
-    core.set_selected_node_did(Some("did:scope:desktop".into()));
     let stream = local::connect(&paths).await.unwrap();
     let mut client = LengthDelimitedCodec::builder().new_framed(stream);
     client
@@ -95,7 +94,6 @@ async fn desktop_start_publishes_its_client_and_exclusion_closes_attachments_bef
     let hello: serde_json::Value =
         serde_json::from_slice(&client.next().await.unwrap().unwrap()).unwrap();
     assert_eq!(hello["version"], protocol::PROTOCOL_VERSION);
-    assert_eq!(core.selected_node_did(), None);
     client
         .send(Bytes::from_static(
             br#"{"kind":"call","id":1,"command":{"name":"desktop_client_snapshot","args":{}}}"#,
@@ -121,15 +119,11 @@ async fn desktop_start_publishes_its_client_and_exclusion_closes_attachments_bef
     .await
     .expect("exclusion closes the native attachment");
     assert!(local::connect(&paths).await.is_err());
-    assert_eq!(
-        core.selected_node_did().as_deref(),
-        Some("did:scope:desktop")
-    );
     assert!(current_core(&state).is_none());
     assert!(Arc::clone(&state.client_lifecycle)
         .try_lock_owned()
         .is_err());
-    let claim = gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
+    let claim = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
     drop(claim);
     drop(exclusion);
 }

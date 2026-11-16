@@ -138,3 +138,15 @@ fn mark(message: &mut Message, cache: &CacheControl) {
 #[cfg(test)]
 #[path = "cache_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn claude_cache_ttl_matches_lean() {
+        gents_lean_vocab::families::prompt_assembly_claude_cache_ttl::replay(|i| {
+            ttl(i.subscriber, i.main_thread, i.using_overage)
+        });
+    }
+}

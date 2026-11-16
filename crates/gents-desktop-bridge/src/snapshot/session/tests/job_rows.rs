@@ -42,6 +42,20 @@ async fn snapshot_of(
             .await
             .expect("refresh request");
     }
+    let mut publications = served.core.stores().subscribe();
+    while !served
+        .core
+        .stores()
+        .snapshot(node)
+        .sessions
+        .iter()
+        .any(|session| session.session_id == session_id)
+    {
+        publications
+            .changed()
+            .await
+            .expect("store observer is running");
+    }
     let access = served.runtime.user_access();
     let page = gents_desktop_core::client::load_session_transcript_page_on(
         &access,

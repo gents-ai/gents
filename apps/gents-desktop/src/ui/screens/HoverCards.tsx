@@ -281,7 +281,6 @@ export function NodeHoverCard({
      click) park no pointer, so they keep the card's focus and hover opening */
   const followed = useRef(false);
   const pressedBy = useRef<string | null>(null);
-  const online = deployment.dialSucceeded;
   const page = nodeSection(deployment.nodeDid, "agent");
   return (
     <HoverCard open={open} onOpenChange={(next) => setOpen(next && !followed.current)}>
@@ -317,7 +316,7 @@ export function NodeHoverCard({
             />
           }
         >
-          <OnlineStatus online={online} />
+          <OnlineStatus deployment={deployment} />
         </CardTitle>
         <Facts>
           <NodeReach deployment={deployment} />

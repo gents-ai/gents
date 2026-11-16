@@ -36,12 +36,14 @@ fn source_projection_is_sorted_and_unavailability_wins() {
                 dispatcher_present: true,
                 unavailable_reason: Some(AgentReadinessUnavailableReason::BackendDisabled),
                 startup_demoted: false,
+                effective_inference: None,
             },
             AgentReadinessSourceEntry {
                 agent_did: "a".to_string(),
                 dispatcher_present: true,
                 unavailable_reason: None,
                 startup_demoted: false,
+                effective_inference: None,
             },
         ],
     )
@@ -56,6 +58,7 @@ fn ready_snapshot_does_not_expire_without_semantic_changes() {
         agent_did: "a".to_string(),
         state: AgentReadinessState::Ready,
         reason: None,
+        effective_inference: None,
     }]);
     let row = readiness_row("did:test:node", serde_json::to_string(&snapshot).unwrap());
     let projection = project_node_readiness(Some(&row), "did:test:node", ["a"], Some("a"));
@@ -76,11 +79,13 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
         agent_did: "a".to_string(),
         state: AgentReadinessState::Ready,
         reason: None,
+        effective_inference: None,
     };
     let unavailable = AgentReadinessEntry {
         agent_did: "b".to_string(),
         state: AgentReadinessState::Unavailable,
         reason: Some(AgentReadinessUnavailableReason::BackendDisabled),
+        effective_inference: None,
     };
     let canonical = readiness_row(
         "did:test:node",
@@ -107,6 +112,7 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
             agent_did: "a".to_string(),
             state: AgentReadinessState::Unavailable,
             reason: None,
+            effective_inference: None,
         }]),
     ];
     for snapshot in malformed_snapshots {
@@ -160,7 +166,9 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
 
     let with_unknown_field = readiness_row(
         "did:test:node",
-        r#"{"format_version":2,"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_did":"a","agents":[{"agent_did":"a","state":"ready","reason":null,"extra":true}]}"#.to_string(),
+        format!(
+            r#"{{"format_version":{NODE_READINESS_FORMAT_VERSION},"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_did":"a","agents":[{{"agent_did":"a","state":"ready","reason":null,"extra":true}}]}}"#
+        ),
     );
     assert_eq!(
         projected_unknown(&with_unknown_field),
@@ -168,7 +176,9 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
     );
     let with_unknown_top_level_field = readiness_row(
         "did:test:node",
-        r#"{"format_version":2,"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_did":"a","agents":[{"agent_did":"a","state":"ready","reason":null}],"extra":true}"#.to_string(),
+        format!(
+            r#"{{"format_version":{NODE_READINESS_FORMAT_VERSION},"process_state":"ready","active_generation":4,"router_generation":4,"default_agent_did":"a","agents":[{{"agent_did":"a","state":"ready","reason":null}}],"extra":true}}"#
+        ),
     );
     assert_eq!(
         project_node_readiness_summary(Some(&with_unknown_top_level_field), "did:test:node"),
@@ -255,4 +265,137 @@ fn unsupported_version_is_classified_before_current_payload_shape() {
         decode_node_readiness_snapshot(&row, "did:test:other"),
         Err(AgentReadinessUnknownReason::ReadinessMalformed),
     );
+}
+
+fn readiness_reason_code<T>(reason: T) -> String
+where
+    T: serde::Serialize,
+{
+    serde_json::to_value(reason)
+        .expect("serialize readiness reason")
+        .as_str()
+        .expect("readiness reason serializes as string")
+        .to_string()
+}
+
+#[test]
+fn generated_agent_readiness_cases_drive_the_production_projector() {
+    use crate::node_readiness::{
+        project_node_readiness, project_node_readiness_source, project_node_readiness_with_storage,
+        AgentReadinessSourceEntry, AgentReadinessUnavailableReason, NodeReadinessProcessState,
+        NodeReadinessRow, ProjectedAgentReadiness, RuntimeStorageObservation,
+        NODE_READINESS_FORMAT_VERSION,
+    };
+    use gents_lean_vocab::families::client_agent_readiness_projection::ReadinessOutput;
+
+    gents_lean_vocab::families::client_agent_readiness_projection::replay::<
+        AgentReadinessUnavailableReason,
+        NodeReadinessProcessState,
+    >(|case| {
+        let selected_assigned = case.runnable || case.unavailable || case.startup_demoted;
+        let default_agent_did = if selected_assigned { "20" } else { "10" };
+        let sources = vec![AgentReadinessSourceEntry {
+            effective_inference: None,
+
+            agent_did: default_agent_did.to_string(),
+            dispatcher_present: if selected_assigned {
+                case.runnable
+            } else {
+                true
+            },
+            unavailable_reason: if selected_assigned && case.unavailable {
+                Some(case.runtime_unavailable_reason)
+            } else {
+                None
+            },
+            startup_demoted: selected_assigned && case.startup_demoted,
+        }];
+        let mut snapshot = project_node_readiness_source(
+            case.process_state,
+            case.active_generation,
+            case.router_generation,
+            default_agent_did,
+            sources,
+        )
+        .unwrap_or_else(|error| panic!("{} invalid generated source: {error}", case.name));
+        let intact = NodeReadinessRow {
+            node_did: "did:test:lean-readiness".to_string(),
+            snapshot_json: serde_json::to_string(&snapshot).unwrap(),
+            updated_at: "2026-08-28T00:00:00Z".to_string(),
+        };
+        let runtime_admissible = matches!(
+            project_node_readiness(Some(&intact), "did:test:lean-readiness", ["20"], Some("20"),)
+                .agents
+                .get("20"),
+            Some(ProjectedAgentReadiness::Ready)
+        );
+        if case.observation_kind == "unsupported_version" {
+            snapshot.format_version = NODE_READINESS_FORMAT_VERSION + 1;
+        }
+        let row = NodeReadinessRow {
+            snapshot_json: if case.observation_kind == "malformed" {
+                "not-json".to_string()
+            } else {
+                serde_json::to_string(&snapshot).unwrap()
+            },
+            ..intact
+        };
+        let storage = RuntimeStorageObservation::from_unavailable(case.storage_unavailable);
+        let projection = project_node_readiness_with_storage(
+            case.observation_present.then_some(&row),
+            "did:test:lean-readiness",
+            ["20"],
+            Some("20"),
+            storage,
+        );
+        let projected = projection
+            .agents
+            .get("20")
+            .unwrap_or_else(|| panic!("{} missing selected agent", case.name));
+        for timestamp in ["1970-01-01T00:00:00Z", "2999-01-01T00:00:00Z"] {
+            let mut aged_row = row.clone();
+            aged_row.updated_at = timestamp.to_string();
+            let aged = project_node_readiness_with_storage(
+                case.observation_present.then_some(&aged_row),
+                "did:test:lean-readiness",
+                ["20"],
+                Some("20"),
+                storage,
+            );
+            assert_eq!(aged.agents, projection.agents, "{}: {timestamp}", case.name);
+            assert_eq!(
+                aged.unknown_reason, projection.unknown_reason,
+                "{}: {timestamp}",
+                case.name
+            );
+        }
+        let (state, reason) = match projected {
+            ProjectedAgentReadiness::Ready => ("ready", None),
+            ProjectedAgentReadiness::Unavailable(reason) => {
+                ("unavailable", Some(readiness_reason_code(*reason)))
+            }
+            ProjectedAgentReadiness::Unknown(reason) => {
+                ("unknown", Some(readiness_reason_code(*reason)))
+            }
+        };
+        if case.observation_kind == "observed" && !case.storage_unavailable {
+            assert_eq!(
+                state == "ready",
+                runtime_admissible,
+                "{} canonical observation/runtime admission parity",
+                case.name
+            );
+        } else {
+            assert_eq!(
+                state, "unknown",
+                "{} transport failure closes client",
+                case.name
+            );
+        }
+        ReadinessOutput {
+            state: state.to_string(),
+            reason,
+            runtime_admissible,
+        }
+    });
 }

@@ -1,7 +1,6 @@
-type Node @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "nodes") {
+type Node @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18da780248ce26a5c", resource: "nodes") {
     node_did: String @index(unique: true)
     display_name: String
-    default_agent_did: String @index
     enabled: Boolean @index
     created_at: String
     updated_at: DateTime @index(direction: DESC)

@@ -1,10 +1,13 @@
-use gents::{BackendProviderKind, Collection, OpenAiWireApi};
+use gents_inference::backends::provider::BackendProviderKind;
+use gents_loop::openai_wire::OpenAiWireApi;
+use gents_store::collection::Collection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::desired_state;
 
-use crate::cli::args::{ToolCeilingArg, ToolPackageArg};
+use gents_service::args::ToolCeilingArg;
+use gents_service::args::ToolPackageArg;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedBackendConfig {
@@ -37,69 +40,6 @@ pub(crate) struct InitSummary {
     pub(crate) defra_query_collections: Vec<String>,
     pub(crate) created_node: bool,
     pub(crate) created_default_agent: bool,
-}
-
-pub(crate) type StoredInitConfig =
-    gents::store::local::home::StoredInitConfig<ToolPackageArg, ToolCeilingArg>;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct P2pAdmissionState {
-    pub(crate) max_pending_dags: usize,
-    pub(crate) max_concurrent_push_tasks: usize,
-    pub(crate) max_concurrent_dag_fetches: usize,
-    pub(crate) rate_limit_burst: u32,
-    pub(crate) rate_limit_rate: f64,
-}
-
-impl P2pAdmissionState {
-    pub(crate) fn to_json(&self) -> Value {
-        serde_json::json!({
-            "max_pending_dags": self.max_pending_dags,
-            "max_concurrent_push_tasks": self.max_concurrent_push_tasks,
-            "max_concurrent_dag_fetches": self.max_concurrent_dag_fetches,
-            "rate_limit_burst": self.rate_limit_burst,
-            "rate_limit_rate": self.rate_limit_rate,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct StoredRuntimeState {
-    pub(crate) home: String,
-    pub(crate) graphql: String,
-    pub(crate) node_name: String,
-    pub(crate) node_did: String,
-    pub(crate) default_agent_did: String,
-    #[serde(default = "default_p2p_transport")]
-    pub(crate) p2p_transport: String,
-    #[serde(default)]
-    pub(crate) p2p_peer_id: Option<String>,
-    #[serde(default)]
-    pub(crate) p2p_listen_addresses: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) p2p_admission: Option<P2pAdmissionState>,
-}
-
-fn default_p2p_transport() -> String {
-    "iroh".to_string()
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub(crate) struct P2pReplicatorRow {
-    #[serde(rename = "ID", default)]
-    pub(crate) id: Option<String>,
-    #[serde(rename = "Addresses", default)]
-    pub(crate) addresses: Vec<String>,
-    #[serde(rename = "CollectionIDs", default)]
-    pub(crate) collection_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct P2pReplicatorOutputRow {
-    pub(crate) id: Option<String>,
-    pub(crate) addresses: Vec<String>,
-    pub(crate) collection_ids: Vec<String>,
-    pub(crate) collection_names: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -135,18 +75,24 @@ pub(crate) struct ConfigExportBundle {
     pub(crate) exported_at: String,
     pub(crate) access_mode: String,
     #[serde(flatten)]
-    pub(crate) config: gents::documents::PackConfig,
+    pub(crate) config: gents_documents::PackConfig,
 }
 
 impl ConfigExportBundle {
     pub(crate) fn docs_for_collection(&self, collection: Collection) -> anyhow::Result<Vec<Value>> {
         let config = serde_json::to_value(&self.config)?;
-        match collection.dir_name() {
-            None => Ok(vec![config["node"].clone()]),
-            Some(key) => match config.get(key) {
+        match collection {
+            Collection::Node => Ok(vec![config["node"].clone()]),
+            Collection::DefaultAgentSelection => Ok(match config.get("default_agent_selection") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(selection) => vec![selection.clone()],
+            }),
+            _ => match collection.dir_name().and_then(|key| config.get(key)) {
                 None | Some(Value::Null) => Ok(Vec::new()),
                 Some(Value::Array(rows)) => Ok(rows.clone()),
-                Some(_) => anyhow::bail!("canonical configuration {key} is not a document array"),
+                Some(_) => {
+                    anyhow::bail!("canonical configuration {collection} is not a document array")
+                }
             },
         }
     }
@@ -163,21 +109,27 @@ impl Serialize for ConfigApplyCounts {
         use serde::ser::SerializeMap;
         let mut map = serializer.serialize_map(Some(Collection::ALL.len()))?;
         for collection in Collection::ALL {
-            let key = collection.dir_name().unwrap_or("node");
-            map.serialize_entry(key, &self.get(collection))?;
+            map.serialize_entry(&collection.to_string(), &self.get(collection))?;
         }
         map.end()
     }
 }
 
 impl ConfigApplyCounts {
-    pub(crate) fn from_config(config: &gents::documents::PackConfig) -> anyhow::Result<Self> {
+    pub(crate) fn from_config(config: &gents_documents::PackConfig) -> anyhow::Result<Self> {
         let value = serde_json::to_value(config)?;
         let mut counts = Self::default();
         for collection in Collection::ALL {
-            let count = match collection.dir_name() {
-                Some(key) => value.get(key).and_then(Value::as_array).map_or(0, Vec::len),
-                None => 1,
+            let count = match collection {
+                Collection::Node => 1,
+                Collection::DefaultAgentSelection => {
+                    usize::from(value.get("default_agent_selection").is_some())
+                }
+                _ => collection
+                    .dir_name()
+                    .and_then(|key| value.get(key))
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len),
             };
             counts.set(collection, count);
         }
@@ -225,7 +177,7 @@ pub(crate) struct ConfigApplyReport {
     pub(crate) access_mode: String,
     pub(crate) node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) schemas: Option<crate::commands::schema::PackSchemaPhase>,
+    pub(crate) schemas: Option<gents_pack::pack::schema_apply::PackSchemaPhase>,
     pub(crate) planned: desired_state::DesiredStateDiffCollectionsCounts,
     pub(crate) applied: ConfigApplyCounts,
     pub(crate) pruned: ConfigApplyCounts,
@@ -233,22 +185,94 @@ pub(crate) struct ConfigApplyReport {
 }
 
 pub(crate) async fn load_backend_observation(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     backend_id: &str,
-) -> anyhow::Result<gents::documents::InferenceBackendObservation> {
-    let query = format!(
-        "{{ InferenceBackendObservation(filter: {{node_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs catalog_freshness probe_status last_probe}} }}",
-        gents::store::graphql::escape_graphql_string(node_did),
-        gents::store::graphql::escape_graphql_string(backend_id),
-    );
-    let rows = crate::graphql_rows(access, "InferenceBackendObservation", &query).await?;
+) -> anyhow::Result<gents_documents::InferenceBackendObservation> {
+    let rows = access
+        .read_view(
+            &gents_inference::views::backends::ObservationList::new(node_did)
+                .backend_id(backend_id),
+        )
+        .await?;
     anyhow::ensure!(
         rows.len() == 1,
         "backend observation is missing or ambiguous"
     );
-    gents::inference::backends::registry::decode_backend_observation(rows[0].clone())
+    Ok(rows
+        .into_iter()
+        .next()
+        .expect("one observed backend")
+        .observation)
+}
+
+pub(crate) fn wire<T>(value: &T) -> String
+where
+    T: Serialize,
+{
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(text)) => text,
+        Ok(other) => other.to_string(),
+        Err(_) => "?".to_owned(),
+    }
 }
 
 #[cfg(test)]
-pub(crate) mod test_support;
+mod catalog_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()> {
+        let node = std::sync::Arc::new(
+            gents_host::test_support::fixture_node_builder()
+                .build()
+                .await?,
+        );
+        gents_store::schema::ensure_runtime_schemas(&node).await?;
+        let owner = gents_host::test_support::publish_test_node(&node).await;
+        let backend: gents_documents::InferenceBackend =
+            serde_json::from_value(serde_json::json!({
+                "node_did":owner, "backend_id":"catalog-backend", "name":"Catalog",
+                "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1",
+                "auth":{"kind":"unauthenticated"}
+            }))?;
+        let access = gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            ::identity::Did::new(owner)?,
+        );
+        gents_documents::write_inference_backend_document(
+            &access,
+            &backend,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
+        for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
+            let catalog: gents_documents::BackendModelCatalog =
+                serde_json::from_value(serde_json::json!({
+                    "node_did":null, "observed_at":observed_at,
+                    "models":[{"model_name":"retained-model"}]
+                }))?;
+            access
+                .transact_write("test.catalog.refresh", |txn| {
+                    let backend = &backend;
+                    let catalog = catalog.clone();
+                    Box::pin(async move {
+                        gents_inference::backends::registry::record_model_catalog_in_txn(
+                            txn, backend, catalog,
+                        )
+                        .await
+                    })
+                })
+                .await?;
+        }
+        let observation =
+            load_backend_observation(&access, &backend.node_did, &backend.backend_id).await?;
+        assert_eq!(observation.catalogs[0].observed_at, "2026-10-28T02:00:00Z");
+        assert_eq!(
+            observation.catalogs[0].models[0].model_name,
+            "retained-model"
+        );
+        node.shutdown().await.expect("node shutdown");
+        Ok(())
+    }
+}

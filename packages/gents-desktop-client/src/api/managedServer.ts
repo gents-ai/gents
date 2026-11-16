@@ -7,6 +7,7 @@ type ManagedServerCommand =
   | "enrollManagedServer"
   | "restartManagedServer"
   | "resetManagedServer"
+  | "repairManagedServer"
   | "validateManagedServerRoot"
   | "selectAgentWorkspaceRoot"
   | "openManagedServerLoginItems"
@@ -32,6 +33,7 @@ export function createManagedServerCommands(
       invokeDesktop("desktop_managed_server_restart", {
         request: { nodeName, ...authority },
       }),
+    repairManagedServer: () => invokeDesktop("desktop_managed_server_repair"),
     resetManagedServer: (confirmation, disposition, fullReset) =>
       invokeDesktop("desktop_managed_server_reset", {
         request: {

@@ -2,6 +2,6 @@
 import type { DefaultPackView } from "./DefaultPackView.js";
 
 /**
- * The Engineer's default packs as the local node's home has them.
+ * The Engineer's core packs as the local node's home has them.
  */
 export type DefaultPacksView = { packs: Array<DefaultPackView>, };

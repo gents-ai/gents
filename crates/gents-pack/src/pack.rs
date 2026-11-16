@@ -1,0 +1,301 @@
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+mod agent_bindings;
+pub use agent_bindings::{
+    load_pack_install_config_with_provisioner, rewrite_references as bind_agent_references,
+    AgentProvisioner,
+};
+pub mod archive;
+pub use agent_bindings::{
+    agent_binding_variable, agent_did_variable, agent_slot_reference, is_agent_binding_variable,
+    load_pack_authoring_config, load_pack_install_config, AuthoredPackConfig, BoundPackConfig,
+    PackAgentBindings, AGENT_SLOT_REFERENCE_PREFIX,
+};
+pub mod authoring;
+pub mod core_packs;
+pub mod home_install;
+pub mod home_removal;
+mod inference;
+pub mod install_flow;
+pub mod install_review;
+mod installation;
+pub mod installation_roots;
+pub mod interpolate;
+pub mod job_admission;
+mod loader;
+pub mod local;
+mod manifest_validation;
+pub mod materialize;
+pub mod node_packs;
+mod plugin;
+pub mod plugin_lifecycle;
+mod plugin_validation;
+pub mod plugin_wire;
+mod plugin_wiring;
+mod provenance;
+#[cfg(test)]
+mod publication_contract_tests;
+pub mod registry;
+pub mod resolve;
+pub mod resolved_pack;
+pub mod rooted_paths;
+pub mod schema_apply;
+pub mod store;
+mod ux;
+pub mod wiring;
+pub use gents_documents::{is_valid_ux_data_tool_name, UxDataSurface, MAX_UX_DATA_SURFACE_ID_LEN};
+pub use home_install::{
+    forget_home_install, installer_provenance, list_home_installs, list_home_installs_with_skips,
+    list_readable_home_installs, read_home_install, record_after_install, write_home_install,
+    HomePackInstall, InstalledVia, SkippedHomeInstall,
+};
+pub use inference::{
+    bind_pack_install_config, inference_profile_options, inspect_pack_inference_bindings,
+    install_pack_documents, install_pack_documents_with_expectations,
+    preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
+    SlotBindingError,
+};
+pub(crate) use inference::{
+    inspect_pack_inference_bindings_with_node_binding,
+    preview_pack_inference_bindings_with_node_binding,
+};
+pub use installation::declared_collections;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use installation::record_plugin_store_change_as_with_node_binding;
+pub use installation::{
+    apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
+    collections_install_creates, declared_readers, document_pack_schema_paths,
+    edited_installed_documents, ensure_plugins_unreferenced, hosted_document_graph,
+    install_prepared_document_graph, install_prepared_document_pack, installed_catalog,
+    installed_pack_documents, installed_packs, installer_tool_root, list_installed_packs,
+    pack_root_record, plugin_data_unique_keys, plugin_pin_conflicts, prepare_document_pack_archive,
+    prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
+    prepare_hosted_document_pack_archive, read_installed_pack, record_plugin_retirement_as,
+    record_plugin_store_change, record_plugin_store_change_as, record_staged_plugin_store_change,
+    referenced_pack_digests, remove_pack, tools_taking_installer_root, visible_plugin_selections,
+    DependencyVariableOverrides, DriftPolicy, HostedDocumentGraph, HostedPackPreparation,
+    InstallReport, InstalledCatalogEntry, InstalledPack, InstalledPackPlugin, InstallerRootAgent,
+    PackAgentRoot, PackChangeError, PackIdentity, PackRemovalError, PackRootRecord, PackSource,
+    PackSourceHistory, PluginPinConflict, PluginSelection, PluginStoreChangeError,
+    PluginStoreLocation, PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
+};
+pub(crate) use installation::{
+    prepare_document_pack_archive_with_provisioner,
+    record_staged_plugin_store_change_as_with_node_binding, sdl_paths, PluginStageContext,
+};
+pub use installation::{
+    stage_hosted_pack, HostedHomePublication, HostedPackApproval, HostedPackStage,
+    HostedPackStageError,
+};
+pub use loader::{
+    authored_document_schema, authored_pack_config_schema, decode_pack_config,
+    ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
+    DependencyVariableResolver,
+};
+pub use manifest_validation::{validate_manifest, validate_pack_manifest};
+pub use plugin::{
+    tool_instructions, BindAccess, HostImport, PackPlugin, PluginDirBinding, PluginLimits,
+    PluginService, MAX_TOOL_INSTRUCTIONS_BYTES, PLUGIN_ARTIFACT_PREFIX, SUPPORTED_PLUGIN_LANGUAGES,
+};
+pub use plugin_wiring::{
+    consent_dynamic_run, consent_tool_calls, unwire_plugin, wire_plugin, WireReport,
+};
+pub(crate) use provenance::pack_artifact_document_digest;
+pub use provenance::{
+    pack_document_digests, pack_origin_from_tags, pack_origin_tag, PackOriginError,
+};
+pub use ux::{
+    is_valid_directive_name, PackUxPlugin, UxContributions, UX_PLUGIN_AREAS, UX_PLUGIN_PREFIX,
+};
+
+mod asset_path;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PackKind {
+    Documents,
+    Assets,
+    Plugins,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PackMetadata {
+    pub kind: PackKind,
+    #[serde(default = "default_namespace")]
+    pub namespace: String,
+    pub authors: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "gents_documents::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[schemars(transform = gents_documents::accepts_null)]
+    pub tags: Vec<String>,
+    pub assets: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "gents_documents::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[schemars(transform = gents_documents::accepts_null)]
+    pub dependencies: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inference_slots: Vec<PackInferenceSlot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<PackPlugin>,
+    /// The UX plugins this pack ships: modules the desktop webview loads,
+    /// each a nav row, a page, a header action or a transcript directive.
+    /// A UX plugin is an asset, never a document: it writes nothing to the
+    /// agent's store and runs with the webview's authority, gated by what
+    /// it declares here (see [`PackUxPlugin`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ux: Vec<PackUxPlugin>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PackInferenceSlot {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub agents: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
+}
+
+pub type PackInferenceBindings = BTreeMap<String, String>;
+
+pub const INFERENCE_SLOT_REFERENCE_PREFIX: &str = "gents:inference-slot:";
+
+pub fn inference_slot_reference(name: &str) -> String {
+    format!("{INFERENCE_SLOT_REFERENCE_PREFIX}{name}")
+}
+
+fn default_namespace() -> String {
+    gents_documents::pack_spec::DEFAULT_NAMESPACE.to_owned()
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PackManifest {
+    pub manifest_version: u32,
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    #[serde(flatten)]
+    pub metadata: PackMetadata,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "gents_documents::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[schemars(transform = gents_documents::accepts_null)]
+    pub schemas: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "gents_documents::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[schemars(transform = gents_documents::accepts_null)]
+    pub external_dependencies: Vec<PackageExternalDependency>,
+    /// The plugin interface the pack was built for (Lean
+    /// `Pack.CorePacks.builtFor`): absent is interface 1, from before the
+    /// interface had a version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_interface: Option<u32>,
+}
+
+impl PackManifest {
+    /// The one manifest decode. A retired `graph` kind is refused before the
+    /// typed decode so the error names the next step instead of serde's
+    /// unknown-variant message.
+    pub fn from_slice(bytes: &[u8]) -> Result<Self> {
+        let raw: serde_json::Value = serde_json::from_slice(bytes)?;
+        if raw.get("kind").and_then(serde_json::Value::as_str) == Some("graph") {
+            let text = |key: &str, fallback: &str| {
+                raw.get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(fallback)
+                    .to_owned()
+            };
+            anyhow::bail!(
+                "graph packs are retired; run `gents config pack remove {}/{}` and install the 2.x version",
+                text("namespace", gents_documents::pack_spec::DEFAULT_NAMESPACE),
+                text("name", "<name>")
+            );
+        }
+        Ok(serde_json::from_value(raw)?)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PackageExternalDependency {
+    pub service_id: String,
+    pub description: String,
+    pub repository_url: String,
+    pub install_command: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackInstallOptions {
+    pub node_did: String,
+}
+
+pub fn is_distributable_asset_path(path: &str) -> bool {
+    asset_path::is_distributable_asset(path) && asset_path::has_canonical_asset_spelling(path)
+}
+
+pub(crate) fn open_pack_asset(root: &std::path::Path, path: &str) -> Result<std::fs::File> {
+    asset_path::open_pack_asset(root, path)
+}
+
+pub fn declared_paths(manifest: &PackManifest) -> Vec<String> {
+    let mut paths = manifest.metadata.assets.clone();
+    paths.push("manifest.json".to_owned());
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+pub fn digest_declared_assets<'a>(
+    manifest: &PackManifest,
+    asset: impl Fn(&str) -> Result<&'a [u8]>,
+) -> Result<String> {
+    let mut digest = PackDigester::default();
+    for path in declared_paths(manifest) {
+        let bytes =
+            asset(&path).with_context(|| format!("pack references missing asset {path:?}"))?;
+        digest.begin_entry(&path, bytes.len() as u64);
+        digest.update(bytes);
+    }
+    Ok(digest.finish())
+}
+
+#[derive(Default)]
+pub struct PackDigester(sha2::Sha256);
+
+impl PackDigester {
+    pub fn begin_entry(&mut self, path: &str, len: u64) {
+        use sha2::Digest;
+        self.0.update((path.len() as u64).to_be_bytes());
+        self.0.update(path.as_bytes());
+        self.0.update(len.to_be_bytes());
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        sha2::Digest::update(&mut self.0, bytes);
+    }
+
+    pub fn finish(self) -> String {
+        format!("sha256:{:x}", sha2::Digest::finalize(self.0))
+    }
+}
+
+#[cfg(test)]
+mod tests;

@@ -2,12 +2,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::documents::{
+use gents_documents::DesiredStateApplyPlan;
+use gents_documents::{
     BackendAuth, ConfigReferences, InferenceBackend, InferenceProfile, InferenceSampling,
 };
-use gents::pack::{decode_pack_config, PackInstallOptions};
-use gents::store::config_client::DesiredStateApplyPlan;
-use gents::BackendProviderKind;
+use gents_inference::backends::provider::BackendProviderKind;
+use gents_pack::pack::{decode_pack_config, PackInstallOptions};
 
 pub const EVAL_TARGET_VARIABLE: &str = "GENTS_EVAL_TARGET";
 
@@ -212,31 +212,54 @@ impl InferenceTarget {
         }
     }
 
-    pub async fn assert_reachable(&self) {
+    pub async fn discover_model(&mut self) -> Result<()> {
         let url = format!("{}/models", self.endpoint().trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
-            .build()
-            .expect("reqwest client");
+        let client = tokio::task::spawn_blocking(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(15))
+                .build()
+        })
+        .await??;
         let mut request = client.get(&url);
-        if let Some(key) = self
-            .backend
-            .auth
-            .resolve_api_key()
-            .unwrap_or_else(|error| panic!("target {} credential: {error:#}", self.name))
-        {
+        if let Some(key) = self.backend.auth.resolve_api_key()? {
             request = request.bearer_auth(key);
         }
-        let name = &self.name;
-        match tokio::time::timeout(Duration::from_secs(20), request.send()).await {
-            Ok(Ok(r)) if r.status().is_success() => {}
-            Ok(Ok(r)) => panic!(
-                "target {name} endpoint {url} returned status {}",
-                r.status()
+        let response = request
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "target {} is unreachable at {url}; start its vLLM server, then run curl {url}",
+                    self.name
+                )
+            })?
+            .error_for_status()
+            .with_context(|| format!("target {} rejected {url}; check curl {url}", self.name))?;
+        let models: serde_json::Value = response.json().await?;
+        let ids = models["data"]
+            .as_array()
+            .context("/v1/models omitted data")?
+            .iter()
+            .filter_map(|model| model["id"].as_str())
+            .collect::<Vec<_>>();
+        let model = match ids.as_slice() {
+            [model] => *model,
+            _ if ids.contains(&self.model()) => self.model(),
+            _ => anyhow::bail!(
+                "target {} serves {ids:?}; select one model in scripts/evals/targets/{}.json",
+                self.name,
+                self.name
             ),
-            Ok(Err(e)) => panic!("target {name} endpoint {url} unreachable: {e}"),
-            Err(_) => panic!("target {name} endpoint {url} timed out (not reachable)"),
-        }
+        };
+        self.profile.model_name = model.to_owned();
+        Ok(())
+    }
+
+    pub async fn assert_reachable(&self) {
+        self.clone()
+            .discover_model()
+            .await
+            .unwrap_or_else(|error| panic!("{error:#}"));
     }
 }
 

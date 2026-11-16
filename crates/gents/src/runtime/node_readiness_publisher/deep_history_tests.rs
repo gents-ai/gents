@@ -10,7 +10,7 @@ use gents_protocol::node_readiness::{
 
 use crate::defra_node::{Node as EmbeddedNode, P2PConfig};
 use crate::runtime::embedded::EmbeddedHome;
-use crate::store::graphql::{
+use gents_store::graphql::{
     decode_composite_commits, escape_graphql_string, graphql_with_transaction_retry,
     CompositeCommit,
 };
@@ -141,6 +141,7 @@ async fn fresh_peer_receives_readiness_past_8192_revisions_and_keeps_following()
             agent_did: "default".into(),
             state: AgentReadinessState::Ready,
             reason: None,
+            effective_inference: None,
         }],
     };
     for generation in 1..=8_200 {

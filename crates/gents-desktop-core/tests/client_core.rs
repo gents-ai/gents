@@ -98,9 +98,14 @@ async fn message_preparation_uses_the_hosted_head_when_the_replica_lags() -> Res
         "/tmp/test-hosted-message-home",
     )
     .await?;
-    assert!(core.store().snapshot().requests.is_empty());
+    assert!(core.stores().snapshot(node_did).requests.is_empty());
     let input = core
-        .prepare_user_message_input(node_did, "hosted-session", Default::default())
+        .prepare_user_message_input_with_delivery(
+            node_did,
+            "hosted-session",
+            Default::default(),
+            gents_protocol::request_input::QueueDelivery::Steer,
+        )
         .await?;
     let queue = input.queue.context("prepared user queue")?;
     assert_eq!(
@@ -131,7 +136,7 @@ async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> Resul
     )
     .await?;
 
-    let tools: gents::Tools = serde_json::from_value(serde_json::json!({
+    let tools: gents_documents::Tools = serde_json::from_value(serde_json::json!({
         "node_did": node_did,
         "tools_id": "must-not-be-local",
         "host": { "files": { "mode": "ReadOnly" } }
@@ -149,7 +154,7 @@ async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> Resul
         .node()
         .execute(&format!(
             r#"{{ Tools(filter: {{ node_did: {{ _eq: "{}" }}, tools_id: {{ _eq: "must-not-be-local" }} }}) {{ _docID }} }}"#,
-            gents::store::graphql::escape_graphql_string(node_did)
+            gents_store::graphql::escape_graphql_string(node_did)
         ))
         .await;
     assert!(

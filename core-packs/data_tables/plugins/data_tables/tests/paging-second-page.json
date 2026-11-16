@@ -1,0 +1,31 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "t",
+        "type": "int64"
+      },
+      {
+        "name": "kind",
+        "type": "text"
+      }
+    ],
+    "markdown": "| t | kind |\n| --- | --- |\n| 3 | a |",
+    "offset": 2,
+    "order": "file",
+    "row_count": 1,
+    "rows": [
+      [
+        3,
+        "a"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "cursor": "dt1.ZTA3OTE5Y2Q0OGM2MmZmYjoy.35ed04ac2d974004",
+    "max_rows": 2,
+    "sql": "SELECT t, kind FROM events"
+  }
+}

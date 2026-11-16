@@ -1,5 +1,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum EnrollmentError {
+    #[error("invalid live replicated-schema digest in enrollment offer")]
+    InvalidLiveSchemaDigest,
     #[error("invalid or expired enrollment renewal intent")]
     RenewalIntentInvalid,
     #[error("unsupported enrollment request version {version}")]

@@ -1,0 +1,554 @@
+use super::*;
+use gents_store::identity::NodeIdentity;
+
+#[cfg(unix)]
+#[tokio::test]
+async fn cancelling_while_approval_waits_never_requires_a_process_record() {
+    use gents_tools::plugin::approval::workspace;
+    if !gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
+        return;
+    }
+    let expected = gents_lean_vocab::lean_process_stop_cases()
+        .iter()
+        .find(|case| case.live_evidence == "never_spawned" && case.worker_released)
+        .unwrap();
+    let mut harness = admission_harness(|_, root, _, _| {
+        BackgroundToolRegistry::from_tools(
+            vec![gents_tools::native::write_capable_bash_for_test(root)],
+            &["bash_unrestricted".into()],
+        )
+    })
+    .await;
+    let executions = BackgroundExecutionRegistry::default();
+    harness.hook = harness
+        .hook
+        .with_background_execution_registry(executions.clone());
+    let root = harness.root.path().canonicalize().unwrap();
+    let agent = hook_managed_identity(&harness.hook, &harness.request_id).await;
+    let key = workspace::WorkspaceKey::canonical(
+        &harness.hook.node_did,
+        &harness.user_did,
+        agent.did(),
+        &root,
+    )
+    .unwrap();
+    let selection = workspace::ReviewTaskSelection {
+        task_id: "review-cancel".into(),
+        policy_digest: "fixture-policy".into(),
+    };
+    workspace::save_mode(
+        harness._dir.path(),
+        &key,
+        0,
+        workspace::Mode::AutoReview,
+        Some(&selection),
+    )
+    .unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let signal = entered.clone();
+    let context = workspace::for_request(
+        Some(harness._dir.path()),
+        &key.node_did,
+        Some(&key.requester_did),
+        &key.agent_did,
+        Some(&root),
+        None,
+    )
+    .unwrap()
+    .unwrap()
+    .with_reviewer(Arc::new(move |_| {
+        let signal = signal.clone();
+        Box::pin(async move {
+            signal.notify_one();
+            std::future::pending().await
+        })
+    }));
+    let args = json!({"tool_name":"bash_unrestricted", "args":{"command":"/bin/sh", "args":["-c", "exit 0"]}}).to_string();
+    accept_hook_tool_call(&harness.hook, "approval-stop", "spawn_process", &args, None).await;
+    let action = workspace::scope(
+        Some(context),
+        harness
+            .hook
+            .on_tool_call("spawn_process", None, "approval-stop", &args),
+    )
+    .await;
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("{action:?}")
+    };
+    let receipt: serde_json::Value = serde_json::from_str(&reason).unwrap();
+    let child = receipt["tool_call_id"].as_str().unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(60), entered.notified())
+        .await
+        .expect("approval was not reached");
+    let session = harness.hook.session_id().await.unwrap();
+    let row =
+        gents_toolcalls::test_support::background_hook::tool_row(&harness.access, &session, child)
+            .await;
+    let request = gents_protocol::process_control::OperatorProcessControlRequest {
+        node_did: key.node_did.clone(),
+        session_id: session.clone(),
+        tool_call_id: child.to_owned(),
+        tool_call_doc_id: row["_docID"].as_str().unwrap().to_owned(),
+    };
+    let agent_did = ::identity::Did::new(harness.access.actor_did().unwrap()).unwrap();
+    let outcome = gents_toolcalls::call::control::client::apply_claimed(
+        &harness.node,
+        &harness.access,
+        &executions,
+        &agent_did,
+        gents_toolcalls::call::control::client::ClaimedTarget {
+            node_did: &request.node_did,
+            session_id: &request.session_id,
+            requester_did: Some(&key.requester_did),
+            tool_call_id: &request.tool_call_id,
+            tool_call_doc_id: &request.tool_call_doc_id,
+            action: "process_stop",
+        },
+    )
+    .await
+    .unwrap();
+    let gents_protocol::process_control::ToolControlReceiptOutcome::Process(outcome) = outcome
+    else {
+        panic!("process stop produced {outcome:?}")
+    };
+    assert!(matches!(
+        outcome,
+        gents_toolcalls::call::control::CancelBackgroundToolCallOutcome::Cancelled {
+            live_execution_cancelled: true
+        } | gents_toolcalls::call::control::CancelBackgroundToolCallOutcome::AlreadyTerminal { .. }
+    ));
+    let row =
+        gents_toolcalls::test_support::background_hook::tool_row(&harness.access, &session, child)
+            .await;
+    assert_eq!(row["lifecycle_state"], expected.durable_state);
+    assert!(executions
+        .process_record(child, &request.tool_call_doc_id)
+        .is_none());
+    gents_toolcalls::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
+        &harness.node,
+        &key.node_did,
+        std::slice::from_ref(&agent),
+        &executions,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        gents_toolcalls::test_support::background_hook::tool_row(&harness.access, &session, child)
+            .await["lifecycle_state"],
+        expected.durable_state
+    );
+    hook_execution_fixtures()
+        .lock()
+        .await
+        .remove(&hook_execution_fixture_key(
+            &harness.hook,
+            &harness.request_id,
+        ));
+    harness.node.shutdown().await.expect("shut down test node");
+}
+
+#[cfg(unix)]
+async fn background_command_consent(
+    case: &gents_lean_vocab::families::workspace_permissions_sandboxed_background::RoutingInput<
+        String,
+        String,
+    >,
+) -> bool {
+    use gents_tools::plugin::approval::workspace;
+
+    let mode = match case.input.mode.as_str() {
+        "ask" => workspace::Mode::Ask,
+        "autoReview" => workspace::Mode::AutoReview,
+        "fullAccess" => workspace::Mode::FullAccess,
+        other => panic!("unknown mode {other}"),
+    };
+    let reviewed = mode == workspace::Mode::AutoReview;
+    let reviewer_available = reviewed && case.review == "allow";
+    let revoke = reviewed && case.reviewed_grant.scope.revision != case.input.current.revision;
+    let supported = gents_session::workspace::sandbox::workspace_write_sandbox_enforced();
+    let mut harness = admission_harness(|_, root, _, _| {
+        BackgroundToolRegistry::from_tools(
+            vec![gents_tools::native::write_capable_bash_for_test(root)],
+            &["bash_unrestricted".into()],
+        )
+    })
+    .await;
+    let executions = BackgroundExecutionRegistry::default();
+    harness.hook = harness
+        .hook
+        .with_background_execution_registry(executions.clone());
+    let root = harness.root.path().canonicalize().unwrap();
+    let agent = hook_managed_identity(&harness.hook, &harness.request_id).await;
+    let key = workspace::WorkspaceKey::canonical(
+        &harness.hook.node_did,
+        &harness.user_did,
+        agent.did(),
+        &root,
+    )
+    .unwrap();
+    let selection = workspace::ReviewTaskSelection {
+        task_id: "review-command".into(),
+        policy_digest: "fixture-policy".into(),
+    };
+    workspace::save_mode(
+        harness._dir.path(),
+        &key,
+        0,
+        mode,
+        (mode == workspace::Mode::AutoReview).then_some(&selection),
+    )
+    .unwrap();
+    let mut context = workspace::for_request(
+        Some(harness._dir.path()),
+        &key.node_did,
+        Some(&key.requester_did),
+        &key.agent_did,
+        Some(&root),
+        None,
+    )
+    .unwrap()
+    .unwrap();
+    let reviews = Arc::new(AtomicU64::new(0));
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    if reviewer_available {
+        let reviews = reviews.clone();
+        let entered = entered.clone();
+        let release = release.clone();
+        context = context.with_reviewer(Arc::new(move |invocation| {
+            reviews.fetch_add(1, Ordering::SeqCst);
+            let entered = entered.clone();
+            let release = release.clone();
+            Box::pin(async move {
+                if revoke {
+                    entered.notify_one();
+                    release.notified().await;
+                }
+                Ok(Some(
+                    json!({
+                        "actionId": invocation.action_id, "decision": "allow",
+                        "reason": "The command writes only the requested fixture marker.",
+                    })
+                    .to_string(),
+                ))
+            })
+        }));
+    }
+    let marker = root.join("approved-marker");
+    let args = json!({"tool_name": "bash_unrestricted", "args": {
+        "command": "/bin/sh",
+        "args": ["-c", "printf approved > \"$1\"", "fixture", marker],
+    }})
+    .to_string();
+    accept_hook_tool_call(&harness.hook, "spawn-command", "spawn_process", &args, None).await;
+    let action = workspace::scope(
+        Some(context),
+        harness
+            .hook
+            .on_tool_call("spawn_process", None, "spawn-command", &args),
+    )
+    .await;
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("{action:?}")
+    };
+    let receipt: serde_json::Value = serde_json::from_str(&reason).unwrap();
+    let child = receipt["tool_call_id"].as_str().expect("background handle");
+    if revoke && supported {
+        tokio::time::timeout(std::time::Duration::from_secs(60), entered.notified())
+            .await
+            .expect("background review did not start");
+        workspace::save_mode(harness._dir.path(), &key, 1, workspace::Mode::Ask, None).unwrap();
+        release.notify_one();
+    }
+    tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        executions.wait_for_completion(child),
+    )
+    .await
+    .expect("background command did not settle");
+    let session = harness.hook.session_id().await.unwrap();
+    let row =
+        gents_toolcalls::test_support::background_hook::tool_row(&harness.access, &session, child)
+            .await;
+    let allowed = match row["lifecycle_state"].as_str() {
+        Some("completed") => true,
+        Some("failed") => false,
+        other => panic!("{mode:?}: {other:?}: {row}"),
+    };
+    assert_eq!(marker.exists(), allowed, "{mode:?}: {row}");
+    if allowed {
+        assert_eq!(std::fs::read_to_string(&marker).unwrap(), "approved");
+    }
+    assert_eq!(
+        reviews.load(Ordering::SeqCst),
+        u64::from(reviewer_available && supported)
+    );
+    assert!(gents_tools::plugin::approval::pending(harness._dir.path())
+        .unwrap()
+        .is_empty());
+    hook_execution_fixtures()
+        .lock()
+        .await
+        .remove(&hook_execution_fixture_key(
+            &harness.hook,
+            &harness.request_id,
+        ));
+    harness.node.shutdown().await.expect("shut down test node");
+    allowed
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn background_commands_keep_workspace_consent_after_dispatch() {
+    assert!(gents_session::workspace::sandbox::workspace_write_sandbox_enforced());
+    let cases = gents_lean_vocab::families::workspace_permissions_sandboxed_background::cases::<
+        String,
+        String,
+    >();
+    for case in &cases {
+        case.check(background_command_consent(&case.input).await);
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[tokio::test]
+async fn background_commands_without_a_sandbox_never_run() {
+    assert!(!gents_session::workspace::sandbox::workspace_write_sandbox_enforced());
+    let cases = gents_lean_vocab::families::workspace_permissions_unsandboxed_background::cases::<
+        String,
+        String,
+    >();
+    for case in &cases {
+        let input = gents_lean_vocab::family::recode(&case.input);
+        case.check(background_command_consent(&input).await);
+    }
+}
+
+#[tokio::test]
+async fn spawn_process_rejects_target_policy_before_spawned_admission() {
+    for case in gents_lean_vocab::families::dispatch_observation_contracts_spawned_target::cases() {
+        for target in DeniedTarget::ALL {
+            let observed = spawned_target_rejection_case(&case.input, &target).await;
+            case.check(Some(observed));
+        }
+    }
+}
+
+enum DeniedTarget {
+    ReadOnlyBash,
+    CliArgvPrefix,
+    McpAllowlist,
+}
+
+impl DeniedTarget {
+    const ALL: [DeniedTarget; 3] = [
+        DeniedTarget::ReadOnlyBash,
+        DeniedTarget::CliArgvPrefix,
+        DeniedTarget::McpAllowlist,
+    ];
+
+    fn target(&self) -> &'static str {
+        match self {
+            Self::ReadOnlyBash => "read_only_bash",
+            Self::CliArgvPrefix => "cli_argv_prefix",
+            Self::McpAllowlist => "mcp_allowlist",
+        }
+    }
+
+    fn spawn_arguments(&self) -> &'static str {
+        match self {
+            Self::ReadOnlyBash => {
+                r#"{"tool_name":"bash","args":{"command":"rm","args":["-rf","."]}}"#
+            }
+            Self::CliArgvPrefix => r#"{"tool_name":"git","args":{"argv":["push","--force"]}}"#,
+            Self::McpAllowlist => {
+                r#"{"tool_name":"call_tool","args":{"service_id":"selected-service","tool_name":"unselected-tool","arguments":{}}}"#
+            }
+        }
+    }
+
+    fn registry(
+        &self,
+        node: &Arc<EmbeddedNode>,
+        root: &std::path::Path,
+        runtime: &str,
+        agent: &str,
+    ) -> BackgroundToolRegistry {
+        match self {
+            Self::ReadOnlyBash => BackgroundToolRegistry::from_tools(
+                vec![gents_tools::native::read_only_bash_for_test(
+                    root,
+                    vec!["ls".into()],
+                )],
+                &["bash".into()],
+            ),
+            Self::CliArgvPrefix => BackgroundToolRegistry::from_tools(
+                vec![gents_tools::native::cli_tool_for_test(
+                    gents_tools::native::CliToolConfig {
+                        name: "git".into(),
+                        binary_path: "/bin/echo".into(),
+                        description: String::new(),
+                        allowed_argv_prefixes: vec![vec!["status".into()]],
+                        env_vars: RapidHashMap::new(),
+                        working_dir: Some(root.to_path_buf()),
+                        timeout_secs: 5,
+                        max_output_chars: 4096,
+                    },
+                )],
+                &["git".into()],
+            ),
+            Self::McpAllowlist => BackgroundToolRegistry::from_tools(
+                vec![Box::new(gents_tools::mcp::meta::CallToolTool::new(
+                    gents_tools::mcp::meta::MetaToolContext {
+                        configuration: gents_inference::resolved::ResolvedConfiguration::Static,
+                        actor: identity::Did::new(agent).unwrap(),
+                        node: node.clone(),
+                        mcp_pool: gents_tools::mcp::pool::McpPool::new().for_agent(agent),
+                        health: gents_tools::mcp::health::ServiceHealthMap::new(),
+                        local_hostname: "local".into(),
+                        local_subnet: None,
+                        node_did: runtime.into(),
+                        allowed_mcp_service_ids: vec!["selected-service".into()],
+                        remote_tools: gents_documents::RemoteTools {
+                            services: vec![gents_documents::RemoteServiceTools {
+                                mcp_service_id: "selected-service".into(),
+                                tool_names: vec!["selected-tool".into()],
+                                ..Default::default()
+                            }],
+                        },
+                    },
+                ))],
+                &["call_tool".into()],
+            ),
+        }
+    }
+}
+
+struct AdmissionHarness {
+    _db: gents_inference::test_support::TestDb,
+    _dir: tempfile::TempDir,
+    user_did: String,
+    access: gents_store::config_client::ConfigAccess,
+    root: tempfile::TempDir,
+    node: Arc<EmbeddedNode>,
+    hook: DefraSessionHook,
+    request_id: String,
+}
+
+async fn admission_harness(
+    registry: impl FnOnce(&Arc<EmbeddedNode>, &std::path::Path, &str, &str) -> BackgroundToolRegistry,
+) -> AdmissionHarness {
+    let dir = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let fixture = gents_toolcalls::test_support::background_hook::budget_hook_fixture(
+        "background-admission",
+        BackgroundToolRegistry::default(),
+        BackgroundExecutionRegistry::default(),
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let gents_toolcalls::test_support::background_hook::BudgetHookFixture {
+        db,
+        user,
+        access,
+        agent,
+        hook,
+        request_id,
+        ..
+    } = fixture;
+    let node = db.node.clone();
+    let user_did = user.did().to_owned();
+    let hook = hook.with_background_tool_registry(registry(
+        &node,
+        root.path(),
+        db.node_identity.did(),
+        agent.did(),
+    ));
+    hook.on_completion_call(&user_text_message("run in the background"), &[])
+        .await;
+    AdmissionHarness {
+        _db: db,
+        _dir: dir,
+        user_did,
+        access,
+        root,
+        node,
+        hook,
+        request_id,
+    }
+}
+
+async fn spawned_target_rejection_case(
+    case: &gents_lean_vocab::families::dispatch_observation_contracts_spawned_target::SpawnedTargetInput,
+    target: &DeniedTarget,
+) -> gents_lean_vocab::families::dispatch_observation_contracts_spawned_target::SpawnedTargetOutput
+{
+    let AdmissionHarness {
+        _db,
+        _dir,
+        user_did: _,
+        access,
+        root,
+        node,
+        hook,
+        request_id,
+    } = admission_harness(|node, root, runtime, agent| target.registry(node, root, runtime, agent))
+        .await;
+    let args = target.spawn_arguments();
+    accept_hook_tool_call(&hook, "spawn-denied", &case.parent_tool, args, None).await;
+    let action = hook
+        .on_tool_call(&case.parent_tool, None, "spawn-denied", args)
+        .await;
+    assert!(
+        matches!(action, ToolCallHookAction::Skip { .. }),
+        "{}/{}: {action:?}",
+        case.parent_tool,
+        target.target()
+    );
+
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ request_id: {{_eq: "{}"}} }}) {{ tool_name lifecycle_state started_at tool_failure_class spawned_by_tool_call_doc_id }} }}"#,
+            gents_store::graphql::escape_graphql_string(&request_id),
+        ))
+        .await.unwrap();
+    let data = &response["data"];
+    let rows = data["AgentToolCall"].as_array().unwrap();
+    let (parents, spawned): (Vec<_>, Vec<_>) = rows
+        .iter()
+        .partition(|row| row["spawned_by_tool_call_doc_id"].is_null());
+    let spawned_admitted = !spawned.is_empty();
+    assert_eq!(parents.len(), 1, "{}: {rows:?}", target.target());
+    let parent = parents[0];
+    assert_eq!(parent["tool_name"], case.parent_tool.as_str());
+    let failed = parent["lifecycle_state"] == "failed";
+    let started = parent["started_at"].is_string();
+    let failure_class = parent["tool_failure_class"].as_str().map(str::to_owned);
+    assert!(root.path().exists());
+
+    let mut fixture = hook_execution_fixtures()
+        .lock()
+        .await
+        .remove(&hook_execution_fixture_key(&hook, &request_id))
+        .unwrap();
+    let completion_outcome = match case.completion_probe_outcome.as_str() {
+        "completed" => gents_session::request::lifecycle::RequestTerminalOutcome::Completed,
+        other => panic!("unsupported modeled completion probe {other}"),
+    };
+    let selection = fixture
+        .writer
+        .terminal_output(&fixture.lifecycle.request().doc_id)
+        .await;
+    let completion = fixture
+        .lifecycle
+        .terminalize_owned(completion_outcome, selection, None)
+        .await;
+    node.shutdown().await.expect("shut down test node");
+    gents_lean_vocab::families::dispatch_observation_contracts_spawned_target::SpawnedTargetOutput {
+        failed,
+        started,
+        failure_class,
+        spawned_admitted,
+        completion_accepted: completion.is_ok(),
+    }
+}

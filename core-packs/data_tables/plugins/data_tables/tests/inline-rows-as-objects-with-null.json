@@ -1,0 +1,54 @@
+{
+  "expect": {
+    "columns": [
+      {
+        "name": "a",
+        "type": "int64"
+      },
+      {
+        "name": "b",
+        "type": "text"
+      }
+    ],
+    "markdown": "| a | b |\n| --- | --- |\n| 1 | x |\n| NULL |  |\n| NULL | z |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 3,
+    "rows": [
+      [
+        1,
+        "x"
+      ],
+      [
+        null,
+        ""
+      ],
+      [
+        null,
+        "z"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT * FROM t",
+    "tables": [
+      {
+        "name": "t",
+        "rows": [
+          {
+            "a": 1,
+            "b": "x"
+          },
+          {
+            "a": null,
+            "b": ""
+          },
+          {
+            "b": "z"
+          }
+        ]
+      }
+    ]
+  }
+}

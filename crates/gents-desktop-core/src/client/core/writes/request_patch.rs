@@ -1,6 +1,7 @@
 use std::hash::{Hash, Hasher};
 
 use anyhow::Result;
+use rapidhash::RapidHashMap;
 
 use super::super::bootstrap::normalize_required;
 use super::{find_request_in_scope, ClientCore, RefreshedRequestProjection};
@@ -19,6 +20,20 @@ fn request_patch_cache_reusable(
     rows_current: bool,
 ) -> bool {
     memoized && same_signature && fence_accepted && rows_current
+}
+
+/// Lean `RequestPatchPublication.publish` for an accepted publication: the
+/// signature is memoized under its cache key. A rejected publication never
+/// reaches this and leaves the cache as it was.
+fn record_request_patch_publication(
+    signatures: &mut RapidHashMap<String, (usize, usize, u64)>,
+    cache_key: String,
+    signature: (usize, usize, u64),
+) {
+    if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
+        signatures.clear();
+    }
+    signatures.insert(cache_key, signature);
 }
 
 fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
@@ -54,20 +69,6 @@ fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
     }
 }
 
-fn strip_cli_operator_hints(message: &str) -> String {
-    message
-        .lines()
-        .filter(|line| {
-            !line.contains("gents init")
-                && !line.contains("gents runtime server")
-                && !line.contains("--graphql")
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
-}
-
 impl ClientCore {
     /// Terminal reads refresh operator configuration omitted by the client P2P route.
     /// Catalog replacement must precede the final request publication to retain page rows.
@@ -89,7 +90,8 @@ impl ClientCore {
             return Ok(None);
         }
 
-        let mut captured = self.store.capture_read();
+        let store = self.stores.ensure(node_did);
+        let mut captured = store.capture_read();
         let access = self.session_queue_access(node_did)?;
         let source = "runtime";
         let access = &access;
@@ -156,9 +158,8 @@ impl ClientCore {
             let mut signatures = self.request_patch_signatures.lock().await;
             let cached_signature = signatures.get(&cache_key) == Some(&signature);
             if cached_signature {
-                let (fence_accepted, rows_current) = self
-                    .store
-                    .current_request_patch_read_status(&captured, &patch);
+                let (fence_accepted, rows_current) =
+                    store.current_request_patch_read_status(&captured, &patch);
                 if request_patch_cache_reusable(
                     cached_signature,
                     true,
@@ -169,7 +170,7 @@ impl ClientCore {
                 }
                 signatures.remove(&cache_key);
                 if !fence_accepted {
-                    self.store.request_resync(Some(node_did));
+                    store.request_resync();
                     return Ok(None);
                 }
             }
@@ -182,7 +183,7 @@ impl ClientCore {
             .is_some_and(|row| row.is_terminal());
         if terminal {
             self.refresh_node(node_did).await?;
-            captured = self.store.capture_read();
+            captured = store.capture_read();
             let Some(refreshed) = read().await? else {
                 return Ok(None);
             };
@@ -195,15 +196,12 @@ impl ClientCore {
             signature = chat_patch_signature(&patch);
         }
         let (rows, bytes, _hash) = signature;
-        let Some(version) = self.store.merge_chat_patch_at_read(&captured, patch) else {
-            self.store.request_resync(Some(node_did));
+        let Some(version) = store.merge_chat_patch_at_read(&captured, patch) else {
+            store.request_resync();
             return Ok(None);
         };
         let mut signatures = self.request_patch_signatures.lock().await;
-        if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
-            signatures.clear();
-        }
-        signatures.insert(cache_key, signature);
+        record_request_patch_publication(&mut signatures, cache_key, signature);
         drop(signatures);
         tracing::debug!(
             target: "gents_desktop_core::replication",
@@ -227,7 +225,7 @@ impl ClientCore {
         node_did: &str,
         session_id: &str,
         request_id: &str,
-    ) -> Result<Option<gents::session::CanonicalRequestOutput>> {
+    ) -> Result<Option<gents_session::session::CanonicalRequestOutput>> {
         let node_did = normalize_required("node_did", node_did)?;
         let session_id = normalize_required("session_id", session_id)?;
         let request_id = normalize_required("request_id", request_id)?;
@@ -253,11 +251,12 @@ impl ClientCore {
                 && answer.requester_did == row.requester_did,
             "request answer crossed its admitted scope"
         );
-        if !answer.is_terminal() || gents::request::lifecycle::folded_into(answer).is_some() {
+        if !answer.is_terminal() || gents_session::request::lifecycle::folded_into(answer).is_some()
+        {
             return Ok(None);
         }
         let access = self.session_queue_access(node_did)?;
-        gents::session::observe_request_output(&access, answer)
+        gents_session::session::observe_request_output(&access, answer)
             .await
             .map(Some)
     }
@@ -266,17 +265,16 @@ impl ClientCore {
         &self,
         node_did: &str,
         request_id: &str,
-    ) -> Result<gents::observe::run_timeline::RunTimeline> {
+    ) -> Result<gents_observe::observe::run_timeline::RunTimeline> {
         normalize_required("node_did", node_did)?;
         let request_id = normalize_required("request_id", request_id)?;
         let access = self.session_queue_access(node_did)?;
         let timeline = tokio::time::timeout(
             std::time::Duration::from_secs(15),
-            gents::observe::run_timeline_fetch::load_run_timeline(&access, request_id),
+            gents_observe::observe::run_timeline_fetch::load_run_timeline(&access, request_id),
         )
         .await
-        .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))?
-        .map_err(|error| anyhow::anyhow!("{}", strip_cli_operator_hints(&error.to_string())))?;
+        .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))??;
         Ok(timeline)
     }
 }

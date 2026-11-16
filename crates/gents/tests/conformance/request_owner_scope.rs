@@ -1,8 +1,9 @@
 use super::*;
 
-use gents::__test_internals::QueueSource;
-use gents::{DefraWatcher, NodeIdentity, Watcher};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_session::request::lifecycle::queue::QueueSource;
+use gents_session::{request::watcher::DefraWatcher, request::watcher::Watcher};
+use gents_store::identity::NodeIdentity;
 
 const CONVERGENCE_CREATED_AT: &str = "2026-03-23T00:00:00Z";
 
@@ -15,7 +16,7 @@ async fn root_write_request(
 ) -> String {
     let root = ::identity::Did::new(node.node_identity_did().expect("runtime DID")).unwrap();
     let working_agent = working_agent.map(|did| ::identity::Did::new(did).expect("Agent DID"));
-    gents::ConfigAccess::local_as(node.clone(), root)
+    gents_store::config_client::ConfigAccess::local_as(node.clone(), root)
         .transact_write("test.convergence.request", |txn| {
             let (input, working_agent) = (&input, &working_agent);
             Box::pin(async move {
@@ -25,7 +26,7 @@ async fn root_write_request(
                         &json!({"input": input}),
                     )
                     .await?;
-                let doc = gents::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                let doc = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
                 if let Some(agent) = working_agent {
                     txn.add_actor_relationship("AgentRequest", &doc, "working_agent", agent)
                         .await?;
@@ -64,10 +65,10 @@ fn local_self_request(
 async fn root_write_signed(
     node: &std::sync::Arc<EmbeddedNode>,
     mut create: gents_protocol::request_admission::AgentRequestCreate,
-    signer: &dyn gents::NodeIdentity,
+    signer: &dyn gents_store::identity::NodeIdentity,
     working_agent: Option<&str>,
 ) -> String {
-    gents::sign_agent_request_create(signer, &mut create)
+    gents_session::request::admission::sign_agent_request_create(signer, &mut create)
         .await
         .expect("sign replicated request");
     let mutation = create
@@ -75,12 +76,12 @@ async fn root_write_signed(
         .expect("render replicated request");
     let root = ::identity::Did::new(node.node_identity_did().expect("runtime DID")).unwrap();
     let working_agent = working_agent.map(|did| ::identity::Did::new(did).expect("Agent DID"));
-    gents::ConfigAccess::local_as(node.clone(), root)
+    gents_store::config_client::ConfigAccess::local_as(node.clone(), root)
         .transact_write("test.convergence.signed_request", |txn| {
             let (mutation, working_agent) = (&mutation, &working_agent);
             Box::pin(async move {
                 let response = txn.execute(mutation).await?;
-                let doc = gents::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                let doc = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
                 if let Some(agent) = working_agent {
                     txn.add_actor_relationship("AgentRequest", &doc, "working_agent", agent)
                         .await?;
@@ -95,7 +96,7 @@ async fn root_write_signed(
 /// The runtime root authored the fixture rows and reads them as their owner.
 async fn root_read(node: &std::sync::Arc<EmbeddedNode>, query: &str) -> Value {
     let root = ::identity::Did::new(node.node_identity_did().expect("runtime DID")).unwrap();
-    let mut response = gents::ConfigAccess::local_as(node.clone(), root)
+    let mut response = gents_store::config_client::ConfigAccess::local_as(node.clone(), root)
         .execute(query)
         .await
         .expect("root reads fixture rows");
@@ -112,9 +113,12 @@ where
 
 /// A syntactically valid DID for a node this process does not run.
 fn foreign_did(db: &support::TestDb) -> String {
-    gents::NodeIdentity::did(
-        &gents::KeyIdentity::load_or_create(db.data_path().join("foreign-owner.key"), None)
-            .unwrap(),
+    gents_store::identity::NodeIdentity::did(
+        &gents_store::identity::KeyIdentity::load_or_create(
+            db.data_path().join("foreign-owner.key"),
+            None,
+        )
+        .unwrap(),
     )
     .to_owned()
 }
@@ -183,7 +187,7 @@ async fn seed_owned_request_projection(
     let root = ::identity::Did::new(node.node_identity_did().expect("runtime DID")).unwrap();
     let agent = ::identity::Did::new(agent_did).expect("Agent DID");
     let session = serde_json::to_value(&session).expect("serialize session");
-    gents::ConfigAccess::local_as(node.clone(), root)
+    gents_store::config_client::ConfigAccess::local_as(node.clone(), root)
         .transact_write("test.convergence.session", |txn| {
             let (session, agent) = (&session, &agent);
             Box::pin(async move {
@@ -193,7 +197,7 @@ async fn seed_owned_request_projection(
                         &json!({"input": session}),
                     )
                     .await?;
-                let doc = gents::store::graphql::created_doc_id(&response, "AgentSession")?;
+                let doc = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
                 txn.add_actor_relationship("AgentSession", &doc, "working_agent", agent)
                     .await?;
                 Ok::<_, anyhow::Error>(())
@@ -279,7 +283,7 @@ async fn create_recovery_request(
         "execution_origin": "interactive",
         "created_at": created_at,
         "retry_count": 0,
-        "max_retries": gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        "max_retries": gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
         "request_hop": 0,
     });
     if RequestLifecycleState::is_terminal_str(Some(lifecycle_state)) {
@@ -355,7 +359,7 @@ async fn create_queue_request(
             "execution_origin": execution_origin,
             "created_at": created_at,
             "retry_count": 0,
-            "max_retries": gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+            "max_retries": gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
             "request_hop": 0,
         }),
         Some(agent_did),
@@ -570,7 +574,7 @@ pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_wr
     )
     .await;
     let runtime_interrupt_doc_id = escape_graphql_string(&runtime_interrupt_doc_id);
-    gents::ConfigAccess::local_managed_agent(
+    gents_store::config_client::ConfigAccess::local_managed_agent(
         db.node.clone(),
         ::identity::Did::new(agent.did()).unwrap(),
         agent.as_ref(),
@@ -658,7 +662,7 @@ pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
 pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
     let db = test_db("convergence-coalesce-foreign").await;
     let agent = support::managed_agent(&db).await;
-    let agent_access = gents::ConfigAccess::local_managed_agent(
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         db.node.clone(),
         ::identity::Did::new(agent.did()).unwrap(),
         agent.as_ref(),
@@ -668,8 +672,11 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
     let foreign = foreign_did(&db);
     let session_id = "convergence-coalesce-foreign-session";
     let key = format!("background_completion:{session_id}");
-    let foreign_identity =
-        gents::KeyIdentity::load_or_create(db.data_path().join("foreign-owner.key"), None).unwrap();
+    let foreign_identity = gents_store::identity::KeyIdentity::load_or_create(
+        db.data_path().join("foreign-owner.key"),
+        None,
+    )
+    .unwrap();
     let owner_parent_id = "convergence-coalesce-owner-parent";
     let owner_parent_doc = root_write_signed(
         &db.node,
@@ -711,7 +718,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         ),
         (
             foreign.as_str(),
-            &foreign_identity as &dyn gents::NodeIdentity,
+            &foreign_identity as &dyn gents_store::identity::NodeIdentity,
             foreign_parent_id,
             foreign_parent_doc.as_str(),
             "convergence-coalesce-foreign",
@@ -746,7 +753,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         .await;
     }
 
-    let survivor = gents::__test_internals::reconcile_coalesced_pending_request_for_with_access(
+    let survivor = gents_session::request::lifecycle::queue::reconcile_coalesced_pending_request_for_with_access(
         (&db.node, &agent_access),
         agent.did(),
         session_id,
@@ -839,9 +846,15 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     .await;
 
     let signer = agent.managed_agent_signer().expect("managed Agent signer");
-    gents::interrupt_request_by_doc_id(&db.node, Some(&signer), &target_doc_id, owner_did, None)
-        .await
-        .unwrap();
+    gents_session::request::interrupt::interrupt_request_by_doc_id(
+        &db.node,
+        Some(&signer),
+        &target_doc_id,
+        owner_did,
+        None,
+    )
+    .await
+    .unwrap();
     let latched = root_read(
         &db.node,
         &format!(

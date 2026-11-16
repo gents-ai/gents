@@ -1,6 +1,9 @@
-import Proofs.AgentSession
-import Proofs.SessionFork
-import Proofs.SessionRecovery
+import Proofs.Session.AgentSession
+import Proofs.Session.SessionFork
+import Proofs.Session.SessionRecovery
+import Proofs.Conformance.Family
+import Proofs.Conformance.Functions.Session
+import Proofs.Conformance.ContractCases.SessionRecovery
 
 namespace Conformance.SessionDocuments
 open AgentSession
@@ -290,5 +293,82 @@ def editForkCases : List EditForkCase :=
   , ⟨"foreign_node", { editForkBinding with child := { child with node := 99 } }, .missing⟩
   , ⟨"same_source_and_child", { editForkBinding with child := scope }, .missing⟩
   , ⟨"empty_anchor", { editForkBinding with messageKey := "" }, .missing⟩ ]
+
+deriving instance Lean.ToJson for Scope
+
+structure RowWire where
+  purpose : String
+  scope : Scope
+  agent : Nat
+  createdAt : Nat
+  docId : Nat
+  requestId : Nat
+  state : RequestState
+  terminalizedAt : Option Nat
+  deriving Lean.ToJson
+
+def RowWire.ofModel (r : RequestFact) : RowWire :=
+  { purpose := r.purpose.toWire, scope := r.scope, agent := r.agent, createdAt := r.createdAt
+    docId := r.observed.docId, requestId := r.observed.requestId, state := r.observed.state
+    terminalizedAt := r.terminalizedAt }
+
+def RowWire.toModel (r : RowWire) : RequestFact :=
+  { purpose := if r.purpose == RequestPurpose.titleAudit.toWire then .titleAudit
+      else if r.purpose == RequestPurpose.accessReview.toWire then .accessReview else .normal
+    scope := r.scope, agent := r.agent, createdAt := r.createdAt
+    observed := ⟨r.docId, r.requestId, r.state⟩, terminalizedAt := r.terminalizedAt }
+
+structure RetryInput where
+  name : String
+  rows : List RowWire
+  parentDoc : Nat
+  failedId : Nat
+  newId : Nat
+  deriving Lean.ToJson
+
+structure RetryRequestWire where
+  requestId : Nat
+  state : RequestState
+  origin : ExecutionOrigin
+  admission : _root_.AdmissionState
+  deadline : Option Nat
+  currentTime : Nat
+  retryCount : Nat
+  maxRetries : Nat
+  deriving Lean.ToJson
+
+structure RetryStateWire where
+  sessionId : Nat
+  agent : Nat
+  latest : Nat
+  requests : List RetryRequestWire
+  deriving Lean.ToJson
+
+def RetryStateWire.ofModel (s : SessionState) : RetryStateWire :=
+  { sessionId := s.sessionId, agent := s.agentDid, latest := s.latest
+    requests := ([1, 3].filter fun id => decide (id ∈ s.requestIds)).map fun id =>
+      let r := s.ctx id
+      { requestId := id, state := r.state, origin := r.origin, admission := r.admission
+        deadline := r.deadline, currentTime := r.currentTime, retryCount := r.retryCount
+        maxRetries := r.maxRetries } }
+
+/-- model-production-gap: the model selects the retry parent from the session's
+interned observation and the exact physical request rows inside one
+transaction; production retry eligibility (`project_retry_eligibility` in
+gents-desktop-bridge and `reissue` in gents-session) reads persisted rows
+without the interned observation, so no production path takes a session
+observation with these rows as an input. The session is `indexed` and the
+retry state `retryState`. -/
+@[conformance_family]
+def retryUnreached : Family RetryInput (Option RetryStateWire) where
+  inputs :=
+    [ ("exact_parent", [old], 101), ("newer_authoritative_row", [old, newerRequest], 101)
+    , ("wrong_physical_parent", [old], 999)
+    , ("existing_candidate_missing_from_auxiliary_projection", [old, olderExistingCandidate], 101)
+    ].map fun (name, rows, parentDoc) =>
+      { name, rows := rows.map RowWire.ofModel, parentDoc, failedId := 1, newId := 3 }
+  model := fun i =>
+    (SessionState.retryFromRows? retryState indexed (i.rows.map RowWire.toModel) i.parentDoc
+      i.failedId i.newId).map RetryStateWire.ofModel
 
 end Conformance.SessionDocuments

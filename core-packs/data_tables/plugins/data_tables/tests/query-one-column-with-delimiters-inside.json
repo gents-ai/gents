@@ -1,0 +1,30 @@
+{
+  "bind": "fixtures/heads",
+  "expect": {
+    "columns": [
+      {
+        "name": "v",
+        "type": "text"
+      }
+    ],
+    "markdown": "| v |\n| --- |\n| a;b |\n| c;d |\n| e;f |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 3,
+    "rows": [
+      [
+        "a;b"
+      ],
+      [
+        "c;d"
+      ],
+      [
+        "e;f"
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT * FROM semis"
+  }
+}

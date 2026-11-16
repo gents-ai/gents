@@ -1,0 +1,237 @@
+import Lean
+import Proofs.Session.Request.CrossActorAuthorization
+
+namespace Request.RemoteDelivery
+
+/-- The accepted tool call retains the exact signed request before any send.
+The digest represents its complete bytes, including its stable retry key and
+the physical target Agent and session identifiers. Signature verification must
+cover both identifiers; their presence in metadata alone is insufficient. -/
+structure Intent where
+  key : String
+  digest : String
+  sender : String
+  target : String
+  targetAgentDoc : String
+  targetSessionDoc : Option String
+  deriving BEq, Repr
+
+structure RemoteRecord where
+  intent : Intent
+  requestDocument : String
+  owner : String
+  workingAgent : String
+  workingAgentGranted : Bool
+  deriving BEq, Repr
+
+inductive Result where
+  | wait | retry | pendingGrant | conflict | committed | existing
+  deriving BEq, Repr
+
+/-- Native ACP does not by itself bind document creation to a target. Creation
+and the subsequent working-agent grant are separate effects; a crash may leave
+a retained request whose grant must be retried. A native grant denial does not
+show that an earlier create failed. Claim authorization remains a separate
+transaction-bound check of the immediate signed author. -/
+def deliver (intent : Intent) (persisted : Bool) (existing : Option RemoteRecord)
+    (createSucceeded workingGrant : Bool) : Result :=
+  if !persisted then .wait
+  else match existing with
+    | some record =>
+        if record.intent == intent && record.owner == intent.sender &&
+            record.workingAgent == intent.target then
+          if record.workingAgentGranted then .existing else .pendingGrant
+        else .conflict
+    | none =>
+        if !createSucceeded then .retry
+        else if !workingGrant then .pendingGrant
+        else .committed
+
+/-- A transport response confirms a delivery only after its exact binding and
+selected target-agent signature have been verified. Loss of that response is
+an uncertain attempt, not proof that creation failed. -/
+def confirmed (result : Result) (verifiedTargetResponse : Bool) : Bool :=
+  verifiedTargetResponse && (result == .committed || result == .existing)
+
+/-- Native authorization observes the immediate sender's session, Agent invoke,
+and node permissions inside the target Agent's claim transaction. The same
+native commit fences those observations; visibility or a prior detached check
+is insufficient. The CrossActor owner determines denial, retry, and claim. -/
+def claimDecision (record : RemoteRecord)
+    (observation : CrossActorAuthorization.Observation)
+    (commit : CrossActorAuthorization.NativeCommit) : CrossActorAuthorization.Decision :=
+  match record.intent.targetSessionDoc with
+  | none => .unavailable
+  | some session =>
+      if record.owner != record.intent.sender || record.workingAgent != record.intent.target then
+        .denied
+      else
+        CrossActorAuthorization.decideClaim
+          ⟨record.requestDocument, session, record.intent.targetAgentDoc,
+            record.intent.sender, record.intent.target⟩ observation commit
+
+def claim (record : RemoteRecord) (observation : CrossActorAuthorization.Observation)
+    (commit : CrossActorAuthorization.NativeCommit) : Bool :=
+  claimDecision record observation commit == .claimed
+
+theorem missing_native_authorization_blocks_claim (record : RemoteRecord)
+    (observation : CrossActorAuthorization.Observation)
+    (commit : CrossActorAuthorization.NativeCommit) (unsupported : observation.supported = false) :
+    claim record observation commit = false := by
+  cases h : record.intent.targetSessionDoc with
+  | none => simp [claim, claimDecision, h]; rfl
+  | some session =>
+      simp [claim, claimDecision, h, CrossActorAuthorization.decideClaim, unsupported]
+      all_goals split <;> rfl
+
+/-- A parent tuple on a sender-owned document can be managed by that sender.
+Its presence alone is not proof of authorization to invoke the target Agent. -/
+def parentTupleProvesInvoke (_parentPresent : Bool) : Bool := false
+
+theorem forged_parent_is_not_invoke_evidence : parentTupleProvesInvoke true = false := by rfl
+
+/-- A detached native observation has no modeled commit-conflict fence. It may
+still be true after permission has been revoked before the work executes. -/
+def detachedObservationMayBeStale (observed current : Bool) : Bool := observed && !current
+
+theorem revoke_after_observation_can_be_missed :
+    detachedObservationMayBeStale true false = true := by rfl
+
+/-- A tool call owns its persisted intent and records uncertainty before HTTP.
+Recovery must reuse the exact request and its physical target bindings. -/
+structure ToolCall where
+  intent : Option Intent
+  attempted : Bool
+  receipt : Option RemoteRecord
+  deriving BEq, Repr
+
+def signedTargetsPresent (intent : Intent) : Bool :=
+  !intent.targetAgentDoc.isEmpty &&
+    (intent.targetSessionDoc.any fun session => !session.isEmpty)
+
+/-- Signature validity is the external cryptographic verifier's result over
+all signed request fields, including the physical target identifiers. -/
+def reserve (call : ToolCall) (intent : Intent) (signatureValid : Bool) : Option ToolCall :=
+  if !signatureValid || !signedTargetsPresent intent then none
+  else match call.intent with
+    | none => if call.attempted || call.receipt.isSome then none
+        else some { call with intent := some intent }
+    | some previous => if previous == intent then some call else none
+
+def reserveSigned (call : ToolCall) (intent : Intent) (signatureValid : Bool) : Option ToolCall :=
+  reserve call intent signatureValid
+
+theorem unsigned_intent_cannot_be_reserved (call : ToolCall) (intent : Intent) :
+    reserve call intent false = none := by simp [reserve]
+
+def sent (call : ToolCall) : ToolCall :=
+  if call.intent.isSome then { call with attempted := true } else call
+
+def observe (call : ToolCall) (record : RemoteRecord) : ToolCall :=
+  if !call.receipt.isSome && call.attempted && call.intent == some record.intent && record.owner == record.intent.sender &&
+      record.workingAgent == record.intent.target && record.workingAgentGranted then
+    { call with receipt := some record }
+  else call
+
+/-- The signed terminal payload includes the exact request and physical targets,
+the target request document, its terminal status, and its output. The verifier
+checks the signature over this complete payload under the selected Agent DID. -/
+structure TerminalPayload where
+  intent : Intent
+  requestDocument : String
+  status : String
+  output : String
+  deriving BEq, Repr
+
+structure Response where
+  payload : TerminalPayload
+  signedPayload : TerminalPayload
+  signer : String
+  signatureValid : Bool
+  deriving BEq, Repr
+
+def acceptResponse (call : ToolCall) (response : Response) : Bool :=
+  match call.receipt with
+  | none => false
+  | some receipt =>
+      call.intent == some response.payload.intent &&
+        receipt.intent == response.payload.intent &&
+        receipt.requestDocument == response.payload.requestDocument &&
+        response.payload == response.signedPayload &&
+        response.signer == response.payload.intent.target && response.signatureValid
+
+theorem no_send_without_intent (call : ToolCall) (missing : call.intent = none) :
+    sent call = call := by simp [sent, missing]
+
+theorem retry_preserves_intent (call : ToolCall) : (sent call).intent = call.intent := by
+  simp only [sent]; split <;> rfl
+
+theorem no_receipt_without_attempt (call : ToolCall) (record : RemoteRecord)
+    (unattempted : call.attempted = false) : observe call record = call := by
+  simp [observe, unattempted]
+
+theorem unsigned_response_is_rejected (call : ToolCall) (payload signed : TerminalPayload)
+    (signer : String) : acceptResponse call ⟨payload, signed, signer, false⟩ = false := by
+  cases h : call.receipt <;> simp [acceptResponse, h]
+
+theorem no_unpersisted_delivery (intent : Intent) (existing : Option RemoteRecord)
+    (create grant : Bool) : deliver intent false existing create grant = .wait := by rfl
+
+theorem missing_post_create_grant_stays_pending (intent : Intent) :
+    deliver intent true none true false = .pendingGrant := by rfl
+
+theorem unknown_response_cannot_confirm (result : Result) :
+    confirmed result false = false := by rfl
+
+theorem mismatched_intent_cannot_confirm_existing (wanted actual : Intent)
+    (different : (actual == wanted) = false) :
+    deliver wanted true (some ⟨actual, "request-doc", actual.sender, actual.target, true⟩) true true = .conflict := by
+  simp [deliver, different]
+
+open Lean
+
+def resultName : Result → String
+  | .wait => "wait"
+  | .retry => "retry"
+  | .pendingGrant => "pending_grant"
+  | .conflict => "conflict"
+  | .committed => "committed"
+  | .existing => "existing"
+
+structure Case where
+  name : String
+  intent : Intent
+  persisted : Bool
+  existing : Option RemoteRecord
+  createSucceeded : Bool
+  workingGrant : Bool
+  responseVerified : Bool
+
+def exampleIntent : Intent := ⟨"tool-1", "signed-request-1", "sender", "target", "agent-doc", some "session-doc"⟩
+
+def cases : List Case :=
+  let request := exampleIntent
+  let otherTarget : Intent := ⟨"tool-1", "signed-request-1", "sender", "other-target", "other-agent-doc", some "session-doc"⟩
+  [ ⟨"intent-not-durable", request, false, none, true, true, true⟩
+  , ⟨"create-unconfirmed", request, true, none, false, false, false⟩
+  , ⟨"grant-not-yet-applied", request, true, none, true, false, false⟩
+  , ⟨"committed-response-lost", request, true, none, true, true, false⟩
+  , ⟨"committed-response-observed", request, true, none, true, true, true⟩
+  , ⟨"verified-replay", request, true, some ⟨request, "request-doc", "sender", "target", true⟩, false, false, true⟩
+  , ⟨"same-key-different-target", request, true, some ⟨otherTarget, "request-doc", "sender", "other-target", true⟩, true, true, true⟩
+  , ⟨"existing-with-wrong-owner", request, true, some ⟨request, "request-doc", "other", "target", true⟩, true, true, true⟩
+  , ⟨"existing-with-wrong-worker", request, true, some ⟨request, "request-doc", "sender", "other-target", true⟩, true, true, true⟩
+  , ⟨"existing-without-working-grant", request, true, some ⟨request, "request-doc", "sender", "target", false⟩, true, false, false⟩ ]
+
+def intentJson (intent : Intent) : Json := Json.mkObj
+  [("key", toJson intent.key), ("digest", toJson intent.digest),
+   ("sender", toJson intent.sender), ("target", toJson intent.target),
+   ("target_agent_doc_id", toJson intent.targetAgentDoc),
+   ("target_session_doc_id", toJson intent.targetSessionDoc)]
+
+def recordJson (record : RemoteRecord) : Json := Json.mkObj
+  [("intent", intentJson record.intent), ("request_doc_id", toJson record.requestDocument),
+   ("owner", toJson record.owner),
+   ("working_agent", toJson record.workingAgent), ("working_grant", toJson record.workingAgentGranted)]
+
+end Request.RemoteDelivery

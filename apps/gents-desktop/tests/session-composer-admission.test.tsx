@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import {
+  type ChatSendRequest,
   type DesktopSessionSnapshot,
   projectDeploymentOperationalState,
   type DeploymentView,
@@ -24,6 +25,8 @@ import { deployment } from "./config-panel-wiring/fixtures";
 import { MemoryNavProvider } from "@gents/shell";
 import { writeSession } from "../src/hooks/sessionStore";
 import { composerText, typeInComposer, typeText } from "./composer-field";
+import { CHAT_SEND_DEADLINE_MS } from "../src/hooks/chatDelivery";
+import { loadChatDrafts } from "../src/hooks/chatDrafts";
 import { goalControl, observedGoal } from "./goal-state-fixture";
 
 const navigate = vi.hoisted(() => vi.fn());
@@ -355,13 +358,20 @@ describe("SessionScreen canonical composer admission", () => {
     expect(sendChatMessage).not.toHaveBeenCalled();
   });
 
-  it("steers a follow-up into a running turn, and queues one sent with the modified Enter", async () => {
+  it("queues a follow-up by default, and steers one sent with the modified Enter", async () => {
     for (const [metaKey, delivery] of [
-      [false, "steer"],
-      [true, "queue"],
+      [false, "queue"],
+      [true, "steer"],
     ] as const) {
-      const { app, sendChatMessage } = screenApp({
+      let release!: () => void;
+      const pending = new Promise<void>((resolve) => (release = resolve));
+      const sendChatMessage = vi.fn(async (request: ChatSendRequest) => {
+        await pending;
+        return acceptedChat(request);
+      });
+      const { app } = screenApp({
         session: heldSession({ turnState: "running" }),
+        sendChatMessage,
       });
       const view = renderScreen(app);
       const message = screen.getByLabelText("Message");
@@ -369,9 +379,13 @@ describe("SessionScreen canonical composer admission", () => {
       await act(async () => {
         fireEvent.keyDown(message, { key: "Enter", metaKey });
       });
-      expect(sendChatMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ content: "and this", delivery }),
-      );
+      await waitFor(() => expect(loadChatDrafts().chatDrafts).toHaveLength(1));
+      expect(JSON.parse(loadChatDrafts().chatDrafts[0]!.requestJson)).toMatchObject({
+        content: "and this",
+        delivery,
+      });
+      await act(async () => release());
+      await waitFor(() => expect(loadChatDrafts().chatDrafts).toHaveLength(0));
       view.unmount();
     }
   });
@@ -576,19 +590,35 @@ describe("SessionScreen automated inputs", () => {
           },
           {
             kind: "automatedInput",
-            origin: { kind: "trigger", triggerId: "nightly", triggerKind: "schedule" },
+            origin: {
+              kind: "trigger",
+              displayBody: "write the nightly report",
+              triggerId: "nightly",
+              triggerKind: "schedule",
+            },
             content: "write the nightly report",
             ...durable("trigger", 4),
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion", notification: true },
+            origin: {
+              kind: "backgroundCompletion",
+              toolCallId: null,
+              reason: null,
+              resultRange: null,
+              notification: true,
+            },
             content: "<agent-notification>done</agent-notification>",
             ...durable("background", 5),
           },
           {
             kind: "automatedInput",
-            origin: { kind: "goalContinuation", goalId: "goal-1", sequence: 2 },
+            origin: {
+              kind: "goalContinuation",
+              retry: null,
+              goalId: "goal-1",
+              sequence: 2,
+            },
             content: "You are running under the durable goal controller",
             ...durable("goal", 6),
           },
@@ -600,7 +630,7 @@ describe("SessionScreen automated inputs", () => {
     expect(items.map((item) => item.textContent)).toEqual([
       expect.stringContaining("From another session"),
       expect.stringContaining("Schedule · nightly"),
-      expect.stringContaining("<agent-notification>done</agent-notification>"),
+      expect.stringContaining("Background result"),
       expect.stringContaining("Goal continuation · 2"),
     ]);
     const text = screen.getByTestId("transcript-panel").textContent ?? "";
@@ -632,7 +662,7 @@ describe("SessionScreen automated inputs", () => {
     );
     await user.click(
       within(items[2]!).getByRole("button", {
-        name: "Show model input: <agent-notification>done</agent-notification>",
+        name: "Show model input: Background result",
       }),
     );
     expect(within(items[2]!).getByTestId("automated-input-content")).toBeVisible();
@@ -645,7 +675,7 @@ describe("SessionScreen automated inputs", () => {
     expect(within(items[3]!).getByTestId("automated-input-content")).toBeVisible();
   });
 
-  it("reads a message without its routing line when it has no friendly body", () => {
+  it("does not infer a display body from a routing line", () => {
     const routed =
       "[message agent:default session:5c1d node:did:key:z6Mk · at:2026-11-01T13:53:39Z · cause:9a7e]\n\nthe build is green";
     const { app } = screenApp({
@@ -670,7 +700,7 @@ describe("SessionScreen automated inputs", () => {
     expect(item).toHaveTextContent("From another node");
     expect(within(item).queryByRole("link")).toBeNull();
     expect(within(item).getByTestId("automated-input-body").textContent?.trim()).toBe(
-      "the build is green",
+      "Message contents unavailable",
     );
   });
 
@@ -690,6 +720,7 @@ describe("SessionScreen automated inputs", () => {
                 itemKey: "tool-test",
                 toolName: "bash",
                 toolCallId: "call-test",
+                toolCallDocId: "doc-call-test",
                 statusKind: "success",
                 awaitMode: "background",
                 reconstruction: { state: "ready" },
@@ -712,6 +743,7 @@ describe("SessionScreen automated inputs", () => {
                 itemKey: "tool-worker",
                 toolName: "agent_new",
                 toolCallId: "call-worker",
+                toolCallDocId: "doc-call-worker",
                 statusKind: "success",
                 awaitMode: "background",
                 reconstruction: { state: "ready" },
@@ -728,19 +760,46 @@ describe("SessionScreen automated inputs", () => {
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion", notification: true },
+            origin: {
+              kind: "backgroundCompletion",
+              toolCallId: "call-test",
+              toolCallDocId: "doc-call-test",
+              toolName: "bash",
+              statusKind: "completed",
+              reason: null,
+              resultRange: null,
+              notification: true,
+            },
             content: completion("call-test", "completed"),
             ...durable("first", 2),
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion", notification: true },
+            origin: {
+              kind: "backgroundCompletion",
+              toolCallId: "call-worker",
+              toolCallDocId: "doc-call-worker",
+              toolName: "agent_new",
+              statusKind: "completed",
+              reason: null,
+              resultRange: null,
+              notification: true,
+            },
             content: completion("call-worker", "completed"),
             ...durable("worker", 3),
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion", notification: true },
+            origin: {
+              kind: "backgroundCompletion",
+              toolCallId: "call-elsewhere",
+              toolCallDocId: "doc-call-elsewhere",
+              toolName: "bash",
+              statusKind: "failed",
+              reason: null,
+              resultRange: null,
+              notification: true,
+            },
             content: completion("call-elsewhere", "failed"),
             ...durable("second", 4),
           },
@@ -788,7 +847,15 @@ describe("SessionScreen automated inputs", () => {
     const completion = `<tool-completion tool_call_id="call-x" tool_name="bash" status="completed">\n  <result>ok</result>\n</tool-completion>`;
     const background = (key: string, sequence: number, content: string) => ({
       kind: "automatedInput",
-      origin: { kind: "backgroundCompletion", notification: content !== wake },
+      origin: {
+        kind: "backgroundCompletion",
+        toolCallId: null,
+        reason: null,
+        resultRange: null,
+        notification: content !== wake,
+        toolName: "bash",
+        statusKind: "completed",
+      },
       content,
       ...durable(key, sequence),
     });
@@ -830,7 +897,7 @@ describe("SessionScreen automated inputs", () => {
     );
   });
 
-  it("draws the sender's agent and session, from its routing line when the origin lacks it", () => {
+  it("draws the sender's session from its native origin", () => {
     const shortNode =
       NODE.length > 20 ? `${NODE.slice(0, 16)}..${NODE.slice(-4)}` : NODE;
     const message = (itemKey: string, sequence: number, session: string) => ({
@@ -838,7 +905,7 @@ describe("SessionScreen automated inputs", () => {
       origin: {
         kind: "sessionMessage",
         senderNodeDid: NODE,
-        senderSessionId: null,
+        senderSessionId: session,
         senderRequestId: `cause-${itemKey}`,
       },
       content: `[message agent:default session:${session} node:${shortNode} · at:2026-11-01T13:53:39Z · cause:cause-${itemKey}]\n\nthe build is green`,
@@ -877,7 +944,9 @@ describe("SessionScreen automated inputs", () => {
     ).toHaveAttribute("href", expect.stringContaining("session-reviewer"));
     expect(known!.querySelector(".lucide-bot")).toBeNull();
     expect(unknown).toHaveAccessibleName("From another session");
-    expect(within(unknown!).queryByRole("link")).toBeNull();
+    expect(
+      within(unknown!).getByRole("link", { name: "another session" }),
+    ).toHaveAttribute("href", expect.stringContaining("session-unlisted"));
     expect(unknown!.querySelector(".lucide-bot")).not.toBeNull();
   });
 
@@ -890,7 +959,12 @@ describe("SessionScreen automated inputs", () => {
             itemKey: "authored:doc-trigger:prompt",
             requestId: "doc-trigger",
             sequence: 1,
-            origin: { kind: "trigger", triggerId: "nightly", triggerKind: "event" },
+            origin: {
+              kind: "trigger",
+              displayBody: null,
+              triggerId: "nightly",
+              triggerKind: "event",
+            },
             content: null,
             timestamp: null,
             reconstruction: { state: "denied", deniedDependencyDocId: "segment" },
@@ -1111,6 +1185,7 @@ it("does not clear the replacement history draft when an earlier client's reply 
   typeInComposer(screen.getByLabelText("Message"), "same text in another history");
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
   expect(sendChatMessage).toHaveBeenCalledTimes(1);
+  expect(composerText(screen.getByLabelText("Message"))).toBe("");
   act(() =>
     app.stores.client.setState((state) => ({
       snapshot: {
@@ -1119,6 +1194,7 @@ it("does not clear the replacement history draft when an earlier client's reply 
       },
     })),
   );
+  typeInComposer(screen.getByLabelText("Message"), "same text in another history");
   await act(async () => {
     finish();
     await pending;
@@ -1130,4 +1206,43 @@ it("does not clear the replacement history draft when an earlier client's reply 
   // Confirmed under its original client: the runtime holds it, so the
   // payload is released (Lean `ClientOptimisticSend`).
   expect(app.stores.chat.getState().chatDrafts).toEqual([]);
+});
+
+it("moves a sent message out of the composer, so Enter after a slow send's deadline sends nothing new", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    let finish!: () => void;
+    const sendChatMessage = vi.fn(
+      (request) =>
+        new Promise((resolve) => {
+          finish = () => resolve(acceptedChat(request));
+        }),
+    );
+    const { app } = screenApp({ session: heldSession(), sendChatMessage });
+    renderScreen(app);
+    const field = screen.getByLabelText("Message");
+    await typeText(field, "Only once{Enter}");
+    expect(sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(composerText(field)).toBe("");
+    const sent = screen
+      .getByText("Only once")
+      .closest<HTMLElement>("[data-timeline-key]")!;
+    expect(within(sent).getByRole("status")).toHaveTextContent("Sending…");
+    await act(() => vi.advanceTimersByTimeAsync(CHAT_SEND_DEADLINE_MS));
+    await screen.findByText("The message wasn't sent");
+    within(screen.getByRole("status", { name: "Saved message" })).getByRole("button", {
+      name: "Retry message",
+    });
+    await screen.findByText(/No reply arrived within/);
+    await typeText(field, "{Enter}");
+    expect(sendChatMessage).toHaveBeenCalledTimes(1);
+    await act(async () => finish());
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "Saved message" })).toBeNull(),
+    );
+    expect(screen.queryByText(/No reply arrived within/)).toBeNull();
+    expect(sendChatMessage).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
 });

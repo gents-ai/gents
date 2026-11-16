@@ -1,3 +1,4 @@
+use super::native::service_action;
 use super::native::{launchable_native_service, native_service, run_native};
 use super::readiness::{
     refused_kind, refused_runtime_store, wait_for_managed_server, Readiness, RuntimeStillBooting,
@@ -10,6 +11,7 @@ use super::status::emit_status;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::ManagedServerStatus;
+use gents_service::args::ServiceAction;
 use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
@@ -54,11 +56,16 @@ where
         let enable_at_login = self.enable_at_login;
         let launched = run_native(
             launchable_native_service(self.app, self.state)?,
-            move |service| match service.start(enable_at_login) {
+            move |service| match service_action(
+                &service,
+                ServiceAction::Start {
+                    enable: enable_at_login,
+                },
+            ) {
                 Ok(()) => Ok(Launched::Started),
                 Err(error) => {
                     match error
-                        .downcast::<gents_server::native_service::BackgroundApprovalPending>()
+                        .downcast::<gents_service::native_service::BackgroundApprovalPending>()
                     {
                         Ok(pending) => Ok(Launched::ApprovalPending(pending.detail)),
                         Err(error) => Err(error),
@@ -125,7 +132,7 @@ where
                     start_when_approved(state, token, &mut lifecycle, launch).await?;
                 }
                 Readiness::ApprovalRequired => {
-                    anyhow::bail!(gents_server::native_service::BACKGROUND_APPROVAL_REQUIRED)
+                    anyhow::bail!(gents_service::native_service::BACKGROUND_APPROVAL_REQUIRED)
                 }
             }
         }
@@ -173,9 +180,9 @@ where
             match refusal {
                 Some(detail) => anyhow::bail!(
                     "{} (launchctl: {detail})",
-                    gents_server::native_service::BACKGROUND_APPROVAL_REQUIRED
+                    gents_service::native_service::BACKGROUND_APPROVAL_REQUIRED
                 ),
-                None => anyhow::bail!(gents_server::native_service::BACKGROUND_APPROVAL_REQUIRED),
+                None => anyhow::bail!(gents_service::native_service::BACKGROUND_APPROVAL_REQUIRED),
             }
         }
         *lifecycle = None;
@@ -267,7 +274,12 @@ where
     let refused_kind = refused_kind(&failure.error);
     let settled = settle_launch_failure(state, token, failure, || async {
         run_native(native_service(app, state)?, move |service| {
-            service.stop(!initial_enabled)
+            service_action(
+                &service,
+                ServiceAction::Stop {
+                    keep_enabled: initial_enabled,
+                },
+            )
         })
         .await
     })
@@ -285,10 +297,10 @@ where
         .as_ref()
         .is_some_and(|error| error.code == BridgeErrorCode::IncompatibleLocalStore)
         || matches!(
-            gents::store::local::storage_backend::incompatible_store_kind(
-                &gents::store::local::home::default_data_dir(node_home)
+            gents_store::local::storage_backend::incompatible_store_kind(
+                &gents_store::local::home::default_data_dir(node_home)
             ),
-            Ok(Some(_))
+            Ok(Some(kind)) if kind != gents_protocol::operations::install_repair::IncompatibleStoreKind::MissingStoreKey
         );
     let refused_store = refused.then(|| refused_runtime_store(node_home, refused_kind));
     state.managed_server.lock().await.incompatible_store = refused_store.clone();
@@ -365,7 +377,7 @@ where
         if started.elapsed() >= timeout {
             anyhow::bail!(
                 "{} Gents waited {} minutes for approval.",
-                gents_server::native_service::BACKGROUND_APPROVAL_REQUIRED,
+                gents_service::native_service::BACKGROUND_APPROVAL_REQUIRED,
                 timeout.as_secs() / 60
             );
         }

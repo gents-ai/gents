@@ -1,33 +1,10 @@
-use std::cmp::Reverse;
-
 use rapidhash::{HashMapExt, RapidHashMap};
 
 use gents_protocol::client_protocol::ClientTurnState;
+use gents_protocol::operations::session::session_order_key;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::AgentSession;
-
-pub type SessionOrderKey = (
-    Reverse<Option<String>>,
-    Reverse<Option<String>>,
-    String,
-    Option<String>,
-);
-
-/// Session lists show the latest activity first, then the newest session.
-pub fn session_order_key(
-    updated_at: Option<&str>,
-    created_at: Option<&str>,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> SessionOrderKey {
-    (
-        Reverse(updated_at.map(str::to_owned)),
-        Reverse(created_at.map(str::to_owned)),
-        session_id.to_owned(),
-        requester_did.map(str::to_owned),
-    )
-}
 
 /// One of a node's sessions with the request its list row shows.
 #[derive(Debug, Clone, Copy)]

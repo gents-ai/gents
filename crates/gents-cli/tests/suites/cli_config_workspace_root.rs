@@ -54,7 +54,8 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
         ],
     )?;
     assert!(
-        relative_rejection.contains("must be an absolute path"),
+        relative_rejection.contains("is not absolute")
+            && relative_rejection.contains("Next: gents config workspace-root set --help"),
         "{relative_rejection}"
     );
 
@@ -186,6 +187,7 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
             disabled_root_str,
             "--display-name",
             "Re-enabled Root",
+            "--enabled",
         ],
     )?;
     assert_eq!(
@@ -259,7 +261,8 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
         ],
     )?;
     assert!(
-        second_rm.contains("workspace root is unavailable"),
+        second_rm.contains("no published workspace root at")
+            && second_rm.contains("Next: gents config workspace-root list"),
         "{second_rm}"
     );
 

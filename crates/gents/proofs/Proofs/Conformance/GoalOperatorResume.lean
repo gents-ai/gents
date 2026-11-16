@@ -1,17 +1,32 @@
-import Proofs.GoalAutomation.OperatorResume
+import Proofs.Automation.GoalAutomation.OperatorResume
 import Proofs.Conformance.ContractTypes
 import Lean.Data.Json.FromToJson
+import Proofs.Conformance.Functions.Automation
+import Proofs.Conformance.Family
 namespace Conformance.GoalOperatorResumeContracts
 open GoalAutomation.OperatorResume Conformance.Contracts
 
-def publicationCasesJson : String :=
-  let cases : List (String × Bool × Bool × Bool) :=
-    [("pending-failed", true, true, false), ("pending-completed", true, true, true),
-     ("completed-no-replay", false, true, false)]
-  (Lean.toJson (cases.map fun (name, pending, authorized, granted) => Lean.Json.mkObj
-    [("name", Lean.toJson name), ("pending", Lean.toJson pending),
-     ("authorized", Lean.toJson authorized), ("granted", Lean.toJson granted),
-     ("expected_pending", Lean.toJson (publicationPending pending authorized granted))])).compress
+structure PublicationInput where
+  name : String
+  pending : Bool
+  authorized : Bool
+  granted : Bool
+  deriving Lean.ToJson
+
+structure PublicationOutput where
+  pending : Bool
+  deriving Lean.ToJson
+
+/-- One client resume on one served goal: its relationships first fail to
+publish, a later resume completes them, and a resume after the relationships
+are revoked must not replay them. -/
+@[conformance_family]
+def publication : Family PublicationInput PublicationOutput where
+  inputs :=
+    [ { name := "pending-failed", pending := true, authorized := true, granted := false }
+    , { name := "pending-completed", pending := true, authorized := true, granted := true }
+    , { name := "completed-no-replay", pending := false, authorized := true, granted := false } ]
+  model := fun i => { pending := publicationPending i.pending i.authorized i.granted }
 
 def parentBinding : Binding :=
   ⟨1, "owner", "session", 10, 100, some "graph-correlation", some "source",
@@ -56,6 +71,56 @@ def resumeCases : List ResumeCase :=
 theorem cases_replay_explicit_expectations :
   ∀ c ∈ resumeCases, resume c.before c.request c.commit = (c.expected, c.outcome) := by decide
 
+deriving instance Lean.ToJson for Binding, Request, Outcome
+
+structure SnapshotWire where
+  status : Goals.Status
+  blockedAudits : Nat
+  wrapupRequested : Bool
+  wrapupCompleted : Bool
+  sequence : Nat
+  lastContinuedFrom : Option Nat
+  latestRequest : Nat
+  children : List Binding
+  tokensUsed : Nat
+  tokenBudget : Option Nat
+  deriving Lean.ToJson
+
+def SnapshotWire.ofModel (s : Snapshot) : SnapshotWire :=
+  { status := s.goal.status, blockedAudits := s.goal.blockedAudits
+    wrapupRequested := s.goal.wrapupRequested, wrapupCompleted := s.goal.wrapupCompleted
+    sequence := s.sequence, lastContinuedFrom := s.lastContinuedFrom
+    latestRequest := s.latestRequest, children := s.children, tokensUsed := s.tokensUsed
+    tokenBudget := s.tokenBudget }
+
+def SnapshotWire.toModel (s : SnapshotWire) : Snapshot :=
+  { goal := { status := s.status, blockedAudits := s.blockedAudits
+              wrapupRequested := s.wrapupRequested, wrapupCompleted := s.wrapupCompleted }
+    sequence := s.sequence, lastContinuedFrom := s.lastContinuedFrom
+    latestRequest := s.latestRequest, children := s.children, tokensUsed := s.tokensUsed
+    tokenBudget := s.tokenBudget }
+
+structure ResumeInput where
+  name : String
+  before : SnapshotWire
+  request : Request
+  commit : Bool
+  deriving Lean.ToJson
+
+structure ResumeOutput where
+  expected : SnapshotWire
+  outcome : Outcome
+  goalStatus : Option Goals.Status
+  deriving Lean.ToJson
+
+@[conformance_family]
+def resumeTransaction : Family ResumeInput ResumeOutput where
+  inputs := resumeCases.map fun c =>
+    { name := c.name, before := .ofModel c.before, request := c.request, commit := c.commit }
+  model := fun i =>
+    let result := resume i.before.toModel i.request i.commit
+    { expected := .ofModel result.1, outcome := result.2, goalStatus := receiptStatus result }
+
 structure ResumeOnCase where
   name : String
   before : Snapshot
@@ -84,6 +149,20 @@ def configCases : List (Goals.Status × Goals.Status × Bool) :=
    (.paused, .paused, true)]
 theorem configCases_match :
   ∀ c ∈ configCases, configMaySetStatus c.1 c.2.1 = c.2.2 := by decide
+
+structure ConfigInput where
+  current : Goals.Status
+  target : Goals.Status
+  deriving Lean.ToJson
+
+structure ConfigOutput where
+  allowed : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def config : Family ConfigInput ConfigOutput where
+  inputs := configCases.map fun c => { current := c.1, target := c.2.1 }
+  model := fun i => { allowed := configMaySetStatus i.current i.target }
 
 private def b (x : Bool) : String := if x then "true" else "false"
 private def n : Option Nat → String | none => "null" | some x => toString x
@@ -116,17 +195,40 @@ def requestJson (x : Request) : String :=
 theorem historical_receipt_can_report_paused :
   receiptStatus (resume later request true) = some .paused := by decide
 
-def caseJson (c : ResumeCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++ ",\"before\":" ++ snapshotJson c.before ++
-  ",\"request\":" ++ requestJson c.request ++ ",\"commit\":" ++ b c.commit ++
-  ",\"expected\":" ++ snapshotJson c.expected ++ ",\"outcome\":" ++ jsonString (outcome c.outcome) ++
-  ",\"goal_status\":" ++ (match receiptStatus (c.expected, c.outcome) with | none => "null" | some value => status value) ++ "}"
-def resumeCasesJson : String := jsonArray (resumeCases.map caseJson)
-def resumeOnCasesJson : String := jsonArray (resumeOnCases.map fun c =>
-  "{\"name\":" ++ jsonString c.name ++ ",\"before\":" ++ snapshotJson c.before ++
-  ",\"target_available\":" ++ b c.targetAvailable ++
-  ",\"expected\":" ++ snapshotJson c.expected ++
-  ",\"outcome\":" ++ jsonString (outcome c.outcome) ++ "}")
-def configCasesJson : String := jsonArray (configCases.map fun c =>
-  "{\"current\":" ++ status c.1 ++ ",\"target\":" ++ status c.2.1 ++ ",\"allowed\":" ++ b c.2.2 ++ "}")
+/-- The snapshot an account resume starts from: the goal before any resume, or
+the goal after one resume already published its canonical child. -/
+def resumeOnBefore (priorReceipt : Bool) : Snapshot :=
+  if priorReceipt then (resume initial request true).1 else initial
+
+example : ∀ c ∈ resumeOnCases, resumeOnBefore (!c.before.children.isEmpty) = c.before := by
+  decide
+
+example : ∀ c ∈ resumeOnCases, c.expected = c.before := by decide
+
+structure ResumeOnInput where
+  name : String
+  priorReceipt : Bool
+  targetAvailable : Bool
+  deriving Lean.ToJson
+
+structure ResumeOnOutput where
+  outcome : String
+  snapshotUnchanged : Bool
+  receiptIsExistingChild : Option Bool
+  deriving Lean.ToJson
+
+/-- One account resume on a served goal whose target account may be disabled,
+either before any child exists or after an earlier resume published one. -/
+@[conformance_family]
+def resumeOnTarget : Family ResumeOnInput ResumeOnOutput where
+  inputs := resumeOnCases.map fun c =>
+    { name := c.name, priorReceipt := !c.before.children.isEmpty,
+      targetAvailable := c.targetAvailable }
+  model := fun i =>
+    let before := resumeOnBefore i.priorReceipt
+    let result := resumeOn before request i.targetAvailable true
+    { outcome := outcome result.2
+      snapshotUnchanged := result.1 == before
+      receiptIsExistingChild := (receiptStatus result).map fun _ =>
+        before.children.any fun child => child.child == result.1.latestRequest }
 end Conformance.GoalOperatorResumeContracts

@@ -70,7 +70,7 @@ pub(crate) struct UxPreviewArgs {
         default_value = "1280x800",
         help = "Size of the pane the page draws in"
     )]
-    pub(crate) viewport: gents::observe::ux_preview::Viewport,
+    pub(crate) viewport: gents_tools::ux_preview::Viewport,
 }
 
 #[derive(clap::Args)]
@@ -100,7 +100,7 @@ pub(crate) struct PluginDirsAddArgs {
     #[arg(help = "Folder or file to allow")]
     pub(crate) path: PathBuf,
     #[arg(long, default_value = "read", help = "read or read_write")]
-    pub(crate) access: gents::pack::BindAccess,
+    pub(crate) access: gents_pack::pack::BindAccess,
     #[arg(long, help = "Home to write the list to; defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
 }

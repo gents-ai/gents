@@ -153,7 +153,7 @@ fn resolve_host_program(program: &str) -> Option<PathBuf> {
     let app_image = std::env::var_os("APPIMAGE").map(PathBuf::from);
     std::env::split_paths(&std::env::var_os("PATH")?)
         .filter(|directory| {
-            !gents_server::native_service::inside_temporary_package(
+            !gents_service::native_service::inside_temporary_package(
                 directory,
                 app_dir.as_deref(),
                 app_image.as_deref(),

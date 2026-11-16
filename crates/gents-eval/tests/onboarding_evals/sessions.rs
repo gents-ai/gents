@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use gents::documents::EvalSplit;
-use gents::pack::{load_pack_config, PackInstallOptions, PackManifest};
+use gents_documents::EvalSplit;
 use gents_eval::checks::CheckRegistry;
+use gents_pack::pack::{load_pack_config, PackInstallOptions, PackManifest};
 
 #[test]
 fn session_investigation_eval_pack_validates_all_splits_and_shipped_checks() {
@@ -125,9 +125,9 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
 
     use anyhow::Context;
     use gents::defra_node::Node as EmbeddedNode;
-    use gents::session::load_tool_call_presentation;
-    use gents::store::config_client::ConfigAccess;
-    use gents::{KeyIdentity, NodeIdentity};
+    use gents_session::session::load_tool_call_presentation;
+    use gents_store::config_client::ConfigAccess;
+    use gents_store::identity::{KeyIdentity, NodeIdentity};
     use serde_json::json;
 
     let run = std::path::PathBuf::from(std::env::var("GENTS_SESSION_METRICS_RUN")?);
@@ -203,10 +203,10 @@ async fn retained_tool_trace_uses_native_canonical_reader() -> anyhow::Result<()
 
     use anyhow::Context;
     use gents::defra_node::Node as EmbeddedNode;
-    use gents::session::load_tool_call_presentation;
-    use gents::store::config_client::ConfigAccess;
-    use gents::store::graphql::escape_graphql_string;
-    use gents::{KeyIdentity, NodeIdentity};
+    use gents_session::session::load_tool_call_presentation;
+    use gents_store::config_client::ConfigAccess;
+    use gents_store::graphql::escape_graphql_string;
+    use gents_store::identity::{KeyIdentity, NodeIdentity};
     use serde_json::json;
 
     let home = std::path::PathBuf::from(std::env::var("GENTS_EVAL_TRACE_HOME")?);

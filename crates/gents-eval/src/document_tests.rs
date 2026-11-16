@@ -1,9 +1,9 @@
 use crate::test_support::{completion, draft, identity, origin};
 use anyhow::Context;
 use gents::defra_node::Node as EmbeddedNode;
-use gents::documents::EvalSplit;
 use gents::eval::documents::*;
-use gents::ConfigAccess;
+use gents_documents::EvalSplit;
+use gents_store::config_client::ConfigAccess;
 use serde_json::json;
 use std::sync::Arc;
 #[tokio::test]
@@ -13,19 +13,24 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
     use crate::optimization::policy::PolicyV2;
     use crate::optimization::target::{Target, TargetField};
     use acp::nac::NodePermission;
-    use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
-        DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint,
-    };
-    use gents::store::identity::NodeIdentity;
-    let modeled = &crate::lean_vocab_test::lean_contract_snapshot().identity_eval_record_cases;
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents_lean_vocab::families::eval_records_published::PublishOutput;
+    use gents_store::config_client::GraphqlEndpoint;
+    use gents_store::identity::NodeIdentity;
     let directory = tempfile::tempdir()?;
-    let user = gents::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
-    let runtime = gents::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
-    let outsider = gents::KeyIdentity::load_or_create(directory.path().join("outsider"), None)?;
-    let binding = gents::store::identity::provision_agent_identity(&runtime)?;
-    let managed = gents::store::identity::resolve_agent_identity(&runtime, &binding)?;
-    let writer = gents::KeyIdentity::load_or_create(directory.path().join("writer"), None)?;
+    let user =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
+    let runtime =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
+    let outsider = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("outsider"),
+        None,
+    )?;
+    let binding = gents_store::identity::provision_agent_identity(&runtime)?;
+    let managed = gents_store::identity::resolve_agent_identity(&runtime, &binding)?;
+    let writer =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("writer"), None)?;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
     let node = Arc::new(
@@ -66,7 +71,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
                 .await?;
         }
     }
-    let mut required: Vec<_> = gents::Collection::ALL
+    let mut required: Vec<_> = gents_store::collection::Collection::ALL
         .iter()
         .map(|collection| collection.graphql_type())
         .collect();
@@ -86,7 +91,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
     ConfigAccess::local_as(node.clone(), identity::Did::new(user.did())?)
         .add_collection(&schemas.join("\n"))
         .await?;
-    let endpoint = |actor: &gents::KeyIdentity| -> anyhow::Result<ConfigAccess> {
+    let endpoint = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
                 .with_client_signing_capability(actor.client_signing_capability()?)?
@@ -127,90 +132,6 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
         managed.as_ref(),
     )?;
     let runtime_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
-    for (name, actor, creator) in [
-        ("agent-creator", &managed_access, managed.did()),
-        ("runtime-creator", &runtime_access, runtime.did()),
-    ] {
-        let case = modeled
-            .iter()
-            .find(|case| case["name"] == name)
-            .expect("modeled creator");
-        create_run(
-            actor,
-            name,
-            runtime.did(),
-            creator,
-            &origin(EvalSplit::Train),
-        )
-        .await
-        .with_context(|| format!("creating {name} run"))?;
-        assert_eq!(
-            load_run(&access, runtime.did(), name).await?.is_some(),
-            case["expected_user_read"].as_bool().unwrap()
-        );
-        assert!(
-            invalidate_run(&access, runtime.did(), name, user.did(), "not creator")
-                .await
-                .is_err()
-        );
-        invalidate_run(actor, runtime.did(), name, creator, "creator").await?;
-    }
-    let writer_access = endpoint(&writer)?;
-    create_run(
-        &writer_access,
-        "agent-run",
-        runtime.did(),
-        writer.did(),
-        &origin(EvalSplit::Train),
-    )
-    .await
-    .context("creating held non-owner writer run")?;
-    let agent_model = modeled
-        .iter()
-        .find(|case| case["name"] == "agent-creator")
-        .expect("modeled creator");
-    assert_eq!(
-        load_run(&access, runtime.did(), "agent-run")
-            .await?
-            .is_some(),
-        agent_model["expected_user_read"].as_bool().unwrap()
-    );
-    assert!(invalidate_run(
-        &access,
-        runtime.did(),
-        "agent-run",
-        user.did(),
-        "not creator"
-    )
-    .await
-    .is_err());
-    invalidate_run(
-        &writer_access,
-        runtime.did(),
-        "agent-run",
-        writer.did(),
-        "creator",
-    )
-    .await?;
-    let foreign_model = modeled
-        .iter()
-        .find(|case| case["name"] == "foreign-node")
-        .expect("modeled unavailable Node");
-    assert!(create_run(
-        &outsider_access,
-        "orphan",
-        runtime.did(),
-        outsider.did(),
-        &origin(EvalSplit::Train)
-    )
-    .await
-    .is_err());
-    assert_eq!(
-        load_run(&outsider_access, runtime.did(), "orphan")
-            .await?
-            .is_some(),
-        foreign_model["expected_created"].as_bool().unwrap()
-    );
     let definition = json!({
         "node_did":runtime.did(), "definition_id":"definition",
         "comparability_version":1, "title":"private",
@@ -221,14 +142,22 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
         }]}],
     });
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents::Collection::EvalDefinition,
+        collection: gents_store::collection::Collection::EvalDefinition,
         add: definition.clone(),
         update: definition,
     }])?;
     access
         .transact_write("test.eval.definition", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await?;
     create_run(
@@ -299,58 +228,142 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
             .len(),
         1
     );
-    for (name, collection, id_field) in [
-        ("definition", "EvalDefinition", "definition_id"),
-        ("run", "EvalRun", "run_id"),
-        ("trial", "EvalTrial", "trial_id"),
-        ("verdict", "EvalVerdict", "verdict_id"),
-        ("optimization", "OptimizationJob", "job_id"),
-    ] {
-        let case = modeled
-            .iter()
-            .find(|case| case["name"] == name)
-            .expect("modeled case");
-        let query = format!(
-            "{{ {collection}(filter: {{ {id_field}: {{ _eq: \"{name}\" }} }}) {{ _docID }} }}"
-        );
-        let own = access.execute(&query).await?;
-        let visible = own["data"][collection]
-            .as_array()
-            .is_some_and(|rows| !rows.is_empty());
-        assert_eq!(
-            visible,
-            case["expected_user_read"].as_bool().unwrap(),
-            "{name} user visibility"
-        );
-        let doc_id = own["data"][collection][0]["_docID"]
-            .as_str()
-            .context("created record ID")?
-            .to_owned();
-        let owners = access
-            .transact_readonly("test.eval.owners", |txn| {
-                let doc_id = &doc_id;
-                Box::pin(async move {
-                    txn.document_owners(collection, std::slice::from_ref(doc_id))
+    let mut agent_user_read = None;
+    for case in gents_lean_vocab::families::eval_records_published::cases() {
+        let name = case.input.name.as_str();
+        let output = match name {
+            "agent-creator" | "runtime-creator" => {
+                let (actor, creator) = if name == "agent-creator" {
+                    (&managed_access, managed.did())
+                } else {
+                    (&runtime_access, runtime.did())
+                };
+                create_run(
+                    actor,
+                    name,
+                    runtime.did(),
+                    creator,
+                    &origin(EvalSplit::Train),
+                )
+                .await
+                .with_context(|| format!("creating {name} run"))?;
+                let output = PublishOutput {
+                    created: load_run(actor, runtime.did(), name).await?.is_some(),
+                    user_read: load_run(&access, runtime.did(), name).await?.is_some(),
+                    stranger_read: load_run(&outsider_access, runtime.did(), name)
+                        .await?
+                        .is_some(),
+                };
+                assert!(
+                    invalidate_run(&access, runtime.did(), name, user.did(), "not creator")
                         .await
-                })
-            })
-            .await?;
-        assert_eq!(owners.len(), 1);
-        assert_eq!(
-            owners[0].owner.as_ref().map(|did| did.as_str()),
-            Some(user.did()),
-            "{name} native owner"
-        );
-        let foreign = outsider_access.execute(&query).await?;
-        let foreign_visible = foreign["data"][collection]
-            .as_array()
-            .is_some_and(|rows| !rows.is_empty());
-        assert_eq!(
-            foreign_visible,
-            case["expected_stranger_read"].as_bool().unwrap(),
-            "{name} outsider visibility"
-        );
+                        .is_err()
+                );
+                invalidate_run(actor, runtime.did(), name, creator, "creator").await?;
+                if name == "agent-creator" {
+                    agent_user_read = Some(output.user_read);
+                }
+                output
+            }
+            "foreign-node" => {
+                assert!(create_run(
+                    &outsider_access,
+                    name,
+                    runtime.did(),
+                    outsider.did(),
+                    &origin(EvalSplit::Train)
+                )
+                .await
+                .is_err());
+                let created = load_run(&outsider_access, runtime.did(), name)
+                    .await?
+                    .is_some();
+                PublishOutput {
+                    created,
+                    user_read: load_run(&access, runtime.did(), name).await?.is_some(),
+                    stranger_read: created,
+                }
+            }
+            _ => {
+                let (collection, id_field) = match name {
+                    "definition" => ("EvalDefinition", "definition_id"),
+                    "run" => ("EvalRun", "run_id"),
+                    "trial" => ("EvalTrial", "trial_id"),
+                    "verdict" => ("EvalVerdict", "verdict_id"),
+                    "optimization" => ("OptimizationJob", "job_id"),
+                    other => panic!("no held fixture creates {other}"),
+                };
+                let query = format!(
+                    "{{ {collection}(filter: {{ {id_field}: {{ _eq: \"{name}\" }} }}) {{ _docID }} }}"
+                );
+                let own = access.execute(&query).await?;
+                let visible = own["data"][collection]
+                    .as_array()
+                    .is_some_and(|rows| !rows.is_empty());
+                let doc_id = own["data"][collection][0]["_docID"]
+                    .as_str()
+                    .context("created record ID")?
+                    .to_owned();
+                let owners = access
+                    .transact_readonly("test.eval.owners", |txn| {
+                        let doc_id = &doc_id;
+                        Box::pin(async move {
+                            txn.document_owners(collection, std::slice::from_ref(doc_id))
+                                .await
+                        })
+                    })
+                    .await?;
+                assert_eq!(owners.len(), 1);
+                assert_eq!(
+                    owners[0].owner.as_ref().map(|did| did.as_str()),
+                    Some(user.did()),
+                    "{name} native owner"
+                );
+                let foreign = outsider_access.execute(&query).await?;
+                PublishOutput {
+                    created: visible,
+                    user_read: visible,
+                    stranger_read: foreign["data"][collection]
+                        .as_array()
+                        .is_some_and(|rows| !rows.is_empty()),
+                }
+            }
+        };
+        case.check(output);
     }
+    let writer_access = endpoint(&writer)?;
+    create_run(
+        &writer_access,
+        "agent-run",
+        runtime.did(),
+        writer.did(),
+        &origin(EvalSplit::Train),
+    )
+    .await
+    .context("creating held non-owner writer run")?;
+    assert_eq!(
+        load_run(&access, runtime.did(), "agent-run")
+            .await?
+            .is_some(),
+        agent_user_read.expect("the agent-creator case ran")
+    );
+    assert!(invalidate_run(
+        &access,
+        runtime.did(),
+        "agent-run",
+        user.did(),
+        "not creator"
+    )
+    .await
+    .is_err());
+    invalidate_run(
+        &writer_access,
+        runtime.did(),
+        "agent-run",
+        writer.did(),
+        "creator",
+    )
+    .await?;
     node.shutdown().await?;
     Ok(())
 }

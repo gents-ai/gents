@@ -16,9 +16,9 @@ import { errorText } from "../../../lib/errorText";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import { readInstalledPacks } from "./model";
 
-/* The packs the Engineer starts with on the desktop's own node, read once per
-   node and shared by the card over the shell and the Packs page, so an
-   approval in one shows in the other. */
+/* The core packs the Engineer starts with on the desktop's own node, read
+   once per node and shared by the card over the shell and the Packs page, so
+   turning one on in one shows in the other. */
 const starter = createStore<{
   /** the local node the list was read for */
   nodeDid: string | null;
@@ -40,15 +40,17 @@ export function resetDefaultPacks() {
   starter.setState(starter.getInitialState(), true);
 }
 
-/** a starter pack that is offered: not installed, and its archive resolved */
+/** a starter pack that is offered: missing and carried by this release, or
+    installed and not turned on */
 export const isPending = (pack: DefaultPack) =>
-  pack.state === "needs_approval" || pack.state === "ready";
+  pack.state === "missing" || pack.state === "not_enabled";
 
 export type DefaultPacksReview = ReturnType<typeof useDefaultPacks>;
 
 /** The starter packs of the selected node when it is the desktop's own and
     this shell can host one; for any other node nothing is read and the list
-    is empty. An approval restarts the local node around the install. */
+    is empty. Installing or turning one on restarts the local node around
+    it. */
 export function useDefaultPacks() {
   const { actions, stores } = useApp();
   const homeDid = useHomeDid();
@@ -124,7 +126,7 @@ export function useDefaultPacks() {
     loading: mine && state.loading,
     error: mine ? state.error : null,
     busy: mine && state.busy,
-    /** the packs the last approval could not install */
+    /** the packs the last install or turn-on could not finish */
     failed: mine ? state.failed : [],
     approve,
     retry,

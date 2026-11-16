@@ -14,6 +14,12 @@ pub fn normalize_responses_assistant_items(value: &mut Value) {
     }
 }
 
+/// The OpenAI function-call item ID a stored tool-call ID may be presented as:
+/// only provider-issued `fc_` handles; a foreign native ID is omitted.
+pub fn openai_function_call_item_id(id: &str) -> Option<&str> {
+    id.starts_with("fc_").then_some(id)
+}
+
 pub fn normalize_function_call_item_ids(value: &mut Value) -> bool {
     let Some(items) = value.get_mut("input").and_then(Value::as_array_mut) else {
         return false;
@@ -27,7 +33,7 @@ pub fn normalize_function_call_item_ids(value: &mut Value) -> bool {
             && object
                 .get("id")
                 .and_then(Value::as_str)
-                .is_some_and(|id| !id.starts_with("fc_"))
+                .is_some_and(|id| openai_function_call_item_id(id).is_none())
         {
             object.remove("id");
             changed = true;

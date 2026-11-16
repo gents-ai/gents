@@ -1,8 +1,10 @@
-use gents_server::server_host::{
-    ManagedEnrollmentDecision, ManagedEnrollmentDecisionOutcome, ManagedEnrollmentHistory,
-    ManagedEnrollmentHistoryEntry, ManagedEnrollmentHistoryState, ManagedEnrollmentMember,
-    ManagedPendingEnrollment,
-};
+use gents_service::server_host::ManagedEnrollmentDecision;
+use gents_service::server_host::ManagedEnrollmentDecisionOutcome;
+use gents_service::server_host::ManagedEnrollmentHistory;
+use gents_service::server_host::ManagedEnrollmentHistoryEntry;
+use gents_service::server_host::ManagedEnrollmentHistoryState;
+use gents_service::server_host::ManagedEnrollmentMember;
+use gents_service::server_host::ManagedPendingEnrollment;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 

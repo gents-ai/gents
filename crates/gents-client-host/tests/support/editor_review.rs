@@ -1,7 +1,7 @@
 use super::{fake_llm, Attachment, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents::{store::graphql::escape_graphql_string, ConfigAccess};
 use gents_protocol::row::AgentRequestRow;
+use gents_store::{config_client::ConfigAccess, graphql::escape_graphql_string};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -94,7 +94,7 @@ pub async fn verify(
         "review input was not admitted exactly once"
     );
     let request = matches[0];
-    gents::verify_request_receipt_signature(request)?;
+    gents_store::identity::request_receipt::verify_request_receipt_signature(request)?;
     ensure!(
         request.requester_did.as_deref() == Some(author),
         "review authority changed"

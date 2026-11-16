@@ -1,11 +1,12 @@
 use anyhow::{ensure, Context, Result};
-use gents::store::config_client::ConfigAccess;
-use gents::tools::call::lifecycle::{load_tool_file_change_observation, ToolFileChangeRead};
 use gents_protocol::file_changes::{ToolFileChanges, FILE_CHANGES_VERSION};
 use gents_protocol::file_inventory::{
     FileChangeMetadata, FileInventoryEntry, FileInventoryImage, FileInventoryImageReference,
     FileInventoryObservation, FileInventoryReadAction, FileInventorySnapshotView,
 };
+use gents_session::tool_call::query::inventory_images::load_inventory_images;
+use gents_session::tool_call::query::result::ToolFileChangeRead;
+use gents_store::config_client::ConfigAccess;
 
 use super::ClientCore;
 
@@ -36,16 +37,7 @@ impl ClientCore {
             self.operator_observation_graphql(&entry.scope.node_did)
                 .context("Connect the runtime that owns these recorded file versions.")?,
         );
-        let retained = match load_tool_file_change_observation(
-            &access,
-            &entry.tool_call_doc_id,
-            &entry.request_doc_id,
-            &entry.scope.node_did,
-            &entry.scope.session_id,
-            Some(&entry.scope.requester_did),
-        )
-        .await?
-        {
+        let retained = match load_inventory_images(&access, &entry).await? {
             ToolFileChangeRead::Retained {
                 document_id,
                 changes,

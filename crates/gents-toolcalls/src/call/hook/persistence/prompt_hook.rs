@@ -1,0 +1,606 @@
+use super::*;
+use crate::call::hook::RetainedStopReceipt;
+use crate::call::hook::{decide_persistence_outcome, FailurePolicy, PolicyDecision};
+use gents_protocol::tool_names::{
+    AGENT_NEW_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
+    READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookOwnedTool {
+    GetGoal,
+    UpdateGoal,
+    CreateGoal,
+    AgentControl,
+    SessionMessage,
+    SpawnProcess,
+    WaitProcess,
+    ListProcesses,
+    ReadProcess,
+    CancelProcess,
+}
+
+impl HookOwnedTool {
+    pub const ROUTES: [(&'static str, Self); 16] = [
+        (
+            gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
+            Self::GetGoal,
+        ),
+        (
+            gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
+            Self::UpdateGoal,
+        ),
+        (
+            gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
+            Self::CreateGoal,
+        ),
+        (
+            gents_protocol::tool_names::AGENT_INTERRUPT_TOOL_NAME,
+            Self::AgentControl,
+        ),
+        (
+            gents_protocol::tool_names::AGENT_STOP_TOOL_NAME,
+            Self::AgentControl,
+        ),
+        (
+            gents_protocol::tool_names::AGENT_RESUME_TOOL_NAME,
+            Self::AgentControl,
+        ),
+        (
+            gents_protocol::tool_names::AGENT_LIST_TOOL_NAME,
+            Self::AgentControl,
+        ),
+        (
+            gents_protocol::tool_names::AGENT_SESSION_READ_TOOL_NAME,
+            Self::AgentControl,
+        ),
+        (
+            gents_protocol::tool_names::AGENT_SESSION_LIST_TOOL_NAME,
+            Self::AgentControl,
+        ),
+        (AGENT_NEW_TOOL_NAME, Self::SessionMessage),
+        (
+            gents_protocol::tool_names::AGENT_MESSAGE_TOOL_NAME,
+            Self::SessionMessage,
+        ),
+        (SPAWN_PROCESS_TOOL_NAME, Self::SpawnProcess),
+        (WAIT_PROCESS_TOOL_NAME, Self::WaitProcess),
+        (LIST_PROCESSES_TOOL_NAME, Self::ListProcesses),
+        (READ_PROCESS_TOOL_NAME, Self::ReadProcess),
+        (CANCEL_PROCESS_TOOL_NAME, Self::CancelProcess),
+    ];
+
+    pub(crate) fn of(tool_name: &str) -> Option<Self> {
+        Self::ROUTES
+            .iter()
+            .find(|(name, _)| *name == tool_name)
+            .map(|(_, route)| *route)
+    }
+
+    fn persistence_context(self) -> &'static str {
+        match self {
+            Self::GetGoal => "persist get_goal tool call",
+            Self::UpdateGoal => "persist update_goal tool call",
+            Self::CreateGoal => "persist create_goal tool call",
+            Self::AgentControl => "persist agents tool call",
+            Self::SessionMessage => "persist session-message tool call",
+            Self::SpawnProcess => "persist spawn_process tool call",
+            Self::WaitProcess => "persist wait_process tool call",
+            Self::ListProcesses => "persist list_processes tool call",
+            Self::ReadProcess => "persist read_process tool call",
+            Self::CancelProcess => "persist cancel_process tool call",
+        }
+    }
+}
+
+impl DefraSessionHook {
+    pub async fn on_completion_call(&self, prompt: &Message, _history: &[Message]) -> HookAction {
+        self.on_completion_call_with_context(prompt, _history, None)
+            .await
+    }
+
+    pub async fn on_completion_call_with_context(
+        &self,
+        _prompt: &Message,
+        _history: &[Message],
+        _context: Option<&Message>,
+    ) -> HookAction {
+        self.state.lock().await.reset_after_user_message();
+        self.record_success();
+        HookAction::Continue
+    }
+
+    pub async fn on_tool_call(
+        &self,
+        tool_name: &str,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> ToolCallHookAction {
+        let owned = HookOwnedTool::of(tool_name).filter(|route| match route {
+            HookOwnedTool::GetGoal | HookOwnedTool::UpdateGoal => self.goal_tools_enabled,
+            HookOwnedTool::CreateGoal => self.goal_creation_enabled,
+            _ => true,
+        });
+        if owned == Some(HookOwnedTool::SessionMessage) {
+            let result = Box::pin(self.persist_session_message_tool_call(
+                tool_name,
+                tool_call_id,
+                internal_call_id,
+                args,
+            ))
+            .instrument(tracing::info_span!(
+                "tool.call",
+                tool_name = %tool_name,
+                tool_call_id = %internal_call_id,
+            ))
+            .await;
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(error) => self.on_tool_persistence_error(
+                    HookOwnedTool::SessionMessage.persistence_context(),
+                    &error,
+                ),
+            };
+        }
+        if let Some(route) = owned {
+            let result = Box::pin(async {
+                match route {
+                    HookOwnedTool::GetGoal => {
+                        self.persist_goal_tool_call(
+                            super::goal_tools::GoalTool::Get,
+                            tool_call_id,
+                            internal_call_id,
+                            args,
+                        )
+                        .await
+                    }
+                    HookOwnedTool::UpdateGoal => {
+                        self.persist_goal_tool_call(
+                            super::goal_tools::GoalTool::Update,
+                            tool_call_id,
+                            internal_call_id,
+                            args,
+                        )
+                        .await
+                    }
+                    HookOwnedTool::CreateGoal => {
+                        self.persist_goal_tool_call(
+                            super::goal_tools::GoalTool::Create,
+                            tool_call_id,
+                            internal_call_id,
+                            args,
+                        )
+                        .await
+                    }
+                    HookOwnedTool::AgentControl => {
+                        self.persist_agent_control_tool_call(
+                            tool_name,
+                            tool_call_id,
+                            internal_call_id,
+                            args,
+                        )
+                        .await
+                    }
+                    HookOwnedTool::SessionMessage => {
+                        unreachable!("session messages are handled above")
+                    }
+                    HookOwnedTool::SpawnProcess => {
+                        self.persist_background_tool_call(tool_call_id, internal_call_id, args)
+                            .await
+                    }
+                    HookOwnedTool::WaitProcess => {
+                        self.persist_wait_tool_call(tool_call_id, internal_call_id, args)
+                            .await
+                    }
+                    HookOwnedTool::ListProcesses => {
+                        self.persist_list_background_tools_tool_call(
+                            tool_call_id,
+                            internal_call_id,
+                            args,
+                        )
+                        .await
+                    }
+                    HookOwnedTool::ReadProcess => {
+                        self.persist_read_tool_output_tool_call(
+                            tool_call_id,
+                            internal_call_id,
+                            args,
+                        )
+                        .await
+                    }
+                    HookOwnedTool::CancelProcess => {
+                        self.persist_cancel_tool_call(tool_call_id, internal_call_id, args)
+                            .await
+                    }
+                }
+            })
+            .instrument(tracing::info_span!(
+                "tool.call",
+                tool_name = %tool_name,
+                tool_call_id = %internal_call_id,
+            ))
+            .await;
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(error) => self.on_tool_persistence_error(route.persistence_context(), &error),
+            };
+        }
+
+        if let Some(binding) = self.job_tools.get(tool_name) {
+            let result =
+                Box::pin(self.persist_job_tool_call(binding, tool_call_id, internal_call_id, args))
+                    .instrument(tracing::info_span!(
+                        "tool.call",
+                        tool_name = %tool_name,
+                        tool_call_id = %internal_call_id,
+                    ))
+                    .await;
+            return match result {
+                Ok(action) => {
+                    self.record_success();
+                    action
+                }
+                Err(error) => self.on_tool_persistence_error("persist job tool call", &error),
+            };
+        }
+
+        let result: anyhow::Result<()> = Box::pin(async {
+            let (session_id, request_id, deadline_at, _seq) =
+                self.ensure_assistant_turn_sequence().await?;
+            let mut lc = self
+                .adopt_accepted_tool_dispatch(
+                    internal_call_id,
+                    tool_call_id.as_deref(),
+                    &request_id,
+                    &session_id,
+                    tool_name,
+                    args,
+                    deadline_at,
+                    gents_protocol::tool_call::AwaitMode::Foreground,
+                )
+                .await?;
+            lc.start_running().await?;
+
+            self.in_flight_lifecycles
+                .lock()
+                .await
+                .insert(internal_call_id.to_string(), lc);
+
+            Ok(())
+        })
+        .instrument(tracing::info_span!(
+            "tool.call",
+            tool_name = %tool_name,
+            tool_call_id = %internal_call_id,
+        ))
+        .await;
+
+        match result {
+            Ok(()) => {
+                self.record_success();
+                ToolCallHookAction::Continue
+            }
+            Err(e) => self.on_tool_persistence_error("persist tool call", &e),
+        }
+    }
+
+    /// Dispatch a job tool: step 0 runs in the foreground, and the call ends
+    /// here unless its output adopts a job.
+    async fn persist_job_tool_call(
+        &self,
+        binding: &crate::background::job::JobBinding,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let tool_name = binding.tool_name.as_str();
+        let (session_id, request_id, deadline_at, _seq) =
+            self.ensure_assistant_turn_sequence().await?;
+        let mut lifecycle = self
+            .adopt_accepted_tool_dispatch(
+                internal_call_id,
+                tool_call_id.as_deref(),
+                &request_id,
+                &session_id,
+                tool_name,
+                args,
+                deadline_at,
+                AwaitMode::Foreground,
+            )
+            .await?;
+        lifecycle.start_running().await?;
+        let payload = match serde_json::from_str(args) {
+            Ok(args) => {
+                crate::background::job::dispatch::run_step0(self, &mut lifecycle, binding, args)
+                    .await?
+            }
+            Err(error) => {
+                let payload = invalid_tool_arguments_payload(
+                    tool_name,
+                    "/",
+                    format!("invalid {tool_name} arguments: {error}"),
+                );
+                lifecycle
+                    .fail(&payload, FailureClass::ArgumentInvalid)
+                    .await?;
+                payload
+            }
+        };
+        Ok(self.skip_tool_result(tool_name, payload))
+    }
+
+    pub async fn on_tool_admission_rejected(
+        &self,
+        tool_name: &str,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        args: &str,
+        outcome: &gents_loop::tool_call_lifecycle::ToolOutcome,
+    ) -> HookAction {
+        let result: anyhow::Result<()> = async {
+            let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
+                class,
+                denial,
+                text,
+            } = outcome
+            else {
+                anyhow::bail!("tool admission rejection must carry a failed outcome");
+            };
+            let (session_id, request_id, deadline_at, _seq) =
+                self.ensure_assistant_turn_sequence().await?;
+            let mut lc = self
+                .adopt_accepted_tool_dispatch(
+                    internal_call_id,
+                    tool_call_id.as_deref(),
+                    &request_id,
+                    &session_id,
+                    tool_name,
+                    args,
+                    deadline_at,
+                    gents_protocol::tool_call::AwaitMode::Foreground,
+                )
+                .await?;
+            match denial {
+                Some(denial) => lc.spawn_failed_with_command_denial(text, denial).await,
+                None => lc.spawn_failed(*class, text).await,
+            }
+        }
+        .instrument(tracing::info_span!(
+            "tool.admission_rejected",
+            tool_name = %tool_name,
+            tool_call_id = %internal_call_id,
+        ))
+        .await;
+
+        match result {
+            Ok(()) => {
+                self.record_success();
+                HookAction::Continue
+            }
+            Err(e) => self.on_persistence_error("persist tool admission rejection", &e),
+        }
+    }
+
+    pub async fn on_tool_result(
+        &self,
+        tool_name: &str,
+        tool_call_id: Option<String>,
+        internal_call_id: &str,
+        _args: &str,
+        outcome: &gents_loop::tool_call_lifecycle::ToolOutcome,
+    ) -> HookAction {
+        use gents_loop::tool_call_lifecycle::ToolOutcome;
+
+        let is_plugin_effect = self
+            .effect_lifecycles
+            .lock()
+            .await
+            .contains_key(internal_call_id);
+        let persist_result: anyhow::Result<HookAction> = async {
+            if matches!(
+                outcome,
+                ToolOutcome::TimedOut { .. } | ToolOutcome::Cancelled
+            ) {
+                let lifecycle = self
+                    .in_flight_lifecycles
+                    .lock()
+                    .await
+                    .remove(internal_call_id);
+
+                if let Some(mut lc) = lifecycle {
+                    if !self.foreground_stop_confirmed(&lc, match outcome {
+                        ToolOutcome::TimedOut { .. } => RetainedStopReceipt::Timeout,
+                        _ => RetainedStopReceipt::Cancel(CancelCause::Interrupted, "request interrupted".to_owned()),
+                    }).await {
+                        self.in_flight_lifecycles.lock().await.insert(internal_call_id.to_owned(), lc);
+                        return Ok(HookAction::Terminate {
+                            reason: "tool process exit could not be confirmed".to_owned(),
+                        });
+                    }
+                    let receipt = if let Some(doc_id) = lc.doc_id() {
+                        self.background_live_outputs.registry.plugin_receipt(doc_id).await
+                    } else { None };
+                    lc.stage_plugin_receipt(receipt);
+                    let output_doc_id = lc.doc_id().map(str::to_owned);
+                    if !self.background_executions.settle_retained_stop(&mut lc).await? {
+                        match outcome {
+                            ToolOutcome::TimedOut { .. } => { let _ = lc.timeout().await?; }
+                            _ => { let _ = lc.cancel_during_run(CancelCause::Interrupted).await?; }
+                        }
+                    }
+                    if lc.is_terminal() {
+                        if let Some(doc) = lc.doc_id() { self.background_executions.retire_confirmed_stop(lc.tool_call_id(), doc, true); }
+                    }
+                    self.forget_foreground_evidence(&lc).await;
+                    if let Some(output_doc_id) = output_doc_id {
+                        self.release_live_output(&output_doc_id).await;
+                    }
+                } else {
+                    tracing::debug!(
+                        tool_call_id = %internal_call_id,
+                        outcome = ?outcome,
+                        "managed terminal tool outcome arrived after lifecycle was already swept"
+                    );
+                }
+
+                if is_plugin_effect {
+                    return Ok(HookAction::Continue);
+                }
+                let reason = match outcome {
+                    ToolOutcome::TimedOut { .. } => "tool call deadline exceeded",
+                    _ => "tool call cancelled",
+                };
+                return Ok(HookAction::Terminate {
+                    reason: reason.to_string(),
+                });
+            }
+
+            let result = outcome.model_facing_text();
+
+            let tool_call_doc_id = {
+                let lifecycles = self.in_flight_lifecycles.lock().await;
+                lifecycles
+                    .get(internal_call_id)
+                    .and_then(|lifecycle| lifecycle.doc_id())
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "on_tool_result: persisted AgentToolCall _docID missing for tool_call_id={internal_call_id}"
+                        )
+                    })?
+            };
+
+            {
+                let mut state = self.state.lock().await;
+                state.register_tool_result_identity(
+                    internal_call_id,
+                    None,
+                    tool_call_id.as_deref(),
+                );
+                anyhow::ensure!(
+                    state.session_id.is_some(),
+                    "session hook missing session id"
+                );
+            }
+
+            let mut lc = self
+                .in_flight_lifecycles
+                .lock()
+                .await
+                .remove(internal_call_id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "on_tool_result: no in-flight lifecycle for tool_call_id={internal_call_id}"
+                    )
+                })?;
+
+            if gents_session::exec::ownership::native_terminal_needs_confirmation(Some(outcome))
+                && !self.foreground_stop_confirmed(&lc, RetainedStopReceipt::Failure(outcome.clone())).await {
+                self.in_flight_lifecycles.lock().await.insert(internal_call_id.to_owned(), lc);
+                return Ok(HookAction::Terminate { reason: "tool process exit could not be confirmed".to_owned() });
+            }
+            self.forget_foreground_evidence(&lc).await;
+            lc.stage_plugin_receipt(
+                self.background_live_outputs.registry.plugin_receipt(&tool_call_doc_id).await
+            );
+            lc.stage_deferred_writes(
+                self.background_live_outputs.registry.deferred_writes(&tool_call_doc_id).await
+            );
+
+            if gents_session::exec::ownership::native_terminal_needs_confirmation(Some(outcome))
+                && self.background_executions.settle_retained_stop(&mut lc).await? {
+                self.release_live_output(&tool_call_doc_id).await;
+                return Ok(HookAction::Continue);
+            }
+
+            let presentation = self.background_live_outputs.registry
+                .take_prepared_presentation(&tool_call_doc_id, result)
+                .await?;
+
+            let bounded = presentation
+                .is_none()
+                .then(|| bounded_tool_result_with_presentation(tool_name, result, &self.truncation_limits))
+                .and_then(|(bounded, presentation)| Some((bounded, presentation?)));
+            match (outcome, bounded) {
+                (ToolOutcome::Failed { denial: Some(denial), .. }, _) => {
+                    lc.fail_with_command_denial(result, denial).await?;
+                }
+                (ToolOutcome::Completed(_), Some((bounded, presentation))) => {
+                    lc.complete_raw_with_presentation(result, &bounded, presentation).await?;
+                }
+                (ToolOutcome::Failed { class, .. }, Some((bounded, presentation))) => {
+                    lc.fail_raw_with_presentation(result, &bounded, *class, presentation).await?;
+                }
+                (ToolOutcome::Completed(_), None) => lc.complete_with_presentation(result, presentation).await?,
+                (ToolOutcome::Failed { class, .. }, None) => {
+                    lc.fail_with_presentation(result, *class, presentation).await?;
+                }
+                (ToolOutcome::TimedOut { .. } | ToolOutcome::Cancelled, _) => {
+                    unreachable!("managed terminals returned above")
+                }
+            }
+
+            if lc.is_terminal() { self.background_executions.retire_confirmed_stop(lc.tool_call_id(), &tool_call_doc_id, true); }
+            self.release_live_output(&tool_call_doc_id).await;
+
+            Ok(HookAction::Continue)
+        }
+        .instrument(tracing::info_span!(
+            "tool.result",
+            tool_name = %tool_name,
+            tool_call_id = %internal_call_id,
+        ))
+        .await;
+
+        match persist_result {
+            Ok(action) => {
+                self.record_success();
+                action
+            }
+            Err(e) => {
+                if is_plugin_effect {
+                    match decide_persistence_outcome(
+                        FailurePolicy::FailClosed,
+                        &self.counters,
+                        "persist plugin effect",
+                        &e,
+                    ) {
+                        PolicyDecision::Terminate(reason) => HookAction::Terminate { reason },
+                        PolicyDecision::Continue => {
+                            unreachable!("plugin effects require durable results")
+                        }
+                    }
+                } else {
+                    self.on_persistence_error("persist tool result", &e)
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::HookOwnedTool;
+
+    /// An agent tool's native body only reports that the hook owns it, so a
+    /// name missing from `ROUTES` fails every call.
+    #[test]
+    fn every_agent_tool_is_routed_through_the_hook() {
+        for name in gents_protocol::tool_names::AGENT_TOOL_NAMES {
+            assert!(
+                matches!(
+                    HookOwnedTool::of(name),
+                    Some(HookOwnedTool::AgentControl | HookOwnedTool::SessionMessage)
+                ),
+                "{name} has no hook route"
+            );
+        }
+    }
+}

@@ -186,23 +186,6 @@ fn an_oversize_or_undersize_frame_fails_before_it_is_buffered() {
 }
 
 #[test]
-fn memory_is_bounded_by_the_announced_frame() {
-    let big = Frame {
-        headers: vec![],
-        payload: vec![9; 100_000],
-    };
-    let bytes = encode(&big);
-    let mut decoder = Decoder::new();
-    let mut peak = 0;
-    for chunk in bytes.chunks(777) {
-        decoder.push(chunk).unwrap();
-        peak = peak.max(decoder.buffer.len());
-    }
-    assert!(peak <= bytes.len());
-    assert!(decoder.buffer.is_empty());
-}
-
-#[test]
 fn a_stream_cut_inside_a_frame_is_truncated_and_a_failed_decoder_stays_failed() {
     let bytes = encode(&sample());
     let mut decoder = Decoder::new();

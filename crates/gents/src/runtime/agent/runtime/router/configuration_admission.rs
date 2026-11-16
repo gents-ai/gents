@@ -3,39 +3,45 @@
 //! Agent before a claim, and defers a request whose selection that generation
 //! no longer holds until a newer generation is active.
 
-use crate::inference::resolved::ResolvedConfiguration;
-use crate::turn::provider_input::configuration::ConfigurationVisibilityError;
+use gents_inference::resolved::visibility::ConfigurationVisibilityError;
+use gents_inference::resolved::ResolvedConfiguration;
 use gents_protocol::row::AgentRequest;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(in crate::runtime::agent) enum ConfigurationAdmission {
     Claim,
     AwaitNewerGeneration,
 }
 
-pub(in crate::runtime::agent) fn configuration_admission(visible: bool) -> ConfigurationAdmission {
-    if visible {
+pub(in crate::runtime::agent) fn configuration_admission(
+    visible: bool,
+    versions_current: bool,
+) -> ConfigurationAdmission {
+    if visible && versions_current {
         ConfigurationAdmission::Claim
     } else {
         ConfigurationAdmission::AwaitNewerGeneration
     }
 }
 
-/// The same native read the provider-input assembly makes
-/// (`SelectedConfiguration::check`). An agent without selected documents has
-/// nothing to read.
+/// Admission requires current composite versions as well as native Agent
+/// visibility. Provider-input assembly keeps its admitted configuration and
+/// checks visibility without rebinding running work.
 pub(in crate::runtime::agent) async fn routed_configuration_admission(
     configuration: Option<&ResolvedConfiguration>,
 ) -> Result<ConfigurationAdmission, ConfigurationVisibilityError> {
-    let visible = match configuration {
-        Some(ResolvedConfiguration::Documents(selection)) => match selection.check().await {
-            Ok(()) => true,
-            Err(ConfigurationVisibilityError::Unavailable) => false,
-            Err(error) => return Err(error),
-        },
-        Some(ResolvedConfiguration::Static) | None => true,
+    let (visible, versions_current) = match configuration {
+        Some(ResolvedConfiguration::Documents(selection)) => {
+            match selection.check_current().await {
+                Ok(current) => (true, current),
+                Err(ConfigurationVisibilityError::Unavailable) => (false, false),
+                Err(error) => return Err(error),
+            }
+        }
+        Some(ResolvedConfiguration::Static) | None => (true, true),
     };
-    Ok(configuration_admission(visible))
+    Ok(configuration_admission(visible, versions_current))
 }
 
 /// Requests left pending with the generation that routed them. The request
@@ -66,4 +72,16 @@ impl DeferredRequests {
 
 fn retries_deferred(deferred_at: u64, active: u64) -> bool {
     deferred_at < active
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn configuration_admission_matches_lean() {
+        gents_lean_vocab::families::runtime_state_configuration_admission::replay(|i| {
+            configuration_admission(i.visible, i.versions_current)
+        });
+    }
 }

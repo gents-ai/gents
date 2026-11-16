@@ -20,7 +20,8 @@ impl SyncHealthState {
 }
 
 /// `ClientSyncHealth.Cause`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SyncHealthCause {
     RuntimeConnecting,
     RuntimeDisconnected,
@@ -51,11 +52,11 @@ impl SyncHealthCause {
             Self::RuntimeConnecting
             | Self::RuntimeDisconnected
             | Self::EnrollmentRoute
-            | Self::DiscoveryDegraded => SyncNextAction::Wait,
+            | Self::DiscoveryDegraded
+            | Self::DiscoveryOffline => SyncNextAction::Wait,
             Self::RuntimeRefused => SyncNextAction::RestoreAccess,
             Self::RuntimeNoEndpoint => SyncNextAction::ConnectRuntime,
             Self::EnrollmentAuthentication => SyncNextAction::EnrollAgain,
-            Self::DiscoveryOffline => SyncNextAction::CheckNetwork,
         }
     }
 
@@ -73,13 +74,13 @@ impl SyncHealthCause {
 }
 
 /// `ClientSyncHealth.NextAction`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SyncNextAction {
     Wait,
     RestoreAccess,
     ConnectRuntime,
     EnrollAgain,
-    CheckNetwork,
 }
 
 impl SyncNextAction {
@@ -89,7 +90,6 @@ impl SyncNextAction {
             Self::RestoreAccess => "restore_access",
             Self::ConnectRuntime => "connect_runtime",
             Self::EnrollAgain => "enroll_again",
-            Self::CheckNetwork => "check_network",
         }
     }
 }
@@ -100,21 +100,25 @@ pub struct SyncHealth {
     pub cause: Option<SyncHealthCause>,
     pub next_action: Option<SyncNextAction>,
     pub last_error: Option<String>,
-    pub connected_peer_count: usize,
+    pub runtime_count: usize,
+    pub connected_runtime_count: usize,
     pub activation_error_count: usize,
 }
 
-/// `ClientSyncHealth.view` over the three facts: `runtimes` holds the runtime
-/// connection of each configured runtime in directory order (`None` before
-/// the observer reconciles it), and the sync owner's snapshot holds the
-/// enrollment activation failures and P2P discovery.
 pub fn project_sync_health<I>(sync: &ClientSyncStateSnapshot, runtimes: I) -> SyncHealth
 where
     I: IntoIterator<Item = Option<RuntimeConnectionStatus>>,
 {
-    let connected_peer_count = sync.peers.iter().filter(|peer| peer.dial_succeeded).count();
+    let runtimes = runtimes.into_iter().collect::<Vec<_>>();
+    let connected_runtime_count = runtimes
+        .iter()
+        .filter(|status| **status == Some(RuntimeConnectionStatus::Connected))
+        .count();
+    let runtimes_connected = !runtimes.is_empty() && connected_runtime_count == runtimes.len();
+    let dialed_peers = sync.peers.iter().filter(|peer| peer.dial_succeeded).count();
     let causes = runtimes
-        .into_iter()
+        .iter()
+        .copied()
         .filter_map(runtime_cause)
         .chain(
             sync.enrollment_activation_errors
@@ -126,11 +130,10 @@ where
                     EnrollmentActivationStage::Route => SyncHealthCause::EnrollmentRoute,
                 }),
         )
-        .chain(discovery_cause(
-            sync.transport.status,
-            sync.peers.len(),
-            connected_peer_count,
-        ))
+        .chain(
+            discovery_cause(sync.transport.status, sync.peers.len(), dialed_peers)
+                .filter(|_| !runtimes_connected),
+        )
         .collect::<Vec<_>>();
     let cause = causes
         .iter()
@@ -144,7 +147,8 @@ where
         last_error: cause
             .filter(|cause| cause.is_discovery())
             .and_then(|_| sync.transport.last_error.clone()),
-        connected_peer_count,
+        runtime_count: runtimes.len(),
+        connected_runtime_count,
         activation_error_count: sync.enrollment_activation_errors.len(),
     }
 }
@@ -181,22 +185,8 @@ fn discovery_cause(
 mod tests {
     use super::*;
     use crate::client::core::{ClientPeerStatus, EnrollmentActivationError, P2PHealth};
-    use serde::Deserialize;
 
-    #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct SyncHealthCase {
-        runtimes: Vec<Option<String>>,
-        enrollment: Vec<String>,
-        transport: String,
-        configured_peers: usize,
-        dialed_peers: usize,
-        state: String,
-        cause: Option<String>,
-        next_action: Option<String>,
-    }
-
-    fn status(name: &str) -> RuntimeConnectionStatus {
+    pub(super) fn status(name: &str) -> RuntimeConnectionStatus {
         match name {
             "connecting" => RuntimeConnectionStatus::Connecting,
             "connected" => RuntimeConnectionStatus::Connected,
@@ -215,12 +205,13 @@ mod tests {
             addr: format!("/ip4/10.0.0.{index}/tcp/1"),
             dial_succeeded,
             last_error: None,
-            pairing: Vec::new(),
             routes: Vec::new(),
         }
     }
 
-    fn snapshot(case: &SyncHealthCase) -> ClientSyncStateSnapshot {
+    pub(super) fn snapshot(
+        case: &gents_lean_vocab::families::client_sync_health_cases_projection::FactsInput,
+    ) -> ClientSyncStateSnapshot {
         let status = match case.transport.as_str() {
             "healthy" => P2PHealthStatus::Healthy,
             "degraded" => P2PHealthStatus::Degraded,
@@ -255,53 +246,46 @@ mod tests {
                 .collect(),
             directory: Vec::new(),
             peers: (0..case.configured_peers)
-                .map(|index| peer(index, index < case.dialed_peers))
+                .map(|index| peer(index as usize, index < case.dialed_peers))
                 .collect(),
         }
     }
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
 
     #[test]
     fn generated_sync_health_cases_match_lean() {
-        let contract: serde_json::Value =
-            gents_lean_contract::load_contract_snapshot().expect("Lean client sync health cases");
-        let cases: Vec<SyncHealthCase> =
-            serde_json::from_value(contract["client_sync_health_cases"].clone())
-                .expect("decode client sync health cases");
-        assert!(!cases.is_empty());
-        for case in cases {
-            let sync = snapshot(&case);
+        gents_lean_vocab::families::client_sync_health_cases_projection::replay(|case| {
+            let sync = tests::snapshot(case);
             let health = project_sync_health(
                 &sync,
                 case.runtimes
                     .iter()
-                    .map(|runtime| runtime.as_deref().map(status)),
-            );
-            let label = format!(
-                "runtimes={:?} enrollment={:?} transport={} configured={} dialed={}",
-                case.runtimes,
-                case.enrollment,
-                case.transport,
-                case.configured_peers,
-                case.dialed_peers
-            );
-            assert_eq!(health.state.as_str(), case.state, "{label}");
-            assert_eq!(
-                health.cause.map(SyncHealthCause::as_str),
-                case.cause.as_deref(),
-                "{label}"
-            );
-            assert_eq!(
-                health.next_action.map(SyncNextAction::as_str),
-                case.next_action.as_deref(),
-                "{label}"
+                    .map(|runtime| runtime.as_deref().map(tests::status)),
             );
             assert_eq!(
                 health.last_error.is_some(),
                 health.cause.is_some_and(SyncHealthCause::is_discovery),
-                "{label}"
+                "{case:?}"
             );
             assert_eq!(health.activation_error_count, case.enrollment.len());
-            assert_eq!(health.connected_peer_count, case.dialed_peers);
-        }
+            gents_lean_vocab::families::client_sync_health_cases_projection::ViewOutput {
+                state: health.state.as_str().to_owned(),
+                cause: health.cause.map(|cause| cause.as_str().to_owned()),
+                next_action: health.next_action.map(|action| action.as_str().to_owned()),
+                runtime_count: health.runtime_count as u64,
+                connected_runtime_count: health.connected_runtime_count as u64,
+            }
+        });
+    }
+
+    #[test]
+    fn sync_health_cause_next_action_matches_lean() {
+        gents_lean_vocab::families::client_sync_health_cause_next_action::replay(|i| {
+            SyncHealthCause::next_action(i.cause)
+        });
     }
 }

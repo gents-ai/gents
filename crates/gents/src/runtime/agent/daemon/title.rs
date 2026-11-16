@@ -8,13 +8,13 @@ use gents_protocol::request_admission::RequestPurpose;
 use tokio::sync::watch;
 
 use super::{AgentDaemon, ShutdownDrainFailure};
-use crate::inference::admission::{self, AdmissionCallContext, CallKind};
-use crate::request::lifecycle::{
+use gents_inference::admission::{self, AdmissionCallContext, CallKind};
+use gents_protocol::row::AgentRequest;
+use gents_session::request::lifecycle::{
     ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
 };
-use crate::request::streaming::DefraStreamWriter;
-use crate::session;
-use gents_protocol::row::AgentRequest;
+use gents_session::request::streaming::DefraStreamWriter;
+use gents_session::session;
 
 pub(super) mod review;
 
@@ -35,16 +35,21 @@ async fn flush_received_title_partial(context: &str) -> Result<()> {
 #[derive(Clone)]
 pub(super) struct AuxiliaryTask<M>
 where
-    M: crate::inference::llm::rig_compat::ProviderModel,
+    M: gents_inference::llm::rig_compat::ProviderModel,
 {
     node: Arc<EmbeddedNode>,
-    agent_config: Arc<crate::inference::resolved::ResolvedAgent>,
+    agent_config: Arc<gents_inference::resolved::ResolvedAgent>,
     provider_family: Option<String>,
     model: Arc<M>,
-    verifier: crate::request::admission::AgentRequestAdmissionVerifier,
-    capture_factory: Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
-    service_admission: crate::runtime::service::RuntimeServiceAdmission,
+    verifier: gents_session::request::admission::AgentRequestAdmissionVerifier,
+    capture_factory: Option<gents_inference::rendered_request::RenderedRequestCaptureFactory>,
+    service_admission: gents_store::service::RuntimeServiceAdmission,
+    /// The clock a claim reads the request's `valid_until` against.
+    expiry_clock: ExpiryClock,
 }
+
+/// Reads the current time for an auxiliary request's expiry check.
+pub(super) type ExpiryClock = Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>;
 
 enum AuxiliaryResult {
     Generated {
@@ -58,7 +63,7 @@ enum AuxiliaryResult {
 
 impl<M> AgentDaemon<M>
 where
-    M: crate::inference::llm::rig_compat::ProviderModel,
+    M: gents_inference::llm::rig_compat::ProviderModel,
 {
     pub(super) fn auxiliary_task(&self) -> AuxiliaryTask<M> {
         AuxiliaryTask {
@@ -72,6 +77,7 @@ where
                 .background_execution_registry
                 .service_admission()
                 .clone(),
+            expiry_clock: Arc::new(chrono::Utc::now),
         }
     }
 
@@ -96,12 +102,12 @@ where
         tokio::spawn(Box::pin(async move {
             let _service_work = service_work;
             let result: Result<()> = async {
-                let access = crate::ConfigAccess::local_managed_agent(
+                let access = gents_store::config_client::ConfigAccess::local_managed_agent(
                     node.clone(),
                     identity::Did::new(&parent.agent_did)?,
                     agent_identity.as_ref(),
                 )?;
-                if !session::session_needs_generated_title(
+                match session::session_needs_generated_title(
                     &access,
                     &parent.node_did,
                     parent.requester_did.as_deref(),
@@ -109,12 +115,24 @@ where
                 )
                 .await?
                 {
-                    return Ok(());
+                    session::GeneratedTitleNeed::Needed => {}
+                    session::GeneratedTitleNeed::AlreadyTitled => return Ok(()),
+                    session::GeneratedTitleNeed::SessionUnreadable => {
+                        tracing::warn!(
+                            target: TRACING_TARGET,
+                            node_did = %parent.node_did,
+                            session_id = %parent.session_id,
+                            agent_did = %parent.agent_did,
+                            requester_did = ?parent.requester_did,
+                            "session row not readable for the title audit; skipping generated title"
+                        );
+                        return Ok(());
+                    }
                 }
                 let signer = agent_identity
                     .managed_agent_signer()
                     .context("title request requires a managed Agent signer")?;
-                crate::request::lifecycle::materialize::write_pending_auxiliary_request(
+                gents_session::request::lifecycle::materialize::write_pending_auxiliary_request(
                     &node,
                     &parent,
                     RequestPurpose::TitleAudit,
@@ -182,7 +200,7 @@ struct TitleGeneration<'a> {
 
 impl<M> AuxiliaryTask<M>
 where
-    M: crate::inference::llm::rig_compat::ProviderModel,
+    M: gents_inference::llm::rig_compat::ProviderModel,
 {
     async fn run(self, request: AgentRequest, shutdown: watch::Receiver<bool>) -> Result<()> {
         self.run_owned(request, shutdown, None).await.map(|_| ())
@@ -249,7 +267,7 @@ where
         else {
             return Ok(None);
         };
-        let origin = crate::request::lifecycle::ExecutionOrigin::from_persisted(
+        let origin = gents_session::request::lifecycle::ExecutionOrigin::from_persisted(
             request.execution_origin.as_deref(),
         )
         .context("admitted auxiliary request is missing execution origin")?;
@@ -264,12 +282,16 @@ where
         lifecycle.set_client_claim_admission(client_claim);
         lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
         lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
-        match lifecycle.claim_with_identity().await {
+        let expiry_clock = Arc::clone(&self.expiry_clock);
+        match lifecycle
+            .claim_with_identity_at(move || expiry_clock())
+            .await
+        {
             Ok(ClaimOutcome::Claimed) => {}
             Ok(ClaimOutcome::Queued | ClaimOutcome::Interrupted | ClaimOutcome::Expired) => {
                 return Ok(None)
             }
-            Err(error) if crate::request::lifecycle::is_claim_admission_error(&error) => {
+            Err(error) if gents_session::request::lifecycle::is_claim_admission_error(&error) => {
                 lifecycle.reject_admission(&error.to_string()).await?;
                 return Ok(None);
             }
@@ -283,7 +305,7 @@ where
         let title_request = lifecycle.request().clone();
         let (interrupt_tx, interrupt_rx) = watch::channel(None);
         let _observer = tokio_util::task::AbortOnDropHandle::new(
-            crate::request::interrupt::spawn_request_interrupt_observer(
+            gents_session::request::interrupt::spawn_request_interrupt_observer(
                 self.node.clone(),
                 lifecycle.access()?,
                 title_request.doc_id.clone(),
@@ -346,7 +368,7 @@ where
         }
         if terminal == TerminalizeResult::Won {
             if let Some((title, parent_requester_did)) = title {
-                let access = crate::ConfigAccess::local_managed_agent(
+                let access = gents_store::config_client::ConfigAccess::local_managed_agent(
                     self.node.clone(),
                     identity::Did::new(&title_request.agent_did)?,
                     self.agent_config.agent_identity.as_ref(),
@@ -376,10 +398,12 @@ where
         writer: &DefraStreamWriter,
         request: AgentRequest,
         shutdown: watch::Receiver<bool>,
-        mut interrupt_rx: watch::Receiver<Option<crate::request::interrupt::InterruptIntent>>,
+        mut interrupt_rx: watch::Receiver<
+            Option<gents_session::request::interrupt::InterruptIntent>,
+        >,
         review: Option<review::ReviewExecution>,
     ) -> Result<AuxiliaryResult> {
-        let parent_access = crate::ConfigAccess::local_managed_agent(
+        let parent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
             self.node.clone(),
             identity::Did::new(&request.agent_did)?,
             self.agent_config.agent_identity.as_ref(),
@@ -397,13 +421,13 @@ where
             .request_commit_cid()
             .context("claimed auxiliary request has no exact commit CID")?;
         let generation = lifecycle.execution_generation()?.to_owned();
-        let capture_context = crate::inference::rendered_request::context_for_claimed_request(
+        let capture_context = gents_inference::rendered_request::context_for_claimed_request(
             &request,
             commit_cid,
             self.agent_config.model_name.clone(),
             self.provider_family.clone(),
         );
-        let mut capture_scope = crate::inference::rendered_request::scope_from_factory(
+        let mut capture_scope = gents_inference::rendered_request::scope_from_factory(
             capture_context,
             self.capture_factory.as_ref(),
         )
@@ -425,7 +449,7 @@ where
         );
         admission::scope_request(
             admission_context,
-            crate::inference::rendered_request::scope::scope_request(capture_scope, async {
+            gents_inference::rendered_request::scope::scope_request(capture_scope, async {
                 lifecycle.begin_owned_execution(writer).await?;
                 if request.purpose == RequestPurpose::AccessReview {
                     return self
@@ -433,12 +457,12 @@ where
                         .await;
                 }
                 let preparation = async {
-                    let access = crate::ConfigAccess::local_managed_agent(
+                    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
                         self.node.clone(),
                         identity::Did::new(&request.agent_did)?,
                         self.agent_config.agent_identity.as_ref(),
                     )?;
-                    if !session::session_needs_generated_title(
+                    match session::session_needs_generated_title(
                         &access,
                         &request.node_did,
                         parent.requester_did.as_deref(),
@@ -446,7 +470,19 @@ where
                     )
                     .await?
                     {
-                        return Ok(None);
+                        session::GeneratedTitleNeed::Needed => {}
+                        session::GeneratedTitleNeed::AlreadyTitled => return Ok(None),
+                        session::GeneratedTitleNeed::SessionUnreadable => {
+                            tracing::warn!(
+                                target: TRACING_TARGET,
+                                node_did = %request.node_did,
+                                session_id = %request.session_id,
+                                agent_did = %request.agent_did,
+                                requester_did = ?parent.requester_did,
+                                "session row not readable for the title audit; skipping generated title"
+                            );
+                            return Ok(None);
+                        }
                     }
                     let recent = session::load_recent_titles_for_agent(
                         &access,
@@ -456,7 +492,7 @@ where
                     )
                     .await
                     .unwrap_or_default();
-                    let source = crate::session::title_text::generation_input(
+                    let source = gents_session::session::title_text::generation_input(
                         &parent.content,
                         &parent.input.captured_context,
                     );
@@ -465,12 +501,12 @@ where
                         &self.agent_config,
                         title_generation_preamble(),
                         0,
-                        crate::inference::rendered_request::CaptureScopeKind::Title,
+                        gents_inference::rendered_request::CaptureScopeKind::Title,
                     );
                     crate::claude_request_context::apply(
                         &mut config,
                         crate::claude_request_context::for_request(
-                            &crate::store::config_client::ConfigAccess::local(self.node.clone()),
+                            &gents_store::config_client::ConfigAccess::local(self.node.clone()),
                             &self.agent_config,
                             &request,
                             gents_claude::origin::Kind::Title,
@@ -483,8 +519,8 @@ where
                         title_max_tokens(config.additional_params.as_ref(), config.max_tokens);
                     config.max_turns = 1;
                     config.retry_policy =
-                        crate::runtime::agent::completion_retry::CompletionRetryPolicy::no_retry();
-                    let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+                        gents_loop::completion_retry::CompletionRetryPolicy::no_retry();
+                    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
                         self.node.clone(),
                         identity::Did::new(request.agent_did.clone())?,
                         self.agent_config.agent_identity.as_ref(),
@@ -526,7 +562,9 @@ where
         &self,
         generation: TitleGeneration<'_>,
         mut shutdown: watch::Receiver<bool>,
-        interrupt_rx: &mut watch::Receiver<Option<crate::request::interrupt::InterruptIntent>>,
+        interrupt_rx: &mut watch::Receiver<
+            Option<gents_session::request::interrupt::InterruptIntent>,
+        >,
     ) -> Result<AuxiliaryResult> {
         let TitleGeneration {
             request_id,
@@ -545,7 +583,7 @@ where
                 attempt,
                 Box::pin(crate::runtime::agent::loop_stream::run_loop_to_text::<M>(
                     (*self.model).clone(),
-                    crate::inference::llm::message::Message::user(prompt.to_string()),
+                    gents_inference::llm::message::Message::user(prompt.to_string()),
                     Vec::new(),
                     Arc::new(Vec::new()),
                     config.clone(),
@@ -607,7 +645,7 @@ where
 /// The parent receipt is read as the auxiliary request's Agent: DefraDB ACP
 /// decides visibility, and a denied read is not retried as the node.
 async fn load_auxiliary_parent(
-    access: &crate::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request: &AgentRequest,
 ) -> Result<AgentRequest> {
     let parent_doc_id = request
@@ -635,7 +673,7 @@ async fn load_auxiliary_parent(
         .context("request parent request disappeared")?;
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(value).context("decode auxiliary parent receipt")?;
-    crate::store::identity::request_receipt::verify_request_receipt_signature(&row)?;
+    gents_store::identity::request_receipt::verify_request_receipt_signature(&row)?;
     let parent = AgentRequest::try_from(row)?;
     anyhow::ensure!(
         parent.purpose == RequestPurpose::Normal
@@ -650,15 +688,15 @@ async fn load_auxiliary_parent(
 }
 
 pub(super) fn title_generation_preamble() -> String {
-    crate::session::title_text::GENERATION_PREAMBLE.to_owned()
+    gents_session::session::title_text::GENERATION_PREAMBLE.to_owned()
 }
 
 fn title_generation_prompt(request_content: &str, recent_titles: &[String]) -> String {
-    crate::session::title_text::generation_prompt(request_content, recent_titles)
+    gents_session::session::title_text::generation_prompt(request_content, recent_titles)
 }
 
 fn sanitize_generated_title(raw_title: &str, fallback_source: &str) -> String {
-    crate::session::title_text::generated_title(raw_title, fallback_source)
+    gents_session::session::title_text::generated_title(raw_title, fallback_source)
 }
 
 #[cfg(test)]

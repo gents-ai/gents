@@ -1,0 +1,197 @@
+use axum::{
+    extract::{Request, State},
+    http::{header, uri::Authority, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
+use defra_http::ExtractIdentity;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
+#[derive(Clone)]
+pub struct HttpAuthority {
+    configured: Option<(String, u16)>,
+    advertised: Option<(String, u16)>,
+    startup_gate: Option<(Arc<AtomicBool>, String)>,
+}
+
+impl HttpAuthority {
+    pub fn for_endpoint(endpoint: &str) -> Self {
+        let configured = reqwest::Url::parse(endpoint).ok().and_then(|url| {
+            Some((
+                url.host_str()?.to_ascii_lowercase(),
+                url.port_or_known_default()?,
+            ))
+        });
+        Self {
+            configured,
+            advertised: None,
+            startup_gate: None,
+        }
+    }
+
+    /// The HTTP listener is bound before native Node ownership is observed.
+    /// Keep every external operation closed until bootstrap completes; the
+    /// private, instance-specific bind probe is the sole exception.
+    pub fn with_startup_gate(mut self, gate: Arc<AtomicBool>, probe_path: String) -> Self {
+        self.startup_gate = Some((gate, probe_path));
+        self
+    }
+
+    /// An explicitly configured public origin can differ from the listener
+    /// behind a proxy. Never infer it from forwarded headers or incoming DNS.
+    pub fn with_advertised_endpoint(mut self, endpoint: Option<&str>) -> Self {
+        self.advertised = endpoint.and_then(|value| Self::for_endpoint(value).configured);
+        self
+    }
+
+    #[cfg(test)]
+    pub fn protect_http(
+        self,
+        config: gents::defra_node::HttpConfig,
+    ) -> gents::defra_node::HttpConfig {
+        config.with_router_transform(std::sync::Arc::new(move |router| self.wrap(router)))
+    }
+
+    pub fn wrap(&self, router: axum::Router) -> axum::Router {
+        router.layer(axum::middleware::from_fn_with_state(
+            self.clone(),
+            require_authority,
+        ))
+    }
+
+    pub fn accepts(&self, request: &Request) -> bool {
+        let Some((configured_host, bound_port)) = &self.configured else {
+            return false;
+        };
+        let mut hosts = request.headers().get_all(header::HOST).iter();
+        let host = match hosts.next() {
+            Some(value) => value.to_str().ok().and_then(parse_authority),
+            None => request
+                .uri()
+                .authority()
+                .and_then(|value| parse_authority(value.as_str())),
+        };
+        if hosts.next().is_some() {
+            return false;
+        }
+        let Some((host, port)) = host else {
+            return false;
+        };
+        if let Some(authority) = request.uri().authority() {
+            if parse_authority(authority.as_str()) != Some((host.clone(), port)) {
+                return false;
+            }
+        }
+        self.advertised
+            .as_ref()
+            .is_some_and(|(advertised_host, advertised_port)| {
+                host == *advertised_host && port_matches(port, *advertised_port)
+            })
+            || port_matches(port, *bound_port)
+                && (host == *configured_host
+                    || matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]"))
+    }
+}
+
+fn port_matches(actual: Option<u16>, expected: u16) -> bool {
+    actual.map_or(matches!(expected, 80 | 443), |port| port == expected)
+}
+
+fn parse_authority(value: &str) -> Option<(String, Option<u16>)> {
+    if value.contains('@') {
+        return None;
+    }
+    let authority = value.parse::<Authority>().ok()?;
+    if authority.host().is_empty() {
+        return None;
+    }
+    let suffix = authority.as_str().strip_prefix(authority.host())?;
+    let port = if suffix.is_empty() {
+        None
+    } else {
+        let digits = suffix.strip_prefix(':')?;
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        Some(digits.parse::<u16>().ok()?)
+    };
+    Some((authority.host().to_ascii_lowercase(), port))
+}
+
+/// A browser's same-origin check does not prevent DNS rebinding. Compare the
+/// actual request authority without consulting DNS or proxy-supplied headers.
+async fn require_authority(
+    State(authority): State<HttpAuthority>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !authority.accepts(&request) {
+        return failure(
+            StatusCode::MISDIRECTED_REQUEST,
+            "This authority does not serve the runtime.",
+        );
+    }
+    if authority
+        .startup_gate
+        .as_ref()
+        .is_some_and(|(ready, probe)| {
+            !ready.load(Ordering::Acquire) && request.uri().path() != probe
+        })
+    {
+        return failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Runtime access is not ready.",
+        );
+    }
+    next.run(request).await
+}
+
+/// These handlers use the node's own database principal, so an arbitrary
+/// authenticated DID is insufficient. DefraDB owns bearer verification.
+pub async fn require_operator(
+    State(node_did): State<String>,
+    identity: ExtractIdentity,
+    request: Request,
+    next: Next,
+) -> Response {
+    match identity.did() {
+        None => failure(
+            StatusCode::UNAUTHORIZED,
+            "Runtime operator authorization is required.",
+        ),
+        Some(actor) if actor.as_ref() != node_did => failure(
+            StatusCode::FORBIDDEN,
+            "This identity does not own the runtime.",
+        ),
+        Some(_) => {
+            let mut response = next.run(request).await;
+            response.headers_mut().insert(
+                header::CACHE_CONTROL,
+                header::HeaderValue::from_static("no-store"),
+            );
+            response
+        }
+    }
+}
+
+pub fn failure(status: StatusCode, error: &str) -> Response {
+    let mut response = (status, axum::Json(serde_json::json!({ "error": error }))).into_response();
+    if status == StatusCode::UNAUTHORIZED {
+        response.headers_mut().insert(
+            header::WWW_AUTHENTICATE,
+            header::HeaderValue::from_static("Bearer"),
+        );
+    }
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+#[cfg(test)]
+#[path = "access_tests.rs"]
+mod tests;

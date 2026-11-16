@@ -1,88 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import setupSelfConfig from "../../../crates/gents-protocol/presets/engineer-self-config.json";
 import { deployment } from "./config-panel-wiring/fixtures";
-import {
-  ENGINEER_AGENT_TAG,
-  ENGINEER_PROMPT,
-  engineerAgentOf,
-  engineerPatches,
-} from "../src/ui/lib/engineer";
+import { ENGINEER_AGENT_TAG, engineerAgentOf } from "../src/ui/lib/engineer";
 
-describe("engineer setup patches", () => {
-  it("wires the default agent, context prompt, and passes the self-config preset through", () => {
-    const withContext = {
-      ...deployment,
-      contexts: [
-        {
-          context_id: "context-a",
-          node_did: deployment.nodeDid,
-          display_name: "Default",
-          description: null,
-          system_prompt: "old",
-          tools_id: "tools-a",
-          compaction_id: null,
-          skill_ids: null,
-          tags: [],
-        },
-      ],
-      tools: [
-        {
-          tools_id: "tools-a",
-          node_did: deployment.nodeDid,
-          display_name: "Standard",
-          built_ins: { enable_context_budget: true },
-        },
-      ],
-    };
-    const patches = engineerPatches(withContext);
-    expect(patches.map((patch) => patch.collection)).toEqual([
-      "Agent",
-      "AgentContext",
-      "Tools",
-    ]);
-    expect(patches[0]).toMatchObject({
-      changes: { tags: [ENGINEER_AGENT_TAG] },
-    });
-    const tools = patches.find((patch) => patch.collection === "Tools");
-    expect(patches.find((patch) => patch.collection === "AgentContext")).toMatchObject({
-      id: "context-a",
-      changes: { system_prompt: ENGINEER_PROMPT },
-    });
-    // Pass-through only: the patch carries the bundled preset unchanged. The
-    // category set is checked against the executed Lean engineerGroup in
-    // tests/lean-conformance/engineer-self-config.test.ts.
-    expect(tools).toMatchObject({
-      id: "tools-a",
-      changes: { self_config: setupSelfConfig },
-    });
-  });
-
-  it("patches the protected Engineer agent after a working agent becomes default", () => {
-    const configured = {
-      ...deployment,
-      node: {
-        ...deployment.node,
-        defaultAgentDid: "ops",
-      },
-      agents: deployment.agents.map((agent) => ({
-        ...agent,
-        isDefault: agent.agentDid === "ops",
-        tags: agent.agentDid === "default" ? [ENGINEER_AGENT_TAG] : [],
-      })),
-    };
-
-    const patches = engineerPatches(configured);
-    expect(patches[0]).toMatchObject({
-      collection: "Agent",
-      id: "default",
-    });
-    expect(patches).not.toContainEqual(
-      expect.objectContaining({ collection: "Agent", id: "ops" }),
-    );
-  });
-
-  it("engineerAgentOf picks the agent engineerPatches patches", () => {
+describe("engineerAgentOf", () => {
+  it("picks the tagged Engineer over the default agent", () => {
     const tagged = {
       ...deployment,
       node: { ...deployment.node, defaultAgentDid: "ops" },
@@ -92,9 +14,6 @@ describe("engineer setup patches", () => {
         tags: agent.agentDid === "default" ? [ENGINEER_AGENT_TAG] : [],
       })),
     };
-    for (const node of [tagged, deployment]) {
-      expect(engineerAgentOf(node)?.agentDid).toBe(engineerPatches(node)[0].id);
-    }
     expect(engineerAgentOf(tagged)?.agentDid).toBe("default");
   });
 });

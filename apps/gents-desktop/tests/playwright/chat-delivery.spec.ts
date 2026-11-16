@@ -1,12 +1,12 @@
 import { expect, gotoHarness, test } from "./desktopTest";
-import { chatDraftKey, retainChatDraft } from "../../src/hooks/chatDrafts";
+import { chatDraftKey, chatDraftOf } from "../../src/hooks/chatDrafts";
 
 for (const colorScheme of ["light", "dark"] as const) {
   test(`keeps a failed message compact, keyboard reachable and retryable in ${colorScheme}`, async ({
     page,
   }, info) => {
     await page.emulateMedia({ colorScheme });
-    const draft = retainChatDraft(
+    const draft = chatDraftOf(
       {
         clientDid: "did:key:desktop-harness",
         nodeDid: "did:key:z6MkBombadilAgent",
@@ -29,7 +29,14 @@ for (const colorScheme of ["light", "dark"] as const) {
     if (colorScheme === "dark")
       await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     else await expect(page.locator("html")).not.toHaveAttribute("data-theme", "dark");
-    const panel = page.getByRole("status", { name: "Saved message" });
+    const row = page.locator('[data-timeline-key="turn:retained-opening"]');
+    await expect(
+      row.getByText(
+        "Retain this original message while preserving the newer composer draft.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    const panel = row.getByRole("status", { name: "Saved message" });
     await expect(panel).toBeVisible();
     const box = await panel.boundingBox();
     expect(box!.height).toBeLessThan(160);
@@ -40,15 +47,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await expect(retry).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(panel.getByRole("button", { name: "Discard message" })).toBeFocused();
-    await panel.getByRole("button", { name: /Show details/ }).focus();
-    await page.keyboard.press("Enter");
-    await expect(
-      panel.getByText(
-        "Retain this original message while preserving the newer composer draft.",
-        { exact: true },
-      ),
-    ).toBeVisible();
-    await panel.screenshot({
+    await row.screenshot({
       path: info.outputPath(`chat-delivery-${colorScheme}.png`),
     });
     await page.reload();

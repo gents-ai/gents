@@ -1,6 +1,6 @@
 use crate::types::*;
 use futures::TryFutureExt;
-use gents::pack::PackChangeError;
+use gents_pack::pack::PackChangeError;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
 use tauri::State;
@@ -8,7 +8,8 @@ use ts_rs::TS;
 
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
-use gents_server::packs::{self, EditedDocuments};
+use gents_protocol::operations::pack::EditedDocuments;
+use gents_server::packs;
 
 pub(super) fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
     state.policy.node_home.clone().ok_or_else(|| {
@@ -41,7 +42,7 @@ where
     F: FnOnce() -> Fut + Send + 'static,
     Fut: std::future::Future<Output = anyhow::Result<Value>>,
 {
-    gents::store::local::storage_backend::drive_unsendable(runtime, operation)
+    gents_store::local::storage_backend::drive_unsendable(runtime, operation)
         .await
         .map_err(|error| BridgeError::untyped(format!("the pack operation stopped: {error}")))?
         .map_err(failed)
@@ -60,7 +61,7 @@ pub async fn desktop_pack_installed(
         let home = home(&state)?;
         if let Some(core) = current_core(&state) {
             let node_did = packs::ux_installing_node(&home).map_err(failed)?;
-            let access = gents::ConfigAccess::Graphql(
+            let access = gents_store::config_client::ConfigAccess::Graphql(
                 core.local_home_operator_endpoint(&node_did, &home)
                     .map_err(|error| failed(error.into()))?,
             );
@@ -92,14 +93,14 @@ pub async fn desktop_pack_info(
     }
 }
 
-/// The Engineer's default packs as the local node's home has them. A read:
-/// it works while the node runs.
+/// The Engineer's core packs as the local node's home has them. A read: it
+/// works while the node runs.
 #[tauri::command]
 pub async fn desktop_default_packs(
     state: State<'_, DesktopAppState>,
 ) -> Result<DefaultPacksView, BridgeError> {
     let home = home(&state)?;
-    run(move || packs::default_packs(home, None)).await
+    run(move || packs::core_packs(home)).await
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -108,12 +109,12 @@ pub struct DefaultPacksApproveRequest {
     pub packs: Vec<DefaultPackApproval>,
 }
 
-/// One approved default pack, at the archive its listing showed.
+/// One core pack to turn on, installing it from the release when the home
+/// lacks it.
 #[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DefaultPackApproval {
     pub pack: String,
-    pub digest: String,
 }
 
 #[derive(Debug, Deserialize, TS)]

@@ -1,4 +1,4 @@
-import Proofs.Mailbox.Executable
+import Proofs.Automation.Mailbox.Executable
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.Contracts

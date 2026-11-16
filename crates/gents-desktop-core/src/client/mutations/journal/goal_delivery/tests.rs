@@ -1,12 +1,12 @@
 use super::*;
 use anyhow::{Context, Result};
-use gents::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::goal_control::{
     GoalControlOutcome, GoalOperation, GoalRevision, SESSION_GOAL_CONTROL_VERSION,
 };
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
+use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -100,7 +100,7 @@ impl Facts {
             + chrono::Duration::seconds(i64::try_from(digest)?);
         let created = at.to_rfc3339();
         let session = format!("session-{}", number(context, "session")?);
-        let initial_request = if let Some(id) = value["initialRequest"].as_u64() {
+        let initial_request = if let Some(id) = value["initial_request"].as_u64() {
             let mut request = AgentRequestCreate::base(
                 RequestPurpose::Normal,
                 format!("request-{id}"),
@@ -237,7 +237,7 @@ impl Facts {
         Ok(Record {
             intent,
             reference,
-            prepared: (value["retainedBytes"] != false).then_some(command),
+            prepared: (value["retained_bytes"] != false).then_some(command),
             receipt,
             acknowledged: value["acknowledged"] == true,
         })
@@ -246,7 +246,7 @@ impl Facts {
     fn reference_json(&self, reference: &Reference) -> Result<Value> {
         Ok(
             json!({"command":suffix(&reference.command_id)?, "digest":self.digests[&reference.command_digest],
-            "initialRequest":reference.initial_request_id.as_deref().map(suffix).transpose()?}),
+            "initial_request":reference.initial_request_id.as_deref().map(suffix).transpose()?}),
         )
     }
 
@@ -265,16 +265,16 @@ impl Facts {
                 "authored":self.authored[&record.intent.authored_hash]},
                 "prepared":self.reference_json(&record.reference)?,
                 "receipt":record.receipt.as_ref().map(|r|self.receipt_json(r)).transpose()?,
-                "retainedBytes":record.prepared.is_some(),"acknowledged":record.acknowledged}))
+                "retained_bytes":record.prepared.is_some(),"acknowledged":record.acknowledged}))
         }).collect::<Result<Vec<_>>>().map(Value::from)
     }
 
     fn output(&self, decision: Decision, publication: Option<Reference>) -> Result<Value> {
         let result = match decision {
-            Decision::Refused => json!({"kind":"refused"}),
-            Decision::Unconfirmed => json!({"kind":"unconfirmed"}),
+            Decision::Refused => json!({"kind":"refused","prepared":null,"receipt":null}),
+            Decision::Unconfirmed => json!({"kind":"unconfirmed","prepared":null,"receipt":null}),
             Decision::Pending(reference) => {
-                json!({"kind":"pending","prepared":self.reference_json(&reference)?})
+                json!({"kind":"pending","prepared":self.reference_json(&reference)?,"receipt":null})
             }
             Decision::Confirmed(reference, receipt) => {
                 json!({"kind":"confirmed","prepared":self.reference_json(&reference)?,"receipt":self.receipt_json(&receipt)?})
@@ -286,35 +286,39 @@ impl Facts {
     }
 }
 
-fn model_cases() -> Result<Vec<Value>> {
-    let value: Value = gents_lean_contract::load_contract_snapshot()?;
-    Ok(value["goal_client_delivery_cases"]
-        .as_array()
-        .context("executed Goal delivery traces")?
-        .clone())
+fn proposal(action: &Value) -> Value {
+    json!({"intent":action["intent"],"prepared":action["prepared"],"receipt":null,
+        "retained_bytes":true,"acknowledged":false})
+}
+
+fn reference_of(command: SessionGoalControl) -> Result<Reference> {
+    Ok(Reference {
+        command_id: command.command_id.clone(),
+        command_digest: command.computed_digest()?,
+        initial_request_id: command
+            .initial_request
+            .as_ref()
+            .map(|r| r.request_id.clone()),
+        requester_did: command.requester_did,
+        agent_did: command.agent_did,
+    })
 }
 
 #[tokio::test]
 async fn generated_goal_delivery_histories_bind_native_signed_preparations() -> Result<()> {
-    let cases = tokio::task::spawn_blocking(model_cases).await??;
-    assert_eq!(cases.len(), 21);
-    for case in cases {
+    for case in gents_lean_vocab::families::goal_client_delivery_contracts_trace::cases() {
+        let input = serde_json::to_value(&case.input)?;
         let mut facts = Facts::new()?;
         let mut records = Vec::new();
-        for record in case["initial"].as_array().context("initial journal")? {
+        for record in input["initial"].as_array().context("initial journal")? {
             records.push(facts.record(record).await?);
         }
-        for step in case["trace"].as_array().context("modeled trace")? {
-            assert_eq!(
-                facts.records_json(&records)?,
-                step["before"],
-                "{} before",
-                case["name"]
-            );
-            let action = &step["input"];
+        let mut steps = Vec::new();
+        for action in input["actions"].as_array().context("modeled actions")? {
+            let before = facts.records_json(&records)?;
             let output = match action["kind"].as_str().context("modeled action")? {
                 "reserve" => {
-                    let proposal = facts.record(&json!({"intent":action["intent"],"prepared":action["prepared"],"receipt":null,"retainedBytes":true,"acknowledged":false})).await?;
+                    let proposal = facts.record(&proposal(action)).await?;
                     let (staged, decision) =
                         reserve(&records, &proposal, action["durable"] == true);
                     if let Some(record) = staged {
@@ -342,17 +346,7 @@ async fn generated_goal_delivery_histories_bind_native_signed_preparations() -> 
                     let command = facts
                         .command(&action["prepared"], &action["intent"])
                         .await?;
-                    let reference = Reference {
-                        command_id: command.command_id.clone(),
-                        command_digest: command.computed_digest()?,
-                        initial_request_id: command
-                            .initial_request
-                            .as_ref()
-                            .map(|r| r.request_id.clone()),
-                        requester_did: command.requester_did,
-                        agent_did: command.agent_did,
-                    };
-                    acknowledge(&mut records, &intent, &reference);
+                    acknowledge(&mut records, &intent, &reference_of(command)?);
                     Value::Null
                 }
                 "reconnect" => {
@@ -361,19 +355,11 @@ async fn generated_goal_delivery_histories_bind_native_signed_preparations() -> 
                 }
                 other => anyhow::bail!("unhandled modeled action {other}"),
             };
-            assert_eq!(
-                output, step["output"],
-                "{} {} output",
-                case["name"], action["kind"]
-            );
-            assert_eq!(
-                facts.records_json(&records)?,
-                step["after"],
-                "{} {} journal",
-                case["name"],
-                action["kind"]
+            steps.push(
+                json!({"before":before,"after":facts.records_json(&records)?,"output":output}),
             );
         }
+        case.check(serde_json::from_value(Value::Array(steps))?);
     }
     Ok(())
 }

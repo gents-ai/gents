@@ -14,7 +14,7 @@ use crate::request_lifecycle::RequestLifecycleState;
 mod agent_request;
 pub use agent_request::{
     normalize_optional_string, validate_agent_request, AgentRequest, AgentRequestRowError,
-    AGENT_REQUEST_FIELDS,
+    ExecutedInferenceBinding, ExecutedInferenceSettings, AGENT_REQUEST_FIELDS,
 };
 
 pub use crate::node_readiness::{
@@ -193,6 +193,16 @@ pub struct AgentRequestRow {
     /// deadline; expired owners cannot revive themselves with output or renewal.
     #[serde(default)]
     pub execution_lease_expires_at: Option<String>,
+    #[serde(default)]
+    pub executed_model_name: Option<String>,
+    #[serde(default)]
+    pub executed_reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub executed_service_tier: Option<String>,
+    #[serde(default)]
+    pub executed_inference_profile_id: Option<String>,
+    #[serde(default)]
+    pub executed_runtime_generation: Option<i64>,
     #[serde(default)]
     pub background_completion_input_through_sequence: Option<i64>,
     #[serde(default)]
@@ -569,4 +579,48 @@ pub struct ToolServiceHealthStateRow {
     pub last_error_message: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+    use crate::output::TerminalOutput;
+    use gents_lean_vocab::families::contracts_terminal_selection_observed::Selection;
+
+    fn terminal_output(selection: &Selection) -> TerminalOutput {
+        match (selection.kind.as_str(), &selection.message_doc_id) {
+            ("message", Some(message_doc_id)) => TerminalOutput::Message {
+                message_doc_id: message_doc_id.clone(),
+            },
+            ("no_message", None) => TerminalOutput::NoMessage,
+            _ => panic!("terminal selection {selection:?} has no production form"),
+        }
+    }
+
+    fn selection(output: &TerminalOutput) -> Selection {
+        match output {
+            TerminalOutput::Message { message_doc_id } => Selection {
+                kind: "message".into(),
+                message_doc_id: Some(message_doc_id.clone()),
+            },
+            TerminalOutput::NoMessage => Selection {
+                kind: "no_message".into(),
+                message_doc_id: None,
+            },
+        }
+    }
+
+    #[test]
+    fn observed_terminal_output_follows_the_lean_selection() {
+        gents_lean_vocab::families::contracts_terminal_selection_observed::replay::<
+            RequestLifecycleState,
+        >(|i| {
+            let row = AgentRequestRow {
+                lifecycle_state: Some(i.state),
+                terminal_output: i.selection.as_ref().map(terminal_output),
+                ..Default::default()
+            };
+            row.observed_terminal_output().map(selection)
+        });
+    }
 }

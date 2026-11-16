@@ -1,0 +1,4 @@
+---- MODULE MCWallClockBoundSlowHost ----
+EXTENDS WallClockBound
+
+====

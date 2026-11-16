@@ -5,7 +5,7 @@ use std::time::Duration;
 use events::{
     Bus, ChannelBus, DocumentChangeSubscription, EventName, Message, Subscription, Update,
 };
-use gents::UpdateSubscriptionSource;
+use gents_store::subscription_source::UpdateSubscriptionSource;
 use tokio::sync::Notify;
 
 #[derive(Clone)]

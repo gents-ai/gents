@@ -1,9 +1,8 @@
-import Proofs.Workspace.OperatorBaseFreeze
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Session.Workspace.OperatorBaseFreeze
+import Proofs.Conformance.Family
 
 namespace Conformance.OperatorBaseFreezeContracts
 open Workspace.PathCapability Workspace.PathCapability.OperatorBaseFreeze
-open Conformance.Contracts
 
 private def workspace : IsolatedWorkspace :=
   {workspaceId := "workspace-1", workUnitId := "work-1", repositoryId := "repo-1",
@@ -61,35 +60,75 @@ theorem cases_replay : ∀ c ∈ cases,
 theorem frozen_base_not_writer_integrable :
     (Workspace.PathCapability.execute
       (OperatorBaseFreeze.execute ready evidence).1 .integrate
-      ⟨binding workspace "base-tree",[],true,true,false,true,true⟩).2 = .denied := by decide
+      ⟨binding workspace "base-tree",[],true,true,false,true,true,[]⟩).2 = .denied := by decide
 
-private def boolJson (b : Bool) := if b then "true" else "false"
-private def dispositionString : Disposition → String
-  | .accepted => "accepted" | .recovered => "recovered" | .denied => "denied"
-private def capabilityJson : WorkspacePathCapability → String
-  | .exactPaths paths => "{\"mode\":\"exactPaths\",\"paths\":" ++ jsonArray (paths.map jsonString) ++ "}"
-  | .unrestrictedCompatibility => "{\"mode\":\"unrestrictedCompatibility\"}"
-private def bindingJson (b : Binding) :=
-  "{\"workspace_id\":" ++ jsonString b.workspaceId ++ ",\"owner\":" ++ jsonString b.owner ++
-  ",\"base\":" ++ jsonString b.base ++ ",\"tree\":" ++ jsonString b.tree ++
-  ",\"capability\":" ++ capabilityJson b.capability ++ "}"
-private def caseJson (c : Case) :=
+deriving instance Lean.ToJson for Disposition
+
+structure CapabilityWire where
+  mode : String
+  paths : Option (List String)
+  deriving Lean.ToJson
+
+private def capabilityWire : WorkspacePathCapability → CapabilityWire
+  | .exactPaths paths => { mode := "exactPaths", paths := some paths }
+  | .unrestrictedCompatibility => { mode := "unrestrictedCompatibility", paths := none }
+
+structure BindingWire where
+  workspaceId : String
+  owner : String
+  base : String
+  tree : String
+  capability : CapabilityWire
+  deriving Lean.ToJson
+
+structure FreezeInput where
+  name : String
+  beforeState : String
+  beforeSeal : Option String
+  capability : CapabilityWire
+  expectedBinding : BindingWire
+  baseTree : String
+  sealCapability : Bool
+  ownerAndPlacementVerified : Bool
+  noActiveWriter : Bool
+  checkoutPresent : Bool
+  manifestCanonical : Bool
+  capturedBaseMatches : Bool
+  changedPaths : List String
+  deriving Lean.ToJson
+
+structure FreezeOutput where
+  state : String
+  disposition : Disposition
+  writerReceipt : Bool
+  trunkEffects : Nat
+  deriving Lean.ToJson
+
+private def freezeInput (c : Case) : FreezeInput :=
   let e := c.evidence
-  "{\"name\":" ++ jsonString c.name ++
-  ",\"before_state\":" ++ jsonString c.before.workspace.state.toDefraDB ++
-  ",\"before_seal\":" ++ (c.before.workspace.sealHash.map jsonString).getD "null" ++
-  ",\"capability\":" ++ capabilityJson c.before.workspace.pathCapability ++
-  ",\"expected_binding\":" ++ bindingJson e.expected ++
-  ",\"base_tree\":" ++ jsonString e.baseTree ++
-  ",\"seal_capability\":" ++ boolJson e.sealCapability ++
-  ",\"owner_and_placement_verified\":" ++ boolJson e.ownerAndPlacementVerified ++
-  ",\"no_active_writer\":" ++ boolJson e.noActiveWriter ++
-  ",\"checkout_present\":" ++ boolJson e.checkoutPresent ++
-  ",\"manifest_canonical\":" ++ boolJson e.manifestCanonical ++
-  ",\"captured_base_matches\":" ++ boolJson e.capturedBaseMatches ++
-  ",\"changed_paths\":" ++ jsonArray (e.delta.map (jsonString ∘ Change.path)) ++
-  ",\"expected_state\":" ++ jsonString c.expectedState.toDefraDB ++
-  ",\"expected_disposition\":" ++ jsonString (dispositionString c.disposition) ++
-  ",\"expected_writer_receipt\":false,\"expected_trunk_effects\":0}"
-def casesJson := jsonArray (cases.map caseJson)
+  { name := c.name, beforeState := c.before.workspace.state.toDefraDB
+    beforeSeal := c.before.workspace.sealHash
+    capability := capabilityWire c.before.workspace.pathCapability
+    expectedBinding :=
+      { workspaceId := e.expected.workspaceId, owner := e.expected.owner, base := e.expected.base
+        tree := e.expected.tree, capability := capabilityWire e.expected.capability }
+    baseTree := e.baseTree, sealCapability := e.sealCapability
+    ownerAndPlacementVerified := e.ownerAndPlacementVerified, noActiveWriter := e.noActiveWriter
+    checkoutPresent := e.checkoutPresent, manifestCanonical := e.manifestCanonical
+    capturedBaseMatches := e.capturedBaseMatches, changedPaths := e.delta.map Change.path }
+
+private def freezeOutput (c : Case) : FreezeOutput :=
+  let (after, disposition) := OperatorBaseFreeze.execute c.before c.evidence
+  { state := after.workspace.state.toDefraDB, disposition
+    writerReceipt := after.writer.isSome, trunkEffects := after.trunkEffects }
+
+/-- The wire input names its case; the model executes the case's own snapshot
+and evidence, whose capability carries arguments the wire cannot. -/
+@[conformance_family]
+def freeze : Family FreezeInput FreezeOutput where
+  inputs := cases.map freezeInput
+  model := fun i => match cases.find? (·.name == i.name) with
+    | some c => freezeOutput c
+    | none => { state := "", disposition := .denied, writerReceipt := false, trunkEffects := 0 }
+
 end Conformance.OperatorBaseFreezeContracts

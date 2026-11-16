@@ -1,0 +1,79 @@
+{
+  "bind": "fixtures/hostile",
+  "expect": {
+    "markdown": "| table | source | rows | columns |\n| --- | --- | --- | --- |\n| bomb_S | bomb.xlsx#S | unknown | error: part xl/worksheets/sheet1.xml of bomb.xlsx inflates far beyond its stored size and is refused as a decompression bomb |\n| corrupt_footer | corrupt_footer.parquet | unknown | error: corrupt_footer.parquet is not a readable Parquet file (Parquet error: Received multiple fields for union from remote ColumnOrder); check it was fully written |\n| deep | deep.json | unknown | error: deep.json nests JSON deeper than 128 levels and cannot be read |\n| empty | empty.csv | unknown | error: empty.csv has no rows to read |\n| header_only | header_only.csv | 0 | a, b |\n| truncated | truncated.json | unknown | error: truncated.json is not valid JSON at line 1, column 14; check the file is a JSON array or one record per line |\n| truncated_2 | truncated.parquet | unknown | error: truncated.parquet is not a readable Parquet file (Parquet error: Invalid Parquet file. Corrupt footer); check it was fully written |\n| unclosed | unclosed.csv | unknown | error: the quoted field on line 2 is never closed; check the quoting |",
+    "tables": [
+      {
+        "error": "part xl/worksheets/sheet1.xml of bomb.xlsx inflates far beyond its stored size and is refused as a decompression bomb",
+        "format": "xlsx",
+        "name": "bomb_S",
+        "sheet": "S",
+        "source": "bomb.xlsx"
+      },
+      {
+        "error": "corrupt_footer.parquet is not a readable Parquet file (Parquet error: Received multiple fields for union from remote ColumnOrder); check it was fully written",
+        "format": "parquet",
+        "name": "corrupt_footer",
+        "source": "corrupt_footer.parquet"
+      },
+      {
+        "error": "deep.json nests JSON deeper than 128 levels and cannot be read",
+        "format": "json",
+        "name": "deep",
+        "source": "deep.json"
+      },
+      {
+        "error": "empty.csv has no rows to read",
+        "format": "csv",
+        "name": "empty",
+        "source": "empty.csv"
+      },
+      {
+        "column_count": 2,
+        "columns": [
+          {
+            "name": "a",
+            "type": "text"
+          },
+          {
+            "name": "b",
+            "type": "text"
+          }
+        ],
+        "details": {
+          "delimiter": ",",
+          "header": true
+        },
+        "format": "csv",
+        "name": "header_only",
+        "row_count": 0,
+        "source": "header_only.csv"
+      },
+      {
+        "error": "truncated.json is not valid JSON at line 1, column 14; check the file is a JSON array or one record per line",
+        "format": "json",
+        "name": "truncated",
+        "source": "truncated.json"
+      },
+      {
+        "error": "truncated.parquet is not a readable Parquet file (Parquet error: Invalid Parquet file. Corrupt footer); check it was fully written",
+        "format": "parquet",
+        "name": "truncated_2",
+        "source": "truncated.parquet"
+      },
+      {
+        "error": "the quoted field on line 2 is never closed; check the quoting",
+        "format": "csv",
+        "name": "unclosed",
+        "source": "unclosed.csv"
+      }
+    ],
+    "warnings": [
+      "3 files were skipped: binary.bin: a binary file that is not a supported data format; not_parquet.parquet: named like Parquet but does not start like a Parquet file; truncated.xlsx: truncated.xlsx is not a readable ZIP container (invalid Zip archive: Could not find EOCD); check it was fully written",
+      "truncated.parquet is the table truncated_2"
+    ]
+  },
+  "input": {
+    "mode": "tables"
+  }
+}

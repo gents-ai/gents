@@ -42,11 +42,17 @@ pub struct ManagedServerState {
     pub pairing_cancel: Option<Arc<tokio_util::sync::CancellationToken>>,
     pub starting: bool,
     pub last_error: Option<String>,
+    /// The last error the background Node logged, read when its exit is observed.
+    pub last_exit_error: Option<String>,
+    /// The exit `last_exit_error` was read for.
+    pub last_exit: Option<gents_service::native_service::ServiceExit>,
     /// Cancels a start that is waiting outside the lifecycle lock.
     pub start_wait: Option<crate::tauri_commands::managed_server::start_wait::StartWait>,
-    pub crash_loop: crate::tauri_commands::managed_server::status::CrashLoopWatch,
+    pub crash_loop: gents_service::repair::crash_loop::CrashLoopWatch,
     pub approval_refused: bool,
-    pub incompatible_store: Option<gents::store::local::storage_backend::IncompatibleStore>,
+    pub incompatible_store: Option<gents_protocol::operations::install_repair::IncompatibleStore>,
+    /// The node home its node stopped for because it was deleted.
+    pub deleted_home: Option<PathBuf>,
 }
 
 pub struct ProviderLoginWait {
@@ -70,31 +76,12 @@ pub struct DesktopBridge {
     /// Shared progress for an in-flight client start; waiters must not open a
     /// second node.
     pub start_inflight: Option<watch::Sender<ClientStartProgress>>,
-    pub incompatible_client_store: Option<gents::store::local::storage_backend::IncompatibleStore>,
+    pub incompatible_client_store:
+        Option<gents_protocol::operations::install_repair::IncompatibleStore>,
 }
 
 impl DesktopBridge {
-    fn selected_node_did(&self) -> Option<String> {
-        if self.selected_nodes_by_window.len() == 1 {
-            self.selected_nodes_by_window
-                .values()
-                .next()
-                .cloned()
-                .flatten()
-        } else {
-            None
-        }
-    }
-
-    fn apply_window_selection(&self) {
-        if let Some(core) = &self.core {
-            let selected = self.selected_node_did();
-            core.set_selected_node_did(selected);
-        }
-    }
-
     pub(crate) fn install_core(&mut self, core: Arc<ClientCore>) {
-        core.set_selected_node_did(self.selected_node_did());
         self.core = Some(core);
     }
 
@@ -131,7 +118,6 @@ impl DesktopBridge {
         };
         let changed = *selected != node_did;
         *selected = node_did;
-        self.apply_window_selection();
         changed
     }
 
@@ -205,7 +191,6 @@ impl DesktopAppState {
             .selected_nodes_by_window
             .entry(label.to_owned())
             .or_default();
-        bridge.apply_window_selection();
     }
 
     pub(crate) fn clear_plugin_approval_subscriptions(&self, label: &str) {
@@ -243,9 +228,7 @@ impl DesktopAppState {
                 wait.cancel.cancel();
             }
         }
-        if bridge.selected_nodes_by_window.remove(label).is_some() {
-            bridge.apply_window_selection();
-        }
+        bridge.selected_nodes_by_window.remove(label);
     }
 }
 
@@ -258,7 +241,7 @@ where
     R: Runtime,
 {
     spawn(async move {
-        let mut store_updates = core.store_change_updates();
+        let mut store_updates = core.store_updates();
         let mut sync_updates = core.sync_state_updates();
 
         loop {

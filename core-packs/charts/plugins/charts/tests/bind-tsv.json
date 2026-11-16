@@ -1,0 +1,71 @@
+{
+  "input": {
+    "chart": "pie",
+    "file": "tabs.tsv",
+    "title": "Scores by team",
+    "output": "svg",
+    "width": 520,
+    "height": 380
+  },
+  "bind": "fixtures/data",
+  "expect": {
+    "response": {
+      "alt": "Pie chart titled \"Scores by team\". 4 slices of score, total 54. \"red\" 12 (22%). \"blue\" 18 (33%). \"green\" 9 (17%). \"yellow\" 15 (28%).",
+      "chart": "pie",
+      "height": 380,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 12.0,
+          "min": 12.0,
+          "name": "red",
+          "points": 1,
+          "share": 0.222222,
+          "value": 12.0
+        },
+        {
+          "axis": "left",
+          "color": "#e69f00",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 18.0,
+          "min": 18.0,
+          "name": "blue",
+          "points": 1,
+          "share": 0.333333,
+          "value": 18.0
+        },
+        {
+          "axis": "left",
+          "color": "#009e73",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 9.0,
+          "min": 9.0,
+          "name": "green",
+          "points": 1,
+          "share": 0.166667,
+          "value": 9.0
+        },
+        {
+          "axis": "left",
+          "color": "#d55e00",
+          "gaps": 0,
+          "mark": "slice",
+          "max": 15.0,
+          "min": 15.0,
+          "name": "yellow",
+          "points": 1,
+          "share": 0.277778,
+          "value": 15.0
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"520\" height=\"380\" viewBox=\"0 0 520 380\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Scores by team</title><desc id=\"chart-desc\">Pie chart titled &quot;Scores by team&quot;. 4 slices of score, total 54. &quot;red&quot; 12 (22%). &quot;blue&quot; 18 (33%). &quot;green&quot; 9 (17%). &quot;yellow&quot; 15 (28%).</desc><rect x=\"0\" y=\"0\" width=\"520\" height=\"380\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Scores by team</text><path d=\"M 214.16,195.5 L 214.16,52 A 143.5,143.5 0 0 1 355.48,170.58 Z\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>red: 12 (22%)</title></path><text x=\"275.03\" y=\"126.95\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#ffffff\">22%</text><path d=\"M 214.16,195.5 L 355.48,170.58 A 143.5,143.5 0 0 1 165.08,330.35 Z\" fill=\"#e69f00\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>blue: 18 (33%)</title></path><text x=\"275.03\" y=\"272.05\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#111111\">33%</text><path d=\"M 214.16,195.5 L 165.08,330.35 A 143.5,143.5 0 0 1 72.84,220.42 Z\" fill=\"#009e73\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>green: 9 (17%)</title></path><text x=\"141.6\" y=\"260.38\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#ffffff\">17%</text><path d=\"M 214.16,195.5 L 72.84,220.42 A 143.5,143.5 0 0 1 214.16,52 Z\" fill=\"#d55e00\" stroke=\"#ffffff\" stroke-width=\"1.5\"><title>yellow: 15 (28%)</title></path><text x=\"141.6\" y=\"138.62\" font-size=\"12\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#ffffff\">28%</text><rect x=\"417.31\" y=\"49\" width=\"12\" height=\"12\" fill=\"#0072b2\"/><text x=\"437.31\" y=\"59\" font-size=\"12\" fill=\"#1f2328\">red (22%)</text><rect x=\"417.31\" y=\"67\" width=\"12\" height=\"12\" fill=\"#e69f00\"/><text x=\"437.31\" y=\"77\" font-size=\"12\" fill=\"#1f2328\">blue (33%)</text><rect x=\"417.31\" y=\"85\" width=\"12\" height=\"12\" fill=\"#009e73\"/><text x=\"437.31\" y=\"95\" font-size=\"12\" fill=\"#1f2328\">green (17%)</text><rect x=\"417.31\" y=\"103\" width=\"12\" height=\"12\" fill=\"#d55e00\"/><text x=\"437.31\" y=\"113\" font-size=\"12\" fill=\"#1f2328\">yellow (28%)</text></svg>",
+      "warnings": [],
+      "width": 520
+    }
+  }
+}

@@ -1,4 +1,4 @@
-//! Fenced by `proofs/Proofs/ClientShell/Timeline.lean`.
+//! Fenced by `proofs/Proofs/Clients/ClientShell/Timeline.lean`.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimelineRole {
@@ -205,6 +205,88 @@ pub fn build_timeline_order(
 mod tests {
     use super::*;
 
+    #[test]
+    fn generated_pending_timeline_cases_preserve_request_identities_and_order() {
+        gents_lean_vocab::families::contracts_pending_timeline::replay(|i| {
+            let role = |role: &str| match role {
+                "user" => TimelineRole::User,
+                "assistant" => TimelineRole::Assistant,
+                role => panic!("unknown modeled role {role}"),
+            };
+            let role_name = |role: TimelineRole| match role {
+                TimelineRole::User => "user".to_owned(),
+                TimelineRole::Assistant => "assistant".to_owned(),
+            };
+            let messages: Vec<_> = i
+                .messages
+                .iter()
+                .map(|row| TimelineMessageInput {
+                    key: row.key.to_string(),
+                    sequence: Some(row.sequence),
+                    role: role(&row.role),
+                    emits_item: row.emits_item,
+                    dedup_token: row.token.map(|key| key.to_string()),
+                })
+                .collect();
+            let pending: Vec<_> = i
+                .pending
+                .iter()
+                .map(|row| PendingInput {
+                    key: row.key.to_string(),
+                    placement: row
+                        .before_sequence
+                        .map_or(PendingPlacement::Tail, |message_sequence| {
+                            PendingPlacement::BeforeMessage { message_sequence }
+                        }),
+                })
+                .collect();
+            let groups: Vec<_> = i.groups.iter().map(|sequence| Some(*sequence)).collect();
+            let overlay = i.overlay.as_ref().map(|overlay| OverlayInput {
+                has_durable_owner: overlay.has_durable_owner,
+                placement: overlay
+                    .before_sequence
+                    .map_or(OverlayPlacement::Tail, |sequence| {
+                        OverlayPlacement::BeforeOrphan {
+                            message_sequence: Some(sequence),
+                        }
+                    }),
+            });
+            let slot =
+                |kind: &str, key: Option<u64>, sequence: Option<i64>, role: Option<String>| {
+                    gents_lean_vocab::families::contracts_pending_timeline::TimelineSlot {
+                        kind: kind.to_owned(),
+                        key,
+                        sequence,
+                        role,
+                    }
+                };
+            gents_lean_vocab::families::contracts_pending_timeline::TimelineOutput {
+                slots: build_timeline_order(&messages, &groups, &pending, overlay)
+                    .into_iter()
+                    .map(|timeline_slot| match timeline_slot {
+                        TimelineSlot::Message {
+                            key,
+                            sequence,
+                            role,
+                        } => slot(
+                            "message",
+                            Some(key.parse().unwrap()),
+                            Some(sequence.unwrap()),
+                            Some(role_name(role)),
+                        ),
+                        TimelineSlot::ToolGroup { message_sequence } => {
+                            slot("tool_group", None, Some(message_sequence.unwrap()), None)
+                        }
+                        TimelineSlot::Pending { key } => {
+                            slot("pending", Some(key.parse().unwrap()), None, None)
+                        }
+                        TimelineSlot::Overlay => slot("overlay", None, None, None),
+                    })
+                    .collect(),
+            }
+        });
+    }
+
     fn msg(key: &str, seq: i64, role: TimelineRole) -> TimelineMessageInput {
         TimelineMessageInput {
             key: key.to_string(),
@@ -318,82 +400,6 @@ mod tests {
     }
 
     #[test]
-    fn overlay_precedes_orphan_groups_for_running_unmaterialized_tool_turn() {
-        let messages = vec![msg("user", 0, TimelineRole::User)];
-        let groups = vec![Some(1)];
-        let slots = build_timeline_order(
-            &messages,
-            &groups,
-            &pending_tail(),
-            Some(OverlayInput {
-                has_durable_owner: false,
-                placement: OverlayPlacement::BeforeOrphan {
-                    message_sequence: Some(1),
-                },
-            }),
-        );
-
-        let overlay_pos = slots
-            .iter()
-            .position(|slot| matches!(slot, TimelineSlot::Overlay))
-            .expect("overlay");
-        let tool_pos = slots
-            .iter()
-            .position(|slot| {
-                matches!(
-                    slot,
-                    TimelineSlot::ToolGroup {
-                        message_sequence: Some(1)
-                    }
-                )
-            })
-            .expect("orphan tool group");
-        assert!(
-            overlay_pos < tool_pos,
-            "live reasoning must precede its running orphan tool group: {slots:?}"
-        );
-    }
-
-    #[test]
-    fn overlay_preserves_earlier_terminal_orphans_before_active_target() {
-        let messages = vec![msg("user", 0, TimelineRole::User)];
-        let groups = vec![Some(1), Some(2)];
-        let slots = build_timeline_order(
-            &messages,
-            &groups,
-            &pending_tail(),
-            Some(OverlayInput {
-                has_durable_owner: false,
-                placement: OverlayPlacement::BeforeOrphan {
-                    message_sequence: Some(2),
-                },
-            }),
-        );
-
-        assert_eq!(
-            slots,
-            vec![
-                TimelineSlot::Message {
-                    key: "user".to_string(),
-                    sequence: Some(0),
-                    role: TimelineRole::User,
-                },
-                TimelineSlot::Pending {
-                    key: "request".into()
-                },
-                TimelineSlot::ToolGroup {
-                    message_sequence: Some(1),
-                },
-                TimelineSlot::Overlay,
-                TimelineSlot::ToolGroup {
-                    message_sequence: Some(2),
-                },
-            ],
-            "historical orphan tools must stay before live reasoning"
-        );
-    }
-
-    #[test]
     fn overlay_follows_terminal_orphan_groups() {
         let messages = vec![msg("user", 0, TimelineRole::User)];
         let groups = vec![Some(1)];
@@ -412,33 +418,6 @@ mod tests {
             Some(&TimelineSlot::Overlay),
             "the next live assistant turn must follow terminal orphan tools: {slots:?}"
         );
-    }
-
-    #[test]
-    fn pending_turn_shown_iff_and_before_orphans() {
-        let messages = vec![msg("a", 0, TimelineRole::User)];
-        let groups = vec![Some(9)];
-        let slots = build_timeline_order(&messages, &groups, &pending_tail(), None);
-        let pending_pos = slots
-            .iter()
-            .position(|s| matches!(s, TimelineSlot::Pending { .. }));
-        let orphan_pos = slots.iter().position(|s| {
-            matches!(
-                s,
-                TimelineSlot::ToolGroup {
-                    message_sequence: Some(9)
-                }
-            )
-        });
-        assert!(pending_pos.is_some(), "pending must be shown");
-        assert!(
-            pending_pos < orphan_pos,
-            "pending must precede orphan groups: {slots:?}"
-        );
-        let no_pending = build_timeline_order(&messages, &groups, &[], None);
-        assert!(!no_pending
-            .iter()
-            .any(|s| matches!(s, TimelineSlot::Pending { .. })));
     }
 
     #[test]
@@ -470,73 +449,6 @@ mod tests {
             )
             .expect("continued assistant message");
         assert_eq!(pending_pos + 1, continued_pos, "{slots:?}");
-    }
-
-    #[test]
-    fn pending_turn_precedes_tool_group_from_non_emitting_same_request_row() {
-        let messages = vec![TimelineMessageInput {
-            key: "tool-first".to_string(),
-            sequence: Some(3),
-            role: TimelineRole::Assistant,
-            emits_item: false,
-            dedup_token: None,
-        }];
-        let slots = build_timeline_order(
-            &messages,
-            &[Some(3)],
-            &[PendingInput {
-                key: "request".into(),
-                placement: PendingPlacement::BeforeMessage {
-                    message_sequence: 3,
-                },
-            }],
-            None,
-        );
-
-        assert_eq!(
-            slots,
-            vec![
-                TimelineSlot::Pending {
-                    key: "request".into()
-                },
-                TimelineSlot::ToolGroup {
-                    message_sequence: Some(3),
-                },
-            ],
-            "a tool-first partial replica must keep its request-owned prompt first"
-        );
-    }
-
-    #[test]
-    fn non_emitting_target_without_group_falls_back_to_tail() {
-        let messages = vec![
-            TimelineMessageInput {
-                key: "invisible".to_string(),
-                sequence: Some(2),
-                role: TimelineRole::Assistant,
-                emits_item: false,
-                dedup_token: None,
-            },
-            msg("visible", 3, TimelineRole::Assistant),
-        ];
-        let slots = build_timeline_order(
-            &messages,
-            &[],
-            &[PendingInput {
-                key: "request".into(),
-                placement: PendingPlacement::BeforeMessage {
-                    message_sequence: 2,
-                },
-            }],
-            None,
-        );
-
-        assert_eq!(
-            slots.last(),
-            Some(&TimelineSlot::Pending {
-                key: "request".into()
-            })
-        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import Proofs.Goals
+import Proofs.Automation.Goals
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.Contracts

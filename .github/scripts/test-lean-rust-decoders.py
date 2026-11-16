@@ -100,7 +100,7 @@ pub struct RecordPayload { value: u64 }
     def test_required_nullable_accepts_null_but_rejects_missing(self):
         self.items = decoders.parse_items(RUST.replace(
             "pub(crate) deadline: Option<u64>,",
-            '#[serde(deserialize_with = "crate::lean_vocab_test::required_nullable")]\n'
+            '#[serde(deserialize_with = "crate::required_nullable")]\n'
             "    pub(crate) deadline: Option<u64>,"))
         self.assertEqual(self.errors(), [])
         self.assertEqual(self.errors(lambda case: case.__setitem__("deadline", 5)), [])
@@ -128,7 +128,7 @@ pub struct RecordPayload { value: u64 }
     def test_required_nullable_non_option_remains_unsupported(self):
         self.items = decoders.parse_items(RUST.replace(
             "pub(crate) name: String,",
-            '#[serde(deserialize_with = "crate::lean_vocab_test::required_nullable")]\n'
+            '#[serde(deserialize_with = "crate::required_nullable")]\n'
             "    pub(crate) name: String,"))
         self.assertIn("required_nullable on non-Option field", "\n".join(self.errors()))
 

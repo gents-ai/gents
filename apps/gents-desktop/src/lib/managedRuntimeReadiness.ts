@@ -47,7 +47,7 @@ export async function waitForManagedRuntimePairing(
   const status = await api.managedServerStatus();
   if (!status.pairingReady) {
     throw new ManagedRuntimeUnavailableError(
-      "The local node started, but secure background pairing is not ready.",
+      "The local node started, but this app's enrollment with it isn't ready yet.",
     );
   }
   return status;

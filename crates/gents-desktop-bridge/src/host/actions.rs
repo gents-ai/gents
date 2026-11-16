@@ -1,9 +1,9 @@
 use anyhow::{ensure, Context, Result};
-use gents::documents::{Schedule, Task};
-use gents::store::config_client::config_projection;
-use gents::store::graphql::escape_graphql_string;
-use gents::Collection;
 use gents_desktop_core::client::ClientCore;
+use gents_documents::config_projection;
+use gents_documents::{Schedule, Task};
+use gents_store::collection::Collection;
+use gents_store::graphql::escape_graphql_string;
 
 use crate::types::{ConfiguredActionKind, ConfiguredActionView};
 
@@ -24,7 +24,7 @@ pub(super) async fn catalog(
     );
     let access = core
         .operator_graphql(node_did)
-        .map(gents::ConfigAccess::Graphql)
+        .map(gents_store::config_client::ConfigAccess::Graphql)
         .context("Connect this local runtime before choosing its configured actions.")?;
     let response = access.execute(&query).await?;
     let tasks: Vec<Task> = serde_json::from_value(
