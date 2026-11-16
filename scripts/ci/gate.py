@@ -692,10 +692,32 @@ def hand_off_on_host(entry):
     print(f"gate: the {entry['archive']} slices run on {host}", flush=True)
 
 
-def nextest(arguments, cwd=ROOT, label=None, expect=None, prefix=(), path_prefix=None):
+def reproducible_paths(source):
+    """Rust flags that make a test binary's bytes independent of where it was built.
+
+    Each runner keeps its own Cargo target tree and builds in its own checkout,
+    and code compiled under a build script's OUT_DIR (Rust, and C through the
+    cc crate) carries that absolute path into the binary: dispatches 43768686550 and 43775883331 built
+    the same commit on two runners of one host and 19 of 45 test binaries
+    differed, so the test cache, keyed by binary bytes, missed every test.
+    Linux targets set no other rustflags (.cargo/config.toml), so the
+    target-specific variable replaces nothing.
+    """
+    if sys.platform != "linux":
+        return None
+    target = os.path.realpath(os.environ.get("CARGO_TARGET_DIR") or str(Path(source) / "target"))
+    source = os.path.realpath(source)
+    rust = f"--remap-path-prefix={target}=/target --remap-path-prefix={source}=/source"
+    # C compiled by build scripts (rquickjs-sys's QuickJS) keeps __FILE__ under OUT_DIR.
+    c = f"-ffile-prefix-map={target}=/target -ffile-prefix-map={source}=/source"
+    return {"CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS": rust,
+            "CFLAGS_x86_64_unknown_linux_gnu": c, "CXXFLAGS_x86_64_unknown_linux_gnu": c}
+
+
+def nextest(arguments, cwd=ROOT, label=None, expect=None, prefix=(), path_prefix=None, extra_env=None):
     """`cargo nextest`, recording the summary's counts; `expect` checks the listed tests per package."""
     command = [*prefix, "cargo", "nextest", *arguments]
-    env = dict(os.environ)
+    env = {**os.environ, **(extra_env or {})}
     if path_prefix:
         env["PATH"] = path_prefix + os.pathsep + env.get("PATH", "")
     env.setdefault("RUST_MIN_STACK", "16777216")
@@ -847,7 +869,8 @@ def run_build(selection, name):
     if profile:
         arguments += ["--cargo-profile", profile]
     arguments += ["--archive-file", str(archive)]
-    if not nextest(arguments, cwd=source, label=f"build {name}: {len(packages)} crates"):
+    if not nextest(arguments, cwd=source, label=f"build {name}: {len(packages)} crates",
+                   extra_env=reproducible_paths(source) if entry.get("test_cache", "off") != "off" else None):
         return
     started = time.time()
     try:
