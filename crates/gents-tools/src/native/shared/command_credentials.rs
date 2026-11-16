@@ -85,8 +85,10 @@ fn capture_native(
     CredentialProtection::capture(paths)
 }
 
-/// The default home is the one the operator's commands open without `--home`; the
-/// runtime's own home is excluded through `runtimes` in `capture_native`.
+/// Each account's `~/.gents` and the home the operator's commands open without
+/// `--home` (the remembered folder). An unreadable remembered file fails the
+/// capture rather than leaving that home unprotected. The runtime's own home
+/// adds its full credential set through `runtimes` in `capture_native`.
 #[cfg(not(any(test, feature = "test-home-guard")))]
 fn inactive_runtime_homes(homes: &[PathBuf]) -> Result<Vec<PathBuf>> {
     Ok(homes
