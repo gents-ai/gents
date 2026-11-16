@@ -388,6 +388,18 @@ describe("the Packs page", () => {
     expect(within(registry).queryByRole("button", { name: "Install" })).toBeNull();
   });
 
+  it("names the list each tab shows as that tab's panel", async () => {
+    show();
+    for (const name of ["Installed", "Registry"]) {
+      const tab = await screen.findByRole("tab", { name: new RegExp(`^${name}`) });
+      fireEvent.click(tab);
+      await waitFor(() => expect(tab).toHaveAttribute("aria-selected", "true"));
+      const panel = document.getElementById(tab.getAttribute("aria-controls") ?? "");
+      expect(panel).toHaveAttribute("role", "tabpanel");
+      expect(panel).toHaveAttribute("aria-labelledby", tab.id);
+    }
+  });
+
   it("returns to the list and search it left, while the app runs", async () => {
     const app = show();
     fireEvent.click(await screen.findByRole("tab", { name: "Registry" }));
