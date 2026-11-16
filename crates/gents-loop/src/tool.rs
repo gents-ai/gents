@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::test_support;
 use crate::tool_call_lifecycle::FailureClass;
 
+mod envelope;
+pub use envelope::{ToolCallEnvelope, ToolCallExtensions};
+
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -100,14 +103,16 @@ pub trait Tool: Sized + Send + Sync {
     fn call(
         &self,
         args: Self::Args,
+        context: &ToolCallEnvelope,
     ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
 
     fn call_with_request(
         &self,
         args: Self::Args,
+        context: &ToolCallEnvelope,
         _request: &ToolRequestContext,
     ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send {
-        self.call(args)
+        self.call(args, context)
     }
 
     /// Producer receipts travel through the existing dispatch and terminal
@@ -143,12 +148,20 @@ pub struct ToolDispatchResult {
 pub trait ToolDyn: Send + Sync {
     fn name(&self) -> String;
     fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition>;
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>>;
+    fn call<'a>(
+        &'a self,
+        args: String,
+        context: &'a ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>>;
 
-    fn call_with_receipt<'a>(&'a self, args: String) -> BoxFuture<'a, ToolDispatchResult> {
+    fn call_with_receipt<'a>(
+        &'a self,
+        args: String,
+        context: &'a ToolCallEnvelope,
+    ) -> BoxFuture<'a, ToolDispatchResult> {
         Box::pin(async move {
             ToolDispatchResult {
-                result: self.call(args).await,
+                result: self.call(args, context).await,
                 plugin_receipt: None,
                 deferred_writes: None,
             }
@@ -158,9 +171,10 @@ pub trait ToolDyn: Send + Sync {
     fn call_with_request<'a>(
         &'a self,
         args: String,
+        context: &'a ToolCallEnvelope,
         _request: &'a ToolRequestContext,
     ) -> BoxFuture<'a, ToolDispatchResult> {
-        self.call_with_receipt(args)
+        self.call_with_receipt(args, context)
     }
 
     fn footprint(&self, _args: &str) -> ToolFootprint {
@@ -199,24 +213,33 @@ where
         Box::pin(<Self as Tool>::definition(self, prompt))
     }
 
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        args: String,
+        context: &'a ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            <Self as ToolDyn>::call_with_receipt(self, args)
+            <Self as ToolDyn>::call_with_receipt(self, args, context)
                 .await
                 .result
         })
     }
 
-    fn call_with_receipt<'a>(&'a self, args: String) -> BoxFuture<'a, ToolDispatchResult> {
-        Box::pin(dispatch_typed(self, args, None))
+    fn call_with_receipt<'a>(
+        &'a self,
+        args: String,
+        context: &'a ToolCallEnvelope,
+    ) -> BoxFuture<'a, ToolDispatchResult> {
+        Box::pin(dispatch_typed(self, args, None, context))
     }
 
     fn call_with_request<'a>(
         &'a self,
         args: String,
+        context: &'a ToolCallEnvelope,
         request: &'a ToolRequestContext,
     ) -> BoxFuture<'a, ToolDispatchResult> {
-        Box::pin(dispatch_typed(self, args, Some(request)))
+        Box::pin(dispatch_typed(self, args, Some(request), context))
     }
 
     fn footprint(&self, args: &str) -> ToolFootprint {
@@ -239,6 +262,7 @@ async fn dispatch_typed<T>(
     tool: &T,
     args: String,
     request: Option<&ToolRequestContext>,
+    context: &ToolCallEnvelope,
 ) -> ToolDispatchResult
 where
     T: Tool,
@@ -246,8 +270,8 @@ where
     let output = async {
         let parsed = parse_tool_args::<T::Args>(&args)?;
         match request {
-            Some(request) => <T as Tool>::call_with_request(tool, parsed, request).await,
-            None => <T as Tool>::call(tool, parsed).await,
+            Some(request) => <T as Tool>::call_with_request(tool, parsed, context, request).await,
+            None => <T as Tool>::call(tool, parsed, context).await,
         }
         .map_err(T::into_dyn_error)
     }
@@ -282,11 +306,19 @@ impl ToolDyn for RequestBoundTool {
     fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {
         self.tools[self.index].definition(prompt)
     }
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move { self.call_with_receipt(args).await.result })
+    fn call<'a>(
+        &'a self,
+        args: String,
+        context: &'a ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move { self.call_with_receipt(args, context).await.result })
     }
-    fn call_with_receipt<'a>(&'a self, args: String) -> BoxFuture<'a, ToolDispatchResult> {
-        self.tools[self.index].call_with_request(args, &self.request)
+    fn call_with_receipt<'a>(
+        &'a self,
+        args: String,
+        context: &'a ToolCallEnvelope,
+    ) -> BoxFuture<'a, ToolDispatchResult> {
+        self.tools[self.index].call_with_request(args, context, &self.request)
     }
     fn footprint(&self, args: &str) -> ToolFootprint {
         self.tools[self.index].footprint(args)
@@ -538,7 +570,11 @@ mod tests {
             }
         }
 
-        async fn call(&self, succeed: bool) -> Result<String, Self::Error> {
+        async fn call(
+            &self,
+            succeed: bool,
+            _context: &crate::tool::ToolCallEnvelope,
+        ) -> Result<String, Self::Error> {
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if succeed {
                 Ok("visible output".into())
@@ -559,7 +595,12 @@ mod tests {
     async fn typed_dispatch_emits_receipts_only_after_one_successful_call() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let tool = ReceiptTool(AtomicUsize::new(0));
-        let success = ToolDyn::call_with_receipt(&tool, "true".into()).await;
+        let success = ToolDyn::call_with_receipt(
+            &tool,
+            "true".into(),
+            &crate::tool::ToolCallEnvelope::ambient(),
+        )
+        .await;
         assert_eq!(success.result.unwrap(), "visible output");
         assert_eq!(
             success.deferred_writes.unwrap().downcast_ref::<u64>(),
@@ -567,16 +608,32 @@ mod tests {
         );
         assert!(success.plugin_receipt.is_none());
         assert_eq!(tool.0.load(Ordering::SeqCst), 1);
-        let failure = ToolDyn::call_with_receipt(&tool, "false".into()).await;
+        let failure = ToolDyn::call_with_receipt(
+            &tool,
+            "false".into(),
+            &crate::tool::ToolCallEnvelope::ambient(),
+        )
+        .await;
         assert!(failure.result.is_err());
         assert!(failure.deferred_writes.is_none());
         assert_eq!(tool.0.load(Ordering::SeqCst), 2);
-        let invalid = ToolDyn::call_with_receipt(&tool, "{}".into()).await;
+        let invalid = ToolDyn::call_with_receipt(
+            &tool,
+            "{}".into(),
+            &crate::tool::ToolCallEnvelope::ambient(),
+        )
+        .await;
         assert!(invalid.result.is_err());
         assert!(invalid.deferred_writes.is_none());
         assert_eq!(tool.0.load(Ordering::SeqCst), 2);
         assert_eq!(
-            ToolDyn::call(&tool, "true".into()).await.unwrap(),
+            ToolDyn::call(
+                &tool,
+                "true".into(),
+                &crate::tool::ToolCallEnvelope::ambient()
+            )
+            .await
+            .unwrap(),
             "visible output"
         );
         assert_eq!(tool.0.load(Ordering::SeqCst), 3);
@@ -598,13 +655,18 @@ mod tests {
             }
         }
 
-        async fn call(&self, _: bool) -> Result<String, Self::Error> {
+        async fn call(
+            &self,
+            _: bool,
+            _context: &crate::tool::ToolCallEnvelope,
+        ) -> Result<String, Self::Error> {
             Err(std::io::Error::other("request required"))
         }
 
         async fn call_with_request(
             &self,
             _: bool,
+            _context: &crate::tool::ToolCallEnvelope,
             request: &ToolRequestContext,
         ) -> Result<String, Self::Error> {
             Ok(format!(
@@ -637,13 +699,16 @@ mod tests {
         };
         let first = bind_request_tools(shared.clone(), context("one", "alice"));
         let second = bind_request_tools(shared, context("two", "bob"));
+        let envelope = crate::tool::ToolCallEnvelope::ambient();
         let (a, b) = tokio::join!(
-            first[0].call_with_receipt("true".into()),
-            second[0].call_with_receipt("true".into())
+            first[0].call_with_receipt("true".into(), &envelope),
+            second[0].call_with_receipt("true".into(), &envelope)
         );
         assert_eq!(a.result.unwrap(), "one:alice");
         assert_eq!(b.result.unwrap(), "two:bob");
-        let receipt = first[1].call_with_receipt("true".into()).await;
+        let receipt = first[1]
+            .call_with_receipt("true".into(), &crate::tool::ToolCallEnvelope::ambient())
+            .await;
         assert_eq!(receipt.result.unwrap(), "visible output");
         assert_eq!(
             receipt.deferred_writes.unwrap().downcast_ref::<u64>(),

@@ -27,21 +27,28 @@ use slot::{
     SlotConfig,
 };
 
-#[derive(Debug)]
-struct ActiveSnapshotReceiverClosed;
+#[derive(Debug, thiserror::Error)]
+enum ActivationError {
+    #[error("active runtime snapshot receiver closed")]
+    ReceiverClosed,
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl ActivationError {
+    fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::Other(error) => error,
+            closed @ Self::ReceiverClosed => anyhow::Error::new(closed),
+        }
+    }
+}
 
 /// The generation a successfully applied proposal publishes.
 pub(crate) fn next_generation(current: u64) -> u64 {
     current + 1
 }
 
-impl std::fmt::Display for ActiveSnapshotReceiverClosed {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("active runtime snapshot receiver closed")
-    }
-}
-
-impl std::error::Error for ActiveSnapshotReceiverClosed {}
 #[cfg(test)]
 use slot::{retire_slot, spawn_slot};
 
@@ -309,11 +316,8 @@ where
                     .await;
             }
             Err(error) => {
-                let receiver_closed = error.chain().any(|cause| {
-                    cause
-                        .downcast_ref::<ActiveSnapshotReceiverClosed>()
-                        .is_some()
-                });
+                let receiver_closed = matches!(error, ActivationError::ReceiverClosed);
+                let error = error.into_anyhow();
                 tracing::error!(
                     generation = next_generation,
                     added_agents = diff.added,
@@ -343,7 +347,7 @@ where
         generation: u64,
         active_snapshot_tx: &watch::Sender<Arc<ActiveRuntimeSnapshot>>,
         shutdown: watch::Receiver<bool>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), ActivationError> {
         resolved_snapshot.validate_node_readiness_source()?;
 
         let mut recreated_agent_dids = Vec::new();
@@ -371,9 +375,11 @@ where
             for agent_did in &recreated_agent_dids {
                 if let Err(error) = policy.on_slot_created(agent_did, generation).await {
                     staged.abort().await;
-                    return Err(error).with_context(|| {
-                        format!("register staged agent slot {agent_did} generation {generation}")
-                    });
+                    return Err(error
+                        .context(format!(
+                            "register staged agent slot {agent_did} generation {generation}"
+                        ))
+                        .into());
                 }
                 staged.record_registration(agent_did.clone(), generation);
             }
@@ -432,7 +438,7 @@ where
         if active_snapshot_tx.is_closed() {
             drop(next_snapshot);
             staged.abort().await;
-            return Err(ActiveSnapshotReceiverClosed.into());
+            return Err(ActivationError::ReceiverClosed);
         }
         // Publish the new source before changing the active dispatcher set: the
         // router stops dequeuing until the snapshot watch catches up, closing
@@ -445,7 +451,9 @@ where
         {
             drop(next_snapshot);
             staged.abort().await;
-            return Err(error).context("publish node readiness before active generation");
+            return Err(error
+                .context("publish node readiness before active generation")
+                .into());
         }
 
         // Admission runs while the router is fenced by source skew; if the sole
@@ -460,7 +468,7 @@ where
             );
             drop(next_snapshot);
             staged.abort().await;
-            return Err(ActiveSnapshotReceiverClosed.into());
+            return Err(ActivationError::ReceiverClosed);
         }
 
         let mut next_slots = RapidHashMap::new();

@@ -80,7 +80,7 @@ fn install_from_pack_locked(
         Ok(previous) => Some(previous)
             .filter(|previous| previous.declaration.model_slot == plugin.model_slot)
             .and_then(|previous| previous.model_binding),
-        Err(error) if is_not_found(&error) => None,
+        Err(error) if store::is_not_found(&error) => None,
         Err(error) => {
             tracing::warn!(
                 plugin = %plugin.name,
@@ -267,14 +267,6 @@ fn bind_plugin_slots_locked(
         bound.push(coordinate);
     }
     Ok(bound)
-}
-
-fn is_not_found(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
-    })
 }
 
 pub fn set_model_binding(

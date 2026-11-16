@@ -203,7 +203,7 @@ async fn a_booting_runtime_past_the_bound_is_left_running() {
     )
     .await
     .expect_err("the wait is bounded");
-    assert!(error.is::<RuntimeStillBooting>(), "{error}");
+    assert!(matches!(error, StartError::StillBooting(_)), "{error}");
 
     let started = std::time::Instant::now();
     await_runtime_readiness(
@@ -346,9 +346,7 @@ async fn a_refused_store_fails_the_start_typed_on_its_first_exit() {
     )
     .await
     .expect_err("a refused store is final");
-    let typed = error
-        .downcast_ref::<BridgeError>()
-        .expect("typed bridge error");
+    let typed = error.bridge().expect("typed bridge error");
     assert_eq!(typed.code, BridgeErrorCode::IncompatibleLocalStore);
 }
 
@@ -378,7 +376,7 @@ async fn a_refused_store_fails_typed_even_while_status_reports_booting() {
         .await
         .expect_err("a refused store is final");
         assert_eq!(
-            error.downcast_ref::<BridgeError>().map(|error| error.code),
+            error.bridge().map(|error| error.code),
             Some(BridgeErrorCode::IncompatibleLocalStore),
             "exit {code}"
         );
@@ -533,6 +531,6 @@ async fn a_missing_store_key_exit_is_not_an_incompatible_home() {
     )
     .await
     .expect_err("the start fails");
-    assert!(error.downcast_ref::<BridgeError>().is_none(), "{error}");
+    assert!(error.bridge().is_none(), "{error}");
     assert!(refused_kind(&error).is_none(), "{error}");
 }

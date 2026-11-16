@@ -224,6 +224,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
+        tool_context: gents_loop::tool::ToolCallEnvelope::ambient(),
     };
     let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 

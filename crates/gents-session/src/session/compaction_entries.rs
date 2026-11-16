@@ -12,6 +12,12 @@ pub struct StaleCompactionGeneration {
     session_id: String,
 }
 
+impl StaleCompactionGeneration {
+    pub fn occurs_in(error: &(dyn std::error::Error + 'static)) -> bool {
+        gents_protocol::error_chain::find_source::<Self>(error).is_some()
+    }
+}
+
 #[derive(Serialize)]
 struct FilePathDelta<'a> {
     version: u32,
