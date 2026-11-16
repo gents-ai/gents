@@ -38,8 +38,9 @@ end RuntimeConnectionObservation
 
 namespace ServiceLifecycle
 
-deriving instance Lean.ToJson for Action, Decision, StartDisposition
+deriving instance Lean.ToJson for Action, CallerObservation, Decision, StartDisposition
 
-attribute [conformance_function] Action.disrupts Action.contendsWithUpdate admission startDisposition
+attribute [conformance_function] Action.disrupts Action.contendsWithUpdate
+  CallerObservation.callerRunsOnTarget admission startDisposition
 
 end ServiceLifecycle

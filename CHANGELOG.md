@@ -6,6 +6,17 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Breaking: `gents service install`, `stop`, `restart` and `uninstall`, and
+  a managed update's helper, refuse to run when the service's running job is
+  an ancestor of the calling process, which they observe from the service
+  manager and the operating system instead of `GENTS_CALLER_RUNTIME_HOME`.
+  Where that ancestry cannot be read (a sandboxed command, a platform other
+  than macOS or Linux) they refuse while the job runs. Agent commands no
+  longer receive `GENTS_CALLER_RUNTIME_HOME`, `GENTS_CALLER_SESSION_ID` or
+  `GENTS_CALLER_REQUEST_ID`, and a managed update submitted from an Agent's
+  shell no longer posts "Runtime update complete" or "Runtime update failed"
+  to the submitting session; read `gents service update-status` instead.
+  Update receipts no longer carry `session_id` or `request_id` (#3922).
 - Task `goal_blocked_audit_threshold` (positive, default 3) and
   `goal_max_infrastructure_retries` (non-negative, default 2) replace the fixed
   Goal limits for the Goals a Task creates. Every Goal a Task creates pins them,
