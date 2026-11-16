@@ -90,7 +90,7 @@ async fn report(
 }
 
 async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let content = resolve_request_content(args.content.as_deref(), args.content_file.as_deref())?;
     let valid_until = parse_valid_until_flag(args.valid_until.as_deref())?;
@@ -142,7 +142,7 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
 }
 
 async fn request_resend(args: RequestResendArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let stale_id = resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
     let access = ConfigAccess::Graphql(graphql);

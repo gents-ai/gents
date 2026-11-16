@@ -94,7 +94,8 @@ pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
     let graphql = gents_service::home_state::resolve_graphql_endpoint(
         Some(&format!("http://127.0.0.1:{port}/api/v0/graphql")),
         None,
-    )?;
+    )
+    .await?;
     let healthz = format!("http://127.0.0.1:{port}/healthz");
     wait_http_ok(&healthz, Duration::from_secs(120))
         .await
@@ -258,7 +259,8 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     let graphql = gents_service::home_state::resolve_graphql_endpoint(
         Some(&format!("http://127.0.0.1:{port}/api/v0/graphql")),
         Some(&home),
-    )?;
+    )
+    .await?;
     let log = run_dir.join("server.log");
     let started = Instant::now();
 

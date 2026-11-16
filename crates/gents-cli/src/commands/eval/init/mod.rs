@@ -35,6 +35,12 @@ pub(crate) struct InitContext<'a> {
     pub(crate) scope: crate::cli::EvalScopeArgs,
 }
 
+impl InitContext<'_> {
+    fn home(&self) -> PathBuf {
+        gents_service::home_state::resolve_home_dir(self.scope.home.as_deref())
+    }
+}
+
 pub(crate) struct InitOutcome {
     pub(crate) written: Option<Written>,
     pub(crate) assembled: Option<Assembled>,
@@ -83,8 +89,8 @@ pub(crate) async fn interview(
                     staged,
                     &ctx.out,
                     ctx.force,
-                    &gents_service::home_state::resolve_home_dir(ctx.scope.home.as_deref()),
-                    &CliWriteHost,
+                    &ctx.home(),
+                    &CliWriteHost(ctx.home()),
                 )?;
                 print_written(ctx, &assembled, &written, out)?;
                 return Ok(InitOutcome {
@@ -153,7 +159,14 @@ async fn checked(
     };
     let assembled = assemble(&draft, definition_id, &ctx.owner, &ctx.dossier.slot)?;
     validate(&assembled, ctx.registry, &ctx.dossier, &ctx.floors)?;
-    let staged = stage(&assembled, summary, &ctx.dossier, pilot, &CliWriteHost).await?;
+    let staged = stage(
+        &assembled,
+        summary,
+        &ctx.dossier,
+        pilot,
+        &CliWriteHost(ctx.home()),
+    )
+    .await?;
     Ok((assembled, staged))
 }
 
@@ -228,7 +241,7 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         served,
         "start `gents runtime server` for this home and retry: the author runs on a served home"
     );
-    write::recover_output(&args.out, &home_dir, &CliWriteHost)?;
+    write::recover_output(&args.out, &home_dir, &CliWriteHost(home_dir.clone()))?;
     anyhow::ensure!(
         args.force || args.out.symlink_metadata().is_err(),
         "{} already exists; pass --force to replace it",
@@ -670,11 +683,9 @@ mod tests {
         let state = gents_service::home_state::read_runtime_state(&home_dir)
             .unwrap()
             .expect("a runtime state written by `gents runtime server`");
-        gents_service::home_state::load_client_identity()
-            .await
-            .unwrap();
         let graphql =
             gents_service::home_state::home_graphql_endpoint(&home_dir, state.graphql.clone())
+                .await
                 .unwrap();
         let access = gents_store::config_client::ConfigAccess::Graphql(graphql.clone());
         let owner = state.node_did.clone();

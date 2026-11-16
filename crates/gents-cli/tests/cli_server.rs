@@ -1,6 +1,6 @@
 #[path = "support/p2p_bind.rs"]
 mod p2p_bind;
-mod support;
+use crate::support;
 use support::graphql::graphql_mutation_with_variables;
 use support::*;
 

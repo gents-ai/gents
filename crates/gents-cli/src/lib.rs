@@ -1,7 +1,6 @@
 use gents_service::home_state::default_data_dir;
 use gents_service::home_state::home_graphql_endpoint;
 use gents_service::home_state::init_config_path;
-use gents_service::home_state::load_client_identity;
 use gents_service::home_state::load_initialized_home_identity;
 use gents_service::home_state::read_init_config;
 use gents_service::home_state::read_runtime_state;
@@ -391,26 +390,6 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     if let Some(home) = read_only_home {
         gents_service::repair::home::refuse_older_home(&resolve_home_dir(home.as_deref())).await?;
     }
-    // Client-facing commands load their principal before resolving an endpoint,
-    // creating it only for a default home not yet set up; runtime entry points
-    // never load this client key.
-    if let Command::Status(args) = &command {
-        let home = resolve_home_dir(args.home.as_deref());
-        gents_service::home_state::client_identity_for(&home).await?;
-    } else if matches!(
-        &command,
-        Command::Sessions { .. }
-            | Command::Automation { .. }
-            | Command::Config { .. }
-            | Command::Runtime {
-                command: RuntimeCommand::P2p { .. } | RuntimeCommand::Diagnose(_),
-            }
-            | Command::Utils {
-                command: UtilsCommand::Data { .. } | UtilsCommand::Debug { .. },
-            }
-    ) {
-        load_client_identity().await?;
-    }
     let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER)?;
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
@@ -632,7 +611,7 @@ async fn resolve_config_access_inner(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let endpoint = resolve_graphql_endpoint(Some(graphql), home)?;
+        let endpoint = resolve_graphql_endpoint(Some(graphql), home).await?;
         return Ok((
             ConfigAccess::Graphql(endpoint.with_client_signed_agent_creates()),
             home_dir,
@@ -641,7 +620,7 @@ async fn resolve_config_access_inner(
     }
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
         if graphql_endpoint_available(&runtime_state.graphql).await {
-            let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql)?;
+            let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql).await?;
             return Ok((
                 ConfigAccess::Graphql(endpoint.with_client_signed_agent_creates()),
                 home_dir,

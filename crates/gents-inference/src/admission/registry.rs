@@ -48,11 +48,12 @@ impl AdmissionRegistry {
         }
     }
 
-    /// Resolves once every terminal row owed by a dropped permit or queued
-    /// guard of this registry is durable. The tracker counts in production so
-    /// the owner can be flushed; only its tests await the point today.
-    #[cfg(test)]
-    pub(crate) async fn drop_cleanup_idle(&self) {
+    /// Resolves once no stream finalizer of this registry still owns a permit
+    /// and every terminal row owed by a dropped permit or queued guard is
+    /// written. A graceful stop awaits it after joining the tasks that hold
+    /// permits and before the runtime exits, within the stop's own deadline
+    /// (Lean `InferenceCall.DroppedPermit.a_graceful_stop_keeps_observed_usage`).
+    pub async fn drop_cleanup_idle(&self) {
         self.inner.drop_cleanup.idle().await;
     }
 

@@ -200,6 +200,7 @@ struct NonTerminalProvider {
     reasoning_prefix: bool,
     stream_calls: Arc<AtomicUsize>,
     empty_deltas: Arc<AtomicUsize>,
+    partial_emitted: Arc<AtomicUsize>,
 }
 
 #[derive(Clone)]
@@ -761,6 +762,7 @@ impl CompletionModel for NonTerminalProvider {
             reasoning_prefix: false,
             stream_calls: Arc::new(AtomicUsize::new(0)),
             empty_deltas: Arc::new(AtomicUsize::new(0)),
+            partial_emitted: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -800,11 +802,14 @@ impl CompletionModel for NonTerminalProvider {
         let endless = self.empty_forever;
         let active_chunks = self.active_chunks;
         let empty_deltas = self.empty_deltas.clone();
+        let partial_emitted = self.partial_emitted.clone();
         let inner: rig::streaming::StreamingResult<()> =
             Box::pin(stream::unfold(0usize, move |index| {
                 let empty_deltas = empty_deltas.clone();
+                let partial_emitted = partial_emitted.clone();
                 async move {
                     if index == 0 {
+                        partial_emitted.fetch_add(1, Ordering::SeqCst);
                         Some((
                             Ok(RawStreamingChoice::Message(
                                 "durable partial incident text".into(),
@@ -838,9 +843,13 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
     let (db, user, access, mut agent_config) = held_daemon_fixture("daemon-lease").await;
     let node = db.node.clone();
     let agent_access = held_daemon_agent_access(&db, &agent_config);
+    // The lease must outlast any one storage step of a saturated host, or the
+    // recovery sweep below legitimately takes over a starved owner (Lean
+    // `expired_recovery_is_atomic_generation_swap`); a claim alone was seen
+    // to take a second. Production leases default to 120 s.
     Arc::get_mut(&mut agent_config)
         .unwrap()
-        .stream_liveness_timeout = Duration::from_secs(1);
+        .stream_liveness_timeout = Duration::from_secs(5);
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
     let model = NonTerminalProvider {
@@ -849,6 +858,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         reasoning_prefix: false,
         stream_calls: Arc::new(AtomicUsize::new(0)),
         empty_deltas: Arc::new(AtomicUsize::new(0)),
+        partial_emitted: Arc::new(AtomicUsize::new(0)),
     };
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
@@ -908,6 +918,10 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                 lifecycle_state execution_generation execution_lease_expires_at terminal_output
             }} }}"#
         );
+        // The interrupt must follow the provider's partial text: the request
+        // promises to retain output the loop received, not text a provider
+        // has yet to send (TLA+ `InterruptPartialOutput`).
+        let partial_before = model.partial_emitted.load(Ordering::SeqCst);
         tokio::time::timeout(Duration::from_secs(15), async {
             let process = daemon.process_request(request, shutdown_rx.clone());
             tokio::pin!(process);
@@ -921,7 +935,10 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                         let recovered = gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(&node, &node_did, &[agent_config.agent_identity.clone()])
                             .await
                             .unwrap();
-                        if !empty_forever || observed_renewal {
+                        if !empty_forever
+                            || observed_renewal
+                            || model.partial_emitted.load(Ordering::SeqCst) == partial_before
+                        {
                             continue;
                         }
                         let result = held_daemon_query(&agent_access, &query).await;
@@ -1250,6 +1267,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         reasoning_prefix: false,
         stream_calls: Arc::new(AtomicUsize::new(0)),
         empty_deltas: Arc::new(AtomicUsize::new(0)),
+        partial_emitted: Arc::new(AtomicUsize::new(0)),
     };
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
@@ -1369,6 +1387,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         reasoning_prefix: true,
         stream_calls: Arc::new(AtomicUsize::new(0)),
         empty_deltas: Arc::new(AtomicUsize::new(0)),
+        partial_emitted: Arc::new(AtomicUsize::new(0)),
     };
     let prompt = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,

@@ -996,4 +996,54 @@ theorem agent_materialization_cases_regressions :
     (Configuration.resolveAgent workerCandidate workerFixture.nodeDid "worker").toOption.isSome = true := by
   native_decide
 
+/-- Each candidate one result can leave, and whether the request enables it.
+`engineer_before_inference` is the Engineer as `init` leaves a node set up
+with no inference provider: its context selected, its backend disabled. -/
+structure AgentResolutionRow where
+  name : String
+  candidate : CandidateFixture
+  enabled : Bool
+
+def withBackend (enabled : Bool) : CandidateFixture :=
+  { workerFixture with backends := [("local", { enabled })] }
+
+def agentResolutionScenarios : List AgentResolutionRow :=
+  [ { name := "resolution_serving_resolved", candidate := workerFixture, enabled := true }
+  , { name := "resolution_backend_disabled_deferred", candidate := withBackend false
+    , enabled := true }
+  , { name := "resolution_engineer_before_inference_deferred"
+    , candidate :=
+        { withBackend false with
+          agents := [("worker", { contextId := some "engineer", profileId := "fast"
+                                  enabled := true })]
+          contexts := [("engineer", { instructions := "Build." })] }
+    , enabled := true }
+  , { name := "resolution_backend_missing_refused"
+    , candidate := { workerFixture with backends := [] }, enabled := true }
+  , { name := "resolution_profile_missing_refused"
+    , candidate := { workerFixture with profiles := [] }, enabled := true }
+  , { name := "resolution_context_missing_refused"
+    , candidate :=
+        { withBackend false with
+          agents := [("worker", { contextId := some "gone", profileId := "fast"
+                                  enabled := true })] }
+    , enabled := true }
+  , { name := "resolution_left_disabled_not_enabled", candidate := withBackend false
+    , enabled := false } ]
+
+def agentResolutionCases : List (String × CandidateResolution) :=
+  agentResolutionScenarios.map fun r =>
+    (r.name, candidateResolution r.candidate.registry r.candidate.nodeDid "worker" r.enabled)
+
+theorem agent_resolution_cases_regressions :
+    agentResolutionCases =
+      [("resolution_serving_resolved", .resolved),
+       ("resolution_backend_disabled_deferred", .deferred),
+       ("resolution_engineer_before_inference_deferred", .deferred),
+       ("resolution_backend_missing_refused", .refused),
+       ("resolution_profile_missing_refused", .refused),
+       ("resolution_context_missing_refused", .refused),
+       ("resolution_left_disabled_not_enabled", .notEnabled)] := by
+  native_decide
+
 end SelfConfig.ContractCases

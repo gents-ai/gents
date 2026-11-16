@@ -28,7 +28,7 @@ pub(crate) async fn status(args: StatusArgs) -> Result<()> {
         None if std::io::stdout().is_terminal() => OutputFormat::Text,
         None => OutputFormat::Json,
     };
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let output = load_runtime_status_output(args.home.as_deref(), &graphql, &node_did).await?;
     if format == OutputFormat::Json {
@@ -57,7 +57,16 @@ fn status_summary(output: &Value, home_flag: &str) -> Vec<String> {
         .as_str()
         .unwrap_or("unknown");
     let ready = output["runnable_agent_count"].as_u64().unwrap_or(0);
-    let unavailable = output["unavailable_agent_count"].as_u64().unwrap_or(0);
+    let off: Vec<&str> = output["off_agents"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let unavailable = output["unavailable_agent_count"]
+        .as_u64()
+        .unwrap_or(0)
+        .saturating_sub(off.len() as u64);
     let backends = output["backend_probes"]
         .as_object()
         .map(|probes| {
@@ -76,7 +85,13 @@ fn status_summary(output: &Value, home_flag: &str) -> Vec<String> {
         format!("node       {node_name} ({})", text("node_did")),
         format!("home       {}", text("home")),
         format!("endpoint   {}", text("graphql")),
-        format!("agents     {ready} of {} ready", ready + unavailable),
+        match off.len() {
+            0 => format!("agents     {ready} of {} ready", ready + unavailable),
+            off => format!(
+                "agents     {ready} of {} ready, {off} off",
+                ready + unavailable
+            ),
+        },
         format!("backends   {backends}"),
     ];
     if readiness == "unknown" {
@@ -88,9 +103,12 @@ fn status_summary(output: &Value, home_flag: &str) -> Vec<String> {
     }
     if let Some(agents) = output["unavailable_agents"].as_object() {
         lines.extend(
-            agents.iter().map(|(agent, reason)| {
-                format!("  {agent}: {}", reason.as_str().unwrap_or_default())
-            }),
+            agents
+                .iter()
+                .filter(|(agent, _)| !off.contains(&agent.as_str()))
+                .map(|(agent, reason)| {
+                    format!("  {agent}: {}", reason.as_str().unwrap_or_default())
+                }),
         );
     }
     if readiness != "ready" {
@@ -111,7 +129,7 @@ pub(crate) async fn load_runtime_status_output(
     let lifecycle = node_readiness_row
         .as_ref()
         .and_then(|row| decode_node_readiness_snapshot(row, node_did).ok());
-    let (node_readiness, readiness_status, runnable_agent_count, unavailable_agents) =
+    let (node_readiness, readiness_status, runnable_agent_count, unavailable_agents, off_agents) =
         match project_node_readiness_summary(node_readiness_row.as_ref(), node_did) {
             ProjectedNodeReadinessSummary::Observed(summary) => {
                 let unavailable = summary
@@ -121,16 +139,23 @@ pub(crate) async fn load_runtime_status_output(
                         (agent_did.clone(), reason.public_message().to_string())
                     })
                     .collect::<BTreeMap<_, _>>();
-                let status = if unavailable.is_empty() {
+                let status = if summary.is_ready() {
                     "ready"
                 } else {
                     "degraded"
                 };
+                let off = summary
+                    .unavailable_agents
+                    .iter()
+                    .filter(|(_, reason)| !reason.degrades_node())
+                    .map(|(agent_did, _)| agent_did.clone())
+                    .collect::<Vec<_>>();
                 (
                     serde_json::to_value(&summary.snapshot).unwrap_or(Value::Null),
                     status,
                     summary.ready_count,
                     unavailable,
+                    off,
                 )
             }
             ProjectedNodeReadinessSummary::Unknown(reason) => (
@@ -138,6 +163,7 @@ pub(crate) async fn load_runtime_status_output(
                 "unknown",
                 0,
                 BTreeMap::new(),
+                Vec::new(),
             ),
         };
     let runtime_row = ConfigAccess::Graphql(graphql.clone())
@@ -188,6 +214,7 @@ pub(crate) async fn load_runtime_status_output(
         "runnable_agent_count": runnable_agent_count,
         "unavailable_agent_count": unavailable_agents.len(),
         "unavailable_agents": unavailable_agents,
+        "off_agents": off_agents,
     });
     if let Some(map) = output.as_object_mut() {
         for field in [

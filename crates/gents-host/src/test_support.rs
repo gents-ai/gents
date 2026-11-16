@@ -103,9 +103,11 @@ pub async fn cli_user() -> &'static gents_desktop_core::client::PrincipalIdentit
     static USER: tokio::sync::OnceCell<gents_desktop_core::client::PrincipalIdentity> =
         tokio::sync::OnceCell::const_new();
     USER.get_or_init(|| async {
-        gents_service::home_state::load_client_identity()
-            .await
-            .unwrap()
+        gents_service::home_state::client_identity_for(
+            &gents_service::home_state::resolve_home_dir(None),
+        )
+        .await
+        .unwrap()
     })
     .await
 }

@@ -23,10 +23,12 @@ use crate::pack::resolved_pack::ResolvedPack;
 use crate::plugin::authority::describe_plugin_authority;
 use crate::plugin::store::read_record;
 
-/// Loads the held User identity a write through a local transaction signs
-/// with. A preview, or a write over GraphQL, never calls it, so it never
-/// loads (or creates) that identity for them.
-pub type LoadHeldUser = fn() -> futures::future::BoxFuture<
+/// Loads the held User identity a write through a local transaction of the
+/// given home signs with. A preview, or a write over GraphQL, never calls it,
+/// so it never loads (or creates) that identity for them.
+pub type LoadHeldUser = fn(
+    &Path,
+) -> futures::future::BoxFuture<
     'static,
     Result<Arc<dyn gents_store::identity::NodeIdentity>>,
 >;
@@ -168,7 +170,7 @@ async fn wire_in_owned(
             })
             .await?
     } else if matches!(access, ConfigAccess::Local(_)) {
-        let client = held_user().await?;
+        let client = held_user(home).await?;
         anyhow::ensure!(
             access.actor_did().as_deref() == Some(client.did()),
             "pack wire requires the held User identity selected by the local transaction"
@@ -292,6 +294,7 @@ pub fn requested_authority(
 pub async fn attach_pack_skills(
     access: &ConfigAccess,
     owner: &str,
+    home: &Path,
     agent: &str,
     coordinate: &str,
     digest: &str,
@@ -312,7 +315,7 @@ pub async fn attach_pack_skills(
         skills: &skills,
     };
     if matches!(access, ConfigAccess::Local(_)) {
-        let client = held_user().await?;
+        let client = held_user(home).await?;
         anyhow::ensure!(
             access.actor_did().as_deref() == Some(client.did()),
             "attaching pack skills requires the held User identity selected by the local transaction"

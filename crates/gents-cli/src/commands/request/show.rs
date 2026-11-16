@@ -25,7 +25,7 @@ use super::show_views::{
 };
 
 pub(crate) async fn request_show(args: RequestShowArgs) -> Result<()> {
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let request_id =
         resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;

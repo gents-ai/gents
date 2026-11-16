@@ -6,6 +6,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Verifiable, multiplayer coding agents"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [lib]
 name = "gents_desktop_tauri_lib"
@@ -57,7 +62,12 @@ custom-protocol = ["tauri/custom-protocol"]
 native-e2e = ["gents-desktop-bridge/native-e2e"]
 
 [dev-dependencies]
-gents = { path = "../../../crates/gents", features = ["test-home-guard"] }
+gents-eval = { workspace = true, features = ["test-fixtures"] }
+gents-host = { workspace = true, features = ["test-fixtures"] }
+gents-service = { workspace = true, features = ["test-home-guard"] }
+gents-desktop-core = { workspace = true, features = ["test-fixtures", "typescript"] }
+gents-workspace-hack = { workspace = true }
+gents = { path = "../../../crates/gents", features = ["test-fixtures", "typescript"] }
 axum = "0.8"
 gents-lean-vocab.workspace = true
 

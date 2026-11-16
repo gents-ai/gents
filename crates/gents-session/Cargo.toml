@@ -5,6 +5,15 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Sessions and the request lifecycle for Gents"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+[[test]]
+name = "log_rate_filter"
+path = "tests/log_rate_filter.rs"
 
 [features]
 default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
@@ -69,7 +78,8 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
-gents-session = { path = ".", features = ["test-fixtures"] }
+gents-workspace-hack = { workspace = true }
+gents-session = { path = ".", features = ["test-fixtures", "typescript"] }
 gents-store = { workspace = true, features = ["test-fixtures"] }
 gents-documents = { workspace = true, features = ["test-fixtures"] }
 gents-inference = { workspace = true, features = ["test-fixtures"] }

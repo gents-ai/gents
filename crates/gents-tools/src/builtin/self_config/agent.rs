@@ -204,6 +204,70 @@ pub struct AgentCandidate {
     pub inference_backends: Vec<InferenceBackend>,
 }
 
+/// Lean `SelfConfig.CandidateResolution`: how a result resolves before it
+/// commits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateResolution {
+    Resolved,
+    /// Its only failure is a disabled backend: inference is not configured
+    /// yet. It commits and serves no request until its backend is enabled.
+    Deferred,
+    Refused,
+    NotEnabled,
+}
+
+impl CandidateResolution {
+    pub fn commits(self) -> bool {
+        self != Self::Refused
+    }
+}
+
+/// Lean `SelfConfig.candidateResolution` over `Configuration.resolveAgent`:
+/// `target` in `candidate`, which the request leaves enabled or not.
+pub fn candidate_resolution(
+    candidate: &AgentCandidate,
+    node_did: &str,
+    target: &str,
+    enabled: bool,
+) -> CandidateResolution {
+    if !enabled {
+        return CandidateResolution::NotEnabled;
+    }
+    let Some(agent) = candidate
+        .agents
+        .iter()
+        .find(|a| a.agent_did == target && a.node_did == node_did && a.enabled)
+    else {
+        return CandidateResolution::Refused;
+    };
+    if let Some(id) = &agent.context_id {
+        if !candidate
+            .contexts
+            .iter()
+            .any(|c| &c.context_id == id && c.node_did == node_did)
+        {
+            return CandidateResolution::Refused;
+        }
+    }
+    let Some(profile) = candidate
+        .inference_profiles
+        .iter()
+        .find(|p| p.profile_id == agent.inference_profile_id && p.node_did == node_did)
+    else {
+        return CandidateResolution::Refused;
+    };
+    match candidate
+        .inference_backends
+        .iter()
+        .find(|b| b.backend_id == profile.backend_id && b.node_did == node_did)
+    {
+        None => CandidateResolution::Refused,
+        Some(backend) if backend.enabled => CandidateResolution::Resolved,
+        Some(_) => CandidateResolution::Deferred,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct MaterializedAgentSession {
     pub instructions: String,

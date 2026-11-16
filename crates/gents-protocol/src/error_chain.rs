@@ -28,6 +28,64 @@ impl fmt::Display for ErrorChain<'_> {
     }
 }
 
+/// What an operation owner can pass through: a value that lends the error it
+/// carries, as an application error or a boxed error does.
+pub trait PassedSource: fmt::Debug + fmt::Display + Send + Sync + 'static {
+    fn top(&self) -> &(dyn Error + Send + Sync + 'static);
+}
+
+impl<T> PassedSource for T
+where
+    T: AsRef<dyn Error + Send + Sync + 'static> + fmt::Debug + fmt::Display + Send + Sync + 'static,
+{
+    fn top(&self) -> &(dyn Error + Send + Sync + 'static) {
+        self.as_ref()
+    }
+}
+
+/// Another owner's failure an operation owner passes through. An application
+/// error converted into `Box<dyn Error>` keeps its top error's message but
+/// forwards `source()` past it, so a classifier walking the chain never meets
+/// that error: a store conflict or refusal on top reads as unclassified (Lean
+/// `AccessClassification.hidden_is_unclassified`). This holder returns the top
+/// error from `source()`, so the chain shows its message twice, the trade
+/// `AccessClassification.exposed` records for every sourced holder.
+#[derive(Debug)]
+pub struct PassedThrough(Box<dyn PassedSource>);
+
+impl PassedThrough {
+    pub fn new<E>(error: E) -> Self
+    where
+        E: PassedSource,
+    {
+        Self(Box::new(error))
+    }
+
+    pub fn boxed<E>(error: E) -> Box<dyn Error + Send + Sync>
+    where
+        E: PassedSource,
+    {
+        Box::new(Self::new(error))
+    }
+
+    /// The passed-through error itself, the first error on its chain.
+    pub fn get(&self) -> &(dyn Error + Send + Sync + 'static) {
+        self.0.top()
+    }
+}
+
+impl fmt::Display for PassedThrough {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
+
+impl Error for PassedThrough {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.0.top())
+    }
+}
+
 /// Finds the first error of type `T` in `error`'s `source()` chain, starting
 /// with `error` itself, held directly or through a box ([`as_owner`]). A
 /// `#[error(transparent)]` wrapper forwards `source()` past the error it wraps,

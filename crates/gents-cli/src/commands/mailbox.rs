@@ -31,7 +31,8 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
     let graphql = gents_service::home_state::resolve_graphql_endpoint(
         args.item.access.graphql.as_deref(),
         home,
-    )?;
+    )
+    .await?;
     let access = ConfigAccess::Graphql(graphql);
     let item = operations::get(&access, &args.item.doc_id)
         .await

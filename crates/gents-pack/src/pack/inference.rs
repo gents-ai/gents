@@ -111,7 +111,10 @@ pub(crate) async fn inspect_pack_inference_bindings_with_node_binding(
                 )
             })?;
         anyhow::ensure!(
-            profile.usable,
+            crate::pack::core_packs::slot_binding(crate::pack::core_packs::ProfileState::of(
+                profile
+            ))
+            .installs(),
             "inference slot {slot:?} profile {profile_id:?} is unavailable: {}",
             profile
                 .unavailable_reason
@@ -259,7 +262,10 @@ pub(crate) async fn preview_pack_inference_bindings_with_node_binding(
         .iter()
         .filter(|slot| !slot.optional)
         .collect::<Vec<_>>();
-    if required.is_empty() {
+    if required
+        .iter()
+        .all(|slot| requested.contains_key(&slot.name))
+    {
         return Ok(preview);
     }
     let usable = preview
@@ -599,12 +605,24 @@ mod tests {
             ("coordinator".into(), "profile".into()),
             ("worker".into(), "glm:inference".into()),
         ]);
-        assert!(
+        let deferred =
             preview_pack_inference_bindings(&access, &two_slots(), owner, &disabled_binding)
                 .await
-                .unwrap_err()
-                .to_string()
-                .contains("disabled")
+                .unwrap();
+        assert_eq!(deferred.bindings, disabled_binding);
+        let glm = deferred
+            .profiles
+            .iter()
+            .find(|profile| profile.profile_id == "glm:inference")
+            .unwrap();
+        assert!(!glm.usable);
+        assert_eq!(
+            glm.unavailable_reason.as_deref(),
+            Some("referenced backend is disabled")
+        );
+        assert_eq!(
+            crate::pack::core_packs::slot_binding(crate::pack::core_packs::ProfileState::of(glm)),
+            crate::pack::core_packs::SlotBinding::Deferred
         );
         node.shutdown().await.expect("node shutdown");
     }

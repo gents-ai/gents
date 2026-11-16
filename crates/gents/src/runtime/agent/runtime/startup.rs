@@ -522,6 +522,7 @@ async fn run_agent_owned(
             health_checker,
             backend_prober,
             runtime_snapshot_observer_handle,
+            admission_registry,
         },
         lsp_pool,
     )

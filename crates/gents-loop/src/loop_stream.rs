@@ -200,16 +200,20 @@ where
 {
     async_stream::stream! {
         futures::pin_mut!(stream);
+        let mut resumed = None;
         loop {
-            let item = tokio::select! {
-                item = stream.next() => item,
-                Some(work) = compactions.recv() => {
-                    // The summarizer runs another owned loop. Poll it after the
-                    // outer loop returns, while retaining the caller's task scope.
-                    let result = work.future.await;
-                    let _ = work.reply.send(result);
-                    continue;
-                }
+            let item = match resumed.take() {
+                Some(item) => item,
+                None => tokio::select! {
+                    item = stream.next() => item,
+                    Some(work) = compactions.recv() => {
+                        // The summarizer runs another owned loop. Poll it after the
+                        // outer loop returns, while retaining the caller's task scope.
+                        let result = work.future.await;
+                        let _ = work.reply.send(result);
+                        continue;
+                    }
+                },
             };
             let Some(item) = item else { break };
             match item {
@@ -229,7 +233,16 @@ where
                 }
                 // Admission and transport capture can enter native transactions;
                 // poll them outside the owned-loop frame on the calling task.
-                Ok(OwnedLoopItem::ProviderWork(work)) => work.await,
+                Ok(OwnedLoopItem::ProviderWork(work)) => {
+                    work.await;
+                    // Resume the loop directly: `select!` returns `Pending` on
+                    // a spent task budget, which would hold a chunk the
+                    // provider already delivered across the consumer's next
+                    // select, where an interrupt drops the stream (TLA+
+                    // `InterruptPartialOutput`). The loop is waiting on this
+                    // work's reply, so it has no compaction queued.
+                    resumed = Some(stream.next().await);
+                }
                 // Foreground execution carries its existing task scopes and
                 // is dropped with the owning stream on cancellation.
                 Ok(OwnedLoopItem::ForegroundWork(work)) => work.await,
@@ -692,7 +705,7 @@ where
                     let poll_receiver = audit_receiver.clone();
                     let poll_idle_timeout = config.provider_idle_timeout;
                     let first_item = !saw_stream_item;
-                    let (reply, result) = tokio::sync::oneshot::channel();
+                    let (reply, mut result) = tokio::sync::oneshot::channel();
                     yield OwnedLoopItem::ProviderWork(Box::pin(async move {
                         let mut stream = stream;
                         let next = {
@@ -715,7 +728,13 @@ where
                         };
                         let _ = reply.send((stream, next));
                     }));
-                    let (returned_stream, next) = result.await.map_err(|_| {
+                    // `drive_admissions` resumes this generator only after the
+                    // provider work finished, so the reply is already present.
+                    // Awaiting it would add a suspension point (a spent task
+                    // budget returns `Pending`) at which the consumer's
+                    // interrupt branch drops the stream with a chunk the
+                    // provider already delivered (TLA+ `InterruptPartialOutput`).
+                    let (returned_stream, next) = result.try_recv().map_err(|_| {
                         StreamingError::Completion(CompletionError::ProviderError(
                             "provider stream poll handoff closed".to_owned(),
                         ))

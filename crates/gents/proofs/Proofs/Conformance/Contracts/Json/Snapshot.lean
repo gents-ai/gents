@@ -43,6 +43,7 @@ import Proofs.Conformance.PluginHostCalls
 import Proofs.Conformance.CallbackAdmission
 import Proofs.Conformance.GoalResetAccount
 import Proofs.Conformance.WakeRedriveSweep
+import Proofs.Conformance.StreamBatch
 import Proofs.Conformance.ToolAdmission
 import Proofs.Conformance.StartupPublication
 import Proofs.Conformance.RequestRepairScope
@@ -192,6 +193,7 @@ import Proofs.Session.Identity.SessionInputEdit
 import Proofs.Automation.EventDelivery.WatcherConformance
 import Proofs.Conformance.WatcherActors
 import Proofs.Conformance.ClientInstallation
+import Proofs.Conformance.ClientIdentityMetadata
 import Proofs.Conformance.RuntimeServiceReplacement
 import Proofs.Conformance.ClientSettings
 import Proofs.Conformance.ClientRequestClosureCases
@@ -349,6 +351,7 @@ import Proofs.Conformance.WorkspacePermissions
 
 import Proofs.Conformance.InstallRepair
 import Proofs.Conformance.RepairBackups
+import Proofs.Conformance.DesktopConnect
 
 namespace Conformance.Contracts
 

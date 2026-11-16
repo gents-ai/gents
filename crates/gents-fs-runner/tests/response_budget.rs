@@ -5,7 +5,7 @@ use gents_fs_runner::protocol::{
 use gents_fs_runner::MAX_RESPONSE_BYTES;
 use serde_json::Value;
 
-mod support;
+use crate::support;
 use support::unique_root;
 
 fn noisy_tree(label: &str) -> std::path::PathBuf {

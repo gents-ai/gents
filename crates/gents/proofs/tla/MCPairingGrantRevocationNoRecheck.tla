@@ -1,0 +1,4 @@
+---- MODULE MCPairingGrantRevocationNoRecheck ----
+EXTENDS PairingGrantRevocation
+
+====

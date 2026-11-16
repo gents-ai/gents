@@ -8,7 +8,8 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use gents_service::native_service::{
     runtime_error_log, wait_for_process_exit, BackgroundItemStatus, CommandOutput, CommandRunner,
-    NativeServiceConfig, NativeServiceManager, NativeServicePlatform, StartOutcome, SYSTEMD_UNIT,
+    NativeServiceConfig, NativeServiceManager, NativeServicePlatform, ServiceRecord, StartOutcome,
+    SYSTEMD_UNIT,
 };
 
 #[cfg(target_os = "macos")]
@@ -80,6 +81,12 @@ impl CommandRunner for ScriptedRunner {
 
     fn background_item_status(&self, _definition: &Path) -> BackgroundItemStatus {
         self.background_item
+    }
+
+    /// The scripts hold this config's own job, if any; whose job the manager
+    /// holds is replayed against the model in the repair conformance.
+    fn service_record(&self, _platform: NativeServicePlatform) -> Result<Option<ServiceRecord>> {
+        Ok(None)
     }
 }
 

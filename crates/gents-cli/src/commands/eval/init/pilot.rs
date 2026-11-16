@@ -276,8 +276,8 @@ async fn revise(
                 staged,
                 &written.out,
                 true,
-                &gents_service::home_state::resolve_home_dir(init.scope.home.as_deref()),
-                &CliWriteHost,
+                &init.home(),
+                &CliWriteHost(init.home()),
             )?;
             writeln!(out, "the author revised the draft after the pilot")?;
             print_written(init, &assembled, &written, out)?;
@@ -363,11 +363,24 @@ mod tests {
         let draft = parse_reply(&block(&cases())).unwrap().unwrap();
         let assembled = assemble(&draft, None, &init.owner, &init.dossier.slot).unwrap();
         validate(&assembled, init.registry, &init.dossier, &init.floors).unwrap();
-        let staged = stage(&assembled, SUMMARY, &init.dossier, None, &CliWriteHost)
-            .await
-            .unwrap();
+        let staged = stage(
+            &assembled,
+            SUMMARY,
+            &init.dossier,
+            None,
+            &CliWriteHost(init.home()),
+        )
+        .await
+        .unwrap();
         let home = tempfile::tempdir().unwrap();
-        let written = commit(staged, &init.out, false, home.path(), &CliWriteHost).unwrap();
+        let written = commit(
+            staged,
+            &init.out,
+            false,
+            home.path(),
+            &CliWriteHost(home.path().to_path_buf()),
+        )
+        .unwrap();
         InitOutcome {
             written: Some(written),
             assembled: Some(assembled),

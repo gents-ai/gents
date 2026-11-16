@@ -41,6 +41,7 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.ClientPresentationAgreement,
   `Proofs.Conformance.ClientInterruptControl,
   `Proofs.Conformance.DesktopShellSecurity,
+  `Proofs.Conformance.ConnectThisDesktopScreen,
   `Proofs.Conformance.ClientPackWatch,
   `Proofs.Conformance.ClientAuthorityRestart,
   `Proofs.Conformance.EvalRequestOutcome,

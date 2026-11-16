@@ -15,7 +15,8 @@ use tokio::time::Instant;
 
 use crate::home_state::{default_home_ignoring_env, read_runtime_state};
 use crate::native_service::{
-    NativeServiceConfig, NativeServiceManager, NativeServicePlatform, ServiceExit, ServiceRefusal,
+    NativeServiceConfig, NativeServiceManager, NativeServicePlatform, ServiceExit, ServiceHolder,
+    ServiceRefusal,
 };
 use crate::repair::crash_loop::{job_sample, CrashLoopWatch};
 use crate::repair::home::{
@@ -30,8 +31,8 @@ use crate::repair::reason::{blocker_for_exit, read_last_error};
 use gents_protocol::graphql::{graphql_endpoint_available, GraphqlRequestOptions};
 
 use crate::repair::service::{
-    apply, gather_facts, newer_node, on_manager, plan_service, served_version, start_job,
-    ServiceAction, ServiceFacts,
+    apply, gather_facts, newer_node, on_manager, plan_before_setup, plan_service, served_version,
+    start_job, ServiceAction, ServiceFacts,
 };
 use crate::server_host::ServerConfig;
 
@@ -212,6 +213,7 @@ async fn prepare_with_lock(
             previous_version: None,
             served_home_present: false,
             operation,
+            holder: ServiceHolder::Free,
         },
     };
     facts.node_version = served_version(&facts.port);
@@ -331,33 +333,8 @@ async fn settle(
     program: &ServiceProgram,
     progress: &mut dyn Progress,
 ) -> Result<RepairReceipt> {
-    use gents_protocol::operations::install_repair::{
-        RepairObservation, RepairPlanBlocker, RepairVersion,
-    };
-    let observation = RepairObservation {
-        home: facts.home,
-        version: match &facts.node_version {
-            Some(service::NodeVersion::Older(_)) => RepairVersion::Older,
-            Some(service::NodeVersion::Same) => RepairVersion::Same,
-            Some(service::NodeVersion::Newer(_)) => RepairVersion::Newer,
-            None => RepairVersion::Unknown,
-        },
-        interactive: asked.interactive,
-        answer: asked.answer,
-        busy,
-        keychain_locked: false,
-        foreign_process: false,
-        readable: true,
-        service_present: facts.definition_home.is_some(),
-        service_running: facts.job_running,
-        service_program_present: facts.executable_present,
-        service_same_home: facts.definition_home.as_deref() == Some(choice.home.as_path()),
-        managed_update: facts.managed_update,
-        drain_supported: facts.drain_supported,
-        served_home_present: facts.served_home_present,
-        operation: facts.operation,
-    };
-    let plan = planning::plan(&observation);
+    use gents_protocol::operations::install_repair::RepairPlanBlocker;
+    let plan = planning::plan(&observe(choice, facts, busy, asked));
     match plan.blocker {
         RepairPlanBlocker::None => {}
         RepairPlanBlocker::Ask
@@ -405,13 +382,9 @@ async fn settle(
             }))
         }
     }
-    let archive = planning::sets_aside(&observation);
-    let continuing = plan.needs_setup && !archive && facts.home == HomeState::UnfinishedSetup;
-    let actions = if archive || continuing {
-        stop_for_setup(facts)
-    } else {
-        plan_service(facts, &choice.home)
-    };
+    let archive = plan.steps.contains(&RepairStep::SetAsideFolder);
+    let continuing = planning::takes_home(&plan, facts.home) && !archive;
+    let actions = service_actions(&plan, facts, &choice.home);
     let answered = answered_switch(&actions);
     let started_from = answered
         .clone()
@@ -532,13 +505,52 @@ async fn settle(
     Ok(report)
 }
 
-/// The home is set aside or set up again only once its node is stopped,
-/// which is all the service needs before setup.
-fn stop_for_setup(facts: &ServiceFacts) -> Vec<ServiceAction> {
-    if facts.job_running || (facts.job_loaded && facts.definition_home.is_some()) {
-        vec![ServiceAction::StopStale]
-    } else {
+fn observe(
+    choice: &HomeChoice,
+    facts: &ServiceFacts,
+    busy: bool,
+    asked: Asked,
+) -> gents_protocol::operations::install_repair::RepairObservation {
+    use gents_protocol::operations::install_repair::{RepairObservation, RepairVersion};
+    RepairObservation {
+        home: facts.home,
+        version: match &facts.node_version {
+            Some(service::NodeVersion::Older(_)) => RepairVersion::Older,
+            Some(service::NodeVersion::Same) => RepairVersion::Same,
+            Some(service::NodeVersion::Newer(_)) => RepairVersion::Newer,
+            None => RepairVersion::Unknown,
+        },
+        interactive: asked.interactive,
+        answer: asked.answer,
+        busy,
+        keychain_locked: false,
+        foreign_process: false,
+        readable: true,
+        service_present: facts.definition_home.is_some(),
+        service_running: facts.job_running,
+        service_program_present: facts.executable_present,
+        service_same_home: facts.definition_home.as_deref() == Some(choice.home.as_path()),
+        managed_update: facts.managed_update,
+        drain_supported: facts.drain_supported,
+        served_home_present: facts.served_home_present,
+        operation: facts.operation,
+    }
+}
+
+/// `InstallRepair.settleServicePlan`: every change the repair makes to the
+/// service is decided here from the plan.
+fn service_actions(
+    plan: &gents_protocol::operations::install_repair::RepairPlan,
+    facts: &ServiceFacts,
+    chosen: &Path,
+) -> Vec<ServiceAction> {
+    use gents_protocol::operations::install_repair::RepairPlanBlocker;
+    if plan.blocker != RepairPlanBlocker::None {
         Vec::new()
+    } else if planning::takes_home(plan, facts.home) {
+        plan_before_setup(facts, chosen)
+    } else {
+        plan_service(facts, chosen)
     }
 }
 
@@ -677,6 +689,11 @@ async fn start(
     let config = manager.config().clone();
     repairs.step(RepairStep::StartNode);
     let sample = on_manager(&config, |manager| {
+        if let ServiceHolder::Another { home, definition } = manager.holder()? {
+            return Ok(Err(home
+                .or(definition)
+                .unwrap_or_else(|| manager.definition_path())));
+        }
         match manager.installed_home()? {
             None => manager.install()?,
             Some(installed) => {
@@ -756,10 +773,11 @@ async fn start(
 async fn service_serving_another(home: &Path) -> Option<PathBuf> {
     let manager = local_service(home, &current_executable().ok()?).ok()??;
     on_manager(manager.config(), |manager| {
-        Ok(match manager.installed_home()? {
-            Some(installed) if installed != manager.home() && manager.job_pid()?.is_some() => {
-                Some(installed)
-            }
+        Ok(match manager.holder()? {
+            ServiceHolder::Another {
+                home: Some(serving),
+                ..
+            } if manager.job_pid()?.is_some() => Some(serving),
             _ => None,
         })
     })

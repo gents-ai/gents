@@ -16,7 +16,7 @@ pub(super) async fn decide_enrollment(
     let request_id = args.request_id.trim();
     anyhow::ensure!(!request_id.is_empty(), "request_id must not be empty");
     let home = resolve_home_dir(args.home.as_deref());
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let body = if action == EnrollmentOperatorAction::Approve {
         approve_verified_client(&home, graphql, request_id, args.lease_seconds, None)
             .await?
@@ -32,7 +32,7 @@ pub(super) async fn decide_enrollment(
 /// Pending enrollment discovery uses a bounded wait on the live runtime.
 pub(super) async fn pending_enrollments(args: P2pAccessArgs) -> Result<()> {
     let home = resolve_home_dir(args.home.as_deref());
-    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let body = load_pending_enrollments(&home, graphql.url()).await?;
     print_json(&body)
 }
@@ -42,7 +42,7 @@ pub(super) async fn pending_enrollments(args: P2pAccessArgs) -> Result<()> {
 /// what it derived (Lean `Identity.EnrollmentGrant`); a failed grant is
 /// finished by retrying it.
 pub(super) async fn grant_pending_client(args: P2pEnrollmentGrantArgs) -> Result<()> {
-    let endpoint = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let endpoint = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref()).await?;
     let home = resolve_home_dir(args.home.as_deref());
     let result = grant_verified_client(&home, endpoint, &args.request_id, None)
         .await?

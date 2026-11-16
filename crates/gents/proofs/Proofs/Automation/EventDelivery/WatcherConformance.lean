@@ -38,9 +38,10 @@ def cases : List Case :=
       ["old", "new"], ["old", "new"]⟩ ]
 
 def actorCases : List (String × List ActorCandidate) :=
-  [ ("disabled-resolved", [⟨"a", true, true, false⟩])
-  , ("disabled-unresolved", [⟨"a", true, false, false⟩])
-  , ("mixed", [⟨"a", true, true, true⟩, ⟨"b", true, true, false⟩,
-      ⟨"c", true, false, false⟩, ⟨"d", false, true, false⟩]) ]
+  [ ("disabled-resolved", [⟨"a", true, true, false, false⟩])
+  , ("disabled-unresolved", [⟨"a", true, false, false, false⟩])
+  , ("mixed", [⟨"a", true, true, true, true⟩, ⟨"b", true, true, true, false⟩,
+      ⟨"c", true, false, true, false⟩, ⟨"d", false, true, true, false⟩,
+      ⟨"e", true, true, false, false⟩]) ]
 
 end EventDelivery.WatcherConformance

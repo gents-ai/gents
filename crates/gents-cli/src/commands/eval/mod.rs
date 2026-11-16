@@ -29,7 +29,7 @@ impl EvalContext {
             crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
         let owner = gents_service::home_state::resolve_node_did(Some(&home_dir), None)?;
         let evaluator =
-            std::sync::Arc::new(gents_service::home_state::load_client_identity().await?);
+            std::sync::Arc::new(gents_service::home_state::client_identity_for(&home_dir).await?);
         let client_signing = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             evaluator.private_key_bytes(),
         )?;

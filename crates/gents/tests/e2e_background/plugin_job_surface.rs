@@ -8,7 +8,7 @@ use gents_toolcalls::plugin::data::StampContext;
 use gents_toolcalls::plugin::job_calls::{result as read_result, JobCaller};
 use serde_json::{json, Value};
 
-use crate::plugin_job_support::{
+use super::plugin_job_support::{
     boot_job_harness, effects, guest_pin, job_call, job_row, result, spawn, wait_job, JobHarness,
     PlanEntry, PLUGIN,
 };

@@ -1,7 +1,6 @@
 use std::process::Command;
 
-#[path = "support/homes.rs"]
-mod homes;
+use crate::support::homes;
 
 #[test]
 fn artifact_description_does_not_open_a_client_store() {

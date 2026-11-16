@@ -39,9 +39,33 @@ pub async fn wire_handler(
         )
             .into_response();
     };
-    let access = runtime.operator_config_access();
-    let owner = state.node_did;
     let home = std::path::PathBuf::from(home);
+    // A pin is published under the held User's approval, and the local
+    // transaction must select that same User as its actor.
+    let user = match gents_service::home_state::load_held_user_identity(&home).await {
+        Ok(user) => user,
+        Err(error) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": format!("the runtime's User identity is unavailable: {error:#}")})),
+            )
+                .into_response()
+        }
+    };
+    let access = match identity::Did::new(user.did()) {
+        Ok(actor) => gents_store::config_client::ConfigAccess::local_as(
+            runtime.observation_node().clone(),
+            actor,
+        ),
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("{error:#}")})),
+            )
+                .into_response()
+        }
+    };
+    let owner = state.node_did;
     let request = command.request;
     // Dropping the HTTP client must not release the store lock before the embedded commit completes.
     match tokio::spawn(async move {

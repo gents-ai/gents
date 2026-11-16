@@ -139,10 +139,14 @@ fn reserve_promoted_dir(home: &Path, name: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
-fn javy_version() -> Result<String, JavyMissing> {
-    let javy = std::env::var("JAVY").unwrap_or_else(|_| "javy".into());
+/// The javy command promotion checks: `JAVY` when set, otherwise `javy` on PATH.
+pub fn javy_command() -> String {
+    std::env::var("JAVY").unwrap_or_else(|_| "javy".into())
+}
+
+fn javy_version(javy: &str) -> Result<String, JavyMissing> {
     match gents_session::exec::native_spawn::output_std(
-        std::process::Command::new(&javy).arg("--version"),
+        std::process::Command::new(javy).arg("--version"),
     ) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
@@ -155,6 +159,14 @@ fn javy_version() -> Result<String, JavyMissing> {
     }
 }
 
+/// The run to promote and the plugin it becomes.
+#[derive(Clone, Copy)]
+pub struct PromoteRequest<'a> {
+    pub selector: &'a str,
+    pub name: Option<&'a str>,
+    pub agent: Option<&'a str>,
+}
+
 /// Promotes the dynamic run `selector` names (its address
 /// `SESSION_ID:TOOL_CALL_ID` or tool call id) into the installed plugin
 /// `gents/<name>`, wired into `agent` (default: the agent that ran it). Every
@@ -164,13 +176,17 @@ pub async fn promote(
     access: &ConfigAccess,
     home: &Path,
     actor: &str,
-    selector: &str,
-    name: Option<&str>,
-    agent: Option<&str>,
+    request: &PromoteRequest<'_>,
+    javy: &str,
     report: &mut dyn FnMut(PromoteStep),
 ) -> Result<PromoteReport, PromotionError> {
+    let PromoteRequest {
+        selector,
+        name,
+        agent,
+    } = *request;
     report(PromoteStep::Javy);
-    let javy = javy_version()?;
+    let javy = javy_version(javy)?;
 
     report(PromoteStep::Load);
     let view = resolve_job(access, actor, selector, None).await?;
@@ -360,14 +376,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
     async fn javy_missing_is_the_first_refusal() {
-        // JAVY is process-wide; the compile lock keeps the build tests off it.
-        let _guard = crate::commands::afterburner_build::compile_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let saved = std::env::var_os("JAVY");
-        std::env::set_var("JAVY", "/nonexistent/javy");
         let home = tempfile::tempdir().unwrap();
         let access =
             ConfigAccess::Graphql(GraphqlEndpoint::anonymous("http://127.0.0.1:9/graphql"));
@@ -376,16 +385,15 @@ mod tests {
             &access,
             home.path(),
             "did:key:z6Mknode",
-            "no-such-job",
-            None,
-            None,
+            &PromoteRequest {
+                selector: "no-such-job",
+                name: None,
+                agent: None,
+            },
+            "/nonexistent/javy",
             &mut |step| steps.push(step),
         )
         .await;
-        match saved {
-            Some(value) => std::env::set_var("JAVY", value),
-            None => std::env::remove_var("JAVY"),
-        }
         let error = result.expect_err("a missing javy refuses");
         assert_eq!(refusal_code(&error), Some("promote_javy_missing"));
         let PromotionError::Javy(missing) = error else {

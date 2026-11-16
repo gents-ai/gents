@@ -95,10 +95,28 @@ where
     retry::classified_transaction_conflict(error).is_some()
 }
 
+/// For a typed DefraDB transaction conflict that outlasted the transaction
+/// owner's attempts, whether a client may repeat the failed operation (Lean
+/// `TransactionReplay.clientMayRepeat`); `None` when `error` is no conflict.
+pub fn classified_conflict_repeatable<E>(error: &E) -> Option<bool>
+where
+    E: TransactionFailure + ?Sized,
+{
+    error.config_client_error()?.conflict_repeatable()
+}
+
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub fn classified_conflict_for_test() -> ConfigClientError {
     retry::transaction_conflict(write_telemetry::ConflictSource::StructuredCode)
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub fn unconfirmed_commit_conflict_for_test() -> ConfigClientError {
+    let mut error = classified_conflict_for_test();
+    error.mark_unconfirmed_commit();
+    error
 }
 
 pub use authored_document::{

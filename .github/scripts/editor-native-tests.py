@@ -50,7 +50,7 @@ def artifacts(log, root, target):
         found.append({'role': role, 'name': name, 'path': str(binary), 'cwd': str(root / 'crates' / package), 'sha256': digest(binary)})
     if (sum(item['role'] == 'process' for item in found) != 1
             or sum(item['role'] == 'bridge' for item in found) != 1
-            or not any(item['role'] == 'host' and item['name'] == 'runtime' for item in found)
+            or not any(item['role'] == 'host' and item['name'] == 'integration' for item in found)
             or not any(item['role'] == 'cli' for item in found)
             or sorted(item['name'] for item in found if item['role'] == 'binary') != ['gents', 'gents-client-host']
             or len({item['path'] for item in found}) != len(found)):
@@ -64,8 +64,8 @@ def transport_targets(root):
     package = next(item for item in json.loads(metadata.stdout)['packages'] if item['name'] == 'gents-client-host')
     targets = sorted(item['name'] for item in package['targets']
                      if 'test' in item['kind'] and set(item.get('required-features') or ()) <= {'runtime-e2e'})
-    if 'runtime' not in targets:
-        raise ValueError('native runtime test target is missing')
+    if 'integration' not in targets:
+        raise ValueError('native host integration test target is missing')
     return targets
 
 
@@ -87,29 +87,15 @@ PROCESS_TESTS = (
 )
 
 
-# These drive a local model (`make live-client`). A hosted runner has no route
-# to one, so they run only where GENTS_LIVE_TARGET selects a target.
-LIVE_TESTS = (
-    'enrolled_client_resumes_a_durable_goal_and_observes_completion',
-    'managed_runtime_replacement_preserves_running_input_enrollment_and_transcript',
-    'native_client_submits_signed_input_and_observes_live_and_durable_output',
-)
-
-
 def command(item):
-    if item['role'] == 'bridge':
-        return [item['path'], 'host::local::windows']
-    if item['role'] == 'host' and item['name'] == 'runtime' and not os.environ.get('GENTS_LIVE_TARGET'):
-        print(f"::notice::No GENTS_LIVE_TARGET: skipping {len(LIVE_TESTS)} live inference cases of the runtime target.", flush=True)
-        return [item['path'], '--exact', *(flag for name in LIVE_TESTS for flag in ('--skip', name))]
-    return [item['path']]
+    return [item['path'], *(['host::local::windows'] if item['role'] == 'bridge' else [])]
 
 
 def check_result(item, status, content):
     summary = re.findall(r'test result: ok\. (\d+) passed; 0 failed;', content)
     if status != 0 or len(summary) != 1:
         raise RuntimeError('native transport tests failed')
-    if (item['role'] in ('bridge', 'cli', 'process') or item['name'] == 'runtime') and int(summary[0]) == 0:
+    if (item['role'] in ('bridge', 'cli', 'process') or item['name'] == 'integration') and int(summary[0]) == 0:
         raise RuntimeError('required native transport cases did not execute')
 
 

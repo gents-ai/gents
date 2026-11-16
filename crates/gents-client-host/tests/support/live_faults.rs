@@ -109,7 +109,7 @@ async fn forward(
                             Value::Array(parts) => parts.iter().any(|part| {
                                 part["text"]
                                     .as_str()
-                                    .is_some_and(|text| text == &state.matching_input)
+                                    .is_some_and(|text| text == state.matching_input)
                             }),
                             _ => false,
                         }

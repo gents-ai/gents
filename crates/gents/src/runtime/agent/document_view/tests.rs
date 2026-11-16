@@ -2302,7 +2302,7 @@ async fn unavailable_agent_scan_identity_follows_lean_candidates() {
         };
         let mut view = original.clone();
         let agent = &mut view.agents.get_mut(&did).unwrap().value;
-        agent.enabled = candidate.available;
+        agent.enabled = candidate.enabled;
         if !candidate.identity_resolved {
             agent.creation_nonce = "invalid".into();
         }

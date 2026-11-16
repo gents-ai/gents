@@ -98,7 +98,8 @@ pub(super) async fn p2p_pairings_list(args: P2pPairingsListArgs) -> Result<()> {
     let graphql = gents_service::home_state::resolve_graphql_endpoint(
         args.graphql.as_deref(),
         args.home.as_deref(),
-    )?;
+    )
+    .await?;
     let connected_peers = fetch_connected_peer_ids(&graphql).await.unwrap_or_default();
     let pairings =
         gents_p2p::operations::pairing::list_pairings(&access, &connected_peers, Utc::now())
