@@ -1,0 +1,4 @@
+---- MODULE MCGoalWrapupWindow ----
+EXTENDS GoalWrapup
+
+====

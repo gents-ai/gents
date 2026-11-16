@@ -380,7 +380,6 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
                 &access,
                 &request_id,
                 &session_id,
-                Duration::from_secs(240),
             )
             .await?;
             let observed = access.execute(&format!(
@@ -504,9 +503,9 @@ async fn wait_for_runtime_agent_request(
     node_did: &str,
     content: &str,
 ) -> Result<(String, String, String)> {
-    let deadline = Instant::now() + Duration::from_secs(60);
     let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
     let mut changes = observed_changes(&access, &["AgentRequest"]).await;
+    let mut last_error = None;
     loop {
         match graphql_query(
             graphql,
@@ -550,13 +549,9 @@ async fn wait_for_runtime_agent_request(
                     ));
                 }
             }
-            Err(error) => {
-                if Instant::now() >= deadline {
-                    bail!("runtime AgentRequest query failed: {error:#}");
-                }
-            }
+            Err(error) => last_error = Some(format!("{error:#}")),
         }
-        if Instant::now() >= deadline {
+        if !changed_before_stall(&mut changes).await {
             let client_requests = gents_store::graphql::graphql_with_transaction_retry(
                 client_node,
                 "{ AgentRequest { request_id node_did content requester_did } }",
@@ -571,11 +566,10 @@ async fn wait_for_runtime_agent_request(
             .unwrap_or_else(|error| serde_json::json!({ "error": error.to_string() }));
             bail!(
                 "runtime never received the enrolled client's AgentRequest; \
-                 runtime_all={runtime_all}; client_requests={:?}",
+                 runtime_all={runtime_all}; client_requests={:?}; last_error={last_error:?}",
                 client_requests.data
             );
         }
-        observe_change_until(&mut changes, deadline).await;
     }
 }
 
@@ -583,22 +577,18 @@ async fn wait_for_complete_agent_response(
     graphql: &str,
     request_id: &str,
     session: &str,
-    timeout: Duration,
 ) -> Result<RuntimeTerminalReply> {
     let access = gents_store::config_client::ConfigAccess::Graphql(
         crate::support::graphql::served_endpoint(graphql),
     );
-    wait_for_complete_agent_response_with_access(&access, request_id, session, timeout).await
+    wait_for_complete_agent_response_with_access(&access, request_id, session).await
 }
 
 async fn wait_for_complete_agent_response_with_access(
     access: &gents_store::config_client::ConfigAccess,
     request_id: &str,
     session: &str,
-    timeout: Duration,
 ) -> Result<RuntimeTerminalReply> {
-    let deadline = Instant::now() + timeout;
-    let mut empty_terminal_since = None::<Instant>;
     let mut changes = observed_changes(
         access,
         &["AgentRequest", "AgentMessage", "AgentOutputSegment"],
@@ -690,26 +680,14 @@ async fn wait_for_complete_agent_response_with_access(
                         text: visible,
                     });
                 }
-                if empty_terminal_since
-                    .get_or_insert_with(Instant::now)
-                    .elapsed()
-                    >= Duration::from_secs(15)
-                {
-                    bail!(
-                        "live inference produced no visible canonical terminal content for {request_id} within 15s of the first terminal observation: {row}; output={output:?}"
-                    );
-                }
             }
         }
-        if Instant::now() >= deadline {
+        if !changed_before_stall(&mut changes).await {
             bail!(
-                "timed out waiting for canonical terminal output with visible text for {request_id}; last={response}"
+                "no canonical terminal output with visible text for {request_id} and no change for {:?}; last={response}",
+                support::waits::STALL_CEILING
             );
         }
-        let until = empty_terminal_since
-            .map(|seen| deadline.min(seen + Duration::from_secs(15)))
-            .unwrap_or(deadline);
-        observe_change_until(&mut changes, until).await;
     }
 }
 
@@ -901,9 +879,22 @@ async fn observed_changes(access: &ConfigAccess, collections: &[&str]) -> Vec<Sn
     changes
 }
 
-async fn observe_change_until(changes: &mut [SnapshotChanges], deadline: Instant) {
+async fn observe_change(changes: &mut [SnapshotChanges]) {
     let futures = changes.iter_mut().map(|change| Box::pin(change.recv()));
-    let _ = tokio::time::timeout_at(deadline, futures::future::select_all(futures)).await;
+    futures::future::select_all(futures).await;
+}
+
+/// Waits for the next change to any watched collection: `false` once none has
+/// arrived for the suite's stall ceiling, so the caller fails with what it last
+/// read instead of a latency budget.
+async fn changed_before_stall(changes: &mut [SnapshotChanges]) -> bool {
+    tokio::time::timeout(support::waits::STALL_CEILING, observe_change(changes))
+        .await
+        .is_ok()
+}
+
+async fn observe_change_until(changes: &mut [SnapshotChanges], deadline: Instant) {
+    let _ = tokio::time::timeout_at(deadline, observe_change(changes)).await;
 }
 
 async fn query_collection_dids(

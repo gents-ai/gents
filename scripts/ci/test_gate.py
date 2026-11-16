@@ -35,12 +35,12 @@ def groups(selection):
 
 
 class TestCacheMode(unittest.TestCase):
-    def mode(self, transfer="host", **environment):
+    def mode(self, single=True, **environment):
         names = ("GATE_TEST_CACHE", "GATE_TEST_CACHE_INPUT", "GATE_TEST_CACHE_MAIN", "GATE_EVENT", "GATE_LABELS")
         saved = {name: os.environ.pop(name, None) for name in names}
         os.environ.update(environment)
         try:
-            return gate.test_cache_mode(transfer)
+            return gate.test_cache_mode(single)
         finally:
             for name in names:
                 os.environ.pop(name, None)
@@ -75,8 +75,8 @@ class TestCacheMode(unittest.TestCase):
             os.environ.pop("GATE_EVENT")
             os.environ.update({name: value for name, value in saved.items() if value is not None})
 
-    def test_it_needs_host_transfer(self):
-        self.assertEqual(self.mode("artifact", GATE_TEST_CACHE="on", GATE_EVENT="pull_request"), "off")
+    def test_it_needs_the_single_slice_in_the_build_job(self):
+        self.assertEqual(self.mode(False, GATE_TEST_CACHE="on", GATE_EVENT="pull_request"), "off")
 
 
 class Selection(unittest.TestCase):
@@ -157,21 +157,22 @@ class Selection(unittest.TestCase):
             self.assertTrue((gate.ROOT / path).exists(), path)
             self.assertNotEqual(gate.classify(path, MEMBERS), {"inert"}, path)
 
-    def test_a_portable_runner_must_be_a_label_list(self):
-        for value, expected in (("", gate.STUDIO), ('["self-hosted","Linux","ci-portable"]',
-                                                    ["self-hosted", "Linux", "ci-portable"])):
-            os.environ["GATE_PORTABLE_RUNNER"] = value
-            try:
-                self.assertEqual(gate.runner("portable"), expected)
-            finally:
-                del os.environ["GATE_PORTABLE_RUNNER"]
-        for value in ("ci-portable", '"ci-portable"', "[]", '[""]', "[1]"):
-            os.environ["GATE_PORTABLE_RUNNER"] = value
+    def test_overrides_must_be_label_lists(self):
+        os.environ["GATE_RUNNER_OVERRIDES"] = '{"portable": ["self-hosted", "Linux", "X64", "ci-other"]}'
+        try:
+            self.assertEqual(gate.runner("portable", fork=False, fallback=False),
+                             ["self-hosted", "Linux", "X64", "ci-other"])
+            self.assertEqual(gate.runner("cli", fork=False, fallback=False), ROLES["cli"]["labels"])
+        finally:
+            del os.environ["GATE_RUNNER_OVERRIDES"]
+        for value in ("ci-portable", '{"portable": "ci-portable"}', '{"portable": []}', '{"portable": [""]}',
+                      '{"portable": [1]}', "[]"):
+            os.environ["GATE_RUNNER_OVERRIDES"] = value
             try:
                 with self.assertRaises(SystemExit, msg=value):
-                    gate.runner("portable")
+                    gate.runner("portable", fork=False, fallback=False)
             finally:
-                del os.environ["GATE_PORTABLE_RUNNER"]
+                del os.environ["GATE_RUNNER_OVERRIDES"]
 
     def test_every_named_test_target_exists(self):
         # Integration tests are folded into one `integration` binary per crate;
@@ -217,6 +218,14 @@ class Shards(unittest.TestCase):
         self.assertIn("shard:portable", selection["jobs"])
         self.assertFalse(any(job in selection["jobs"] for job in ("test:foundation", "test:store", "test:session")))
 
+    def test_one_slice_runs_in_the_build_job(self):
+        selection = sharded(1, everything=True)
+        self.assertEqual(selection["shards"], [])
+        self.assertTrue(selection["archives"][0]["run"])
+        self.assertIn("build:portable", selection["jobs"])
+        self.assertNotIn("shard:portable", selection["jobs"])
+        self.assertFalse(sharded(3, everything=True)["archives"][0]["run"])
+
     def test_zero_or_unset_keeps_one_job_per_group(self):
         for selection in (select(everything=True), sharded(0, everything=True)):
             self.assertEqual(set(groups(selection)), {group.name for group in gate.GROUPS})
@@ -225,7 +234,8 @@ class Shards(unittest.TestCase):
     def test_never_more_slices_than_crates_with_tests(self):
         selection = sharded(6, "crates/gents-store/src/graphql.rs", tier="draft")
         self.assertEqual(archived(selection), ["gents-store"])
-        self.assertEqual(len(selection["shards"]), 1)
+        self.assertEqual(selection["shards"], [])
+        self.assertTrue(selection["archives"][0]["run"])
         compile_only = sharded(6, "crates/gents-core-packs/src/lib.rs", tier="draft")
         self.assertEqual(archived(compile_only), ["gents-core-packs"])
         self.assertEqual(compile_only["shards"], [])
@@ -245,24 +255,11 @@ class Shards(unittest.TestCase):
             with self.assertRaises(SystemExit, msg=value):
                 sharded(value, everything=True)
 
-    def test_slices_receive_the_archive_by_artifact_unless_kept_on_the_host(self):
-        self.assertEqual({entry["transfer"] for entry in sharded(4, everything=True)["shards"]}, {"artifact"})
-        os.environ["GATE_ARCHIVE_TRANSFER"] = "host"
+    def test_an_archive_is_found_in_the_runner_temp_artifact_directory(self):
+        saved = {name: os.environ.get(name) for name in ("GITHUB_ACTIONS", "RUNNER_TEMP")}
+        os.environ.update(GITHUB_ACTIONS="true", RUNNER_TEMP="/runner/_temp")
         try:
-            selection = sharded(4, everything=True)
-            self.assertEqual({entry["transfer"] for entry in selection["archives"] + selection["shards"]}, {"host"})
-            os.environ["GATE_ARCHIVE_TRANSFER"] = "nfs"
-            with self.assertRaises(SystemExit):
-                sharded(4, everything=True)
-        finally:
-            del os.environ["GATE_ARCHIVE_TRANSFER"]
-
-    def test_a_kept_archive_is_found_by_run_not_attempt(self):
-        saved = {name: os.environ.get(name) for name in ("GITHUB_ACTIONS", "RUNNER_TEMP", "GITHUB_RUN_ID")}
-        os.environ.update(GITHUB_ACTIONS="true", RUNNER_TEMP="/runner/_temp", GITHUB_RUN_ID="42")
-        try:
-            self.assertEqual(gate.archive_dir("host"), gate.HOST_ARCHIVES / "42")
-            self.assertEqual(gate.archive_dir("artifact"), Path("/runner/_temp/gents-tests"))
+            self.assertEqual(gate.archive_dir(), Path("/runner/_temp/gents-tests"))
         finally:
             for name, value in saved.items():
                 if value is None:
@@ -270,26 +267,24 @@ class Shards(unittest.TestCase):
                 else:
                     os.environ[name] = value
 
-    def test_slices_sharing_a_host_cap_their_test_threads(self):
+    def test_slices_cap_their_test_threads(self):
         captured = []
         original = gate.nextest
         gate.nextest = lambda arguments, **options: captured.append(arguments) or True
         saved = os.environ.get("RUST_TEST_THREADS")
-        os.environ["RUST_TEST_THREADS"] = "12"
         try:
-            for transfer in ("host", "artifact"):
-                os.environ["GATE_ARCHIVE_TRANSFER"] = transfer
+            for threads in ("12", "4"):
+                os.environ["RUST_TEST_THREADS"] = threads
                 gate.run_shard(sharded(3, everything=True), "portable", 1)
         finally:
             gate.nextest = original
-            del os.environ["GATE_ARCHIVE_TRANSFER"]
             os.environ.pop("GENTS_TEST_BINARIES_PREBUILT", None)
             if saved is None:
-                del os.environ["RUST_TEST_THREADS"]
+                os.environ.pop("RUST_TEST_THREADS", None)
             else:
                 os.environ["RUST_TEST_THREADS"] = saved
         threads = [arguments[arguments.index("--test-threads") + 1] for arguments in captured]
-        self.assertEqual(threads, [str(gate.HOST_SLICE_THREADS), "12"])
+        self.assertEqual(threads, [str(gate.SLICE_THREADS), "4"])
 
     def test_a_shard_job_names_its_slice(self):
         selection = sharded(3, everything=True)
@@ -311,6 +306,120 @@ class Shards(unittest.TestCase):
             pinned = Path(directory) / "pinned"
             pinned.write_bytes(b"\0" + str(source / "crates/gents-pack").encode() + b"\0")
             self.assertEqual(gate.unrelocatable([portable, pinned], source), ["pinned"])
+
+
+ROLES = gate.inventory()["roles"]
+HOSTED = re.compile(r"(ubuntu|macos|windows)-[\w.-]+")
+
+
+def runs_on_values(text):
+    """(job, runs-on as written) for every job of a workflow file."""
+    for job, body in workflow_jobs(text).items():
+        match = re.search(r"^    runs-on:[ \t]*(.*)\n((?:      .*\n)*)", body, flags=re.M)
+        if match:
+            yield job, " ".join([match.group(1).strip()] + [line.strip() for line in match.group(2).splitlines()])
+
+
+def labels_of(value):
+    """The literal labels a runs-on value can name: list items, `- item` lines
+    and the quoted strings inside expressions."""
+    value = value.strip()
+    # In an expression, a runner is a result of `&&`/`||` or a fromJSON list;
+    # other quoted strings are operands of comparisons.
+    literals = re.findall(r"(?:&&|\|\|)\s*'([^'\[]*)'", value)
+    for literal in re.findall(r"fromJSON\('(\[[^']*\])'\)", value):
+        literals += json.loads(literal)
+    plain = re.sub(r"\$\{\{.*?\}\}", "", value).strip()
+    if plain.startswith(">-"):
+        plain = ""
+    plain = plain.strip("[]")
+    items = [item.strip().strip('"') for item in re.split(r"[,\s-]+\s", " " + plain + " ") if item.strip()]
+    return {label for label in literals + items if label}
+
+
+class Runners(unittest.TestCase):
+    """Jobs choose runners by role labels from .github/ci-runners.json, never by host."""
+
+    def test_a_fork_never_resolves_to_a_self_hosted_runner(self):
+        for role in ROLES:
+            value = gate.runner(role, fork=True, fallback=False)
+            self.assertIsInstance(value, str, role)
+            self.assertRegex(value, HOSTED, role)
+
+    def test_fallback_moves_the_shared_roles_off_our_linux_pool(self):
+        self.assertEqual(gate.runner("linux", fork=False, fallback=True), "ubuntu-latest")
+        self.assertEqual(gate.runner("browser", fork=False, fallback=True), "ubuntu-latest")
+
+    def test_a_role_whose_pool_is_hosted_runs_hosted(self):
+        for role, entry in ROLES.items():
+            if entry.get("pool") == "hosted":
+                self.assertEqual(gate.runner(role, fork=False, fallback=False), entry["hosted"], role)
+            else:
+                self.assertNotIn("pool", entry, role)
+                self.assertEqual(gate.runner(role, fork=False, fallback=False), entry["labels"], role)
+        self.assertEqual(gate.runner("portable", fork=False, fallback=True), ROLES["macos"]["labels"])
+        self.assertEqual(gate.runner("cli", fork=False, fallback=True), ROLES["cli"]["labels"])
+
+    def test_every_role_is_self_hosted_capability_labels(self):
+        for role, entry in ROLES.items():
+            labels = entry["labels"]
+            self.assertEqual(labels[0], "self-hosted", role)
+            self.assertIn(labels[1], ("Linux", "macOS"), role)
+            self.assertIn(labels[2], ("X64", "ARM64"), role)
+            self.assertTrue(all(label.startswith("ci-") for label in labels[3:]), role)
+            fallback = entry.get("fallback")
+            if fallback:
+                self.assertTrue(fallback in ROLES or HOSTED.fullmatch(fallback), role)
+
+    def test_every_building_role_names_its_host_cache(self):
+        # A role whose jobs build Rust shares one host sccache server per
+        # host; the setup step reaches it through the supervisor named here.
+        for role, entry in ROLES.items():
+            if "target" not in entry:
+                continue
+            with self.subTest(role=role):
+                key = "systemd_unit" if entry["labels"][1] == "Linux" else "launchd_label"
+                self.assertEqual(set(entry.get("cache", {})), {key})
+                self.assertTrue(entry["cache"][key])
+
+    def test_the_plan_routes_every_job_and_group(self):
+        selection = select(everything=True)
+        self.assertEqual(set(selection["runs_on"]), set(gate.WORKFLOW_ROLES))
+        for entry in selection["matrix"]:
+            self.assertEqual(entry["runs_on"], gate.runner(entry["role"]), entry["group"])
+        jobs = workflow_jobs(CI)
+        for job, value in runs_on_values(CI):
+            with self.subTest(job=job):
+                routed = re.findall(r"fromJSON\(needs\.plan\.outputs\.plan\)\.runs_on\.([\w-]+)", value)
+                self.assertTrue(routed or "matrix.runs_on" in value or job == "plan", value)
+                self.assertLessEqual(set(routed), set(gate.WORKFLOW_ROLES))
+                if job not in ("plan", "gate"):
+                    self.assertRegex(jobs[job], r"needs: (plan|\[plan)")
+
+    def test_literal_linux_labels_are_the_linux_role(self):
+        for path in sorted((gate.ROOT / ".github/workflows").glob("*.yml")):
+            for job, value in runs_on_values(path.read_text()):
+                for literal in re.findall(r"fromJSON\('(\[[^']*\])'\)", value):
+                    self.assertEqual(json.loads(literal), ROLES["linux"]["labels"], f"{path.name} {job}")
+
+    def test_no_workflow_selects_a_runner_by_host(self):
+        vocabulary = {"self-hosted"} | {label for entry in ROLES.values() for label in entry["labels"]}
+        role_sets = [entry["labels"] for entry in ROLES.values()]
+        for path in sorted((gate.ROOT / ".github/workflows").glob("*.yml")):
+            text = path.read_text()
+            self.assertNotRegex(text, r"runner\.name\s*(==|!=)", path.name)
+            for job, value in runs_on_values(text):
+                with self.subTest(workflow=path.name, job=job):
+                    labels = labels_of(value)
+                    named = {label for label in labels if not HOSTED.fullmatch(label)}
+                    self.assertLessEqual(named, vocabulary | {"plan", "runs_on"}, value)
+                    if "${{" not in value and "self-hosted" in labels:
+                        self.assertIn(sorted(labels), [sorted(labels) for labels in role_sets], value)
+
+    def test_actionlint_knows_exactly_the_inventory_labels(self):
+        config = (gate.ROOT / ".github/actionlint.yaml").read_text()
+        listed = set(re.findall(r"^    - (\S+)$", config.split("paths:")[0], flags=re.M))
+        self.assertEqual(listed, {label for entry in ROLES.values() for label in entry["labels"]} - {"self-hosted"})
 
 
 class Verdict(unittest.TestCase):

@@ -65,6 +65,7 @@ test-fixtures = []
 [dev-dependencies]
 gents-workspace-hack = { workspace = true }
 gents-automation = { workspace = true, features = ["test-fixtures"] }
+gents-store = { workspace = true, features = ["test-fixtures"] }
 # Enables the served-runtime fixture for this crate's integration tests.
 gents-desktop-core = { path = ".", features = ["test-fixtures", "typescript"] }
 gents = { path = "../gents", features = ["test-fixtures", "typescript"] }

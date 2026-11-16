@@ -210,6 +210,11 @@ fn failure_disposition(
     }
 }
 
+/// Lean `TransactionReplay.clientMayRepeat`.
+fn client_may_repeat(stage: AttemptStage, failure: AttemptFailure, confirmed_abort: bool) -> bool {
+    failure == AttemptFailure::Conflict && (stage != AttemptStage::Commit || confirmed_abort)
+}
+
 fn rerun_honoured(
     mode: TransactionMode,
     discarded: bool,
@@ -481,14 +486,20 @@ where
                                 });
                                 return Err(E::from(txn.unconfirmed_relationships(error)));
                             }
+                            let confirmed_abort =
+                                definitely_not_committed || discarded_before_commit;
+                            let failure = AttemptFailure::of_access(&error);
+                            let mut error = error;
+                            if !client_may_repeat(AttemptStage::Commit, failure, confirmed_abort) {
+                                error.mark_unconfirmed_commit();
+                            }
                             Err(TransactionAttemptFailure {
                                 stage: AttemptStage::Commit,
-                                failure: AttemptFailure::of_access(&error),
+                                failure,
                                 conflict_source: retry::classified_transaction_conflict(&error),
                                 error: E::from(error),
                                 rollback,
-                                confirmed_abort: definitely_not_committed
-                                    || discarded_before_commit,
+                                confirmed_abort,
                             })
                         }
                     }
@@ -632,8 +643,9 @@ mod conformance {
     use gents_lean_vocab::families;
 
     use super::{
-        client_signed_write_may_retry, failure_disposition, rerun_honoured, AttemptFailure,
-        AttemptStage, FailureDisposition, IdempotentTransactionRetry, TransactionMode,
+        client_may_repeat, client_signed_write_may_retry, failure_disposition, rerun_honoured,
+        AttemptFailure, AttemptStage, FailureDisposition, IdempotentTransactionRetry,
+        TransactionMode,
     };
 
     #[derive(Debug, Clone, Copy, serde::Deserialize)]
@@ -694,5 +706,12 @@ mod conformance {
         families::transaction_replay_mode_max_attempts::replay::<Mode>(|i| {
             u64::from(i.mode.production().max_attempts())
         });
+    }
+
+    #[test]
+    fn client_repeats_match_the_lean_model() {
+        families::transaction_replay_client_may_repeat::replay::<AttemptFailure, AttemptStage>(
+            |i| client_may_repeat(i.stage, i.failure, i.confirmed_abort),
+        );
     }
 }

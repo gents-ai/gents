@@ -58,6 +58,7 @@ const BRIDGE_ERROR_CODES: Record<BridgeErrorCode, true> = {
   credentialNotSaved: true,
   runtimeStillBooting: true,
   sessionNotOwned: true,
+  transactionConflict: true,
   unknown: true,
 };
 
