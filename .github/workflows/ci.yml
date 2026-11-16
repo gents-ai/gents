@@ -15,8 +15,10 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   merge_group:
     types: [checks_requested]
-  # A daily run of main's archived test groups that ignores the test-result
-  # cache, so a cache defect cannot hide a regression for longer than a day.
+  # A daily run of main: the archived test groups ignoring the test-result
+  # cache, so a cache defect cannot hide a regression for longer than a day,
+  # and the portable groups that have a macOS role on macOS, uncached, so a
+  # platform difference the Linux runs cannot see surfaces within a day.
   schedule:
     - cron: "23 7 * * *"
   workflow_dispatch:
@@ -166,8 +168,8 @@ jobs:
           GATE_EVERYTHING: >-
             ${{ (github.event_name != 'pull_request' && github.event_name != 'merge_group')
             && 'true' || env.GATE_EVERYTHING }}
-          # The scheduled run is the full test-cache run of the archived groups.
-          GATE_ONLY: ${{ github.event_name == 'schedule' && 'build:portable' || inputs.only }}
+          # gate.py selects the scheduled run's jobs itself (resolve_plan).
+          GATE_ONLY: ${{ inputs.only }}
           # scripts/ci/gate.py test_cache_mode reads these.
           GATE_EVENT: ${{ github.event_name }}
           GATE_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
@@ -506,9 +508,10 @@ jobs:
 
   # One job per group of crates that holds a changed crate or a dependent.
   # Each job starts from an empty RUNNER_TEMP target tree; the host sccache
-  # service supplies cached rlibs, so parallel jobs share compilation.
+  # service supplies cached rlibs, so parallel jobs share compilation. A role's
+  # `jobs` in .github/ci-runners.json bound the job's compile and test parallelism.
   test:
-    name: test (${{ matrix.group }})
+    name: ${{ matrix.job }}
     needs: [plan, repository-guard]
     if: >-
       (github.event_name != 'pull_request' ||
@@ -521,6 +524,8 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
+      CARGO_BUILD_JOBS: ${{ matrix.build_jobs || vars.CARGO_BUILD_JOBS || '12' }}
+      RUST_TEST_THREADS: ${{ matrix.test_threads || vars.RUST_TEST_THREADS || vars.CARGO_BUILD_JOBS || '12' }}
     steps:
       - *checkout-self-hosted-macos
       - *checkout-elsewhere
@@ -532,7 +537,7 @@ jobs:
       # Enable only after provisioning a separate OS account and runner. The
       # configured path must be the running fleet node's actual gents home.
       - name: Verify isolated runtime runner
-        if: matrix.group == 'runtime' && vars.GENTS_CI_RUNTIME_ISOLATED == 'true'
+        if: matrix.role == 'runtime-isolated'
         env:
           GENTS_CI_FLEET_HOME: ${{ vars.GENTS_CI_FLEET_HOME }}
           GENTS_CI_FLEET_USER: ${{ vars.GENTS_CI_FLEET_USER }}
@@ -547,8 +552,8 @@ jobs:
           afterburner: ${{ matrix.go }}
           role: ${{ matrix.role }}
 
-      - name: Run tests for ${{ matrix.packages }}
-        run: make gate-run JOB="test:${{ matrix.group }}"
+      - name: Run ${{ matrix.job }}
+        run: make gate-run JOB="${{ matrix.job }}"
 
       - name: Collect migration lens diagnostics on failure
         if: failure() && matrix.group == 'foundation'
@@ -589,6 +594,8 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.archives) }}
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
+      CARGO_BUILD_JOBS: ${{ matrix.build_jobs || vars.CARGO_BUILD_JOBS || '12' }}
+      RUST_TEST_THREADS: ${{ matrix.test_threads || vars.RUST_TEST_THREADS || vars.CARGO_BUILD_JOBS || '12' }}
     steps:
       - *checkout-self-hosted-macos
       - *checkout-elsewhere
@@ -603,6 +610,7 @@ jobs:
       - uses: ./.github/actions/rust-runner
         with:
           lean: ${{ matrix.run && 'true' || 'false' }}
+          afterburner: ${{ matrix.run && matrix.go && 'true' || 'false' }}
 
       - name: Install cargo-nextest
         run: .github/scripts/setup-nextest.sh
@@ -656,6 +664,8 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.shards) }}
     env:
       GATE_PLAN: ${{ needs.plan.outputs.plan }}
+      CARGO_BUILD_JOBS: ${{ matrix.build_jobs || vars.CARGO_BUILD_JOBS || '12' }}
+      RUST_TEST_THREADS: ${{ matrix.test_threads || vars.RUST_TEST_THREADS || vars.CARGO_BUILD_JOBS || '12' }}
     steps:
       - *checkout-self-hosted-macos
       - *checkout-elsewhere
@@ -667,6 +677,7 @@ jobs:
       - uses: ./.github/actions/rust-runner
         with:
           lean: "true"
+          afterburner: ${{ matrix.go && 'true' || 'false' }}
 
       - name: Install cargo-nextest
         run: .github/scripts/setup-nextest.sh

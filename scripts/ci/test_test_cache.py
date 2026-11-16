@@ -407,6 +407,28 @@ class Policy(unittest.TestCase):
             "GITHUB_RUN_ID": "1", "CARGO_TARGET_DIR": "/runner/a", "HOME": "/home/x"})
         self.assertEqual(keyed, {"GENTS_TEST_BINARIES_PREBUILT": "1", "RUST_MIN_STACK": "16777216"})
 
+    def test_the_platform_enters_the_key(self):
+        policy = test_cache.load_policy()
+        linux = test_cache.platform_inputs("linux", "x86_64-unknown-linux-gnu")
+        self.assertEqual(linux, {"os": "linux", "target": "x86_64-unknown-linux-gnu"})
+        mac = test_cache.platform_inputs("darwin", "aarch64-apple-darwin", "25A100")
+        self.assertEqual(mac["os_build"], "25A100")
+        with self.assertRaises(ValueError):
+            test_cache.platform_inputs("darwin", "aarch64-apple-darwin", "")
+
+        def key(platform):
+            return test_cache.static_key(policy, "b", "digest", test_cache.runner_inputs(policy, "nextest 1", platform))
+
+        updated = test_cache.platform_inputs("darwin", "aarch64-apple-darwin", "25B200")
+        other_arch = test_cache.platform_inputs("linux", "aarch64-unknown-linux-gnu")
+        keys = [key(linux), key(mac), key(updated), key(other_arch)]
+        self.assertEqual(len(set(keys)), len(keys))
+        self.assertEqual(key(linux), key(dict(linux)))
+        # This host's own platform is read from the toolchain and the OS.
+        here = test_cache.platform_inputs()
+        self.assertEqual(here["os"], sys.platform)
+        self.assertEqual("os_build" in here, sys.platform == "darwin")
+
     def test_filters_select_exactly_the_tests_that_run(self):
         listing = {"a": ["x", "y"], "b": ["z"], "c": ["u", "v", "w"]}
         decisions = {"a x": {"run": "miss"}, "a y": {"run": "miss"}, "b z": {"skip": {}},
