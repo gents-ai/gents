@@ -1,0 +1,3 @@
+---- MODULE MCBackendFirstProbeRejects ----
+EXTENDS BackendFirstProbe
+====

@@ -202,16 +202,13 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
         if allowed {
             access
                 .transact_write("test.latest_delivery_session", |txn| {
-                    let (session, owner, agent_did) = (&next.session, &owner, &agent_did);
+                    let (session, owner) = (&next.session, &owner);
                     Box::pin(async move {
-                        gents_session::session::ensure_session_in_txn(
+                        gents_session::test_support::stage_agent_owned_session_in_txn(
                             txn,
-                            session,
                             owner,
-                            agent_did,
+                            session,
                             Some(owner.as_str()),
-                            None,
-                            None,
                             &chrono::Utc::now().to_rfc3339(),
                         )
                         .await
@@ -553,19 +550,10 @@ async fn restart_outcome_recovery_matches_modeled_crash_boundaries() {
         let access = crate::triggers::callback::test_agent_access(&node);
         access
             .transact_write("test.seed_terminal_outcome_boundary", |txn| {
-                let (fire, request_mutation, agent_did, goal_status) =
-                    (&fire, &request_mutation, &agent_did, &goal_status);
+                let (fire, request_mutation, goal_status) =
+                    (&fire, &request_mutation, &goal_status);
                 Box::pin(async move {
-                    gents_session::session::ensure_session_in_txn(
-                        txn,
-                        &fire.session_id,
-                        &fire.identity.owner_did,
-                        agent_did,
-                        None,
-                        None,
-                        None,
-                        "2026-01-01T00:00:00Z",
-                    )
+                    gents_session::test_support::stage_agent_owned_session_in_txn(txn, &fire.identity.owner_did, &fire.session_id, None, "2026-01-01T00:00:00Z")
                     .await?;
                     durable::stage_fire_request(txn, fire, request_mutation).await?;
                     if goal_status.is_some() || replaced {
@@ -727,15 +715,11 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                         .transact_write("test.outcome_trace_admit", |txn| {
                             let receipt = &receipt;
                             let mutation = &mutation;
-                            let agent = agent.did();
                             Box::pin(async move {
-                                gents_session::session::ensure_session_in_txn(
+                                gents_session::test_support::stage_agent_owned_session_in_txn(
                                     txn,
-                                    &receipt.session_id,
                                     &receipt.identity.owner_did,
-                                    agent,
-                                    None,
-                                    None,
+                                    &receipt.session_id,
                                     None,
                                     &receipt.created_at,
                                 )

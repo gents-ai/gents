@@ -12,14 +12,13 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequest;
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 use gents_session::request::lifecycle::materialize::{
-    created_session_provenance_in_txn, refuse_retired_reserved_cause, sign_request, RequestSigner,
+    refuse_retired_reserved_cause, sign_request, RequestSigner,
 };
 use gents_session::request::lifecycle::{
     bind_client_targets_in_txn, stage_client_request_in_txn,
     stage_revoke_execution_preserving_output, stage_supersede_parked_execution,
     RequestTerminalOutcome, TerminalizeResult,
 };
-use gents_session::session;
 use gents_store::config_client::ConfigApplyTxn;
 use gents_store::graphql::escape_graphql_string;
 #[cfg(test)]
@@ -942,8 +941,7 @@ async fn stage_task_delivery_with_receipt(
             .await?;
         } else {
             refuse_retired_reserved_cause(create)?;
-            txn.execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
-                .await?;
+            gents_session::request::lifecycle::runtime_publication::publish(txn, create).await?;
         }
     }
     let query = {
@@ -975,95 +973,6 @@ async fn stage_task_delivery_with_receipt(
         let request = AgentRequest::try_from(serde_json::from_value::<
             gents_protocol::row::AgentRequestRow,
         >(rows[0].clone())?)?;
-        let provenance = created_session_provenance_in_txn(txn, &request).await?;
-        let created = session::ensure_session_in_txn(
-            txn,
-            &request.session_id,
-            &request.node_did,
-            &request.agent_did,
-            request.requester_did.as_deref(),
-            request.input.initial_title.clone(),
-            provenance,
-            &request.created_at,
-        )
-        .await?;
-        let agent_owned = matches!(
-            create.admission.kind,
-            gents_protocol::request_admission::AgentRequestAdmissionKind::LocalSelf
-                | gents_protocol::request_admission::AgentRequestAdmissionKind::RuntimeInternal
-        );
-        if created || agent_owned {
-            let session = gents_store::config_client::agent_session::load_agent_session_row_in_txn(
-                txn,
-                &request.node_did,
-                &request.session_id,
-                request.requester_did.as_deref(),
-            )
-            .await?
-            .context("Task session disappeared")?;
-            let (agent, _) = gents_documents::read_desired_state_record_in_txn(
-                txn,
-                gents_store::collection::Collection::Agent,
-                &request.node_did,
-                &request.agent_did,
-            )
-            .await?
-            .context("selected Task agent is unavailable")?;
-            if agent_owned {
-                anyhow::ensure!(
-                    txn.actor_did() == Some(request.agent_did.as_str())
-                        && create.admission.signer_did == request.agent_did
-                        && request.doc_id == rows[0]["_docID"].as_str().unwrap_or_default()
-                        && request.node_did == create.node_did
-                        && request.agent_did == create.agent_did
-                        && request.session_id == create.session_id
-                        && request.request_id == create.request_id
-                        && request.requester_did.as_deref() == Some(create.requester_did.as_str())
-                        && session.session.agent_did == request.agent_did,
-                    "Task request publication differs from its authenticated Agent or session"
-                );
-                anyhow::ensure!(
-                    gents_store::identity::verify_did_signature(
-                        &create.admission.signer_did,
-                        &create.signing_payload(),
-                        &create.admission.signature,
-                    )?,
-                    "Task request publication requires its valid signed receipt"
-                );
-                txn.add_resource_relationship(
-                    "AgentRequest",
-                    &request.doc_id,
-                    "parent",
-                    "agents",
-                    &agent,
-                )
-                .await?;
-                txn.add_resource_relationship(
-                    "AgentRequest",
-                    &request.doc_id,
-                    "session",
-                    "sessions",
-                    &session.doc_id,
-                )
-                .await?;
-                txn.add_actor_relationship(
-                    "AgentRequest",
-                    &request.doc_id,
-                    "working_agent",
-                    &identity::Did::new(&request.agent_did)?,
-                )
-                .await?;
-            }
-            if created {
-                session::stage_created_session_relationships_in_txn(
-                    txn,
-                    &session.doc_id,
-                    &agent,
-                    &identity::Did::new(&request.agent_did)?,
-                )
-                .await?;
-            }
-        }
         let session = gents_store::config_client::agent_session::load_agent_session_row_in_txn(
             txn,
             &request.node_did,

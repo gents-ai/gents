@@ -4617,8 +4617,10 @@ async fn closed_goal_notifications_keep_durable_continuation_and_cancellation_li
     )
     .with_rescan_interval(RESCAN);
     // This test exercises `next_fire`'s own trigger loop, which a settled
-    // rescan bypasses, and that loop exposes no settled point; it keeps its
-    // windows.
+    // rescan bypasses. The loop exposes no settled point, so the check that a
+    // closed feed does not end the source keeps its window: load can only
+    // make it pass without observing the closure, never fail it. The positive
+    // waits below are the owner's own `next_fire` results.
     assert!(
         tokio::time::timeout(Duration::from_millis(50), source.next_fire())
             .await
@@ -4638,7 +4640,7 @@ async fn closed_goal_notifications_keep_durable_continuation_and_cancellation_li
     )
     .await
     .unwrap();
-    let _fire = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+    let _fire = tokio::time::timeout(gents_store::test_support::STALL_CEILING, source.next_fire())
         .await
         .expect("durable rescan must find the active Goal")
         .expect("closed notifications must not terminate the source");
@@ -4647,7 +4649,7 @@ async fn closed_goal_notifications_keep_durable_continuation_and_cancellation_li
     assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
     cancel.cancel();
     assert!(
-        tokio::time::timeout(Duration::from_secs(1), source.next_fire())
+        tokio::time::timeout(gents_store::test_support::STALL_CEILING, source.next_fire())
             .await
             .expect("cancellation must stop the source")
             .is_none()

@@ -131,7 +131,7 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
     node.shutdown().await.expect("node shutdown");
 }
 
-fn routed_snapshot_with_agent(
+pub(super) fn routed_snapshot_with_agent(
     generation: u64,
     agent: Arc<gents_inference::resolved::ResolvedAgent>,
     dispatcher: mpsc::Sender<AgentRequest>,

@@ -157,6 +157,12 @@ impl ClientCore {
 
             let p2p = gents_store::identity::node_p2p(&node)
                 .context("desktop node started without identity-bound P2P support")?;
+            #[cfg(test)]
+            let p2p = options
+                .startup_p2p
+                .as_ref()
+                .map(|p2p| Arc::clone(p2p) as Arc<dyn P2POps>)
+                .unwrap_or(p2p);
             let local_peer_id = p2p_local_peer_id(&p2p)
                 .await
                 .context("reading desktop P2P peer id")?;

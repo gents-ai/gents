@@ -1156,3 +1156,28 @@ async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshne
     node.shutdown().await.expect("node shutdown");
     Ok(())
 }
+
+#[test]
+fn generated_first_probe_cases_hold_without_provider_admission() {
+    use gents_lean_vocab::families::backend_health_admission_first_probe as family;
+
+    family::replay(|input: &family::FirstProbeInput| {
+        let mut backend = base_backend();
+        backend.enabled = input.enabled;
+        let observation = InferenceBackendObservation {
+            metadata_doc_id: None,
+            backend_id: backend.backend_id.clone(),
+            catalogs: Vec::new(),
+            probe_status: Some(input.probe_status.clone()),
+            last_probe: None,
+        };
+        let config = BackendAdmissionConfig::from_backend(&backend, &observation)
+            .unwrap()
+            .with_measured_unhealthy(input.measured_unhealthy);
+        let waiting = config.awaiting_first_probe();
+        if waiting {
+            assert!(!config.is_available());
+        }
+        family::WaitingOutput { waiting }
+    });
+}

@@ -146,6 +146,7 @@ describe("the owner of plugins' notifications", () => {
   let opened: Route[];
   let offered: string[] = [];
   let offeredBlocked: boolean[] = [];
+  let deliveryError: Error | null = null;
 
   const notifier = () =>
     createPluginNotifier({
@@ -155,7 +156,10 @@ describe("the owner of plugins' notifications", () => {
       focused: () => focused,
       blocked: async () => blocked,
       now: () => now,
-      tell: (notice) => void told.push(notice),
+      tell: async (notice) => {
+        if (deliveryError) throw deliveryError;
+        told.push(notice);
+      },
       show: (notice, open) => void shownInApp.push({ notice, open }),
       open: (to) => void opened.push(to),
       offer: (_caller, { kind }, isBlocked) => {
@@ -165,6 +169,7 @@ describe("the owner of plugins' notifications", () => {
     } satisfies PluginNotifyDeps);
 
   beforeEach(() => {
+    deliveryError = null;
     enabled = true;
     speaks = true;
     focused = false;
@@ -319,6 +324,9 @@ describe("the owner of plugins' notifications", () => {
     blocked = true;
     expect(await ask()).toEqual({ status: "blocked" });
     expect(told).toHaveLength(1);
+    blocked = false;
+    deliveryError = new Error("The system refused this notification");
+    await expect(ask()).rejects.toThrow("The system refused this notification");
     /* in front, the app shows it itself, whatever the system says */
     focused = true;
     expect(await ask()).toEqual({ status: "sent", via: "app" });
@@ -637,15 +645,15 @@ describe("the switches for plugins' notifications", () => {
     expect(await screen.findByText("Blocked by the system")).toBeInTheDocument();
     /* on the app's own row, and again beside the packs' kinds */
     expect(screen.getAllByText(SYSTEM_BLOCKED)).toHaveLength(2);
-    view.unmount();
     permission.mockResolvedValue("granted");
-    render(<NotificationsGroup />);
+    fireEvent(window, new Event("focus"));
     await vi.waitFor(() =>
       expect(
         screen.getByRole("button", { name: "Send a test notification" }),
       ).toBeEnabled(),
     );
     expect(screen.queryByText("Blocked by the system")).toBeNull();
+    view.unmount();
     vi.restoreAllMocks();
   });
 

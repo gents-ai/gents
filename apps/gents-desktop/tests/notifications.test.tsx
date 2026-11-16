@@ -282,10 +282,12 @@ describe("the notification owner", () => {
     expect(opened).toEqual([{ name: "session", sessionId: "a", nodeDid: NODE }]);
   });
 
-  it("without click callbacks, offers it when the window comes back soon after, and opens only on Open", () => {
+  it("without click callbacks, offers it when the window comes back soon after, and opens only on Open", async () => {
     const { set } = start([session("a", "running"), session("b", "running")]);
     set([session("a", "completed"), session("b", "running")]);
-    pass(BURST_QUIET);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BURST_QUIET);
+    });
     pass(1000);
     focusHandler?.();
     expect(offered.map(({ title, action }) => ({ title, action }))).toEqual([
@@ -295,17 +297,21 @@ describe("the notification owner", () => {
     offered[0]!.open();
     expect(opened).toEqual([{ name: "session", sessionId: "a", nodeDid: NODE }]);
     set([session("a", "completed"), session("b", "completed")]);
-    pass(BURST_QUIET);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BURST_QUIET);
+    });
     pass(FOLLOW_WITHIN + 1);
     focusHandler?.();
     expect(offered).toHaveLength(1);
     expect(opened).toHaveLength(1);
   });
 
-  it("offers a burst with Show, which opens its list", () => {
+  it("offers a burst with Show, which opens its list", async () => {
     const { set } = start([session("a", "running"), session("b", "running")]);
     set([session("a", "completed"), session("b", "completed")]);
-    pass(BURST_QUIET);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BURST_QUIET);
+    });
     focusHandler?.();
     expect(offered.map(({ title, action }) => ({ title, action }))).toEqual([
       { title: "2 sessions finished", action: "Show" },

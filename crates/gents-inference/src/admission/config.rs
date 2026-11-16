@@ -133,6 +133,12 @@ impl BackendAdmissionConfig {
         }
     }
 
+    pub fn awaiting_first_probe(&self) -> bool {
+        self.enabled
+            && self.probe_status == gents_documents::inference_backend::UNKNOWN_PROBE_STATUS
+            && !self.measured_unhealthy
+    }
+
     pub fn is_available(&self) -> bool {
         self.availability() == BackendAvailability::Available
     }

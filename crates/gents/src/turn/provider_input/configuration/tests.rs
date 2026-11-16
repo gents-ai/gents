@@ -130,11 +130,13 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
         };
         let selected = vec![
             SelectedConfigurationDocument {
+                version: "fixture-version".into(),
                 collection: gents_store::collection::Collection::Agent,
                 doc_id: docs[0].clone(),
                 logical_id: None,
             },
             SelectedConfigurationDocument {
+                version: "fixture-version".into(),
                 collection: gents_store::collection::Collection::AgentContext,
                 doc_id: if item["missing_context"] == true {
                     docs[3].clone()
@@ -144,6 +146,7 @@ async fn modeled_provider_inputs_require_the_selected_agent_to_read_exact_docume
                 logical_id: None,
             },
             SelectedConfigurationDocument {
+                version: "fixture-version".into(),
                 collection: gents_store::collection::Collection::Tools,
                 doc_id: docs[2].clone(),
                 logical_id: None,
@@ -330,6 +333,7 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
                 .await?;
         }
         let mut selected = vec![SelectedConfigurationDocument {
+            version: "fixture-version".into(),
             collection: gents_store::collection::Collection::Agent,
             doc_id: agent_doc.clone(),
             logical_id: None,
@@ -337,6 +341,7 @@ async fn modeled_inference_inputs_require_each_selected_native_document() -> any
         selected.extend(
             ids.iter()
                 .map(|(_, collection, doc_id)| SelectedConfigurationDocument {
+                    version: "fixture-version".into(),
                     collection: *collection,
                     doc_id: doc_id.clone(),
                     logical_id: None,
@@ -515,16 +520,19 @@ async fn modeled_provider_inputs_recheck_backend_metadata_as_agent() -> anyhow::
             actor.clone(),
             vec![
                 SelectedConfigurationDocument {
+                    version: "fixture-version".into(),
                     collection: gents_store::collection::Collection::Agent,
                     doc_id: docs[0].clone(),
                     logical_id: None,
                 },
                 SelectedConfigurationDocument {
+                    version: "fixture-version".into(),
                     collection: gents_store::collection::Collection::InferenceProfile,
                     doc_id: docs[1].clone(),
                     logical_id: None,
                 },
                 SelectedConfigurationDocument {
+                    version: "fixture-version".into(),
                     collection: gents_store::collection::Collection::InferenceBackend,
                     doc_id: docs[2].clone(),
                     logical_id: None,

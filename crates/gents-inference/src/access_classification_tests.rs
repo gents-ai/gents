@@ -26,6 +26,10 @@ fn every_inference_owner_variant_preserves_the_access_classification() {
             "runtime_account_metadata_error_access" => {
                 classify_erased(input.erasure, RuntimeAccountMetadataError::Access(access))
             }
+            "configuration_visibility_error_version" => classify_owner(
+                input.erasure,
+                ConfigurationVisibilityError::Version(access.into()),
+            ),
             "configuration_visibility_error_access" => {
                 classify_owner(input.erasure, ConfigurationVisibilityError::Access(access))
             }

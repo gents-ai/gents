@@ -32,7 +32,7 @@ export type PluginNotifyDeps = {
   blocked: () => Promise<boolean>;
   now: () => number;
   /** through the system, opening `to` when clicked */
-  tell: (notice: Notice & { to: Route }) => void;
+  tell: (notice: Notice & { to: Route }) => Promise<void>;
   /** in the app, while its window is in front */
   show: (notice: Notice, open: () => void) => void;
   open: (to: Route) => void;
@@ -180,7 +180,7 @@ export function createPluginNotifier(deps: PluginNotifyDeps = defaults()) {
       return { status: "sent", via: "app" };
     }
     if (await deps.blocked()) return { status: "blocked" };
-    deps.tell({ ...notice, to });
+    await deps.tell({ ...notice, to });
     return { status: "sent", via: "system" };
   };
 }

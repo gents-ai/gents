@@ -159,6 +159,21 @@ fn data_publications_match_the_lean_model() {
     });
 }
 
+#[test]
+fn reload_fence_matches_the_lean_model() {
+    gents_lean_vocab::families::client_data_publication_reload_accepted_since::replay(|i| {
+        let (_stores, store) = node_store(requests(&["old"]));
+        let read = store.capture_read();
+        if i.publication {
+            store.merge_chat_patch(requests(&["concurrent"]));
+        }
+        if i.event {
+            store.observe_request_event();
+        }
+        store.replace_reloaded_snapshot_at_read(&read, requests(&["incoming"]))
+    });
+}
+
 /// Two nodes, each in its own store. A read of node 1 publishes after the
 /// modeled actions; nothing done to node 2's store moves node 1's.
 #[test]

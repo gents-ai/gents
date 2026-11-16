@@ -1,0 +1,3 @@
+----------------- MODULE MCDesktopStartOwnershipReplaced -----------------
+EXTENDS DesktopStartOwnership
+=============================================================================

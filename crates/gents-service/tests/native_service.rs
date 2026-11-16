@@ -102,17 +102,18 @@ fn ok() -> CommandOutput {
     output(true, "", "")
 }
 
+fn write_executable(path: &Path, contents: &str) {
+    #[cfg(unix)]
+    gents_store::test_support::write_executable_script(path, contents).expect("fixture executable");
+    #[cfg(not(unix))]
+    fs::write(path, contents).expect("fixture executable");
+}
+
 fn config(root: &Path, name: &str) -> NativeServiceConfig {
     let home = root.join("agent-home");
     fs::create_dir_all(&home).expect("agent home");
     let executable = root.join(name);
-    fs::write(&executable, b"fixture executable").expect("fixture executable");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
-            .expect("fixture executable mode");
-    }
+    write_executable(&executable, "fixture executable");
     NativeServiceConfig {
         home,
         executable,
@@ -307,12 +308,7 @@ fn same_home_allows_a_new_caller_executable_and_path() -> Result<()> {
     manager(owner.clone(), NativeServicePlatform::Linux, install_runner).install()?;
 
     let new_executable = temp.path().join("new-gents");
-    fs::write(&new_executable, b"new fixture executable")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&new_executable, fs::Permissions::from_mode(0o755))?;
-    }
+    write_executable(&new_executable, "new fixture executable");
     let mut new_caller =
         NativeServiceConfig::new(owner.home.join("..").join("agent-home"), new_executable)?;
     new_caller.user_home = owner.user_home.clone();
@@ -377,12 +373,7 @@ fn same_home_stopped_upgrade_unloads_old_launchd_job_without_changing_enablement
 
     let mut upgraded = old.clone();
     upgraded.executable = temp.path().join("new-gents");
-    fs::write(&upgraded.executable, b"new fixture executable")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&upgraded.executable, fs::Permissions::from_mode(0o755))?;
-    }
+    write_executable(&upgraded.executable, "new fixture executable");
     let runner = ScriptedRunner::with_outputs([
         output(true, "501", ""),
         output(true, "state = exited", ""),

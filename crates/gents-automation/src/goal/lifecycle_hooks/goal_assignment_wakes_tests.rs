@@ -56,14 +56,11 @@ async fn parent(
             let mutation = &mutation;
             let (node_did, agent_did, now) = (node_did.as_str(), agent_did.as_str(), now.as_str());
             Box::pin(async move {
-                gents_session::session::ensure_session_in_txn(
+                gents_session::test_support::stage_agent_owned_session_in_txn(
                     txn,
-                    session,
                     node_did,
-                    agent_did,
+                    session,
                     Some(agent_did),
-                    None,
-                    None,
                     now,
                 )
                 .await?;

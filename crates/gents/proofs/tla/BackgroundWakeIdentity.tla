@@ -1,4 +1,6 @@
 ---- MODULE BackgroundWakeIdentity ----
+\* lean: none
+\* crates: gents-session, gents-toolcalls
 (***************************************************************************)
 (* Concurrent background-completion notifications of one finished request *)
 (* coalescing into one wake request (#3810).                               *)

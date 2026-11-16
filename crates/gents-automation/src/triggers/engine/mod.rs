@@ -69,6 +69,27 @@ fn trigger_prompt_header(intent: &FireIntent) -> String {
     header + "]"
 }
 
+pub fn trigger_display_body(request: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
+    let gents_session::request::lifecycle::RequestOrigin::Trigger {
+        trigger_id,
+        trigger_kind,
+    } = gents_session::request::lifecycle::request_origin(request)
+    else {
+        return None;
+    };
+    let kind = if trigger_kind == Some("event") {
+        "event"
+    } else {
+        "scheduled"
+    };
+    request
+        .content
+        .as_deref()?
+        .strip_prefix(&format!("[{kind} trigger:{trigger_id} · task:"))?
+        .split_once("]\n\n")
+        .map(|(_, body)| body)
+}
+
 pub struct FireIntent {
     pub trigger_id: Option<String>,
     pub trigger_kind: TriggerKind,

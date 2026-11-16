@@ -156,7 +156,7 @@ pub(super) async fn complete_access_snapshot_requests(
 /// (`RuntimeConnectionObservation.SnapshotOutcome`). The observer reconnects
 /// a refused source and keeps an armed source for any other failure, so the
 /// kind is decided here, by the access owner's classification, and nowhere
-/// else. An omitted root is not a failure (`omitted_roots_read_empty`).
+/// else. The selected Node must be visible for a usable snapshot.
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotReadError {
     /// The access owner refused the read (HTTP 401/403 or a
@@ -168,6 +168,8 @@ pub enum SnapshotReadError {
     /// something the reader could not decode.
     #[error("{0}")]
     Failed(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("Access to this Node is unavailable. Connect this desktop to request access again.")]
+    NodeUnavailable,
 }
 
 impl From<anyhow::Error> for SnapshotReadError {
@@ -182,7 +184,7 @@ impl From<anyhow::Error> for SnapshotReadError {
 
 impl SnapshotReadError {
     pub fn refused(&self) -> bool {
-        matches!(self, Self::Refused(_))
+        matches!(self, Self::Refused(_) | Self::NodeUnavailable)
     }
 }
 
@@ -190,12 +192,6 @@ pub async fn load_node_snapshot_on(
     access: &ConfigAccess,
     node_did: &str,
 ) -> std::result::Result<ClientStore, SnapshotReadError> {
-    load_node_snapshot(access, node_did)
-        .await
-        .map_err(SnapshotReadError::from)
-}
-
-async fn load_node_snapshot(access: &ConfigAccess, node_did: &str) -> Result<ClientStore> {
     let (
         nodes,
         default_agent_selections,
@@ -260,7 +256,9 @@ async fn load_node_snapshot(access: &ConfigAccess, node_did: &str) -> Result<Cli
             AgentTargetList::new(node_did),
             DatastoreToolSurfaceList::new(node_did),
         ))
-        .await?;
+        .await
+        .map_err(anyhow::Error::from)?;
+    selected_node_root(!nodes.is_empty())?;
     let mut triggers = Vec::with_capacity(trigger_rows.len());
     let mut trigger_observations = Vec::with_capacity(trigger_rows.len());
     let mut schedule_observations = Vec::with_capacity(trigger_rows.len());
@@ -402,15 +400,41 @@ pub async fn load_node_scoped_snapshot_with_peer_records(
     node_did: &str,
     peers: &[PeerRecord],
     capability: &gents_store::config_client::ClientSigningCapability,
-) -> Result<ClientStore> {
+) -> std::result::Result<ClientStore, SnapshotReadError> {
     let endpoint = peers
         .iter()
         .find(|peer| peer.node_did == node_did)
         .and_then(|peer| crate::local_runtime::operator_endpoint(peer, capability))
         .with_context(|| format!("runtime {node_did} has no authenticated database endpoint"))?;
-    Ok(load_node_snapshot_on(
+    load_node_snapshot_on(
         &gents_store::config_client::ConfigAccess::Graphql(endpoint),
         node_did,
     )
-    .await?)
+    .await
+}
+
+fn selected_node_root(visible: bool) -> std::result::Result<(), SnapshotReadError> {
+    if visible {
+        Ok(())
+    } else {
+        Err(SnapshotReadError::NodeUnavailable)
+    }
+}
+
+#[cfg(test)]
+mod root_contract {
+    #[test]
+    fn selected_node_root_matches_lean() {
+        gents_lean_vocab::families::runtime_connection_observation_selected_root_snapshot::replay::<
+            String,
+        >(|case| {
+            let visible = case.visible;
+            match super::selected_node_root(visible) {
+                Ok(()) => "succeeded",
+                Err(error) if error.refused() => "refused",
+                Err(_) => "unreachable",
+            }
+            .to_owned()
+        });
+    }
 }

@@ -770,8 +770,8 @@ mod tests {
                     expires_in: Some(3600),
                     scope: None,
                     account_id: Some("IDENTITY".into()),
-                    organization_uuid: Some("org-KEY".into()),
-                    account_uuid: Some(format!("account-KEY-{who}")),
+                    organization_uuid: Some("org-KEY-SENTINEL".into()),
+                    account_uuid: Some(format!("account-KEY-SENTINEL-{who}")),
                 },
                 chrono::Utc::now(),
             )
@@ -826,7 +826,7 @@ mod tests {
                 .await
                 .expect("load timeline");
             let text = serde_json::to_string(&timeline).unwrap();
-            for secret in ["SECRET", "IDENTITY", "KEY"] {
+            for secret in ["SECRET", "IDENTITY", "KEY-SENTINEL"] {
                 assert!(!text.contains(secret), "{secret} in {text}");
             }
             timeline

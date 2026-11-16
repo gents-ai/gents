@@ -1285,12 +1285,20 @@ async fn queued_persist_failure_releases_queue_capacity() {
     ));
     wait_for_request_call_state(&node, &signer, "req-leak-c", "queued").await;
     drop(held);
-    let permit = tokio::time::timeout(Duration::from_secs(30), queued)
+    let permit = tokio::time::timeout(gents_store::test_support::STALL_CEILING, queued)
         .await
         .expect("queued acquire must not hang")
         .expect("queued acquire task join")
         .expect("queue capacity must be available after the failed persist");
     drop(permit);
+}
+
+struct WakeNotify(tokio::sync::Notify);
+
+impl futures::task::ArcWake for WakeNotify {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        arc_self.0.notify_one();
+    }
 }
 
 async fn acquire_on(
@@ -1681,18 +1689,32 @@ async fn park_with_assigned_permit(
     let parked_registry = registry.clone();
     let mut parked: ParkedCall =
         Box::pin(async move { acquire_on(&parked_registry, request_id, backend).await });
-    let waker = futures::task::noop_waker();
+    // The test polls the parked call itself, so it can stop polling once the
+    // permit is assigned; it polls again whenever the call's waker fires or
+    // its InferenceCall rows change, never on a timer (TLA+ `WallClockBound`).
+    let woken = Arc::new(WakeNotify(tokio::sync::Notify::new()));
+    let waker = futures::task::waker(woken.clone());
     let mut cx = std::task::Context::from_waker(&waker);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut changes =
+        gents_store::subscription_source::subscribe_collections(node, ["InferenceCall"])
+            .expect("observe InferenceCall");
     loop {
         assert!(parked.as_mut().poll(&mut cx).is_pending());
         let rows = call_rows(node, &registry.signer).await;
         if call_state_for_request(&rows, request_id).as_deref() == Some("queued") {
             break;
         }
-        assert!(tokio::time::Instant::now() < deadline);
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::timeout(gents_store::test_support::STALL_CEILING, async {
+            tokio::select! {
+                _ = woken.0.notified() => {}
+                _ = changes.recv() => {}
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{request_id} stalled before queueing: {rows:?}"));
     }
+    // A negative check without a settled point: nothing wakes a queued call
+    // while its slot is held, so these polls can only pass, under any load.
     for _ in 0..20 {
         assert!(parked.as_mut().poll(&mut cx).is_pending());
         tokio::time::sleep(Duration::from_millis(5)).await;

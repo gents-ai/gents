@@ -311,6 +311,7 @@ inductive InferenceWrapper where
   | inventoryErrorStore
   | inventoryErrorView
   | runtimeAccountMetadataErrorAccess
+  | configurationVisibilityErrorVersion
   | configurationVisibilityErrorAccess
   deriving DecidableEq, Repr
 

@@ -108,4 +108,32 @@ theorem agent_install_grants_no_reader (reader : RootReader) :
     readerAction .agent reader ≠ .grant := by
   cases reader <;> simp [readerAction]
 
+/-- For a pack Tools document that leaves its filesystem root unset, a live
+host configuration owns its existing root, including an explicitly unbound
+root. Only a newly configured host inherits the installer's root. Reinstall
+and overwrite select content; neither authorizes widening this default. The
+install's existing snapshot check refuses concurrent edits before commit. -/
+inductive HostRootSource | retained | installer | unbound
+  deriving DecidableEq, Repr
+
+def hostRootSource (installedHost installerRoot : Bool) : HostRootSource :=
+  if installedHost then .retained else if installerRoot then .installer else .unbound
+
+/-- Repeating an approved install may finish a prior failed root-reader grant
+only when its provenance was installer-supplied and its live root still equals
+this installer's root. A retained different root never becomes an automatic
+reader grant. Explicitly authored roots do not enter this defaulting owner. -/
+def hostRootSupplied (source : HostRootSource) (previouslySupplied matchesInstaller : Bool) : Bool :=
+  matchesInstaller && (source == .installer || (source == .retained && previouslySupplied))
+
+theorem existing_host_root_is_retained (installerRoot : Bool) :
+    hostRootSource true installerRoot = .retained := rfl
+
+theorem retained_different_root_is_not_supplied (previouslySupplied : Bool) :
+    hostRootSupplied .retained previouslySupplied false = false := rfl
+
+theorem an_unbound_root_is_not_supplied (previouslySupplied matchesInstaller : Bool) :
+    hostRootSupplied .unbound previouslySupplied matchesInstaller = false := by
+  cases matchesInstaller <;> simp [hostRootSupplied]
+
 end Pack.Operations
