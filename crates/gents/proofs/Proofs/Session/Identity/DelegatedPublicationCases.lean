@@ -43,7 +43,8 @@ structure Case where
   invokeGrant : Bool
   binding : Binding
   actions : List Action
-  claimCommit : NativeCommit
+  /-- The writes that land on the target's claim attempts, one per attempt. -/
+  claimRaces : List ClaimRace := []
 
 def grantedCommit : NativeCommit := ⟨true, true, true, true⟩
 def deniedCommit : NativeCommit := ⟨true, false, true, true⟩
@@ -52,30 +53,53 @@ def observed : Action := .observe true true
 def grant : Action := .publish "parent-agent" true allGrants
 
 def cases : List Case :=
-  [ ⟨"published", true, binding, [good, observed, grant], grantedCommit⟩
-  , ⟨"same-agent-published", false, sameAgentBinding, [good, observed, grant], deniedCommit⟩
+  [ ⟨"published", true, binding, [good, observed, grant], []⟩
+  , ⟨"same-agent-published", false, sameAgentBinding, [good, observed, grant], []⟩
   , ⟨"same-agent-partial-visible", false, sameAgentBinding,
-      [good, observed, .publish "parent-agent" true visiblePartialGrants], deniedCommit⟩
+      [good, observed, .publish "parent-agent" true visiblePartialGrants], []⟩
   , ⟨"same-agent-marker-conflict", false, sameAgentBinding, [good, observed, grant],
-      { deniedCommit with committed := false }⟩
-  , ⟨"invoke-denied", false, binding, [good, observed, grant], deniedCommit⟩
-  , ⟨"invoke-revoked-at-commit", true, binding, [good, observed, grant], deniedCommit⟩
-  , ⟨"marker-commit-conflict", true, binding, [good, observed, grant], { grantedCommit with committed := false }⟩
-  , ⟨"native-commit-failed", true, binding, [.commit true true false, observed, grant], grantedCommit⟩
-  , ⟨"missing-starter", true, binding, [.commit false true true, observed, grant], grantedCommit⟩
-  , ⟨"missing-creation-receipt", true, binding, [.commit true false true, observed, grant], grantedCommit⟩
-  , ⟨"wrong-signer", true, { binding with signer := "user" }, [good, observed, grant], grantedCommit⟩
-  , ⟨"wrong-physical-session", true, { binding with signedSession := "other" }, [good, observed, grant], grantedCommit⟩
-  , ⟨"wrong-physical-agent", true, { binding with signedAgent := "other" }, [good, observed, grant], grantedCommit⟩
-  , ⟨"commit-unconfirmed", true, binding, [good, grant], grantedCommit⟩
-  , ⟨"wrong-receipt", true, binding, [good, .observe false true, grant], grantedCommit⟩
-  , ⟨"wrong-owner", true, binding, [good, .observe true false, grant], grantedCommit⟩
-  , ⟨"partial-grants", true, binding, [good, observed, .publish "parent-agent" true partialGrants], grantedCommit⟩
-  , ⟨"visible-before-publication-complete", true, binding, [good, observed, .publish "parent-agent" true visiblePartialGrants], grantedCommit⟩
-  , ⟨"partial-then-recover", true, binding, [good, observed, .publish "parent-agent" true partialGrants, grant], grantedCommit⟩
-  , ⟨"foreign-recovery-actor", true, binding, [good, observed, .publish "user" true allGrants], grantedCommit⟩
-  , ⟨"mismatched-recovery-binding", true, binding, [good, observed, .publish "parent-agent" false allGrants], grantedCommit⟩
-  , ⟨"revoked-after-publication", true, binding, [good, observed, grant, .revokeSessionParent, grant], grantedCommit⟩ ]
+      [.rewriteMarkers]⟩
+  , ⟨"invoke-denied", false, binding, [good, observed, grant], []⟩
+  , ⟨"invoke-revoked-at-commit", true, binding, [good, observed, grant], [.revokeInvoke]⟩
+  , ⟨"marker-commit-conflict", true, binding, [good, observed, grant], [.rewriteMarkers]⟩
+  , ⟨"marker-reset-at-commit", true, binding, [good, observed, grant], [.resetRequestMarker]⟩
+  , ⟨"native-commit-failed", true, binding, [.commit true true false, observed, grant], []⟩
+  , ⟨"missing-starter", true, binding, [.commit false true true, observed, grant], []⟩
+  , ⟨"missing-creation-receipt", true, binding, [.commit true false true, observed, grant], []⟩
+  , ⟨"wrong-signer", true, { binding with signer := "user" }, [good, observed, grant], []⟩
+  , ⟨"wrong-physical-session", true, { binding with signedSession := "other" }, [good, observed, grant], []⟩
+  , ⟨"wrong-physical-agent", true, { binding with signedAgent := "other" }, [good, observed, grant], []⟩
+  , ⟨"commit-unconfirmed", true, binding, [good, grant], []⟩
+  , ⟨"wrong-receipt", true, binding, [good, .observe false true, grant], []⟩
+  , ⟨"wrong-owner", true, binding, [good, .observe true false, grant], []⟩
+  , ⟨"partial-grants", true, binding, [good, observed, .publish "parent-agent" true partialGrants], []⟩
+  , ⟨"visible-before-publication-complete", true, binding, [good, observed, .publish "parent-agent" true visiblePartialGrants], []⟩
+  , ⟨"partial-then-recover", true, binding, [good, observed, .publish "parent-agent" true partialGrants, grant], []⟩
+  , ⟨"foreign-recovery-actor", true, binding, [good, observed, .publish "user" true allGrants], []⟩
+  , ⟨"mismatched-recovery-binding", true, binding, [good, observed, .publish "parent-agent" false allGrants], []⟩
+  , ⟨"revoked-after-publication", true, binding, [good, observed, grant, .revokeSessionParent, grant], []⟩ ]
+
+/-- The User's revocation lands on the target's first claim attempt, which
+conflicts; the rerun reads the revoked invoke and denies. -/
+theorem invoke_revoked_at_commit_is_denied :
+    claimRetrying ([good, observed, grant].foldl step (initial true)) [.revokeInvoke] = .denied := by
+  native_decide
+
+/-- A marker reset between the claim's check and its commit conflicts the
+attempt; the rerun reads the pending marker and leaves the work unavailable. -/
+theorem marker_reset_at_commit_is_unavailable :
+    claimRetrying ([good, observed, grant].foldl step (initial true)) [.resetRequestMarker] =
+      .unavailable := by
+  native_decide
+
+/-- Rewriting the markers to the value they hold conflicts the attempt and
+changes nothing the rerun reads, so the rerun claims, for a cross-actor and a
+same-Agent request alike. -/
+theorem rewritten_markers_rerun_claims :
+    claimRetrying ([good, observed, grant].foldl step (initial true)) [.rewriteMarkers] = .claimed ∧
+    claimRetrying ([good, observed, grant].foldl step (initial false sameAgentBinding))
+      [.rewriteMarkers] = .claimed := by
+  native_decide
 
 theorem complete_publication_exposes_child_and_preserves_user_control :
     let s := [good, observed, grant].foldl step (initial true)

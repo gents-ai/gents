@@ -412,10 +412,63 @@ async fn exercise_readiness(same_agent: bool, cases: Vec<ReadinessCase>) {
     for case in &published {
         case.check(observed.clone());
     }
-    assert!(matches!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    ));
+    if same_agent {
+        let cases =
+            gents_lean_vocab::families::delegated_publication_same_agent_claim_race::cases();
+        let [case] = cases.as_slice() else {
+            panic!(
+                "the readiness fixture claims once: {} race cases",
+                cases.len()
+            );
+        };
+        let [race] = case.input.claim_races.as_slice() else {
+            panic!(
+                "the commit pause holds one attempt: {:?}",
+                case.input.claim_races
+            );
+        };
+        assert_eq!(race, "rewrite_markers", "{}", case.input.name);
+        let reached = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut claim = Box::pin(
+            gents_store::config_client::ConfigApplyTxn::with_embedded_before_commit_pause(
+                reached.clone(),
+                release.clone(),
+                lifecycle.claim_with_identity(),
+            ),
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            tokio::select! {
+                _ = reached.notified() => {}
+                outcome = &mut claim => panic!("claim returned before its commit boundary: {outcome:?}"),
+            }
+        })
+        .await
+        .expect("the claim reaches its native commit boundary");
+        set_pending(
+            &author_access,
+            "test.readiness.claim_race_markers",
+            session_doc,
+            Some(false),
+            &request_doc,
+            Some(false),
+        )
+        .await;
+        release.notify_one();
+        case.check(
+            match claim.await.unwrap() {
+                ClaimOutcome::Claimed => "claimed",
+                ClaimOutcome::Queued => "unavailable",
+                other => panic!("unmodeled raced claim outcome {other:?}"),
+            }
+            .to_owned(),
+        );
+    } else {
+        assert!(matches!(
+            lifecycle.claim_with_identity().await.unwrap(),
+            ClaimOutcome::Claimed
+        ));
+    }
     let admitted_after = lifecycle.claimed_client_provenance();
     let label = |actual: &str, fixture: &str, modeled: &str| {
         if actual == fixture {

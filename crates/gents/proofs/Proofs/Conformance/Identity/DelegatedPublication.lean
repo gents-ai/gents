@@ -49,10 +49,7 @@ structure CaseInput where
   signedAgent : String
   signer : String
   actions : List ActionWire
-  claimSessionPermission : Bool
-  claimAgentInvoke : Bool
-  claimNativeCommit : Bool
-  claimRequesterNodePermission : Bool
+  claimRaces : List String
   deriving ToJson
 
 def caseInput (c : Case) : CaseInput :=
@@ -62,14 +59,11 @@ def caseInput (c : Case) : CaseInput :=
     requestDoc := c.binding.requestDoc, signedSession := c.binding.signedSession
     signedAgent := c.binding.signedAgent, signer := c.binding.signer
     actions := c.actions.map actionWire
-    claimSessionPermission := c.claimCommit.sessionPermission
-    claimAgentInvoke := c.claimCommit.agentInvoke
-    claimNativeCommit := c.claimCommit.committed
-    claimRequesterNodePermission := c.claimCommit.requesterNodePermission }
+    claimRaces := c.claimRaces.map Identity.DelegatedPublication.ClaimRace.wire }
 
 private def caseNamed (name : String) : Case :=
   (cases.find? fun c => c.name == name).getD
-    ⟨"", false, binding, [], grantedCommit⟩
+    ⟨"", false, binding, [], []⟩
 
 private def finalState (c : Case) : Identity.DelegatedPublication.Publication :=
   c.actions.foldl step (initial c.invokeGrant c.binding)
@@ -80,7 +74,7 @@ private def targetRead (c : Case) : Bool :=
 
 private def claimOf (c : Case) : String :=
   Request.CrossActorAuthorization.decisionString
-    (Identity.DelegatedPublication.claim (finalState c) c.claimCommit)
+    (Identity.DelegatedPublication.claimRetrying (finalState c) c.claimRaces)
 
 structure ReadinessOutput where
   targetRead : Bool
@@ -227,6 +221,27 @@ private def observation (c : Case) : Observation :=
     otherUserAdmin := Identity.Household.allowed 5 s.household "other-user" "sessions" b.sessionDoc "delete"
     claim := claimOf c }
 
+/-- The served delegated-finality fixture commits one complete publication,
+then holds the child's claim at its native commit boundary while the race lands:
+the configuring User revokes the parent's `session_writer`, or the parent
+rewrites the pending markers complete or resets the request's. -/
+def claimRaceNames : List String :=
+  ["invoke-revoked-at-commit", "marker-commit-conflict", "marker-reset-at-commit"]
+
+@[conformance_family]
+def claimRace : Family CaseInput String where
+  inputs := (cases.filter fun c => c.name ∈ claimRaceNames).map caseInput
+  model := fun i => claimOf (caseNamed i.name)
+
+/-- The served readiness fixture's same-Agent run holds the Agent's own claim at
+its native commit boundary while the author rewrites both markers complete. -/
+def sameAgentClaimRaceNames : List String := ["same-agent-marker-conflict"]
+
+@[conformance_family]
+def sameAgentClaimRace : Family CaseInput String where
+  inputs := (cases.filter fun c => c.name ∈ sameAgentClaimRaceNames).map caseInput
+  model := fun i => claimOf (caseNamed i.name)
+
 /-- model-production-gap: no production path reaches five cases.
 `wrong-physical-session` and `wrong-physical-agent`: the `agent_new` commit
 binds the physical session and Agent documents and then signs in the same
@@ -235,36 +250,23 @@ the receipt is issued in that transaction after the opening it needs is staged,
 signed and starter-verified there. `partial-grants` and `partial-then-recover`:
 each relation set is staged atomically with its pending marker.
 
-Model and production disagree on four cases. `invoke-denied`: the model commits
+Model and production disagree on two cases. `invoke-denied`: the model commits
 without the parent's invoke grant (`commit`,
-Proofs/Session/Identity/DelegatedPublication.lean:58) and denies only at claim
-(`claim`, line 131); production's `agent_new` transaction refuses the commit
+Proofs/Session/Identity/DelegatedPublication.lean:58) and denies only at claim;
+production's `agent_new` transaction refuses the commit
 (crates/gents-session/src/session/message/commit.rs:460, staging the target
 session at line 534). `revoked-after-publication`: the model lets the parent
 Agent revoke its session's parent relation
 (Proofs/Session/Identity/DelegatedPublicationCases.lean:38); production refuses
 the parent Agent's `delete_resource_relationship`
 (crates/gents-store/src/config_client/relationships.rs:147) with NotAuthorized
-get-collection. `invoke-revoked-at-commit` and `same-agent-marker-conflict`:
-the model's claim ends in `conflict` when its native commit conflicts (`claim`,
-line 126); production claims in `transact_write`
-(crates/gents-session/src/request/lifecycle/claim.rs:273), whose ConflictRetry
-mode (crates/gents-store/src/config_client/txn/transact_entry.rs:106) reruns a
-conflicted attempt, so the observable result is the rerun's decision; holding
-the claim at its commit boundary while the User revoked the parent's
-`session_writer` gave a denied claim.
-
-`marker-commit-conflict` is inconclusive: holding the claim at its commit
-boundary while the author rewrote both markers complete gave a committed claim,
-but no native conflict was shown, so neither the retry nor a missing conflict
-is established. The safety direction, a marker reset to pending between the
-claim's check and its commit, is untested; whether that claim must fail is a
-question for the maintainer. -/
+get-collection. -/
 @[conformance_family]
 def unreached : Family CaseInput Observation where
   inputs := (cases.filter fun c =>
       !(c.name ∈ readinessNames || c.name ∈ recoveryNames || c.name ∈ agentNewNames ||
-        c.name ∈ creatorRecoveryNames || c.name ∈ commitRefusalNames)).map caseInput
+        c.name ∈ creatorRecoveryNames || c.name ∈ commitRefusalNames ||
+        c.name ∈ claimRaceNames || c.name ∈ sameAgentClaimRaceNames)).map caseInput
   model := fun i => observation (caseNamed i.name)
 
 example : targetRead (caseNamed "visible-before-publication-complete") = true := by native_decide

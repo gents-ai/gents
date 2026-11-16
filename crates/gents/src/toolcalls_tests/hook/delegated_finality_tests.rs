@@ -703,6 +703,183 @@ async fn delegated_publication_commit_refusal_follows_the_lean_model() {
     }
 }
 
+/// Writes the modeled concurrent change while the child's claim is held
+/// between its reads and its native commit.
+async fn land_claim_race(fixture: &Fixture, doc: &str, race: &str) {
+    match race {
+        "revoke_invoke" => fixture
+            .config
+            .delete_actor_relationship(
+                "Agent",
+                &child_agent_document(fixture).await,
+                "session_writer",
+                &fixture.parent_binding.agent_did.parse().unwrap(),
+            )
+            .await
+            .unwrap(),
+        "rewrite_markers" | "reset_request_marker" => {
+            let row = child_publication_row(fixture).await;
+            let request_pending = race == "reset_request_marker";
+            let session = row["session_doc_id"].as_str().unwrap().to_owned();
+            fixture
+                .access
+                .transact_write("test.finality.claim_race_markers", |txn| {
+                    let session = &session;
+                    Box::pin(async move {
+                        for (collection, schema, doc, pending) in [
+                            (
+                                "AgentSession",
+                                gents_protocol::schemas::AGENT_SESSION,
+                                session.as_str(),
+                                false,
+                            ),
+                            (
+                                "AgentRequest",
+                                gents_protocol::schemas::AGENT_REQUEST,
+                                doc,
+                                request_pending,
+                            ),
+                        ] {
+                            txn.execute_client_signed_update(
+                                &format!(
+                                    r#"mutation($input: {collection}MutationInputArg!) {{ update_{collection}(docID: "{}", input: $input) {{ _docID }} }}"#,
+                                    gents_store::graphql::escape_graphql_string(doc)
+                                ),
+                                &json!({"input": {"relationships_pending": pending}}),
+                                schema,
+                            )
+                            .await?;
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
+                .await
+                .unwrap();
+        }
+        other => panic!("unmodeled claim race {other}"),
+    }
+}
+
+/// The child's claim with each modeled race landing on one attempt. The
+/// fixture's commit pause holds only the first attempt, so a case races at
+/// most once; a rerun reads and decides again on the state the race left.
+async fn child_claim_raced(fixture: &Fixture, doc: &str, races: &[String]) -> String {
+    let [race] = races else {
+        assert!(races.is_empty(), "the fixture races one attempt: {races:?}");
+        return child_claim(fixture, doc).await;
+    };
+    let watcher = gents_session::request::watcher::DefraWatcher::for_agents(
+        fixture.node.clone(),
+        fixture.runtime.did(),
+        vec![fixture.child.clone()],
+    )
+    .unwrap();
+    let request = watcher
+        .pending_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|request| request.doc_id == doc)
+        .expect("the published child request is pending for the child");
+    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+    let verifier = AgentRequestAdmissionVerifier::new(
+        fixture.node.clone(),
+        fixture.runtime.clone(),
+        authority,
+    );
+    let (request, admission) = verifier
+        .verify_fresh_for_claim(&request, fixture.child.did())
+        .await
+        .unwrap();
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        fixture.node.clone(),
+        request,
+        60,
+        ExecutionOrigin::Interactive,
+        String::new(),
+    );
+    lifecycle
+        .bind_managed_agent(fixture.child.as_ref())
+        .unwrap();
+    lifecycle.set_client_claim_admission(admission);
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let mut claim = Box::pin(ConfigApplyTxn::with_embedded_before_commit_pause(
+        reached.clone(),
+        release.clone(),
+        lifecycle.claim_with_identity(),
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        tokio::select! {
+            _ = reached.notified() => {}
+            outcome = &mut claim => panic!("claim returned before its commit boundary: {outcome:?}"),
+        }
+    })
+    .await
+    .expect("the claim reaches its native commit boundary");
+    land_claim_race(fixture, doc, race).await;
+    release.notify_one();
+    match claim.await {
+        Ok(ClaimOutcome::Claimed) => "claimed".into(),
+        Ok(ClaimOutcome::Queued) => "unavailable".into(),
+        Ok(other) => panic!("unmodeled raced claim outcome {other:?}"),
+        Err(error) => {
+            let row = fixture
+                .config
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
+                    gents_store::graphql::escape_graphql_string(doc)
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                row["data"]["AgentRequest"][0]["lifecycle_state"],
+                gents_protocol::request_lifecycle::RequestLifecycleState::Failed.as_str(),
+                "a refused claim rejects the request: {error:#}"
+            );
+            "denied".into()
+        }
+    }
+}
+
+#[tokio::test]
+async fn delegated_publication_claim_race_follows_the_lean_model() {
+    for case in gents_lean_vocab::families::delegated_publication_claim_race::cases() {
+        let mut fixture = fixture(&case.input.name).await;
+        assert!(
+            case.input
+                .actions
+                .first()
+                .is_some_and(|action| action.kind == "commit"
+                    && action.starter == Some(true)
+                    && action.creation_receipt == Some(true)
+                    && action.native_commit == Some(true)),
+            "{} publishes through one complete commit",
+            case.input.name
+        );
+        assert!(
+            case.input.invoke_grant,
+            "the fixture's configuring User grants the parent session_writer"
+        );
+        let mut tool = fixture.tool.clone();
+        gents_session::session::message::commit(
+            &fixture.node,
+            &gents_automation::goal::session_message::SessionGoals,
+            &fixture.cause,
+            &mut tool,
+            fixture.plan.take().unwrap(),
+            false,
+        )
+        .await
+        .unwrap();
+        let (_, children) = observed(&fixture).await;
+        let doc = children[0]["_docID"].as_str().unwrap().to_owned();
+        let claim = child_claim_raced(&fixture, &doc, &case.input.claim_races).await;
+        case.check(claim);
+        fixture.node.shutdown().await.unwrap();
+    }
+}
+
 #[tokio::test]
 async fn dropped_commit_ack_recovery_matches_the_lean_model() {
     for case in gents_lean_vocab::families::delegated_publication_recovery_watcher::cases() {
