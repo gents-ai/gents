@@ -8,9 +8,9 @@ fn native_reset_acknowledges_clearing_an_isolated_datastore() {
         .replace('-', "");
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_gents-desktop-tauri"))
         .arg("__verify-browser-clear")
+        .arg("--webview-store-id")
+        .arg(identifier)
         .arg(&receipt)
-        .env("GENTS_NATIVE_E2E", "1")
-        .env("GENTS_E2E_WEBVIEW_STORE_ID", identifier)
         .status()
         .unwrap();
     assert!(status.success());
@@ -35,9 +35,9 @@ fn native_reset_never_overwrites_an_existing_receipt() {
         .replace('-', "");
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_gents-desktop-tauri"))
         .arg("__clear-browser-data")
+        .arg("--webview-store-id")
+        .arg(identifier)
         .arg(&receipt)
-        .env("GENTS_NATIVE_E2E", "1")
-        .env("GENTS_E2E_WEBVIEW_STORE_ID", identifier)
         .status()
         .unwrap();
     assert!(!status.success());
@@ -50,9 +50,9 @@ fn malformed_isolation_never_falls_back_to_default_user_data() {
     let receipt = root.path().join("browser-clear.json");
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_gents-desktop-tauri"))
         .arg("__clear-browser-data")
+        .arg("--webview-store-id")
+        .arg("invalid")
         .arg(&receipt)
-        .env("GENTS_NATIVE_E2E", "1")
-        .env("GENTS_E2E_WEBVIEW_STORE_ID", "invalid")
         .status()
         .unwrap();
     assert!(!status.success());
@@ -75,10 +75,10 @@ fn browser_reset_preflight_accepts_the_cli_check_command() {
     let check = |receipt: &std::path::Path| {
         std::process::Command::new(env!("CARGO_BIN_EXE_gents-desktop-tauri"))
             .arg("__clear-browser-data")
+            .arg("--webview-store-id")
+            .arg(&identifier)
             .arg("--check")
             .arg(receipt)
-            .env("GENTS_NATIVE_E2E", "1")
-            .env("GENTS_E2E_WEBVIEW_STORE_ID", &identifier)
             .output()
             .unwrap()
     };

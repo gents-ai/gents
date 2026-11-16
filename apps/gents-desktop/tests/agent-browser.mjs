@@ -530,6 +530,7 @@ function spawnLiveBridge(options) {
   } else {
     runnerArgs.push("--api-key", "gents-agent-browser-test-key");
   }
+  if (process.env.GENTS_TAURI_LIVE === "1") runnerArgs.push("--fixture-routes");
 
   const child = spawn("cargo", runnerArgs, {
     cwd: REPO_ROOT,

@@ -80,11 +80,25 @@ export function createLiveBridgeRunnerInvocation(
     command = configuredBinary;
     runnerArgs = [];
   }
-  appendRunnerArg(runnerArgs, "--inference-url", options.inferenceUrl);
+  const openRouterFallback =
+    !options.inferenceUrl?.trim() && Boolean(env.OPENROUTER_API_KEY?.trim());
+  appendRunnerArg(
+    runnerArgs,
+    "--inference-url",
+    openRouterFallback ? "https://openrouter.ai/api/v1" : options.inferenceUrl,
+  );
   appendRunnerArg(runnerArgs, "--model-name", options.modelName);
-  appendRunnerArg(runnerArgs, "--provider", options.provider);
+  appendRunnerArg(
+    runnerArgs,
+    "--provider",
+    openRouterFallback ? "OpenRouter" : options.provider,
+  );
   appendRunnerArg(runnerArgs, "--api-key", options.apiKey);
-  appendRunnerArg(runnerArgs, "--api-key-env-var", options.apiKeyEnvVar);
+  appendRunnerArg(
+    runnerArgs,
+    "--api-key-env-var",
+    openRouterFallback ? "OPENROUTER_API_KEY" : options.apiKeyEnvVar,
+  );
   appendRunnerArg(
     runnerArgs,
     "--agent-target-inference-url",
@@ -102,6 +116,10 @@ export function createLiveBridgeRunnerInvocation(
     "--agent-target-api-key-env-var",
     options.agentTargetApiKeyEnvVar,
   );
+  appendRunnerArg(runnerArgs, "--inference-settings", env.GENTS_DESKTOP_LIVE_INFERENCE);
+  appendRunnerArg(runnerArgs, "--log-filter", env.GENTS_DESKTOP_TEST_LOG);
+  if (env.GENTS_TAURI_LIVE === "1") runnerArgs.push("--fixture-routes");
+  if (env.GENTS_TAURI_LIVE_RETAIN_DATA !== undefined) runnerArgs.push("--retain-data");
   return { command, runnerArgs };
 }
 

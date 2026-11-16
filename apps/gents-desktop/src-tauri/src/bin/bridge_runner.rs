@@ -15,7 +15,10 @@ use serde::Serialize;
 use tokio::io::AsyncReadExt;
 
 use http::BridgeRunnerServer;
-use live_fixture::{LiveBackendOverride, LiveBridgeFixture, LiveTargetBackendOverride};
+use live_fixture::{
+    LiveBackendOverride, LiveBridgeFixture, LiveFixtureOptions, LiveInferenceSettings,
+    LiveTargetBackendOverride,
+};
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[global_allocator]
@@ -45,6 +48,17 @@ struct RunnerArgs {
     agent_target_api_key: Option<String>,
     #[arg(long)]
     agent_target_api_key_env_var: Option<String>,
+    /// JSON object overriding the fixture's sampling, output and turn limits.
+    #[arg(long)]
+    inference_settings: Option<String>,
+    /// Keeps the fixture's temporary data root after shutdown.
+    #[arg(long)]
+    retain_data: bool,
+    /// Serves the routes that reach past the desktop client into the fixture.
+    #[arg(long)]
+    fixture_routes: bool,
+    #[arg(long, default_value = "warn,gents_desktop_tauri=info")]
+    log_filter: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -59,12 +73,35 @@ struct ReadyMessage {
 }
 
 fn main() -> Result<()> {
-    live_fixture::run_on_live_runtime_with_handle(|handle| run(RunnerArgs::parse(), handle))?
+    let args = RunnerArgs::parse();
+    live_fixture::init_live_runner_tracing(&args.log_filter);
+    for (flag, variable) in [
+        ("--api-key-env-var", &args.api_key_env_var),
+        (
+            "--agent-target-api-key-env-var",
+            &args.agent_target_api_key_env_var,
+        ),
+    ] {
+        let Some(variable) = variable.as_deref().map(str::trim) else {
+            continue;
+        };
+        // The provider key stays in the environment the runtime resolves it
+        // from; only its presence is checked here, before any fixture starts.
+        if !variable.is_empty() && std::env::var_os(variable).is_none() {
+            anyhow::bail!("set {variable} because {flag} names it");
+        }
+    }
+    live_fixture::run_on_live_runtime_with_handle(|handle| run(args, handle))?
 }
 
 async fn run(args: RunnerArgs, runtime: tokio::runtime::Handle) -> Result<()> {
+    let options = LiveFixtureOptions {
+        retain_data: args.retain_data,
+        fixture_routes: args.fixture_routes,
+        inference: LiveInferenceSettings::parse(args.inference_settings.as_deref())?,
+    };
     let fixture = if args.desktop_only {
-        tokio::spawn(LiveBridgeFixture::start_desktop_only())
+        tokio::spawn(LiveBridgeFixture::start_desktop_only(options))
             .await
             .map_err(|_| anyhow!("bridge runner panicked during desktop-only startup"))??
     } else {
@@ -85,6 +122,7 @@ async fn run(args: RunnerArgs, runtime: tokio::runtime::Handle) -> Result<()> {
         tokio::spawn(LiveBridgeFixture::start(
             Some(backend_override),
             Some(agent_target_override),
+            options,
         ))
         .await
         .map_err(|_| anyhow!("bridge runner panicked during startup"))??

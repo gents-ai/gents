@@ -2092,15 +2092,9 @@ fn ambient_context_counts_statics_outside_test_items() {
 /// replaces it; the list only shrinks (#1764).
 #[rustfmt::skip]
 const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
-    ("apps/fixture-host/src-tauri/src/lib.rs", 1, "FIXTURE_DOMAIN_HOME: fixture-host test application's data directory; test seam in production code: move behind a test fixture"),
-    ("apps/gents-desktop/src-tauri/src/bin/bridge_runner/http/routes.rs", 3, "GENTS_TAURI_LIVE gates live-fixture routes of the bridge test runner binary; test seam in production code: move behind a test fixture"),
+    ("apps/gents-desktop/src-tauri/src/bin/bridge_runner.rs", 1, "presence of the provider API key variable a live backend names, checked at the bridge test runner's entry; the runtime reads the key itself"),
     ("apps/gents-desktop/src-tauri/src/bridge/browser.rs", 1, "HOME: platform discovery, expands a leading ~ in a user-typed path"),
     ("apps/gents-desktop/src-tauri/src/bridge/links.rs", 1, "APPIMAGE: AppImage probe deciding how links open from a packaged Linux build"),
-    ("apps/gents-desktop/src-tauri/src/bridge/mod.rs", 6, "GENTS_NATIVE_E2E and GENTS_E2E_* select the native end-to-end harness configuration; test seam in production code: move behind a test fixture"),
-    ("apps/gents-desktop/src-tauri/src/browser_data.rs", 2, "GENTS_NATIVE_E2E and GENTS_E2E_WEBVIEW_STORE_ID isolate the e2e webview store; test seam in production code: move behind a test fixture"),
-    ("apps/gents-desktop/src-tauri/src/runner/live_fixture.rs", 2, "GENTS_TAURI_LIVE_RETAIN_DATA and GENTS_DESKTOP_TEST_LOG configure the live-fixture runner; test seam in production code: move behind a test fixture"),
-    ("apps/gents-desktop/src-tauri/src/runner/live_fixture/backend.rs", 4, "live-fixture backend selection and its provider API key variables; test seam in production code: move behind a test fixture"),
-    ("apps/gents-desktop/src-tauri/src/runner/live_fixture/inference.rs", 1, "GENTS_DESKTOP_LIVE_INFERENCE selects live-fixture inference; test seam in production code: move behind a test fixture"),
     ("crates/gents-chatgpt-login/src/lib.rs", 1, "CODEX_CA_CERT and SSL_CERT_FILE: standard custom CA bundle convention for the login HTTP client"),
     ("crates/gents-cli/src/commands/chat/streaming.rs", 1, "NO_COLOR: standard convention disabling terminal colour"),
     ("crates/gents-cli/src/commands/desktop.rs", 2, "GENTS_DESKTOP_HOME and GENTS_HOME: home discovery when --desktop-home or --home is absent, as the home owner resolves it"),
@@ -2116,7 +2110,6 @@ const ENVIRONMENT_READ_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-cli/src/desired_state/load.rs", 1, "desired-state ${VAR} interpolation: the manifest names operator-supplied variables"),
     ("crates/gents-desktop-bridge/src/host_browser.rs", 4, "BROWSER, PATH, APPDIR and APPIMAGE: platform browser discovery and the AppImage probe"),
     ("crates/gents-desktop-bridge/src/package_tools.rs", 6, "PATH, APPDIR, APPIMAGE and launcher overrides: AppImage probe restoring the host environment for host programs"),
-    ("crates/gents-desktop-bridge/src/tauri_commands/e2e.rs", 13, "GENTS_NATIVE_E2E and GENTS_E2E_* drive the native end-to-end command; test seam in production code: move behind a test fixture"),
     ("crates/gents-desktop-bridge/src/tauri_commands/service_executable.rs", 4, "GENTS_BIN, PATH, APPDIR and APPIMAGE: discovery of the gents executable and the AppImage probe"),
     ("crates/gents-desktop-core/src/client/paths.rs", 1, "GENTS_DESKTOP_HOME: desktop home discovery, the desktop counterpart of GENTS_HOME"),
     ("crates/gents-desktop-core/src/local_runtime/mod.rs", 1, "HOME: platform discovery of the user home for the local runtime service"),
