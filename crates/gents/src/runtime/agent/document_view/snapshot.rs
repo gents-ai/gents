@@ -69,7 +69,7 @@ struct UnselectedDisabledBackend {
 enum InferenceResolveError {
     #[error(transparent)]
     Unselected(#[from] UnselectedDisabledBackend),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Invalid(#[from] anyhow::Error),
 }
 

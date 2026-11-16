@@ -30,6 +30,14 @@ fn every_session_owner_variant_preserves_the_access_classification() {
             "user_message_input_error_read" => {
                 classify_erased(erasure, UserMessageInputError::Read(access))
             }
+            "position_error_access" => classify_erased(
+                erasure,
+                crate::request::lifecycle::queue::PositionError::Access(access),
+            ),
+            "renewal_error_access" => classify_erased(
+                erasure,
+                crate::request::lifecycle::RenewalError::Access(access),
+            ),
             "watcher_scan_error_query" => classify_erased(
                 erasure,
                 WatcherScanError::Query {

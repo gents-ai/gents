@@ -102,7 +102,7 @@ enum SchemaCommandError {
     DigestMismatch,
     #[error("SDL definition is invalid")]
     Sdl(#[source] anyhow::Error),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

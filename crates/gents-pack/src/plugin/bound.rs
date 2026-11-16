@@ -204,7 +204,7 @@ impl std::error::Error for NotLinkable {}
 pub(crate) enum BindFileError {
     #[error(transparent)]
     NotLinkable(#[from] NotLinkable),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

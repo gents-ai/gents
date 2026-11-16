@@ -327,6 +327,8 @@ inductive SessionWrapper where
   | hookErrorStore
   | userMessageInputErrorRead
   | watcherScanErrorQuery
+  | positionErrorAccess
+  | renewalErrorAccess
   deriving DecidableEq, Repr
 
 def SessionWrapper.holding (_ : SessionWrapper) : Holding := .sourced
@@ -353,11 +355,13 @@ transparently, as `InferenceWrapper.inventoryErrorView` does. -/
 inductive ToolsWrapper where
   | schemaIdentityErrorConfigClient
   | registryReadErrorView
+  | queryCommandErrorAccess
   deriving DecidableEq, Repr
 
 def ToolsWrapper.wrap : ToolsWrapper → Failure → Error
   | .registryReadErrorView, failure => .wrapper .transparent (StoreWrapper.viewErrorExecute.wrap failure)
   | .schemaIdentityErrorConfigClient, failure => .wrapper .sourced (.owner failure)
+  | .queryCommandErrorAccess, failure => .wrapper .sourced (.owner failure)
 
 /-- `gents-desktop-core`. -/
 inductive DesktopCoreWrapper where
@@ -365,6 +369,21 @@ inductive DesktopCoreWrapper where
   deriving DecidableEq, Repr
 
 def DesktopCoreWrapper.holding (_ : DesktopCoreWrapper) : Holding := .sourced
+
+/-- `gents-eval`. -/
+inductive EvalWrapper where
+  | promoteTxnErrorAccess
+  deriving DecidableEq, Repr
+
+def EvalWrapper.holding (_ : EvalWrapper) : Holding := .sourced
+
+/-- `gents-toolcalls`. -/
+inductive ToolcallsWrapper where
+  | terminalWriteErrorAccess
+  | writeFailureAccess
+  deriving DecidableEq, Repr
+
+def ToolcallsWrapper.holding (_ : ToolcallsWrapper) : Holding := .sourced
 
 /-- The classification of `failure` held by a store owner variant. -/
 def storeWrapped (wrapper : StoreWrapper) (failure : Failure) (erasure : Erasure) :
@@ -394,6 +413,23 @@ def toolsWrapped (wrapper : ToolsWrapper) (failure : Failure) (erasure : Erasure
 def desktopCoreWrapped (wrapper : DesktopCoreWrapper) (failure : Failure) (erasure : Erasure) :
     Classification :=
   Error.held wrapper.holding failure erasure
+
+def evalWrapped (wrapper : EvalWrapper) (failure : Failure) (erasure : Erasure) :
+    Classification :=
+  Error.held wrapper.holding failure erasure
+
+def toolcallsWrapped (wrapper : ToolcallsWrapper) (failure : Failure) (erasure : Erasure) :
+    Classification :=
+  Error.held wrapper.holding failure erasure
+
+theorem eval_wrapping_preserves_classification (wrapper : EvalWrapper) (failure : Failure)
+    (erasure : Erasure) : evalWrapped wrapper failure erasure = failure.classification :=
+  Error.held_preserves_classification wrapper.holding (by cases wrapper <;> decide) failure erasure
+
+theorem toolcalls_wrapping_preserves_classification (wrapper : ToolcallsWrapper)
+    (failure : Failure) (erasure : Erasure) :
+    toolcallsWrapped wrapper failure erasure = failure.classification :=
+  Error.held_preserves_classification wrapper.holding (by cases wrapper <;> decide) failure erasure
 
 theorem store_wrapping_preserves_classification (wrapper : StoreWrapper) (failure : Failure)
     (erasure : Erasure) : storeWrapped wrapper failure erasure = failure.classification :=

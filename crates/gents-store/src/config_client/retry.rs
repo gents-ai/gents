@@ -95,14 +95,10 @@ pub(super) fn access_error_in<'a>(
 pub(crate) fn access_owner<'a>(
     cause: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a ConfigClientError> {
-    asked::<ConfigClientError>(cause).or_else(|| asked::<GraphqlResponseError>(cause))
-}
-
-fn asked<'a, O>(cause: &'a (dyn std::error::Error + 'static)) -> Option<&'a ConfigClientError>
-where
-    O: TransactionFailure + std::error::Error + 'static,
-{
-    gents_protocol::error_chain::as_owner::<O>(cause)?.config_client_error()
+    use gents_protocol::error_chain::as_owner;
+    as_owner::<ConfigClientError>(cause)
+        .and_then(TransactionFailure::config_client_error)
+        .or_else(|| as_owner::<GraphqlResponseError>(cause)?.config_client_error())
 }
 
 /// The first request to run again in an erased error's chain. It is found by

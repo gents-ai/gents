@@ -69,7 +69,7 @@ pub(super) enum StepError {
         failure: StepFailure,
         context: String,
     },
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

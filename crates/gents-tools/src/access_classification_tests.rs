@@ -20,6 +20,10 @@ fn every_tools_owner_variant_preserves_the_access_classification() {
             "schema_identity_error_config_client" => {
                 classify_erased(input.erasure, SchemaIdentityError::ConfigClient(access))
             }
+            "query_command_error_access" => classify_erased(
+                input.erasure,
+                crate::builtin::defra_query::QueryCommandError::Access(access),
+            ),
             "registry_read_error_view" => classify_erased(
                 input.erasure,
                 RegistryReadError::View(ViewError::Execute(access)),

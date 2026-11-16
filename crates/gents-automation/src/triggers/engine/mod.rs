@@ -142,7 +142,7 @@ pub(crate) enum MaterializeError {
     BudgetExhausted(#[from] MaterializeBudgetExhausted),
     #[error(transparent)]
     Duplicate(#[from] MaterializeDuplicate),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

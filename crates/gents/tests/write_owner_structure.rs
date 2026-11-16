@@ -2504,7 +2504,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-pack/src/plugin/http_calls.rs", &["InternalAddress::in_chain"]),
     ("crates/gents-pack/src/plugin/store.rs", &["PublishedPluginReadError::error_chain_is_busy"]),
     ("crates/gents-protocol/src/database_error.rs", &["is_storage_full"]),
-    ("crates/gents-protocol/src/error_chain.rs", &["find_source"]),
+    ("crates/gents-protocol/src/error_chain.rs", &["exactly"]),
     ("crates/gents-protocol/src/graphql/transport.rs", &["graphql_error_is_retryable"]),
     ("crates/gents-protocol/src/operations/install_repair.rs", &["IncompatibleStore::of"]),
     ("crates/gents-protocol/src/output.rs", &["ReconstructionError::in_chain"]),
@@ -2519,7 +2519,7 @@ const OWNER_CLASSIFIER_REGISTRY: &[(&str, &[&str])] = &[
     ("crates/gents-session/src/request/seam_error.rs", &["RuntimeSeamError::recover"]),
     ("crates/gents-session/src/session/compaction_entries.rs", &["StaleCompactionGeneration::occurs_in"]),
     ("crates/gents-session/src/session/output.rs", &["CanonicalOutputReadError::in_error"]),
-    ("crates/gents-store/src/config_client/retry.rs", &["access_error_in", "rerun_request_in"]),
+    ("crates/gents-store/src/config_client/retry.rs", &["access_owner", "rerun_request_in"]),
     ("crates/gents-store/src/config_client/schema_install.rs", &["install_error_in", "schema_install_mismatch"]),
     ("crates/gents-store/src/identity/error.rs", &["identity_key_unavailable"]),
     ("crates/gents-store/src/local/backend_protection.rs", &["BackendProtectionError::in_chain"]),
@@ -3418,7 +3418,7 @@ impl<'ast> Visit<'ast> for ClassifierVisitor<'_> {
             if let proc_macro2::TokenTree::Ident(ident) = token {
                 if matches!(
                     ident.to_string().as_str(),
-                    "downcast" | "downcast_ref" | "downcast_mut" | "find_source"
+                    "downcast" | "downcast_ref" | "downcast_mut" | "find_source" | "as_owner"
                 ) {
                     self.downcast_site(ident.span().start().line, None);
                 }
@@ -3438,7 +3438,7 @@ impl<'ast> Visit<'ast> for ClassifierVisitor<'_> {
     fn visit_expr_call(&mut self, call: &'ast ExprCall) {
         if let Expr::Path(function) = call.func.as_ref() {
             if let Some(segment) = function.path.segments.last() {
-                if segment.ident == "find_source" {
+                if segment.ident == "find_source" || segment.ident == "as_owner" {
                     let asked = match &segment.arguments {
                         syn::PathArguments::AngleBracketed(arguments) => first_type(arguments),
                         _ => None,
@@ -4411,6 +4411,8 @@ const ACCESS_HOLDER_FAMILIES: &[(&str, &str)] = &[
     ("gents-p2p", "access_classification_p2p_wrapped"),
     ("gents-service", "access_classification_service_wrapped"),
     ("gents-tools", "access_classification_tools_wrapped"),
+    ("gents-eval", "access_classification_eval_wrapped"),
+    ("gents-toolcalls", "access_classification_toolcalls_wrapped"),
     (
         "gents-desktop-core",
         "access_classification_desktop_core_wrapped",
@@ -4471,23 +4473,6 @@ impl<'ast> Visit<'ast> for ErrorHolderVisitor {
             });
         }
     }
-}
-
-fn derives_error(attributes: &[syn::Attribute]) -> bool {
-    attributes.iter().any(|attribute| {
-        attribute.path().is_ident("derive")
-            && attribute
-                .parse_args_with(
-                    syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
-                )
-                .is_ok_and(|derived| {
-                    derived.iter().any(|path| {
-                        path.segments
-                            .last()
-                            .is_some_and(|segment| segment.ident == "Error")
-                    })
-                })
-    })
 }
 
 fn held_errors(fields: &syn::Fields) -> BTreeSet<&'static str> {
