@@ -1936,13 +1936,28 @@ def caseCoverage : List CoverageEntry :=
   , tagged (boundaryCoverage
       "family"
       "identity_user_delegation_admit"
-      "model-production-gap: a home on an embedded Vera node is refused before it is created or opened (document_acp_choice_enter), and the pinned DefraDB runs a verified client graph only under transaction-bound document authorization, which a Vera node does not offer; no production path admits a User's write there (#3831).")
+      "model-production-gap: the pinned DefraDB runs a verified client graph only under transaction-bound document authorization, which a Vera node does not offer, and takes no credential for the graph's signer; no production path admits a User's write the runtime makes in its own process on a Vera home until it does (#3831, defradb.rs#2970).")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (boundaryCoverage
       "family"
       "identity_user_delegation_credential"
       "model-production-gap: no client reads a node's delegation audience yet, so the endpoint mints an identity token for every home (#3831).")
       "identity-permission" [Surface.operatorCli, Surface.operatorUi, Surface.api]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_user_delegation_status_reports"
+      "model-production-gap: the public status does not carry a delegation audience yet (#3831).")
+      "identity-permission" [Surface.api]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_user_delegation_resolve"
+      "model-production-gap: no client reads a node's delegation audience yet (#3831).")
+      "identity-permission" [Surface.operatorCli, Surface.operatorUi, Surface.api]
+  , tagged (boundaryCoverage
+      "family"
+      "identity_user_delegation_runtime_signs_with_held_user_key"
+      "model-production-gap: the runtime's pack wire and install routes load the held User key on every home; a Vera home is refused before it is opened (document_acp_choice_enter), so no served route reaches the refusal (#3831).")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "family"
       "pack_placement_readers_readers")

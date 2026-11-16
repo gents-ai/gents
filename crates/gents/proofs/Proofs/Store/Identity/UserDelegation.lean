@@ -25,15 +25,18 @@ structure Audience where
   deployment : Nat
   deriving DecidableEq, Repr
 
-/-- The claims of a delegation. `policyCommands` is the one scope DefraDB takes
-from a caller: policy commands, nothing narrower or wider, and no relay or
-request claim. `signed` is the issuer's own key having signed these claims. -/
+/-- The claims of a delegation. `policyCommands` is the scope: policy
+commands, nothing narrower or wider. `request` is the one write a
+request-bound delegation authorizes, named by that write's digest; a general
+delegation names none and authorizes every policy command of its issuer while
+it is current. `signed` is the issuer's own key having signed these claims. -/
 structure Delegation where
   issuer : String
   audience : Audience
   notBefore : Nat
   expires : Nat
   policyCommands : Bool
+  request : Option String
   signed : Bool
   deriving DecidableEq, Repr
 
@@ -62,21 +65,24 @@ def Holder.signsFor : Holder → String → Bool
   | .runtime node agents, issuer => node == issuer || agents.contains issuer
 
 /-- The one minting point. A delegation is issued only by the holder of its
-issuer's key, for the audience a node reported, at the holder's clock. -/
-def mint (holder : Holder) (issuer : String) (audience : Audience) (now : Nat) : Option Delegation :=
+issuer's key, for the audience a node reported, at the holder's clock, either
+general or for the one write `request` names. -/
+def mint (holder : Holder) (issuer : String) (audience : Audience) (now : Nat)
+    (request : Option String) : Option Delegation :=
   if holder.signsFor issuer then
     some { issuer, audience, notBefore := now - backdateSeconds, expires := now + lifetimeSeconds,
-           policyCommands := true, signed := true }
+           policyCommands := true, request, signed := true }
   else none
 
 theorem the_runtime_never_mints_a_user_delegation (node user : String) (agents : List String)
-    (audience : Audience) (now : Nat) (notNode : node ≠ user) (notAgent : user ∉ agents) :
-    mint (.runtime node agents) user audience now = none := by
+    (audience : Audience) (now : Nat) (request : Option String) (notNode : node ≠ user)
+    (notAgent : user ∉ agents) :
+    mint (.runtime node agents) user audience now request = none := by
   simp [mint, Holder.signsFor, notNode, notAgent]
 
 theorem a_client_mints_only_as_its_own_user (user issuer : String) (audience : Audience)
-    (now : Nat) (delegation : Delegation)
-    (h : mint (.client user) issuer audience now = some delegation) :
+    (now : Nat) (request : Option String) (delegation : Delegation)
+    (h : mint (.client user) issuer audience now request = some delegation) :
     delegation.issuer = user := by
   unfold mint at h
   split at h
@@ -94,8 +100,9 @@ def Delegation.currentAt (delegation : Delegation) (now : Nat) : Bool :=
 `elapsed` seconds later, for any block time that trails the clock by no more
 than an idle node's does and any `elapsed` within the lifetime. -/
 theorem a_minted_delegation_outlives_an_idle_block (holder : Holder) (issuer : String)
-    (audience : Audience) (issued elapsed trail : Nat) (delegation : Delegation)
-    (minted : mint holder issuer audience issued = some delegation)
+    (audience : Audience) (issued elapsed trail : Nat) (request : Option String)
+    (delegation : Delegation)
+    (minted : mint holder issuer audience issued request = some delegation)
     (withinLifetime : elapsed ≤ lifetimeSeconds) (trails : trail ≤ idleTrailSeconds) :
     delegation.currentAt (issued + elapsed - trail) = true := by
   unfold mint at minted
@@ -127,9 +134,13 @@ def verdict (node : Audience) (now : Nat) (signer : String) (delegation : Delega
   else .refused
 
 /-- The caller DefraDB's HTTP boundary authenticates from a delegation
-presented as the bearer. -/
+presented as the bearer. External premise: it takes a general delegation that
+is current for this node as its issuer's bearer, with no command beside it,
+and refuses a request-bound one. -/
 def presentedOverHttp (node : Audience) (now : Nat) (delegation : Delegation) : Option String :=
-  if verdict node now delegation.issuer delegation = .issuedBySigner then some delegation.issuer
+  if delegation.request.isNone
+      && verdict node now delegation.issuer delegation = .issuedBySigner then
+    some delegation.issuer
   else none
 
 /-- The identity of a delegation inside a signed payload. External premise:
@@ -141,10 +152,22 @@ structure Digest where
   of : Delegation → String
   injective : ∀ left right, of left = of right → left = right
 
-/-- A command a User signed. `delegationDigest` is covered by the command's
-signature; a command that names none carries no delegation. -/
+/-- Where a signed command is when the runtime acts on it. A direct command
+is handed to the runtime and acted on in the same exchange; nothing keeps it.
+A stored command is a document the runtime reads later, so everyone who may
+read that document reads what it carries. -/
+inductive Carrier where
+  | direct
+  | stored
+  deriving DecidableEq, Repr
+
+/-- A command a User signed. `delegationDigest` and `write` are covered by the
+command's signature; a command that names no digest carries no delegation.
+`write` is the digest of the exact write the runtime makes for the command. -/
 structure Command where
   signer : String
+  carrier : Carrier
+  write : String
   delegationDigest : Option String
   deriving DecidableEq, Repr
 
@@ -163,6 +186,18 @@ def carried (digest : Digest) (command : Command) (attached : Option Delegation)
   | some delegation =>
     if command.delegationDigest = some (digest.of delegation) then .bound else .lifted
 
+/-- What an attached delegation authorizes, compared with the command's write. -/
+inductive Scope where
+  | general
+  | thisWrite
+  | anotherWrite
+  deriving DecidableEq, Repr
+
+def scope (command : Command) (delegation : Delegation) : Scope :=
+  match delegation.request with
+  | none => .general
+  | some request => if request = command.write then .thisWrite else .anotherWrite
+
 inductive Author where
   | user
   | node
@@ -174,21 +209,26 @@ inductive Admission where
   carries is given to DefraDB. -/
   | unchanged
   /-- The write runs as the signer with the carried delegation as the
-  request's bearer. -/
+  request's credential. -/
   | forwarded
   | delegationRequired
   | delegationNotBound
+  /-- A stored command carries a general delegation. -/
+  | delegationNotRequestBound
+  | delegationForAnotherWrite
   | delegationRefused
   | issuerNotSigner
   deriving DecidableEq, Repr
 
 /-- What the runtime does with a write it is about to make in its own process
 for the author of a command it verified. `provider` is the home's recorded
-choice. Admission comes before the command's nonce or receipt is consumed and
-before anything is written, so a refused command leaves no trace and is
-answered by signing a new one. -/
-def admit (provider : Provider) (author : Author) (carried : Carried) (verdict : Verdict) :
-    Admission :=
+choice. Decision (gents#3831): a stored command carries a request-bound
+delegation and a general one in it is refused, so a document never holds a
+credential for anything but its own write. Admission comes before the
+command's nonce or receipt is consumed and before anything is written, so a
+refused command leaves no trace and is answered by signing a new one. -/
+def admit (provider : Provider) (author : Author) (carrier : Carrier) (carried : Carried)
+    (scope : Scope) (verdict : Verdict) : Admission :=
   match provider, author with
   | .nodeStore, _ => .unchanged
   | .embeddedVera, .node => .unchanged
@@ -198,10 +238,12 @@ def admit (provider : Provider) (author : Author) (carried : Carried) (verdict :
     | .absent => .delegationRequired
     | .lifted => .delegationNotBound
     | .bound =>
-      match verdict with
-      | .issuedBySigner => .forwarded
-      | .issuedByAnother => .issuerNotSigner
-      | .refused => .delegationRefused
+      if scope = .anotherWrite then .delegationForAnotherWrite
+      else if scope = .general ∧ carrier = .stored then .delegationNotRequestBound
+      else match verdict with
+        | .issuedBySigner => .forwarded
+        | .issuedByAnother => .issuerNotSigner
+        | .refused => .delegationRefused
 
 def Admission.runs : Admission → Bool
   | .unchanged => true
@@ -214,25 +256,33 @@ def Admission.consumesCommand (admission : Admission) : Bool := admission.runs
 
 def admitCommand (digest : Digest) (provider : Provider) (author : Author) (node : Audience)
     (now : Nat) (command : Command) (attached : Option Delegation) : Admission :=
-  admit provider author (carried digest command attached)
-    (match attached with
-      | some delegation => verdict node now command.signer delegation
-      | none => .refused)
+  match attached with
+  | some delegation =>
+    admit provider author command.carrier (carried digest command attached)
+      (scope command delegation) (verdict node now command.signer delegation)
+  | none => admit provider author command.carrier .absent .general .refused
 
 theorem admitCommand_attached (digest : Digest) (node : Audience) (now : Nat)
     (command : Command) (delegation : Delegation) :
     admitCommand digest .embeddedVera .user node now command (some delegation) =
       if command.delegationDigest = some (digest.of delegation) then
-        if delegation.validFor node now then
+        if scope command delegation = .anotherWrite then .delegationForAnotherWrite
+        else if scope command delegation = .general ∧ command.carrier = .stored then
+          .delegationNotRequestBound
+        else if delegation.validFor node now then
           if delegation.issuer = command.signer then .forwarded else .issuerNotSigner
         else .delegationRefused
       else .delegationNotBound := by
   by_cases named : command.delegationDigest = some (digest.of delegation)
-  · cases valid : delegation.validFor node now
-    · simp [admitCommand, admit, carried, verdict, named, valid]
-    · by_cases own : delegation.issuer = command.signer
-      · simp [admitCommand, admit, carried, verdict, named, valid, own]
-      · simp [admitCommand, admit, carried, verdict, named, valid, own]
+  · by_cases another : scope command delegation = .anotherWrite
+    · simp [admitCommand, admit, carried, named, another]
+    · by_cases general : scope command delegation = .general ∧ command.carrier = .stored
+      · simp [admitCommand, admit, carried, named, another, general]
+      · cases valid : delegation.validFor node now
+        · simp [admitCommand, admit, carried, verdict, named, another, general, valid]
+        · by_cases own : delegation.issuer = command.signer
+          · simp [admitCommand, admit, carried, verdict, named, another, general, valid, own]
+          · simp [admitCommand, admit, carried, verdict, named, another, general, valid, own]
   · simp [admitCommand, admit, carried, named]
 
 theorem a_user_write_on_vera_runs_only_under_its_own_bound_current_delegation
@@ -245,23 +295,36 @@ theorem a_user_write_on_vera_runs_only_under_its_own_bound_current_delegation
       ∧ delegation.audience = node
       ∧ delegation.currentAt now = true
       ∧ delegation.policyCommands = true
-      ∧ delegation.signed = true := by
+      ∧ delegation.signed = true
+      ∧ scope command delegation ≠ .anotherWrite
+      ∧ (command.carrier = .stored → scope command delegation = .thisWrite) := by
   cases attached with
-  | none => simp [admitCommand, admit, carried, Admission.runs] at h
+  | none => simp [admitCommand, admit, Admission.runs] at h
   | some delegation =>
     rw [admitCommand_attached] at h
     by_cases named : command.delegationDigest = some (digest.of delegation)
-    · cases valid : delegation.validFor node now
-      · simp [named, valid, Admission.runs] at h
-      · by_cases own : delegation.issuer = command.signer
-        · simp only [Delegation.validFor, Bool.and_eq_true, decide_eq_true_eq] at valid
-          exact ⟨delegation, rfl, named, own, valid.1.2, valid.2, valid.1.1.2, valid.1.1.1⟩
-        · simp [named, valid, own, Admission.runs] at h
+    · by_cases another : scope command delegation = .anotherWrite
+      · simp [named, another, Admission.runs] at h
+      · by_cases general : scope command delegation = .general ∧ command.carrier = .stored
+        · simp [named, another, general, Admission.runs] at h
+        · cases valid : delegation.validFor node now
+          · simp [named, another, general, valid, Admission.runs] at h
+          · by_cases own : delegation.issuer = command.signer
+            · simp only [Delegation.validFor, Bool.and_eq_true, decide_eq_true_eq] at valid
+              refine ⟨delegation, rfl, named, own, valid.1.2, valid.2, valid.1.1.2, valid.1.1.1,
+                another, ?_⟩
+              intro stored
+              cases bound : scope command delegation
+              · exact absurd ⟨bound, stored⟩ general
+              · rfl
+              · exact absurd bound another
+            · simp [named, another, general, valid, own, Admission.runs] at h
     · simp [named, Admission.runs] at h
 
-theorem a_user_write_on_vera_is_forwarded_or_refused (carried : Carried) (verdict : Verdict) :
-    admit .embeddedVera .user carried verdict ≠ .unchanged := by
-  cases carried <;> cases verdict <;> decide
+theorem a_user_write_on_vera_is_forwarded_or_refused (carrier : Carrier) (carried : Carried)
+    (scope : Scope) (verdict : Verdict) :
+    admit .embeddedVera .user carrier carried scope verdict ≠ .unchanged := by
+  cases carrier <;> cases carried <;> cases scope <;> cases verdict <;> decide
 
 /-- A delegation taken from the command it was signed into and attached to
 another command is refused, whatever else holds of it. -/
@@ -284,13 +347,46 @@ theorem a_command_bound_to_another_delegation_refuses_this_one (digest : Digest)
   intro same
   exact differs (digest.injective _ _ (Option.some.inj same))
 
+theorem a_general_delegation_in_a_stored_command_is_refused (digest : Digest) (node : Audience)
+    (now : Nat) (command : Command) (delegation : Delegation)
+    (stored : command.carrier = .stored) (general : delegation.request = none) :
+    (admitCommand digest .embeddedVera .user node now command (some delegation)).runs = false := by
+  have unbound : scope command delegation = .general := by simp [scope, general]
+  rw [admitCommand_attached]
+  by_cases named : command.delegationDigest = some (digest.of delegation)
+  · simp [named, unbound, stored, Admission.runs]
+  · simp [named, Admission.runs]
+
+theorem a_delegation_for_another_write_is_refused (digest : Digest) (node : Audience)
+    (now : Nat) (command : Command) (delegation : Delegation) (request : String)
+    (names : delegation.request = some request) (another : request ≠ command.write) :
+    (admitCommand digest .embeddedVera .user node now command (some delegation)).runs = false := by
+  have elsewhere : scope command delegation = .anotherWrite := by simp [scope, names, another]
+  rw [admitCommand_attached]
+  by_cases named : command.delegationDigest = some (digest.of delegation)
+  · simp [named, elsewhere, Admission.runs]
+  · simp [named, Admission.runs]
+
+/-- What a stored command carries is no bearer: the HTTP boundary takes it
+from nobody. -/
+theorem a_request_bound_delegation_is_no_bearer (node : Audience) (now : Nat)
+    (delegation : Delegation) (bound : delegation.request.isSome = true) :
+    presentedOverHttp node now delegation = none := by
+  cases request : delegation.request
+  · simp [request] at bound
+  · simp [presentedOverHttp, request]
+
 theorem an_invalid_delegation_fails_closed (digest : Digest) (node : Audience) (now : Nat)
     (command : Command) (delegation : Delegation)
     (invalid : delegation.validFor node now = false) :
     (admitCommand digest .embeddedVera .user node now command (some delegation)).runs = false := by
   rw [admitCommand_attached]
   by_cases named : command.delegationDigest = some (digest.of delegation)
-  · simp [named, invalid, Admission.runs]
+  · by_cases another : scope command delegation = .anotherWrite
+    · simp [named, another, Admission.runs]
+    · by_cases general : scope command delegation = .general ∧ command.carrier = .stored
+      · simp [named, another, general, Admission.runs]
+      · simp [named, another, general, invalid, Admission.runs]
   · simp [named, Admission.runs]
 
 theorem an_expired_delegation_fails_closed (digest : Digest) (node : Audience) (now : Nat)
@@ -309,48 +405,125 @@ theorem a_delegation_for_another_node_fails_closed (digest : Digest) (node : Aud
   simp [Delegation.validFor, elsewhere]
 
 theorem a_refused_command_is_not_consumed (provider : Provider) (author : Author)
-    (carried : Carried) (verdict : Verdict)
-    (refused : (admit provider author carried verdict).runs = false) :
-    (admit provider author carried verdict).consumesCommand = false := refused
+    (carrier : Carrier) (carried : Carried) (scope : Scope) (verdict : Verdict)
+    (refused : (admit provider author carrier carried scope verdict).runs = false) :
+    (admit provider author carrier carried scope verdict).consumesCommand = false := refused
 
 /-- After any refusal the same User answers with a new command carrying a
-delegation minted now, and it is admitted. -/
+delegation minted now for that command's own write, and it is admitted
+whether the command is direct or stored. -/
 theorem a_refused_command_is_signed_again (digest : Digest) (node : Audience) (now : Nat)
-    (user : String) (delegation : Delegation)
-    (minted : mint (.client user) user node now = some delegation) :
+    (user write : String) (carrier : Carrier) (delegation : Delegation)
+    (minted : mint (.client user) user node now (some write) = some delegation) :
     admitCommand digest .embeddedVera .user node now
-      { signer := user, delegationDigest := some (digest.of delegation) } (some delegation)
-      = .forwarded := by
+      { signer := user, carrier, write, delegationDigest := some (digest.of delegation) }
+      (some delegation) = .forwarded := by
   unfold mint at minted
   split at minted
   · cases minted
     rw [admitCommand_attached]
-    simp [Delegation.validFor, Delegation.currentAt]
+    simp [scope, Delegation.validFor, Delegation.currentAt]
   · cases minted
 
 theorem node_and_agent_writes_are_unchanged (provider : Provider) (author : Author)
-    (carried : Carried) (verdict : Verdict) (runtimeHeld : author ≠ .user) :
-    admit provider author carried verdict = .unchanged := by
+    (carrier : Carrier) (carried : Carried) (scope : Scope) (verdict : Verdict)
+    (runtimeHeld : author ≠ .user) :
+    admit provider author carrier carried scope verdict = .unchanged := by
   cases provider <;> cases author <;> simp_all [admit]
 
-theorem a_home_on_the_node_store_is_unchanged (author : Author) (carried : Carried)
-    (verdict : Verdict) : admit .nodeStore author carried verdict = .unchanged := rfl
+theorem a_home_on_the_node_store_is_unchanged (author : Author) (carrier : Carrier)
+    (carried : Carried) (scope : Scope) (verdict : Verdict) :
+    admit .nodeStore author carrier carried scope verdict = .unchanged := rfl
 
-/-- The binding holds on the command path alone. External premise: DefraDB's
-HTTP boundary takes any delegation that is current for this node as its
-issuer's bearer, with no command beside it. Whoever can read a command that
-carries a delegation therefore holds that User's bearer for policy commands
-until it expires. -/
-theorem the_binding_does_not_reach_the_http_boundary (node : Audience) (now : Nat)
-    (delegation : Delegation) (valid : delegation.validFor node now = true) :
+/-- The digest binding holds on the command path alone: a general delegation
+that is current for this node is its issuer's bearer at the HTTP boundary,
+for whoever holds it. That is why only a direct command may carry one. -/
+theorem a_general_delegation_is_a_bearer_wherever_it_is_read (node : Audience) (now : Nat)
+    (delegation : Delegation) (general : delegation.request = none)
+    (valid : delegation.validFor node now = true) :
     presentedOverHttp node now delegation = some delegation.issuer := by
-  simp [presentedOverHttp, verdict, valid]
+  simp [presentedOverHttp, verdict, general, valid]
+
+/-- Whether the runtime may sign a pack's effects with a User key kept in its
+home. Decision (gents#3831): on a Vera home it never does, because that
+signature would need a delegation only the User's client may mint; the client
+signs each effect, as it does for a hosted install. A home on the node's own
+store keeps the route it has for as long as such homes exist. -/
+def runtimeSignsWithHeldUserKey : Provider → Bool
+  | .nodeStore => true
+  | .embeddedVera => false
+
+theorem a_vera_runtime_never_signs_as_a_user :
+    runtimeSignsWithHeldUserKey .embeddedVera = false := rfl
+
+/-- What a node's public status says of its delegation audience. -/
+inductive Reported where
+  /-- The status has no such field: a home on the node's own store, or a
+  runtime older than this model. -/
+  | absent
+  | named
+  /-- The home is on a Vera node whose audience could not be read now. -/
+  | unavailable
+  deriving DecidableEq, Repr
+
+/-- What a runtime puts in its public status. The worker and the deployment
+are not secret: a delegation for them is useless without its issuer's key. -/
+def statusReports (provider : Provider) (nodeReportsAudience : Bool) : Reported :=
+  match provider with
+  | .nodeStore => .absent
+  | .embeddedVera => if nodeReportsAudience then .named else .unavailable
+
+/-- What a client does when it builds or refreshes an endpoint from a node's
+status. It never guesses: a Vera home whose audience it cannot read gets no
+credential at all, since an identity token would only be refused later. -/
+inductive Resolution where
+  | identityToken
+  | delegation
+  | refused
+  deriving DecidableEq, Repr
+
+def resolve : Reported → Resolution
+  | .absent => .identityToken
+  | .named => .delegation
+  | .unavailable => .refused
+
+theorem a_client_mints_a_delegation_only_for_a_home_on_vera (provider : Provider)
+    (nodeReportsAudience : Bool)
+    (h : resolve (statusReports provider nodeReportsAudience) = .delegation) :
+    provider = .embeddedVera ∧ nodeReportsAudience = true := by
+  cases provider <;> cases nodeReportsAudience <;> simp_all [resolve, statusReports]
+
+theorem a_home_on_the_node_store_resolves_as_it_did (nodeReportsAudience : Bool) :
+    resolve (statusReports .nodeStore nodeReportsAudience) = .identityToken := rfl
+
+/-- A runtime that restarts on the same deployment with the same worker
+reports the audience it reported, and delegations minted for it stay good. -/
+theorem a_restart_that_changes_nothing_keeps_the_credential (digest : Digest)
+    (before after : Audience) (now : Nat) (command : Command) (delegation : Delegation)
+    (same : before = after)
+    (admitted : admitCommand digest .embeddedVera .user before now command (some delegation)
+      = .forwarded) :
+    admitCommand digest .embeddedVera .user after now command (some delegation) = .forwarded := by
+  rw [← same]
+  exact admitted
+
+/-- A runtime that comes back under another worker or deployment refuses every
+delegation minted for the old audience; the client reads the status again. -/
+theorem a_restart_under_another_audience_refuses_the_old_credential (digest : Digest)
+    (before after : Audience) (now : Nat) (command : Command) (delegation : Delegation)
+    (changed : before ≠ after) (mintedFor : delegation.audience = before) :
+    (admitCommand digest .embeddedVera .user after now command (some delegation)).runs
+      = false := by
+  apply a_delegation_for_another_node_fails_closed
+  rw [mintedFor]
+  exact changed
 
 /-- The credential a client endpoint presents, at the one place that mints it.
 `forwardsCallerBearer` is an endpoint built around a bearer its caller
-presented, passed on as it is. `nodeNamesAudience` is the node having reported
-a delegation audience: only a home on an embedded Vera node does. Otherwise
-the endpoint mints what it minted before this model. -/
+presented, passed on as it is. `nodeNamesAudience` is the endpoint holding the
+audience it resolved from its node (`resolve`): only a home on an embedded
+Vera node names one. Otherwise the endpoint mints what it minted before this
+model. -/
 inductive Credential where
   | anonymous
   | callerBearer
