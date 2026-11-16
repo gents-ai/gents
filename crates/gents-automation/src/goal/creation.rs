@@ -59,7 +59,9 @@ pub(crate) async fn finish_goal_relationships(
     let actor = access
         .actor_did()
         .context("Goal publication requires an authenticated actor")?;
-    access.transact_write("goal.repair_relationships", |txn| {
+    // Each attempt re-selects only unlinked rows and updates them guarded on
+    // parent_linked = false, so a confirmed conflict is rebuilt.
+    access.transact_signed_conflict_rebuild("goal.repair_relationships", |txn| {
         let actor = &actor;
         Box::pin(async move {
             let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(txn, node_did, session_id)

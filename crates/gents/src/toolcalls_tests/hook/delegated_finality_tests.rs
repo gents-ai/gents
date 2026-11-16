@@ -332,7 +332,7 @@ async fn delegated_commit_finality_follows_the_lean_traces() {
             .await;
             assert!(
                 fired,
-                "the transaction must lose its post-commit acknowledgement"
+                "the transaction must lose its post-commit acknowledgement: {result:?}"
             );
             let receipt = result.unwrap();
             let (state, children) = observed(&fixture).await;

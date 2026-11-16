@@ -574,6 +574,27 @@ impl ConfigClientError {
         self.transaction_conflict().is_some()
     }
 
+    /// For a conflict, whether a client may repeat the failed operation (Lean
+    /// `TransactionReplay.clientMayRepeat`): the attempt that met it did not
+    /// commit. `None` for any other failure.
+    pub fn conflict_repeatable(&self) -> Option<bool> {
+        match self.access() {
+            Self::TransactionConflict(conflict) => Some(conflict.repeatable),
+            _ => None,
+        }
+    }
+
+    /// Marks a conflict as met at a commit the store did not confirm aborted.
+    pub(super) fn mark_unconfirmed_commit(&mut self) {
+        match self {
+            Self::TransactionConflict(conflict) => conflict.repeatable = false,
+            Self::Response(crate::graphql::GraphqlResponseError::Access(error)) => {
+                error.mark_unconfirmed_commit()
+            }
+            _ => {}
+        }
+    }
+
     /// The conflict origin when the transaction owner may replay this failure.
     pub(crate) fn transaction_conflict(&self) -> Option<ConflictSource> {
         match self.access() {
@@ -725,10 +746,13 @@ impl ConfigClientError {
 }
 
 /// A conflict the transaction owner may replay; its origin is telemetry only.
+/// `repeatable` is Lean `TransactionReplay.clientMayRepeat` for the attempt
+/// that met it: false only for a commit the store did not confirm aborted.
 #[derive(Debug, thiserror::Error)]
 #[error("DefraDB transaction conflict")]
 pub struct TransactionConflict {
     pub(super) origin: ConflictSource,
+    pub(super) repeatable: bool,
 }
 
 /// Native wraps a refused relationship change in `RelationshipAcp`, naming the
