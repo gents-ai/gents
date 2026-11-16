@@ -585,10 +585,11 @@ jobs:
           HOSTED: ${{ runner.environment == 'github-hosted' }}
           BROWSERS: ${{ matrix.suite == 'browser' && 'chromium webkit' || 'chromium' }}
         run: |
+          read -ra browsers <<< "${BROWSERS}"
           if [[ "${HOSTED}" == true ]]; then
-            npx playwright install --with-deps ${BROWSERS}
+            npx playwright install --with-deps "${browsers[@]}"
           else
-            npx playwright install ${BROWSERS}
+            npx playwright install "${browsers[@]}"
           fi
 
       - name: Run the desktop ${{ matrix.suite }} suite
