@@ -469,6 +469,8 @@ pub(super) async fn stage_goal_and_claim(
             wrapup_requested: Some(initial_state.wrapup_requested),
             wrapup_completed: Some(initial_state.wrapup_completed),
             infrastructure_retry_count: Some(0),
+            blocked_audit_threshold: None,
+            max_infrastructure_retries: None,
             last_failure: None,
             completion_evidence: None,
             auto_resume_at_reset: None,
