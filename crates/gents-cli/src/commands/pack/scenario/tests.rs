@@ -730,19 +730,17 @@ fn readonly_pack_requires_tool_root() {
 #[cfg(unix)]
 #[tokio::test]
 async fn projection_traces_read_as_the_served_home() {
-    use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();
     let calls = temp.path().join("calls");
     let bin = temp.path().join("gents");
-    std::fs::write(
+    gents_store::test_support::write_executable_script(
         &bin,
-        format!(
+        &format!(
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\necho '{{}}'\n",
             calls.display()
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     let graphql = GraphqlEndpoint::anonymous("http://127.0.0.1:9/api/v0/graphql");
     let stages = [StageResult {
         trigger_id: "stage".to_string(),

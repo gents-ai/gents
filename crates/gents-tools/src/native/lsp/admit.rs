@@ -17,14 +17,10 @@ mod tests {
     fn under_root_absolute_is_denied() {
         let root = tempfile::tempdir().unwrap();
         let bin = root.path().join("evil-ls");
-        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&bin).unwrap().permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&bin, perms).unwrap();
-        }
+        gents_store::test_support::write_executable_script(&bin, "#!/bin/sh\n").unwrap();
+        #[cfg(not(unix))]
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
         let err = admit_command(&bin.to_string_lossy(), root.path()).unwrap_err();
         assert_eq!(err.to_contract(), "workspaceExecutable");
     }

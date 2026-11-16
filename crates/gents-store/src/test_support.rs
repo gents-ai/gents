@@ -1,6 +1,11 @@
 pub mod acp_policies;
+#[cfg(unix)]
+mod executable_script;
 pub mod relationships;
 pub mod wire_database;
+
+#[cfg(unix)]
+pub use executable_script::write_executable_script;
 
 /// Hang detector for a test wait that has no deadline of its own: the longest
 /// the awaited owner may go without a change before the wait fails. It is one

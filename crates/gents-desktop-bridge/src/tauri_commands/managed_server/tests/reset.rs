@@ -1,13 +1,15 @@
 use super::*;
 
+/// The stalled helper is checked in rather than written here: Linux execve
+/// refuses a file any process holds open for writing (ETXTBSY), and a
+/// concurrent test's spawn copies this process's descriptors into its child
+/// until that child execs (`tla/ScriptFixtureExec.tla`).
 #[cfg(unix)]
 #[test]
 fn stalled_reset_helper_is_killed_without_retiring_state() {
-    use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().unwrap();
-    let script = temp.path().join("helper");
-    std::fs::write(&script, "#!/bin/sh\nexec sleep 60\n").unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/tauri_commands/managed_server/tests/reset-helper/stalled");
     let home = temp.path().join("home");
     write(&home.join("init.json"), "original state");
     let before = std::time::Instant::now();

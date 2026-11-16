@@ -383,6 +383,17 @@ See `../README.md` for how this fits the broader formal-verification model.
   bytes, the observed failure; `TimeoutKill` is the tool timeout killing it
   at the gate, which the wait reports as failed; `PollBudget` is the test's poll budget failing
   before the child prints. Green has neither clock.
+- `ScriptFixtureExec` — a test that executes a script beside sibling tests
+  that spawn (`supplied_path_retains_native_script_fallback`). A sibling's
+  spawn copies the process's descriptors into its child until that child
+  execs, and Linux execve refuses a file open for writing (ETXTBSY). RED:
+  `InProcessWrite` writes the script in the test process, the failure on the
+  Linux runner, and also what O_CLOEXEC alone gives (std already opens with
+  it). Green never opens it for writing there (a checked-in fixture);
+  `ChildWriter` writes a generated script from a child process the test
+  reaps before its exec (`write_executable_script`), and its RED
+  `ChildWriterUnwaited` drops the reap. `Darwin` (no such execve check) and
+  `Alone` (no sibling) explain why the old order passed on macOS and alone.
 - `Sanity` — toolchain smoke test; not a real model.
 
 ## One-time setup
