@@ -30,16 +30,6 @@ pub fn heartbeat_is_fresh(ts: DateTime<Utc>, now: DateTime<Utc>, stale_after: Du
 
 pub const DEFAULT_NETWORK_ID: &str = "default";
 
-pub const NETWORK_ID_ENV: &str = "GENTS_NETWORK_ID";
-
-pub fn resolve_network_id() -> String {
-    std::env::var(NETWORK_ID_ENV)
-        .ok()
-        .map(|raw| raw.trim().to_string())
-        .filter(|raw| !raw.is_empty())
-        .unwrap_or_else(|| DEFAULT_NETWORK_ID.to_string())
-}
-
 pub const DEFAULT_OFFERED_TEMPLATES: &[&str] = &["machine", "client"];
 
 pub fn validate_offered_templates<I, S>(offered: I) -> Result<Vec<String>>

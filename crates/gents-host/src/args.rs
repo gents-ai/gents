@@ -243,6 +243,12 @@ pub struct ServeArgs {
     )]
     pub p2p_registry_stale_ms: Option<u64>,
     #[arg(
+        long,
+        value_name = "NETWORK_ID",
+        help = "P2P network id that partitions this runtime's registry entries (must not be blank). Defaults to default"
+    )]
+    pub p2p_network_id: Option<String>,
+    #[arg(
         long = "apply-root",
         value_name = "ROOT",
         help = "After the server is ready, run config apply on this pack root (schemas/ then desired-state) against the in-process node. Rebinds pack placeholder DIDs to the home node (same as config apply --bind-node-did home --force-rebind-concrete-did)"

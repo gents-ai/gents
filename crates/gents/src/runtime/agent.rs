@@ -159,6 +159,7 @@ pub struct DocumentRuntimeOptions {
     pub health_checker_options: HealthCheckerOptions,
     pub backend_prober_options: BackendProberOptions,
     pub p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
+    pub p2p_network_id: Option<String>,
     pub backend_health: Option<BackendHealthMap>,
     pub process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     pub runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
@@ -225,6 +226,7 @@ pub struct Gents {
     backend_prober_options: BackendProberOptions,
     backend_health: BackendHealthMap,
     p2p_intervals: gents_p2p::p2p_reconcile::intervals::P2pIntervals,
+    p2p_network_id: String,
     storage_fault: crate::runtime::storage_fault::StorageFaultObservation,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
@@ -323,6 +325,9 @@ impl Gents {
             health_checker_options: options.health_checker_options,
             backend_prober_options: options.backend_prober_options,
             p2p_intervals: options.p2p_intervals,
+            p2p_network_id: options
+                .p2p_network_id
+                .unwrap_or_else(|| gents_p2p::p2p_reconcile::DEFAULT_NETWORK_ID.to_owned()),
             backend_health,
             storage_fault: crate::runtime::storage_fault::StorageFaultObservation::new(),
             process_state_observer: options.process_state_observer,
@@ -506,6 +511,10 @@ impl Gents {
 
     pub(crate) fn p2p_intervals(&self) -> gents_p2p::p2p_reconcile::intervals::P2pIntervals {
         self.p2p_intervals
+    }
+
+    pub(crate) fn p2p_network_id(&self) -> &str {
+        &self.p2p_network_id
     }
 
     pub(crate) fn document_runtime_context(&self) -> Option<&DocumentResolveContext> {

@@ -343,6 +343,7 @@ pub(super) fn spawn_node_tasks(
         ..
     } = startup;
     let p2p_intervals = agent.p2p_intervals();
+    let p2p_network_id = agent.p2p_network_id().to_owned();
     let completion_node = agent.node.clone();
     let completion_node_did = agent.node_did().to_string();
     let completion_background_executions = agent.background_execution_registry.clone();
@@ -407,7 +408,7 @@ pub(super) fn spawn_node_tasks(
             gents_p2p::p2p_reconcile::run_registry_heartbeat(
                 registry_node,
                 registry_node_did,
-                gents_p2p::p2p_reconcile::resolve_network_id(),
+                p2p_network_id,
                 p2p_intervals,
                 registry_cancel,
             )
