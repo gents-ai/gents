@@ -295,10 +295,13 @@ pub(crate) async fn init_home_with_core_packs(
         None
     };
 
+    let installs_core_packs = args.engineer && fresh_store && !args.no_default_packs;
+    if installs_core_packs {
+        default_packs::require_archives(core_packs)?;
+    }
     if fresh_store {
         reserve_fresh_bootstrap(&home_dir).await?;
     }
-    let installs_core_packs = args.engineer && fresh_store && !args.no_default_packs;
     if installs_core_packs {
         default_packs::record_installing(&home_dir)?;
     }

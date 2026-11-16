@@ -78,6 +78,29 @@ fn release_archive<'a>(archives: Archives<'a>, pack: CorePack) -> Option<&'a [u8
         .map(|(_, bytes)| *bytes)
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("this build cannot initialize the Engineer: missing core pack archives: {missing}; in the Gents source checkout run `make core-packs && make build-cli`, then retry with the rebuilt binary, or pass `--no-default-packs` to opt out")]
+pub(crate) struct MissingCorePackArchives {
+    missing: String,
+}
+
+/// Refuse a fresh Engineer before reserving its bootstrap if the build cannot
+/// provide its core packs. A bootstrap-only binary can still build packs.
+pub(crate) fn require_archives(archives: Archives<'_>) -> Result<()> {
+    let missing: Vec<_> = CorePack::ALL
+        .into_iter()
+        .filter(|&pack| release_archive(archives, pack).is_none())
+        .map(CorePack::coordinate)
+        .collect();
+    if !missing.is_empty() {
+        return Err(MissingCorePackArchives {
+            missing: missing.join(", "),
+        }
+        .into());
+    }
+    Ok(())
+}
+
 fn not_carried(pack: CorePack) -> String {
     format!(
         "this build carries no {} archive; a build made with `make core-packs` does",
@@ -1110,6 +1133,29 @@ mod tests {
             let pack: CorePack = case.input.core_pack;
             case.check(family_output(wiring_of(at_init, pack)));
         }
+    }
+
+    #[tokio::test]
+    async fn missing_archives_refuse_fresh_engineer_before_bootstrap() {
+        let home = tempfile::tempdir().unwrap();
+        let error =
+            crate::commands::init::init_home_with_core_packs(init_args(home.path(), &[]), &[])
+                .await
+                .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("gents/pack_builder"), "{message}");
+        assert!(message.contains("gents/script"), "{message}");
+        assert!(!home
+            .path()
+            .join(gents_store::local::home::BOOTSTRAP_CONSUMED_FILE_NAME)
+            .exists());
+        // The same home remains usable once the operator explicitly opts out.
+        crate::commands::init::init_home_with_core_packs(
+            init_args(home.path(), &["--no-default-packs"]),
+            &[],
+        )
+        .await
+        .unwrap();
     }
 
     /// The real `init --engineer` and `gents config pack starter --enable`
