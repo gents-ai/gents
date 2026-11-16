@@ -620,6 +620,25 @@ impl ReconstructionError {
                 | Self::UnresolvedTerminalOutput { .. }
         )
     }
+
+    /// Contradictory or malformed immutable facts: proof of corruption.
+    /// Missing replica dependencies and access failures are not.
+    pub fn is_definitive_corruption(&self) -> bool {
+        matches!(
+            self,
+            Self::ConflictingSegments { .. }
+                | Self::ConflictingClosures { .. }
+                | Self::InvalidWriter { .. }
+                | Self::ExtentMismatch { .. }
+                | Self::InvalidPayload { .. }
+                | Self::InvalidStructure { .. }
+        )
+    }
+
+    /// The reconstruction failure in an erased error's `source()` chain.
+    pub fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        crate::error_chain::find_source::<Self>(error)
+    }
 }
 
 impl std::fmt::Display for ReconstructionError {

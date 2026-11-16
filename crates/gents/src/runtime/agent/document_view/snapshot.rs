@@ -65,6 +65,25 @@ struct UnselectedDisabledBackend {
     backend_id: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum InferenceResolveError {
+    #[error(transparent)]
+    Unselected(#[from] UnselectedDisabledBackend),
+    #[error(transparent)]
+    Invalid(#[from] anyhow::Error),
+}
+
+impl InferenceResolveError {
+    /// Callers downstream of the snapshot downcast the root cause, so the
+    /// erased error carries the cause itself rather than this enum.
+    fn into_detail(self) -> anyhow::Error {
+        match self {
+            Self::Unselected(error) => error.into(),
+            Self::Invalid(error) => error,
+        }
+    }
+}
+
 struct AgentResolutionError {
     code: AgentReadinessUnavailableReason,
     detail: anyhow::Error,
@@ -189,12 +208,15 @@ fn resolve_agent_factories(
             let inference =
                 resolve_inference(view, &agent_config.inference_profile_id).map_err(|error| {
                     AgentResolutionError::new(
-                        if error.is::<UnselectedDisabledBackend>() {
-                            AgentReadinessUnavailableReason::BackendDisabled
-                        } else {
-                            AgentReadinessUnavailableReason::InferenceProfileInvalid
+                        match error {
+                            InferenceResolveError::Unselected(_) => {
+                                AgentReadinessUnavailableReason::BackendDisabled
+                            }
+                            InferenceResolveError::Invalid(_) => {
+                                AgentReadinessUnavailableReason::InferenceProfileInvalid
+                            }
                         },
-                        error,
+                        error.into_detail(),
                     )
                 })?;
             ensure_inference_available(
@@ -491,8 +513,8 @@ fn select_inference_documents<'a>(
 fn resolve_inference(
     view: &DocumentRuntimeView,
     id: &str,
-) -> Result<gents_inference::resolved::ResolvedInference> {
-    let selected = select_inference_documents(view, id)?;
+) -> std::result::Result<gents_inference::resolved::ResolvedInference, InferenceResolveError> {
+    let selected = select_inference_documents(view, id).map_err(anyhow::Error::from)?;
     let profile = selected.profile.clone();
     let backend = selected.backend.clone();
     if profile.model_name.trim().is_empty() && !backend.enabled {
@@ -501,11 +523,9 @@ fn resolve_inference(
         }
         .into());
     }
-    anyhow::ensure!(
-        !profile.model_name.trim().is_empty(),
-        "profile {} has no model selection",
-        profile.profile_id
-    );
+    if profile.model_name.trim().is_empty() {
+        return Err(anyhow!("profile {} has no model selection", profile.profile_id).into());
+    }
     let sampling = selected.sampling.cloned();
     let execution = selected.execution.cloned();
     let retry_policy = selected.retry_policy.cloned();

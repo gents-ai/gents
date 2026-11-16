@@ -72,13 +72,16 @@ pub(super) async fn finish_start_wait(state: &DesktopAppState, token: &StartWait
     }
 }
 
-pub(super) async fn wait_unlocked<T>(
+pub(super) async fn wait_unlocked<T, E>(
     token: &StartWait,
-    wait: impl Future<Output = anyhow::Result<T>>,
-) -> anyhow::Result<T> {
+    wait: impl Future<Output = Result<T, E>>,
+) -> Result<T, E>
+where
+    E: From<anyhow::Error>,
+{
     tokio::select! {
         biased;
-        _ = token.cancelled() => anyhow::bail!(token.cancel_message()),
+        _ = token.cancelled() => Err(anyhow::anyhow!(token.cancel_message()).into()),
         result = wait => result,
     }
 }

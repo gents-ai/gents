@@ -206,7 +206,7 @@ impl BindingAction {
         }
     }
 
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<(), BindingError> {
         match self {
             Self::Plugin { path, is_dir, .. } => {
                 gents_pack::plugin::allowed::canonical_target(path, Some(*is_dir))?;
@@ -218,23 +218,25 @@ impl BindingAction {
                 writable_root,
                 ..
             } => {
-                anyhow::ensure!(
-                    !argv.is_empty() && !argv[0].trim().is_empty(),
-                    "the command approval has no executable"
-                );
+                if argv.is_empty() || argv[0].trim().is_empty() {
+                    return Err(anyhow::anyhow!("the command approval has no executable").into());
+                }
                 gents_pack::plugin::allowed::canonical_target(root, Some(true))?;
                 gents_pack::plugin::allowed::canonical_target(cwd, Some(true))?;
                 if let Some(writable) = writable_root {
                     gents_pack::plugin::allowed::canonical_target(writable, Some(true))?;
-                    anyhow::ensure!(
-                        writable.starts_with(root),
-                        "the writable root exceeds the tool root"
-                    );
+                    if !writable.starts_with(root) {
+                        return Err(
+                            anyhow::anyhow!("the writable root exceeds the tool root").into()
+                        );
+                    }
                 }
-                anyhow::ensure!(
-                    cwd.starts_with(root),
-                    "the command working directory is outside its tool root"
-                );
+                if !cwd.starts_with(root) {
+                    return Err(anyhow::anyhow!(
+                        "the command working directory is outside its tool root"
+                    )
+                    .into());
+                }
             }
             Self::FileMutation {
                 path,
@@ -248,14 +250,18 @@ impl BindingAction {
                     path.to_str()
                         .context("the file approval path is not valid UTF-8")?,
                 )?;
-                anyhow::ensure!(
-                    resolved == *path && path.try_exists()? == *existed,
-                    "The file approval target changed. Retry the file change."
-                );
-                anyhow::ensure!(
-                    !existed || path.is_file(),
-                    "The file approval target is not a regular file."
-                );
+                if resolved != *path || path.try_exists().map_err(anyhow::Error::from)? != *existed
+                {
+                    return Err(anyhow::anyhow!(
+                        "The file approval target changed. Retry the file change."
+                    )
+                    .into());
+                }
+                if *existed && !path.is_file() {
+                    return Err(
+                        anyhow::anyhow!("The file approval target is not a regular file.").into(),
+                    );
+                }
             }
         }
         Ok(())
@@ -274,7 +280,7 @@ impl ActionConsent {
     /// Consent can outlive an approval wait or a plugin host round. Recheck
     /// the captured workspace revision and action before each mutation or run.
     pub(crate) fn validate(&self) -> Result<()> {
-        validate_binding(&self.home, &self.binding)?;
+        validate_binding(&self.home, &self.binding).map_err(BindingError::into_anyhow)?;
         Ok(())
     }
 
@@ -377,7 +383,7 @@ pub async fn consent_binding(
             Ok(())
         };
         ensure_open()?;
-        validate_binding(home, &decision.binding)?;
+        validate_binding(home, &decision.binding).map_err(BindingError::into_anyhow)?;
         let route = context::resolve_review(home, &decision, &request.id).await?;
         ensure_open()?;
         let allowed = match route {
@@ -389,7 +395,7 @@ pub async fn consent_binding(
             },
         };
         ensure_open()?;
-        validate_binding(home, &decision.binding)?;
+        validate_binding(home, &decision.binding).map_err(BindingError::into_anyhow)?;
         Ok(allowed)
     };
     tokio::select! {
@@ -405,7 +411,29 @@ pub async fn consent_binding(
 #[error("Workspace permissions changed. Retry the action with the current permissions.")]
 pub(crate) struct SelectionChanged;
 
-pub(crate) fn validate_binding(home: &Path, binding: &Binding) -> Result<Settings> {
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BindingError {
+    #[error(transparent)]
+    SelectionChanged(#[from] SelectionChanged),
+    #[error(transparent)]
+    PathChanged(#[from] gents_pack::plugin::allowed::PathChanged),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl BindingError {
+    /// Each variant erases to its own error: callers holding `anyhow` find
+    /// the refusal by its type, which a transparent wrapper would hide.
+    pub(crate) fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::SelectionChanged(error) => error.into(),
+            Self::PathChanged(error) => error.into(),
+            Self::Other(error) => error,
+        }
+    }
+}
+
+pub(crate) fn validate_binding(home: &Path, binding: &Binding) -> Result<Settings, BindingError> {
     let settings = context::governing_settings(home, &binding.scope.workspace)?;
     let available: Vec<_> = settings.iter().map(Settings::scope).collect();
     if !policy::approval_scope_matches(&available, &binding.scope) {
@@ -413,7 +441,7 @@ pub(crate) fn validate_binding(home: &Path, binding: &Binding) -> Result<Setting
     }
     gents_pack::plugin::allowed::canonical_target(&binding.scope.workspace.path, Some(true))?;
     binding.action.validate()?;
-    settings.context("workspace permissions are unavailable")
+    Ok(settings.context("workspace permissions are unavailable")?)
 }
 
 pub(crate) fn consume_decision(
@@ -422,7 +450,7 @@ pub(crate) fn consume_decision(
     received: &Binding,
     allowed: bool,
 ) -> Result<bool> {
-    let settings = validate_binding(home, expected)?;
+    let settings = validate_binding(home, expected).map_err(BindingError::into_anyhow)?;
     let available = [settings.scope()];
     policy::consume_approval(&available, expected, received, allowed)
         .ok_or_else(|| SelectionChanged.into())
@@ -983,7 +1011,10 @@ mod tests {
             None,
         )?;
         let error = check().await.unwrap_err();
-        assert!(error.is::<SelectionChanged>(), "{error}");
+        assert!(
+            matches!(error, BindingError::SelectionChanged(_)),
+            "{error}"
+        );
         validate_binding(&home, &binding)?;
         Ok(())
     }

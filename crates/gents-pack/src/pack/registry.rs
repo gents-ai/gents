@@ -24,6 +24,12 @@ pub enum RegistryError {
     NotFound { url: String },
 }
 
+impl RegistryError {
+    pub fn in_chain(error: &anyhow::Error) -> Option<&Self> {
+        error.chain().find_map(|cause| cause.downcast_ref::<Self>())
+    }
+}
+
 pub fn split_pack_coordinate(name: &str) -> (&str, &str) {
     name.split_once('/')
         .unwrap_or((gents_documents::pack_spec::DEFAULT_NAMESPACE, name))

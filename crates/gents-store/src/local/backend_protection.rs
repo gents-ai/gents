@@ -57,6 +57,10 @@ pub enum BackendProtectionError {
 }
 
 impl BackendProtectionError {
+    pub(crate) fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        gents_protocol::error_chain::find_source::<Self>(error)
+    }
+
     pub fn incompatible(
         &self,
     ) -> Option<&gents_protocol::operations::install_repair::IncompatibleStore> {

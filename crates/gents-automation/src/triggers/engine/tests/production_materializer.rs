@@ -1048,16 +1048,11 @@ async fn goal_task_replay_traces_match_the_lean_admission_model() {
                     let outcome = match publish().await {
                         Ok(request) if request == prepared.receipt.request_id => "fired",
                         Ok(request) => panic!("published another request {request}"),
-                        Err(error) => {
-                            assert_eq!(
-                                error
-                                    .downcast_ref::<MaterializeDuplicate>()
-                                    .unwrap()
-                                    .request_id,
-                                prepared.receipt.request_id
-                            );
+                        Err(MaterializeError::Duplicate(duplicate)) => {
+                            assert_eq!(duplicate.request_id, prepared.receipt.request_id);
                             "duplicate"
                         }
+                        Err(error) => panic!("publish failed: {error}"),
                     };
                     let after = access.execute(&query).await.unwrap();
                     let fire_goal = after["data"]["TriggerFire"][0]["goal_id"].as_str().unwrap();

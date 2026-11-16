@@ -8,7 +8,6 @@ use defra_http::ExtractIdentity;
 use gents::runtime::agent::inference_read::InferenceObservationRead;
 use gents_inference::backends::registry::ActorBackendDiscoveryError;
 use gents_inference::inference_observation::InferenceKey;
-use gents_protocol::error_chain::find_source;
 use gents_protocol::operations::inference::{DiscoveryAnswer, InferenceOperationError};
 use gents_store::config_client::ConfigAccess;
 
@@ -72,12 +71,9 @@ pub async fn discover_backend(
 
 fn unavailable(error: &InferenceOperationError) -> bool {
     matches!(error, InferenceOperationError::Missing { .. })
-        || error.passthrough().is_some_and(|source| {
-            matches!(
-                find_source::<ActorBackendDiscoveryError>(source),
-                Some(ActorBackendDiscoveryError::Unavailable)
-            )
-        })
+        || error
+            .passthrough()
+            .is_some_and(|source| ActorBackendDiscoveryError::unavailable_in(source))
 }
 
 pub async fn read(

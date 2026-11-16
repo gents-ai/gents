@@ -225,6 +225,42 @@ impl std::fmt::Display for BaselineMismatch {
 
 impl std::error::Error for BaselineMismatch {}
 
+#[derive(Debug)]
+pub enum BaselineError {
+    Mismatch(BaselineMismatch),
+    Other(anyhow::Error),
+}
+
+impl std::fmt::Display for BaselineError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Mismatch(mismatch) => mismatch.fmt(formatter),
+            Self::Other(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for BaselineError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Mismatch(_) => None,
+            Self::Other(error) => error.source(),
+        }
+    }
+}
+
+impl From<BaselineMismatch> for BaselineError {
+    fn from(mismatch: BaselineMismatch) -> Self {
+        Self::Mismatch(mismatch)
+    }
+}
+
+impl From<anyhow::Error> for BaselineError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Other(error)
+    }
+}
+
 fn remapped_by_trial(collection: Collection, field: Option<&str>, pack_document: &Value) -> bool {
     match (collection, field) {
         (Collection::Node, _) => true,
@@ -251,7 +287,10 @@ fn comparable(collection: Collection, document: &Value, pack_document: &Value) -
     Ok(projected)
 }
 
-pub fn baseline_equivalence(pack: &DesiredStateApplyPlan, live: &Closure) -> Result<()> {
+pub fn baseline_equivalence(
+    pack: &DesiredStateApplyPlan,
+    live: &Closure,
+) -> std::result::Result<(), BaselineError> {
     for document in pack.documents() {
         let collection = document.collection;
         if !is_closure_collection(collection) || remapped_by_trial(collection, None, &document.add)

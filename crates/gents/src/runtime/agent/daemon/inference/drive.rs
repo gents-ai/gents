@@ -96,7 +96,7 @@ where
                         async {
                             match processor.validate_execution().await.map_err(RuntimeSeamError::into_inner) {
                                 Ok(()) => {}
-                                Err(error) if error.is::<gents_session::request::lifecycle::ExecutionOwnershipLost>() => {
+                                Err(error) if gents_session::request::lifecycle::ExecutionOwnershipLost::occurs_in(&error) => {
                                     tracing::warn!(
                                         request_id = %request_id,
                                         session_id = %session_id,

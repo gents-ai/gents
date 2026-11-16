@@ -107,6 +107,10 @@ impl From<defra_node::Error> for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
+    pub fn in_chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        gents_protocol::error_chain::find_source::<Self>(error)
+    }
+
     pub fn is_unknown_lineage(&self) -> bool {
         matches!(self, Self::UnknownLineage { .. })
     }
