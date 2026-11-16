@@ -58,6 +58,8 @@ const DESKTOP_P2P_RATE_LIMIT_RATE: f64 = 500.0;
 
 #[derive(Debug, Clone)]
 pub struct ClientCoreOptions {
+    #[cfg(test)]
+    pub(crate) startup_p2p: Option<Arc<tests::RecordingP2P>>,
     pub port: u16,
     pub bind_addr: Option<IpAddr>,
     // Defra's HTTP listener lives until its Tokio runtime stops;
@@ -105,6 +107,8 @@ pub trait ClientStoreKeyProvider: std::fmt::Debug + Send + Sync {
 impl Default for ClientCoreOptions {
     fn default() -> Self {
         Self {
+            #[cfg(test)]
+            startup_p2p: None,
             port: 0,
             bind_addr: None,
             http_addr: None,
