@@ -81,7 +81,13 @@ mod tests {
 
     #[test]
     fn a_temporary_home_is_accepted() {
-        refuse_real_gents_home(&std::env::temp_dir().join("gents-home"), "GENTS_HOME");
+        let root = tempfile::tempdir().unwrap();
+        let temp = root.path().join("temp");
+        let real = root.path().join("operator").join(".gents");
+        assert_eq!(
+            real_home_containing(&temp.join("gents-home"), &temp, std::iter::once(real)),
+            None
+        );
     }
 
     #[test]
