@@ -31,6 +31,11 @@ const UNKNOWN_TOOL_HINT: &str = "If this was a tools.NAME call, NAME is not on t
 const API: &str = r#"
 const __failed = answer => Object.prototype.hasOwnProperty.call(answer, 'error');
 const __ask = request => JSON.parse(__gents_host(JSON.stringify(request)));
+const __protocol = (operation, answer) => {
+    const error = new Error(`ScriptHostProtocolMismatch: ${operation}: ${JSON.stringify(answer)}`);
+    error.name = 'ScriptHostProtocolMismatch';
+    return error;
+};
 const __queue = [];
 const invoke = request => new Promise((resolve, reject) => { __queue.push({request, resolve, reject}); });
 Object.defineProperty(globalThis, '__gents_flush', {value: () => {
@@ -42,8 +47,12 @@ Object.defineProperty(globalThis, '__gents_flush', {value: () => {
         return true;
     }
     const answer = __ask({batch: waiting.map(call => call.request)});
-    const results = Array.isArray(answer.results) ? answer.results : [];
-    waiting.forEach((call, index) => settle(call, results[index] ?? {error: answer.error ?? 'the host returned no result for this call'}));
+    if (!Array.isArray(answer.results) || answer.results.length !== waiting.length) {
+        const error = __protocol('batch needs one result per member', answer);
+        waiting.forEach(call => call.reject(error));
+    } else {
+        waiting.forEach((call, index) => settle(call, answer.results[index]));
+    }
     return true;
 }});
 const sleep = async milliseconds => {
@@ -54,8 +63,12 @@ const sleep = async milliseconds => {
 const tools = __tools_enabled ? (() => {
     const described = request => {
         const answer = __ask({describe: request});
-        if (__failed(answer)) throw new Error(answer.error);
-        return answer.result;
+        const result = answer.result;
+        const valid = request === null
+            ? Array.isArray(result) && result.every(name => typeof name === 'string')
+            : result && typeof result.description === 'string' && result.parameters && typeof result.parameters === 'object';
+        if (!valid) throw __protocol('describe returned no tool surface', answer);
+        return result;
     };
     let names;
     const known = name => typeof name === 'string' && name !== 'then' && (names ??= described(null)).includes(name);
@@ -338,6 +351,33 @@ mod tests {
                 read("d"),
             ]
         );
+    }
+
+    #[test]
+    fn an_old_host_or_malformed_batch_fails_with_a_named_protocol_error() {
+        let error = run(
+            &json!({"tool_calls": true, "script": "return Object.keys(tools);"}),
+            |_| Ok(json!({"error": "expected {tool_name, arguments} or {sleep_ms}"}).to_string()),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("ScriptHostProtocolMismatch: describe"),
+            "{error}"
+        );
+        for reply in [
+            json!({"error": "expected {tool_name, arguments} or {sleep_ms}"}),
+            json!({"results": []}),
+        ] {
+            let error = run(
+                &json!({"script": "await Promise.all([sleep(0), sleep(0)]);"}),
+                move |_| Ok(reply.to_string()),
+            )
+            .unwrap_err();
+            assert!(
+                error.contains("ScriptHostProtocolMismatch: batch"),
+                "{error}"
+            );
+        }
     }
 
     #[test]
