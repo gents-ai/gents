@@ -32,7 +32,7 @@ const API: &str = r#"
 const __failed = answer => Object.prototype.hasOwnProperty.call(answer, 'error');
 const __ask = request => JSON.parse(__gents_host(JSON.stringify(request)));
 const __protocol = (operation, answer) => {
-    const error = new Error(`ScriptHostProtocolMismatch: ${operation}: ${JSON.stringify(answer)}`);
+    const error = new Error(`ScriptHostProtocolMismatch: ${operation}: ${JSON.stringify(answer)}. Update the host or install the script pack version matching it.`);
     error.name = 'ScriptHostProtocolMismatch';
     return error;
 };
@@ -47,7 +47,9 @@ Object.defineProperty(globalThis, '__gents_flush', {value: () => {
         return true;
     }
     const answer = __ask({batch: waiting.map(call => call.request)});
-    if (!Array.isArray(answer.results) || answer.results.length !== waiting.length) {
+    if (__failed(answer) && !String(answer.error).startsWith('expected {tool_name, arguments} or {sleep_ms}')) {
+        waiting.forEach(call => call.reject(new Error(answer.error)));
+    } else if (!Array.isArray(answer.results) || answer.results.length !== waiting.length) {
         const error = __protocol('batch needs one result per member', answer);
         waiting.forEach(call => call.reject(error));
     } else {
@@ -378,6 +380,17 @@ mod tests {
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn a_batch_host_error_preserves_the_hosts_own_diagnostic() {
+        let error = run(
+            &json!({"script": "await Promise.all([sleep(0), sleep(0)]);"}),
+            |_| Ok(json!({"error": "TOO_LARGE: host request exceeds 1 MiB"}).to_string()),
+        )
+        .unwrap_err();
+        assert!(error.contains("TOO_LARGE"), "{error}");
+        assert!(!error.contains("ScriptHostProtocolMismatch"), "{error}");
     }
 
     #[test]

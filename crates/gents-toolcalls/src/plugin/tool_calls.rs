@@ -229,6 +229,19 @@ mod tests {
     struct Tools(Mutex<Vec<(u32, String, Value)>>);
 
     impl ToolEffectDispatcher for Tools {
+        fn definitions<'a>(&'a self) -> gents_loop::tool::BoxFuture<'a, Vec<ToolDefinition>> {
+            Box::pin(async {
+                ["query", "charts"]
+                    .into_iter()
+                    .map(|name| ToolDefinition {
+                        name: name.into(),
+                        description: String::new(),
+                        parameters: json!({"type":"object"}),
+                    })
+                    .collect()
+            })
+        }
+
         fn call<'a>(
             &'a self,
             _parent: &'a gents_loop::tool::ToolCallEnvelope,
@@ -468,6 +481,19 @@ mod tests {
     async fn a_fatal_hook_termination_cannot_be_swallowed_by_the_guest() {
         struct Fatal;
         impl ToolEffectDispatcher for Fatal {
+            fn definitions<'a>(&'a self) -> gents_loop::tool::BoxFuture<'a, Vec<ToolDefinition>> {
+                Box::pin(async {
+                    ["query"]
+                        .into_iter()
+                        .map(|name| ToolDefinition {
+                            name: name.into(),
+                            description: String::new(),
+                            parameters: json!({"type":"object"}),
+                        })
+                        .collect()
+                })
+            }
+
             fn call<'a>(
                 &'a self,
                 _parent: &'a gents_loop::tool::ToolCallEnvelope,
@@ -624,6 +650,19 @@ mod tests {
     async fn serving_children_is_not_charged_to_the_guest_clock() {
         struct Slow(RoundClock);
         impl ToolEffectDispatcher for Slow {
+            fn definitions<'a>(&'a self) -> gents_loop::tool::BoxFuture<'a, Vec<ToolDefinition>> {
+                Box::pin(async {
+                    ["slow"]
+                        .into_iter()
+                        .map(|name| ToolDefinition {
+                            name: name.into(),
+                            description: String::new(),
+                            parameters: json!({"type":"object"}),
+                        })
+                        .collect()
+                })
+            }
+
             fn call<'a>(
                 &'a self,
                 _parent: &'a gents_loop::tool::ToolCallEnvelope,
@@ -693,6 +732,19 @@ mod tests {
     async fn a_child_parked_on_operator_consent_is_not_charged_to_the_guest_clock() {
         struct Asking(std::path::PathBuf, std::path::PathBuf, RoundClock);
         impl ToolEffectDispatcher for Asking {
+            fn definitions<'a>(&'a self) -> gents_loop::tool::BoxFuture<'a, Vec<ToolDefinition>> {
+                Box::pin(async {
+                    ["read"]
+                        .into_iter()
+                        .map(|name| ToolDefinition {
+                            name: name.into(),
+                            description: String::new(),
+                            parameters: json!({"type":"object"}),
+                        })
+                        .collect()
+                })
+            }
+
             fn call<'a>(
                 &'a self,
                 _parent: &'a gents_loop::tool::ToolCallEnvelope,

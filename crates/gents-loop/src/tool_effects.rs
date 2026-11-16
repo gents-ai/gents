@@ -27,9 +27,7 @@ pub trait ToolEffectDispatcher: Send + Sync {
 
     /// The definitions of the tools `call` reaches: the request's selected
     /// surface, in its order.
-    fn definitions<'a>(&'a self) -> BoxFuture<'a, Vec<ToolDefinition>> {
-        Box::pin(async { Vec::new() })
-    }
+    fn definitions<'a>(&'a self) -> BoxFuture<'a, Vec<ToolDefinition>>;
 
     /// Settle the children the invocation left unfinished once it has stopped
     /// with `stop`. A stopped invocation drops its in-flight child call, so no
