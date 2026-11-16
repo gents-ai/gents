@@ -1,0 +1,4 @@
+---- MODULE MCBackgroundLiveOutputObservationPollBudget ----
+EXTENDS BackgroundLiveOutputObservation
+
+====

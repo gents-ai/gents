@@ -324,7 +324,7 @@ pub(super) fn deadline_open(deadline: Option<&str>) -> Result<bool, RequestOpera
         return Ok(true);
     };
     let deadline = chrono::DateTime::parse_from_rfc3339(deadline)
-        .map_err(RequestOperationError::passthrough)?;
+        .map_err(RequestOperationError::passthrough_error)?;
     Ok(Utc::now() <= deadline.with_timezone(&Utc))
 }
 
@@ -336,7 +336,7 @@ fn created_after(parent_created_at: Option<&str>) -> Result<String, RequestOpera
     {
         Some(parent) => {
             let parent = chrono::DateTime::parse_from_rfc3339(parent)
-                .map_err(RequestOperationError::passthrough)?
+                .map_err(RequestOperationError::passthrough_error)?
                 .with_timezone(&Utc);
             now.max(parent + chrono::Duration::seconds(1))
         }

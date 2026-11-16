@@ -1,0 +1,4 @@
+---- MODULE MCDroppedPermitCleanupUncountedFinalizer ----
+EXTENDS DroppedPermitCleanup
+
+====

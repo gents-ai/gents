@@ -1,0 +1,4 @@
+---- MODULE MCClientIdentityMetadataNoReread ----
+EXTENDS ClientIdentityMetadata
+
+====
