@@ -719,7 +719,7 @@ fn assert_provider_wait_respects_max_wait(case: &LeanCompletionRetryCase) {
     let wait = case.pre_scheduled_wake.expect("modeled retry wake") - case.pre_now;
     let cap = case.pre_max_wait.expect("modeled max wait");
     let mut state = CompletionRetryState::new(CompletionRetryPolicy {
-        max_rate_limit_wait: Duration::from_secs(cap as u64),
+        max_rate_limit_wait: Duration::from_secs(cap),
         ..scheduled_like_policy()
     });
     let directive = state.pre_stream(
@@ -743,7 +743,7 @@ fn assert_provider_wait_respects_max_wait(case: &LeanCompletionRetryCase) {
             PreStreamDirective::RetryAfter {
                 delay,
                 kind: RetryKind::Transport,
-            } => assert!(delay <= Duration::from_secs(cap as u64), "{}", case.name),
+            } => assert!(delay <= Duration::from_secs(cap), "{}", case.name),
             other => panic!(
                 "{}: expected a held transport wait, got {other:?}",
                 case.name
