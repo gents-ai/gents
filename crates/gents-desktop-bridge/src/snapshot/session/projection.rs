@@ -2065,12 +2065,7 @@ pub(super) fn project_transcript_rows(
                 origin: if runtime_context {
                     None
                 } else {
-                    message_origin(
-                        store,
-                        origin_message,
-                        source_request,
-                        &transcript.tool_calls,
-                    )
+                    message_origin(origin_message, source_request)
                 },
                 input_text,
                 timestamp: Some(row.message.created_at.clone()),
