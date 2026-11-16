@@ -391,7 +391,6 @@ mod tests {
         assert_eq!(shard((0..7).collect(), 1, 3), vec![1, 4]);
     }
 
-
     #[test]
     fn an_undecoded_snapshot_renders_the_decoded_schema() {
         let snapshot = serde_json::json!({
