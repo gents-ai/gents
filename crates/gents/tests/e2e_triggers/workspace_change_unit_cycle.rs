@@ -590,16 +590,15 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     assert_eq!(inbox["session_id"], supervisor_session);
     assert_eq!(inbox["agent_did"], supervisor);
     assert_eq!(inbox["requester_did"], cycle.user.did());
-    if gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
-        assert_eq!(inbox["lifecycle_state"], "completed");
-        assert!(inbox["content"].as_str().unwrap().contains(FAILURE_UNIT));
-    } else {
-        assert_eq!(inbox["lifecycle_state"], "failed");
+    assert_eq!(inbox["lifecycle_state"], "completed", "{inbox:#}");
+    let content = inbox["content"].as_str().unwrap();
+    assert!(content.contains(FAILURE_UNIT), "{inbox:#}");
+    if !gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
         assert!(
-            inbox["failure_reason"].as_str().is_some_and(|reason| reason.contains(
+            content.contains(
                 "ReadWrite workspace binding requires an enforceable WorkspaceWrite sandbox on this host"
-            )),
-            "an unsupported host must return the workspace owner's refusal: {inbox:#}"
+            ),
+            "an unsupported host must deliver the workspace owner's refusal: {inbox:#}"
         );
     }
 
@@ -735,19 +734,26 @@ async fn select_default_agent(access: &ConfigAccess, owner: &str, agent_did: &st
     .await;
 }
 
+/// The stage fails on the scripted 400 only where its ReadWrite workspace
+/// binding is admitted; on a host without an enforceable WorkspaceWrite
+/// sandbox admission refuses it before inference, so the inbox turn is the
+/// unit's first provider request.
 fn failure_inbox_backend() -> MockStreamingBackend {
-    let unit = StreamPlan::current_authored_user(
+    let delivered = StreamResponse::completes(
         "change-unit:cycle-inbox",
+        ["The failed stage reached the supervisor session."],
+    );
+    let responses = if gents_session::workspace::sandbox::workspace_write_sandbox_enforced() {
         vec![
             StreamResponse::bad_request(
                 "scripted failure for the change-unit supervisor inbox test",
             ),
-            StreamResponse::completes(
-                "change-unit:cycle-inbox",
-                ["The failed stage reached the supervisor session."],
-            ),
-        ],
-    );
+            delivered,
+        ]
+    } else {
+        vec![delivered]
+    };
+    let unit = StreamPlan::current_authored_user("change-unit:cycle-inbox", responses);
     MockStreamingBackend::start_with_plans(MODEL, vec![unit]).expect("mock provider starts")
 }
 

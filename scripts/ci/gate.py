@@ -23,6 +23,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -1251,12 +1252,14 @@ def run_cached_slice(plan, arguments, label):
     traces, written = {}, {}
     if prefix:
         derived = lean_derived() + ([(str(shims), PROOFS)] if shims else [])
-        context = test_cache.Context(ROOT, extract, derived=derived, refused=kept_target())
+        # TMPDIR is the job's own temporary directory on the Linux runners (rust-runner).
+        temporary = os.path.realpath(tempfile.gettempdir())
+        context = test_cache.Context(ROOT, extract, scratch=[temporary], derived=derived, refused=kept_target())
         # Lake reads tens of thousands of build files per test: the prefilter
         # drops them, and each process that touched them queries the proofs' sources.
         markers = [prefix_path + "/" for prefix_path, _ in derived] + [os.path.expanduser("~/.elan/")]
         lake_pids = set().union(*(test_cache.pids_matching(trace_dir, marker) for marker in markers))
-        drop = test_cache.scratch_drop(["/tmp/", "/proc/", "/sys/", "/dev/", *markers])
+        drop = test_cache.scratch_drop(["/tmp/", "/proc/", "/sys/", "/dev/", temporary + "/", *markers])
         traces, written = test_cache.parse_trace(test_cache.trace_directory(trace_dir, drop), context,
                                                  set(binary_ids.values()), lake_pids, PROOFS)
     answers = test_cache.Answers(ROOT, extract)
@@ -1278,7 +1281,6 @@ def run_cached_slice(plan, arguments, label):
 
 def start_lake_broker(extract):
     """Start scripts/ci/test_cache_broker.py outside the tracer and a `lake` shim for the slice's PATH."""
-    import tempfile
     import test_cache_broker
     socket_path = os.path.join(tempfile.mkdtemp(prefix="gate-lake-"), "socket")
     broker = subprocess.Popen([sys.executable, str(ROOT / "scripts/ci/test_cache_broker.py"), "serve", socket_path,

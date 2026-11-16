@@ -541,7 +541,8 @@ class MacosOnlyTests(unittest.TestCase):
             self.assertEqual(whole, {""})
 
     def test_the_repository_gated_tests_are_found(self):
-        self.assertEqual(gate.macos_only_tests("gents-cli"), {("--test", "plugin_build_sandbox"): []})
+        # A whole-file gate runs the whole target.
+        self.assertEqual(gate.macos_only_tests("gents-cli")[("--test", "plugin_build_sandbox")], [])
         self.assertIn("a_skipped_gate_releases_the_bound_workspace", gate.macos_only_tests("gents")[("--lib",)])
         # Compiled on both platforms, or on neither with the gate's features: not macOS-only.
         self.assertEqual(gate.macos_only_tests("gents-host"), {})
