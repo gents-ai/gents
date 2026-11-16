@@ -76,6 +76,9 @@
               "agent_did": "gents:agent-slot:change-unit-reviewer"
             },
             {
+              "agent_did": "gents:agent-slot:change-unit-record"
+            },
+            {
               "agent_did": "gents:agent-slot:change-unit-rejected"
             }
           ]

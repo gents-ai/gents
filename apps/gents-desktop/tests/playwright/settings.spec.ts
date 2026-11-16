@@ -1,6 +1,6 @@
-import { expect, gotoHarness, test } from "./desktopTest";
+import { expect, gotoHarness, OWN_VIEWPORT, test } from "./desktopTest";
 
-test.describe("the app's settings screen", () => {
+test.describe("the app's settings screen", { tag: OWN_VIEWPORT }, () => {
   test("opens from the rail on its general section and applies a theme change", async ({
     page,
   }) => {
@@ -66,7 +66,7 @@ test("an agent's access sentence opens the setting each part describes", async (
   await expect(sheet.locator(":focus")).toHaveAttribute("id", /-bash$/);
 });
 
-test("an agent's Edit opens its name and tags at the first field, and a header tag opens them at Tags", async ({
+test("an agent's Edit opens its name and tags at the first field, and a header tag opens them at Tags @own-viewport", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1400, height: 900 });

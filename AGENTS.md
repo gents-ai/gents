@@ -1,303 +1,210 @@
 # Repository instructions
 
-Gents is a Rust agent runtime with DefraDB as its control plane. Configuration,
-requests, responses, sessions, tools, triggers, and schedules are documents.
-The `gents` runtime crate is the core; the CLI, desktop app, protocol, and
-schemas operate or expose its vocabulary. Use DefraDB's DID identity and
-document ACP for database authorization. Reuse its transaction and P2P APIs
-through the existing Gents adapters.
+## You are here
 
-## Finding the owner
+Gents is an agent runtime: a small Rust core runs the owned agent loop and keeps
+its state as documents in DefraDB ([defradb.rs](https://github.com/sourcenetwork/defradb.rs)),
+which supplies storage, transactions, DID identity, access control (ACP) and
+peer-to-peer sync. Capabilities are plugins in packs; clients are adapters.
 
-Read versions and dependency revisions from `Cargo.toml`, `Cargo.lock` and
-`rust-toolchain.toml`; read the actual check matrix from `.github/workflows/`.
-Do not duplicate changing versions in instructions.
+Crates are layered: each names only crates below it
+(`crate_dependencies_follow_the_layers`). Put code in the lowest crate that
+owns everything it uses.
 
-| Surface | Starting point |
+| Layer (bottom up) | Crate | Owns |
+| --- | --- | --- |
+| Vocabulary | `gents-schemas`, `gents-protocol`, `gents-lean-vocab`, `gents-loop` | SDL and access policy; wire types, operation contracts, typed queries; Lean case decoders; the provider turn loop and provider input |
+| Store | `gents-store` | DefraDB access, transactions, identity, ACP |
+| Documents | `gents-documents` | Configuration documents, desired state |
+| Inference, P2P | `gents-inference`, `gents-p2p` | Backends and accounts; peers, enrollment, sync |
+| Packs | `gents-pack` | Packs, the plugin runner |
+| Session | `gents-session` | Requests, sessions, the lifecycle hook seam |
+| Tools | `gents-tools` | The tool surface, the Engineer's self-config |
+| Tool calls | `gents-toolcalls` | Tool-call lifecycle, background jobs |
+| Automation | `gents-automation` | Triggers, tasks, callbacks, Goals |
+| Observe | `gents-observe` | Timelines, trace export |
+| Root | `gents` | The runtime and its composition |
+| Host, clients | `gents-host`, `gents-service`, `gents-cli`, `gents-eval`, `gents-desktop-*`, `gents-client-host`, `apps/`, `packages/` | Serving, service supervision, adapters, presentation |
+
+Lean models live in `crates/gents/proofs/Proofs/`, one directory per layer,
+and import only downward; TLA+ specs live in `crates/gents/proofs/tla/`. The
+[proof map](crates/gents/proofs/README.md) names the modelled surfaces. Read
+versions from `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml`.
+
+**Worktrees.** One tree per change, created from the main checkout with
+`git fetch origin && make worktree BRANCH=<branch> BASE=origin/main`. Build
+with `PROFILE=fast-dev` (Make) or `--profile fast-dev` (Cargo); direct test
+runs need the `RUST_MIN_STACK` the Makefile exports. Never change a checkout while a build or test runs in it; a
+timed-out observation is not a stopped process. Remove the worktree once its
+branch merges; `make sweep` clears stale artifacts.
+
+## Model first
+
+The Lean owners are the truth: when model and Rust disagree, decide in the
+model. For a transition, invariant, access rule or provider input:
+
+1. **Model.** Change the Lean owner; no `sorry`. Interleavings of concurrent
+   actors go in TLA+: a spec, a correct configuration, and one broken
+   configuration per safeguard that fails as expected
+   (`crates/gents/proofs/tla/scripts/run-tlc.sh <config>`).
+2. **Conformance.** Mark the owner `@[conformance_function]` (its whole domain
+   becomes cases) or `@[conformance_family]` (chosen cases), run
+   `make lean-regen`, and replay it against the production function in exactly
+   one test (`every_emitted_family_has_a_consumer_or_a_ledger_reason`).
+   Expectations come only from running the model: no fixture constants, no
+   Rust mirror of its policy.
+3. **Rust.** Make the owner satisfy the contract.
+
+Lean and TLA+ divide the work: Lean owns every decision (a pure function from
+observed state to action, with its theorems); TLA+ owns the interleaving of the
+actors that call it. A spec names the Lean owner of each decision it uses and
+takes the decision's cases from that owner rather than restating the policy;
+each configuration records its expected result (holds, or fails with the
+property it names), so a spec that stops catching its bug is visible.
+
+Generated files (decoders, the family schema, the access policy YAML) are
+regenerated, never edited. Decisions and external premises are docstrings on
+the Lean definitions they justify. Semantics-preserving plumbing needs no model
+change.
+
+## Flaky tests are defects
+
+An intermittent failure is an interleaving nobody wrote down. Never answer one
+with a sleep, retry, larger deadline or looser assertion.
+
+1. State the property the test asserts over named actors and steps; if it
+   cannot be stated, the test asserts an accident.
+2. Model the interleaving in TLA+ from the code's real atomic steps.
+3. Fix the side the model says is wrong: the product if the checker finds a
+   violating trace, the test or its observer if the model exonerates the
+   product. The owner's decision goes in Lean with a conformance family.
+4. Keep the test as the regression and show it passing under the contention
+   that broke it. Report what was verified by execution, by model checking and
+   only by reading.
+
+An intermittent correctness assertion (a lost update, message or stop) is a
+possible product defect until the model says otherwise.
+
+Waits follow events: subscribe to the documents watched (`rows_when` in
+`crates/gents/tests/support/live_inference.rs`) or await the owner's
+notification, and fail with the last state seen once nothing changes for the
+suite-wide `STALL_CEILING`. Assert the order of events, never a per-test
+wall-clock budget.
+
+## Code shape
+
+- **No duplication.** Reuse the owner: no parallel interpretation, side
+  channel, alias or re-export from an old location. Do not hand-maintain a list
+  a scan can derive.
+- **Modular and small.** One responsibility per module; split files and crates
+  at an ownership seam instead of growing them. No size limit is enforced;
+  Clippy's complexity thresholds are pinned in `clippy.toml`, fixed by
+  restructuring, never raised.
+- **Point dependencies down.** When a lower layer needs behavior above it,
+  define a small trait where it is called and implement it above.
+- **No comments** except a constraint code and proofs cannot express (safety,
+  ordering, external behavior), stated once on the item.
+- **No prose documents** (design notes, plans, status reports) in this
+  repository; user documentation lives in the docs repository.
+- **No backwards compatibility before 1.0**: no upgrade paths, conversions or
+  aliases. An incompatible home is refused clearly and left untouched.
+
+## Enforced rules
+
+Unless noted, the ratchets live in `crates/gents/tests/write_owner_structure.rs`;
+their allowlists only shrink.
+
+| Rule | Enforced by |
 | --- | --- |
-| Runtime documents, admission, tasks and recovery | `crates/gents/src/` |
-| Provider turn execution and input assembly | `crates/gents-loop/src/` |
-| Eval and optimization drivers | `crates/gents-eval/` |
-| Canonical wire types and database vocabulary | `crates/gents-protocol/`, `crates/gents-schemas/` |
-| Executable models and model-driven contracts | `crates/gents/proofs/`, `crates/gents-lean-contract/` |
-| CLI and installed editor helpers | `crates/gents-cli/`, `crates/gents-client-host/`, `crates/gents-media-host/` |
-| Desktop application | `apps/gents-desktop/` |
-| Shared desktop client and presentation | `crates/gents-desktop-core/`, `crates/gents-desktop/`, `packages/` |
+| DefraDB access goes through `gents-store`: writes `ConfigAccess::write`/`write_local`, multi-statement or DID-scoped work `ConfigAccess::transact_*`, reads `graphql_with_transaction_retry` or `ConfigAccess::execute`. Never the embedded node, raw HTTP GraphQL, or another retry loop or wrapper. | `production_defradb_writes_have_one_owner`, `production_defradb_node_execution_only_shrinks` |
+| A User-signed transaction that can lose its read to a concurrent write uses `transact_signed_conflict_rebuild` (or `_with_finality`); its callback re-reads its inputs and has no outside effects, and only a confirmed abort is rebuilt. | Lean `clientSignedWriteMayRetry` |
+| Queries use `gents_protocol::document_query` with variables; any interpolated string goes through `graphql::escape_graphql_string()`. A mutation never emits `[]`; use `null`. | review |
+| Owner interfaces return `thiserror` enums. An erased error is classified by asking the owner through `error_chain::find_map_source`; an owner passing an application error through wraps it in `error_chain::PassedThrough`. A store conflict is the typed `TransactionConflict`. Error text is matched only in an adapter classifier whose docstring names the external premise. | `owner_interfaces_use_thiserror`, `downcast_classifiers_only_shrink`, `error_text_classification_only_shrinks` |
+| Request context (identity, signing, transaction, requester, trace) is an explicit argument, never thread- or task-local. | `ambient_request_context_only_shrinks` |
+| One Tokio runtime per process, built at its entry point; handles come from the caller (`DropCleanup::current` in drop guards). Never block a runtime thread: `.await`, `spawn_blocking`, `drive_unsendable`. | `disallowed-methods` in `clippy.toml` |
+| Maps and sets are `rapidhash`; trait bounds live in `where` clauses. | `hash_maps_use_rapidhash`, `trait_bounds_live_in_where_clauses` |
+| Rig types stay behind `gents_loop::rig_compat` and `provider_input`. | `rig_types_stay_behind_their_owners` |
+| OAuth credentials are picked through the resolver. | `oauth_credential_picks_go_through_the_resolver` |
+| Test fixtures never reach a production build. | `gents_test_fixtures_stay_dev_only` |
+| Tests never touch the host's service manager: whatever reaches `gents-service` or spawns `gents` enables its `test-home-guard` from dev-dependencies. | `service_isolation_stays_test_only`, `tests_reaching_the_service_manager_are_isolated` |
+| One integration binary per crate (`tests/integration.rs` with `#[path]` modules); separate binaries only for process-wide state, listed with the reason. | `integration_tests_share_one_binary_per_crate` |
+| Log with `tracing`, never `println!`. | review |
 
-## Working on a change
+DefraDB's execution boundaries hold: autocommit prepares remote inputs on the
+caller and routes only prepared attempts; cache-only commits stay on their
+native I/O queue (Regolith's `commit_nowait`). Missing transaction mechanics
+are fixed in defradb.rs or Regolith, not hidden by a Gents retry.
 
-- Read the issue's acceptance, the owning contract and its callers before
-  editing. Reuse the existing owner rather than adding a parallel interpretation.
-  Keep each module focused on one responsibility; split at ownership seams.
-- Preserve unrelated edits and use an isolated worktree. Do not change a
-  checkout's source, HEAD, manifests or dependency pin while its build or test is
-  running. An observation timeout is not a stopped process; inspect its actual
-  state before restarting it. Stop only processes owned by the current work.
-- Diagnose a retained failure before rerunning it. Use the smallest regression
-  that distinguishes the defect; do not hide it with retries, larger deadlines
-  or looser assertions. Reuse valid evidence from unchanged inputs.
-- For performance changes, compare equivalent workloads at the affected owner
-  and record the source revision, scope and measured result. A narrower payload
-  alone does not establish faster execution or fewer database reads.
-- Keep review changes scoped to their final behavior and target the immediate
-  parent when stacked. Describe the problem, delivered behavior, actual checks
-  and remaining limits. Close an issue only when its complete acceptance is
-  delivered; record partial work without claiming the whole flow is finished.
+## Identity and ownership
 
-## Ownership
+- **ACP is the only authorization.** Actors are DIDs: a **User** (key stays on
+  the client; signs user configuration, plugin installs and agent creation), a
+  **Node** (peer admission and sync; owns operational documents no Agent
+  caused) and an **Agent** (runtime-managed; owns what it creates). Each
+  transaction runs as exactly one. No second identity layer or Rust check that
+  bypasses ACP; if ACP cannot express a rule, change the policy model.
+- **One policy, in Lean** (`crates/gents/proofs/Proofs/Store/Identity/`).
+  Permissions flow down `parent` (Node, Agent, session, its children); access
+  is granted by writing a relationship and revoked by deleting it. Every
+  document type gets its resource, parent and create/read/update/delete rule
+  in the model first. ACP authorizes whole documents: a field with different
+  writers is its own document.
+- **Core is the loop and its state.** Capabilities ship as WASM plugins in packs
+  ([gents-ai/packs](https://github.com/gents-ai/packs)); core adds only the
+  seam. Hooks on the `gents-session` seam receive rows and return effects as
+  data, never a transaction, and cannot prevent an interrupt, stop or terminal.
+  A plugin job is an ordinary background tool call.
+- **Request state is only `lifecycle_state`** (`RequestLifecycleState`).
+  Claimed work runs through the owned completion loop, the sole provider-input
+  boundary. `AgentSession` is the one session document; `Agent` is its only
+  configuration selection. Tools, MCP services, skills, tasks, callbacks and
+  schedules are documents reconciled by their owners.
+- **Clients are adapters.** An operation's contract lives in
+  `gents_protocol::operations`, its handler with the documents; clients never
+  re-implement validation, defaults or permissions. Sync health belongs to
+  `ClientSyncStateOwner` and `project_sync_health`.
+- **Model-facing text** discloses progressively: a small core, help per
+  resource, errors naming the next call; answer first, then next steps, then
+  metadata.
 
-- Core is bounded to the owned agent loop and task and data management in
-  DefraDB: documents, triggers, tasks, identity and ACP, plus
-  generic plugin seams (tools, callbacks, plugin jobs). Workflow languages and
-  other capabilities (OCR, git and GitHub, web research, domain tools) ship as WASM
-  plugins in packs (gents-ai/packs) and run as tools or workflow stages; core
-  adds only the plugin seam a pack needs, not the capability.
-- Request state is only `lifecycle_state`, using
-  `gents_protocol::request_lifecycle::RequestLifecycleState`. Claimed work runs
-  through the owned completion loop; reuse its lifecycle and terminal owners.
-- The owned loop is the sole provider-input boundary. Durable transcripts may
-  be permissive; sanitize and narrow them there.
-- DefraDB authenticates actors as DIDs and enforces document authorization
-  through ACP; do not add a parallel identity or authorization layer. User keys
-  stay on clients, which sign user configuration, plugin installs and agent creation.
-  The node key authenticates peer admission and synchronization and owns node-local
-  operational documents not caused by an agent; enrollment grants no document access. Each node-local Agent has a runtime-managed DID and owns the
-  data it creates. Clients connect to its hosting runtime. The operating convention
-  is one active runtime per node; enforcement is deferred. Do not add host identity,
-  leases, or host-migration machinery. Validate configured paths/resources through
-  existing owners and fail affected work clearly when unavailable. Paths and
-  observations are not portable identity data.
-- Tools, MCP services, agent targets, skills, tasks, callbacks, schedules,
-  and event sources are documents. Tool groups are nested settings within Tools.
-  Extend existing reconcilers and owners instead of adding side channels.
-- Task hooks are explicitly configured host commands on Task. Reuse existing
-  host process execution and request completion owners for ordering, timeouts,
-  errors, and cancellation; do not introduce a TaskRun lifecycle. Hook state lives
-  on the host, not in input/result mapping configuration. Existing event callbacks
-  retain their action journals. A plugin job is an ordinary background tool
-  call; its pin and progress are fields on that call; guest notes are pack
-  data; it is not a TaskRun lifecycle or a new core action journal. Workspace integration with general hooks remains
-  an explicit design TODO; preserve current workspace functionality until resolved.
-- AgentSession is the single durable session document.
-  Agent is its only configuration selection. Title and creation provenance live
-  within the session; request state and derived UI observations keep their existing
-  owners. Use the canonical protocol session type rather than another writable copy.
-- Discovery and enrollment use P2P; clients read runtime data through authenticated
-  GraphQL and observe it through subscriptions. `ClientSyncStateOwner` combines
-  the discovery and enrollment facts and `project_sync_health` derives product
-  state from them and the runtime connections. Keep runtime
-  readiness separate and do not add UI-local sync heuristics.
-- Rig is a provider client behind `gents_loop::rig_compat` and
-  `gents_loop::provider_input`, re-exported by the inference owner
-  (`llm::rig_compat`) and the turn owner (`provider_input`) for callers here. Rig's own types stay inside those two
-  and the loop that drives them (`gents_loop::loop_stream`); runtime owners
-  use their native handles (`ProviderModel`, `ProviderClient`). For now,
-  provider transport adapters (the `*_http`, Codex, Claude Messages, xAI and
-  backend-client modules) may also implement Rig's HTTP client traits or
-  build its provider clients. `rig_types_stay_behind_their_owners` in
-  `write_owner_structure.rs` enforces the boundary; its allowlist only shrinks.
-  Persisted messages remain native. DefraDB is the pinned public dependency in
-  the workspace `Cargo.toml`; investigate node, schema, identity, and
-  transaction behavior there. Claude subscriptions use Anthropic Messages HTTP
-  with a node-scoped `OAuthCredential` written by `gents accounts login claude` and
-  refreshed by gents; the `claude` binary is not a dependency.
+## Tests and CI
 
-## Foundation
+- Tests hold the Rust to the models; prefer generated cases to hand-written
+  unit tests. Keep end-to-end tests through real owners, tests pinning text a
+  person or model reads, and tests evidencing a premise about the database,
+  filesystem, processes or a wire format. Never assert how something is done.
+- End-to-end tests drive live inference and assert behavior (states, documents,
+  tool calls), not wording. Never pin temperature 0.
+- A Cargo filter matching nothing exits 0: read the test count.
 
-For changes to legal transitions, invariants, or provider input, work in this
-order:
+**The gate** (`scripts/ci/gate.py`, run by `.github/workflows/ci.yml`) maps a
+change to its crates and their reverse dependents and selects `fmt`, `lint`
+(clippy `-D warnings`, live suites compiled), `contract` (no `sorry`, Lean
+layers and build, generated files current, the consumer scan, the ratchets),
+the TypeScript jobs, and the test groups `foundation`, `store`, `session`,
+`runtime`, `cli` and `desktop`, each crate built and tested alone.
 
-1. Update the Lean model in `crates/gents/proofs/` and keep it free of `sorry`.
-2. Update the generated or model-driven conformance tests.
-3. Make the Rust implementation satisfy the contract.
+```bash
+make gate-plan                  # what this change selects
+make gate                       # run it against BASE=origin/main
+make gate-run JOB=test:session  # one job
+```
 
-Plumbing and tooling need no proof change when they preserve semantics. The
-[proof map](crates/gents/proofs/README.md) identifies the modeled surfaces.
+A draft tests the crates it changes; a ready pull request and the merge queue
+add their dependents; a push to `main` runs everything, and main's runs are the
+measurement for flakes and speed. Native changes pass `make gate` before
+pushing: a lower crate is not verified until its consumers, clients included,
+pass.
 
-Conformance has one semantic source: the executable Lean owners. Serialize actual
-modeled inputs/actions and derive expectations through those owners; do not keep
-separate fixture constants or test-only Rust policy machines that mirror their behavior.
-Explicit regression expectations must be checked against model execution. Wire
-decoders and native adapters translate representations, not redefine policy.
+**Runners** are chosen by role from `.github/ci-runners.json` (capability
+labels, never host names); a machine joins by registering with a role's labels.
+A fork pull request never runs on a self-hosted runner; a maintainer pushes it
+to a branch here to test it.
 
-## Repository rules
+## Delivering a change
 
-- Escape every interpolated GraphQL string with
-  `graphql::escape_graphql_string()`.
-- Never emit `[]` in a DefraDB mutation; use `null` for an empty nillable list.
-- All application DefraDB access goes through the store layer's config_client
-  and graphql owners: single writes via `ConfigAccess::write`/`write_local`,
-  multi-statement or DID-scoped work via `ConfigAccess::transact*`, reads via
-  `graphql_with_transaction_retry` (embedded) or `ConfigAccess::execute`
-  (local/HTTP). Never call `EmbeddedNode::execute*`, `runner()`, or raw DefraDB
-  HTTP GraphQL from feature code, and never add another retry loop or access
-  wrapper. `write_owner_structure.rs` is a syntactic ratchet over direct node
-  access, not complete enforcement; its allowlist only shrinks.
-- Owner and library interfaces, the seams where callers decide behavior by
-  which failure occurred, return module-owned `thiserror` enums, and classifiers
-  match those enums or ask the owner's classifier. `OWNER_MODULES` in
-  `owner_interfaces_use_thiserror` lists them. Application code (commands, tool
-  handlers, daemon glue, tests) may use `anyhow` with context; where an erased
-  error reaches an owner boundary, find the owner enum with
-  `gents_protocol::error_chain::find_map_source` and ask it, since `source()`
-  skips a transparent variant's own error. A decision on error text belongs only
-  in an adapter-boundary classifier whose docstring names the external premise
-  (third-party or persisted text is the only signal).
-  `error_text_classification_only_shrinks` and `downcast_classifiers_only_shrink`
-  ratchet both; their allowlists only shrink. Print typed error chains with
-  `gents_protocol::error_chain::ErrorChain`.
-- Request context (identity, signing, ACP bypass, transaction handles, the
-  requester or session, trace or request IDs) travels with the task or message
-  as an explicit argument or field, never in `thread_local!` or `task_local!`.
-  `ambient_request_context_only_shrinks` in `write_owner_structure.rs` bans new
-  production sites; its allowlist only shrinks.
-- Preserve DefraDB's execution boundaries when updating its adapter or dependency.
-  Autocommit prepares remote inputs on the caller and routes only prepared database
-  attempts; do not replace that sequence with a call that moves the whole request
-  onto a database worker. Worker-affine cache-only commits stay on their native I/O
-  queue through `commit_nowait`; never offload them to a pool's blocking executor
-  or add a Gents retry to hide `WouldBlock::Io`. Fix missing asynchronous transaction
-  mechanics in Regolith. Read the owning contracts before changing these paths:
-  [PooledExecutor](https://github.com/sourcenetwork/defradb.rs/blob/main/crates/query/src/pooled/mod.rs),
-  [embedded autocommit](https://github.com/sourcenetwork/defradb.rs/blob/main/crates/defra-node/src/lib.rs),
-  [WorkerIo](https://github.com/sourcenetwork/defradb.rs/blob/main/crates/storage/src/backends/regolith/worker_io/mod.rs),
-  and [Regolith commit tickets](https://github.com/sourcenetwork/regolith/blob/main/src/transaction/nowait.rs).
-- Use `tracing`, never `println!`.
-- One Tokio runtime per process, built at its entry point (`main`, the Tauri
-  runtime install, `#[tokio::test]`); the speech worker's silent runtime is the
-  one documented exception. Code that needs a `tokio::runtime::Handle` takes it
-  from its caller; `tokio::spawn` inside a running task is fine. Never call
-  `Handle::current`/`try_current`: a guard whose `Drop` owes async cleanup
-  binds its runtime with the drop-cleanup owner's `DropCleanup::current`, and tests
-  take theirs from their crate's test-support helper.
-- Never block a runtime thread: every wait is an `.await` (`tokio::time::sleep`,
-  the owner's notification, never a polling loop) and synchronous work runs on
-  `spawn_blocking`. Clippy bans `std::thread::sleep`, `Handle::block_on`,
-  `block_in_place` and the futures and tauri `block_on`; each remaining use
-  carries a reasoned `expect` and sits off the runtime workers (a synchronous
-  process or test, a dedicated OS thread, a `spawn_blocking` closure) or is a
-  test future that deliberately overruns a deadline within one poll.
-  `Runtime::block_on` is for process and test entry points and dedicated
-  threads. Drive a non-`Send` embedded-node future through the
-  store layer's storage backend (`drive_unsendable`).
-- Every hash map and set is `rapidhash::RapidHashMap`/`RapidHashSet` (the fast
-  hasher, built with `new`, `default` or `with_capacity` via `HashMapExt`/
-  `HashSetExt`), and hashers are `rapidhash::fast::RapidHasher`, as in DefraDB.
-  Use std's map only where a third-party signature fixes it;
-  `hash_maps_use_rapidhash` ratchets this and its allowlist only shrinks.
-- Trait bounds live in where clauses, never inline in generic parameter lists;
-  `trait_bounds_live_in_where_clauses` ratchets this.
-- Treat flaky tests as defects: reproduce, file, and fix them.
-- Create worktrees with `make worktree BRANCH=<branch>` so build artifacts are
-  cloned efficiently. In agent worktrees build and test with
-  `PROFILE=fast-dev`; the default dev profile keeps full dependency debug info
-  and fills the disk across concurrent worktrees. Run `make sweep` to delete
-  stale artifacts, and remove a worktree (`git worktree remove`) once its
-  branch merges.
-
-## Documentation and comments
-
-Sources of truth are the Lean model (`crates/gents/proofs`), the code, and the
-tests that bind them. Do not add prose documentation, design notes, status
-reports or working documents to this repository; derive them with agents when
-needed. User documentation belongs in the docs repository.
-
-Record decisions, external premises and safety reasons that cannot be derived
-from code or proofs as docstrings on the Lean definitions and theorems they
-justify. For constraints on native interfaces the model does not cover, use a
-docstring on the owning Rust or TypeScript item instead. Other code comments
-state only constraints the code and proofs cannot express (safety, ordering,
-external-system behavior); do not narrate code, restate names or record history.
-
-Keep agent instructions (this file), CHANGELOG, license, generated references,
-machine-read manifests and maps, runtime-loaded prompt and pack markdown, and
-minimal install steps. Before deleting prose, move any non-derivable obligation
-it holds to its owner, and never remove a file a build, test or coverage check
-reads.
-
-Model-facing tool text and agent prompts use progressive disclosure (#2088): a
-small tool core, then help that adds detail per resource and command, and
-errors that name the next call. Prompts hold concepts, tools hold syntax and
-recipes; nothing is repeated across layers or on every response. Model-facing
-tool results read top to bottom: the answer first, then how to proceed, then
-metadata.
-
-## Specification stacks
-
-### Configuration refactor stack
-
-[PR #1430](https://github.com/gents-ai/gents/pull/1430) is the specification:
-its description holds the decisions and deletion handoff; canonical config/protocol
-structs define the target shapes. Old runtime code is evidence of existing behavior,
-not permission to restore rejected abstractions.
-
-- Keep the spec branch focused on types. It is intentionally red; per the user,
-  do not run builds/tests or add compatibility code to make it compile here.
-- Implement in stacked PRs: Lean [#1436](https://github.com/gents-ai/gents/pull/1436),
-  then conformance [#1443](https://github.com/gents-ai/gents/pull/1443), then
-  Rust/schema/loading and packs/consumers. Each PR targets its immediate parent.
-  Keep its description current with baseline, owners, deletions and validation.
-- Trace removed concepts through writers, readers and contracts. Preserve their
-  guarantees through existing owners; delete obsolete implementations in their
-  owning layer. Do not duplicate configuration types or selection paths.
-- Remove historical migration steps, frozen old schemas and transition-specific
-  tests; retain useful migration infrastructure. No legacy conversions or data wipes.
-- Resolve spec conflicts in #1430 before propagating them. Validate each descendant
-  and the integrated stack; the non-buildable foundation must not merge alone.
-
-### Canonical output stack (#1571)
-
-`gents_protocol::output` and the SDL are the breaking specification; the
-[ownership table](contracts/canonical-output.md) assigns the remaining deletions.
-Keep this layer intentionally red: no builds/tests or compatibility shims.
-Stack Lean, generated conformance, then implementation/consumers, each on its
-parent. Model the new contracts before implementing transitions or projections.
-The foundation must not merge alone; validate the integrated stack before pushing
-its implementation layers.
-
-### Session-message stack (#1938)
-
-The session-message spec layer (`gents_protocol::request_admission`, the
-AgentRequest/AgentToolCall/Node SDL, `AgentTools` and
-`Proofs/Request/CausalHop.lean`) removes the privileged subagent position.
-Keep it intentionally red: no Rust builds, tests or compatibility shims. Stack
-L1 spec, L2 conformance, L3 runtime, L4 CLI/shims, L5 desktop, each on its
-parent. The spec layer never merges alone; validate the integrated stack
-before pushing its implementation layers.
-
-### Node/Agent rename stack (#1799)
-
-The rename spec layer (Node and Agent SDL, `gents_protocol` re-exports, the
-Engineer prompt and preset) replaces the old vocabulary in the table below.
-Keep it intentionally red: no Rust builds, tests or compatibility shims. Stack
-L0 spec, L1 Lean, L2 conformance, L3 runtime, L4 CLI/shims, L5 desktop, each
-on its parent. The spec layer never merges alone; validate the integrated stack
-before pushing its implementation layers.
-
-| Old | New |
-| --- | --- |
-| AgentPrincipal | Node |
-| AgentBehavior | Agent |
-| SubagentTools, SubagentTarget | AgentTools, AgentTarget |
-| setup steward | Engineer |
-
-## Validation
-
-During iteration, run focused checks for the changed owner or flow. Do not
-repeat broad suites, dependency installation or native/shared builds on every
-edit. Recheck when the source, dependency inputs or a concrete failure warrants
-it. Keep test, browser and installed-editor evidence distinct.
-
-Before pushing native implementation changes, run `cargo test -p gents`,
-`make test-eval-drivers` (`cargo test -p gents-eval`),
-`cargo check --workspace --all-targets` and `make lint` (clippy, `-D warnings`).
-Run `lake build` for proof changes and the relevant CLI or desktop suites for
-affected consumers. The named intentionally red specification layers above
-retain their own validation and integration constraints.
-
-In worktrees, select `PROFILE=fast-dev` for Make recipes or `--profile fast-dev`
-for direct Cargo build/test commands. Read recipe and feature names from the
-Makefile and owning manifests rather than inventing an equivalent command.
-Instruction-only edits need content, reference and discovery checks; workflow-only
-edits need their affected workflow/control checks. Neither alone requires a
-runtime rebuild or the native implementation gates.
+Read the issue's acceptance, the owning model and its callers first. Diagnose a
+failure before rerunning it. For performance, compare equivalent workloads at
+the owner and record revision, scope and result. Describe the problem, the
+delivered behavior, the checks actually run and the limits that remain; close
+an issue only when its whole acceptance is delivered.

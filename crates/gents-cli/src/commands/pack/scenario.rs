@@ -7,15 +7,15 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
-use super::cli_process::{path_arg, run_cli_json};
 use super::server::{wait_http, wait_runtime_ready};
 use crate::cli::args::{PackInitArgs, PackRunArgs, PackSeedArgs};
 use crate::graphql_access::post_graphql;
 use background::await_background_completion;
 use fan_in::verify_fan_in;
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
+use gents_host::cli_process::path_arg;
+use gents_host::cli_process::run_cli_json;
 use gents_protocol::client_protocol::RequestLifecycleState;
+use gents_store::config_client::ConfigAccess;
 use load::{
     load_manifest, load_manifest_with, read_distribution_manifest, resolve_scenario_dir,
     trigger_source_collections,
@@ -91,10 +91,11 @@ pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
     let manifest = load_manifest(&pack, &distribution)?;
 
     let port = args.http_port;
-    let graphql = crate::resolve_graphql_endpoint(
+    let graphql = gents_service::home_state::resolve_graphql_endpoint(
         Some(&format!("http://127.0.0.1:{port}/api/v0/graphql")),
         None,
-    )?;
+    )
+    .await?;
     let healthz = format!("http://127.0.0.1:{port}/healthz");
     wait_http_ok(&healthz, Duration::from_secs(120))
         .await
@@ -140,11 +141,20 @@ pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
             let graphql = graphql.clone();
             let job_id = job_id.clone();
             async move {
-                let query = format!(
-                    "{{ AgentRequest(filter: {{ caused_by_correlation: {{ _eq: \"{}\" }} }}) {{ request_id }} }}",
-                    escape_graphql_string(&job_id)
-                );
-                let response = post_graphql(&graphql, &query).await?;
+                let rendered = {
+                    use gents_protocol::document_query::{
+                        fields::agent_request as fields, Filter, Query, Selection,
+                    };
+                    Query::select(Selection::new().field(fields::REQUEST_ID))
+                        .filter(Filter::eq(fields::CAUSED_BY_CORRELATION, &job_id))
+                        .render()
+                };
+                let response = gents_store::config_client::post_graphql_with_variables(
+                    &graphql,
+                    &rendered.document,
+                    &rendered.variables,
+                )
+                .await?;
                 Ok(has_correlated_request(&response))
             }
         },
@@ -246,10 +256,11 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     }
 
     let port = args.http_port;
-    let graphql = crate::resolve_graphql_endpoint(
+    let graphql = gents_service::home_state::resolve_graphql_endpoint(
         Some(&format!("http://127.0.0.1:{port}/api/v0/graphql")),
         Some(&home),
-    )?;
+    )
+    .await?;
     let log = run_dir.join("server.log");
     let started = Instant::now();
 
@@ -363,7 +374,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         for collection in manifest.expect.collection_counts.keys() {
             counts.insert(collection.clone(), count_rows(&graphql, collection).await);
         }
-        let signer_identity = gents::store::identity::commit_signer_identity_for_did(&node_did)?;
+        let signer_identity = gents_store::identity::commit_signer_identity_for_did(&node_did)?;
         let provenance = if manifest.expect.signed_provenance {
             let mut evidence = Vec::with_capacity(stages.len());
             for stage in &stages {

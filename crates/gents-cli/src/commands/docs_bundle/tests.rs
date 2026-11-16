@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::Path;
 
 use clap::{CommandFactory, Parser};
-use gents::Collection;
+use gents_store::collection::Collection;
 use serde_json::{json, Value};
 
 use super::config_reference::document_id;
@@ -138,6 +138,12 @@ fn defs_ref(property: &Value) -> Option<&str> {
     property
         .get("$ref")
         .or_else(|| property.get("items").and_then(|items| items.get("$ref")))
+        .or_else(|| {
+            property
+                .get("anyOf")
+                .and_then(Value::as_array)
+                .and_then(|variants| variants.iter().find_map(|variant| variant.get("$ref")))
+        })
         .and_then(Value::as_str)
         .and_then(|reference| reference.strip_prefix("#/$defs/"))
 }
@@ -235,24 +241,21 @@ fn exporter_writes_a_complete_deterministic_bundle() {
         .expect("pack_config properties");
     let roots: BTreeSet<_> = Collection::ALL
         .into_iter()
-        .map(|collection| collection.dir_name().unwrap_or("node"))
+        .map(|collection| collection.to_string())
         .collect();
     assert_eq!(
-        properties
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>(),
+        properties.keys().cloned().collect::<BTreeSet<_>>(),
         roots,
         "every pack_config root is one canonical collection"
     );
     for collection in Collection::ALL {
-        let root = collection.dir_name().unwrap_or("node");
+        let root = collection.to_string();
         let schema = json_file(
             &files,
             &format!("config/{}.schema.json", document_id(collection)),
         );
         assert_eq!(
-            defs_ref(&properties[root]),
+            defs_ref(&properties[&root]),
             schema["title"].as_str(),
             "pack_config.{root} must hold the {collection} document schema"
         );

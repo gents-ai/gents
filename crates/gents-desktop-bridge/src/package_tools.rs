@@ -83,7 +83,7 @@ fn host_environment_changes(
         return Vec::new();
     }
     let packaged = |path: &Path| {
-        gents_server::native_service::inside_temporary_package(path, app_dir, app_image)
+        gents_service::native_service::inside_temporary_package(path, app_dir, app_image)
     };
     let mut changes = Vec::new();
     for name in PACKAGE_SEARCH_LISTS {
@@ -128,7 +128,7 @@ fn host_first_search_path(
     let entries: Vec<PathBuf> = std::env::split_paths(search?).collect();
     let (packaged, host): (Vec<PathBuf>, Vec<PathBuf>) =
         entries.iter().cloned().partition(|entry| {
-            gents_server::native_service::inside_temporary_package(entry, app_dir, app_image)
+            gents_service::native_service::inside_temporary_package(entry, app_dir, app_image)
         });
     if packaged.is_empty() {
         return None;

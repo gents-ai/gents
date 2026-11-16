@@ -9,58 +9,33 @@ import Proofs.Conformance.Contracts.Machines.ToolCall
 import Proofs.Conformance.Contracts.Machines.ManagedExec
 import Proofs.Conformance.Contracts.Machines.Goal
 import Proofs.Conformance.Contracts.Machines.Mailbox
-import Proofs.CompletionRetry.Contracts
-import Proofs.Eval
+import Proofs.Conformance.CompletionRetry.Contracts
+import Proofs.Runtime.Eval
+import Proofs.Conformance.Family
+
+attribute [conformance_vocabulary] RequestState.toDefraDB
+attribute [conformance_vocabulary] ExecutionOrigin.toDefraDB
+attribute [conformance_vocabulary] ProcessState.toDefraDB
+attribute [conformance_vocabulary] PersistenceState.FailurePolicy.toDefraDB
+attribute [conformance_vocabulary] ReconcilePhase.toDefraDB
+attribute [conformance_vocabulary] InferenceCallTerminalReason.toDefraDB
+attribute [conformance_vocabulary] ToolExecution.ToolCallState.toDefraDB
+attribute [conformance_vocabulary] ToolExecution.CancelCause.toDefraDB
+attribute [conformance_vocabulary] ManagedExecState.toDefraDB
+attribute [conformance_vocabulary] ManagedExec.StopOutcome.toContract
+attribute [conformance_vocabulary] ManagedExec.CancelReply.toContract
+attribute [conformance_vocabulary] ToolExecution.FailureClass.toDefraDB
+attribute [conformance_vocabulary] ToolExecution.AwaitMode.toDefraDB
+attribute [conformance_vocabulary] Goals.Status.toDefraDB
+attribute [conformance_vocabulary] Mailbox.Status.toDefraDB
+attribute [conformance_vocabulary] Mailbox.Kind.toDefraDB
+attribute [conformance_vocabulary] Mailbox.Handling.toDefraDB
+attribute [conformance_vocabulary] Mailbox.SourceKind.toDefraDB
+attribute [conformance_vocabulary] Eval.OutcomeKind.toDefraDB
+attribute [conformance_vocabulary] Eval.ProviderReason.toDefraDB
+attribute [conformance_vocabulary] Eval.EvidenceClass.toDefraDB
 
 namespace Conformance.Contracts
-
-def vocabularies : List VocabularyContract :=
-  [ { domain := "RequestState", values := requestStateNames }
-  , { domain := "ExecutionOrigin", values :=
-        [.interactive, .scheduled].map ExecutionOrigin.toDefraDB }
-  , { domain := "ProcessState", values := processStateNames }
-  , { domain := "PersistenceState", values := persistenceStateNames }
-  , { domain := "PersistenceFailurePolicy", values :=
-        [.failOpen, .failClosed].map PersistenceState.FailurePolicy.toDefraDB }
-  , { domain := "ReconcilePhase", values := runtimeReconcileStateNames }
-  , { domain := "StorageObservation", values := storageObservationStateNames }
-  , { domain := "SessionRecoveryLatestRequestState"
-    , values := requestStateNames
-    }
-  , { domain := "InferenceCallState", values := inferenceCallStateNames }
-  , { domain := "InferenceCallTerminalReason", values :=
-        [ .cancelled
-        , .backendGone
-        , .queueFull
-        , .streamDroppedBeforeTerminalResponse
-        ].map InferenceCallTerminalReason.toDefraDB
-    }
-  , { domain := "CompletionRetryFailureClass"
-    , values := CompletionRetry.Contracts.failureClassVocabulary
-    }
-  , { domain := "ToolCallState", values := toolCallStateNames }
-  , { domain := "CancelCause", values := toolCallCancelCauseNames }
-  , { domain := "ManagedExecState", values := managedExecStateNames }
-  , { domain := "ProcessStopOutcome"
-    , values := ManagedExec.StopOutcome.all.map ManagedExec.StopOutcome.toContract
-    }
-  , { domain := "CancelProcessReply"
-    , values := ManagedExec.CancelReply.all.map ManagedExec.CancelReply.toContract
-    }
-  , { domain := "ToolFailureClass", values := failureClassNames }
-  , { domain := "ToolRetryDisposition", values := toolRetryDispositionNames }
-  , { domain := "AwaitMode"
-    , values := ToolExecution.AwaitMode.all.map ToolExecution.AwaitMode.toDefraDB
-    }
-  , { domain := "GoalStatus", values := goalStatusNames }
-  , { domain := "MailboxStatus", values := Mailbox.statusVocabulary }
-  , { domain := "MailboxKind", values := Mailbox.kindVocabulary }
-  , { domain := "MailboxHandling", values := Mailbox.handlingVocabulary }
-  , { domain := "MailboxSourceKind", values := Mailbox.sourceKindVocabulary }
-  , { domain := "EvalOutcomeKind", values := Eval.allKinds.map Eval.OutcomeKind.toDefraDB }
-  , { domain := "EvalProviderReason", values := Eval.allReasons.map Eval.ProviderReason.toDefraDB }
-  , { domain := "EvalEvidenceClass", values := Eval.allClasses.map Eval.EvidenceClass.toDefraDB }
-  ]
 
 def stateMachines : List StateMachineContract :=
   [ requestMachine

@@ -1,4 +1,4 @@
-import Proofs.Workspace.EditorUndo
+import Proofs.Session.Workspace.EditorUndo
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.EditorUndo

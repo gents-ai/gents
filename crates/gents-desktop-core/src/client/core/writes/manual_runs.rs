@@ -1,10 +1,9 @@
 use anyhow::Result;
-use gents::request::lifecycle::TriggerLineage;
-use gents_protocol::request_input::RequestInput;
-use gents_protocol::session::{SessionTitle, SessionTitleSource};
+use gents_protocol::operations::task::TaskOperationError;
+use gents_tools::task_run::TaskRunOptions;
 
-use super::{agent_did_for_write, ensure_peer_chat_ready, observe_submitted_request, ClientCore};
-use crate::client::mutations::{self, SubmitRequestOptions, SubmittedRequest};
+use super::{ensure_peer_chat_ready, observe_submitted_request, ClientCore};
+use crate::client::mutations::SubmittedRequest;
 
 impl ClientCore {
     pub async fn fire_task_now_for_node(
@@ -13,11 +12,56 @@ impl ClientCore {
         task_id: &str,
         args: serde_json::Value,
     ) -> Result<SubmittedRequest> {
+        let peer_record = self.peer_record_for_chat_write(node_did)?;
+        ensure_peer_chat_ready(node_did, peer_record.as_ref())?;
         let access = self.operator_access(node_did)?;
-        let invocation = mutations::resolve_task_now_on(&access, node_did, task_id, args)
+        let fired = async {
+            let task =
+                gents_automation::operations::task::runnable(&access, node_did, task_id).await?;
+            let session_id = task
+                .task
+                .goal_objective_template
+                .is_some()
+                .then(|| uuid::Uuid::new_v4().to_string());
+            gents_automation::operations::task::fire(
+                &access,
+                node_did,
+                &self.node_identity,
+                task,
+                &TaskRunOptions {
+                    args,
+                    session_id,
+                    continue_session: None,
+                },
+            )
             .await
-            .map_err(|error| self.record_mutation_error("resolve task", error))?;
-        self.submit_manual_task_invocation(invocation).await
+        };
+        let output = fired
+            .await
+            .map_err(|error| self.record_mutation_error("fire task", failure(error)))?;
+        let submitted = SubmittedRequest {
+            request_id: output.request_id,
+            session_id: output.session_id,
+            node_did: output.node_did,
+            agent_did: Some(output.agent_did),
+        };
+        let node = submitted.node_did.clone();
+        let submitted = observe_submitted_request(
+            &self.stores.ensure(&node),
+            submitted,
+            self.refresh_node(&node),
+        )
+        .await;
+        self.clear_mutation_error();
+        tracing::info!(
+            target: "gents_desktop_core::writes",
+            doc_type = "manual_run",
+            node_did,
+            task_id,
+            request_id = %submitted.request_id,
+            "desktop manual task run submitted through the task operation"
+        );
+        Ok(submitted)
     }
 
     pub async fn fire_schedule_now_for_node(
@@ -26,72 +70,37 @@ impl ClientCore {
         schedule_id: &str,
     ) -> Result<SubmittedRequest> {
         let access = self.operator_access(node_did)?;
-        let invocation = mutations::resolve_schedule_now_on(&access, node_did, schedule_id)
+        let task_id =
+            gents_automation::operations::task::scheduled_task(&access, node_did, schedule_id)
+                .await
+                .map_err(|error| self.record_mutation_error("resolve schedule", failure(error)))?;
+        self.fire_task_now_for_node(node_did, &task_id, serde_json::json!({}))
             .await
-            .map_err(|error| self.record_mutation_error("resolve schedule", error))?;
-        self.submit_manual_task_invocation(invocation).await
     }
+}
 
-    async fn submit_manual_task_invocation(
-        &self,
-        invocation: mutations::ManualTaskInvocation,
-    ) -> Result<SubmittedRequest> {
-        let snapshot = self.store.snapshot();
-        let peer_record = self.peer_record_for_chat_write(&invocation.node_did)?;
-        ensure_peer_chat_ready(&invocation.node_did, peer_record.as_ref())?;
-        let (signer, admission, requester_did) = self
-            .request_authority(&invocation.node_did, peer_record.as_ref())
-            .await?;
-        let options = SubmitRequestOptions {
-            input: RequestInput {
-                initial_title: Some(SessionTitle {
-                    text: invocation.session_title.clone(),
-                    source: SessionTitleSource::Task,
-                }),
-                ..RequestInput::default()
-            },
-            trigger_lineage: TriggerLineage {
-                trigger_kind: Some("manual".to_string()),
-                ..TriggerLineage::default()
-            },
-            ..SubmitRequestOptions::default()
-        };
-        let agent_did = agent_did_for_write(Some(&invocation.agent_did));
-        let access = self.operator_access(&invocation.node_did)?;
-        let submitted = mutations::submit_task_request(
-            snapshot.as_ref(),
-            &access,
-            &invocation.fire,
-            &requester_did,
-            signer.as_ref(),
-            admission,
-            &invocation.content,
-            agent_did.as_deref(),
-            options,
-        )
-        .await;
-        match submitted {
-            Ok(result) => {
-                let node = result.node_did.clone();
-                let result = observe_submitted_request(
-                    &self.store,
-                    result,
-                    self.refresh_written_node(&node),
-                )
-                .await;
-                self.clear_mutation_error();
-                tracing::info!(
-                    target: "gents_desktop_core::writes",
-                    doc_type = "manual_run",
-                    node_did = %invocation.node_did,
-                    task_id = %invocation.task_id,
-                    request_id = %result.request_id,
-                    requester_did,
-                    "desktop canonical manual task run submitted through client authority"
-                );
-                Ok(result)
-            }
-            Err(error) => Err(self.record_mutation_error("fire task", error)),
-        }
-    }
+/// A refused Task operation as the message the UI shows: what happened, then
+/// the next step in desktop terms.
+fn failure(error: TaskOperationError) -> anyhow::Error {
+    use gents_protocol::operations::NextCall;
+    let next = match error.recovery() {
+        NextCall::List { resource: "task" } => "Reload the task list and choose a task.",
+        NextCall::Inspect { resource: "task" } => "Enable the task, then run it again.",
+        NextCall::Inspect { .. } => "Enable the task's agent, then run it again.",
+        NextCall::List {
+            resource: "schedule",
+        } => "Reload the schedules and choose one.",
+        NextCall::List { .. } => "Give the schedule exactly one enabled trigger, or run its task.",
+        NextCall::VerbHelp { .. }
+        | NextCall::ResourceHelp { .. }
+        | NextCall::Preview { .. }
+        | NextCall::Verb { .. } => "Check the task's arguments and templates, then run it again.",
+    };
+    let message = format!(
+        "{}. {next}",
+        gents_protocol::error_chain::ErrorChain(&error)
+            .to_string()
+            .trim_end_matches('.')
+    );
+    anyhow::Error::new(error).context(message)
 }

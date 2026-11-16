@@ -1,13 +1,16 @@
 use super::*;
-use crate::request::lifecycle::{
-    ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome,
+use gents_lean_vocab::families::goal_wake_receipt_contracts_receipt::{
+    NotificationWire, ReceiptOutput, ScopeWire,
 };
-use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_input::{GoalAssignmentInput, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::row::AgentRequestRow;
+use gents_session::request::lifecycle::{
+    ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome,
+};
+use gents_store::identity::{KeyIdentity, NodeIdentity};
 use std::{collections::BTreeMap, sync::Arc};
 
 fn key(id: u64) -> String {
@@ -27,10 +30,10 @@ struct ScopeFixture {
 
 impl ScopeFixture {
     async fn new(name: &str) -> Self {
-        use crate::store::config_client::NodePermission;
-        let (db, user, client, binding) = crate::test_support::signed_test_node(name).await;
+        use gents_store::config_client::NodePermission;
+        let (db, user, client, binding) = crate::test_support::root::signed_test_node(name).await;
         let agent =
-            crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+            gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();
         let admin = ConfigAccess::local_as(
             db.node.clone(),
@@ -64,7 +67,7 @@ impl ScopeFixture {
 
 async fn write_request(fixture: &ScopeFixture, mut create: AgentRequestCreate) -> AgentRequestRow {
     create.session_doc_id = Some(
-        crate::request::lifecycle::reserve_goal_session(&fixture.client, &create)
+        gents_session::request::lifecycle::reserve_goal_session(&fixture.client, &create)
             .await
             .unwrap(),
     );
@@ -80,10 +83,10 @@ async fn write_request(fixture: &ScopeFixture, mut create: AgentRequestCreate) -
         panic!("one selected agent")
     };
     create.agent_doc_id = Some(agent["_docID"].as_str().unwrap().to_owned());
-    crate::sign_agent_request_create(&fixture.user, &mut create)
+    gents_session::request::admission::sign_agent_request_create(&fixture.user, &mut create)
         .await
         .unwrap();
-    crate::request::lifecycle::submit_client_request(&fixture.client, &create)
+    gents_session::request::lifecycle::submit_client_request(&fixture.client, &create)
         .await
         .unwrap();
     let request_id = escape_graphql_string(&create.request_id);
@@ -97,16 +100,16 @@ async fn write_request(fixture: &ScopeFixture, mut create: AgentRequestCreate) -
         .unwrap();
     let row: AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    crate::verify_request_receipt_signature(&row).unwrap();
+    gents_store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
     row
 }
 
 async fn terminal_source(fixture: &ScopeFixture, row: &AgentRequestRow) {
     let request: crate::AgentRequest = row.clone().try_into().unwrap();
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+    let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
         fixture.db.node.clone(),
         fixture.db.node_identity.clone(),
-        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+        gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
     );
     let (request, admission) = verifier
         .verify_fresh_for_claim_with_identity(&request, fixture.agent.as_ref())
@@ -128,7 +131,7 @@ async fn terminal_source(fixture: &ScopeFixture, row: &AgentRequestRow) {
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+    let writer = gents_session::request::streaming::DefraStreamWriter::new_for_lifecycle(
         fixture.db.node.clone(),
         &lifecycle,
         std::time::Duration::ZERO,
@@ -145,17 +148,30 @@ async fn terminal_source(fixture: &ScopeFixture, row: &AgentRequestRow) {
         .unwrap();
 }
 
+struct ClaimScope<'a> {
+    kind: &'a str,
+    goal: Option<u64>,
+    root: Option<u64>,
+}
+
+impl<'a> From<&'a ScopeWire<String>> for ClaimScope<'a> {
+    fn from(scope: &'a ScopeWire<String>) -> Self {
+        Self {
+            kind: &scope.kind,
+            goal: scope.goal,
+            root: scope.root,
+        }
+    }
+}
+
 fn reference(
-    scope: &Value,
+    scope: &ClaimScope<'_>,
     roots: &BTreeMap<(u64, u64), AgentRequestRow>,
 ) -> Option<GoalAssignmentInput> {
-    (scope["kind"] == "referenced").then(|| GoalAssignmentInput {
-        goal_id: goal(scope["goal"].as_u64().unwrap()),
+    (scope.kind == "referenced").then(|| GoalAssignmentInput {
+        goal_id: goal(scope.goal.unwrap()),
         root_request_doc_id: Some(
-            roots[&(
-                scope["goal"].as_u64().unwrap(),
-                scope["root"].as_u64().unwrap(),
-            )]
+            roots[&(scope.goal.unwrap(), scope.root.unwrap())]
                 .doc_id
                 .clone()
                 .unwrap(),
@@ -166,25 +182,22 @@ fn reference(
 async fn wake(
     fixture: &ScopeFixture,
     session: &str,
-    claim: &Value,
+    wake: u64,
+    scope: &ClaimScope<'_>,
     roots: &BTreeMap<(u64, u64), AgentRequestRow>,
     unassigned_parent: &AgentRequestRow,
     retry_parent: Option<&AgentRequestRow>,
 ) -> crate::AgentRequest {
-    let scope = &claim["scope"];
     let parent = if let Some(parent) = retry_parent {
         parent
-    } else if scope["kind"] == "referenced" {
-        &roots[&(
-            scope["goal"].as_u64().unwrap(),
-            scope["root"].as_u64().unwrap(),
-        )]
+    } else if scope.kind == "referenced" {
+        &roots[&(scope.goal.unwrap(), scope.root.unwrap())]
     } else {
         unassigned_parent
     };
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
-        format!("wake-{}", claim["wake"]),
+        format!("wake-{wake}"),
         fixture.db.node_identity.did(),
         fixture.user.did(),
         fixture.agent.did(),
@@ -226,9 +239,12 @@ async fn wake(
     }
     create.session_doc_id = parent.session_doc_id.clone();
     create.agent_doc_id = parent.agent_doc_id.clone();
-    crate::sign_agent_request_create(fixture.agent.as_ref(), &mut create)
-        .await
-        .unwrap();
+    gents_session::request::admission::sign_agent_request_create(
+        fixture.agent.as_ref(),
+        &mut create,
+    )
+    .await
+    .unwrap();
     let mutation = create.graphql_mutation().unwrap();
     let session_doc = create.session_doc_id.as_deref().unwrap();
     let agent_doc = create.agent_doc_id.as_deref().unwrap();
@@ -240,7 +256,7 @@ async fn wake(
             let agent_did = &agent_did;
             Box::pin(async move {
                 let result = txn.execute(mutation).await?;
-                let doc = crate::store::graphql::created_doc_id(&result, "AgentRequest")?;
+                let doc = gents_store::graphql::created_doc_id(&result, "AgentRequest")?;
                 txn.add_resource_relationship("AgentRequest", &doc, "parent", "agents", agent_doc)
                     .await?;
                 txn.add_resource_relationship(
@@ -269,31 +285,31 @@ async fn wake(
         .unwrap();
     let row: AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    crate::verify_request_receipt_signature(&row).unwrap();
+    gents_store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
     row.try_into().unwrap()
 }
 
 async fn append_through(
     fixture: &ScopeFixture,
     session: &str,
-    notifications: &[Value],
+    notifications: &[NotificationWire<String>],
     sources: &BTreeMap<u64, AgentRequestRow>,
     appended: &mut u64,
     cutoff: u64,
 ) {
-    use crate::store::config_client::session_children::{
-        output_segment_bound_variables, transcript_message_bound_variables,
-    };
     use gents_protocol::output::rows::{
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
     use gents_protocol::output::*;
+    use gents_store::config_client::session_children::{
+        output_segment_bound_variables, transcript_message_bound_variables,
+    };
     for row in notifications {
-        let sequence = row["sequence"].as_u64().unwrap();
+        let sequence = row.sequence;
         if sequence <= *appended || sequence > cutoff {
             continue;
         }
-        let id = row["message"].as_u64().unwrap();
+        let id = row.message;
         let text = format!("Notification {id}");
         let message_key = key(id);
         let request_doc = sources[&id].doc_id.as_ref().unwrap();
@@ -339,7 +355,7 @@ async fn append_through(
                         .execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &vars)
                         .await?;
                     let close_doc_id =
-                        crate::store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
+                        gents_store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
                     let header = TranscriptMessage {
                         native_request_id: None,
                         message_key: message_key.clone(),
@@ -373,7 +389,7 @@ async fn append_through(
             })
             .await
             .unwrap();
-        crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
+        gents_store::config_client::session_children::publish_agent_session_child_relationships_with_access(
             &fixture.access,
             fixture.db.node_identity.did(),
             &identity::Did::new(fixture.agent.did()).unwrap(),
@@ -386,10 +402,10 @@ async fn append_through(
 }
 
 async fn claim(fixture: &ScopeFixture, request: crate::AgentRequest) -> RequestLifecycle {
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+    let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
         fixture.db.node.clone(),
         fixture.db.node_identity.clone(),
-        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+        gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
     );
     let (request, admission) = verifier
         .verify_fresh_for_claim_with_identity(&request, fixture.agent.as_ref())
@@ -410,7 +426,7 @@ async fn claim(fixture: &ScopeFixture, request: crate::AgentRequest) -> RequestL
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+    let writer = gents_session::request::streaming::DefraStreamWriter::new_for_lifecycle(
         fixture.db.node.clone(),
         &lifecycle,
         std::time::Duration::ZERO,
@@ -422,12 +438,11 @@ async fn claim(fixture: &ScopeFixture, request: crate::AgentRequest) -> RequestL
 
 #[tokio::test]
 async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
-    let snapshot = gents_lean_contract::load_contract_snapshot::<Value>().unwrap();
-    let cases = snapshot["goal_wake_receipt_cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 11);
     let mut conflicting_history_cases = 0;
-    for case in cases {
-        let name = case["name"].as_str().unwrap();
+    for case in
+        gents_lean_vocab::families::goal_wake_receipt_contracts_receipt::cases::<String, String>()
+    {
+        let name = case.input.name.as_str();
         let fixture = ScopeFixture::new(&format!("goal-wake-scope-{name}")).await;
         let node = fixture.db.node.clone();
         let access = &fixture.access;
@@ -448,21 +463,22 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         };
         let parent = write_request(&fixture, make("unassigned-parent".into())).await;
         terminal_source(&fixture, &parent).await;
-        let notifications = case["notifications"].as_array().unwrap();
+        let notifications = &case.input.notifications;
         let mut roots = BTreeMap::new();
-        for scope in notifications.iter().map(|row| &row["scope"]).chain(
-            case["retry_parent"]
-                .is_null()
-                .then_some(&case["claim"]["scope"])
-                .into_iter(),
-        ) {
-            if scope["kind"] != "referenced" {
+        let claim_scope = case
+            .input
+            .retry_parent
+            .is_none()
+            .then(|| ClaimScope::from(&case.input.claim.scope));
+        for scope in notifications
+            .iter()
+            .map(|row| ClaimScope::from(&row.scope))
+            .chain(claim_scope)
+        {
+            if scope.kind != "referenced" {
                 continue;
             }
-            let pair = (
-                scope["goal"].as_u64().unwrap(),
-                scope["root"].as_u64().unwrap(),
-            );
+            let pair = (scope.goal.unwrap(), scope.root.unwrap());
             if roots.contains_key(&pair) {
                 continue;
             }
@@ -477,26 +493,29 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         }
         let mut sources = BTreeMap::new();
         for notification in notifications {
-            let id = notification["message"].as_u64().unwrap();
+            let id = notification.message;
             let mut create = make(format!("source-{id}"));
-            create.input.goal_assignment = reference(&notification["scope"], &roots);
+            create.input.goal_assignment =
+                reference(&ClaimScope::from(&notification.scope), &roots);
             let row = write_request(&fixture, create.clone()).await;
-            if case["superseded_origins"] == true {
+            if case.input.superseded_origins {
                 create.request_id = format!("source-{id}-replacement");
                 let replacement = write_request(&fixture, create).await;
-                let mutation = crate::request::lifecycle::queue::supersede_pending_mutation(
-                    row.doc_id.as_deref().unwrap(),
-                    fixture.db.node_identity.did(),
-                    &replacement.request_id,
-                    replacement.doc_id.as_deref().unwrap(),
-                    "modeled superseded origin",
-                );
+                let mutation =
+                    gents_session::request::lifecycle::queue::supersede_pending_mutation(
+                        row.doc_id.as_deref().unwrap(),
+                        fixture.db.node_identity.did(),
+                        &replacement.request_id,
+                        replacement.doc_id.as_deref().unwrap(),
+                        "modeled superseded origin",
+                    )
+                    .unwrap();
                 let result = access
                     .write("test.wake_scope_superseded_origin", &mutation)
                     .await
                     .unwrap();
                 assert_eq!(
-                    crate::store::graphql::mutation_documents(&result, "update_AgentRequest")
+                    gents_store::graphql::mutation_documents(&result, "update_AgentRequest")
                         .unwrap()
                         .unwrap()
                         .len(),
@@ -508,12 +527,12 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             }
             sources.insert(id, row);
         }
-        if case["prior"].as_array().unwrap().is_empty()
-            && case["retry_parent"].is_null()
-            && case["claim"]["scope"]["kind"] == "referenced"
+        if case.input.prior.is_empty()
+            && case.input.retry_parent.is_none()
+            && case.input.claim.scope.kind == "referenced"
             && notifications
                 .iter()
-                .all(|notice| notice["scope"]["kind"] == "referenced")
+                .all(|notice| notice.scope.kind == "referenced")
         {
             let opening = roots.values().next().unwrap().doc_id.as_deref().unwrap();
             access.transact_write("test.unrelated_goal_opening", |txn| {
@@ -532,7 +551,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                     ).await
                 })
             }).await.unwrap();
-            crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
+            gents_store::config_client::session_children::publish_agent_session_child_relationships_with_access(
                 access,
                 fixture.db.node_identity.did(),
                 &identity::Did::new(fixture.agent.did()).unwrap(),
@@ -542,36 +561,46 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             .unwrap();
             conflicting_history_cases += 1;
         }
-        if case["prior"].as_array().unwrap().is_empty()
-            && case["retry_parent"].is_null()
-            && case["claim"]["scope"]["kind"] == "referenced"
+        if case.input.prior.is_empty()
+            && case.input.retry_parent.is_none()
+            && case.input.claim.scope.kind == "referenced"
             && notifications
                 .iter()
-                .all(|notice| notice["scope"]["kind"] == "referenced")
+                .all(|notice| notice.scope.kind == "referenced")
         {
-            assert!(
-                crate::goal::load_request_assignment(access, sources.values().next().unwrap())
-                    .await
-                    .is_err()
-            );
+            assert!(gents_automation::goal::load_request_assignment(
+                access,
+                sources.values().next().unwrap()
+            )
+            .await
+            .is_err());
         }
         let mut appended = 0;
         let mut retry_parent = None;
-        for prior in case["prior"].as_array().unwrap() {
-            let prior_claim = &prior["claim"];
+        for prior in &case.input.prior {
+            let prior_claim = &prior.claim;
             append_through(
                 &fixture,
                 &session,
                 notifications,
                 &sources,
                 &mut appended,
-                prior_claim["cutoff"].as_u64().unwrap(),
+                prior_claim.cutoff,
             )
             .await;
-            let request = wake(&fixture, &session, prior_claim, &roots, &parent, None).await;
+            let request = wake(
+                &fixture,
+                &session,
+                prior_claim.wake,
+                &ClaimScope::from(&prior_claim.scope),
+                &roots,
+                &parent,
+                None,
+            )
+            .await;
             let doc = request.doc_id.clone();
             let mut lifecycle = claim(&fixture, request).await;
-            if prior["create_goal"] == true {
+            if prior.create_goal {
                 let response = access
                     .execute(&format!(
                         "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
@@ -582,7 +611,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                     .unwrap();
                 let caller: AgentRequestRow =
                     serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-                let created = crate::goal::create_goal_for_request_from_access(
+                let created = gents_automation::goal::create_goal_for_request_from_access(
                     &node,
                     Some(access),
                     &caller,
@@ -596,7 +625,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                     Some(doc.as_str())
                 );
             }
-            let outcome = match prior["state"].as_str().unwrap() {
+            let outcome = match prior.state.as_str() {
                 "completed" => RequestTerminalOutcome::Completed,
                 "failed" => RequestTerminalOutcome::Failed,
                 "interrupted" => RequestTerminalOutcome::Interrupted,
@@ -611,7 +640,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                 .await
                 .unwrap();
             drop(lifecycle);
-            if case["retry_parent"] == prior_claim["wake"] {
+            if case.input.retry_parent == Some(prior_claim.wake) {
                 let response = access
                     .execute(&format!(
                         "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
@@ -628,20 +657,21 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                 );
             }
         }
-        let current_claim = &case["claim"];
+        let current_claim = &case.input.claim;
         append_through(
             &fixture,
             &session,
             notifications,
             &sources,
             &mut appended,
-            current_claim["cutoff"].as_u64().unwrap(),
+            current_claim.cutoff,
         )
         .await;
         let request = wake(
             &fixture,
             &session,
-            current_claim,
+            current_claim.wake,
+            &ClaimScope::from(&current_claim.scope),
             &roots,
             &parent,
             retry_parent.as_ref(),
@@ -655,19 +685,17 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                 .unwrap(),
         )
         .unwrap();
-        let expected = |field: &str| {
-            case[field]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|id| key(id.as_u64().unwrap()))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            captured,
-            expected("captured"),
-            "{name}: claim admitted another assignment's notification"
-        );
+        let captured = captured
+            .iter()
+            .map(|captured| {
+                captured
+                    .strip_prefix("background-completion-notification:scope-")
+                    .and_then(|rest| rest.strip_suffix(":tool"))
+                    .and_then(|id| id.parse::<u64>().ok())
+                    .filter(|id| key(*id) == *captured)
+                    .unwrap_or_else(|| panic!("{name}: captured key {captured} names no source"))
+            })
+            .collect::<Vec<_>>();
         append_through(
             &fixture,
             &session,
@@ -684,40 +712,37 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         )
         .await
         .unwrap();
-        let actual = rows
+        let current = rows
             .iter()
-            .map(|row| row.message.rag_text().expect("notification user text"))
+            .map(|row| {
+                let text = row.message.rag_text().expect("notification user text");
+                text.strip_prefix("Notification ")
+                    .and_then(|id| id.parse::<u64>().ok())
+                    .unwrap_or_else(|| panic!("{name}: provider input {text} is no notification"))
+            })
             .collect::<Vec<_>>();
-        let expected_content = case["current"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|id| format!("Notification {}", id.as_u64().unwrap()))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            actual, expected_content,
-            "{name}: provider input or exact acknowledgement changed"
-        );
         drop(lifecycle);
         node.shutdown().await.expect("node shutdown");
+        case.check(ReceiptOutput { captured, current });
     }
     assert!(conflicting_history_cases > 0);
 }
 
 #[tokio::test]
 async fn claimed_background_wake_reads_user_session_as_selected_agent() {
-    use crate::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access;
-    use crate::request::lifecycle::RequestTerminalOutcome;
-    use crate::tools::call::lifecycle::admission_fixture::{
-        published_admission_with_owner, PublishedAdmissionOptions,
-    };
     use gents_protocol::request_lifecycle::RequestHopCause;
     use gents_protocol::tool_call::AwaitMode;
+    use gents_session::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access;
+    use gents_session::request::lifecycle::RequestTerminalOutcome;
+    use gents_toolcalls::call::lifecycle::admission_fixture::{
+        published_admission_with_owner, PublishedAdmissionOptions,
+    };
 
     let (fixture, mut parent) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "wake-agent-observation".into(),
         await_mode: AwaitMode::Background,
         start_running: false,
+        composition: gents_automation::lifecycle_hooks::composition(),
         ..Default::default()
     })
     .await
@@ -738,7 +763,7 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     let binding: gents_protocol::agent_identity::AgentIdentityBinding =
         serde_json::from_value(agent_row.clone()).unwrap();
     let agent =
-        crate::store::identity::resolve_agent_identity(fixture.runtime.as_ref(), &binding).unwrap();
+        gents_store::identity::resolve_agent_identity(fixture.runtime.as_ref(), &binding).unwrap();
     let agent_access = ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(agent.did()).unwrap(),
@@ -798,8 +823,8 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     };
     let row: AgentRequestRow = serde_json::from_value(row.clone()).unwrap();
     let request: crate::AgentRequest = row.try_into().unwrap();
-    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+    let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         fixture.runtime.clone(),
         authority,
@@ -821,7 +846,7 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+    let writer = gents_session::request::streaming::DefraStreamWriter::new_for_lifecycle(
         node.clone(),
         &lifecycle,
         std::time::Duration::ZERO,
@@ -855,14 +880,14 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     );
     assert!(actual[0].physical_header.is_some());
 
-    let other_binding = crate::store::identity::provision_agent_identity_authorized(
+    let other_binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         fixture.runtime.as_ref(),
         &identity::Did::new(fixture.requester_identity.did()).unwrap(),
     )
     .await
     .unwrap();
-    crate::test_support::install_test_agent_binding_with_access(
+    gents_inference::test_support::install_test_agent_binding_with_access(
         fixture.runtime.did(),
         "Other Agent",
         &other_binding,
@@ -870,7 +895,7 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     )
     .await;
     let other =
-        crate::store::identity::resolve_agent_identity(fixture.runtime.as_ref(), &other_binding)
+        gents_store::identity::resolve_agent_identity(fixture.runtime.as_ref(), &other_binding)
             .unwrap();
     let other_access = ConfigAccess::local_managed_agent(
         node.clone(),

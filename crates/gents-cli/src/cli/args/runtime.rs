@@ -52,8 +52,15 @@ pub(crate) struct McpRegisterArgs {
     pub(crate) description: Option<String>,
     #[arg(long, value_name = "VERSION", default_value = "unversioned")]
     pub(crate) version: String,
-    #[arg(long, action = ArgAction::SetTrue)]
-    pub(crate) send_node_did: bool,
+    /// Send this Node's DID to the service (`--send-node-did=false` stops
+    /// it). Omitted, a new service does not receive it and a registered one
+    /// keeps its setting.
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    pub(crate) send_node_did: Option<bool>,
+    /// Enable the service, or disable it with `--enabled=false`. Omitted, a
+    /// new service starts enabled and a registered one keeps its state.
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    pub(crate) enabled: Option<bool>,
 }
 
 #[derive(clap::Args)]
@@ -134,6 +141,14 @@ pub(crate) struct StatusArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long)]
     pub(crate) node_did: Option<String>,
+    // Scripts and tests read the JSON from a pipe without passing this flag,
+    // so the default follows whether stdout is a terminal.
+    #[arg(
+        long,
+        value_enum,
+        help = "text (a short summary) or json (every field); defaults to text on a terminal and json otherwise"
+    )]
+    pub(crate) output: Option<OutputFormat>,
 }
 
 #[derive(clap::Args)]

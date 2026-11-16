@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 
 use anyhow::{Context, Result};
-use gents::runtime::agent::p2p_reconcile::templates::{builtin_templates, Delivery, Scope};
+use gents_p2p::p2p_reconcile::templates::{builtin_templates, Delivery, Scope};
 use serde::Serialize;
 use serde_json::json;
 

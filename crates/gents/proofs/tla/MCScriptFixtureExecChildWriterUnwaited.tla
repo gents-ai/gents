@@ -1,0 +1,4 @@
+---- MODULE MCScriptFixtureExecChildWriterUnwaited ----
+EXTENDS ScriptFixtureExec
+
+====

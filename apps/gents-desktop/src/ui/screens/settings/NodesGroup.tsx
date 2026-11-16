@@ -1,4 +1,5 @@
 import { History } from "lucide-react";
+import { runtimeConnectionBlocksAdmission } from "@source-inc/gents-desktop-client";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -83,7 +84,9 @@ function StartupNodeRow({
             aria-hidden
             className={cn(
               "absolute -right-0.5 -bottom-0.5 size-2 rounded-full border-2 border-popover",
-              node.dialSucceeded ? "bg-brand" : "bg-border",
+              runtimeConnectionBlocksAdmission(node.runtimeConnection)
+                ? "bg-border"
+                : "bg-brand",
             )}
           />
         )}

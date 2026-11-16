@@ -7,16 +7,21 @@
 /// receiving a session's facts, so `ReconstructionError::is_incomplete` names
 /// the states a reader may not yet resolve. Every other error is a defect.
 pub async fn live_canonical_message(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     header_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Option<(
     gents_protocol::output::TranscriptMessage,
-    gents::inference::llm::message::Message,
+    gents_protocol::message::Message,
 )> {
-    match gents::session::load_canonical_message(access, header_doc_id, node_did, requester_did)
-        .await
+    match gents_session::session::load_canonical_message(
+        access,
+        header_doc_id,
+        node_did,
+        requester_did,
+    )
+    .await
     {
         Ok(message) => Some(message),
         Err(error)

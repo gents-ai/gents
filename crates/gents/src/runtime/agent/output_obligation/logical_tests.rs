@@ -1,34 +1,38 @@
 use super::*;
-use crate::request::lifecycle::{
-    ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
-};
-use crate::request::streaming::DefraStreamWriter;
-use crate::store::identity::{KeyIdentity, NodeIdentity};
-use crate::tools::call::lifecycle::ToolCallLifecycle;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::tool_call::AwaitMode;
-use serde_json::{json, Value};
+use gents_session::request::lifecycle::{
+    ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
+};
+use gents_session::request::streaming::DefraStreamWriter;
+use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
+use serde_json::json;
 use std::{sync::Arc, time::Duration};
 
-/// A Node whose runtime root is `root`. Agents derived from `root` are then the
-/// Node's own Agents, and their rows are written through their managed signer.
-async fn rooted_node(root: &KeyIdentity) -> Arc<EmbeddedNode> {
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .with_node_identity_did(root.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    node
+/// A started Node and its runtime root, which is the Node's identity. Agents
+/// derived from the root are the Node's own Agents.
+async fn rooted_node() -> (gents_inference::test_support::TestDb, KeyIdentity) {
+    let db = gents_inference::test_support::test_db(
+        "output-obligation",
+        gents_automation::lifecycle_hooks::composition(),
+    )
+    .await;
+    let root = gents_store::test_support::held_runtime_identity(db.node_identity.did());
+    (db, root)
 }
 
-/// An Agent DID derives from the runtime root and a creation nonce.
-fn derived_agent(root: &KeyIdentity) -> Arc<dyn NodeIdentity> {
-    let binding = crate::store::identity::provision_agent_identity(root).unwrap();
-    crate::store::identity::resolve_agent_identity(root, &binding).unwrap()
+/// The Node's live Agent, created by its enrolled User; its DID derives from
+/// the runtime root and a creation nonce.
+async fn live_agent(
+    db: gents_inference::test_support::TestDb,
+    root: &KeyIdentity,
+) -> (gents_inference::test_support::TestDb, Arc<dyn NodeIdentity>) {
+    let (db, _user, _access, binding) =
+        gents_inference::test_support::signed_test_node_from_db(db, "output-obligation").await;
+    let agent = gents_store::identity::resolve_agent_identity(root, &binding).unwrap();
+    (db, agent)
 }
 
 async fn persist_request(
@@ -37,7 +41,7 @@ async fn persist_request(
     create: &AgentRequestCreate,
 ) -> AgentRequestRow {
     let actor = identity::Did::new(&create.agent_did).unwrap();
-    let access = crate::ConfigAccess::local_with_optional_agent_signer(
+    let access = gents_store::config_client::ConfigAccess::local_with_optional_agent_signer(
         node.clone(),
         actor.clone(),
         agent.managed_agent_signer(),
@@ -54,11 +58,17 @@ async fn persist_request(
             r#"mutation {{ create_AgentSession(input: {{ node_did: "{node_did}", session_id: "{session}", requester_did: "{}", agent_did: "{}", created_at: "2026-09-05T00:00:00Z" }}) {{ _docID }} }}"#,
             escape_graphql_string(&create.requester_did), escape_graphql_string(&create.agent_did),
         )).await.unwrap();
-        let doc = crate::store::graphql::created_doc_id(&created, "AgentSession").unwrap();
-        access
-            .add_actor_relationship("AgentSession", &doc, "working_agent", &actor)
-            .await
-            .unwrap();
+        let doc = gents_store::graphql::created_doc_id(&created, "AgentSession").unwrap();
+        gents_store::test_support::relationships::actor_in_txn(
+            &access,
+            "AgentSession",
+            &doc,
+            "working_agent",
+            &actor,
+            false,
+        )
+        .await
+        .unwrap();
         doc
     } else {
         assert_eq!(rows.len(), 1);
@@ -71,21 +81,28 @@ async fn persist_request(
         )
         .await
         .unwrap();
-    let request_doc = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
-    access
-        .add_actor_relationship("AgentRequest", &request_doc, "working_agent", &actor)
-        .await
-        .unwrap();
-    access
-        .add_resource_relationship(
-            "AgentRequest",
-            &request_doc,
-            "session",
-            "sessions",
-            &session_doc,
-        )
-        .await
-        .unwrap();
+    let request_doc = gents_store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+    gents_store::test_support::relationships::actor_in_txn(
+        &access,
+        "AgentRequest",
+        &request_doc,
+        "working_agent",
+        &actor,
+        false,
+    )
+    .await
+    .unwrap();
+    gents_store::test_support::relationships::resource_in_txn(
+        &access,
+        "AgentRequest",
+        &request_doc,
+        "session",
+        "sessions",
+        &session_doc,
+        false,
+    )
+    .await
+    .unwrap();
     let data = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
@@ -148,7 +165,7 @@ async fn publish_accepted_turn(
     tool_call_id: &str,
     tool_name: &str,
     arguments: &serde_json::Value,
-) -> (crate::tools::call::lifecycle::AcceptedToolCall, String) {
+) -> (gents_session::request::streaming::AcceptedToolCall, String) {
     writer
         .start_provider_attempt(
             &lifecycle.request().doc_id,
@@ -190,7 +207,7 @@ async fn publish_accepted_turn(
 async fn terminalize_accepted_tool(
     node: &Arc<EmbeddedNode>,
     lifecycle: &mut RequestLifecycle,
-    accepted: crate::tools::call::lifecycle::AcceptedToolCall,
+    accepted: gents_session::request::streaming::AcceptedToolCall,
     completed: bool,
 ) -> ToolCallLifecycle {
     let deadline = lifecycle
@@ -212,7 +229,7 @@ async fn terminalize_accepted_tool(
         assert!(tool
             .fail_owned(
                 "write failed",
-                crate::tools::call::lifecycle::FailureClass::External,
+                gents_loop::tool_call_lifecycle::FailureClass::External,
                 None
             )
             .await
@@ -224,9 +241,8 @@ async fn terminalize_accepted_tool(
 #[tokio::test]
 async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
     for interrupted in [true, false] {
-        let temp = tempfile::tempdir().unwrap();
-        let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
-        let node = rooted_node(&identity).await;
+        let (db, identity) = rooted_node().await;
+        let node = db.node.clone();
         let now = chrono::Utc::now();
         let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let valid_until =
@@ -249,7 +265,7 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
             AgentRequestAdmissionRecord::local_self(identity.did()),
         );
         create.valid_until = Some(valid_until);
-        crate::sign_agent_request_create(&identity, &mut create)
+        gents_session::request::admission::sign_agent_request_create(&identity, &mut create)
             .await
             .unwrap();
         let row = persist_request(&node, &identity, &create).await;
@@ -278,8 +294,8 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
         tool.start_running().await.unwrap();
 
         if interrupted {
-            crate::request::interrupt::interrupt_request_by_doc_id_with_access(
-                &crate::ConfigAccess::local_as(
+            gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
+                &gents_store::config_client::ConfigAccess::local_as(
                     node.clone(),
                     identity::Did::new(identity.did()).unwrap(),
                 ),
@@ -306,7 +322,7 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
             TerminalizeResult::Won
         );
 
-        let response = crate::ConfigAccess::local_as(
+        let response = gents_store::config_client::ConfigAccess::local_as(
             node.clone(), identity::Did::new(identity.did()).unwrap(),
         ).execute(
             &format!(
@@ -325,15 +341,15 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
 
 #[tokio::test]
 async fn generated_logical_output_obligation_cases_drive_signed_requests_and_durable_writes() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().logical_output_obligation_cases;
-    assert_eq!(cases.len(), 11);
-    for case in cases {
-        let temp = tempfile::tempdir().unwrap();
-        let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
-        let node = rooted_node(&identity).await;
-        let agent = derived_agent(&identity);
+    for case in
+        gents_lean_vocab::families::logical_output_obligation_contracts_gate::cases::<String>()
+    {
+        let input = &case.input;
+        let (db, identity) = rooted_node().await;
+        let (db, agent) = live_agent(db, &identity).await;
+        let node = db.node.clone();
         assert_ne!(identity.did(), agent.did());
-        let automated = case["automated_root"].as_bool().unwrap();
+        let automated = input.automated_root;
         let mut root = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "output-root",
@@ -365,12 +381,12 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             root.caused_by_trigger_context =
                 Some(json!({"source_fields":{"area_id":"area-a","expected_total":2}}).to_string());
         }
-        crate::sign_agent_request_create(agent.as_ref(), &mut root)
+        gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut root)
             .await
             .unwrap();
         let root_row = persist_request(&node, agent.as_ref(), &root).await;
         let root_request = gents_protocol::row::AgentRequest::try_from(root_row.clone()).unwrap();
-        let mut child = crate::request::lifecycle::queue::prepare_goal_continuation(
+        let mut child = gents_automation::goal::continuation::prepare_goal_continuation(
             &root_request,
             agent.did().into(),
             "output-goal",
@@ -381,10 +397,10 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             root_request.request_hop,
         )
         .unwrap();
-        if !case["authenticated_child"].as_bool().unwrap() {
+        if !input.authenticated_child {
             child.caused_by_parent_request_doc_id = Some("wrong-physical-parent".into());
         }
-        crate::sign_agent_request_create(agent.as_ref(), &mut child)
+        gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut child)
             .await
             .unwrap();
         let child_row = persist_request(&node, agent.as_ref(), &child).await;
@@ -409,21 +425,23 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             "2026-09-05T00:00:02Z",
             AgentRequestAdmissionRecord::local_self(agent.did()),
         );
-        crate::sign_agent_request_create(agent.as_ref(), &mut outsider)
+        gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut outsider)
             .await
             .unwrap();
         let outsider_row = persist_request(&node, agent.as_ref(), &outsider).await;
         let mut stored = rapidhash::RapidHashSet::default();
         let mut previous: Option<(RequestLifecycle, Option<String>)> = None;
-        let mut writes_by_request: std::collections::BTreeMap<u64, Vec<&Value>> =
-            Default::default();
-        for write in case["writes"].as_array().unwrap() {
-            let call = write["call_doc"].as_u64().unwrap();
+        let mut writes_by_request: std::collections::BTreeMap<
+            u64,
+            Vec<&gents_lean_vocab::families::logical_output_obligation_contracts_gate::Write>,
+        > = Default::default();
+        for write in &input.writes {
+            let call = write.call_doc;
             if !stored.insert(call) {
                 continue;
             }
             writes_by_request
-                .entry(write["request_doc"].as_u64().unwrap())
+                .entry(write.request_doc)
                 .or_default()
                 .push(write);
         }
@@ -443,15 +461,15 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             let writer = begin_writer(&mut lifecycle, &node).await;
             let mut last_message_doc_id: Option<String> = None;
             for (turn, write) in writes.iter().enumerate() {
-                let call = write["call_doc"].as_u64().unwrap();
-                let expected = if !case["count_valid"].as_bool().unwrap() {
+                let call = write.call_doc;
+                let expected = if !input.count_valid {
                     if call == 100 {
                         2
                     } else {
                         3
                     }
                 } else {
-                    case["expected_count"].as_u64().unwrap_or(2)
+                    input.expected_count.unwrap_or(2)
                 };
                 let (accepted, message_doc_id) = publish_accepted_turn(
                     &writer,
@@ -459,7 +477,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                     turn,
                     0,
                     &format!("native-write-{call}"),
-                    if write["tool"] == 1 {
+                    if write.tool == 1 {
                         "write_result"
                     } else {
                         "other_tool"
@@ -467,15 +485,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                     &json!({"expected_total": expected}),
                 )
                 .await;
-                terminalize_accepted_tool(
-                    &node,
-                    &mut lifecycle,
-                    accepted,
-                    write["completed"]
-                        .as_bool()
-                        .expect("modeled write completion"),
-                )
-                .await;
+                terminalize_accepted_tool(&node, &mut lifecycle, accepted, write.completed).await;
                 last_message_doc_id = Some(message_doc_id);
             }
             let doc_id = last_message_doc_id
@@ -485,25 +495,24 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         assert!(writes_by_request.is_empty());
         let configured = vec![(
             "write_result".into(),
-            crate::documents::WriteToolOutputObligation {
-                scope: if case["request_scope"].as_bool().unwrap() {
-                    crate::documents::WriteToolOutputObligationScope::Request
+            gents_documents::WriteToolOutputObligation {
+                scope: if input.request_scope {
+                    gents_documents::WriteToolOutputObligationScope::Request
                 } else {
-                    crate::documents::WriteToolOutputObligationScope::Trigger
+                    gents_documents::WriteToolOutputObligationScope::Trigger
                 },
-                minimum_writes: case["minimum"].as_u64().unwrap() as usize,
-                expected_count_field: (case["expected_count"].is_number()
-                    || !case["count_valid"].as_bool().unwrap())
-                .then(|| "expected_total".into()),
+                minimum_writes: input.minimum as usize,
+                expected_count_field: (input.expected_count.is_some() || !input.count_valid)
+                    .then(|| "expected_total".into()),
             },
         )];
         let observed =
             match OutputObligationGate::for_request(node.clone(), &request, &configured).await {
                 Err(error) => {
                     assert!(
-                        !case["authenticated_child"].as_bool().unwrap(),
+                        !input.authenticated_child,
                         "{}: unexpected ancestry error {error:#}",
-                        case["name"]
+                        input.name
                     );
                     assert!(error.to_string().contains("parent is absent"), "{error:#}");
                     "reject"
@@ -514,9 +523,9 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                     match gate.unmet().await {
                         Err(error) => {
                             assert!(
-                                !case["count_valid"].as_bool().unwrap(),
+                                !input.count_valid,
                                 "{}: unexpected gate error {error:#}",
-                                case["name"]
+                                input.name
                             );
                             assert!(error.to_string().contains("disagree"), "{error:#}");
                             "reject"
@@ -526,13 +535,8 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
                     }
                 }
             };
-        assert_eq!(
-            observed,
-            case["expected_decision"].as_str().unwrap(),
-            "{}",
-            case["name"]
-        );
         node.shutdown().await.expect("node shutdown");
+        case.check(observed.to_string());
     }
 }
 
@@ -556,9 +560,8 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
             "a negative count is not a canonical positive integer",
         ),
     ] {
-        let temp = tempfile::tempdir().unwrap();
-        let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
-        let node = rooted_node(&identity).await;
+        let (db, identity) = rooted_node().await;
+        let node = db.node.clone();
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "request-count-fail-closed",
@@ -571,7 +574,7 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
             "2026-09-05T00:00:00Z",
             AgentRequestAdmissionRecord::local_self(identity.did()),
         );
-        crate::sign_agent_request_create(&identity, &mut create)
+        gents_session::request::admission::sign_agent_request_create(&identity, &mut create)
             .await
             .unwrap();
         let row = persist_request(&node, &identity, &create).await;
@@ -583,8 +586,8 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
                 .expect("persisted physical request ID"),
             vec![ActiveOutputObligation {
                 tool_name: "write_result".to_string(),
-                contract: crate::documents::WriteToolOutputObligation {
-                    scope: crate::documents::WriteToolOutputObligationScope::Trigger,
+                contract: gents_documents::WriteToolOutputObligation {
+                    scope: gents_documents::WriteToolOutputObligationScope::Trigger,
                     minimum_writes: 1,
                     expected_count_field: Some("expected_total".to_string()),
                 },
@@ -618,9 +621,8 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
 
 #[tokio::test]
 async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
-    let temp = tempfile::tempdir().unwrap();
-    let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
-    let node = rooted_node(&identity).await;
+    let (db, identity) = rooted_node().await;
+    let node = db.node.clone();
     let mut create = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "request-count-conflict",
@@ -633,7 +635,7 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
         "2026-09-05T00:00:00Z",
         AgentRequestAdmissionRecord::local_self(identity.did()),
     );
-    crate::sign_agent_request_create(&identity, &mut create)
+    gents_session::request::admission::sign_agent_request_create(&identity, &mut create)
         .await
         .unwrap();
     let row = persist_request(&node, &identity, &create).await;
@@ -709,8 +711,8 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
         lifecycle.request().doc_id.clone(),
         vec![ActiveOutputObligation {
             tool_name: "write_result".to_string(),
-            contract: crate::documents::WriteToolOutputObligation {
-                scope: crate::documents::WriteToolOutputObligationScope::Trigger,
+            contract: gents_documents::WriteToolOutputObligation {
+                scope: gents_documents::WriteToolOutputObligationScope::Trigger,
                 minimum_writes: 1,
                 expected_count_field: Some("expected_total".to_string()),
             },

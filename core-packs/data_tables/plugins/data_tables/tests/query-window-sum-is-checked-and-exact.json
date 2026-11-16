@@ -1,0 +1,36 @@
+{
+  "expect": {
+    "columns": [
+      {
+        "name": "x",
+        "type": "int64"
+      },
+      {
+        "name": "run",
+        "type": "int64"
+      }
+    ],
+    "markdown": "| x | run |\n| --- | --- |\n| 1 | 1 |\n| 2 | 3 |\n| 4 | 7 |",
+    "offset": 0,
+    "order": "columns",
+    "row_count": 3,
+    "rows": [
+      [
+        1,
+        1
+      ],
+      [
+        2,
+        3
+      ],
+      [
+        4,
+        7
+      ]
+    ],
+    "warnings": []
+  },
+  "input": {
+    "sql": "SELECT x, sum(x) OVER (ORDER BY x) AS run FROM (VALUES (1), (2), (4)) AS t(x)"
+  }
+}

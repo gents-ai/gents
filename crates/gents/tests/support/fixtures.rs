@@ -1,10 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::{
-    AgentToolSurfaceConfig, BackendProviderKind, KeyIdentity, NodeIdentity, ResolvedAgent,
-    RuntimeNode,
-};
+use gents_inference::{backends::provider::BackendProviderKind, resolved::ResolvedAgent};
+use gents_store::{identity::KeyIdentity, identity::NodeIdentity, identity::RuntimeNode};
+use gents_tools::surface::AgentToolSurfaceConfig;
 
 pub fn fixture_pack_names() -> Vec<String> {
     const KNOWN: [&str; 8] = [
@@ -56,7 +55,7 @@ pub fn test_identity(name: &str) -> KeyIdentity {
 }
 
 pub fn test_node_for(
-    identity: Arc<dyn gents::NodeIdentity>,
+    identity: Arc<dyn gents_store::identity::NodeIdentity>,
     default_agent_did: impl Into<String>,
 ) -> Arc<RuntimeNode> {
     Arc::new(RuntimeNode {
@@ -73,15 +72,15 @@ pub fn test_agent(
     backend_id: &str,
     backend_api_key_env_var: Option<&str>,
 ) -> ResolvedAgent {
-    let identity: Arc<dyn gents::NodeIdentity> = Arc::new(test_identity(name));
+    let identity: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(test_identity(name));
     let principal = test_node_for(identity, name);
     let mut behavior = test_agent_for_node(name, principal);
     behavior.backend_id = Some(backend_id.to_owned());
     behavior.backend_auth = match backend_api_key_env_var {
-        Some(variable) => gents::documents::BackendAuth::Environment {
+        Some(variable) => gents_documents::BackendAuth::Environment {
             variable: variable.into(),
         },
-        None => gents::documents::BackendAuth::Unauthenticated,
+        None => gents_documents::BackendAuth::Unauthenticated,
     };
     behavior
 }
@@ -92,20 +91,20 @@ pub fn test_agent_for_node(
 ) -> ResolvedAgent {
     let _display_name = agent_did.into();
     let binding =
-        gents::store::identity::provision_agent_identity(principal.identity.as_ref()).unwrap();
+        gents_store::identity::provision_agent_identity(principal.identity.as_ref()).unwrap();
     let agent_identity =
-        gents::store::identity::resolve_agent_identity(principal.identity.as_ref(), &binding)
+        gents_store::identity::resolve_agent_identity(principal.identity.as_ref(), &binding)
             .unwrap();
     test_agent_with_identity(principal, agent_identity)
 }
 
 pub fn test_agent_with_identity(
     principal: Arc<RuntimeNode>,
-    agent_identity: Arc<dyn gents::NodeIdentity>,
+    agent_identity: Arc<dyn gents_store::identity::NodeIdentity>,
 ) -> ResolvedAgent {
     let agent_did = agent_identity.did().to_owned();
     ResolvedAgent {
-        configuration: gents::inference::resolved::ResolvedConfiguration::Static,
+        configuration: gents_inference::resolved::ResolvedConfiguration::Static,
         profile_id: None,
         skills: Vec::new(),
         oauth_pool: Vec::new(),
@@ -114,45 +113,65 @@ pub fn test_agent_with_identity(
         node: principal,
         backend_id: None,
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: gents::OpenAiWireApi::ChatCompletions,
+        openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:8000/v1".to_string(),
         claude_platform: None,
-        backend_auth: gents::documents::BackendAuth::Unauthenticated,
-        model_name: gents::inference::resolved::DEFAULT_MODEL_NAME.to_string(),
+        backend_auth: gents_documents::BackendAuth::Unauthenticated,
+        model_name: gents_inference::resolved::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
         resolved_reasoning_efforts: None,
-        context_window: gents::inference::resolved::DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens: gents::inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
-        max_turns: gents::inference::resolved::DEFAULT_MAX_TURNS,
-        max_turns_provenance: gents::inference::resolved::MaxTurnsProvenance::Default,
+        context_window: gents_inference::resolved::DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: gents_inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: gents_inference::resolved::DEFAULT_MAX_TURNS,
+        max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
         system_prompt: String::new(),
-        tools: AgentToolSurfaceConfig::default(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
-        stream_batch_ms: gents::inference::resolved::DEFAULT_STREAM_BATCH_MS,
+        stream_batch_ms: gents_inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
-            gents::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+            gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(
-            gents::inference::resolved::DEFAULT_DEADLINE_DURATION_SECS,
+            gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
         ),
         provider_idle_timeout: Duration::from_secs(
-            gents::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+            gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
-        completion_retry:
-            gents::runtime::agent::completion_retry::CompletionRetryProfileFields::default(),
-        sampling: gents::inference::resolved::SamplingConfig::default(),
+        completion_retry: gents_loop::completion_retry::CompletionRetryProfileFields::default(),
+        sampling: gents_inference::resolved::SamplingConfig::default(),
     }
+}
+
+/// A fixture Agent paired with the default tool surface configuration its tests ran with.
+pub fn with_default_tools(agent: ResolvedAgent) -> gents_tools::surface::AgentWithTools {
+    gents_tools::surface::AgentWithTools::new(agent, AgentToolSurfaceConfig::default())
+}
+
+/// One default tool surface configuration per Agent, as a snapshot holds beside `agents`.
+pub fn default_tool_configs(
+    agents: &rapidhash::RapidHashMap<String, Arc<ResolvedAgent>>,
+) -> rapidhash::RapidHashMap<String, Arc<AgentToolSurfaceConfig>> {
+    agents
+        .keys()
+        .map(|agent_did| {
+            (
+                agent_did.clone(),
+                Arc::new(AgentToolSurfaceConfig::default()),
+            )
+        })
+        .collect()
 }
 
 pub async fn session_command_agent_snapshot(
     db: &super::TestDb,
 ) -> tokio::sync::watch::Receiver<
-    Arc<gents::runtime::agent::p2p_reconcile::session_commands::SessionCommandAgentSnapshot>,
+    Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot>,
 > {
-    let access =
-        gents::ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        db.node_identity.did().parse().unwrap(),
+    );
     let response = access
         .execute("{ Agent { agent_did creation_nonce node_did } }")
         .await
@@ -170,7 +189,7 @@ pub async fn session_command_agent_snapshot(
                 .into(),
         };
         let signer =
-            gents::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+            gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .expect("held Agent identity");
         let node = test_node_for(db.node_identity.clone(), &binding.agent_did);
         let agent = Arc::new(test_agent_with_identity(node, signer));
@@ -182,25 +201,26 @@ pub async fn session_command_agent_snapshot(
     );
     let default_agent_did = agents.keys().next().unwrap().clone();
     let runtime_node = test_node_for(db.node_identity.clone(), &default_agent_did);
-    let snapshot =
-        gents::runtime::agent::p2p_reconcile::session_commands::SessionCommandAgentSnapshot {
-            generation: 1,
-            node: Some(runtime_node),
-            local_did: db.node_identity.did().into(),
-            default_agent_did,
-            agents,
-            tool_surfaces: Default::default(),
-            backend_admission_configs: Default::default(),
-            unavailable_agents: Default::default(),
-            active_schedules: Default::default(),
-            unavailable_schedules: Default::default(),
-            active_event_triggers: Default::default(),
-            unavailable_event_triggers: Default::default(),
-            active_tasks: Default::default(),
-            dispatchers: Default::default(),
-            agent_executor_capacities: Default::default(),
-            agent_executor_queue_capacities: Default::default(),
-        };
+    let tool_configs = default_tool_configs(&agents);
+    let snapshot = gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+        generation: 1,
+        node: Some(runtime_node),
+        local_did: db.node_identity.did().into(),
+        default_agent_did,
+        agents,
+        tool_configs,
+        tool_surfaces: Default::default(),
+        backend_admission_configs: Default::default(),
+        unavailable_agents: Default::default(),
+        active_schedules: Default::default(),
+        unavailable_schedules: Default::default(),
+        active_event_triggers: Default::default(),
+        unavailable_event_triggers: Default::default(),
+        active_tasks: Default::default(),
+        dispatchers: Default::default(),
+        agent_executor_capacities: Default::default(),
+        agent_executor_queue_capacities: Default::default(),
+    };
     let (_sender, receiver) = tokio::sync::watch::channel(Arc::new(snapshot));
     receiver
 }
@@ -211,8 +231,8 @@ pub async fn configure_agent_tools(
     node_did: &str,
     agent_did: &str,
     system_prompt: Option<String>,
-    tools: gents::documents::Tools,
-    referenced_documents: Vec<(gents::Collection, serde_json::Value)>,
+    tools: gents_documents::Tools,
+    referenced_documents: Vec<(gents_store::collection::Collection, serde_json::Value)>,
 ) {
     let user = super::load_managed_fixture_user(db).await;
     configure_agent_tools_as(
@@ -227,18 +247,18 @@ pub async fn configure_agent_tools(
 }
 
 pub async fn configure_agent_tools_as(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     agent_did: &str,
     system_prompt: Option<String>,
-    tools: gents::documents::Tools,
-    referenced_documents: Vec<(gents::Collection, serde_json::Value)>,
+    tools: gents_documents::Tools,
+    referenced_documents: Vec<(gents_store::collection::Collection, serde_json::Value)>,
 ) {
-    use gents::documents::AgentContext;
-    use gents::store::config_client::{
+    use gents_documents::AgentContext;
+    use gents_documents::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use gents::Collection;
+    use gents_store::collection::Collection;
 
     assert_eq!(tools.node_did, node_did);
     let mut tools = tools;
@@ -254,7 +274,7 @@ pub async fn configure_agent_tools_as(
             .expect("canonical tool root")
             .to_string_lossy()
             .into_owned();
-        gents::tools::surface::set_workspace_root_with_readers(
+        gents_tools::surface::set_workspace_root_with_readers(
             access,
             node_did,
             &root,
@@ -275,7 +295,7 @@ pub async fn configure_agent_tools_as(
                 let (_, behavior) = read(txn, Collection::Agent, node_did, agent_did)
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("behavior {agent_did} is missing"))?;
-                let mut behavior: gents::AgentDocument = serde_json::from_value(behavior)?;
+                let mut behavior: gents_documents::Agent = serde_json::from_value(behavior)?;
                 let context_id = behavior
                     .context_id
                     .clone()
@@ -317,9 +337,13 @@ pub async fn configure_agent_tools_as(
                         })
                         .collect(),
                 )?;
-                gents::documents::apply_desired_state_plan(txn, &plan)
-                    .await
-                    .map(|_| ())
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await
@@ -331,9 +355,9 @@ pub fn agent_target(
     name: impl Into<String>,
     target_node_did: impl Into<String>,
     agent_did: impl Into<String>,
-) -> gents::AgentTargetDocument {
+) -> gents_documents::AgentTargetDocument {
     let name = name.into();
-    gents::AgentTargetDocument {
+    gents_documents::AgentTargetDocument {
         target_id: name.clone(),
         node_did: owner_did.to_string(),
         target_node_did: target_node_did.into(),
@@ -354,8 +378,8 @@ pub async fn held_fixture_history(
     db: &super::TestDb,
     fixture: &super::ManagedAgentFixture,
     session_id: &str,
-) -> Vec<gents::inference::llm::message::Message> {
-    let session = gents::store::graphql::escape_graphql_string(session_id);
+) -> Vec<gents_inference::llm::message::Message> {
+    let session = gents_store::graphql::escape_graphql_string(session_id);
     let response = fixture.access.execute(&format!(
         r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session}" }} }}, order: {{ sequence: ASC }}) {{ _docID }} }}"#,
     )).await.expect("read fixture message headers");
@@ -380,11 +404,11 @@ pub async fn held_canonical_message(
     header: &str,
 ) -> (
     gents_protocol::output::TranscriptMessage,
-    gents::inference::llm::message::Message,
+    gents_inference::llm::message::Message,
 ) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        match gents::session::load_canonical_message(
+        match gents_session::session::load_canonical_message(
             &fixture.access,
             header,
             db.node_identity.did(),
@@ -413,13 +437,13 @@ pub async fn held_canonical_message(
 /// relationships is incomplete, not failed: wait out that window and fail on
 /// any other error.
 pub async fn canonical_run_timeline_rows(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request_id: &str,
-) -> gents::RunTimelineRows {
-    gents::observe::run_timeline_fetch::load_settled_run_timeline_rows(
+) -> gents_observe::observe::run_timeline::RunTimelineRows {
+    gents_observe::observe::run_timeline_fetch::load_settled_run_timeline_rows(
         access,
         request_id,
-        gents::observe::run_timeline_fetch::RUN_TIMELINE_SETTLE_BOUND,
+        gents_observe::observe::run_timeline_fetch::RUN_TIMELINE_SETTLE_BOUND,
     )
     .await
     .unwrap_or_else(|error| panic!("load canonical run timeline for {request_id}: {error:#}"))
@@ -453,11 +477,11 @@ pub async fn bind_selected_managed_agent_backend(
     endpoint: &str,
     model_name: &str,
 ) {
-    use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use gents::Collection;
+    use gents_store::collection::Collection;
 
     let owner = db.node_identity.did();
     // The runtime writes the Node concurrently; a confirmed conflict after the held User
@@ -466,7 +490,7 @@ pub async fn bind_selected_managed_agent_backend(
         .access
         .transact_signed_conflict_rebuild("test.bind_managed_agent_backend", |txn| {
             Box::pin(async move {
-                let (_, mut node) =
+                let (_, node) =
                     read_desired_state_record_in_txn(txn, Collection::Node, owner, owner)
                         .await?
                         .expect("held user must own the test Node");
@@ -477,9 +501,6 @@ pub async fn bind_selected_managed_agent_backend(
                 let profile_id = agent["inference_profile_id"]
                     .as_str()
                     .expect("managed Agent inference profile");
-                if make_default {
-                    node["default_agent_did"] = agent_did.into();
-                }
                 let profile = serde_json::json!({
                     "node_did": owner,
                     "profile_id": profile_id,
@@ -498,26 +519,38 @@ pub async fn bind_selected_managed_agent_backend(
                     "max_queue_depth": 100,
                     "enabled": true,
                 });
+                let mut documents = vec![
+                    (Collection::Node, node),
+                    (Collection::InferenceBackend, backend),
+                    (Collection::InferenceProfile, profile),
+                ];
+                if make_default {
+                    documents.push((
+                        Collection::DefaultAgentSelection,
+                        serde_json::json!({"node_did": owner, "default_agent_did": agent_did}),
+                    ));
+                }
                 let plan = DesiredStateApplyPlan::new(
-                    [
-                        (Collection::Node, node),
-                        (Collection::InferenceBackend, backend),
-                        (Collection::InferenceProfile, profile),
-                    ]
-                    .into_iter()
-                    .map(|(collection, value)| DesiredStateApplyDocument {
-                        collection,
-                        add: value.clone(),
-                        update: value,
-                    })
-                    .collect(),
+                    documents
+                        .into_iter()
+                        .map(|(collection, value)| DesiredStateApplyDocument {
+                            collection,
+                            add: value.clone(),
+                            update: value,
+                        })
+                        .collect(),
                 )?;
-                apply_desired_state_plan(txn, &plan).await
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
             })
         })
         .await
         .expect("bind managed Agent backend as held user");
-    gents::inference::backends::registry::set_backend_probe_status_as(
+    gents_inference::backends::registry::set_backend_probe_status_as(
         &fixture.access,
         owner,
         backend_id,
@@ -549,14 +582,14 @@ async fn bind_agent_backend_chain(
     let owner = db.node_identity.did();
     let user = super::managed_fixture_user(db).await;
     let access = db.client_access(&user);
-    let read = |collection: gents::Collection, id: String| {
+    let read = |collection: gents_store::collection::Collection, id: String| {
         let access = access.clone();
         async move {
             access
                 .transact_readonly("test.bind_backend.read", |txn| {
                     let id = &id;
                     Box::pin(async move {
-                        gents::store::config_client::read_desired_state_record_in_txn(
+                        gents_documents::read_desired_state_record_in_txn(
                             txn, collection, owner, id,
                         )
                         .await
@@ -567,15 +600,15 @@ async fn bind_agent_backend_chain(
                 .expect("read fixture configuration as its User")
         }
     };
-    if read(gents::Collection::Node, owner.to_owned())
+    if read(gents_store::collection::Collection::Node, owner.to_owned())
         .await
         .is_none()
     {
-        let admin = gents::ConfigAccess::local_as(
+        let admin = gents_store::config_client::ConfigAccess::local_as(
             db.node.clone(),
             identity::Did::new(owner).expect("valid runtime DID"),
         );
-        gents::store::identity::GrantSet::OperatorUser
+        gents_store::identity::GrantSet::OperatorUser
             .grant(
                 &admin,
                 &identity::Did::new(user.did()).expect("valid user DID"),
@@ -583,9 +616,9 @@ async fn bind_agent_backend_chain(
             .await
             .expect("grant fixture User operator access");
         let node = serde_json::json!({"node_did": owner});
-        let plan = gents::store::config_client::DesiredStateApplyPlan::new(vec![
-            gents::store::config_client::DesiredStateApplyDocument {
-                collection: gents::Collection::Node,
+        let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+            gents_documents::DesiredStateApplyDocument {
+                collection: gents_store::collection::Collection::Node,
                 add: node.clone(),
                 update: node,
             },
@@ -594,7 +627,14 @@ async fn bind_agent_backend_chain(
         access
             .transact_write("test.bind_backend.node", |txn| {
                 let plan = &plan;
-                Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    gents_documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .expect("install fixture Node as its User");
@@ -602,10 +642,13 @@ async fn bind_agent_backend_chain(
     let agent_did = match agent_did {
         Some(agent_did) => agent_did.to_owned(),
         None => {
-            let node = read(gents::Collection::Node, owner.to_owned())
-                .await
-                .expect("fixture Node");
-            match node["default_agent_did"]
+            let selection = read(
+                gents_store::collection::Collection::DefaultAgentSelection,
+                owner.to_owned(),
+            )
+            .await
+            .unwrap_or_default();
+            match selection["default_agent_did"]
                 .as_str()
                 .filter(|did| !did.is_empty())
             {
@@ -620,13 +663,16 @@ async fn bind_agent_backend_chain(
         }
     };
     let fixture = super::ManagedAgentFixture {
-        agent: gents::store::identity::resolve_agent_identity(
+        agent: gents_store::identity::resolve_agent_identity(
             db.node_identity.as_ref(),
             &gents_protocol::agent_identity::AgentIdentityBinding {
                 agent_did: agent_did.clone(),
-                creation_nonce: read(gents::Collection::Agent, agent_did.clone())
-                    .await
-                    .expect("fixture Agent is installed by its User")["creation_nonce"]
+                creation_nonce: read(
+                    gents_store::collection::Collection::Agent,
+                    agent_did.clone(),
+                )
+                .await
+                .expect("fixture Agent is installed by its User")["creation_nonce"]
                     .as_str()
                     .expect("fixture Agent creation nonce")
                     .to_owned(),
@@ -650,19 +696,19 @@ async fn bind_agent_backend_chain(
 /// that holds the Node key, for owners that act only as that Agent.
 pub async fn session_agent_identity(
     node: &std::sync::Arc<gents::defra_node::Node>,
-    runtime: &dyn gents::NodeIdentity,
+    runtime: &dyn gents_store::identity::NodeIdentity,
     node_did: &str,
     session_id: &str,
-) -> std::sync::Arc<dyn gents::NodeIdentity> {
-    let access = gents::ConfigAccess::local_as(
+) -> std::sync::Arc<dyn gents_store::identity::NodeIdentity> {
+    let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(runtime.did()).expect("runtime DID"),
     );
     let response = access
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ agent_did }} }}"#,
-            gents::store::graphql::escape_graphql_string(node_did),
-            gents::store::graphql::escape_graphql_string(session_id),
+            gents_store::graphql::escape_graphql_string(node_did),
+            gents_store::graphql::escape_graphql_string(session_id),
         ))
         .await
         .expect("read session Agent");
@@ -670,11 +716,11 @@ pub async fn session_agent_identity(
         .as_str()
         .expect("session has a working Agent")
         .to_owned();
-    let agent = gents::load_agent(node, &agent_did)
+    let agent = gents_documents::load_agent(node, node_did, &agent_did)
         .await
         .expect("load session Agent")
         .expect("session Agent exists");
-    gents::store::identity::resolve_agent_identity(
+    gents_store::identity::resolve_agent_identity(
         runtime,
         &gents_protocol::agent_identity::AgentIdentityBinding {
             agent_did: agent.agent_did,
@@ -687,13 +733,13 @@ pub async fn session_agent_identity(
 /// Rebinds an InferenceBackend's `auth` as its configuring User through the
 /// client-signed desired-state owner; client endpoints refuse raw mutations.
 pub async fn set_backend_auth_as(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     backend_id: &str,
     auth: serde_json::Value,
 ) {
-    use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     access
@@ -702,7 +748,7 @@ pub async fn set_backend_auth_as(
             Box::pin(async move {
                 let (_, mut backend) = read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::InferenceBackend,
+                    gents_store::collection::Collection::InferenceBackend,
                     owner,
                     backend_id,
                 )
@@ -710,11 +756,17 @@ pub async fn set_backend_auth_as(
                 .ok_or_else(|| anyhow::anyhow!("backend {backend_id} is missing"))?;
                 backend["auth"] = auth;
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: gents::Collection::InferenceBackend,
+                    collection: gents_store::collection::Collection::InferenceBackend,
                     add: backend.clone(),
                     update: backend,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await

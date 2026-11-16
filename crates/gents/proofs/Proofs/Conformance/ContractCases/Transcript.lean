@@ -1,5 +1,5 @@
 import Proofs.Conformance.ContractCases.Types
-import Proofs.Transcript.Executable
+import Proofs.Session.Transcript.Executable
 
 namespace Conformance.ContractCases
 

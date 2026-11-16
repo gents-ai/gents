@@ -5,11 +5,13 @@ use crate::truncation::floor_char_boundary;
 
 const FAILURE_LIMIT: u32 = 3;
 const SUPPRESSION_LIMIT: u32 = 2;
+const SUCCESS_LIMIT: u32 = 8;
 /// Bounds the error included in the notice and stop reason; the full error
 /// identity still determines whether dispatched calls failed identically.
 const ERROR_EXCERPT_BYTES: usize = 512;
 
 pub const REPEATED_TOOL_FAILURE_PREFIX: &str = "repeated_tool_failure: ";
+pub const REPEATED_TOOL_SUCCESS_PREFIX: &str = "repeated_tool_success: ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RepeatDecision {
@@ -18,24 +20,34 @@ pub(super) enum RepeatDecision {
     Stop,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreakKind {
+    Failure,
+    Success,
+}
+
 struct Streak {
+    kind: StreakKind,
     tool: String,
     args: String,
-    error: String,
+    identity: String,
     excerpt: String,
-    failures: u32,
+    count: u32,
 }
 
 #[derive(Default)]
-pub(super) struct RepeatedToolFailure {
+pub(super) struct RepeatedToolProgress {
     streak: Option<Streak>,
     suppressed: u32,
 }
 
-impl RepeatedToolFailure {
+impl RepeatedToolProgress {
     fn repeats_streak(&self, tool: &str, args: &str) -> bool {
         self.streak.as_ref().is_some_and(|streak| {
-            streak.tool == tool && streak.args == args && streak.failures >= FAILURE_LIMIT
+            streak.kind == StreakKind::Failure
+                && streak.tool == tool
+                && streak.args == args
+                && streak.count >= FAILURE_LIMIT
         })
     }
 
@@ -61,35 +73,62 @@ impl RepeatedToolFailure {
         command_envelope: bool,
     ) {
         let identity = match outcome {
+            ToolOutcome::Completed(text) => stable_result_identity(text, command_envelope)
+                .map(|identity| (StreakKind::Success, identity, text)),
             ToolOutcome::Failed { class, text, .. } if !InvalidToolProgress::charges(outcome) => {
-                error_identity(*class, text, command_envelope).map(|identity| (identity, text))
+                error_identity(*class, text, command_envelope)
+                    .map(|identity| (StreakKind::Failure, identity, text))
             }
             _ => None,
         };
-        let Some((identity, text)) = identity else {
+        let Some((kind, identity, text)) = identity else {
             self.reset();
             return;
         };
         match self.streak.as_mut() {
             Some(streak)
-                if streak.tool == tool && streak.args == args && streak.error == identity =>
+                if streak.kind == kind
+                    && streak.tool == tool
+                    && streak.args == args
+                    && streak.identity == identity =>
             {
-                streak.failures += 1;
+                streak.count += 1;
                 streak.excerpt = error_excerpt(text).to_owned();
             }
             _ => {
                 *self = Self {
                     streak: Some(Streak {
+                        kind,
                         tool: tool.to_owned(),
                         args: args.to_owned(),
-                        error: identity,
+                        identity,
                         excerpt: error_excerpt(text).to_owned(),
-                        failures: 1,
+                        count: 1,
                     }),
                     suppressed: 0,
                 };
             }
         }
+    }
+
+    /// Every dispatched read in a batch settles. Isolate a possible eighth
+    /// success so later reads cannot execute before its result decides the stop.
+    pub(super) fn success_may_stop(&self, tool: &str, args: &str) -> bool {
+        self.streak.as_ref().is_some_and(|streak| {
+            streak.kind == StreakKind::Success
+                && streak.count + 1 >= SUCCESS_LIMIT
+                && streak.tool == tool
+                && streak.args == args
+        })
+    }
+
+    pub(super) fn success_stop_reason(&self) -> Option<String> {
+        self.streak.as_ref().filter(|streak| {
+            streak.kind == StreakKind::Success && streak.count >= SUCCESS_LIMIT
+        }).map(|streak| format!(
+            "{REPEATED_TOOL_SUCCESS_PREFIX}tool={}, identical_successes={}; the tool returned the same result with the same arguments on every call; change the arguments or take a different approach",
+            streak.tool, streak.count,
+        ))
     }
 
     pub(super) fn suppress(&mut self) -> ToolOutcome {
@@ -107,7 +146,7 @@ impl RepeatedToolFailure {
                  Change the arguments or take a different approach; calling it again unchanged ends \
                  this request. Last error: {error}",
                 tool = streak.tool,
-                failures = streak.failures,
+                failures = streak.count,
                 error = streak.excerpt,
             ),
         }
@@ -123,7 +162,7 @@ impl RepeatedToolFailure {
              the model kept repeating a call that failed identically with the same arguments; \
              last error: {}",
             streak.tool,
-            streak.failures,
+            streak.count,
             self.suppressed + 1,
             streak.excerpt,
         )
@@ -131,6 +170,11 @@ impl RepeatedToolFailure {
 }
 
 fn error_identity(class: FailureClass, text: &str, command_envelope: bool) -> Option<String> {
+    stable_result_identity(text, command_envelope)
+        .map(|stable| format!("{}\n{stable}", class.as_str()))
+}
+
+fn stable_result_identity(text: &str, command_envelope: bool) -> Option<String> {
     let envelope = command_envelope
         .then(|| text.strip_prefix(COMMAND_OUTPUT_META_PREFIX))
         .flatten();
@@ -146,9 +190,13 @@ fn error_identity(class: FailureClass, text: &str, command_envelope: bool) -> Op
         }
         None => text.to_owned(),
     };
-    Some(format!("{}\n{stable}", class.as_str()))
+    Some(stable)
 }
 
 fn error_excerpt(error: &str) -> &str {
     &error[..floor_char_boundary(error, ERROR_EXCERPT_BYTES)]
 }
+
+#[cfg(test)]
+#[path = "repeated_tool_failure/success_tests.rs"]
+mod success_tests;

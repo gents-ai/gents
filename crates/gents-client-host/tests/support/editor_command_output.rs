@@ -1,7 +1,7 @@
 use super::{fake_llm, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents::store::graphql::escape_graphql_string as escape;
-use gents::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string as escape;
 use serde_json::{json, Value};
 
 pub const ACTIVITY_PROMPT: &str = "Run the command-output activity profile.";
@@ -64,7 +64,7 @@ pub async fn verify(
     session: &str,
     request: &gents_protocol::row::AgentRequestRow,
 ) -> Result<Value> {
-    gents::verify_request_receipt_signature(request)?;
+    gents_store::identity::request_receipt::verify_request_receipt_signature(request)?;
     ensure!(
         request.node_did.as_deref() == Some(node)
             && request.session_id.as_deref() == Some(session)
@@ -172,7 +172,7 @@ pub async fn verify(
             .context("activity command prefix")?;
         if index == "0" {
             ensure!(
-                output.len() > gents::truncation::TruncationLimits::default().max_bytes,
+                output.len() > gents_loop::truncation::TruncationLimits::default().max_bytes,
                 "the live command fixture did not exceed the displayed tail limit"
             );
         }

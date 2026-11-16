@@ -1,4 +1,4 @@
-import Proofs.RuntimeReconcile
+import Proofs.Runtime.RuntimeReconcile
 import Proofs.Conformance.ContractTypes
 import Proofs.Conformance.ContractCases.Runtime
 

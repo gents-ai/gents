@@ -1,5 +1,6 @@
-use gents::pack::BindAccess;
-use gents::plugin::{allowed, approval};
+use gents_pack::pack::BindAccess;
+use gents_pack::plugin::allowed;
+use gents_tools::plugin::approval;
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -42,9 +43,9 @@ pub enum ApprovalSubjectView {
         cwd: std::path::PathBuf,
         root: std::path::PathBuf,
         #[serde(rename = "executionMode")]
-        execution_mode: gents::tools::native::CommandExecutionMode,
+        execution_mode: gents_tools::native::CommandExecutionMode,
         #[serde(rename = "networkMode")]
-        network_mode: gents::tools::native::CommandNetworkMode,
+        network_mode: gents_tools::native::CommandNetworkMode,
     },
 }
 

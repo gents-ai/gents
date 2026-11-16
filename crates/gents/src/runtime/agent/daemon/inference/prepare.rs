@@ -6,27 +6,26 @@ use gents_loop::output_obligation::OutputObligationCheck;
 
 use super::super::AgentDaemon;
 use super::compactor_failure;
-use crate::inference::admission::{self, CallKind};
-use crate::inference::compaction::{ReductionEngine, ReductionOptions};
-use crate::inference::llm::message::Message;
-use crate::inference::resolved::MaxTurnsProvenance;
 use crate::runtime::agent::loop_stream::{
     AggregateTokenBudget, FoldedPrompt, LoopConfig, LoopReplayInput, TaggedMessage,
     TurnCompactionError, TurnCompactionOutcome, TurnCompactionRequest,
 };
-use crate::runtime::agent::output_obligation::OutputObligationGate;
-use crate::tools::call::hook::DefraSessionHook;
 use crate::turn::provider_input::budget::ContextCalibration;
 use crate::turn::provider_input::ProviderInputProfile;
+use gents_inference::admission::{self, CallKind};
+use gents_inference::compaction::{ReductionEngine, ReductionOptions};
+use gents_inference::llm::message::Message;
+use gents_inference::resolved::MaxTurnsProvenance;
 use gents_protocol::row::AgentRequest;
+use gents_toolcalls::call::hook::DefraSessionHook;
 
 #[derive(Clone, Copy)]
 pub(super) struct InferencePreparation<'a> {
     pub(super) request: &'a AgentRequest,
-    pub(super) lifecycle: &'a crate::request::lifecycle::RequestLifecycle,
+    pub(super) lifecycle: &'a gents_session::request::lifecycle::RequestLifecycle,
     pub(super) request_deadline: Option<DateTime<Utc>>,
     pub(super) inference_observation:
-        &'a Option<Arc<crate::observe::inference_observation::InferenceObservationGuard>>,
+        &'a Option<Arc<gents_inference::inference_observation::InferenceObservationGuard>>,
     pub(super) effective_seed: Option<i64>,
     pub(super) context_calibration: &'a ContextCalibration,
     pub(super) request_context_message: &'a Option<Message>,
@@ -53,7 +52,7 @@ struct TurnCompaction {
     options: ReductionOptions,
     node: Arc<defra_node::Node>,
     agent_did: String,
-    signer: crate::store::identity::ManagedAgentSigner,
+    signer: gents_store::identity::ManagedAgentSigner,
     request: AgentRequest,
     request_commit_cid: String,
     provider_profile: ProviderInputProfile,
@@ -115,7 +114,7 @@ fn compact_turn(
                 &provider_view,
                 &compaction_request.required,
             )
-            .map_err(crate::inference::compaction::CompactionError::from)?;
+            .map_err(gents_inference::compaction::CompactionError::from)?;
         let native_messages =
             crate::runtime::agent::loop_stream::provider_messages(provider_profile, &provider_view);
         options.keep_recent_tokens = compactor.retention_target(
@@ -128,21 +127,22 @@ fn compact_turn(
         // Request-local sticky projection, not a
         // session-prefix cursor; the stronger
         // safe_to_reduce gate belongs to session compaction.
-        let source_boundary = crate::turn::provider_context_reduction::capture_source_boundary(
-            &crate::ConfigAccess::local_with_agent_signer(
-                node.clone(),
-                identity::Did::new(agent_did.clone()).map_err(compactor_failure)?,
-                signer.clone(),
+        let source_boundary =
+            gents_session::session::provider_context_reduction::capture_source_boundary(
+                &gents_store::config_client::ConfigAccess::local_with_agent_signer(
+                    node.clone(),
+                    identity::Did::new(agent_did.clone()).map_err(compactor_failure)?,
+                    signer.clone(),
+                )
+                .map_err(compactor_failure)?,
+                &request.session_id,
+                &request.node_did,
+                request.requester_did.as_deref(),
+                &request.doc_id,
+                &request_commit_cid,
             )
-            .map_err(compactor_failure)?,
-            &request.session_id,
-            &request.node_did,
-            request.requester_did.as_deref(),
-            &request.doc_id,
-            &request_commit_cid,
-        )
-        .await
-        .map_err(compactor_failure)?;
+            .await
+            .map_err(compactor_failure)?;
         let (result, producer_join) = admission::scope_call_with_join(
             CallKind::Compaction,
             1,
@@ -158,7 +158,7 @@ fn compact_turn(
         let producer_call = producer_join
             .filter(|join| matches!(join.call_kind, CallKind::Compaction))
             .map(
-                |join| crate::turn::provider_context_reduction::ProducerCallRef {
+                |join| gents_session::session::provider_context_reduction::ProducerCallRef {
                     call_id: join.call_id,
                     call_seq: join.call_seq,
                 },
@@ -171,7 +171,7 @@ fn compact_turn(
             }
             if result
                 .provider_messages()
-                .map_err(crate::inference::compaction::CompactionError::from)?
+                .map_err(gents_inference::compaction::CompactionError::from)?
                 != provider_values
             {
                 return Err(compactor_failure(
@@ -202,14 +202,14 @@ fn compact_turn(
         )?;
         let exact = native.exact();
         let associations =
-            crate::turn::provider_context_reduction::ReplayAssociations::from_tagged_split(
+            gents_session::session::provider_context_reduction::ReplayAssociations::from_tagged_split(
                 compaction_request.required,
                 &provider_view[..split],
                 &provider_view[split..],
             );
         let reduction_index = compaction_request.prior_reduction_keys.len() + 1;
-        crate::turn::provider_context_reduction::stage_exact(
-            crate::turn::provider_context_reduction::NewExactProviderContextReduction {
+        gents_session::session::provider_context_reduction::stage_exact(
+            gents_session::session::provider_context_reduction::NewExactProviderContextReduction {
                 agent_did: &agent_did,
                 node_did: &request.node_did,
                 requester_did: request.requester_did.as_deref(),
@@ -238,7 +238,7 @@ fn compact_turn(
 
 impl<M> AgentDaemon<M>
 where
-    M: crate::inference::llm::rig_compat::ProviderModel,
+    M: gents_inference::llm::rig_compat::ProviderModel,
 {
     pub(super) async fn prepare_inference(
         &self,
@@ -270,7 +270,7 @@ where
             self.account_hops,
         )?;
         let claude_context = crate::claude_request_context::for_request(
-            &crate::store::config_client::ConfigAccess::local_managed_agent(
+            &gents_store::config_client::ConfigAccess::local_managed_agent(
                 self.node.clone(),
                 identity::Did::new(request.agent_did.clone())?,
                 self.agent_config.agent_identity.as_ref(),
@@ -283,8 +283,7 @@ where
         crate::claude_request_context::apply(&mut loop_config, claude_context.as_ref())?;
         loop_config.deadline = request_deadline;
         loop_config.context_calibration = context_calibration.clone();
-        loop_config.output_obligation_gate =
-            output_obligation_gate.map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
+        loop_config.output_obligation_gate = output_obligation_gate;
         let turn_compactor = self.compactor.clone();
         let provider_profile = loop_config.provider_input_counter.profile();
         let turn_context_window = self.agent_config.context_window;
@@ -348,7 +347,7 @@ where
     async fn session_hook(
         &self,
         preparation: InferencePreparation<'_>,
-    ) -> Result<(DefraSessionHook, Option<OutputObligationGate>)> {
+    ) -> Result<(DefraSessionHook, Option<Arc<dyn OutputObligationCheck>>)> {
         let InferencePreparation {
             request,
             lifecycle,
@@ -363,7 +362,8 @@ where
                 request,
                 self.output_obligations.as_ref(),
             )
-            .await?;
+            .await?
+            .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
         let hook = DefraSessionHook::resume_with_actor_policy(
             self.node.clone(),
             &request.session_id,
@@ -381,10 +381,16 @@ where
         .with_remote_tools(self.remote_tools.clone())
         .with_job_tools(self.job_tools.clone())
         .with_goal_tool_authority(
-            self.agent_config.tools.goal_tools_requested(),
-            self.agent_config.tools.goal_creation_requested(),
+            self.tool_config.goal_tools_requested(),
+            self.tool_config.goal_creation_requested(),
         )
-        .with_output_obligation_gate(output_obligation_gate.clone());
+        .with_output_obligation_gate(output_obligation_gate.clone())
+        .with_session_goals(Arc::new(
+            gents_automation::goal::session_message::SessionGoals,
+        ))
+        .with_goal_tools(Arc::new(
+            gents_automation::goal::goal_tools::GoalToolAnswers,
+        ));
         // Lean `CurrentInput.answersSelection`: a resumed retry
         // publishes no authored input, so steered messages stay
         // queued for their own turn instead of folding into it.
@@ -437,16 +443,17 @@ where
             }
         };
         loop_config.authored_input = Some(authored_input(folded_prompts.clone()));
-        let reduction_access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        let reduction_access = gents_store::config_client::ConfigAccess::local_managed_agent(
             self.node.clone(),
             identity::Did::new(request.agent_did.clone())?,
             self.agent_config.agent_identity.as_ref(),
         )?;
-        let restored = crate::turn::provider_context_reduction::load_unconsumed_for_request(
-            &reduction_access,
-            &request.doc_id,
-        )
-        .await?;
+        let restored =
+            gents_session::session::provider_context_reduction::load_unconsumed_for_request(
+                &reduction_access,
+                &request.doc_id,
+            )
+            .await?;
         let (loop_history, loop_prompt) = if let Some((row, lineage_keys)) = restored {
             let mut messages = row.checkpoint_tagged_messages()?;
             let prompt = messages
@@ -461,7 +468,7 @@ where
                 "durable provider-context checkpoint crossed its current request scope"
             );
             let boundary = row.source_boundary()?;
-            let replay_scope = crate::session::CanonicalReplayScope {
+            let replay_scope = gents_session::session::CanonicalReplayScope {
                 expected_scope_kind: gents_protocol::rendered_request::CaptureScopeKind::Inference,
                 node_did: &request.node_did,
                 requester_did: request.requester_did.as_deref(),
@@ -471,7 +478,7 @@ where
                 request_commit_cid: &row.request_commit_cid,
             };
             replay.required = row.replay_associations()?.required;
-            crate::session::validate_canonical_replay_boundary(
+            gents_session::session::validate_canonical_replay_boundary(
                 &reduction_access,
                 replay_scope,
                 &boundary,
@@ -496,7 +503,7 @@ where
             (messages, prompt)
         } else {
             loop_config.reduction_chain_keys =
-                crate::turn::provider_context_reduction::load_for_request(
+                gents_session::session::provider_context_reduction::load_for_request(
                     &reduction_access,
                     &request.doc_id,
                 )

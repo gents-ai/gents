@@ -1,9 +1,3 @@
-/* The `@gents/ux-sdk` reference and the lint's token list are generated into
-   crates/gents/src/plugin/ux so the Rust side can carry them. This compares
-   both with what they describe: the frame's export namespace, and the custom
-   properties its built stylesheet declares at document scope.
-   UPDATE_UX_SDK_REFERENCE=1 npx vitest run tests/ux-sdk-reference.test.ts
-   writes them instead. */
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -14,7 +8,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import * as sdk from "@/sandbox/sdk-exports";
 import { renderSdkReference, SDK_ENTRIES, TOKEN_ROLES } from "@/sandbox/sdk-reference";
 
-const UX_DIR = join(__dirname, "../../../crates/gents/src/plugin/ux");
+const UX_DIR = join(__dirname, "../../../crates/gents-pack/src/plugin/ux");
 const REFERENCE = join(UX_DIR, "sdk_reference.md");
 const TOKENS = join(UX_DIR, "frame_tokens.txt");
 const REGENERATE =

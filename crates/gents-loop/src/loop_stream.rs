@@ -68,7 +68,7 @@ pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotError,
     OneShotNoVisibleOutput, OneShotProviderFailure,
 };
-pub use repeated_tool_failure::REPEATED_TOOL_FAILURE_PREFIX;
+pub use repeated_tool_failure::{REPEATED_TOOL_FAILURE_PREFIX, REPEATED_TOOL_SUCCESS_PREFIX};
 pub use request_assembly::dispatch::{
     clamp_request_output_budget, completion_request_input_components, ensure_context_can_dispatch,
 };
@@ -200,16 +200,20 @@ where
 {
     async_stream::stream! {
         futures::pin_mut!(stream);
+        let mut resumed = None;
         loop {
-            let item = tokio::select! {
-                item = stream.next() => item,
-                Some(work) = compactions.recv() => {
-                    // The summarizer runs another owned loop. Poll it after the
-                    // outer loop returns, while retaining the caller's task scope.
-                    let result = work.future.await;
-                    let _ = work.reply.send(result);
-                    continue;
-                }
+            let item = match resumed.take() {
+                Some(item) => item,
+                None => tokio::select! {
+                    item = stream.next() => item,
+                    Some(work) = compactions.recv() => {
+                        // The summarizer runs another owned loop. Poll it after the
+                        // outer loop returns, while retaining the caller's task scope.
+                        let result = work.future.await;
+                        let _ = work.reply.send(result);
+                        continue;
+                    }
+                },
             };
             let Some(item) = item else { break };
             match item {
@@ -229,7 +233,16 @@ where
                 }
                 // Admission and transport capture can enter native transactions;
                 // poll them outside the owned-loop frame on the calling task.
-                Ok(OwnedLoopItem::ProviderWork(work)) => work.await,
+                Ok(OwnedLoopItem::ProviderWork(work)) => {
+                    work.await;
+                    // Resume the loop directly: `select!` returns `Pending` on
+                    // a spent task budget, which would hold a chunk the
+                    // provider already delivered across the consumer's next
+                    // select, where an interrupt drops the stream (TLA+
+                    // `InterruptPartialOutput`). The loop is waiting on this
+                    // work's reply, so it has no compaction queued.
+                    resumed = Some(stream.next().await);
+                }
                 // Foreground execution carries its existing task scopes and
                 // is dropped with the owning stream on cancellation.
                 Ok(OwnedLoopItem::ForegroundWork(work)) => work.await,
@@ -303,7 +316,7 @@ where
             new_messages.extend(config.folded_prompts.iter().map(|row| TaggedMessage::unassociated(row.message.clone())));
         }
         let mut invalid_tool_progress = invalid_tool_progress::InvalidToolProgress::default();
-        let mut repeated_tool_failure = repeated_tool_failure::RepeatedToolFailure::default();
+        let mut repeated_tool_failure = repeated_tool_failure::RepeatedToolProgress::default();
         let aggregate_token_budget = config.aggregate_token_budget.clone();
         let mut current_turn: usize = config.initial_turn_index;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
@@ -692,7 +705,7 @@ where
                     let poll_receiver = audit_receiver.clone();
                     let poll_idle_timeout = config.provider_idle_timeout;
                     let first_item = !saw_stream_item;
-                    let (reply, result) = tokio::sync::oneshot::channel();
+                    let (reply, mut result) = tokio::sync::oneshot::channel();
                     yield OwnedLoopItem::ProviderWork(Box::pin(async move {
                         let mut stream = stream;
                         let next = {
@@ -715,7 +728,13 @@ where
                         };
                         let _ = reply.send((stream, next));
                     }));
-                    let (returned_stream, next) = result.await.map_err(|_| {
+                    // `drive_admissions` resumes this generator only after the
+                    // provider work finished, so the reply is already present.
+                    // Awaiting it would add a suspension point (a spent task
+                    // budget returns `Pending`) at which the consumer's
+                    // interrupt branch drops the stream with a chunk the
+                    // provider already delivered (TLA+ `InterruptPartialOutput`).
+                    let (returned_stream, next) = result.try_recv().map_err(|_| {
                         StreamingError::Completion(CompletionError::ProviderError(
                             "provider stream poll handoff closed".to_owned(),
                         ))
@@ -1332,7 +1351,8 @@ where
                         && admit_tool(tools.as_slice(), name, &args).is_none();
                     (name, args, read)
                 }).collect();
-                let batch_len = if first_decision == repeated_tool_failure::RepeatDecision::Dispatch {
+                let batch_len = if first_decision == repeated_tool_failure::RepeatDecision::Dispatch
+                    && !repeated_tool_failure.success_may_stop(&first_call.function.name, &first_args) {
                     parallel::read_prefix(candidates.iter().map(|(name, args, read)| (*name, args.as_str(), *read)), invalid_tool_progress.remaining().min(4))
                 } else { 0 };
                 if batch_len > 1 {
@@ -1366,10 +1386,11 @@ where
                         };
                         pending_results.push((rig_compat::from_rig_tool_call(&result.call), result.internal_id, bounded));
                     }
-                    if invalid_tool_progress.exhausted() {
+                    let stop_reason = repeated_tool_failure.success_stop_reason().or_else(|| invalid_tool_progress.exhausted().then(|| invalid_tool_progress.exhaustion_reason()));
+                    if let Some(reason) = stop_reason {
                         for item in close_streaming_turn(&mut new_messages, &mut accumulator, turn_ids.clone(), accepted_source.clone(), pending_results) { yield OwnedLoopItem::Output(item); }
-                        Err(StreamingError::Completion(CompletionError::ProviderError(invalid_tool_progress.exhaustion_reason())))?;
-                        unreachable!("invalid tool budget exhaustion ends the stream");
+                        Err(StreamingError::Completion(CompletionError::ProviderError(reason)))?;
+                        unreachable!("tool progress guard ends the stream");
                     }
                     continue;
                 }
@@ -1578,7 +1599,8 @@ where
                     internal_call_id,
                     bounded_result,
                 ));
-                if invalid_tool_progress.exhausted() {
+                let stop_reason = repeated_tool_failure.success_stop_reason().or_else(|| invalid_tool_progress.exhausted().then(|| invalid_tool_progress.exhaustion_reason()));
+                if let Some(reason) = stop_reason {
                     for item in close_streaming_turn(
                         &mut new_messages,
                         &mut accumulator,
@@ -1589,9 +1611,9 @@ where
                         yield OwnedLoopItem::Output(item);
                     }
                     Err(StreamingError::Completion(CompletionError::ProviderError(
-                        invalid_tool_progress.exhaustion_reason(),
+                        reason,
                     )))?;
-                    unreachable!("invalid tool budget exhaustion ends the stream");
+                    unreachable!("tool progress guard ends the stream");
                 }
             }
 
@@ -1889,3 +1911,6 @@ fn replace_core_chat_history(
     .expect("assembled prompt makes chat history nonempty");
     Ok(())
 }
+
+#[cfg(test)]
+mod candidate_conformance;

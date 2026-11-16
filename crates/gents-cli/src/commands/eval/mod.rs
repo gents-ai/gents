@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents_eval::checks::CheckRegistry;
+use gents_eval::optimization::Proposer;
 use gents_eval::runner::embedded::EmbeddedExecutor;
 use gents_eval::runner::{RunOptions, TrialExecutor};
 use serde::Serialize;
@@ -11,12 +12,12 @@ use tokio_util::sync::CancellationToken;
 use crate::cli::{EvalCommand, EvalScopeArgs};
 
 pub(crate) struct EvalContext {
-    pub(crate) access: gents::store::config_client::ConfigAccess,
+    pub(crate) access: gents_store::config_client::ConfigAccess,
     pub(crate) home_dir: PathBuf,
     pub(crate) owner: String,
     pub(crate) runtime: tokio::runtime::Handle,
-    pub(crate) evaluator: std::sync::Arc<dyn gents::NodeIdentity>,
-    pub(crate) client_signing: gents::store::config_client::ClientSigningCapability,
+    pub(crate) evaluator: std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
+    pub(crate) client_signing: gents_store::config_client::ClientSigningCapability,
 }
 
 impl EvalContext {
@@ -26,12 +27,12 @@ impl EvalContext {
     ) -> Result<Self> {
         let (access, home_dir) =
             crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
-        let owner = crate::resolve_node_did(Some(&home_dir), None)?;
-        let evaluator = std::sync::Arc::new(crate::load_client_identity().await?);
-        let client_signing =
-            gents::store::config_client::ClientSigningCapability::from_ed25519_key(
-                evaluator.private_key_bytes(),
-            )?;
+        let owner = gents_service::home_state::resolve_node_did(Some(&home_dir), None)?;
+        let evaluator =
+            std::sync::Arc::new(gents_service::home_state::client_identity_for(&home_dir).await?);
+        let client_signing = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
+            evaluator.private_key_bytes(),
+        )?;
         Ok(Self {
             access,
             home_dir,
@@ -46,27 +47,18 @@ impl EvalContext {
         self.access
             .transact_readonly("eval.default_inference_profile", |txn| {
                 Box::pin(async move {
-                    let (_, node) = gents::store::config_client::read_desired_state_record_in_txn(
-                        txn,
-                        gents::Collection::Node,
-                        &self.owner,
-                        &self.owner,
-                    )
-                    .await?
-                    .context("node configuration is missing; select --profile explicitly")?;
-                    let node: gents::documents::Node = serde_json::from_value(node)?;
-                    let did = node
-                        .default_agent_did
+                    let did = gents_documents::load_default_agent_did_in_txn(txn, &self.owner)
+                        .await?
                         .context("node has no default agent; select --profile explicitly")?;
-                    let (_, agent) = gents::store::config_client::read_desired_state_record_in_txn(
+                    let (_, agent) = gents_documents::read_desired_state_record_in_txn(
                         txn,
-                        gents::Collection::Agent,
+                        gents_store::collection::Collection::Agent,
                         &self.owner,
                         &did,
                     )
                     .await?
                     .context("default agent is unavailable; select --profile explicitly")?;
-                    let agent: gents::AgentDocument = serde_json::from_value(agent)?;
+                    let agent: gents_documents::Agent = serde_json::from_value(agent)?;
                     anyhow::ensure!(
                         agent.enabled,
                         "default agent is disabled; select --profile explicitly"
@@ -83,14 +75,14 @@ impl EvalContext {
 
     pub(crate) fn jobs_dir(&self) -> PathBuf {
         self.home_dir
-            .join(gents::store::local::home::EVAL_DIR_NAME)
+            .join(gents_store::local::home::EVAL_DIR_NAME)
             .join("jobs")
     }
 }
 
 pub(crate) fn runs_dir(home_dir: &Path) -> PathBuf {
     home_dir
-        .join(gents::store::local::home::EVAL_DIR_NAME)
+        .join(gents_store::local::home::EVAL_DIR_NAME)
         .join("runs")
 }
 
@@ -99,6 +91,9 @@ pub(crate) struct Deps<'a> {
     pub(crate) registry: &'a CheckRegistry,
     pub(crate) cancel: CancellationToken,
     pub(crate) options: RunOptions,
+    /// A proposer supplied by the caller in place of `--proposer`; only
+    /// optimization reads it, and only tests supply one.
+    pub(crate) proposer: Option<&'a dyn Proposer>,
 }
 
 pub(crate) fn usage_error(command: &EvalCommand) -> Option<String> {
@@ -113,7 +108,7 @@ pub(crate) async fn dispatch(command: EvalCommand, runtime: tokio::runtime::Hand
         command,
         EvalCommand::Run(_) | EvalCommand::Batch(_) | EvalCommand::Resume(_) | EvalCommand::Init(_)
     ) {
-        crate::process_resources::prepare()?;
+        gents_service::process_resources::prepare()?;
     }
     if let EvalCommand::Cancel(args) = &command {
         return cancel_without_context(args, runtime)
@@ -158,6 +153,7 @@ pub(crate) async fn dispatch(command: EvalCommand, runtime: tokio::runtime::Hand
         registry: &registry,
         cancel,
         options: RunOptions::default(),
+        proposer: None,
     };
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -205,7 +201,7 @@ async fn cancel_without_context(
     args: &crate::cli::EvalRunIdArgs,
     runtime: tokio::runtime::Handle,
 ) -> Result<()> {
-    let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let home_dir = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
     let purpose = async {
         let ctx = EvalContext::resolve(&args.scope, runtime).await?;
         manage::run_purpose(&ctx.access, &ctx.owner, &args.run_id).await
@@ -247,7 +243,8 @@ async fn watch_while_held(
                     error = %format!("{error:#}"),
                     "node held, reading runner files"
                 );
-                let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+                let home_dir =
+                    gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
                 watch::watch(
                     &runs_dir(&home_dir),
                     args,

@@ -1,15 +1,15 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
-use super::super::cli_process::{path_arg, run_cli_json};
 use super::manifest::ResultDocumentExpectation;
 use super::stages::StageResult;
 use crate::graphql_access::post_graphql;
-use gents::store::graphql::escape_graphql_string;
+use gents_host::cli_process::{path_arg, run_cli_json};
+use gents_store::graphql::escape_graphql_string;
 
 pub(super) async fn graphql_rows(
     graphql: &GraphqlEndpoint,

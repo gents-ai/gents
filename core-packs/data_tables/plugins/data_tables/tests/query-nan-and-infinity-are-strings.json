@@ -1,0 +1,41 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "a",
+        "type": "float64"
+      },
+      {
+        "name": "b",
+        "type": "float64"
+      },
+      {
+        "name": "c",
+        "type": "float64"
+      },
+      {
+        "name": "d",
+        "type": "float64"
+      }
+    ],
+    "markdown": "| a | b | c | d |\n| --- | --- | --- | --- |\n| NaN | Infinity | 0.1 | 1e+301 |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 1,
+    "rows": [
+      [
+        "NaN",
+        "Infinity",
+        0.1,
+        1e+301
+      ]
+    ],
+    "warnings": [
+      "2 float values are NaN or infinite and appear as the strings \"NaN\", \"Infinity\" and \"-Infinity\""
+    ]
+  },
+  "input": {
+    "sql": "SELECT CAST('NaN' AS DOUBLE) AS a, 1.0 / 0.0 AS b, 0.1 AS c, 1e300 * 10 AS d"
+  }
+}

@@ -1,7 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 
 import type { OptimisticPendingTurn } from "@source-inc/gents-desktop-chat";
-import type { SentTurn } from "./chatStore";
+import type { SentTurn } from "./sentTurns";
 
 import {
   projectSessionLoadingStatus,
@@ -54,25 +54,38 @@ function sameInputs(a: ViewInputs, b: ViewInputs) {
 function viewOf(inputs: ViewInputs): ShellView {
   const projection = projectShell(inputs);
   const { selection, session, optimisticPendingTurn: turn } = inputs;
+  const loadingStatus = projectSessionLoadingStatus({
+    selectedSessionId: selection.sessionId,
+    selectedNodeDid: selection.nodeDid,
+    session,
+    sessionLoad: inputs.load,
+    operationalState: projection.operationalState,
+  });
+  const rereadingShown =
+    inputs.load.phase === "cached" &&
+    inputs.load.sessionId === selection.sessionId &&
+    inputs.load.nodeDid === selection.nodeDid &&
+    session?.sessionId === selection.sessionId &&
+    session.nodeDid === selection.nodeDid;
   return {
     ...projection,
-    loadingStatus: projectSessionLoadingStatus({
-      selectedSessionId: selection.sessionId,
-      selectedNodeDid: selection.nodeDid,
-      session,
-      sessionLoad: inputs.load,
-      operationalState: projection.operationalState,
-    }),
+    loadingStatus:
+      loadingStatus && rereadingShown
+        ? { ...loadingStatus, quiet: true }
+        : loadingStatus,
     pendingTurn: turn,
     sentTurns: inputs.sentTurns,
     draftKey: selection.sessionId
       ? sessionDraftKey(selection.nodeDid, selection.sessionId)
-      : JSON.stringify(["new", selection.nodeDid, projection.agentReadiness.agentDid]),
+      : newSessionDraftKey(selection.nodeDid, projection.agentReadiness.agentDid),
   };
 }
 
 export const sessionDraftKey = (nodeDid: string | null, sessionId: string) =>
   JSON.stringify(["session", nodeDid, sessionId]);
+
+export const newSessionDraftKey = (nodeDid: string | null, agentDid: string | null) =>
+  JSON.stringify(["new", nodeDid, agentDid]);
 
 export function createShellView(stores: ShellStores): ShellViewStore {
   let inputs = inputsOf(stores);

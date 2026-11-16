@@ -136,82 +136,57 @@ fn repair_with_decoder(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::Deserialize;
+    use gents_lean_vocab::families::schema_argument_repair_arguments as family;
+    use gents_lean_vocab::family::Json;
 
-    #[derive(Deserialize)]
-    struct Snapshot {
-        schema_argument_repair_cases: Vec<Case>,
-    }
-
-    #[derive(Deserialize)]
-    struct Case {
-        name: String,
-        schema: Value,
-        input: Value,
-        expected: Value,
-        paths: Vec<String>,
-        parses: Vec<ParseObservation>,
-        native_schema: Value,
-        native_input: Value,
-        native_expected: Value,
-        native_paths: Vec<String>,
-    }
-
-    #[derive(Deserialize)]
-    struct ParseObservation {
-        raw: String,
-        accepted: bool,
-        parsed: Value,
+    #[test]
+    fn schema_argument_repair_family_replays_against_repair_arguments() {
+        let cases = family::cases();
+        assert_eq!(cases.len(), 8);
+        for case in &cases {
+            let mut arguments = case.input.arguments.0.clone();
+            let paths = repair_arguments(&case.input.schema.0, &mut arguments);
+            case.check(family::Repaired {
+                arguments: Json(arguments),
+                paths,
+            });
+        }
     }
 
     #[test]
-    fn generated_schema_argument_repairs_match_the_executable_model() {
-        let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
-        assert!(!snapshot.schema_argument_repair_cases.is_empty());
-        for case in snapshot.schema_argument_repair_cases {
-            let mut observations = std::collections::BTreeMap::new();
-            for observed in case.parses {
-                let actual = serde_json::from_str::<Value>(&observed.raw).ok();
-                let expected = observed.accepted.then_some(observed.parsed);
+    fn schema_argument_repairs_replay_against_the_native_decoder() {
+        gents_lean_vocab::families::schema_argument_repair_tool_arguments::replay(|case| {
+            for observed in &case.parses {
                 assert_eq!(
-                    actual, expected,
-                    "{}: native parse {:?}",
-                    case.name, observed.raw
-                );
-                assert!(
-                    observations.insert(observed.raw, actual).is_none(),
-                    "{}: duplicate parse observation",
-                    case.name
+                    serde_json::from_str::<Value>(&observed.raw).ok(),
+                    observed.accepted.then(|| observed.parsed.0.clone()),
+                    "{}: native decoder premise {:?}",
+                    case.name,
+                    observed.raw
                 );
             }
             let mut parse = |raw: &str| {
-                let actual = serde_json::from_str::<Value>(raw).ok();
-                assert_eq!(
-                    Some(&actual),
-                    observations.get(raw),
-                    "{}: unmodeled or mismatched native parse {raw:?}",
+                assert!(
+                    case.parses.iter().any(|observed| observed.raw == raw),
+                    "{}: unmodeled native parse {raw:?}",
                     case.name
                 );
-                actual
+                serde_json::from_str::<Value>(raw).ok()
             };
-            let mut value = case.input;
-            let paths = repair_with_decoder(&case.schema, &mut value, &mut parse);
-            assert_eq!(value, case.expected, "{}", case.name);
-            assert_eq!(paths, case.paths, "{}", case.name);
-            assert!(
-                repair_with_decoder(&case.schema, &mut value, &mut parse).is_empty(),
-                "{}",
-                case.name
-            );
-            assert_eq!(value, case.expected, "{}: second pass", case.name);
-            let mut native = case.native_input;
-            let paths = repair_with_decoder(&case.native_schema, &mut native, &mut parse);
-            assert_eq!(
-                native, case.native_expected,
-                "{}: tool-call root",
-                case.name
-            );
-            assert_eq!(paths, case.native_paths, "{}: tool-call paths", case.name);
-        }
+            let mut value = case.input.0.clone();
+            let paths = repair_with_decoder(&case.schema.0, &mut value, &mut parse);
+            let mut repeated = value.clone();
+            let repeated_paths = repair_with_decoder(&case.schema.0, &mut repeated, &mut parse);
+            let mut native = case.native_input.0.clone();
+            let native_paths = repair_with_decoder(&case.native_schema.0, &mut native, &mut parse);
+            gents_lean_vocab::families::schema_argument_repair_tool_arguments::ToolArgumentsOutput {
+                expected: Json(value),
+                paths,
+                repeated: Json(repeated),
+                repeated_paths,
+                native_expected: Json(native),
+                native_paths,
+            }
+        });
     }
 }

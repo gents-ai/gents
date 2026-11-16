@@ -9,52 +9,40 @@ pub async fn load_session_context_details(
     session_id: &str,
     request_id: &str,
     call_id: &str,
-) -> anyhow::Result<Option<gents::tools::native::SessionContextDetails>> {
-    let response = access.execute(&format!(
-        r#"{{ InferenceCall(filter: {{
-            call_id: {{_eq: "{}"}}, node_did: {{_eq: "{}"}},
-            request_id: {{_eq: "{}"}}, call_kind: {{_eq: "inference"}}
-        }}, limit: 2) {{ request_doc_id request_id call_id call_seq queued_at context_accounting_json }} }}"#,
-        gents::store::graphql::escape_graphql_string(call_id),
-        gents::store::graphql::escape_graphql_string(node_did),
-        gents::store::graphql::escape_graphql_string(request_id),
-    )).await?;
-    let rows = response
-        .pointer("/data/InferenceCall")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("context detail call response omitted its result array"))?;
-    let [row] = rows.as_slice() else {
+) -> anyhow::Result<Option<gents_tools::native::SessionContextDetails>> {
+    let calls = access
+        .read_view(
+            &gents_inference::views::activity::InferenceCalls::new(node_did)
+                .context_call(request_id)
+                .call_id(call_id),
+        )
+        .await?;
+    let [row] = calls.as_slice() else {
         return Ok(None);
     };
-    if !has_context_accounting(row) {
+    let row = serde_json::to_value(row)?;
+    if !has_context_accounting(&row) {
         return Ok(None);
     }
-    let context = decode_request_context_row(row)?;
+    let context = decode_request_context_row(&row)?;
     let Some(physical_id) = context.request_doc_id.as_deref() else {
         return Ok(None);
     };
-    let requester = requester_did
-        .map(|did| format!("\"{}\"", gents::store::graphql::escape_graphql_string(did)))
-        .unwrap_or_else(|| "null".into());
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{
-            _docID: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}, node_did: {{_eq: "{}"}},
-            session_id: {{_eq: "{}"}}, request_id: {{_eq: "{}"}},
-            requester_did: {{_eq: {requester}}}
-        }}, limit: 2) {{_docID}} }}"#,
-            gents::store::graphql::escape_graphql_string(physical_id),
-            gents::store::graphql::escape_graphql_string(node_did),
-            gents::store::graphql::escape_graphql_string(session_id),
-            gents::store::graphql::escape_graphql_string(request_id),
-        ))
+    let scope =
+        gents_session::views::transcript::Scope::Session(gents_protocol::session::SessionScope {
+            node_did: node_did.to_owned(),
+            session_id: session_id.to_owned(),
+            requester_did: requester_did.map(str::to_owned),
+        });
+    let owners = access
+        .read_view(
+            &gents_session::views::requests::RequestRows::new(scope)
+                .public()
+                .doc_ids(vec![physical_id.to_owned()])
+                .request_ids(vec![request_id.to_owned()])
+                .limit(2),
+        )
         .await?;
-    let owners = response
-        .pointer("/data/AgentRequest")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| {
-            anyhow::anyhow!("context detail request response omitted its result array")
-        })?;
     if owners.len() != 1 {
         return Ok(None);
     }
@@ -64,7 +52,7 @@ pub async fn load_session_context_details(
         requester_did,
         session_id,
         physical_id,
-        &gents::tools::native::LastRequestContextSnapshot {
+        &gents_tools::native::LastRequestContextSnapshot {
             request_id: context.request_id.clone(),
             call_id: context.call_id.clone(),
             call_sequence: context.call_sequence,
@@ -76,12 +64,12 @@ pub async fn load_session_context_details(
 }
 
 pub(super) async fn load_latest_session_request_context(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
 ) -> anyhow::Result<Option<LoadedRequestContext>> {
-    let rows = gents::tools::native::load_latest_session_context_calls(
+    let rows = gents_tools::native::load_latest_session_context_calls(
         access,
         node_did,
         requester_did,
@@ -94,7 +82,7 @@ pub(super) async fn load_latest_session_request_context(
 /// `request_doc_ids` come from the scoped transcript page, so each one has a
 /// canonical message anchor and needs no second AgentRequest scope check.
 pub(super) async fn load_session_request_context_history(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -103,53 +91,25 @@ pub(super) async fn load_session_request_context_history(
     if request_doc_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let physical_ids = request_doc_ids
-        .iter()
-        .map(|doc_id| {
-            format!(
-                r#""{}""#,
-                gents::store::graphql::escape_graphql_string(doc_id)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let requester = requester_did
-        .map(gents::store::graphql::escape_graphql_string)
-        .map(|did| format!("\"{did}\""))
-        .unwrap_or_else(|| "null".to_string());
-    let query = format!(
-        r#"query {{
-            AgentMessage(filter: {{
-                node_did: {{ _eq: "{node_did}" }},
-                session_id: {{ _eq: "{session_id}" }},
-                requester_did: {{ _eq: {requester} }},
-                request_doc_id: {{ _in: [{physical_ids}] }}
-            }}) {{ request_doc_id sequence }}
-            InferenceCall(
-                filter: {{ _and: [
-                    {{ node_did: {{ _eq: "{node_did}" }} }},
-                    {{ call_kind: {{ _eq: "inference" }} }},
-                    {{ request_doc_id: {{ _in: [{physical_ids}] }} }}
-                ] }},
-                order: [{{ queued_at: ASC }}, {{ request_doc_id: ASC }}, {{ call_seq: ASC }}, {{ call_id: ASC }}]
-            ) {{ request_doc_id request_id call_id call_seq queued_at context_accounting_json }}
-        }}"#,
-        node_did = gents::store::graphql::escape_graphql_string(node_did),
-        session_id = gents::store::graphql::escape_graphql_string(session_id),
-    );
-    let data = access.execute(&query).await?;
-    let result = |collection: &str| {
-        data.pointer(&format!("/data/{collection}"))
-            .and_then(serde_json::Value::as_array)
-            .ok_or_else(|| anyhow::anyhow!("page {collection} response omitted its result array"))
-    };
-    let mut anchors = std::collections::BTreeMap::<&str, i64>::new();
-    for row in result("AgentMessage")? {
-        let (Some(doc_id), Some(sequence)) = (
-            row.get("request_doc_id")
-                .and_then(serde_json::Value::as_str),
-            row.get("sequence").and_then(serde_json::Value::as_i64),
-        ) else {
+    let scope =
+        gents_session::views::transcript::Scope::Session(gents_protocol::session::SessionScope {
+            node_did: node_did.to_owned(),
+            session_id: session_id.to_owned(),
+            requester_did: requester_did.map(str::to_owned),
+        });
+    let mut messages = gents_session::views::transcript::MessageRows::new(scope);
+    messages.request_doc_ids = Some(request_doc_ids.to_vec());
+    let calls = gents_inference::views::activity::InferenceCalls::new(node_did)
+        .contexts(request_doc_ids.to_vec());
+    let (messages, calls) = access
+        .read_views(&(
+            gents_session::views::transcript::MessageIdentities(messages),
+            calls,
+        ))
+        .await?;
+    let mut anchors = std::collections::BTreeMap::<String, i64>::new();
+    for row in messages {
+        let (Some(doc_id), Some(sequence)) = (row.request_doc_id, row.sequence) else {
             anyhow::bail!("page AgentMessage row has no request anchor");
         };
         anchors
@@ -157,7 +117,10 @@ pub(super) async fn load_session_request_context_history(
             .and_modify(|current| *current = (*current).min(sequence))
             .or_insert(sequence);
     }
-    result("InferenceCall")?
+    calls
+        .into_iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()?
         .iter()
         .filter(|row| has_context_accounting(row))
         .map(|row| {
@@ -172,40 +135,24 @@ pub(super) async fn load_session_request_context_history(
 }
 
 pub(super) async fn load_session_reductions(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> anyhow::Result<Vec<LoadedReduction>> {
-    let requester = requester_did
-        .map(gents::store::graphql::escape_graphql_string)
-        .map(|did| format!("\"{did}\""))
-        .unwrap_or_else(|| "null".to_string());
-    let query = format!(
-        r#"query {{
-            ProviderContextReduction(
-                filter: {{
-                    node_did: {{ _eq: "{node_did}" }},
-                    session_id: {{ _eq: "{session_id}" }},
-                    requester_did: {{ _eq: {requester} }}
-                }},
-                order: [{{ created_at: ASC }}, {{ reduction_key: ASC }}]
-            ) {{
-                reduction_key source_boundary_json messages_compacted
-                original_tokens compacted_tokens created_at
-            }}
-        }}"#,
-        node_did = gents::store::graphql::escape_graphql_string(node_did),
-        session_id = gents::store::graphql::escape_graphql_string(session_id),
-    );
-    let data = access.execute(&query).await?;
-    data.pointer("/data/ProviderContextReduction")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| {
-            anyhow::anyhow!("ProviderContextReduction response omitted its result array")
-        })?
-        .iter()
-        .map(decode_reduction_row)
+    let rows = access
+        .read_view(&gents_session::views::reductions::ReductionRows::new(
+            gents_session::views::transcript::Scope::Session(
+                gents_protocol::session::SessionScope {
+                    node_did: node_did.to_owned(),
+                    session_id: session_id.to_owned(),
+                    requester_did: requester_did.map(str::to_owned),
+                },
+            ),
+        ))
+        .await?;
+    rows.into_iter()
+        .map(|row| decode_reduction_row(&serde_json::to_value(row)?))
         .collect()
 }
 
@@ -217,7 +164,7 @@ const REQUEST_STARTS_PER_QUERY: usize = 32;
 /// request it ran for, by compaction key. A compaction whose request is
 /// unknown (a fork's copy has none) or has no messages here is left out.
 pub(super) async fn load_compaction_request_starts(
-    access: &dyn gents::store::config_client::ConfigRead,
+    access: &dyn gents_store::config_client::ConfigRead,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -231,32 +178,32 @@ pub(super) async fn load_compaction_request_starts(
         .collect::<Vec<_>>();
     let mut starts = RapidHashMap::<&str, i64>::new();
     for chunk in requests.chunks(REQUEST_STARTS_PER_QUERY) {
-        let data = access
-            .execute_read(&request_starts_query(
-                node_did,
-                session_id,
-                requester_did,
-                chunk,
-            ))
-            .await?;
-        for (index, doc_id) in chunk.iter().enumerate() {
-            let first = data
-                .pointer(&format!("/data/r{index}"))
-                .and_then(serde_json::Value::as_array)
-                .ok_or_else(|| anyhow::anyhow!("AgentMessage response omitted its result array"))?
-                .first();
-            let Some(sequence) = first
-                .filter(|row| {
-                    row.get("request_doc_id")
-                        .and_then(serde_json::Value::as_str)
-                        == Some(*doc_id)
-                })
-                .and_then(|row| row.get("sequence"))
-                .and_then(serde_json::Value::as_i64)
-            else {
-                continue;
-            };
-            starts.insert(*doc_id, sequence);
+        let views = chunk
+            .iter()
+            .map(|doc_id| {
+                let mut view = gents_session::views::transcript::MessageRows::new(
+                    gents_session::views::transcript::Scope::Session(
+                        gents_protocol::session::SessionScope {
+                            node_did: node_did.to_owned(),
+                            session_id: session_id.to_owned(),
+                            requester_did: requester_did.map(str::to_owned),
+                        },
+                    ),
+                );
+                view.request_doc_ids = Some(vec![(*doc_id).to_owned()]);
+                view.limit = Some(1);
+                gents_session::views::transcript::MessageIdentities(view)
+            })
+            .collect::<Vec<_>>();
+        let pages = gents_store::views::read_views(access, &views).await?;
+        for (doc_id, page) in chunk.iter().zip(pages) {
+            if let Some(sequence) = page
+                .first()
+                .filter(|row| row.request_doc_id.as_deref() == Some(*doc_id))
+                .and_then(|row| row.sequence)
+            {
+                starts.insert(*doc_id, sequence);
+            }
         }
     }
     Ok(entries
@@ -266,36 +213,6 @@ pub(super) async fn load_compaction_request_starts(
             Some((entry.compaction_key.clone(), start))
         })
         .collect())
-}
-
-/// Each request's first message as its own ordered `limit: 1` selection, so
-/// the read returns one row per request rather than every message it holds.
-fn request_starts_query(
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-    request_doc_ids: &[&str],
-) -> String {
-    let scope = format!(
-        r#"node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }}"#,
-        node = gents::store::graphql::escape_graphql_string(node_did),
-        session = gents::store::graphql::escape_graphql_string(session_id),
-        requester = requester_did
-            .map(|did| format!("\"{}\"", gents::store::graphql::escape_graphql_string(did)))
-            .unwrap_or_else(|| "null".to_string()),
-    );
-    let selections = request_doc_ids
-        .iter()
-        .enumerate()
-        .map(|(index, doc_id)| {
-            format!(
-                r#"r{index}: AgentMessage(filter: {{ {scope}, request_doc_id: {{ _eq: "{doc_id}" }} }}, order: {{ sequence: ASC }}, limit: 1) {{ request_doc_id sequence }}"#,
-                doc_id = gents::store::graphql::escape_graphql_string(doc_id),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("query DesktopCompactionRequestStarts {{ {selections} }}")
 }
 
 pub(super) struct EntrySummary {
@@ -313,7 +230,7 @@ pub(super) struct MarkerSummaries {
 }
 
 pub(super) async fn load_marker_summaries(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -324,58 +241,31 @@ pub(super) async fn load_marker_summaries(
     if entry_keys.is_empty() && reduction_keys.is_empty() {
         return Ok(summaries);
     }
-    let keys = |keys: &[String]| {
-        keys.iter()
-            .map(|key| format!(r#""{}""#, gents::store::graphql::escape_graphql_string(key)))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let scope = format!(
-        r#"node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }}"#,
-        node = gents::store::graphql::escape_graphql_string(node_did),
-        session = gents::store::graphql::escape_graphql_string(session_id),
-        requester = requester_did
-            .map(|did| format!("\"{}\"", gents::store::graphql::escape_graphql_string(did)))
-            .unwrap_or_else(|| "null".to_string()),
-    );
-    let data = access
-        .execute(&format!(
-            "query {{ CompactionEntry(filter: {{ {scope}, compaction_key: {{ _in: [{entries}] }} }}) {{ compaction_key summary files_read files_modified }} ProviderContextReduction(filter: {{ {scope}, reduction_key: {{ _in: [{reductions}] }} }}) {{ reduction_key summary }} }}",
-            entries = keys(entry_keys),
-            reductions = keys(reduction_keys),
-        ))
-        .await?;
-    let text = |row: &serde_json::Value, field: &str| {
-        row.get(field)
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
-    };
-    for row in data
-        .pointer("/data/CompactionEntry")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if let Some(key) = text(row, "compaction_key") {
-            summaries.entries.insert(
-                key,
-                EntrySummary {
-                    summary: text(row, "summary"),
-                    files_read: text(row, "files_read"),
-                    files_modified: text(row, "files_modified"),
-                },
-            );
-        }
+    let scope =
+        gents_session::views::transcript::Scope::Session(gents_protocol::session::SessionScope {
+            node_did: node_did.to_owned(),
+            session_id: session_id.to_owned(),
+            requester_did: requester_did.map(str::to_owned),
+        });
+    let mut entries = gents_session::views::transcript::CompactionRows::new(scope.clone());
+    entries.compaction_keys = Some(entry_keys.to_vec());
+    let mut reductions = gents_session::views::reductions::ReductionRows::new(scope);
+    reductions.reduction_keys = Some(reduction_keys.to_vec());
+    let (entries, reductions) = access.read_views(&(entries, reductions)).await?;
+    for row in entries {
+        summaries.entries.insert(
+            row.compaction_key,
+            EntrySummary {
+                summary: row.summary,
+                files_read: row.files_read,
+                files_modified: row.files_modified,
+            },
+        );
     }
-    for row in data
-        .pointer("/data/ProviderContextReduction")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if let Some(key) = text(row, "reduction_key") {
-            summaries.reductions.insert(key, text(row, "summary"));
-        }
+    for row in reductions {
+        summaries
+            .reductions
+            .insert(row.reduction_key, Some(row.summary));
     }
     Ok(summaries)
 }
@@ -497,7 +387,21 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        let access = ConfigAccess::graphql(server.uri());
+        let reader = tokio::task::spawn_blocking(|| {
+            gents_store::test_support::test_identity("context-history-reader")
+        })
+        .await
+        .unwrap();
+        let access = ConfigAccess::Graphql(
+            gents_store::config_client::GraphqlEndpoint::with_authenticated_delegation(
+                format!("{}/api/v0/graphql", server.uri()),
+                "Bearer fixture",
+                gents_store::identity::NodeIdentity::did(&reader)
+                    .parse()
+                    .unwrap(),
+            )
+            .unwrap(),
+        );
         let mut items = Vec::new();
         let result =
             attach_context_history_rows(&access, "session", "node", None, &[], &mut items).await;
@@ -510,16 +414,7 @@ mod tests {
     #[tokio::test]
     async fn context_details_reject_foreign_physical_requests_before_reading_capture() {
         use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
-        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
-        fn query_contains(fragment: &'static str) -> impl wiremock::Match {
-            move |request: &wiremock::Request| {
-                request
-                    .body_json::<serde_json::Value>()
-                    .ok()
-                    .and_then(|body| body["query"].as_str().map(|query| query.contains(fragment)))
-                    .unwrap_or(false)
-            }
-        }
+        use gents_store::test_support::wire_database::WireDatabase;
         let directory = tempfile::tempdir().unwrap();
         let core = std::sync::Arc::new(
             ClientCore::start_with_paths_and_options(
@@ -529,7 +424,6 @@ mod tests {
             .await
             .unwrap(),
         );
-        let server = MockServer::start().await;
         let accounting = serde_json::json!({
             "accounting_version":gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
             "turn_index":0, "attempt":0, "estimator":"openai_chat_wire_json_bytes_div_4_v1",
@@ -538,27 +432,26 @@ mod tests {
             "compaction_threshold_basis_points":7500,"compaction_threshold_tokens":7500,
             "compaction_reason":"below_threshold"
         });
-        Mock::given(method("POST")).and(query_contains("InferenceCall("))
-            .and(query_contains("call_id: {_eq: \"call\"}"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"data":{"InferenceCall":[{
-                "request_doc_id":"foreign-physical", "request_id":"request", "call_id":"call", "call_seq":1,
-                "context_accounting_json":accounting.to_string()
-            }]}}))).expect(1).mount(&server).await;
-        Mock::given(method("POST"))
-            .and(query_contains("AgentRequest("))
-            .and(query_contains("_docID: {_eq: \"foreign-physical\"}"))
-            .and(query_contains("requester_did: {_eq: \"requester\"}"))
-            .and(query_contains("session_id: {_eq: \"session\"}"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({"data":{"AgentRequest":[]}})),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
+        let read = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let database = WireDatabase::spawn(
+            serde_json::json!({"InferenceCall": [{
+                "node_did": "node", "call_state": "completed",
+                "request_doc_id": "foreign-physical", "request_id": "request",
+                "call_id": "call", "call_seq": 1,
+                "context_accounting_json": accounting.to_string()
+            }]}),
+            {
+                let read = read.clone();
+                std::sync::Arc::new(move |collection| {
+                    read.lock().unwrap().push(collection);
+                    Box::pin(async { Ok(()) })
+                })
+            },
+        )
+        .await;
         let details = load_session_context_details(
             &core,
-            &ConfigAccess::graphql(server.uri()),
+            &ConfigAccess::Graphql(database.reader()),
             "node",
             Some("requester"),
             "session",
@@ -568,9 +461,8 @@ mod tests {
         .await
         .unwrap();
         assert!(details.is_none());
-        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        assert_eq!(*read.lock().unwrap(), ["InferenceCall", "AgentRequest"]);
         core.shutdown().await.unwrap();
-        server.verify().await;
     }
 
     fn reduction(key: &str, through: Option<i64>, created_at: &str) -> LoadedReduction {
@@ -846,42 +738,65 @@ mod tests {
 
     #[tokio::test]
     async fn a_read_carries_the_summaries_of_the_markers_it_draws_only() {
-        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(|request: &wiremock::Request| {
-                request
-                    .body_json::<serde_json::Value>()
-                    .ok()
-                    .and_then(|body| body["query"].as_str().map(str::to_owned))
-                    .is_some_and(|query| {
-                        query.contains(r#"compaction_key: { _in: ["drawn"] }"#)
-                            && query.contains(r#"reduction_key: { _in: ["mid"] }"#)
-                    })
+        use gents_store::identity::NodeIdentity as _;
+        let home = tempfile::tempdir().unwrap();
+        let identity =
+            gents_store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
+                .unwrap();
+        let reader = identity.did().to_owned();
+        let node = std::sync::Arc::new(
+            gents::defra_node::Node::builder()
+                .with_node_identity_did(&reader)
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents_store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
+        let inputs = vec![
+            (
+                "mutation($input: CompactionEntryMutationInputArg!) { create_CompactionEntry(input: $input) { _docID } }",
+                serde_json::json!({
+                    "compaction_key": "drawn", "node_did": reader, "session_id": "session",
+                    "requester_did": reader, "summary": "## Goal\nKept.",
+                    "files_read": "[\"src/lib.rs\"]"
+                }),
+            ),
+            (
+                "mutation($input: ProviderContextReductionMutationInputArg!) { create_ProviderContextReduction(input: $input) { _docID } }",
+                serde_json::json!({
+                    "reduction_key": "mid", "node_did": reader, "session_id": "session",
+                    "requester_did": reader, "request_id": "request", "request_doc_id": "physical",
+                    "request_commit_cid": "cid", "reduction_index": 0, "turn_index": 0,
+                    "source_boundary_json": "{}", "compacted_prefix_json": "[]",
+                    "retained_suffix_json": "[]", "pair_closed": true,
+                    "checkpoint_messages_json": "[]", "replay_associations_json": "{}",
+                    "summary": "  ", "messages_compacted": 0, "original_tokens": 0,
+                    "compacted_tokens": 0, "created_at": "2026-10-30T17:01:00Z"
+                }),
+            ),
+        ];
+        ConfigAccess::transact_local_write(&node, None, "test.marker_summaries", |txn| {
+            let inputs = inputs.clone();
+            Box::pin(async move {
+                for (mutation, input) in inputs {
+                    txn.execute_with_variables(mutation, &serde_json::json!({"input": input}))
+                        .await?;
+                }
+                Ok::<_, anyhow::Error>(())
             })
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": {
-                    "CompactionEntry": [{"compaction_key": "drawn", "summary": "## Goal\nKept.",
-                        "files_read": "[\"src/lib.rs\"]", "files_modified": null}],
-                    "ProviderContextReduction": [{"reduction_key": "mid", "summary": "  "}]
-                }})),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
+        })
+        .await
+        .unwrap();
+        let access = ConfigAccess::local_as(node, reader.parse().unwrap());
         let mut markers = vec![
             marker("session-compaction:drawn", 4, "2026-10-30T17:00:00Z"),
             marker("request-compaction:mid", 9, "2026-10-30T17:01:00Z"),
         ];
-        fill_marker_summaries(
-            &ConfigAccess::graphql(server.uri()),
-            "session",
-            "node",
-            Some("requester"),
-            &mut markers,
-        )
-        .await
-        .expect("marker summaries");
+        fill_marker_summaries(&access, "session", &reader, Some(&reader), &mut markers)
+            .await
+            .expect("marker summaries");
         let summaries = markers
             .iter()
             .map(|(_, item)| match item {
@@ -904,7 +819,6 @@ mod tests {
                 (None, None),
             ]
         );
-        server.verify().await;
     }
 }
 

@@ -1,4 +1,4 @@
-import { FileDiff, Globe, SquareStack, Terminal } from "lucide-react";
+import { FileDiff, Globe, Route, SquareStack, Terminal } from "lucide-react";
 import { registerSurface } from "@/app/surfaces";
 import { flag } from "@/preferences";
 import { isMacTauriShell } from "../../lib/shellPlatform";
@@ -8,6 +8,7 @@ import { BrowserSurface, resetBrowser } from "./browser/BrowserSurface";
 import { ChangesSurface } from "./ChangesSurface";
 import { startedCount } from "./StartedCount";
 import { WorkersSurface } from "./WorkersSurface";
+import { WORKFLOWS_SURFACE, WorkflowsSurface } from "./WorkflowsSurface";
 
 registerSurface({
   id: "workers",
@@ -37,6 +38,16 @@ registerSurface({
   routes: ["session"],
   render: BackgroundSurface,
 });
+
+if (flag("workflow-panel"))
+  registerSurface({
+    id: WORKFLOWS_SURFACE,
+    title: "Workflows",
+    icon: Route,
+    placements: ["dock", "sheet"],
+    routes: ["session"],
+    render: WorkflowsSurface,
+  });
 
 registerSurface({
   id: "changes",

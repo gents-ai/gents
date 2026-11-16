@@ -117,7 +117,7 @@ const initial = (): Preferences => ({
   navWidth: NAV_WIDTH.initial,
   zoom: 1,
   sentTurn: "anchor",
-  followUp: "steer",
+  followUp: "queue",
   pinnedSessions: [],
   flags: {},
   navLayout: DEFAULT_NAV_LAYOUT,

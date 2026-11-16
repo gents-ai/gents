@@ -1,0 +1,63 @@
+{
+  "input": {
+    "chart": "area",
+    "data": {
+      "columns": [
+        "year",
+        "v"
+      ],
+      "rows": [
+        [
+          2015,
+          10
+        ],
+        [
+          2016,
+          13
+        ],
+        [
+          2017,
+          16
+        ],
+        [
+          2018,
+          19
+        ],
+        [
+          2019,
+          22
+        ]
+      ]
+    },
+    "height": 360,
+    "output": "svg",
+    "title": "Five years",
+    "width": 560,
+    "x": "year",
+    "y": [
+      "v"
+    ]
+  },
+  "expect": {
+    "response": {
+      "alt": "Area chart titled \"Five years\". X axis: year, from 2015 to 2019. Y axis: v, from 0 to 25. 1 series. \"v\": 5 points, lowest 10 at 2015, highest 22 at 2019.",
+      "chart": "area",
+      "height": 360,
+      "series": [
+        {
+          "axis": "left",
+          "color": "#0072b2",
+          "gaps": 0,
+          "mark": "area",
+          "max": 22.0,
+          "min": 10.0,
+          "name": "v",
+          "points": 5
+        }
+      ],
+      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"560\" height=\"360\" viewBox=\"0 0 560 360\" role=\"img\" aria-labelledby=\"chart-title chart-desc\" font-family=\"Liberation Sans, Arial, Helvetica, sans-serif\"><title id=\"chart-title\">Five years</title><desc id=\"chart-desc\">Area chart titled &quot;Five years&quot;. X axis: year, from 2015 to 2019. Y axis: v, from 0 to 25. 1 series. &quot;v&quot;: 5 points, lowest 10 at 2015, highest 22 at 2019.</desc><rect x=\"0\" y=\"0\" width=\"560\" height=\"360\" fill=\"#ffffff\"/><text x=\"16\" y=\"32.2\" font-size=\"18\" font-weight=\"bold\" fill=\"#1f2328\">Five years</text><line x1=\"53.24\" y1=\"252.5\" x2=\"531.76\" y2=\"252.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"202.5\" x2=\"531.76\" y2=\"202.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"151.5\" x2=\"531.76\" y2=\"151.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"53.24\" y1=\"101.5\" x2=\"531.76\" y2=\"101.5\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"173.5\" y1=\"50\" x2=\"173.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"293.5\" y1=\"50\" x2=\"293.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><line x1=\"412.5\" y1=\"50\" x2=\"412.5\" y2=\"303\" fill=\"none\" stroke=\"#e3e6ea\" stroke-width=\"1\"/><path d=\"M 53.24,303 L 53.24,201.8 L 172.87,171.44 L 292.5,141.08 L 412.13,110.72 L 531.76,80.36 L 531.76,303 Z\" fill=\"#0072b2\" fill-opacity=\"0.28\"/><path d=\"M 53.24,201.8 L 172.87,171.44 L 292.5,141.08 L 412.13,110.72 L 531.76,80.36\" fill=\"none\" stroke=\"#0072b2\" stroke-width=\"2\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/><circle cx=\"53.24\" cy=\"201.8\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>v: 2015, 10</title></circle><circle cx=\"172.87\" cy=\"171.44\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>v: 2016, 13</title></circle><circle cx=\"292.5\" cy=\"141.08\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>v: 2017, 16</title></circle><circle cx=\"412.13\" cy=\"110.72\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>v: 2018, 19</title></circle><circle cx=\"531.76\" cy=\"80.36\" r=\"3\" fill=\"#0072b2\" stroke=\"#ffffff\" stroke-width=\"1\"><title>v: 2019, 22</title></circle><line x1=\"53.24\" y1=\"303.5\" x2=\"531.76\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"52.74\" y1=\"50\" x2=\"52.74\" y2=\"303\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><line x1=\"53.5\" y1=\"303\" x2=\"53.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"53.24\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">2015</text><line x1=\"173.5\" y1=\"303\" x2=\"173.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"172.87\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">2016</text><line x1=\"293.5\" y1=\"303\" x2=\"293.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"292.5\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">2017</text><line x1=\"412.5\" y1=\"303\" x2=\"412.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"412.13\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">2018</text><line x1=\"532.5\" y1=\"303\" x2=\"532.5\" y2=\"307\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"531.76\" y=\"319\" font-size=\"11\" text-anchor=\"middle\" fill=\"#57606a\">2019</text><line x1=\"49.24\" y1=\"303.5\" x2=\"53.24\" y2=\"303.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"307\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">0</text><line x1=\"49.24\" y1=\"252.5\" x2=\"53.24\" y2=\"252.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"256.4\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">5</text><line x1=\"49.24\" y1=\"202.5\" x2=\"53.24\" y2=\"202.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"205.8\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">10</text><line x1=\"49.24\" y1=\"151.5\" x2=\"53.24\" y2=\"151.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"155.2\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">15</text><line x1=\"49.24\" y1=\"101.5\" x2=\"53.24\" y2=\"101.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"104.6\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">20</text><line x1=\"49.24\" y1=\"50.5\" x2=\"53.24\" y2=\"50.5\" fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\"/><text x=\"45.24\" y=\"54\" font-size=\"11\" text-anchor=\"end\" fill=\"#57606a\">25</text><text x=\"292.5\" y=\"340\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\">year</text><text x=\"27\" y=\"176.5\" font-size=\"12\" text-anchor=\"middle\" fill=\"#1f2328\" transform=\"rotate(-90 27 176.5)\">v</text></svg>",
+      "warnings": [],
+      "width": 560
+    }
+  }
+}

@@ -16,8 +16,8 @@ pub(crate) struct ScaffoldReport {
     pub(crate) renamed_from: Option<String>,
 }
 
-fn shared_template(template: PackTemplate) -> gents::pack::authoring::Template {
-    use gents::pack::authoring::Template;
+fn shared_template(template: PackTemplate) -> gents_pack::pack::authoring::Template {
+    use gents_pack::pack::authoring::Template;
     match template {
         PackTemplate::Minimal => Template::Minimal,
         PackTemplate::Automation => Template::Automation,
@@ -27,8 +27,8 @@ fn shared_template(template: PackTemplate) -> gents::pack::authoring::Template {
     }
 }
 
-fn shared_kind(kind: Option<PackKindArg>) -> Option<gents::pack::authoring::Kind> {
-    use gents::pack::authoring::Kind;
+fn shared_kind(kind: Option<PackKindArg>) -> Option<gents_pack::pack::authoring::Kind> {
+    use gents_pack::pack::authoring::Kind;
     kind.map(|kind| match kind {
         PackKindArg::Documents => Kind::Documents,
         PackKindArg::Assets => Kind::Assets,
@@ -37,7 +37,7 @@ fn shared_kind(kind: Option<PackKindArg>) -> Option<gents::pack::authoring::Kind
 }
 
 pub(crate) fn new(args: PackNewArgs) -> Result<()> {
-    let dir = PathBuf::from(gents::pack::authoring::pack_name(&args.name));
+    let dir = PathBuf::from(gents_pack::pack::authoring::pack_name(&args.name));
     if dir.exists() {
         anyhow::ensure!(
             std::fs::read_dir(&dir)?.next().is_none(),
@@ -62,10 +62,10 @@ pub(crate) fn init(args: PackScaffoldArgs) -> Result<()> {
 
 pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Result<ScaffoldReport> {
     let template = args.template.map(shared_template);
-    let report = gents::pack::authoring::scaffold(
+    let report = gents_pack::pack::authoring::scaffold(
         dir,
         name,
-        &gents::pack::authoring::ScaffoldInput {
+        &gents_pack::pack::authoring::ScaffoldInput {
             namespace: args.namespace.clone(),
             template,
             kind: shared_kind(args.kind),

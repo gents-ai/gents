@@ -50,9 +50,51 @@ pub(crate) struct LiveBridgeFixture {
     update_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     running_node: Mutex<Option<RunningNode>>,
     shutdown_started: AtomicBool,
+    /// The node the runner's one frontend selected, as a window's selection.
+    selected_node: std::sync::Mutex<Option<String>>,
+}
+
+/// Reads every node that has a connection, each through its own connection
+/// into its own store.
+pub(crate) async fn refresh_every_node(core: &ClientCore) -> Result<()> {
+    for record in core.peer_records().await {
+        if core
+            .operator_observation_graphql(&record.node_did)
+            .is_some()
+        {
+            core.refresh_node(&record.node_did).await?;
+        }
+    }
+    Ok(())
+}
+
+/// The first value `find` reports from any node's own store.
+#[cfg(test)]
+fn find_in_node_stores<T>(
+    core: &ClientCore,
+    mut find: impl FnMut(&gents_desktop_core::client::ClientStore) -> Option<T>,
+) -> Option<T> {
+    core.stores()
+        .node_dids()
+        .into_iter()
+        .find_map(|node_did| find(&core.stores().snapshot(&node_did)))
 }
 
 impl LiveBridgeFixture {
+    pub(crate) fn selected_node_did(&self) -> Option<String> {
+        self.selected_node
+            .lock()
+            .expect("selected node lock poisoned")
+            .clone()
+    }
+
+    pub(crate) fn select_node(&self, node_did: Option<String>) {
+        *self
+            .selected_node
+            .lock()
+            .expect("selected node lock poisoned") = node_did;
+    }
+
     pub(crate) fn init_summary(&self) -> DesktopInitSummary {
         self.init_summary.clone()
     }
@@ -73,7 +115,7 @@ impl LiveBridgeFixture {
             .node)
     }
 
-    pub(crate) fn runtime_identity(&self) -> Result<&Arc<dyn gents::NodeIdentity>> {
+    pub(crate) fn runtime_identity(&self) -> Result<&Arc<dyn gents_store::identity::NodeIdentity>> {
         Ok(&self
             .runtime_home
             .as_ref()
@@ -82,7 +124,7 @@ impl LiveBridgeFixture {
     }
 
     pub(crate) fn runtime_p2p(&self) -> Result<Arc<dyn defra_p2p_adapter::P2POperations>> {
-        gents::store::identity::node_p2p(self.runtime_node()?.as_ref())
+        gents_store::identity::node_p2p(self.runtime_node()?.as_ref())
             .context("live runtime P2P unavailable")
     }
 
@@ -105,7 +147,7 @@ impl LiveBridgeFixture {
         request_id: Option<&str>,
     ) -> Option<String> {
         let node_did = node_did?;
-        let store = self.desktop_core.store().snapshot();
+        let store = self.desktop_core.stores().snapshot(node_did);
         request_id
             .and_then(|request_id| {
                 store.requests.iter().find(|request| {
@@ -214,7 +256,7 @@ impl LiveBridgeFixture {
             agent_target_backend.as_ref(),
         )
         .await?;
-        let runtime_p2p = gents::store::identity::node_p2p(&runtime_home.node)
+        let runtime_p2p = gents_store::identity::node_p2p(&runtime_home.node)
             .context("runtime P2P unavailable")?;
         let remote_addr =
             wait_for_runtime_iroh_addr(&runtime_p2p, DEFAULT_DEPLOYMENT_LABEL).await?;
@@ -293,6 +335,7 @@ impl LiveBridgeFixture {
             addr: peer_record.addr.clone(),
             source: peer_record.source.clone(),
             graphql: peer_record.graphql.clone(),
+            local: peer_record.is_managed_runtime(),
         }];
 
         tracing::info!(
@@ -351,6 +394,7 @@ impl LiveBridgeFixture {
             update_task: Mutex::new(Some(update_task)),
             running_node: Mutex::new(Some(running_node)),
             shutdown_started: AtomicBool::new(false),
+            selected_node: std::sync::Mutex::new(None),
         }))
     }
 
@@ -437,6 +481,7 @@ impl LiveBridgeFixture {
             update_task: Mutex::new(Some(update_task)),
             running_node: Mutex::new(None),
             shutdown_started: AtomicBool::new(false),
+            selected_node: std::sync::Mutex::new(None),
         }))
     }
 
@@ -460,6 +505,13 @@ impl LiveBridgeFixture {
             diagnostics_hint: gents::runtime::native_logging::diagnostics_hint().to_string(),
             node_home_exists: self.node_home.exists(),
             client_state_exists: self.desktop_paths.client_state_exists(),
+            local_setup_unfinished: gents_desktop_core::home_reset::local_setup_unfinished(
+                &self.node_home,
+                non_empty_clone(&self.init_summary.node_did).as_deref(),
+                self.bootstrap_saved_peers
+                    .iter()
+                    .map(|peer| peer.node_did.as_str()),
+            ),
             saved_peers: self.bootstrap_saved_peers.clone(),
         }
     }
@@ -527,6 +579,8 @@ fn init_live_runner_tracing() {
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
+
+    use super::{find_in_node_stores, refresh_every_node};
     use std::time::{Duration, Instant};
 
     use anyhow::{bail, Context, Result};
@@ -610,8 +664,8 @@ mod tests {
         let node_did = fixture.node_did().to_string();
         let agent_did = fixture
             .desktop_core()
-            .store()
-            .snapshot()
+            .stores()
+            .snapshot(&node_did)
             .default_agent_did_for_node(&node_did)
             .context("live fixture Node has no configured default agent")?
             .to_owned();
@@ -664,8 +718,8 @@ mod tests {
             "active initial desktop request",
             Duration::from_secs(60),
             || async {
-                fixture.desktop_core().refresh_store().await?;
-                let store = fixture.desktop_core().store().snapshot();
+                fixture.desktop_core().refresh_node(&node_did).await?;
+                let store = fixture.desktop_core().stores().snapshot(&node_did);
                 Ok(store.requests.iter().any(|row| {
                     row.request_id == initial.request_id
                         && row.node_did.as_deref() == Some(node_did.as_str())
@@ -707,11 +761,11 @@ mod tests {
             "desktop submitted request scope",
             Duration::from_secs(60),
             || async {
-                fixture.desktop_core().refresh_store().await?;
+                fixture.desktop_core().refresh_node(&node_did).await?;
                 Ok(fixture
                     .desktop_core()
-                    .store()
-                    .snapshot()
+                    .stores()
+                    .snapshot(&node_did)
                     .requests
                     .iter()
                     .find(|row| {
@@ -764,8 +818,8 @@ mod tests {
             submitted.request_id,
             fixture
                 .desktop_core()
-                .store()
-                .snapshot()
+                .stores()
+                .snapshot(&node_did)
                 .requests
                 .iter()
                 .filter(|row| row.request_id == initial.request_id
@@ -850,11 +904,11 @@ mod tests {
         agent_did: &str,
         skill_id: &str,
     ) -> Result<()> {
-        use gents::documents::apply_desired_state_plan;
-        use gents::store::collection::Collection;
-        use gents::store::config_client::{
+        use gents_documents::apply_desired_state_plan;
+        use gents_documents::{
             read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
+        use gents_store::collection::Collection;
         fixture
             .desktop_core()
             .operator_access(node_did)?
@@ -868,7 +922,7 @@ mod tests {
                     )
                     .await?
                     .with_context(|| format!("agent {agent_did} is missing"))?;
-                    let agent: gents::AgentDocument = serde_json::from_value(agent)?;
+                    let agent: gents_documents::Agent = serde_json::from_value(agent)?;
                     let context_id = agent.context_id.context("fixture agent has no context")?;
                     let (_, context) = read_desired_state_record_in_txn(
                         txn,
@@ -878,7 +932,7 @@ mod tests {
                     )
                     .await?
                     .context("fixture context is missing")?;
-                    let mut context: gents::documents::AgentContext =
+                    let mut context: gents_documents::AgentContext =
                         serde_json::from_value(context)?;
                     context.skill_ids = vec![skill_id.to_owned()];
                     let value = serde_json::to_value(context)?;
@@ -887,12 +941,17 @@ mod tests {
                         add: value.clone(),
                         update: value,
                     }])?;
-                    apply_desired_state_plan(txn, &plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        &plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;
-        fixture.desktop_core().refresh_store().await?;
+        refresh_every_node(fixture.desktop_core()).await?;
         Ok(())
     }
 
@@ -903,20 +962,22 @@ mod tests {
     ) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            core.refresh_store().await?;
-            let store = core.store().snapshot();
-            let observed = store
-                .agents
-                .iter()
-                .find(|agent| agent.agent_did == agent_did)
-                .and_then(|agent| agent.context_id.as_deref())
-                .and_then(|context_id| {
-                    store
-                        .contexts
-                        .iter()
-                        .find(|context| context.context_id == context_id)
-                })
-                .map(|context| context.skill_ids.as_slice());
+            refresh_every_node(core).await?;
+            let observed = find_in_node_stores(core, |store| {
+                store
+                    .agents
+                    .iter()
+                    .find(|agent| agent.agent_did == agent_did)
+                    .and_then(|agent| agent.context_id.as_deref())
+                    .and_then(|context_id| {
+                        store
+                            .contexts
+                            .iter()
+                            .find(|context| context.context_id == context_id)
+                    })
+                    .map(|context| context.skill_ids.clone())
+            });
+            let observed = observed.as_deref();
             let matches = observed.is_some_and(|skill_ids| {
                 skill_ids
                     .iter()
@@ -937,26 +998,30 @@ mod tests {
 
     async fn wait_for_remote_skill(core: &ClientCore, skill_id: &str) -> Result<()> {
         wait_for_condition("remote Skill create", Duration::from_secs(60), || async {
-            core.refresh_store().await?;
-            Ok(core
-                .store()
-                .snapshot()
-                .skills
-                .iter()
-                .any(|skill| skill.skill_id == skill_id))
+            refresh_every_node(core).await?;
+            Ok(find_in_node_stores(core, |store| {
+                store
+                    .skills
+                    .iter()
+                    .any(|skill| skill.skill_id == skill_id)
+                    .then_some(())
+            })
+            .is_some())
         })
         .await
     }
 
     async fn wait_for_remote_skill_absent(core: &ClientCore, skill_id: &str) -> Result<()> {
         wait_for_condition("remote Skill delete", Duration::from_secs(60), || async {
-            core.refresh_store().await?;
-            Ok(!core
-                .store()
-                .snapshot()
-                .skills
-                .iter()
-                .any(|skill| skill.skill_id == skill_id))
+            refresh_every_node(core).await?;
+            Ok(find_in_node_stores(core, |store| {
+                store
+                    .skills
+                    .iter()
+                    .any(|skill| skill.skill_id == skill_id)
+                    .then_some(())
+            })
+            .is_none())
         })
         .await
     }
@@ -966,14 +1031,14 @@ mod tests {
         request_id: &str,
     ) -> Result<AgentRequestRow> {
         wait_for_row("remote AgentRequest", Duration::from_secs(60), || async {
-            core.refresh_store().await?;
-            Ok(core
-                .store()
-                .snapshot()
-                .requests
-                .iter()
-                .find(|request| request.request_id == request_id)
-                .cloned())
+            refresh_every_node(core).await?;
+            Ok(find_in_node_stores(core, |store| {
+                store
+                    .requests
+                    .iter()
+                    .find(|request| request.request_id == request_id)
+                    .cloned()
+            }))
         })
         .await
     }
@@ -989,8 +1054,8 @@ mod tests {
         core: &ClientCore,
         node_did: &str,
     ) -> Result<Option<RemoteRuntimeObservation>> {
-        core.refresh_store().await?;
-        let store = core.store().snapshot();
+        core.refresh_node(node_did).await?;
+        let store = core.stores().snapshot(node_did);
         let Some(readiness_row) = store.node_readiness(node_did) else {
             return Ok(None);
         };
@@ -1219,7 +1284,7 @@ mod tests {
                 inference_url: Some(self.endpoint.clone()),
                 model_name: Some(model_name.to_string()),
                 provider: Some(
-                    gents::BackendProviderKind::OpenAiCompatible
+                    gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible
                         .as_str()
                         .to_owned(),
                 ),

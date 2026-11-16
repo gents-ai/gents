@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use gents::tools::mcp::pool::{resolve_mcp_url, McpPool};
+use gents_tools::mcp::pool::{resolve_mcp_url, McpPool};
 
 pub struct ToolServiceTarget {
     pub service_id: String,

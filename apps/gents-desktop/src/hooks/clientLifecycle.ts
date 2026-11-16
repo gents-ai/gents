@@ -59,7 +59,7 @@ export function logShellEvent(message: string) {
 
 type ClientLifecycleParams = {
   api: DesktopApiAdapter;
-  localServer: Pick<LocalServerActions, "restoreLocalServer" | "restartLocalServer">;
+  localServer: Pick<LocalServerActions, "restoreLocalServer">;
   supportsManagedServer: boolean;
   stores: ShellStores;
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
@@ -83,9 +83,6 @@ export function createClientLifecycle({
   const setError = (error: string | null) => clientStatus.setError(client, error);
   const setStarting = (starting: boolean) => clientStatus.setStarting(client, starting);
   const setStopping = (stopping: boolean) => client.setState({ stopping });
-  const setManagedServerFailure = (
-    managedServerFailure: ManagedServerStartupError | null,
-  ) => client.setState({ managedServerFailure });
   const recovery: ClientRecovery = {
     autostartAttempted: false,
     autoRestartInFlight: false,
@@ -118,6 +115,14 @@ export function createClientLifecycle({
     client,
     setError,
     startFresh: () => initializeDesktop(),
+    setAside: (repair) => {
+      setError(null);
+      void initializeDesktop().then(() =>
+        client.setState({
+          repairNotes: [...client.getState().repairNotes, ...repair.repaired],
+        }),
+      );
+    },
   });
   function setStartupPhase(next: DesktopStartupPhase) {
     client.setState({ startupPhase: next });
@@ -163,7 +168,11 @@ export function createClientLifecycle({
     setError(null);
     const isCurrent = publication.checkpoint();
     try {
-      return await mutateSnapshot(() => api.startDesktopClient());
+      const started = await mutateSnapshot(() => api.startDesktopClient());
+      const note = started.repairNote;
+      if (note)
+        client.setState({ repairNotes: [...client.getState().repairNotes, note] });
+      return started;
     } catch (error) {
       if (isCurrent() || !publication.snapshot?.client) {
         setError(String(error));
@@ -239,9 +248,16 @@ export function createClientLifecycle({
       setStartupPhase("checking-managed-server");
       const abort = new AbortController();
       managedServerWaitAbort = abort;
-      setManagedServerFailure(null);
       try {
-        localServerAvailable = await localServer.restoreLocalServer(abort.signal);
+        localServerAvailable = await localServer.restoreLocalServer(
+          abort.signal,
+          (repair) =>
+            client.setState({
+              repairNotes: repair.outcome === "blocked" ? [] : repair.repaired,
+              repairPeers: repair.savedPeers,
+              localNodeLost: repair.localNodeLost,
+            }),
+        );
       } catch (error) {
         localServerAvailable = false;
         setError(errorText(error));
@@ -250,7 +266,6 @@ export function createClientLifecycle({
           return;
         }
         if (error instanceof ManagedServerStartupError) {
-          setManagedServerFailure(error);
           setStartupPhase("managed-server-error");
           return;
         }
@@ -266,34 +281,9 @@ export function createClientLifecycle({
       return;
     }
     localServerAvailable = false;
-    setManagedServerFailure(null);
     setError(null);
     setStartupPhase("loading-configuration");
     void refreshSnapshot();
-  }
-
-  async function restartManagedServer() {
-    const status = client.getState().managedServerFailure?.status;
-    if (!status?.nodeName || !status.effectiveToolCeiling || !api.restartManagedServer)
-      return;
-    const nodeName = status.nodeName;
-    const authority = {
-      toolCeiling: status.effectiveToolCeiling,
-      toolRoot: status.effectiveToolRoot,
-    };
-    setStarting(true);
-    setError(null);
-    setStartupPhase("checking-managed-server");
-    try {
-      await localServer.restartLocalServer(nodeName, authority);
-      await initializeDesktop();
-    } catch (error) {
-      setError(errorText(error));
-      setStartupPhase("managed-server-error");
-      await home.adopt(error);
-    } finally {
-      setStarting(false);
-    }
   }
 
   async function retryStartup() {
@@ -359,7 +349,6 @@ export function createClientLifecycle({
     startClient,
     initializeDesktop,
     skipManagedServerWait,
-    restartManagedServer,
     supportsManagedServer,
     retryStartup,
     restartDesktopClient,

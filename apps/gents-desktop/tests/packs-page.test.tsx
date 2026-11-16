@@ -6,6 +6,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeploymentView, InstalledPack } from "@source-inc/gents-desktop-client";
 import {
@@ -27,6 +28,7 @@ import {
   partsOf,
   resetInstalledPacks,
   statusOf,
+  sourceOf,
   resourceTree,
   nodeLinks,
   rememberPacksQuery,
@@ -330,6 +332,25 @@ describe("who published a pack", () => {
     expect(publisherOf("unread", "dave")).toBeNull();
     expect(publisherOf({}, "dave")).toBeNull();
   });
+
+  it("says where an installed pack came from, or nothing when its record predates sources", () => {
+    const from = (source: InstalledPack["source"]) => sourceOf({ ...research, source });
+    expect(from({ kind: "local", file_name: "research.pack" })).toBe(
+      "From research.pack",
+    );
+    expect(from({ kind: "local", file_name: null })).toBe("From a file");
+    expect(from({ kind: "store" })).toBe("From this node's pack store");
+    expect(
+      from({
+        kind: "registry",
+        namespace: "demo",
+        name: "research",
+        version: "1.0.0",
+        artifact_digest: "sha256:0",
+      }),
+    ).toBe("From the registry");
+    expect(from(undefined)).toBeNull();
+  });
 });
 
 describe("the Packs page", () => {
@@ -384,14 +405,41 @@ describe("the Packs page", () => {
     expect(screen.getByRole("textbox", { name: "Search packs" })).toHaveValue("doc");
   });
 
-  it("narrows the registry to one publisher's packs, until its chip is cleared", async () => {
+  it("shows every author's packs until one is chosen from the Author menu", async () => {
+    const user = userEvent.setup();
+    show();
+    await user.click(await screen.findByRole("tab", { name: "Registry" }));
+    const registry = await screen.findByRole("list", { name: "Registry packs" });
+    expect(await within(registry).findByText("research")).toBeInTheDocument();
+    expect(within(registry).getByText("docs")).toBeInTheDocument();
+    const menu = screen.getByRole("combobox", { name: "Author" });
+    expect(menu).toHaveTextContent("All authors");
+    await user.click(menu);
+    expect(
+      (await screen.findAllByRole("option")).map((option) => option.textContent),
+    ).toEqual(["All authors", "acme", "demo"]);
+    await user.click(screen.getByRole("option", { name: "acme" }));
+    expect(screen.getByRole("combobox", { name: "Author" })).toHaveTextContent("acme");
+    await waitFor(() => expect(within(registry).queryByText("research")).toBeNull());
+    expect(within(registry).getByText("docs")).toBeInTheDocument();
+  });
+
+  it("narrows the registry to one publisher's packs, until All authors is chosen", async () => {
+    const user = userEvent.setup();
     show();
     act(() => showPublisher("acme"));
     const registry = await screen.findByRole("list", { name: "Registry packs" });
     expect(await within(registry).findByText("docs")).toBeInTheDocument();
     expect(within(registry).queryByText("research")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /not only acme/ }));
+    expect(screen.queryByRole("button", { name: /not only acme/ })).toBeNull();
+    const menu = screen.getByRole("combobox", { name: "Author" });
+    expect(menu).toHaveTextContent("acme");
+    await user.click(menu);
+    await user.click(await screen.findByRole("option", { name: "All authors" }));
     expect(await within(registry).findByText("research")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Author" })).toHaveTextContent(
+      "All authors",
+    );
   });
 
   it("offers a pack's actions from its row's menu", async () => {
@@ -451,6 +499,28 @@ describe("the Packs page", () => {
     const versions = await screen.findByRole("region", { name: "Versions" });
     expect(within(versions).getByText(/Installed/)).toBeInTheDocument();
     expect(within(versions).getByText(/Latest/)).toBeInTheDocument();
+  });
+
+  it("names the file an installed pack came from when the registry has no record of it", async () => {
+    show(RESEARCH, {
+      listInstalledPacks: async () => ({
+        packs: [{ ...research, source: { kind: "local", file_name: "research.pack" } }],
+      }),
+      packInfo: async () => {
+        throw new Error("not in the registry");
+      },
+    });
+    expect(await screen.findByText(/From research\.pack/)).toBeInTheDocument();
+    expect(screen.queryByText(/registry has no record of it/)).toBeNull();
+  });
+
+  it("still says a pack may have come from a file or a link when its source is unknown", async () => {
+    show(RESEARCH, {
+      packInfo: async () => {
+        throw new Error("not in the registry");
+      },
+    });
+    expect(await screen.findByText(/registry has no record of it/)).toBeInTheDocument();
   });
 
   it("opens a pack's page in place, or in a new window on a modified click", async () => {

@@ -140,7 +140,7 @@ pub(crate) struct TraceProjectArgs {
     pub(crate) actor_did: Option<String>,
     #[arg(
         long = "acp-policy-id",
-        help = "DefraDB Document ACP policy id used to enforce row-level read decisions before projection. Requires --graphql and --actor-did."
+        help = "DefraDB Document ACP policy id used to enforce row-level read decisions before projection. Requires --graphql and --actor-did. Rows are read as the caller; this only omits rows the actor cannot read, and each decision is authorized as the caller."
     )]
     pub(crate) acp_policy_id: Option<String>,
     #[arg(

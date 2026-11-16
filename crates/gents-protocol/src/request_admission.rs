@@ -66,6 +66,49 @@ impl TryFrom<&str> for RequestPurpose {
     }
 }
 
+#[cfg(test)]
+mod purpose_wire_tests {
+    use super::RequestPurpose;
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PurposeField {
+        purpose: RequestPurpose,
+    }
+
+    #[test]
+    fn request_purposes_are_the_lean_request_purposes() {
+        gents_lean_vocab::families::request_purpose_vocabulary::replay(&[
+            RequestPurpose::Normal,
+            RequestPurpose::TitleAudit,
+            RequestPurpose::AccessReview,
+        ]);
+    }
+
+    #[test]
+    fn signed_purpose_wire_decodes_as_the_lean_model() {
+        gents_lean_vocab::families::contracts_title_purpose_wire::replay::<RequestPurpose>(|i| {
+            let parsed = i
+                .wire
+                .as_deref()
+                .and_then(|wire| RequestPurpose::try_from(wire).ok());
+            let field = match &i.wire {
+                Some(wire) => serde_json::json!({ "purpose": wire }),
+                None => serde_json::json!({}),
+            };
+            let decoded = serde_json::from_value::<PurposeField>(field)
+                .ok()
+                .map(|row| row.purpose);
+            assert_eq!(parsed, decoded, "{i:?}");
+            if let Some(purpose) = decoded {
+                assert_eq!(Some(purpose.as_str()), i.wire.as_deref(), "{i:?}");
+            }
+            decoded
+        });
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentRequestAdmissionKind {

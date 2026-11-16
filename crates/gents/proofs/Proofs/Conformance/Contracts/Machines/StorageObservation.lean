@@ -1,4 +1,4 @@
-import Proofs.StorageObservation
+import Proofs.Store.StorageObservation
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.Contracts

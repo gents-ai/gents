@@ -1,0 +1,30 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "tags",
+        "type": "list<int32>"
+      }
+    ],
+    "markdown": "| tags |\n| --- |\n| [1,2] |",
+    "offset": 0,
+    "order": "none",
+    "row_count": 1,
+    "rows": [
+      [
+        [
+          1,
+          2
+        ]
+      ]
+    ],
+    "warnings": [
+      "people.parquet is the table people_2",
+      "the result has no sortable column, so its row order is not guaranteed between calls"
+    ]
+  },
+  "input": {
+    "sql": "SELECT DISTINCT tags FROM people_2 WHERE id = 1"
+  }
+}

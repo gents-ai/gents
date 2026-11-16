@@ -13,6 +13,10 @@ pub(super) struct EnrollmentEndpoint {
 }
 
 impl EnrollmentEndpoint {
+    pub(super) fn names_node(&self, node_did: &str) -> bool {
+        self.node_did == node_did
+    }
+
     fn fresh(&self, now: DateTime<Utc>) -> bool {
         DateTime::parse_from_rfc3339(&self.expires_at).is_ok_and(|expires| expires > now)
     }

@@ -215,6 +215,31 @@ fn admit_tool_effect(tools: &[Box<dyn ToolDyn>], name: &str, args: &str) -> Opti
     admit_tool(tools, name, args)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ReadySettlement {
+    TimedOut,
+    ReceiptFailure,
+    EarlyFailure,
+    Completed,
+}
+
+pub(super) fn settle_ready(
+    expired: bool,
+    receipt_failed: bool,
+    early_failure: bool,
+) -> ReadySettlement {
+    if expired {
+        ReadySettlement::TimedOut
+    } else if receipt_failed {
+        ReadySettlement::ReceiptFailure
+    } else if early_failure {
+        ReadySettlement::EarlyFailure
+    } else {
+        ReadySettlement::Completed
+    }
+}
+
 pub async fn dispatch_tool(
     tools: &[Box<dyn ToolDyn>],
     name: &str,
@@ -317,12 +342,14 @@ pub(super) async fn dispatch_provider_tool(
                 Err(error) => (None, Some(outcome(Err(error)))),
             };
             if let (Some(check), Some(failure)) = (&cleanup, &early_failure) { check(Some(failure)); }
-            let receipt = crate::tool_call_lifecycle::runtime::record_dispatch_receipt(dispatched, receipt_writer).await;
-            let decided = if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
-                ToolOutcome::TimedOut { deadline_at: scope.deadline_at }
-            } else if let Err(error) = receipt { outcome(Err(error)) }
-            else if let Some(failure) = early_failure { failure }
-            else { ToolOutcome::Completed(successful.expect("dispatch result")) };
+            let receipt = crate::tool_call_lifecycle::runtime::record_dispatch_receipt(dispatched, receipt_writer).await.err();
+            let expired = deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero());
+            let decided = match settle_ready(expired, receipt.is_some(), early_failure.is_some()) {
+                ReadySettlement::TimedOut => ToolOutcome::TimedOut { deadline_at: scope.deadline_at },
+                ReadySettlement::ReceiptFailure => outcome(Err(receipt.expect("receipt failure"))),
+                ReadySettlement::EarlyFailure => early_failure.expect("early failure"),
+                ReadySettlement::Completed => ToolOutcome::Completed(successful.expect("dispatch result")),
+            };
             if let Some(check) = &cleanup { check(Some(&decided)); }
             decided
         },
@@ -426,7 +453,7 @@ mod tests {
     use crate::tool::{BoxFuture, ToolDefinition, ToolError};
     use crate::tool_call_lifecycle::runtime::scope_request_tool_execution;
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     };
 
@@ -699,6 +726,7 @@ mod tests {
             tools: Arc::new(vec![Box::new(ReadyAfterWallDeadline {
                 deadline_at: Utc::now(),
                 called: Arc::new(AtomicBool::new(false)),
+                fails: false,
             })]),
             hook: hook.clone(),
             parent_internal_id: "parent".into(),
@@ -736,6 +764,7 @@ mod tests {
                 tools: Arc::new(vec![Box::new(ReadyAfterWallDeadline {
                     deadline_at: Utc::now(),
                     called: Arc::new(AtomicBool::new(false)),
+                    fails: false,
                 })]),
                 hook: hook.clone(),
                 parent_internal_id: "parent".into(),
@@ -776,6 +805,7 @@ mod tests {
     struct ReadyAfterWallDeadline {
         deadline_at: DateTime<Utc>,
         called: Arc<AtomicBool>,
+        fails: bool,
     }
 
     impl ToolDyn for ReadyAfterWallDeadline {
@@ -802,34 +832,202 @@ mod tests {
                 self.called.store(true, Ordering::SeqCst);
                 let remaining = (self.deadline_at - Utc::now()).to_std().unwrap_or_default();
                 std::thread::sleep(remaining + std::time::Duration::from_millis(10));
-                Ok("late success".into())
+                if self.fails {
+                    Err(ToolError::ReportedFailure {
+                        class: crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+                        text: "tool failed".into(),
+                    })
+                } else {
+                    Ok("late success".into())
+                }
             })
         }
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn ready_tool_after_wall_deadline_is_timed_out() {
-        let deadline_at = Utc::now() + chrono::Duration::seconds(1);
-        let called = Arc::new(AtomicBool::new(false));
-        let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(ReadyAfterWallDeadline {
-            deadline_at,
-            called: Arc::clone(&called),
-        })];
-        let outcome = scope_request_tool_execution(
-            Some(deadline_at),
-            tokio_util::sync::CancellationToken::new(),
-            dispatch_tool(&tools, "ready_after_wall_deadline", "{}".into(), None, None),
-        )
-        .await;
-        assert!(
-            called.load(Ordering::SeqCst),
-            "tool must reach the call-ready branch"
-        );
-        assert_eq!(
-            outcome,
-            ToolOutcome::TimedOut {
-                deadline_at: Some(deadline_at)
+    struct AdmissionGate {
+        name: &'static str,
+        admitted: bool,
+    }
+
+    impl ToolDyn for AdmissionGate {
+        fn name(&self) -> String {
+            self.name.into()
+        }
+
+        fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+            Box::pin(async {
+                ToolDefinition {
+                    name: self.name.into(),
+                    description: String::new(),
+                    parameters: serde_json::json!({"type": "object"}),
+                }
+            })
+        }
+
+        fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+            Box::pin(async { Ok(String::new()) })
+        }
+
+        fn admit(&self, _args: &str) -> Result<(), ToolError> {
+            if self.admitted {
+                Ok(())
+            } else {
+                Err(ToolError::ReportedFailure {
+                    class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+                    text: "refused by the tool's own admission".into(),
+                })
             }
-        );
+        }
+    }
+
+    #[test]
+    fn plugin_child_admission_matches_the_lean_model() {
+        gents_lean_vocab::families::plugin_resources_child_routes::replay(|i| {
+            let name = if i.static_hook_owned {
+                gents_protocol::goal_names::GET_GOAL_TOOL_NAME
+            } else {
+                "workflow_run"
+            };
+            let surface = if i.selected { name } else { "unselected" };
+            let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(AdmissionGate {
+                name: surface,
+                admitted: i.admitted,
+            })];
+            admit_tool_effect(&tools, name, "{}").is_none()
+        });
+    }
+
+    #[test]
+    fn ready_settlement_matches_the_lean_model() {
+        gents_lean_vocab::families::tool_dispatch_settle_ready::replay::<ReadySettlement>(|i| {
+            settle_ready(i.expired, i.receipt_failed, i.early_failure)
+        });
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn deadline_dispatch_matches_the_lean_model() {
+        for case in gents_lean_vocab::families::tool_dispatch_dispatch_under_deadline::cases::<
+            ReadySettlement,
+        >() {
+            let now = Utc::now();
+            let (deadline_at, ready_at) = if case.input.expired_at_dispatch {
+                (now - chrono::Duration::seconds(1), now)
+            } else if case.input.ready_after_deadline {
+                let deadline_at = now + chrono::Duration::milliseconds(300);
+                (deadline_at, deadline_at)
+            } else {
+                (
+                    now + chrono::Duration::seconds(60),
+                    now - chrono::Duration::seconds(1),
+                )
+            };
+            let called = Arc::new(AtomicBool::new(false));
+            let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(ReadyAfterWallDeadline {
+                deadline_at: ready_at,
+                called: Arc::clone(&called),
+                fails: case.input.fails,
+            })];
+            let outcome = scope_request_tool_execution(
+                Some(deadline_at),
+                tokio_util::sync::CancellationToken::new(),
+                dispatch_tool(&tools, "ready_after_wall_deadline", "{}".into(), None, None),
+            )
+            .await;
+            let settlement = match outcome {
+                ToolOutcome::TimedOut {
+                    deadline_at: Some(recorded),
+                } if recorded == deadline_at => ReadySettlement::TimedOut,
+                ToolOutcome::Failed {
+                    class: crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+                    denial: None,
+                    text,
+                } if text == "tool failed" => ReadySettlement::EarlyFailure,
+                ToolOutcome::Completed(_) => ReadySettlement::Completed,
+                other => panic!("{:?}: unexpected outcome {other:?}", case.input),
+            };
+            case.check(gents_lean_vocab::families::tool_dispatch_dispatch_under_deadline::DeadlineDispatch {
+                called: called.load(Ordering::SeqCst),
+                settlement,
+            });
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
+        use crate::tool::{Tool, ToolDefinition};
+
+        struct StrictArgsTool {
+            calls: Arc<AtomicUsize>,
+        }
+        #[derive(Debug, thiserror::Error)]
+        #[error("strict tool error")]
+        struct StrictToolError;
+        #[derive(serde::Deserialize)]
+        struct StrictArgs {
+            #[allow(dead_code)]
+            text: String,
+        }
+        impl Tool for StrictArgsTool {
+            const NAME: &'static str = "strict";
+            type Error = StrictToolError;
+            type Args = StrictArgs;
+            type Output = String;
+            async fn definition(&self, _prompt: String) -> ToolDefinition {
+                ToolDefinition {
+                    name: Self::NAME.to_string(),
+                    description: String::new(),
+                    parameters: serde_json::json!({"type": "object"}),
+                }
+            }
+            async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok("ran".to_string())
+            }
+        }
+
+        #[derive(serde::Deserialize)]
+        struct Case {
+            termination: String,
+            arguments: String,
+            kind: String,
+        }
+        let cases: Vec<Case> = serde_json::from_str(include_str!(
+            "../../../gents/tests/fixtures/tool_argument_failure.json"
+        ))
+        .unwrap();
+        let cases: Vec<_> = cases
+            .into_iter()
+            .filter(|case| case.termination == "unreported" && case.kind == "malformed")
+            .collect();
+        assert!(!cases.is_empty());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictArgsTool {
+            calls: calls.clone(),
+        })];
+        for case in cases {
+            let result = super::dispatch_tool(&tools, "strict", case.arguments, None, None).await;
+            match &result {
+                crate::tool_call_lifecycle::ToolOutcome::Failed {
+                    class,
+                    denial: None,
+                    text,
+                } => {
+                    assert_eq!(
+                        *class,
+                        crate::tool_call_lifecycle::FailureClass::ArgumentInvalid
+                    );
+                    assert!(
+                        text.contains(&format!("arguments were rejected ({})", case.kind)),
+                        "{text}"
+                    );
+                    assert!(
+                        !text.contains("ran") && !text.contains("token limit"),
+                        "{text}"
+                    );
+                }
+                other => panic!("unparseable args must classify ArgumentInvalid, got {other:?}"),
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
     }
 }

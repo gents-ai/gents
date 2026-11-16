@@ -1,4 +1,5 @@
-use serde_json::Value;
+use gents_protocol::client_protocol::RequestLifecycleState;
+use serde_json::{json, Value};
 
 use super::show_text::{push_request_output_text, render_request_show_text};
 use super::show_views::{
@@ -25,7 +26,9 @@ fn output_envelope(output: CliOutputObservation) -> RequestOutputEnvelope {
     }
 }
 
-fn show_snapshot(blocked: Option<gents::goal::blocked_turn::BlockedTurn>) -> RequestShowSnapshot {
+fn show_snapshot(
+    blocked: Option<gents_automation::goal::blocked_turn::BlockedTurn>,
+) -> RequestShowSnapshot {
     let row = json!({
         "request_id": "request", "lifecycle_state": "failed",
         "failure_reason": "provider usage limit reached (reset time not reported)",
@@ -45,10 +48,10 @@ fn show_snapshot(blocked: Option<gents::goal::blocked_turn::BlockedTurn>) -> Req
 
 fn usage_limit(
     resets_at: Option<chrono::DateTime<chrono::Utc>>,
-) -> gents::goal::blocked_turn::BlockedTurn {
-    gents::goal::blocked_turn::BlockedTurn {
-        reason: gents::goal::blocked_turn::BlockedReason::UsageLimit,
-        account: Some(gents::goal::blocked_turn::BlockedAccount {
+) -> gents_automation::goal::blocked_turn::BlockedTurn {
+    gents_automation::goal::blocked_turn::BlockedTurn {
+        reason: gents_automation::goal::blocked_turn::BlockedReason::UsageLimit,
+        account: Some(gents_automation::goal::blocked_turn::BlockedAccount {
             label: "label-b".into(),
             provider: "claude-subscription".into(),
         }),

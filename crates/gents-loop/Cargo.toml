@@ -55,4 +55,5 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true
 tokio = { version = "1", default-features = false, features = ["sync", "macros", "io-util", "rt", "time", "test-util"] }

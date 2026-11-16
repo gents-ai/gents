@@ -32,7 +32,7 @@ export function SyncHealth({
     ["State", d.state ?? "unknown"],
     ["Cause", d.cause ?? "—"],
     ["Next action", d.nextAction ?? "—"],
-    ["Connected peers", d.connectedPeerCount],
+    ["Runtimes connected", `${d.connectedRuntimeCount} of ${d.runtimeCount}`],
     ["Enrollment failures", d.activationErrorCount],
   ];
   return (
@@ -42,7 +42,7 @@ export function SyncHealth({
       onOpenChangeComplete={popover.onOpenChangeComplete}
     >
       <PopoverTrigger
-        aria-label={`${status.shortLabel}. Show sync diagnostics.`}
+        aria-label={`${status.shortLabel}. Show connection details.`}
         title={status.detail}
         className={cn(
           "flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
@@ -73,13 +73,13 @@ export function SyncHealth({
       <PopoverContent
         ref={popover.popupRef}
         role={popover.open ? "dialog" : "presentation"}
-        aria-label={popover.open ? "Sync details" : undefined}
+        aria-label={popover.open ? "Connection details" : undefined}
         aria-hidden={popover.open ? undefined : true}
         align={compact ? "start" : "end"}
         side={compact ? "right" : "bottom"}
         className="w-96"
       >
-        <p className="font-heading text-sm font-medium text-heading">Sync</p>
+        <p className="font-heading text-sm font-medium text-heading">Connection</p>
         <p className="mt-0.5 text-sm text-muted-foreground">{status.detail}</p>
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm">
           {rows.map(([k, v]) => (

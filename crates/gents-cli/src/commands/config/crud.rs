@@ -1,15 +1,16 @@
 use anyhow::{Context, Result};
-use gents::store::graphql::escape_graphql_string;
-use gents::Collection;
+use gents_documents::operations::delete;
+use gents_protocol::operations::document::{DocumentDeleteError, OperationActor};
+use gents_protocol::operations::inference::InferenceDocument;
+use gents_store::collection::Collection;
 use serde_json::{json, Value};
 
+use super::inference_failure::InferenceFailure;
 use crate::cli::output_format::OutputFormat;
 use crate::cli::{ConfigListArgs, ConfigShowArgs};
-use crate::config_import::apply_delete_collection;
 use crate::config_writes::ConfigAccess;
-use crate::desired_state;
 use crate::request_helpers::resolve_dual_id;
-use crate::{graphql_rows, print_json, resolve_config_access};
+use crate::{print_json, resolve_config_access};
 
 #[derive(Clone, Copy)]
 pub(crate) struct ConfigDocumentSpec {
@@ -67,10 +68,18 @@ pub(crate) const CONTEXT_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     collection: Collection::AgentContext,
 };
 
-pub(crate) const NODE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
-    noun: "node",
-    collection: Collection::Node,
-};
+const DOCUMENT_SPECS: [ConfigDocumentSpec; 10] = [
+    BACKEND_SPEC,
+    AGENT_SPEC,
+    TOOLS_SPEC,
+    PROFILE_SPEC,
+    TRIGGER_SPEC,
+    SCHEDULE_SPEC,
+    MCP_SPEC,
+    SKILL_SPEC,
+    EVENT_SOURCE_SPEC,
+    CONTEXT_SPEC,
+];
 
 pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
@@ -142,53 +151,92 @@ pub(super) async fn config_rm(spec: ConfigDocumentSpec, args: ConfigShowArgs) ->
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .with_context(|| format!("resolving access for config {} rm", spec.noun))?;
-    let live = live_manifest_for_delete(
-        &access,
-        spec,
-        &id,
+    let node_did = super::binding::resolve_target_node_did(
+        None,
+        None,
         args.home.as_deref(),
         args.graphql.as_deref(),
+        Some(&access),
     )
     .await?;
-    let mut desired = live.clone();
-    remove_target(&mut desired, spec.collection, &id)?;
-
-    let deletes = desired_state::prune::prune_safe_deletes(&desired, &live)?;
-    let target_selected = deletes
-        .iter()
-        .any(|doc| doc.collection == spec.collection && doc.id == id);
-    if !target_selected {
-        anyhow::bail!("refused: {} {} is still referenced", spec.noun, id);
-    }
-    if deletes
-        .iter()
-        .any(|doc| doc.collection != spec.collection || doc.id != id)
-    {
-        anyhow::bail!(
-            "refused: deleting {} {} would select additional documents",
-            spec.noun,
-            id
-        );
-    }
-
-    let collection = spec.collection;
-    let node_did = &live.node.node_did;
-    let id_ref = &id;
-    let deleted = access
-        .transact_write("cli.config.delete", move |txn| {
-            Box::pin(async move {
-                apply_delete_collection(txn, collection, node_did, std::slice::from_ref(id_ref))
-                    .await
-            })
-        })
-        .await?;
+    let receipt = delete::delete(
+        &access,
+        "cli.config.delete",
+        &node_did,
+        &[(spec.collection, id.clone())],
+        OperationActor::User,
+        None,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .map_err(|error| delete_failure(spec, error))?;
     match output {
         OutputFormat::Json => print_json(&json!({
             "collection": spec.collection.graphql_type(),
             "id": id,
-            "deleted": deleted,
+            "deleted": receipt.targets.len(),
         })),
         _ => unreachable!("ensure_supported restricts config rm output formats"),
+    }
+}
+
+pub(super) async fn inference_rm(document: InferenceDocument, args: ConfigShowArgs) -> Result<()> {
+    let noun = document.resource();
+    let id = resolve_dual_id(noun, "--id", args.id.as_deref(), args.id_flag.as_deref())?;
+    let output = args
+        .output
+        .ensure_supported(&format!("config {noun} rm"), &[OutputFormat::Json])?;
+    let (access, node_did) =
+        super::profile::target(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let receipt = gents_inference::operations::remove(&access, &node_did, document, &id)
+        .await
+        .map_err(|error| InferenceFailure::new(error, document, "rm"))?;
+    anyhow::ensure!(
+        receipt.removed,
+        "not found: {} {node_did}/{id}",
+        receipt.collection
+    );
+    match output {
+        OutputFormat::Json => print_json(&json!({
+            "collection": receipt.collection,
+            "id": id,
+            "deleted": 1,
+        })),
+        _ => unreachable!("ensure_supported restricts config rm output formats"),
+    }
+}
+
+fn delete_failure(spec: ConfigDocumentSpec, error: DocumentDeleteError) -> anyhow::Error {
+    let next = match &error {
+        DocumentDeleteError::Passthrough(_) => None,
+        DocumentDeleteError::StillReferenced { collection, id, .. } => Some(
+            DOCUMENT_SPECS
+                .iter()
+                .find(|referrer| referrer.collection.graphql_type() == *collection)
+                .map_or_else(
+                    || format!("gents utils data query find --collection {collection}"),
+                    |referrer| {
+                        format!("gents config {} show {id}", referrer.noun.replace(' ', "-"))
+                    },
+                ),
+        ),
+        DocumentDeleteError::TargetMissing { .. } => {
+            Some(format!("gents config {} list", spec.noun.replace(' ', "-")))
+        }
+        _ => Some(format!(
+            "gents config {} rm --help",
+            spec.noun.replace(' ', "-")
+        )),
+    };
+    match next {
+        Some(next) => anyhow::anyhow!(
+            "{}\nNext: {next}",
+            gents_protocol::error_chain::ErrorChain(&error)
+        ),
+        None => match error {
+            DocumentDeleteError::Passthrough(error) => anyhow::anyhow!(error),
+            error => error.into(),
+        },
     }
 }
 
@@ -201,93 +249,176 @@ fn resolve_config_id(spec: ConfigDocumentSpec, args: &ConfigShowArgs) -> Result<
     )
 }
 
-async fn live_manifest_for_delete(
-    access: &ConfigAccess,
-    spec: ConfigDocumentSpec,
-    id: &str,
-    home: Option<&std::path::Path>,
-    graphql: Option<&str>,
-) -> Result<desired_state::DesiredStateManifest> {
-    let node_did =
-        super::binding::resolve_target_node_did(None, None, home, graphql, Some(access)).await?;
-    let bundle = crate::build_config_export_bundle(access, &node_did).await?;
-    let docs = bundle.docs_for_collection(spec.collection)?;
-    anyhow::ensure!(
-        docs.iter().any(|row| row
-            .get(spec.collection.unique_field())
-            .and_then(Value::as_str)
-            == Some(id)),
-        "target configuration is absent from the selected owner"
-    );
-    desired_state::manifest_from_export_bundle(&bundle)
-}
-
 pub(crate) async fn query_collection(
     access: &ConfigAccess,
     spec: ConfigDocumentSpec,
     node_did: &str,
     id: Option<&str>,
 ) -> Result<Vec<Value>> {
-    let mut filter = format!(
-        r#"node_did: {{ _eq: "{}" }}"#,
-        escape_graphql_string(node_did)
-    );
-    if let Some(id) = id {
-        filter.push_str(&format!(
-            r#", {}: {{ _eq: "{}" }}"#,
-            spec.collection.unique_field(),
-            escape_graphql_string(id)
-        ));
+    if spec.collection == Collection::Agent {
+        let mut view = gents_documents::views::agents::AgentList::new(node_did);
+        if let Some(id) = id {
+            view = view.agent_did(id);
+        }
+        return access
+            .read_view(&view)
+            .await?
+            .into_iter()
+            .map(|row| {
+                let enabled = row.agent.enabled;
+                let mut value = serde_json::to_value(row)?;
+                value["enabled"] = Value::Bool(enabled);
+                Ok(value)
+            })
+            .collect();
     }
     let rows = if spec.collection == Collection::InferenceBackend {
+        let mut view = gents_inference::views::backends::BackendList::new(node_did);
+        if let Some(id) = id {
+            view = view.backend_id(id);
+        }
         access
-            .transact_readonly("cli.config.backend.read", |txn| {
-                Box::pin(async move {
-                    if let Some(id) = id {
-                        let record = gents::store::config_client::read_desired_state_record_in_txn(
-                            txn,
-                            Collection::InferenceBackend,
-                            node_did,
-                            id,
-                        )
-                        .await?;
-                        return record
-                            .into_iter()
-                            .map(|(doc_id, mut row)| {
-                                row.as_object_mut()
-                                    .context("backend must be an object")?
-                                    .insert("_docID".into(), Value::String(doc_id));
-                                Ok(row)
-                            })
-                            .collect::<Result<Vec<_>>>();
-                    }
-                    gents::store::config_client::list_inference_backends_in_txn(txn, node_did)
-                        .await?
-                        .into_iter()
-                        .map(|backend| {
-                            let doc_id = backend
-                                .physical_doc_id
-                                .clone()
-                                .context("backend has no physical ID")?;
-                            let mut row = serde_json::to_value(backend)?;
-                            row.as_object_mut()
-                                .context("backend must be an object")?
-                                .insert("_docID".into(), Value::String(doc_id));
-                            Ok(row)
-                        })
-                        .collect::<Result<Vec<_>>>()
-                })
-            })
+            .read_view(&view)
             .await?
+            .into_iter()
+            .map(|row| {
+                let doc_id = row
+                    .metadata
+                    .physical_doc_id
+                    .clone()
+                    .context("backend has no physical ID")?;
+                let mut value = serde_json::to_value(row.metadata.into_backend()?)?;
+                value
+                    .as_object_mut()
+                    .context("backend must be an object")?
+                    .insert("_docID".into(), Value::String(doc_id));
+                Ok(value)
+            })
+            .collect::<Result<Vec<_>>>()?
+    } else if spec.collection == Collection::InferenceProfile {
+        let mut view = gents_inference::views::profiles::ProfileList::new(node_did);
+        if let Some(id) = id {
+            view = view.profile_id(id);
+        }
+        access
+            .read_view(&view)
+            .await?
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    } else if spec.collection == Collection::InferenceSampling {
+        let mut view = gents_inference::views::settings::SamplingList::new(node_did);
+        if let Some(id) = id {
+            view = view.id(id);
+        }
+        access
+            .read_view(&view)
+            .await?
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    } else if spec.collection == Collection::InferenceExecution {
+        let mut view = gents_inference::views::settings::ExecutionList::new(node_did);
+        if let Some(id) = id {
+            view = view.id(id);
+        }
+        access
+            .read_view(&view)
+            .await?
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    } else if spec.collection == Collection::InferenceRetryPolicy {
+        let mut view = gents_inference::views::settings::RetryPolicyList::new(node_did);
+        if let Some(id) = id {
+            view = view.id(id);
+        }
+        access
+            .read_view(&view)
+            .await?
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()?
     } else {
-        let fields = gents::store::config_client::config_projection(spec.collection, None)?
-            .0
-            .join(" ");
-        let query = format!(
-            "{{ {}(filter: {{ {filter} }}) {{ _docID {fields} }} }}",
-            spec.collection.graphql_type()
-        );
-        graphql_rows(access, spec.collection.graphql_type(), &query).await?
+        use gents_documents::views::{config, tasks};
+        macro_rules! read {
+            ($view:expr) => {{
+                access
+                    .read_view(&$view)
+                    .await?
+                    .into_iter()
+                    .map(serde_json::to_value)
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            }};
+        }
+        macro_rules! config {
+            ($view:ty) => {{
+                let mut view = <$view>::new(node_did);
+                if let Some(id) = id {
+                    view = view.id(id);
+                }
+                read!(view)
+            }};
+        }
+        match spec.collection {
+            Collection::Node => config!(config::NodeList),
+            Collection::DefaultAgentSelection => config!(config::DefaultAgentSelectionList),
+            Collection::AgentContext => config!(config::AgentContextList),
+            Collection::Compaction => config!(config::CompactionConfigList),
+            Collection::Tools => config!(config::ToolsList),
+            Collection::AgentTarget => config!(config::AgentTargetList),
+            Collection::DatastoreToolSurface => config!(config::DatastoreToolSurfaceList),
+            Collection::Skill => config!(config::SkillList),
+            Collection::Page => config!(config::PageList),
+            Collection::PluginSource => config!(config::PluginSourceList),
+            Collection::ToolServiceRegistry => read!(gents_tools::mcp::views::ServiceInventory {
+                node_did,
+                service_id: id,
+                enabled_only: false,
+            }),
+            Collection::Task => {
+                let mut view = tasks::TaskList::new(node_did);
+                if let Some(id) = id {
+                    view = view.task_id(id);
+                }
+                read!(view)
+            }
+            Collection::Trigger => {
+                let mut view = tasks::TriggerList::new(node_did);
+                if let Some(id) = id {
+                    view = view.trigger_ids(vec![id.to_owned()]);
+                }
+                access
+                    .read_view(&view)
+                    .await?
+                    .into_iter()
+                    .map(|row| {
+                        let doc_id = row.doc_id.clone();
+                        let mut value = serde_json::to_value(row.into_parts().0)?;
+                        value
+                            .as_object_mut()
+                            .context("trigger must be an object")?
+                            .insert("_docID".into(), Value::String(doc_id));
+                        Ok(value)
+                    })
+                    .collect::<Result<Vec<_>>>()?
+            }
+            Collection::Schedule => {
+                let mut view = tasks::ScheduleList::new(node_did);
+                if let Some(id) = id {
+                    view = view.schedule_ids(vec![id.to_owned()]);
+                }
+                read!(view)
+            }
+            Collection::EventSource => {
+                let mut view = tasks::EventSourceList::new(node_did);
+                if let Some(id) = id {
+                    view = view.event_source_ids(vec![id.to_owned()]);
+                }
+                read!(view)
+            }
+            collection => anyhow::bail!("no configuration view for {}", collection.graphql_type()),
+        }
     };
     let mut ids = std::collections::BTreeSet::new();
     for row in &rows {
@@ -320,9 +451,7 @@ pub(crate) async fn query_collection_sorted(
     spec: ConfigDocumentSpec,
     node_did: &str,
 ) -> Result<Vec<Value>> {
-    let mut rows = query_collection(access, spec, node_did, None).await?;
-    sort_rows(&mut rows, spec.collection.unique_field());
-    Ok(rows)
+    query_collection(access, spec, node_did, None).await
 }
 
 pub(crate) async fn load_one(
@@ -341,31 +470,6 @@ pub(crate) async fn load_one(
                 spec.collection.graphql_type()
             )
         })
-}
-
-fn remove_target(
-    manifest: &mut desired_state::DesiredStateManifest,
-    collection: Collection,
-    id: &str,
-) -> Result<()> {
-    let key = collection
-        .dir_name()
-        .context("node deletion is not a config document removal")?;
-    let mut encoded = serde_json::to_value(&*manifest)?;
-    if let Some(rows) = encoded.get_mut(key).and_then(Value::as_array_mut) {
-        rows.retain(|row| row.get(collection.unique_field()).and_then(Value::as_str) != Some(id));
-    }
-    *manifest = serde_json::from_value(encoded)?;
-    Ok(())
-}
-
-fn sort_rows(rows: &mut [Value], id_field: &str) {
-    rows.sort_by(|a, b| {
-        a.get(id_field)
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .cmp(b.get(id_field).and_then(Value::as_str).unwrap_or_default())
-    });
 }
 
 fn print_list_table(spec: ConfigDocumentSpec, rows: &[Value]) {
@@ -446,15 +550,18 @@ fn print_table_row(cells: &[&str; 3], widths: &[usize; 3]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::documents::apply_desired_state_plan;
-    use gents::store::config_client::DesiredStateApplyPlan;
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::DesiredStateApplyPlan;
     use std::sync::Arc;
 
     #[tokio::test]
     async fn backend_reads_use_metadata_for_list_and_exact_show() -> Result<()> {
-        let node = Arc::new(crate::shared::test_support::node_builder().build().await?);
-        gents::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::local(node.clone());
+        let node = Arc::new(gents_host::test_support::node_builder().build().await?);
+        gents_store::schema::ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(node.node_identity_did().context("fixture Node identity")?)?,
+        );
         for owner in ["owner-a", "owner-b"] {
             access.write("test.backend.metadata", &format!(
                 r#"mutation {{ create_InferenceBackendMetadata(input: {{node_did: "{owner}", backend_id: "same", name: "{owner}", provider_kind: "OpenAiCompatible", endpoint: "http://127.0.0.1:9/v1", auth_kind: "credential", credential_id: "private-ref", credential_version: "version"}}) {{_docID}} }}"#
@@ -477,11 +584,14 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_reads_keep_shared_labels_in_the_selected_owner() -> Result<()> {
-        let client = crate::shared::test_support::ClientHome::new().await;
+        let client = gents_host::test_support::ClientHome::new().await;
         let peer_dir = tempfile::tempdir()?;
-        let peer = gents::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)?;
+        let peer = gents_store::identity::KeyIdentity::load_or_create(
+            peer_dir.path().join("peer.key"),
+            None,
+        )?;
         let owner_a = client.node_did().to_owned();
-        let owner_b = gents::NodeIdentity::did(&peer).to_owned();
+        let owner_b = gents_store::identity::NodeIdentity::did(&peer).to_owned();
         let access = client.access.clone();
         for owner in [owner_a.as_str(), owner_b.as_str()] {
             let config = serde_json::from_value(json!({
@@ -493,7 +603,14 @@ mod tests {
             access
                 .transact_write("test.config.crud.seed", |txn| {
                     let plan = &plan;
-                    Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                    Box::pin(async move {
+                        apply_desired_state_plan(
+                            txn,
+                            plan,
+                            &gents_inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await
+                    })
                 })
                 .await?;
         }

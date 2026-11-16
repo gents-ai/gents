@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
 use gents_desktop_core::error::BridgeErrorCode;
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobState};
@@ -18,6 +16,8 @@ use gents_protocol::process_control::{
     ToolControlIntent, ToolControlReceipt, ToolControlReceiptOutcome,
 };
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 
 use crate::job_control::job_control;
 use crate::tests::support::OPERATOR;
@@ -119,7 +119,7 @@ pub(super) async fn seed_admission_for_node(
             .expect("segment doc id");
     let message = TranscriptMessage {
         native_request_id: None,
-        message_key: gents::session::sequence_message_key(
+        message_key: gents_session::session::sequence_message_key(
             node_did,
             session_id,
             Some(OPERATOR),
@@ -171,13 +171,13 @@ pub(super) struct ControlRuntime {
     pub runtime: Arc<gents::defra_node::Node>,
     pub node_did: String,
     pub client_did: String,
-    owner: gents::KeyIdentity,
-    pub agent: Arc<dyn gents::NodeIdentity>,
+    owner: gents_store::identity::KeyIdentity,
+    pub agent: Arc<dyn gents_store::identity::NodeIdentity>,
     _directory: tempfile::TempDir,
 }
 
 pub(super) async fn control_runtime() -> ControlRuntime {
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
 
     let directory = tempfile::tempdir().unwrap();
     let core = Arc::new(
@@ -188,8 +188,11 @@ pub(super) async fn control_runtime() -> ControlRuntime {
         .await
         .unwrap(),
     );
-    let owner =
-        gents::KeyIdentity::load_or_create(directory.path().join("owner.key"), None).unwrap();
+    let owner = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("owner.key"),
+        None,
+    )
+    .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
     let runtime = Arc::new(
@@ -203,9 +206,11 @@ pub(super) async fn control_runtime() -> ControlRuntime {
             .await
             .unwrap(),
     );
-    gents::ensure_runtime_schemas(&runtime).await.unwrap();
-    let binding = gents::store::identity::provision_agent_identity(&owner).unwrap();
-    let agent = gents::store::identity::resolve_agent_identity(&owner, &binding).unwrap();
+    gents_store::schema::ensure_runtime_schemas(&runtime)
+        .await
+        .unwrap();
+    let binding = gents_store::identity::provision_agent_identity(&owner).unwrap();
+    let agent = gents_store::identity::resolve_agent_identity(&owner, &binding).unwrap();
     let home = directory.path().join("runtime");
     std::fs::create_dir(&home).unwrap();
     core.add_managed_enrollment_peer_for_test(owner.did(), &graphql, home.to_str().unwrap(), 1)
@@ -275,7 +280,11 @@ impl ControlRuntime {
                 agent.as_ref(),
             )
             .unwrap();
-            let mut changes = gents::subscribe_collections(&runtime, ["AgentToolControl"]).unwrap();
+            let mut changes = gents_store::subscription_source::subscribe_collections(
+                &runtime,
+                ["AgentToolControl"],
+            )
+            .unwrap();
             // The working_agent grant follows the intent's creation, so a
             // creation event can precede the Agent's visibility.
             let mut sweep = tokio::time::interval(std::time::Duration::from_millis(50));
@@ -348,7 +357,7 @@ pub(super) async fn assert_client_signed_intent(
     call: &str,
     action: &str,
 ) {
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
 
     intent.validate_shape().unwrap();
     assert_eq!(intent.client_did, control.client_did);

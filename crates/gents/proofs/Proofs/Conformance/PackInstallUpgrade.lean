@@ -1,4 +1,4 @@
-import Proofs.Configuration
+import Proofs.Documents.Configuration
 import Proofs.Conformance.ContractTypes
 
 open Configuration Conformance.Contracts

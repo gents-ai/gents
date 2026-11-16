@@ -1,4 +1,7 @@
 ---- MODULE DesktopUpdateListener ----
+\* lean: none
+\* crates: gents-desktop-bridge
+\* paths: apps/gents-desktop/src/hooks/clientObservation.ts, apps/gents-desktop/src/hooks/projectionController.ts, apps/gents-desktop/src/hooks/sessionReads.ts
 (***************************************************************************)
 (* The last leg of the desktop's event path: the bridge emitter, Tauri     *)
 (* delivery, the frontend's listener registration, its projection drain    *)
@@ -54,8 +57,8 @@ CONSTANTS
 
 Sessions == {1, 2}
 NoRead == [v |-> 0, s |-> 0]
-\* a selected request not at its owner yet, or a message still in delivery
-Waiting == {"pending", "delivering", "notConnected", "accepted"}
+\* a selected request not at its owner yet
+Waiting == {"pending"}
 
 VARIABLES
   rust,         \* the latest committed store version

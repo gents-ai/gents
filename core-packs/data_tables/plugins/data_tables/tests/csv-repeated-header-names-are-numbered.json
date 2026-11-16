@@ -1,0 +1,36 @@
+{
+  "bind": "fixtures/formats",
+  "expect": {
+    "columns": [
+      {
+        "name": "x",
+        "type": "int64"
+      },
+      {
+        "name": "x_2",
+        "type": "int64"
+      },
+      {
+        "name": "y",
+        "type": "int64"
+      }
+    ],
+    "markdown": "| x | x_2 | y |\n| --- | --- | --- |\n| 1 | 2 | 3 |",
+    "offset": 0,
+    "order": "file",
+    "row_count": 1,
+    "rows": [
+      [
+        1,
+        2,
+        3
+      ]
+    ],
+    "warnings": [
+      "1 repeated column name got a number added (name_2, name_3)"
+    ]
+  },
+  "input": {
+    "sql": "SELECT * FROM dupnames"
+  }
+}

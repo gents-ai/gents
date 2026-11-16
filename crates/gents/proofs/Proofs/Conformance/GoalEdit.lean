@@ -1,9 +1,15 @@
-import Proofs.GoalAutomation.Edit
+import Proofs.Automation.GoalAutomation.Edit
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Functions.Automation
+import Proofs.Conformance.Family
+
+namespace GoalAutomation.Edit
+deriving instance Lean.ToJson for Assignment, Fields, Origin
+end GoalAutomation.Edit
 
 namespace Conformance.GoalEditContracts
 
-open GoalAutomation.Edit Conformance.Contracts
+open Lean GoalAutomation.Edit Conformance.Contracts
 
 structure Case where
   name : String
@@ -69,31 +75,88 @@ example : apply? {base with status := .paused} {base with status := .paused}
 example : apply? base {base with status := .paused} ⟨some "verify", none⟩ .client = none := by
   native_decide
 
-private def optionalIntJson : Option Int → String
-  | none => "null"
-  | some value => toString value
+structure Preference where
+  name : String
+  observed : Assignment
+  current : Assignment
+  stored : Option Bool
+  fields : Fields
+  autoResume : Option Bool
+  deriving Repr
 
-def assignmentJson (assignment : Assignment) : String :=
-  "{\"status\":" ++ jsonString assignment.status.toDefraDB ++
-  ",\"sequence\":" ++ toString assignment.sequence ++
-  ",\"objective\":" ++ jsonString assignment.objective ++
-  ",\"budget\":" ++ optionalIntJson assignment.budget ++ "}"
+def completeBase : Assignment := {base with status := .complete}
+def pausedBase : Assignment := {base with status := .paused}
 
-def caseJson (origin : Origin) (c : Case) : String :=
-  let source := if origin == .agent then "agent" else "client"
-  "{\"name\":" ++ jsonString (source ++ "_" ++ c.name) ++
-  ",\"origin\":" ++ jsonString source ++
-  ",\"observed\":" ++ assignmentJson c.observed ++
-  ",\"current\":" ++ assignmentJson c.current ++
-  ",\"fields\":{\"objective\":" ++ (match c.fields.objective with
-    | none => "null" | some objective => jsonString objective) ++
-  ",\"budget\":" ++ optionalIntJson c.fields.budget ++ "}" ++
-  ",\"expected\":" ++ (match apply? c.observed c.current c.fields origin with
-    | none => "null" | some assignment => assignmentJson assignment) ++ "}"
+private def preferenceCases : List Preference :=
+  [ ⟨"auto_resume_on", base, base, none, ⟨none, none⟩, some true⟩
+  , ⟨"auto_resume_off", base, base, some true, ⟨none, none⟩, some false⟩
+  , ⟨"auto_resume_retry", base, base, some true, ⟨none, none⟩, some true⟩
+  , ⟨"auto_resume_with_budget", base, base, none, ⟨none, some 200⟩, some true⟩
+  , ⟨"auto_resume_stale_epoch", base, {base with sequence := 3}, none, ⟨none, none⟩, some true⟩
+  , ⟨"auto_resume_on_complete", completeBase, completeBase, none, ⟨none, none⟩, some true⟩
+  , ⟨"auto_resume_complete_objective", completeBase, completeBase, none, ⟨some "verify", none⟩, some true⟩
+  , ⟨"budget_keeps_auto_resume", base, base, some true, ⟨none, some 10⟩, none⟩
+  , ⟨"objective_keeps_auto_resume", base, base, some true, ⟨some "ship more", none⟩, none⟩
+  , ⟨"paused_budget_keeps_auto_resume", pausedBase, pausedBase, some true, ⟨none, some 10⟩, none⟩
+  , ⟨"paused_objective_keeps_auto_resume_off", pausedBase, pausedBase, some false, ⟨some "verify", none⟩, none⟩
+  ]
 
-def casesJson : String := jsonArray (cases.map fun (origin, c) => caseJson origin c)
+structure EditInput where
+  name : String
+  origin : Origin
+  observed : Assignment
+  current : Assignment
+  storedAutoResume : Option Bool
+  fields : Fields
+  autoResume : Option Bool
+  deriving ToJson
 
-def whitespaceCodepointsJson : String :=
-  jsonArray (GoalAutomation.objectiveWhitespaceCodepoints.map toString)
+structure Edited where
+  assignment : Assignment
+  autoResume : Option Bool
+  deriving ToJson
+
+private def originPrefix (origin : Origin) : String :=
+  if origin == .agent then "agent_" else "client_"
+
+@[conformance_family]
+def edit : Family EditInput (Option Edited) where
+  inputs := (cases.map fun (origin, c) =>
+    { name := originPrefix origin ++ c.name, origin, observed := c.observed, current := c.current,
+      storedAutoResume := none, fields := c.fields, autoResume := none }) ++
+    ([Origin.agent, .client].flatMap fun origin => preferenceCases.map fun c =>
+      { name := originPrefix origin ++ c.name, origin, observed := c.observed, current := c.current,
+        storedAutoResume := c.stored, fields := c.fields, autoResume := c.autoResume })
+  model := fun i =>
+    (applyPreference? i.observed i.current i.storedAutoResume i.fields i.autoResume i.origin).map
+      fun (assignment, autoResume) => { assignment, autoResume }
+
+/-- The last Unicode scalar value. -/
+def lastCodepoint : Nat := 0x10FFFF
+
+structure WhitespaceRun where
+  first : Nat
+  last : Nat
+  deriving ToJson
+
+/-- The code space split into each whitespace scalar value on its own and the
+content runs between them. -/
+def whitespaceRuns : List WhitespaceRun :=
+  let (runs, next) := TextNormalization.objectiveWhitespaceCodepoints.foldl
+    (fun (runs, next) codepoint =>
+      (runs ++ (if next < codepoint then [⟨next, codepoint - 1⟩] else []) ++
+        [⟨codepoint, codepoint⟩], codepoint + 1))
+    ([], 0)
+  runs ++ (if next ≤ lastCodepoint then [⟨next, lastCodepoint⟩] else [])
+
+@[conformance_family]
+def objectiveWhitespaceRuns : Family WhitespaceRun Bool where
+  inputs := whitespaceRuns
+  model := fun run => TextNormalization.objectiveWhitespace (Char.ofNat run.first)
+
+example : (whitespaceRuns.flatMap fun run =>
+    if TextNormalization.objectiveWhitespace (Char.ofNat run.first) then
+      (List.range (run.last - run.first + 1)).map (run.first + ·) else []) =
+    TextNormalization.objectiveWhitespaceCodepoints := by native_decide
 
 end Conformance.GoalEditContracts

@@ -1,0 +1,24 @@
+[workspace]
+
+[package]
+name = "script"
+version = "0.1.1"
+edition = "2021"
+
+[lib]
+path = "source/lib.rs"
+
+[[bin]]
+name = "script"
+path = "source/main.rs"
+
+[dependencies]
+rquickjs = "0.14"
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

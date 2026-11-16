@@ -1,0 +1,4 @@
+---- MODULE MCNativeCompletionHandshakeUnarmedAdvance ----
+EXTENDS NativeCompletionHandshake
+
+====

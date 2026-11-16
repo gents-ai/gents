@@ -1,12 +1,14 @@
-use super::install::{
-    check_expected_digest, check_wire_target, install_documents_command_with_local,
-};
+use super::install::install_documents_command_with_local;
 use super::scope::resolve_plugin_slot_owner;
 use super::source::names_a_directory;
 use super::*;
-use crate::packs::EditedDocuments;
-use gents::pack::{PackChangeError, PackKind, PackManifest};
-use gents::plugin::authority::GrantError;
+use anyhow::Context;
+use gents_pack::pack::install_flow::check_wire_target;
+use gents_pack::pack::resolved_pack::{materialize_cached_pack, resolve_pack_source, ResolvedPack};
+use gents_pack::pack::{PackChangeError, PackKind, PackManifest};
+use gents_pack::plugin::authority::GrantError;
+use gents_protocol::operations::pack::EditedDocuments;
+use std::collections::BTreeMap;
 
 #[tokio::test]
 async fn a_bare_subject_spec_is_a_pack_name_even_when_the_cwd_has_that_directory() {
@@ -44,7 +46,7 @@ fn scenario_cache_lease_excludes_pruning() {
     let home = tempfile::tempdir().unwrap();
     let pack = test_support::fixture_pack_source("documents_fixture", home.path());
     let (root, lease) = materialize_cached_pack(home.path(), &pack).unwrap();
-    let exclusive = gents::pack::materialize::cache_lock(root.parent().unwrap()).unwrap();
+    let exclusive = gents_pack::pack::materialize::cache_lock(root.parent().unwrap()).unwrap();
     assert!(exclusive.try_lock().is_err());
     drop(lease);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -64,10 +66,10 @@ fn a_document_pack_materializes_a_valid_configuration() {
     let home = tempfile::tempdir().unwrap();
     let pack = test_support::fixture_pack_source("documents_fixture", home.path());
     let root = tempfile::tempdir().unwrap();
-    gents::pack::materialize::materialize(pack.archive(), root.path()).unwrap();
-    let config = gents::pack::load_pack_authoring_config(
+    gents_pack::pack::materialize::materialize(pack.archive(), root.path()).unwrap();
+    let config = gents_pack::pack::load_pack_authoring_config(
         pack.manifest(),
-        &gents::pack::PackInstallOptions {
+        &gents_pack::pack::PackInstallOptions {
             node_did: "did:key:zPackCatalogValidationOwner".into(),
         },
         &|path| pack.asset(path).map(Vec::from),
@@ -75,8 +77,7 @@ fn a_document_pack_materializes_a_valid_configuration() {
     )
     .unwrap();
     assert!(config.agent("fixture-worker").is_some());
-    gents::store::config_client::DesiredStateApplyPlan::from_pack_config(&config.documents)
-        .unwrap();
+    gents_documents::DesiredStateApplyPlan::from_pack_config(&config.documents).unwrap();
 }
 
 #[tokio::test]
@@ -91,28 +92,6 @@ async fn resolution_prefers_the_home_store_without_the_registry() {
     .await
     .expect("a stored pack must resolve without touching the registry");
     assert_eq!(source.label(), "store");
-}
-
-#[tokio::test]
-async fn resolution_falls_back_to_the_registry_and_reports_the_offline_sentence() {
-    let result = resolve_pack_source(
-        "definitely_not_a_stored_pack",
-        Some("http://127.0.0.1:1"),
-        tempfile::tempdir().unwrap().path(),
-    )
-    .await;
-    let Err(error) = result else {
-        panic!("neither the store nor the registry has this pack");
-    };
-    let message = format!("{error:#}");
-    assert!(
-        message.contains("is not in the pack store of") && message.contains("could not be reached"),
-        "{message}"
-    );
-    assert!(
-        message.contains("definitely_not_a_stored_pack"),
-        "{message}"
-    );
 }
 
 #[tokio::test]
@@ -193,11 +172,15 @@ fn document_pack_preview_shows_the_install_variable_and_its_target() {
     config["tasks"] =
         json!([{ "task_id": "research", "prompt_template": "${GENTS_TEST_3317_UNSET:-fallback}" }]);
     std::fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
-    let (bytes, _) = gents::pack::archive::pack_dir(dir.path()).unwrap();
-    let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
-    let source =
-        super::source::PackSource::received(archive, gents::pack::PackSource::Installed).unwrap();
-    let preview = super::install::install_variable_preview(&source, "did:key:node").unwrap();
+    let (bytes, _) = gents_pack::pack::archive::pack_dir(dir.path()).unwrap();
+    let archive = gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let source = ResolvedPack::received(archive, gents_pack::pack::PackSource::Installed).unwrap();
+    let preview = gents_pack::pack::install_flow::install_variable_preview(
+        &source,
+        "did:key:node",
+        &Default::default(),
+    )
+    .unwrap();
     assert_eq!(preview["kind"], "install_literal");
     assert_eq!(preview["uses"][0]["path"], "/node/node_did");
     assert_eq!(
@@ -235,17 +218,18 @@ fn dependency_preview_reads_installed_literals_instead_of_the_current_environmen
         serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
     authored["tools"][0]["display_name"] = json!("${DISPLAY_LABEL:-fallback}");
     std::fs::write(config_path, serde_json::to_vec(&authored).unwrap()).unwrap();
-    let (bytes, _) = gents::pack::archive::pack_dir(dir.path()).unwrap();
-    let source = super::source::PackSource::received(
-        gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap(),
-        gents::pack::PackSource::Installed,
+    let (bytes, _) = gents_pack::pack::archive::pack_dir(dir.path()).unwrap();
+    let source = ResolvedPack::received(
+        gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap(),
+        gents_pack::pack::PackSource::Installed,
     )
     .unwrap();
-    let config: gents::documents::PackConfig = serde_json::from_value(json!({
+    let config: gents_documents::PackConfig = serde_json::from_value(json!({
         "node": {"node_did": "did:key:node"},
         "tools": [{"node_did": "did:key:node", "tools_id": "demo-tools", "display_name": "installed value"}]
     })).unwrap();
-    let preview = super::install::reused_variable_preview(&source, &config).unwrap();
+    let preview =
+        gents_pack::pack::install_flow::reused_variable_preview(&source, &config).unwrap();
     let node = preview["uses"]
         .as_array()
         .unwrap()
@@ -271,25 +255,6 @@ fn dependency_preview_reads_installed_literals_instead_of_the_current_environmen
         target["document"],
         json!({"collection": "Tools", "id": "demo-tools"})
     );
-}
-
-#[test]
-fn dependency_variable_overrides_are_scoped_and_reject_duplicates() {
-    let parse = super::install::parse_dependency_variables;
-    let values = parse(&["acme/alpha:HOST=one=two".into(), "acme/beta:HOST=".into()]).unwrap();
-    assert_eq!(values["acme/alpha"]["HOST"].as_deref(), Some("one=two"));
-    assert_eq!(values["acme/beta"]["HOST"].as_deref(), Some(""));
-    assert!(parse(&["acme/alpha:HOST=one".into(), "acme/alpha:HOST=two".into()]).is_err());
-    assert!(parse(&["HOST=one".into()]).is_err());
-}
-
-#[test]
-fn remote_plugin_routing_does_not_resolve_install_variables() {
-    let config = json!({"tools": [{"integrations": {"plugins": [{"plugin": "${UNSET_PLUGIN}"}]}}]});
-    assert!(super::install::has_plugin_references(&config));
-    assert!(!super::install::has_plugin_references(
-        &json!({"tools": [{"integrations": {"plugins": []}}]})
-    ));
 }
 
 async fn initialized_home() -> tempfile::TempDir {
@@ -415,7 +380,7 @@ async fn documents_command_closes_its_owned_store_on_success_and_failure() {
                 "{error:#}"
             );
         }
-        let after = gents::store::config_client::ConfigAccess::local(retained_node.clone())
+        let after = gents_store::config_client::ConfigAccess::local(retained_node.clone())
             .execute(query)
             .await;
         assert!(
@@ -444,13 +409,13 @@ async fn documents_install_writes_an_operator_home_record() {
         .await
         .unwrap();
 
-    let record = gents::pack::read_home_install(home.path(), "gents/demo_pack")
+    let record = gents_pack::pack::read_home_install(home.path(), "gents/demo_pack")
         .unwrap()
         .expect("a documents install records itself in the home");
     assert_eq!(record.kind, PackKind::Documents);
     assert_eq!(
         record.installed_via,
-        Some(gents::pack::InstalledVia::Operator)
+        Some(gents_pack::pack::InstalledVia::Operator)
     );
 
     let staged = documents_pack_dir("1.1.0");
@@ -489,14 +454,14 @@ async fn edit_demo_tools(home: &std::path::Path) {
         .transact_write("test.edit_pack_document", |txn| {
             let node_did = &node_did;
             Box::pin(async move {
-                use gents::documents::apply_desired_state_plan;
-                use gents::store::config_client::{
+                use gents_documents::apply_desired_state_plan;
+                use gents_documents::{
                     read_desired_state_record_in_txn, DesiredStateApplyDocument,
                     DesiredStateApplyPlan,
                 };
                 let (_, mut tools) = read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::Tools,
+                    gents_store::collection::Collection::Tools,
                     node_did,
                     "demo-tools",
                 )
@@ -504,11 +469,17 @@ async fn edit_demo_tools(home: &std::path::Path) {
                 .expect("installed pack tools");
                 tools["display_name"] = "edited".into();
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: gents::Collection::Tools,
+                    collection: gents_store::collection::Collection::Tools,
                     add: tools.clone(),
                     update: tools,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await
@@ -528,7 +499,7 @@ async fn documents_install_rolls_back_its_record_on_failure() {
     install_from(home.path(), first.path(), Vec::new())
         .await
         .unwrap();
-    let before = gents::pack::read_home_install(home.path(), "gents/demo_pack")
+    let before = gents_pack::pack::read_home_install(home.path(), "gents/demo_pack")
         .unwrap()
         .unwrap();
     edit_demo_tools(home.path()).await;
@@ -544,7 +515,7 @@ async fn documents_install_rolls_back_its_record_on_failure() {
     assert!(format!("{error:#}").contains("were edited"), "{error:#}");
 
     assert_eq!(
-        gents::pack::read_home_install(home.path(), "gents/demo_pack").unwrap(),
+        gents_pack::pack::read_home_install(home.path(), "gents/demo_pack").unwrap(),
         Some(before)
     );
 }
@@ -601,7 +572,7 @@ async fn a_plugins_pack_asking_for_authority_is_a_typed_refusal() {
         ),
         "{error:#}"
     );
-    assert!(gents::plugin::store::list_records(home.path())
+    assert!(gents_pack::plugin::store::list_records(home.path())
         .unwrap()
         .is_empty());
     install(true)
@@ -618,7 +589,7 @@ async fn update_returns_the_edited_refusal_for_one_package() {
         .unwrap();
     edit_demo_tools(home.path()).await;
     let newer = documents_pack_dir("1.1.0");
-    let (bytes, _) = gents::pack::archive::pack_dir(newer.path()).unwrap();
+    let (bytes, _) = gents_pack::pack::archive::pack_dir(newer.path()).unwrap();
     let digest = {
         use sha2::Digest;
         format!("{:x}", sha2::Sha256::digest(&bytes))
@@ -694,11 +665,13 @@ async fn dependency_install_keeps_an_existing_operator_record() {
     let installed = install_from(home.path(), &fixture, Vec::new())
         .await
         .unwrap();
-    let record: gents::pack::HomePackInstall =
+    let record: gents_pack::pack::HomePackInstall =
         serde_json::from_value(installed["record"].clone()).unwrap();
-    let via =
-        gents::pack::home_install::recorded_provenance(record.kind, Some(record.installed_via));
-    assert_eq!(via, gents::pack::InstalledVia::Operator);
+    let via = gents_pack::pack::home_install::recorded_provenance(
+        record.kind,
+        Some(record.installed_via),
+    );
+    assert_eq!(via, gents_pack::pack::InstalledVia::Operator);
 }
 
 #[test]
@@ -715,7 +688,7 @@ fn local_publication_failure_restores_exactly_the_previous_records() {
     };
 
     let v1 = plugin_manifest("acme", "widget", "echo", "1.0.0");
-    gents::plugin::install::install_pack_plugins_with_bindings(
+    gents_pack::plugin::install::install_pack_plugins_with_bindings(
         home.path(),
         &v1,
         "sha256:v1",
@@ -740,7 +713,7 @@ fn local_publication_failure_restores_exactly_the_previous_records() {
             .context("unexpected asset")
     };
     let v2 = plugin_manifest("acme", "widget", "echo", "1.1.0");
-    let error = gents::plugin::install::install_pack_plugins_with_bindings(
+    let error = gents_pack::plugin::install::install_pack_plugins_with_bindings(
         home.path(),
         &v2,
         "sha256:v2",
@@ -767,7 +740,7 @@ fn local_publication_failure_restores_exactly_the_previous_records() {
             .context("unexpected asset")
     };
     let first_time = plugin_manifest("acme", "brand_new", "brandnew", "1.0.0");
-    let error = gents::plugin::install::install_pack_plugins_with_bindings(
+    let error = gents_pack::plugin::install::install_pack_plugins_with_bindings(
         home.path(),
         &first_time,
         "sha256:new",
@@ -779,23 +752,6 @@ fn local_publication_failure_restores_exactly_the_previous_records() {
     );
     assert!(error.is_err());
     assert!(super::super::plugin::store::read_record(home.path(), "acme", "brandnew").is_err());
-}
-
-#[test]
-fn expect_digest_match_passes() {
-    check_expected_digest(Some("sha256:abc"), "sha256:abc").unwrap();
-    check_expected_digest(None, "sha256:abc").unwrap();
-}
-
-#[test]
-fn expect_digest_mismatch_names_both_digests_and_pack_show() {
-    let error = format!(
-        "{:#}",
-        check_expected_digest(Some("sha256:expected"), "sha256:actual").unwrap_err()
-    );
-    for needle in ["sha256:expected", "sha256:actual", "gents config pack show"] {
-        assert!(error.contains(needle), "{needle} missing from {error}");
-    }
 }
 
 #[test]
@@ -897,7 +853,7 @@ async fn an_install_grants_reader_only_on_its_own_root_and_only_with_the_flag() 
     })
     .await
     .unwrap();
-    gents::tools::surface::set_workspace_root(&access, &owner, other_root, None, true)
+    gents_tools::surface::set_workspace_root(&access, &owner, other_root, None, true)
         .await
         .unwrap();
     access.local_node().unwrap().shutdown().await.unwrap();
@@ -923,7 +879,7 @@ async fn an_install_grants_reader_only_on_its_own_root_and_only_with_the_flag() 
         "{refused}"
     );
     assert_eq!(
-        gents::pack::read_home_install(home.path(), "fixture/literal").unwrap(),
+        gents_pack::pack::read_home_install(home.path(), "fixture/literal").unwrap(),
         None
     );
 
@@ -981,7 +937,7 @@ async fn an_install_grants_reader_only_on_its_own_root_and_only_with_the_flag() 
         "{unflagged}"
     );
     assert_eq!(
-        gents::pack::read_home_install(home.path(), "fixture/rootless").unwrap(),
+        gents_pack::pack::read_home_install(home.path(), "fixture/rootless").unwrap(),
         None
     );
 
@@ -1009,8 +965,8 @@ async fn a_new_dependencys_agents_take_the_installers_root_and_its_grant() {
     let (home, initialized) = engineer_home().await;
     let engineer_root = initialized["tool_root"].as_str().unwrap().to_owned();
     let dependency = host_tools_pack_dir("depworker", json!({"files": {"mode": "ReadOnly"}}));
-    gents::pack::local::open(
-        &gents::pack::local::LocalName::Path(dependency.path()),
+    gents_pack::pack::local::open(
+        &gents_pack::pack::local::LocalName::Path(dependency.path()),
         home.path(),
     )
     .unwrap();
@@ -1066,8 +1022,8 @@ async fn a_repeated_install_grants_the_dependency_agents_a_failed_grant_missed()
     let (home, initialized) = engineer_home().await;
     let engineer_root = initialized["tool_root"].as_str().unwrap().to_owned();
     let dependency = host_tools_pack_dir("retryworker", json!({"files": {"mode": "ReadOnly"}}));
-    gents::pack::local::open(
-        &gents::pack::local::LocalName::Path(dependency.path()),
+    gents_pack::pack::local::open(
+        &gents_pack::pack::local::LocalName::Path(dependency.path()),
         home.path(),
     )
     .unwrap();
@@ -1103,10 +1059,16 @@ async fn a_repeated_install_grants_the_dependency_agents_a_failed_grant_missed()
     let (access, _, local_endpoint) = crate::resolve_pack_config_access(Some(home.path()), None)
         .await
         .unwrap();
-    *super::wire::FAIL_GRANTS_FOR.lock().unwrap() = Some("fixture/retryworker".to_owned());
+    gents_tools::surface::FAIL_GRANTS_FOR
+        .lock()
+        .unwrap()
+        .push("fixture/retryworker".to_owned());
     let outcome =
         super::install::install_documents_report(access, &source, &args, local_endpoint).await;
-    *super::wire::FAIL_GRANTS_FOR.lock().unwrap() = None;
+    gents_tools::surface::FAIL_GRANTS_FOR
+        .lock()
+        .unwrap()
+        .retain(|failing| failing != "fixture/retryworker");
     let (receipt, failed_step) = outcome.unwrap();
     assert!(failed_step.is_some(), "{receipt}");
     assert!(
@@ -1404,8 +1366,8 @@ async fn swapped_tools_ids_do_not_move_the_grant_to_self_rooted_tools() {
         ]),
         &[("inherits", rootless), ("names", rooted)],
     );
-    gents::pack::local::open(
-        &gents::pack::local::LocalName::Path(swappable.path()),
+    gents_pack::pack::local::open(
+        &gents_pack::pack::local::LocalName::Path(swappable.path()),
         home.path(),
     )
     .unwrap();
@@ -1519,8 +1481,8 @@ async fn an_agent_the_review_did_not_name_is_not_granted_through_another_packs_t
             "host": {"files": {"mode": "ReadOnly"}}}]),
         &[("owner", "lender-tools")],
     );
-    gents::pack::local::open(
-        &gents::pack::local::LocalName::Path(lender.path()),
+    gents_pack::pack::local::open(
+        &gents_pack::pack::local::LocalName::Path(lender.path()),
         home.path(),
     )
     .unwrap();
@@ -1599,13 +1561,18 @@ async fn a_preview_lists_the_agent_bindings_its_install_was_given() {
         "{preview}"
     );
     assert_eq!(
-        super::parse_agent_bindings(&["bound-worker=did:key:given".into()]).unwrap(),
+        gents_pack::pack::install_flow::parse_agent_bindings(
+            &["bound-worker=did:key:given".into()]
+        )
+        .unwrap(),
         std::collections::BTreeMap::from([(
             "GENTS_PACK_BIND_AGENT_BOUND_WORKER".to_owned(),
             "did:key:given".to_owned()
         )])
     );
-    assert!(super::parse_agent_bindings(&["bound-worker".into()]).is_err());
+    assert!(
+        gents_pack::pack::install_flow::parse_agent_bindings(&["bound-worker".into()]).is_err()
+    );
 }
 
 /// A reader grant that fails after the install committed leaves the pack
@@ -1623,10 +1590,16 @@ async fn a_failed_reader_grant_keeps_the_install_receipt() {
     let (access, _, local_endpoint) = crate::resolve_pack_config_access(Some(home.path()), None)
         .await
         .unwrap();
-    *super::wire::FAIL_GRANTS_FOR.lock().unwrap() = Some("fixture/grantfail".to_owned());
+    gents_tools::surface::FAIL_GRANTS_FOR
+        .lock()
+        .unwrap()
+        .push("fixture/grantfail".to_owned());
     let outcome =
         super::install::install_documents_report(access, &source, &args, local_endpoint).await;
-    *super::wire::FAIL_GRANTS_FOR.lock().unwrap() = None;
+    gents_tools::surface::FAIL_GRANTS_FOR
+        .lock()
+        .unwrap()
+        .retain(|failing| failing != "fixture/grantfail");
     let (receipt, failed_step) = outcome.unwrap();
     assert!(failed_step.is_some(), "{receipt}");
     assert_eq!(receipt["pack"], "grantfail", "{receipt}");
@@ -1643,7 +1616,7 @@ async fn a_failed_reader_grant_keeps_the_install_receipt() {
         "{receipt}"
     );
     assert!(
-        gents::pack::read_home_install(home.path(), "fixture/grantfail")
+        gents_pack::pack::read_home_install(home.path(), "fixture/grantfail")
             .unwrap()
             .is_some(),
         "the install committed"
