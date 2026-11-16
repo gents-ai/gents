@@ -2,8 +2,9 @@
 //! and a bounded body prefix, never request headers.
 
 use futures::StreamExt;
-use rig::completion::CompletionError;
-use rig::http_client;
+
+use crate::llm::rig_compat::completion::CompletionError;
+use crate::llm::rig_compat::http as http_client;
 
 pub(crate) const NON_SUCCESS_BODY_PREFIX_BYTES: usize = 512;
 
@@ -40,7 +41,7 @@ pub(crate) fn body_prefix(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[..end]).trim().to_string()
 }
 
-pub(super) async fn read_body_prefix(mut body: http_client::sse::BoxedStream) -> String {
+pub(super) async fn read_body_prefix(mut body: http_client::BoxedStream) -> String {
     let mut bytes: Vec<u8> = Vec::new();
     while bytes.len() < NON_SUCCESS_BODY_PREFIX_BYTES {
         match body.next().await {

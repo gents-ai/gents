@@ -159,7 +159,13 @@ fn config(tools: &[Box<dyn ToolDyn>]) -> &dyn ToolDyn {
 /// `Ok` is the receipt object; `Err` is the typed failure object, whose
 /// `recovery.next_call` names the next command.
 async fn run(tool: &dyn ToolDyn, argv: Value) -> std::result::Result<Value, Value> {
-    match tool.call(argv.to_string()).await {
+    match tool
+        .call(
+            argv.to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+    {
         Ok(text) => Ok(serde_json::from_str(&text).expect("policy success is JSON")),
         Err(ToolError::ToolCallError(error)) => {
             Err(serde_json::from_str(&error.to_string()).expect("policy failure is typed JSON"))

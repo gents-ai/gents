@@ -68,6 +68,7 @@ impl Fixture {
                         timeout_secs: None,
                         raw_json: true,
                     },
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
                 ),
             ),
         )
@@ -368,6 +369,7 @@ async fn workspace_command_sandbox_tracks_the_selected_permission_mode() {
         approval::scope_interactive(true, async {
             for (directory, allowed) in [(&project, true), (&sibling, false)] {
                 let marker = directory.join("executed");
+                let envelope = gents_loop::tool::ToolCallEnvelope::ambient();
                 let call = Tool::call(
                     &tool,
                     BashArgs {
@@ -377,6 +379,7 @@ async fn workspace_command_sandbox_tracks_the_selected_permission_mode() {
                         timeout_secs: None,
                         raw_json: true,
                     },
+                    &envelope,
                 );
                 let answer = async {
                     let question = fixture.question().await;
@@ -418,6 +421,7 @@ async fn workspace_command_sandbox_tracks_the_selected_permission_mode() {
                     timeout_secs: None,
                     raw_json: true,
                 },
+                &gents_loop::tool::ToolCallEnvelope::ambient(),
             )
             .await
             .unwrap();

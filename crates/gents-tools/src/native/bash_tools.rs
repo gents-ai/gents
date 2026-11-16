@@ -206,7 +206,11 @@ impl Tool for ReadOnlyBashTool {
         validate_read_only_bash_input(&args.command, &args.args, &policy)
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         Tool::admit(self, &args)?;
         let policy = crate::native::effective_command_policy(&self.policy);
         run_command(
@@ -309,7 +313,11 @@ impl Tool for UnrestrictedBashTool {
         validate_command_policy(command, &command_args, &policy)
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+    async fn call(
+        &self,
+        args: Self::Args,
+        _context: &gents_loop::tool::ToolCallEnvelope,
+    ) -> Result<Self::Output, Self::Error> {
         Tool::admit(self, &args)?;
         let (command, command_args) = unrestricted_argv(&args);
         let policy = crate::native::effective_command_policy(&self.policy);
@@ -357,6 +365,7 @@ mod input_tests {
                 timeout_secs: None,
                 raw_json: false,
             },
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
         )
         .await
         .unwrap_err()

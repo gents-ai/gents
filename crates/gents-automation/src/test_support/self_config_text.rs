@@ -9,7 +9,13 @@ pub async fn call(tools: &Vec<Box<dyn ToolDyn>>, args: Value) -> Result<Value, S
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .expect("config registered");
-    match tool.call(args.to_string()).await {
+    match tool
+        .call(
+            args.to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+    {
         Ok(text) => Ok(serde_json::from_str(&text).unwrap_or(Value::String(text))),
         Err(error) => Err(format!("{error:#}")),
     }
@@ -43,7 +49,13 @@ pub async fn structured_failure(tools: &Vec<Box<dyn ToolDyn>>, args: Value) -> V
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
-    match tool.call(args.to_string()).await {
+    match tool
+        .call(
+            args.to_string(),
+            &gents_loop::tool::ToolCallEnvelope::ambient(),
+        )
+        .await
+    {
         Err(gents_loop::tool::ToolError::ToolCallError(error)) => {
             serde_json::from_str(&error.to_string()).unwrap()
         }
@@ -88,7 +100,10 @@ pub async fn text(tools: &Vec<Box<dyn ToolDyn>>, args: Value) -> String {
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .expect("config registered");
-    tool.call(args.to_string())
-        .await
-        .unwrap_or_else(|error| panic!("{args}: {error:#}"))
+    tool.call(
+        args.to_string(),
+        &gents_loop::tool::ToolCallEnvelope::ambient(),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("{args}: {error:#}"))
 }

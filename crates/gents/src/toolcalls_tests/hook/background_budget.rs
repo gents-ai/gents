@@ -18,7 +18,11 @@ impl ToolDyn for PendingTool {
         })
     }
 
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+    fn call<'a>(
+        &'a self,
+        _args: String,
+        _context: &'a gents_loop::tool::ToolCallEnvelope,
+    ) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(std::future::pending())
     }
 }
@@ -151,7 +155,16 @@ async fn generated_background_budget_uses_accepted_dispatch() {
     let results = tokio::time::timeout(std::time::Duration::from_secs(60), async {
         let mut results = Vec::with_capacity(ids.len());
         for (id, case) in ids.iter().zip(&batch) {
-            results.push(hook.on_tool_call(&case.action, None, id, args).await);
+            results.push(
+                hook.on_tool_call(
+                    &case.action,
+                    None,
+                    id,
+                    args,
+                    &gents_loop::tool::ToolCallEnvelope::ambient(),
+                )
+                .await,
+            );
         }
         results
     })

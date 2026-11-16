@@ -320,7 +320,9 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         .await
         .expect("metadata write must reach reconcile owner")
         .expect("proposal channel");
-    assert_eq!(
+    // A committed metadata edit is a new selected version, which admission
+    // requires to be current (Lean `superseded_configuration_is_not_claimed`).
+    assert_ne!(
         repeated.configuration_fingerprint(),
         snapshot.configuration_fingerprint()
     );

@@ -2,7 +2,7 @@ use gents_protocol::operations::install_repair::{IncompatibleStore, Incompatible
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use gents_protocol::error_chain::{find_map_source, find_source};
+use gents_protocol::error_chain::find_map_source;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageBackendError {
@@ -164,15 +164,17 @@ pub fn incompatible_store(
             data_path: key.path.clone(),
         });
     }
-    let protection = find_source::<super::backend_protection::BackendProtectionError>(error)
-        .and_then(|error| match error {
-            super::backend_protection::BackendProtectionError::MissingProvenance => {
-                Some(IncompatibleStoreKind::UnknownLineage)
+    let protection =
+        super::backend_protection::BackendProtectionError::in_chain(error).and_then(|error| {
+            match error {
+                super::backend_protection::BackendProtectionError::MissingProvenance => {
+                    Some(IncompatibleStoreKind::UnknownLineage)
+                }
+                super::backend_protection::BackendProtectionError::DocumentAcp(refused) => {
+                    refused.refusal()
+                }
+                _ => None,
             }
-            super::backend_protection::BackendProtectionError::DocumentAcp(refused) => {
-                refused.refusal()
-            }
-            _ => None,
         });
     if let Some(kind) = protection {
         return Some(IncompatibleStore {
@@ -180,7 +182,7 @@ pub fn incompatible_store(
             data_path: data_path.to_path_buf(),
         });
     }
-    find_source::<gents_migration::Error>(error)
+    gents_migration::Error::in_chain(error)
         .and_then(|cause| {
             if cause.is_unknown_lineage() {
                 Some(IncompatibleStoreKind::UnknownLineage)
@@ -204,8 +206,7 @@ fn find_incompatible<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a IncompatibleStore> {
     find_map_source(error, |cause| {
-        cause
-            .downcast_ref::<IncompatibleStore>()
+        IncompatibleStore::of(cause)
             .or_else(|| {
                 cause
                     .downcast_ref::<crate::local::store_key::StoreKeyError>()?

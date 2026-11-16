@@ -66,6 +66,7 @@ pub async fn run_step0(
     lifecycle: &mut ToolCallLifecycle,
     binding: &JobBinding,
     args: Value,
+    context: &gents_loop::tool::ToolCallEnvelope,
 ) -> Result<String> {
     let Some(driver) = hook.job_driver.as_ref() else {
         return refuse(
@@ -141,8 +142,11 @@ pub async fn run_step0(
         .call_data_bound_jobs_with_receipt(
             &installed,
             serde_json::to_value(&input)?,
-            runtime.tool_root.as_deref(),
-            binding.plugin.tool_calls,
+            crate::plugin::executor::ToolInvocation {
+                tool_root: runtime.tool_root.as_deref(),
+                tool_calls: binding.plugin.tool_calls,
+                context,
+            },
             Some(data),
             Some(jobs),
         )
