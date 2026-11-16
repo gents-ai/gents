@@ -1,4 +1,6 @@
 ---- MODULE WallClockBound ----
+\* lean: none
+\* crates: gents-store, gents-toolcalls, gents-inference, gents-automation
 (***************************************************************************)
 (* A wall-clock bound racing an owner's progress in a test (#3840).        *)
 (*                                                                          *)

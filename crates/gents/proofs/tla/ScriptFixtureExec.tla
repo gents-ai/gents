@@ -1,4 +1,6 @@
 ---- MODULE ScriptFixtureExec ----
+\* lean: none
+\* crates: gents-session, gents-store
 (***************************************************************************)
 (* A test that executes a script it created, beside sibling tests of the  *)
 (* same process that spawn children concurrently                           *)
