@@ -135,6 +135,7 @@ CONTRACT_PATHS = (
     "contracts/", ".github/scripts/check-lean-", ".github/scripts/test-lean-",
     ".github/scripts/lean-import-layers.json", ".github/scripts/report-lean-import-layers.py",
     ".github/scripts/check-canonical-output-map.py", ".github/scripts/test-canonical-output-map.py",
+    ".github/scripts/check-test-cache-model.sh",
 )
 TS_PATHS = (
     "apps/", "packages/", "package.json", "package-lock.json", "scripts/check-desktop-package-boundaries.mjs",
