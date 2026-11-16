@@ -41,6 +41,16 @@ async fn dispatch_renders_goal_objective_with_the_request_template_scope() {
         "[scheduled trigger:sched-goal · task:t1 · at:2030-01-01T00:00:00Z]\n\nwork on release for runtime"
             .to_string()
     );
+    let request = gents_protocol::row::AgentRequestRow {
+        caused_by_trigger_id: Some("sched-goal".into()),
+        caused_by_trigger_kind: Some("schedule".into()),
+        content: Some(materializer.calls()[0].2.clone()),
+        ..Default::default()
+    };
+    assert_eq!(
+        trigger_display_body(&request),
+        Some("work on release for runtime")
+    );
     assert_eq!(
         materializer.goal_objectives(),
         vec![Some(format!(

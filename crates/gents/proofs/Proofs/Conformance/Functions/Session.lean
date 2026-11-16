@@ -1,3 +1,4 @@
+import Proofs.Session.TranscriptInputOrigin
 import Proofs.Conformance.Family
 import Proofs.Session.Client.Types
 import Proofs.Session.CommandPolicy.ArtifactAuthority
@@ -61,3 +62,11 @@ deriving instance Lean.ToJson for DeliveryChoice, Delivery, Matches, Lookup, Rei
 attribute [conformance_function] resolveDelivery requestLookup reissueDecision interruptSettled
 
 end SessionOperations
+
+namespace TranscriptInputOrigin
+
+deriving instance Lean.ToJson for Kind
+
+attribute [conformance_function] classification
+
+end TranscriptInputOrigin
