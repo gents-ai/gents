@@ -802,7 +802,17 @@ async fn prepare_document_pack_archive_inputs(
             node_did: owner.to_owned(),
         },
         &|path| archive.asset(path).map(<[u8]>::to_vec),
-        &|name| capture_variable(&captured, name, || root.resolve(name, environment)),
+        // A binding is recorded in `agent_bindings`, and only an install that
+        // binds its own slots looks one up (a hosted runtime takes them from
+        // the client), so keeping it out of `variables` lets both sides of a
+        // hosted install record the same installation.
+        &|name| {
+            if super::super::is_agent_binding_variable(name) {
+                root.resolve(name, environment)
+            } else {
+                capture_variable(&captured, name, || root.resolve(name, environment))
+            }
+        },
         installed_via,
         super::super::agent_bindings::PackBindingInputs {
             available: &available,

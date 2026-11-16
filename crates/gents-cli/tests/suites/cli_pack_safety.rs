@@ -454,22 +454,40 @@ async fn hosted_pack_install_ignores_the_runtime_environment() -> Result<()> {
     )?;
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
+    // The fixture without its own schema, which a hosted install cannot
+    // approve yet, so the install reaches the variable's Tools document.
     let pack = documents_fixture_with_secret_variable(temp.path())?;
-    let installed = run_cli_json_with_env(
+    let edit = |file: &str, change: &dyn Fn(&mut Value)| -> Result<()> {
+        let path = pack.join(file);
+        let mut value: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+        change(&mut value);
+        Ok(std::fs::write(&path, serde_json::to_vec(&value)?)?)
+    };
+    edit("manifest.json", &|manifest| {
+        manifest["schemas"] = json!([]);
+    })?;
+    edit("pack_config.json", &|config| {
+        config["event_sources"] = json!([]);
+        config["triggers"] = json!([]);
+    })?;
+    run_cli_json_with_env(
         &home,
         &[
             "config",
             "pack",
             "install",
             pack.to_str().context("pack path")?,
+            "--inference-slot",
+            &format!("worker={}", inference_profile_id_from_init(&init)?),
             "--graphql",
             &graphql,
         ],
         &[("PACK_PREVIEW_SECRET", "installer-value")],
     )?;
+    let installed = graphql_query(&graphql, "{ Tools { tools_id display_name } }").await?;
     anyhow::ensure!(
-        !installed.to_string().contains("runtime-value"),
-        "the install used the runtime's value: {installed}"
+        installed.to_string().contains("installer-value"),
+        "the install did not use the installer's value: {installed}"
     );
     Ok(())
 }
