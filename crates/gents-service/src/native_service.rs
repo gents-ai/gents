@@ -872,9 +872,10 @@ where
     /// Whether the owned definition already logs to this config's log path;
     /// true when nothing is installed.
     pub fn definition_log_current(&self) -> Result<bool> {
-        Ok(self
-            .refreshed_definition()?
-            .is_none_or(|(installed, contents)| contents.as_bytes() == installed))
+        match self.refreshed_definition()? {
+            None => Ok(true),
+            Some((installed, contents)) => definition_matches(self.platform, &installed, &contents),
+        }
     }
 
     /// Re-renders the owned definition with this config's log path, keeping the
@@ -884,7 +885,7 @@ where
         let Some((installed, contents)) = self.refreshed_definition()? else {
             return Ok(false);
         };
-        if contents.as_bytes() == installed {
+        if definition_matches(self.platform, &installed, &contents)? {
             return Ok(false);
         }
         let path = self.config.definition_path(self.platform);
@@ -1424,6 +1425,23 @@ where
             }
         })
     }
+}
+
+/// A managed update re-serializes a LaunchAgent through `plist`, so its bytes
+/// differ from the template render while its properties are the same; launchd
+/// reads the properties.
+fn definition_matches(
+    platform: NativeServicePlatform,
+    installed: &[u8],
+    rendered: &str,
+) -> Result<bool> {
+    Ok(match platform {
+        NativeServicePlatform::Macos => {
+            plist::Value::from_reader_xml(installed)?
+                == plist::Value::from_reader_xml(rendered.as_bytes())?
+        }
+        NativeServicePlatform::Linux => installed == rendered.as_bytes(),
+    })
 }
 
 fn render(platform: NativeServicePlatform, config: &NativeServiceConfig) -> Result<String> {
