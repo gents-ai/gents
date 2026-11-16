@@ -1084,11 +1084,24 @@ path to a non-slot-holding terminal state.
 
 `Proofs/Inference/InferenceCall/Persistence.lean` refines the database writer guards:
 start requires the current row to be queued; completion/failure require running;
-cancellation accepts queued/running. A terminal winner preserves its outcome
-and stamp against later lifecycle writes, while late provider usage can update
-the usage observation without reopening the call. Usage observation does not
-itself charge the aggregate budget. These laws support the admission persistence
+cancellation accepts queued/running. A terminal winner preserves its outcome,
+stamp and provider-limit verdict against later lifecycle writes; the verdict
+lands in the write that installs the failure (`failure_installs_its_verdict`)
+and only a failure carries one. Late provider usage can update the usage
+observation without reopening the call. Usage observation does not itself
+charge the aggregate budget. These laws support the admission persistence
 reverse-race regressions; no new legal lifecycle transitions are introduced.
+
+`Proofs/Inference/InferenceCall/ProviderLimit.lean` is the verdict the admission
+permit records on a failed call (#3923): a throttle whose wake lies beyond the
+admitted model's rate-limit wait cap is the provider's usage limit, resetting
+at that wake. Under the cap the owned loop holds, a recorded usage limit is
+exactly a failure the loop does not retry
+(`recorded_usage_limit_is_the_loops_permanent_failure`,
+`recorded_throttle_is_held_by_the_loop`). Fence: family
+`inference_provider_limit_verdicts` and vocabulary
+`inference_call_provider_limit_verdict_vocabulary` (consumer `gents-loop`
+`completion_retry` tests).
 
 ### Session Recovery
 
