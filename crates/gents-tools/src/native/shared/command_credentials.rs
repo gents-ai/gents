@@ -89,7 +89,7 @@ fn capture_native(
 fn inactive_runtime_homes(homes: &[PathBuf]) -> Vec<PathBuf> {
     homes
         .iter()
-        .map(|home| home.join(".gents"))
+        .map(|account| account.join(".gents"))
         .chain(
             std::env::var_os("GENTS_HOME")
                 .filter(|value| !value.is_empty())
