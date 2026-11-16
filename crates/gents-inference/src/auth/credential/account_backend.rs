@@ -45,6 +45,7 @@ pub fn preset_account_backend(
         },
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
+        request_timeout_secs: None,
         max_concurrent: None,
         max_queue_depth: None,
         enabled: true,

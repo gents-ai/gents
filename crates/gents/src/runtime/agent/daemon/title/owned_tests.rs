@@ -1368,6 +1368,9 @@ impl TitleFixture {
             stream_batch_ms: 0,
             stream_liveness_timeout: Duration::from_secs(60),
             deadline_duration: Duration::from_secs(120),
+            title_timeout: Duration::from_secs(
+                gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS,
+            ),
             provider_idle_timeout: Duration::from_secs(
                 gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
             ),

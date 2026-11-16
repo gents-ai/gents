@@ -76,6 +76,9 @@ async fn active_agents(
         max_total_tokens: None,
         stream_batch_ms: 0,
         stream_liveness_timeout: std::time::Duration::from_secs(5),
+        title_timeout: std::time::Duration::from_secs(
+            gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS,
+        ),
         provider_idle_timeout: std::time::Duration::from_secs(5),
         deadline_duration: std::time::Duration::from_secs(30),
         completion_retry: gents_loop::completion_retry::CompletionRetryProfileFields::default(),

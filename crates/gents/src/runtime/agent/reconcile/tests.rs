@@ -2349,6 +2349,9 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
             deadline_duration: Duration::from_secs(
                 gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
             ),
+            title_timeout: Duration::from_secs(
+                gents_inference::resolved::DEFAULT_TITLE_TIMEOUT_SECS,
+            ),
             provider_idle_timeout: Duration::from_secs(
                 gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
             ),

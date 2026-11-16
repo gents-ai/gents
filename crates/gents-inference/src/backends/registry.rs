@@ -25,7 +25,7 @@ pub struct BackendFields {
     pub claude_platform: Option<ClaudePlatform>,
 }
 
-pub(crate) const BACKEND_CONFIG_FIELDS: &str = "node_did backend_id name provider_kind openai_wire_api endpoint auth_kind credential_id credential_version environment_variable oauth_account_ref oauth_allow_overage claude_platform connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
+pub(crate) const BACKEND_CONFIG_FIELDS: &str = "node_did backend_id name provider_kind openai_wire_api endpoint auth_kind credential_id credential_version environment_variable oauth_account_ref oauth_allow_overage claude_platform connect_timeout_secs discovery_timeout_secs request_timeout_secs max_concurrent max_queue_depth enabled tags";
 
 pub fn backend_fields(backend: &InferenceBackend) -> BackendFields {
     BackendFields {

@@ -6,6 +6,10 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- InferenceExecution `title_timeout_secs` (default 10s) bounds one title-generation
+  attempt, replacing the fixed title timeout. InferenceBackend `request_timeout_secs`
+  (default 120s) bounds one plugin model call through that backend, replacing the fixed
+  plugin model timeout. Both are positive integers, validated where the documents are.
 - An application pairing no longer reinstalls its collections on authority
   read before its author lost the P2P mutation grant: each install re-reads
   the author's authority after the operations before it, and a change to the

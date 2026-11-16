@@ -25,7 +25,6 @@ pub(crate) const TRACING_TARGET: &str = module_path!();
 /// and output so naming a session cannot compete indefinitely with requests.
 const RECENT_TITLE_LIMIT: usize = 5;
 const TITLE_GENERATION_MAX_ATTEMPTS: i64 = 2;
-const TITLE_GENERATION_TIMEOUT_SECS: u64 = 10;
 const TITLE_VISIBLE_MAX_TOKENS: u64 = 24;
 
 async fn flush_received_title_partial(context: &str) -> Result<()> {
@@ -599,7 +598,7 @@ where
                 }
                 result = super::request::prepare_unless_interrupted(
                     interrupt_rx,
-                    tokio::time::timeout(Duration::from_secs(TITLE_GENERATION_TIMEOUT_SECS), run),
+                    tokio::time::timeout(self.agent_config.title_timeout, run),
                 ) => match result {
                     Some(result) => result,
                     None => {
@@ -627,7 +626,7 @@ where
                     flush_received_title_partial("provider timeout").await?;
                     last_error = Some(anyhow::anyhow!(
                         "title inference timed out after {}s",
-                        TITLE_GENERATION_TIMEOUT_SECS
+                        self.agent_config.title_timeout.as_secs()
                     ));
                 }
             }
