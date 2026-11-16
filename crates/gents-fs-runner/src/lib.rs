@@ -5,14 +5,16 @@ use anyhow::{anyhow, Result};
 
 pub mod protocol;
 
+mod blocker;
 mod context;
 mod model;
 mod output;
 mod tools;
 mod traversal;
 
+pub use blocker::TraversalBlocker;
 pub use output::{error_response_line, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES};
-pub use tools::{execute_request, execute_request_with_base};
+pub use tools::{execute_request, execute_request_with_base, execute_request_with_blocker};
 
 use protocol::{GlobArgs, NativeFsRunnerRequest, NativeFsRunnerResponse};
 
@@ -20,13 +22,18 @@ pub fn run_stdio_from_args(args: impl IntoIterator<Item = String>) -> Result<()>
     let mut args = args.into_iter();
     let mut root = None;
     let mut base = None;
+    let mut blocker = None;
     let mut self_test_requested = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--self-test" => self_test_requested = true,
             "--root" => root = args.next().map(PathBuf::from),
             "--base" => base = args.next().map(PathBuf::from),
-            other => anyhow::bail!("unknown argument {other:?}"),
+            other => {
+                if !TraversalBlocker::parse_flag(&mut blocker, other, &mut args)? {
+                    anyhow::bail!("unknown argument {other:?}");
+                }
+            }
         }
     }
 
@@ -41,7 +48,7 @@ pub fn run_stdio_from_args(args: impl IntoIterator<Item = String>) -> Result<()>
         None => std::env::current_dir()?,
     };
     let request = read_request(std::io::stdin())?;
-    let output = execute_request_with_base(root, base, request)?;
+    let output = execute_request_with_blocker(root, base, request, blocker)?;
     serde_json::to_writer(
         std::io::stdout(),
         &NativeFsRunnerResponse {

@@ -1,4 +1,5 @@
 use gents_fs_runner::protocol::{GlobArgs, GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
+use gents_fs_runner::{execute_request_with_blocker, TraversalBlocker};
 
 use crate::support;
 use support::{run_json, unique_root};
@@ -106,17 +107,15 @@ fn glob_wall_budget_stops_walk() {
     std::fs::write(slow_dir.join("inner.txt"), "x").unwrap();
     std::fs::write(root.join("zzz-after.txt"), "x").unwrap();
 
-    std::env::set_var(
-        "GENTS_FS_RUNNER_BLOCK_DIR",
-        std::fs::canonicalize(&slow_dir)
-            .unwrap()
-            .to_string_lossy()
-            .to_string(),
-    );
-    std::env::set_var("GENTS_FS_RUNNER_BLOCK_MS", "300");
+    let blocker = TraversalBlocker {
+        dir: std::fs::canonicalize(&slow_dir).unwrap(),
+        pause: std::time::Duration::from_millis(300),
+        ..TraversalBlocker::default()
+    };
 
-    let value = run_json(
-        &root,
+    let output = execute_request_with_blocker(
+        root.clone(),
+        None,
         NativeFsRunnerRequest::Glob(GlobArgs {
             pattern: "**/*.txt".to_string(),
             path: None,
@@ -125,10 +124,11 @@ fn glob_wall_budget_stops_walk() {
             max_entries_visited: None,
             max_wall_ms: Some(50),
         }),
-    );
+        Some(blocker),
+    )
+    .unwrap();
+    let value: serde_json::Value = serde_json::from_str(&output).unwrap();
 
-    std::env::remove_var("GENTS_FS_RUNNER_BLOCK_DIR");
-    std::env::remove_var("GENTS_FS_RUNNER_BLOCK_MS");
     let _ = std::fs::remove_dir_all(&root);
 
     assert_eq!(value["ok"], true);
