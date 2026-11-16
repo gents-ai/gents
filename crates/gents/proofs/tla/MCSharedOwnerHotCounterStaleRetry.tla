@@ -1,0 +1,4 @@
+---- MODULE MCSharedOwnerHotCounterStaleRetry ----
+EXTENDS SharedOwnerHotCounter
+
+====
