@@ -120,6 +120,11 @@ pub enum IdentityError {
         #[source]
         source: crypto::Error,
     },
+    #[error("commit signer {identity:?} ({signature_type}) is not a readable public key")]
+    UnreadableCommitSigner {
+        identity: String,
+        signature_type: String,
+    },
     #[error("no signing identity is loaded for {did}")]
     SigningIdentityNotLoaded { did: String },
     #[error("loading signing identity {did}")]

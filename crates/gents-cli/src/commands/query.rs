@@ -91,6 +91,9 @@ fn command_from_args(
             serde_json::from_str(&page).context("parsing --field-page as JSON")?,
         );
     }
+    if args.signer {
+        command.options.insert("signer".into(), json!(true));
+    }
     if let Some(text) = args.text {
         command.options.insert("text".into(), json!(text));
     }
@@ -215,6 +218,7 @@ mod tests {
             fields,
             filter: None,
             field_page: None,
+            signer: false,
             limit: None,
             allow_collections: Vec::new(),
         }
