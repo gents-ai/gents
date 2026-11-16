@@ -532,9 +532,7 @@ struct TaskFire {
     goal_id: Option<String>,
     goal_objective: Option<String>,
     goal_token_budget: Option<i64>,
-    #[serde(default)]
     goal_blocked_audit_threshold: Option<i64>,
-    #[serde(default)]
     goal_max_infrastructure_retries: Option<i64>,
     #[serde(default)]
     goal_assignment_applied: bool,
