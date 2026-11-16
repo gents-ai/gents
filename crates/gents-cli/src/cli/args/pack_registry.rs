@@ -210,6 +210,8 @@ pub(crate) struct PackPruneArgs {
     pub(crate) package: String,
     #[arg(long, help = "Home containing the local pack asset cache")]
     pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
+    pub(crate) registry: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -247,6 +249,11 @@ pub(crate) struct PackStarterArgs {
     pub(crate) enable: Vec<String>,
     #[arg(long)]
     pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Pack registry base URL, used by the Engineer's core pack installs. Defaults to the public registry"
+    )]
+    pub(crate) registry: Option<String>,
 }
 
 #[derive(clap::Args)]

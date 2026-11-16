@@ -6,9 +6,13 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
-- Breaking: `GENTS_REGISTRY` no longer selects the pack or plugin registry.
-  The `--registry` flag of each pack and plugin command is the only override;
-  without it the public registry is used.
+- Breaking: `GENTS_REGISTRY` is no longer read. `gents server --registry URL`
+  chooses the registry an Agent's `config pack` commands resolve and search
+  from; the config tool still takes no per-call registry. `gents init`, bare
+  `gents` setup, `gents config pack starter`, `pack prune` and `automation job
+  promote` gain `--registry`, as every other pack and plugin command has.
+  Without the flag the public registry is used. An installed service runs
+  without `--registry`, so its Agents use the public registry.
 - Breaking: `gents service install`, `stop`, `restart` and `uninstall`, and
   a managed update's helper, refuse to run when the service's running job is
   an ancestor of the calling process, which they observe from the service

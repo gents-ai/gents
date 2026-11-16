@@ -259,6 +259,8 @@ pub struct ServeArgs {
         help = "P2P network id that partitions this runtime's registry entries (must not be blank). Defaults to default"
     )]
     pub p2p_network_id: Option<String>,
+    #[arg(long, help = "Pack registry base URL. Defaults to the public registry")]
+    pub registry: Option<String>,
     #[arg(
         long = "apply-root",
         value_name = "ROOT",

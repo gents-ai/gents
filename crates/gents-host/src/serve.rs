@@ -654,6 +654,7 @@ async fn serve_foreground(
     let p2p_config = resolve_server_p2p_config(&home_dir, &args)?;
     let p2p_intervals = resolve_p2p_intervals(&args)?;
     let p2p_network_id = resolve_p2p_network_id(&args)?;
+    let registry_url = resolve_registry(&args)?;
     let system_log = args.system_log;
     if let Some(config) = p2p_config.as_ref() {
         crate::p2p_relay::log_relay_mode_diagnostics(
@@ -850,6 +851,7 @@ async fn serve_foreground(
                 p2p_intervals,
                 p2p_network_id,
                 system_log,
+                registry_url,
                 process_state_observer: Some(Arc::new(CliReadyObserver { tx: ready_tx })),
                 runtime_snapshot_observer: Some(Arc::new(CliRuntimeSnapshotObserver {
                     configuration_tx,
@@ -1583,6 +1585,16 @@ fn resolve_p2p_network_id(args: &ServeArgs) -> Result<Option<String>> {
     }
 }
 
+fn resolve_registry(args: &ServeArgs) -> Result<Option<String>> {
+    match args.registry.as_deref() {
+        None => Ok(None),
+        Some(raw) if raw.trim().is_empty() => anyhow::bail!("--registry must not be blank"),
+        Some(raw) => Ok(Some(gents_pack::pack::registry::resolve_registry_url(
+            Some(raw.trim()),
+        ))),
+    }
+}
+
 fn log_p2p_admission_config(config: &defra_node::P2PConfig) {
     tracing::info!(
         max_pending_dags = config.sync.max_pending_dags,
@@ -1726,6 +1738,17 @@ mod server_key_tests {
         assert!(error
             .to_string()
             .contains("--p2p-network-id must not be blank"));
+    }
+
+    #[test]
+    fn registry_is_trimmed_and_rejects_blank() {
+        assert_eq!(resolve_registry(&parse_server(&[])).unwrap(), None);
+        assert_eq!(
+            resolve_registry(&parse_server(&["--registry", " http://127.0.0.1:9/ "])).unwrap(),
+            Some("http://127.0.0.1:9".to_owned())
+        );
+        let error = resolve_registry(&parse_server(&["--registry", "  "])).unwrap_err();
+        assert!(error.to_string().contains("--registry must not be blank"));
     }
 
     #[test]
