@@ -24,7 +24,9 @@ import threading
 import time
 from pathlib import Path
 
-import test_cache
+# Other checks load this file by path (test-rust-build-space.py), without its directory on sys.path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import test_cache  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 PROOFS = "crates/gents/proofs"
