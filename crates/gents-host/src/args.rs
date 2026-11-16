@@ -87,6 +87,7 @@ pub struct ServeArgs {
     /// Startup waits after client access opens until this path opens for
     /// reading, so a test can observe a runtime serving clients before it is
     /// ready; a FIFO holds it until the test opens the writing end.
+    #[cfg(feature = "test-seams")]
     #[arg(long, hide = true, value_name = "PATH")]
     pub stall_after_client_access: Option<PathBuf>,
     #[arg(

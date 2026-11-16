@@ -11,7 +11,7 @@ use gents_pack::pack::rooted_paths::{ensure_within, normalize_for_creation};
 pub struct ToolContext {
     root: Arc<PathBuf>,
     base: Arc<PathBuf>,
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-seams"))]
     runner_blocker: Option<Arc<gents_fs_runner::TraversalBlocker>>,
 }
 
@@ -112,14 +112,14 @@ impl ToolContext {
         Ok(Self {
             root: Arc::new(canonical),
             base: Arc::new(base),
-            #[cfg(test)]
+            #[cfg(all(test, feature = "test-seams"))]
             runner_blocker: None,
         })
     }
 
     /// Native filesystem runners spawned from this context pause their scan
     /// of the blocker's directory.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-seams"))]
     pub(crate) fn with_runner_blocker(
         mut self,
         blocker: gents_fs_runner::TraversalBlocker,
@@ -128,7 +128,7 @@ impl ToolContext {
         self
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-seams"))]
     pub(crate) fn runner_blocker(&self) -> Option<Arc<gents_fs_runner::TraversalBlocker>> {
         self.runner_blocker.clone()
     }

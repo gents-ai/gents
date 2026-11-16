@@ -11,6 +11,12 @@ autotests = false
 name = "integration"
 path = "tests/integration.rs"
 
+[features]
+# Hidden `--block-*` flags and the in-process traversal blocker used by race
+# tests. Off in every non-test build; the dev-dependency below enables it for
+# this crate's tests.
+test-seams = []
+
 [dependencies]
 anyhow.workspace = true
 globset = "0.4"
@@ -18,3 +24,6 @@ ignore = "0.4"
 regex = "1"
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+gents-fs-runner = { path = ".", features = ["test-seams"] }

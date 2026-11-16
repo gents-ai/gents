@@ -72,6 +72,10 @@ source consistency checks, not a separate runtime compatibility version.
   `--inference-settings`, the fixture host takes `--domain-home`, and the
   filesystem runner and `gents server` take hidden test flags; the test
   harnesses map their own variables to these arguments.
+- The filesystem runner's `--block-*` flags and `gents server
+  --stall-after-client-access` exist only in builds with the `test-seams`
+  cargo feature of `gents-fs-runner`, `gents-host` and `gents-cli`. Release
+  builds reject them as unknown arguments.
 - InferenceRetryPolicy `max_rate_limit_wait_ms` is now the live threshold
   between a provider throttle and its usage limit: a provider wait beyond it
   fails the request as usage-limited (with its reset time) even when transport

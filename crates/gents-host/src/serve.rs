@@ -493,6 +493,7 @@ async fn wait_for_embedded_http_bind(
     }
 }
 
+#[cfg(feature = "test-seams")]
 async fn stall_after_client_access(path: Option<&Path>) -> Result<()> {
     let Some(path) = path else {
         return Ok(());
@@ -813,6 +814,7 @@ async fn serve_foreground(
             .await
             .context("claiming the readiness this home's previous process left behind")?;
         client_access_ready.store(true, std::sync::atomic::Ordering::Release);
+        #[cfg(feature = "test-seams")]
         stall_after_client_access(args.stall_after_client_access.as_deref()).await?;
         gents_store::local::store_key::upgrade::finish(&data_dir)?;
         let schema = gents_p2p::p2p_reconcile::read_client_replicated_schema(node.clone())

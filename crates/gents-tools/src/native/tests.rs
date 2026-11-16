@@ -410,7 +410,7 @@ fn ensure_native_fs_runner_for_test() {
             .expect("Cargo profile directory has a name");
         let profile = if profile == "debug" { "dev" } else { profile };
         let status = std::process::Command::new(cargo)
-            .args(["build", "-p", "gents-fs-runner"])
+            .args(["build", "-p", "gents-fs-runner", "--features", "test-seams"])
             .args(["--profile", profile])
             .arg("--target-dir")
             .arg(profile_dir.parent().expect("Cargo target directory"))
@@ -494,6 +494,7 @@ fn tool_outcome_state(outcome: &gents_loop::tool_call_lifecycle::ToolOutcome) ->
     }
 }
 
+#[cfg(feature = "test-seams")]
 #[tokio::test]
 async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue() {
     ensure_native_fs_runner_for_test();
