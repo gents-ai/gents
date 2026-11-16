@@ -34,10 +34,11 @@ namespace AccessClassification
 
 deriving instance Lean.ToJson for Classification, Failure, Erasure, StoreWrapper,
   InferenceWrapper, SessionWrapper, P2pWrapper, ServiceWrapper, ToolsWrapper, DesktopCoreWrapper,
-  StoreRetryWrapper, ProtocolRetryWrapper, OwnerProbe, StoreOwnerWrapper
+  StoreRetryWrapper, ProtocolRetryWrapper, OwnerProbe, StoreOwnerWrapper, PassthroughWrapper,
+  Printer
 
 attribute [conformance_function] storeWrapped inferenceWrapped sessionWrapped p2pWrapped
   serviceWrapped toolsWrapped desktopCoreWrapped storeRetryWrapped protocolRetryWrapped
-  storeOwnerFound
+  storeOwnerFound passthroughWrapped passthroughPrinted
 
 end AccessClassification

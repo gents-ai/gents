@@ -547,4 +547,155 @@ theorem boxed_store_owner_is_lost_to_an_exact_search :
     (Chain.wrapper StoreOwnerWrapper.identityErrorLoadSigningIdentity.holding
       (.owner OwnerProbe.insecureKey)).found .exact = none := rfl
 
+/-! ## A passthrough: classified through its source, printed once
+
+An operation owner's `Passthrough` variant (`gents_protocol::operations`) passes
+another owner's failure through unchanged. It holds
+`gents_protocol::error_chain::PassedThrough` transparently, and `PassedThrough`
+returns the passed-through error from `source()`, so the variant is a
+transparent holder of a sourced holder (`passthrough`): the passed-through error
+is on the chain and every classifier finds it. An application error converted
+into a box instead shows its top error's message and forwards `source()` past
+it (`hiddenPassthrough`), so that top error was never found.
+
+Both holders keep the passed-through error's text as their own message, so a
+printer of the whole chain meets that text twice in a row. The printers of the
+whole chain (`error_chain::ErrorChain`, and `error_chain::ErrorReport` for the
+CLI's `Error:` and `Caused by:` report) print a message that repeats the one
+just printed once (`collapse`). Decision 2026-11-16: the printer removes the
+repeat; a holder with a message of its own would drop the passed-through text
+wherever only the outermost message is shown. -/
+
+namespace Chain
+
+variable {α : Type}
+
+/-- An operation owner's `Passthrough` variant around the error it passes. -/
+def passthrough (inner : Chain α) : Chain α := .wrapper .transparent (.wrapper .sourced inner)
+
+/-- The same variant holding a box of an application error, before
+`PassedThrough`. -/
+def hiddenPassthrough (inner : Chain α) : Chain α :=
+  .wrapper .transparent (.wrapper .transparent inner)
+
+theorem wrapAll_append (outer inner : List Holding) (error : Chain α) :
+    wrapAll (outer ++ inner) error = wrapAll outer (wrapAll inner error) := by
+  simp [wrapAll, List.foldr_append]
+
+/-- Whatever owners wrap a passthrough, the error it passes is found. -/
+theorem passthrough_is_found (holdings : List Holding) (answer : α) :
+    (wrapAll holdings (passthrough (owner answer))).found .ownerOrBox = some answer := by
+  have shape : wrapAll holdings (passthrough (owner answer))
+      = wrapAll (holdings ++ [.transparent]) (wrapper .sourced (owner answer)) := by
+    rw [wrapAll_append]
+    rfl
+  rw [shape]
+  exact found_survives_every_wrapping _ .sourced (by decide) answer
+
+theorem hidden_passthrough_is_not_found (answer : α) :
+    (hiddenPassthrough (owner answer)).found .ownerOrBox = none := rfl
+
+end Chain
+
+/-- The messages a printer of the whole chain prints, from the messages it
+meets, outermost first: a message that repeats the one just printed is printed
+once. Messages are named by number; a message repeats another when it equals
+it or is its first line, as for a report that adds lines below the error it
+reports (`Next: ...`), so both carry one number here. -/
+def collapse : List Nat → List Nat
+  | [] => []
+  | first :: rest => first :: collapseAfter first rest
+where
+  collapseAfter (previous : Nat) : List Nat → List Nat
+    | [] => []
+    | next :: rest =>
+      if next = previous then collapseAfter previous rest else next :: collapseAfter next rest
+
+/-- The messages a printer meets on a holder that keeps the held error's text
+as its own message (`#[error(transparent)]`, `#[error("{0}")]`,
+`PassedThrough`), given those it meets on the held error. A transparent holder
+displays as the held error and forwards `source()` past it, so it takes the
+held error's place; a sourced or boxed holder is met above the held error. -/
+def Holding.print : Holding → List Nat → List Nat
+  | .transparent, messages => messages
+  | _, [] => []
+  | _, message :: rest => message :: message :: rest
+
+theorem collapse_print (holding : Holding) (messages : List Nat) :
+    collapse (holding.print messages) = collapse messages := by
+  cases holding <;> cases messages <;>
+    simp [Holding.print, collapse, collapse.collapseAfter]
+
+/-- Holders that keep the held error's text add nothing to what a printer of
+the whole chain prints. -/
+theorem kept_text_is_printed_once (holdings : List Holding) (messages : List Nat) :
+    collapse (holdings.foldr Holding.print messages) = collapse messages := by
+  induction holdings with
+  | nil => rfl
+  | cons holding rest ih => simp [List.foldr, collapse_print, ih]
+
+/-- How a passthrough is printed: through a printer of the whole chain, which
+prints a repeat once, or by joining every message, as anyhow's `{:#}` and
+`{:?}` do. -/
+inductive Printer where
+  | errorChain | errorReport | joined
+  deriving DecidableEq, Repr
+
+/-- The messages `printer` prints for a passthrough of an error with message
+`0` caused by an error with message `1`. -/
+def Printer.printPassthrough (printer : Printer) : List Nat :=
+  let met := Holding.transparent.print (Holding.sourced.print [0, 1])
+  match printer with
+  | .errorChain | .errorReport => collapse met
+  | .joined => met
+
+theorem passthrough_is_printed_once :
+    Printer.errorChain.printPassthrough = [0, 1]
+      ∧ Printer.errorReport.printPassthrough = [0, 1] := ⟨rfl, rfl⟩
+
+/-- Joining every message prints the passed-through text twice. -/
+theorem joined_passthrough_repeats : Printer.joined.printPassthrough = [0, 0, 1] := rfl
+
+/-- Every operation owner with a `Passthrough` variant, named
+`<owner>Passthrough`. Native fence: `write_owner_structure`'s
+`passthrough_variants_keep_their_source` fails when a `Passthrough` variant
+holds a boxed error, or when the owners holding `PassedThrough` differ from
+this. -/
+inductive PassthroughWrapper where
+  | agentOperationErrorPassthrough
+  | documentOperationErrorPassthrough
+  | documentDeleteErrorPassthrough
+  | goalOperationErrorPassthrough
+  | inferenceOperationErrorPassthrough
+  | mailboxOperationErrorPassthrough
+  | registryErrorPassthrough
+  | applicationPairingErrorPassthrough
+  | packOperationErrorPassthrough
+  | agentPermissionErrorPassthrough
+  | requestOperationErrorPassthrough
+  | sessionOperationErrorPassthrough
+  | taskOperationErrorPassthrough
+  | workspaceRootErrorPassthrough
+  deriving DecidableEq, Repr
+
+/-- The classification of an access failure an operation owner passes through,
+received as `erasure`. -/
+def passthroughWrapped (_ : PassthroughWrapper) (failure : Failure) (erasure : Erasure) :
+    Classification :=
+  Error.classify (Chain.passthrough (.owner failure)) erasure
+
+/-- How many times `printer` prints the text an operation owner passes
+through. -/
+def passthroughPrinted (_ : PassthroughWrapper) (printer : Printer) : Nat :=
+  printer.printPassthrough.count 0
+
+theorem passthrough_wrapping_preserves_classification (wrapper : PassthroughWrapper)
+    (failure : Failure) (erasure : Erasure) :
+    passthroughWrapped wrapper failure erasure = failure.classification := by
+  cases erasure <;> cases failure <;> rfl
+
+theorem passthrough_text_is_printed_once (wrapper : PassthroughWrapper) :
+    passthroughPrinted wrapper .errorChain = 1 ∧ passthroughPrinted wrapper .errorReport = 1 :=
+  ⟨rfl, rfl⟩
+
 end AccessClassification
