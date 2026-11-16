@@ -106,7 +106,12 @@ def backendCredentialPublication : Family CredentialPublicationInput CredentialV
   model := credentialVersions
 
 /-- The reading Agent owns `owned`, holds a reader grant on `shared`, and has
-no relation to `foreign`, which its sibling owns. -/
+no relation to `foreign`, which its sibling owns. For `granted := false` the
+served fixture disables the reading Agent: every live Agent holds
+`read-document` through its projected baseline (`GrantSets.projectedSets`),
+which the model's empty grant projection omits. Decision (maintainer,
+gents#3804, 2026-11-16): keep the disabled-Agent fixture rather than give
+this model the baseline. -/
 @[conformance_family]
 def sessionToolAccess : Family SessionToolInput Bool where
   inputs := sessionToolInputs.filter fun i => !i.nativeBypass
