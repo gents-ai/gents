@@ -129,7 +129,6 @@ pub fn desktop_bin() -> Result<PathBuf> {
 pub fn run_desktop_init_json(node_home: &Path, desktop_home: &Path, label: &str) -> Result<Value> {
     let output = Command::new(desktop_bin()?)
         .env("RUST_LOG", "error")
-        .env("GENTS_DESKTOP_HOME", desktop_home)
         .arg("init")
         .arg("--node-home")
         .arg(node_home)

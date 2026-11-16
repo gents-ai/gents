@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use gents_desktop_core::client::DesktopPaths;
 
-/// Throwaway user, runtime and desktop homes under a test's own directory for
+/// Throwaway user and runtime homes under a test's own directory for
 /// every host and CLI process it spawns. Without them the runtime CLI resolves
 /// its client identity, default homes and service definitions from the
 /// operator's account, which test builds refuse.
@@ -13,10 +13,26 @@ pub struct ProcessHomes {
 impl ProcessHomes {
     pub fn under(directory: &Path) -> Self {
         let root = directory.join("process-homes");
-        for home in ["user", "runtime", "desktop"] {
+        for home in ["user", "runtime"] {
             std::fs::create_dir_all(root.join(home)).expect("creating a throwaway process home");
         }
         Self { root }
+    }
+
+    /// The desktop home a process run with [`Self::env`] resolves without
+    /// `--desktop-home`.
+    #[allow(
+        dead_code,
+        reason = "shared by test binaries that do not all read the desktop home"
+    )]
+    pub fn desktop_root(&self) -> PathBuf {
+        let user = self.root.join("user");
+        let data = if cfg!(target_os = "macos") {
+            user.join("Library").join("Application Support")
+        } else {
+            user.join(".local").join("share")
+        };
+        data.join("gents").join("desktop")
     }
 
     /// The desktop home whose `cli` child holds the CLI client identity that
@@ -26,16 +42,12 @@ impl ProcessHomes {
         reason = "shared by test binaries that do not all sign as the CLI"
     )]
     pub fn cli_identity(&self) -> DesktopPaths {
-        DesktopPaths::from_root(self.root.join("desktop").join("cli"))
+        DesktopPaths::from_root(self.desktop_root().join("cli"))
     }
 
-    pub fn env(&self) -> [(&'static str, PathBuf); 4] {
+    pub fn env(&self) -> [(&'static str, PathBuf); 3] {
         let user = self.root.join("user");
         [
-            (
-                gents_desktop_core::client::DESKTOP_HOME_ENV,
-                self.root.join("desktop"),
-            ),
             ("XDG_DATA_HOME", user.join(".local").join("share")),
             ("XDG_CONFIG_HOME", user.join(".config")),
             ("HOME", user),

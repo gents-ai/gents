@@ -275,7 +275,6 @@ enum HomeSelection {
 
 struct ClientIdentityFixture {
     user_home: tempfile::TempDir,
-    identities: tempfile::TempDir,
     other: tempfile::TempDir,
 }
 
@@ -283,13 +282,18 @@ impl ClientIdentityFixture {
     fn new() -> Result<Self> {
         Ok(Self {
             user_home: tempfile::tempdir()?,
-            identities: tempfile::tempdir()?,
             other: tempfile::tempdir()?,
         })
     }
 
+    fn cli_paths(&self) -> gents_desktop_core::client::DesktopPaths {
+        gents_desktop_core::client::DesktopPaths::from_root(
+            default_desktop_root(self.user_home.path()).join("cli"),
+        )
+    }
+
     fn key(&self) -> PathBuf {
-        self.identities.path().join("cli/principal.ed25519.key")
+        self.cli_paths().identity_key_path().to_path_buf()
     }
 
     fn command(
@@ -301,7 +305,6 @@ impl ClientIdentityFixture {
         let mut process = Command::new(cli_bin());
         process
             .env("HOME", self.user_home.path())
-            .env("GENTS_DESKTOP_HOME", self.identities.path())
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_DATA_HOME")
             .env("RUST_LOG", "error")
@@ -460,9 +463,7 @@ async fn observe_identity(case: &IdentityCase, command: &[&str]) -> Result<&'sta
     };
     place(&other, case.other.0, case.other.1)?;
     let held = if case.key_present {
-        let paths = gents_desktop_core::client::DesktopPaths::from_root(
-            fixture.identities.path().join("cli"),
-        );
+        let paths = fixture.cli_paths();
         paths.ensure_root_dirs().await?;
         gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths).await?;
         Some(fs::read(fixture.key())?)
@@ -549,10 +550,7 @@ fn first_run_step(user_home: &Path, home: &Path, step: &str, graphql: &str) -> R
             "--nocapture",
         ])
         .env("HOME", user_home)
-        .env(
-            gents_desktop_core::client::DESKTOP_HOME_ENV,
-            user_home.join("selected-desktop"),
-        )
+        .env_remove("XDG_DATA_HOME")
         .env(FIRST_RUN_HOME_ENV, home)
         .env(FIRST_RUN_STEP_ENV, step)
         .env(FIRST_RUN_GRAPHQL_ENV, graphql)
@@ -584,13 +582,7 @@ async fn desktop_first_run_without_inference_sets_up_the_engineer() -> Result<()
         user_home,
         port,
         &["--home", home.to_str().context("home path")?],
-        &[(
-            gents_desktop_core::client::DESKTOP_HOME_ENV,
-            user_home
-                .join("selected-desktop")
-                .to_str()
-                .context("desktop root path")?,
-        )],
+        &[],
     )?;
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(
@@ -601,21 +593,22 @@ async fn desktop_first_run_without_inference_sets_up_the_engineer() -> Result<()
     .await?;
     first_run_step(user_home, &home, "desktop", &graphql)?;
     let desktop =
-        gents_desktop_core::client::DesktopPaths::from_root(user_home.join("selected-desktop"));
+        gents_desktop_core::client::DesktopPaths::from_root(default_desktop_root(user_home));
     anyhow::ensure!(
         desktop.cli_client().identity_key_path().is_file(),
-        "the selected desktop root has no administrator key"
+        "the desktop root has no administrator key"
     );
-    let fallback = if cfg!(target_os = "macos") {
+    Ok(())
+}
+
+/// The desktop root a process with `HOME=user_home` and no `XDG_DATA_HOME`
+/// resolves without `--desktop-home`.
+fn default_desktop_root(user_home: &Path) -> PathBuf {
+    if cfg!(target_os = "macos") {
         user_home.join("Library/Application Support/gents/desktop")
     } else {
         user_home.join(".local/share/gents/desktop")
-    };
-    anyhow::ensure!(
-        !fallback.exists(),
-        "first-run wrote an unselected desktop root"
-    );
-    Ok(())
+    }
 }
 
 async fn provision_as_the_desktop(home: PathBuf, desktop_root: PathBuf) -> Result<()> {
@@ -648,7 +641,7 @@ async fn provisioning_refuses_a_desktop_root_the_process_does_not_resolve() -> R
 async fn desktop_first_run_in_fixture_home() -> Result<()> {
     let home = PathBuf::from(std::env::var_os(FIRST_RUN_HOME_ENV).context("fixture home")?);
     let step = std::env::var(FIRST_RUN_STEP_ENV).context("fixture step")?;
-    let resolved = gents_desktop_core::client::DesktopPaths::discover()?;
+    let resolved = gents_desktop_core::client::DesktopPaths::discover(None)?;
     if step == "provision" {
         return provision_as_the_desktop(home, resolved.root().to_path_buf()).await;
     }
@@ -659,9 +652,8 @@ async fn desktop_first_run_in_fixture_home() -> Result<()> {
             .expect_err("a desktop root this process does not resolve is refused");
         let refusal = format!("{refusal:#}");
         anyhow::ensure!(
-            refusal.contains(gents_desktop_core::client::DESKTOP_HOME_ENV)
-                && refusal.contains(&foreign.display().to_string()),
-            "the refusal does not name the root to start with: {refusal}"
+            refusal.contains("--desktop-home") && refusal.contains(&foreign.display().to_string()),
+            "the refusal does not name the root it refused: {refusal}"
         );
         anyhow::ensure!(
             !resolved.cli_client().root().exists() && !foreign.exists(),

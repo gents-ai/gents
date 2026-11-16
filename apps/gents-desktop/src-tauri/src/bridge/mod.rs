@@ -302,9 +302,21 @@ where
     tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app))
 }
 
+/// `--desktop-home <PATH>` keeps the desktop client state in PATH instead of
+/// the platform's application data folder.
+fn launch_home_policy() -> HomePolicy {
+    std::env::args_os()
+        .skip(1)
+        .skip_while(|arg| arg != "--desktop-home")
+        .nth(1)
+        .map_or(HomePolicy::Default, |root| {
+            HomePolicy::FixedRoot(root.into())
+        })
+}
+
 fn platform_bridge_config() -> BridgeConfig {
     BridgeConfig {
-        home: HomePolicy::Default,
+        home: launch_home_policy(),
         bootstrap: platform_bootstrap_policy(),
         app_meta: AppMeta {
             app_name: "Gents".into(),

@@ -17,6 +17,13 @@ source consistency checks, not a separate runtime compatibility version.
   shell no longer posts "Runtime update complete" or "Runtime update failed"
   to the submitting session; read `gents service update-status` instead.
   Update receipts no longer carry `session_id` or `request_id` (#3922).
+- Breaking: `GENTS_DESKTOP_HOME` is no longer read. The desktop app takes
+  `--desktop-home PATH` as a launch argument; `gents-desktop init` and
+  `gents runtime desktop reset` keep their `--desktop-home`, and
+  `gents-client-host` its `--home`. Without one, desktop state is in the
+  platform's app data folder. The CLI's own client key always lives under that
+  default desktop home, which follows `HOME`, so a desktop started with another
+  `--desktop-home` cannot provision a managed home.
 - Breaking: `GENTS_HOME` is no longer read. `--home` is the only way to choose a
   node home; without it commands use the folder chosen at setup, then `~/.gents`.
   The macOS uninstall script takes `--home DIR` instead.

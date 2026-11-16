@@ -193,7 +193,6 @@ async fn start(binary: &Path, paths: &DesktopPaths) -> Result<Child> {
             )
             .env(),
         )
-        .env("GENTS_DESKTOP_HOME", paths.root())
         .args(["--serve", "--editor-store", "--home"])
         .arg(paths.root())
         .stdin(Stdio::null())

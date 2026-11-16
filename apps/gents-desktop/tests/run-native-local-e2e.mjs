@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createNativeProviderGate } from "./native-local-provider-gate.mjs";
@@ -21,17 +21,26 @@ if (process.platform !== "darwin")
   throw new Error("Native local acceptance currently requires macOS launchd.");
 const service = "ai.gents.runtime.native-e2e";
 const serviceTarget = `gui/${process.getuid()}/${service}`;
-const definition = join(homedir(), "Library", "LaunchAgents", `${service}.plist`);
 const target = resolve(repoRoot, process.env.CARGO_TARGET_DIR ?? "target", "debug");
 const artifactRoot = await mkdtemp(join(tmpdir(), "gents-native-local-"));
+// The app and its runtime keep per-user state (the CLI key under the default
+// desktop home, the LaunchAgent) under HOME, so they run with this one.
+const userHome = join(artifactRoot, "user");
+const definition = join(userHome, "Library", "LaunchAgents", `${service}.plist`);
 const nodeHome = join(artifactRoot, "node");
-const desktopHome = join(artifactRoot, "desktop");
+const desktopHome = join(
+  userHome,
+  "Library",
+  "Application Support",
+  "gents",
+  "desktop",
+);
 const toolRoot = join(artifactRoot, "workspace");
 const runTmp = join(artifactRoot, "tmp");
 const webviewStoreId = randomBytes(16).toString("hex");
 const binaries = join(artifactRoot, "bin");
 for (const directory of [nodeHome, desktopHome, toolRoot, runTmp, binaries]) {
-  await mkdir(directory);
+  await mkdir(directory, { recursive: true });
 }
 console.log(`Native acceptance artifacts: ${artifactRoot}`);
 await writeFile(
@@ -137,7 +146,7 @@ async function runPhase(phase) {
     ...process.env,
     TMPDIR: `${runTmp}/`,
     GENTS_BIN: join(binaries, "gents"),
-    GENTS_DESKTOP_HOME: desktopHome,
+    HOME: userHome,
   };
   const launch = {
     serverAddress: providerGate.endpoint,

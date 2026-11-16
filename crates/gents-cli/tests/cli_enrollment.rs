@@ -70,7 +70,7 @@ async fn grant_configured_workspace_root_readers(
     )?;
     let root = root.to_str().context("configured host root is not UTF-8")?;
     let bootstrap_user = gents_desktop_core::client::PrincipalIdentity::load_existing(
-        &DesktopPaths::from_root(owner_home.join("cli")),
+        &support::graphql::cli_client_paths(owner_home, &[]),
     )?;
     anyhow::ensure!(
         bootstrap_user.did() != node_did,
@@ -163,7 +163,7 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
     let desktop_home = tempdir.path().join("desktop-home");
     let owner_home = tempdir.path().join("bootstrap-owner");
     let owner_env = [(
-        "GENTS_DESKTOP_HOME",
+        "HOME",
         owner_home
             .to_str()
             .context("bootstrap owner path is not UTF-8")?,
@@ -204,7 +204,7 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
         &owner_env,
     )?;
     let bootstrap_user = gents_desktop_core::client::PrincipalIdentity::load_existing(
-        &DesktopPaths::from_root(owner_home.join("cli")),
+        &support::graphql::cli_client_paths(&owner_home, &[]),
     )
     .context("loading held bootstrap CLI User")?;
     let node_did = node_did_from_init(&init)?;
@@ -311,7 +311,7 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
                 let owner = grant_owner.to_str().context("bootstrap owner home is not UTF-8")?;
                 run_cli_json_with_env(&grant_home,
                     &["runtime", "p2p", "enrollment", "grant", &grant_request, "--home", home],
-                    &[("GENTS_DESKTOP_HOME", owner)],
+                    &[("HOME", owner)],
                 )
             }).await.context("joining enrollment grant")?
                 .context("granting the fresh desktop User access through the bootstrap User")?;
