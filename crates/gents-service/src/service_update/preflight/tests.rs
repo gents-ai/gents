@@ -91,7 +91,8 @@ fn candidate_keychain_refusal_precedes_staging_without_touching_runtime() {
         id,
         args,
         None,
-        |executable, checked_home, keychain| {
+        |executable, checked_home, keychain, original| {
+            assert_eq!(original, candidate);
             assert_ne!(executable, candidate);
             assert_eq!(
                 super::super::files::digest(executable).unwrap(),
@@ -203,4 +204,15 @@ fn old_candidate_metadata_cannot_attest_to_keychain_readability() {
         admit(&metadata, home, true),
         Err(PreflightError::Incompatible)
     ));
+}
+
+#[test]
+fn remedy_command_quotes_executable_and_actual_home() {
+    assert_eq!(
+        check_command(
+            Path::new("/candidate dir/gents"),
+            Path::new("/home/John's node")
+        ),
+        "'/candidate dir/gents' runtime service update-check --home '/home/John'\"'\"'s node'"
+    );
 }

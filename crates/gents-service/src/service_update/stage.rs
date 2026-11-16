@@ -11,9 +11,15 @@ pub(super) fn prepare(
     args: ServiceUpdateArgs,
     helper: Option<PathBuf>,
 ) -> Result<(Plan, Receipt, File)> {
-    prepare_with_preflight(home, id, args, helper, |candidate, home, keychain| {
-        preflight::probe(candidate, home, keychain).map_err(Into::into)
-    })
+    prepare_with_preflight(
+        home,
+        id,
+        args,
+        helper,
+        |candidate, home, keychain, original| {
+            preflight::probe(candidate, home, keychain, original).map_err(Into::into)
+        },
+    )
 }
 
 pub(super) fn prepare_with_preflight(
@@ -21,7 +27,7 @@ pub(super) fn prepare_with_preflight(
     id: uuid::Uuid,
     args: ServiceUpdateArgs,
     helper: Option<PathBuf>,
-    mut probe: impl FnMut(&Path, &Path, bool) -> Result<()>,
+    mut probe: impl FnMut(&Path, &Path, bool, &Path) -> Result<()>,
 ) -> Result<(Plan, Receipt, File)> {
     let root = home.join(gents_store::local::home::SERVICE_UPDATES_DIR_NAME);
     private_dir(&root)?;
@@ -72,7 +78,7 @@ pub(super) fn prepare_with_preflight(
             "candidate SHA-256 mismatch; runtime unchanged"
         );
         let temp = verified_candidate(&root, candidate, &expected)?;
-        probe(&temp.path().join("gents"), &home, keychain)?;
+        probe(&temp.path().join("gents"), &home, keychain, candidate)?;
         Some((expected, temp))
     } else {
         None
@@ -95,7 +101,7 @@ pub(super) fn prepare_with_preflight(
         None => {
             let expected = digest(&old_executable)?;
             let temp = verified_candidate(&root, &old_executable, &expected)?;
-            probe(&temp.path().join("gents"), &home, keychain)?;
+            probe(&temp.path().join("gents"), &home, keychain, &old_executable)?;
             (expected, temp)
         }
     };

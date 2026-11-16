@@ -8,18 +8,29 @@ pub(super) enum PreflightError {
     Observation(#[source] gents_protocol::error_chain::PassedThrough),
     #[error("candidate preflight returned invalid metadata; runtime and service unchanged")]
     Metadata(#[from] serde_json::Error),
-    #[error("candidate cannot read this home's store key without a Keychain prompt: {}; this build may not be trusted by the Keychain item (or the login Keychain is locked). Runtime and service unchanged. Unlock the login Keychain and grant the candidate access in Keychain Access, or re-sign it with the installed build's signing identity; then retry the candidate's `service update-check --home` for {}. Cause: {source}", home.display(), home.display())]
+    #[error("candidate cannot read this home's store key without a Keychain prompt: {}; this build may not be trusted by the Keychain item (or the login Keychain is locked). Runtime and service unchanged. Unlock the login Keychain and grant the candidate access in Keychain Access, or re-sign it with the installed build's signing identity; then run `{command}` to check access without prompting. Cause: {source}", home.display())]
     StoreKey {
         home: PathBuf,
+        command: String,
         #[source]
         source: StoreKeyError,
     },
-    #[error("candidate preflight refused; runtime and service unchanged: {detail}")]
-    CandidateRefused { detail: String },
-    #[error("candidate did not prove noninteractive Keychain store-key access for {}; runtime and service unchanged. Use a candidate that supports the store-key preflight, then retry service update", home.display())]
+    #[error("candidate preflight refused; runtime and service unchanged. After resolving trust/access, run `{command}` using the original candidate (the temporary probe copy is removed). Diagnostic: {detail}")]
+    CandidateRefused { command: String, detail: String },
+    #[error("candidate did not prove noninteractive Keychain store-key access for {}; runtime and service unchanged. Use a candidate that supports the store-key preflight, then retry your original update command", home.display())]
     MissingStoreKeyProof { home: PathBuf },
     #[error("candidate platform, schema check or handoff protocol mismatch; runtime and service unchanged")]
     Incompatible,
+}
+
+/// Quote paths as single POSIX shell arguments, including embedded apostrophes.
+fn check_command(candidate: &Path, home: &Path) -> String {
+    let quote = |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"));
+    format!(
+        "{} runtime service update-check --home {}",
+        quote(candidate),
+        quote(home)
+    )
 }
 
 fn observation(error: anyhow::Error) -> PreflightError {
@@ -47,6 +58,7 @@ fn check_store_key_with(
     };
     let _no_prompts =
         crate::process_resources::prevent_keychain_prompts_guard().map_err(observation)?;
+    let executable = std::env::current_exe().map_err(|error| observation(error.into()))?;
     read(
         record,
         &gents_store::local::store_key::home_key_file(home),
@@ -55,6 +67,7 @@ fn check_store_key_with(
     .map(drop)
     .map_err(|source| PreflightError::StoreKey {
         home: home.to_path_buf(),
+        command: check_command(&executable, home),
         source,
     })?;
     Ok(true)
@@ -64,6 +77,7 @@ pub(super) fn probe(
     candidate: &Path,
     home: &Path,
     keychain: bool,
+    original_candidate: &Path,
 ) -> std::result::Result<(), PreflightError> {
     super::files::validate_native_executable(candidate).map_err(observation)?;
     let output = ProcessCommandRunner
@@ -79,6 +93,7 @@ pub(super) fn probe(
         .map_err(observation)?;
     if !output.success {
         return Err(PreflightError::CandidateRefused {
+            command: check_command(original_candidate, home),
             detail: gents_protocol::failure_text::bounded_text(&output.stderr),
         });
     }
