@@ -463,6 +463,16 @@ class Verdict(unittest.TestCase):
         self.assertEqual(gate.verdict({name: {"result": "success"} for name in needs - {"lint"}}),
                          ["lint: missing from the gate job's needs", "plan: produced no plan"])
 
+    def test_a_cache_extract_directory_starts_empty(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(os.environ, {"GATE_ARCHIVE_DIR": str(Path(directory) / "archive"),
+                                             "GITHUB_RUN_ID": "7"}):
+            first = gate.extract_dir("plan")
+            (first / "stale").write_text("left by an earlier slice")
+            again = gate.extract_dir("plan")
+            self.assertEqual(again, Path(directory) / "extract-7-plan")
+            self.assertEqual(list(again.iterdir()), [])
+
     def test_verdict_runs_from_a_checkout_of_scripts_ci_alone(self):
         # The gate job's sparse checkout; it also holds the TLA+ runner, which
         # verdict must not need.
