@@ -374,6 +374,7 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
     );
     for permission in [
         gents_store::config_client::NodePermission::DocumentRead,
+        gents_store::config_client::NodePermission::CollectionGet,
         gents_store::config_client::NodePermission::DocumentUpdate,
         gents_store::config_client::NodePermission::DacRelationAdd,
     ] {
