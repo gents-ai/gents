@@ -22,6 +22,27 @@ use plugin_jobs::diagnose_plugin_jobs;
 use schema::{diagnose_schema_presence, load_runtime_row};
 use tool_ceiling::diagnose_tool_ceiling;
 
+/// The one call that fixes an unavailable Agent, or the check that finds out
+/// what is wrong when no single call does. The node home goes into the grant so
+/// it applies here: several nodes run on one machine, and a bare `gents` acts on
+/// the default home.
+fn reason_next_step(
+    reason: gents_protocol::node_readiness::AgentReadinessUnavailableReason,
+    home: &std::path::Path,
+) -> Option<String> {
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
+    match reason {
+        Reason::ToolSurfaceUnavailable => {
+            Some("Check installed plugins and Tools configuration on the node.".to_owned())
+        }
+        Reason::WorkspaceRootReaderMissing => Some(format!(
+            "Grant the agent a reader on the workspace root its tools read: {}",
+            gents_protocol::node_readiness::workspace_root_reader_grant_without_root(home)
+        )),
+        _ => None,
+    }
+}
+
 pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
     let init_config = read_init_config(&home_dir)?;
@@ -65,8 +86,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
                             "agent_did": agent_did,
                             "reason": reason,
                             "message": reason.public_message(),
-                            "next_step": (*reason == gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable)
-                                .then_some("Check installed plugins and Tools configuration on the node."),
+                            "next_step": reason_next_step(*reason, &home_dir),
                         })
                     })
                     .collect::<Vec<_>>();
@@ -512,8 +532,41 @@ fn claude_auth_gate(backend_configured: bool, check: &Value) -> bool {
 mod tests {
     use serde_json::json;
 
-    use super::{accounts_json, claude_auth_gate};
+    use super::{accounts_json, claude_auth_gate, reason_next_step};
     use gents_inference::auth::credential::AccountSummary;
+
+    /// Every reason a diagnose entry states has a step an operator can take; the
+    /// reader cause names the grant, against this node's home.
+    #[test]
+    fn the_reader_cause_gives_a_next_step_with_the_grant_on_this_home() {
+        let home = std::path::Path::new("/Users/someone/.gents-one");
+        let step = reason_next_step(
+            gents_protocol::node_readiness::AgentReadinessUnavailableReason::WorkspaceRootReaderMissing,
+            home,
+        )
+        .expect("the reader cause names a step");
+        assert!(step.contains("workspace-root list --home /Users/someone/.gents-one"), "{step}");
+        assert!(step.contains("grant-reader"), "{step}");
+        assert_eq!(
+            reason_next_step(
+                gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+                home,
+            )
+            .as_deref(),
+            Some("Check installed plugins and Tools configuration on the node.")
+        );
+        let between = gents_protocol::node_readiness::AgentReadinessUnavailableReason::ALL
+            .into_iter()
+            .filter(|reason| {
+                matches!(
+                    reason,
+                    gents_protocol::node_readiness::AgentReadinessUnavailableReason::WorkspaceRootReaderMissing
+                        | gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable
+                )
+            })
+            .count();
+        assert_eq!(between, 2, "the two causes with a step stay two");
+    }
 
     fn account(label: &str, enabled: bool, expires_in_minutes: i64) -> AccountSummary {
         AccountSummary {

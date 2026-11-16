@@ -140,9 +140,7 @@ impl ConfigAccess {
     }
 
     /// Every relationship on a document, for an actor that owns it or holds a
-    /// relation managing its resource. Native DefraDB decides the gate on the
-    /// actor, which an offline read needs but no signature: a plain read signs
-    /// nothing, as the GraphQL route's authenticated caller does not.
+    /// relation managing its resource. Native DefraDB decides the gate.
     pub async fn list_document_relationships(
         &self,
         collection: &str,
@@ -151,6 +149,9 @@ impl ConfigAccess {
         crate::graphql::validate_collection_identifier(collection)?;
         match self {
             Self::Local(local) => {
+                local
+                    .agent_signer()
+                    .ok_or(ConfigClientError::ManagedAgentSignerRequired)?;
                 let actor = local
                     .identity()
                     .cloned()
@@ -191,6 +192,55 @@ impl ConfigAccess {
                 Ok(response.json().await?)
             }
         }
+    }
+
+    /// The relationships on a document for an operator acting as the node
+    /// itself, which is who `list` and `show` already run as. The signature
+    /// gate [`Self::list_document_relationships`] applies is for an Agent's own
+    /// identity; an operator read signs nothing, exactly as the GraphQL route's
+    /// authenticated caller does not. Native DefraDB still decides the gate on
+    /// the actor.
+    pub async fn list_document_relationships_as_node(
+        &self,
+        collection: &str,
+        doc_id: &str,
+    ) -> Result<Vec<acp::DocumentRelationship>, ConfigClientError> {
+        match self {
+            Self::Local(local) if local.agent_signer().is_some() => {
+                self.list_document_relationships(collection, doc_id).await
+            }
+            Self::Local(_) => self.list_document_relationships_unproved(collection, doc_id).await,
+            Self::Graphql(_) => self.list_document_relationships(collection, doc_id).await,
+        }
+    }
+
+    /// [`Self::list_document_relationships`] without the signer gate: the
+    /// caller runs as an operator (the node's own actor), so no Agent signature
+    /// is owed. Kept private so the gate stays the default for every caller.
+    async fn list_document_relationships_unproved(
+        &self,
+        collection: &str,
+        doc_id: &str,
+    ) -> Result<Vec<acp::DocumentRelationship>, ConfigClientError> {
+        crate::graphql::validate_collection_identifier(collection)?;
+        let Self::Local(local) = self else {
+            return self.list_document_relationships(collection, doc_id).await;
+        };
+        let actor = local
+            .identity()
+            .cloned()
+            .ok_or(ConfigClientError::NodePermissionActorRequired)?;
+        let (collection, doc_id) = (collection.to_owned(), doc_id.to_owned());
+        local
+            .run_owned(move |node| async move {
+                let context =
+                    defra_core::RequestContext::default().with_identity(Some(actor.to_string()));
+                Ok::<_, ConfigClientError>(
+                    node.list_dac_relationships_as(&context, &collection, &doc_id)
+                        .await?,
+                )
+            })
+            .await
     }
 
     /// Native NAC decides the change as this access's actor: locally its

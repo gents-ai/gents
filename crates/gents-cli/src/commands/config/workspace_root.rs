@@ -60,7 +60,14 @@ pub(super) async fn workspace_root_list(args: ConfigListArgs) -> Result<()> {
                     .map(|listed| super::crud::WorkspaceRootReadership {
                         root_path: listed.root.root_path.clone(),
                         enabled: listed.root.enabled,
-                        reader_agents: listed.reader_agents.clone(),
+                        readers: match &listed.readers {
+                            gents_protocol::operations::workspace_root::WorkspaceRootReaders::Known {
+                                agents,
+                            } => agents.join(", "),
+                            gents_protocol::operations::workspace_root::WorkspaceRootReaders::Unknown {
+                                reason,
+                            } => format!("unknown ({reason})"),
+                        },
                     })
                     .collect::<Vec<_>>(),
             );

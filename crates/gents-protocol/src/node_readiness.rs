@@ -103,11 +103,44 @@ impl AgentReadinessUnavailableReason {
     ];
 }
 
+/// The grant that makes an Agent a reader of a published root, naming the home
+/// it must run against: several nodes run on one machine, and a bare `gents`
+/// acts on the default home, so a grant applied elsewhere leaves this node's
+/// Agent exactly as it was.
+pub fn workspace_root_reader_grant(path: &str, agent_did: &str, home: &str) -> String {
+    format!("gents config workspace-root grant-reader --path {path} --agent-did {agent_did} --home {home}")
+}
+
+/// The call that finds the roots on this node, where a cause names no root yet:
+/// its output lists each root with its readers, so the operator sees which
+/// grant is missing.
+pub fn workspace_root_list_call(home: &std::path::Path) -> String {
+    format!("gents config workspace-root list --home {}", home.display())
+}
+
+/// The cause of an Agent's host tools not being admitted, when the runtime knows
+/// the root and its own home: the grant, with the home it applies to.
+pub fn workspace_root_reader_missing_message(agent_did: &str, path: &str, home: &str) -> String {
+    format!(
+        "agent has host tools under the workspace root {path}, which it is not a reader of; fix it with `{}`, then start the agent again",
+        workspace_root_reader_grant(path, agent_did, home)
+    )
+}
+
+/// The same cause where the root is known but the home is not: the grant omits
+/// `--home` — no placeholder inside a copy-pasteable call — and the sentence
+/// after it says to add one.
+pub fn workspace_root_reader_missing_message_without_home(agent_did: &str, path: &str) -> String {
+    format!(
+        "agent has host tools under the workspace root {path}, which it is not a reader of; fix it with `gents config workspace-root grant-reader --path {path} --agent-did {agent_did}`, adding `--home` with this node's home, then start the agent again"
+    )
+}
+
 /// The rejection text of [`AgentReadinessUnavailableReason::WorkspaceRootReaderMissing`]
-/// when the runtime knows neither the root nor the home it runs under. It still
-/// names the failing step and the call that fixes it.
+/// when the runtime knows neither the root nor the home: it names the failing
+/// step and the call that lists the roots and their readers.
 pub const WORKSPACE_ROOT_READER_MISSING_MESSAGE: &str =
-    "agent has host tools under the workspace root <root>, which it is not a reader of; fix it with `gents config workspace-root grant-reader --path <root> --agent-did <agent-did> --home <this node's home>`, then start the agent again";
+    "agent has host tools under a workspace root it is not a reader of; find it with `gents config workspace-root list` and grant the reader it names, adding `--home` with this node's home, then start the agent again";
 
 /// What a full rejection text of
 /// [`AgentReadinessUnavailableReason::WorkspaceRootReaderMissing`] starts with:
@@ -116,16 +149,6 @@ pub const WORKSPACE_ROOT_READER_MISSING_MESSAGE: &str =
 /// this node's paths ([`workspace_root_reader_missing_message`]).
 pub const WORKSPACE_ROOT_READER_MISSING_PREFIX: &str =
     "agent has host tools under the workspace root";
-
-/// Lean `Runtime.StartupDegraded.packAgentReason` names a missing reader as its
-/// own cause; the text carries the three facts the operator's call needs, so a
-/// grant run against another node's home reads as the same cause and is told
-/// apart by its `--home`.
-pub fn workspace_root_reader_missing_message(agent_did: &str, root: &str, home: &str) -> String {
-    format!(
-        "agent has host tools under the workspace root {root}, which it is not a reader of; fix it with `gents config workspace-root grant-reader --path {root} --agent-did {agent_did} --home {home}`, then start the agent again"
-    )
-}
 
 pub const BEHAVIOR_NOT_ASSIGNED_MESSAGE: &str = "behavior is not assigned to this runtime";
 

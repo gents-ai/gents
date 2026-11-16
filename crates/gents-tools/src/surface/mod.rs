@@ -80,7 +80,7 @@ pub use root_admission::{
 };
 pub use root_admission::{
     agent_tool_root_reader, agents_tool_root_readers, tool_root_reader, tool_root_refusal,
-    ToolRootReader, ToolRootRefusal,
+    tool_surface_reason, RootDenialKind, RootPublishing, ToolRootReader, ToolRootRefusal,
 };
 pub(crate) use root_admission::{
     load_workspace_root_policy_in_txn, published_root_covering_in_txn, reader_grant_step,
@@ -380,6 +380,15 @@ impl ToolSurface {
             guard.node_home = runtime.plugin_home().map(std::path::Path::to_path_buf);
             guard.validate(&runtime.node, agent).await?;
         }
+        self.build_admitted_tools(runtime).await
+    }
+
+    /// [`Self::build_tools`] once the root guard has admitted the root:
+    /// the host, self-config, plugin and remote tools the document selects.
+    async fn build_admitted_tools(
+        &self,
+        runtime: &ToolRuntimeContext,
+    ) -> Result<Vec<Box<dyn ToolDyn>>> {
         let writethrough = self.lsp.as_ref().map(|config| {
             crate::native::lsp::LspWritethrough::new(runtime.lsp_pool.clone(), config.clone())
         });

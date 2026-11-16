@@ -47,20 +47,34 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
             .ok_or_else(|| anyhow!("missing resolved agent {agent_did} during tool admission"))?;
         let tool_runtime = tool_runtime.for_agent(agent);
         if let Err(error) = tool_surface.build_tools(&tool_runtime).await {
-            // A missing workspace-root reader is the one cause of an unbuilt
-            // surface with a call of its own; it is reported as that cause (and
-            // its text, which carries the grant), not as every unbuilt surface.
+            // Lean `Runtime.StartupDegraded.toolSurfaceReason` decides the cause:
+            // a root the node publishes and enables that the Agent cannot read
+            // is the missing reader, reported with the grant that fixes it;
+            // every other unbuilt surface is the generic cause.
             let reason = match gents_tools::surface::tool_root_refusal(error.as_ref()) {
                 Some(refusal @ gents_tools::surface::ToolRootRefusal::ReaderMissing { .. }) => {
                     let grant = refusal.to_string();
-                    UnavailableAgent::new(
-                        gents_protocol::node_readiness::AgentReadinessUnavailableReason::WorkspaceRootReaderMissing,
-                        format!("building tool surface: {grant}"),
-                    )
-                    .with_public_message(grant)
+                    let cause = gents_tools::surface::tool_surface_reason(
+                        gents_tools::surface::RootPublishing::PublishedEnabled,
+                        gents_tools::surface::RootDenialKind::NoAllowedRoots,
+                    );
+                    UnavailableAgent::new(cause, format!("building tool surface: {grant}"))
+                        .with_public_message(grant)
+                }
+                Some(gents_tools::surface::ToolRootRefusal::Denied { denial, .. }) => {
+                    let cause = gents_tools::surface::tool_surface_reason(
+                        // A denial matched no enabled published root: the cause
+                        // is the path, so the surface is generically unavailable.
+                        gents_tools::surface::RootPublishing::PublishedDisabled,
+                        gents_tools::surface::RootDenialKind::of(*denial),
+                    );
+                    UnavailableAgent::new(cause, format!("building tool surface: {error:#}"))
                 }
                 _ => UnavailableAgent::new(
-                    gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+                    gents_tools::surface::tool_surface_reason(
+                        gents_tools::surface::RootPublishing::NoPolicy,
+                        gents_tools::surface::RootDenialKind::Admitted,
+                    ),
                     format!("building tool surface: {error:#}"),
                 ),
             };

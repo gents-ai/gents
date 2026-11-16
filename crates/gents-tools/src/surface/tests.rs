@@ -1,4 +1,9 @@
 use super::*;
+use crate::plugin_host::{NoPluginHost, PluginHost};
+use gents_pack::plugin::store::InstalledPlugin;
+use gents_documents::PluginToolRef;
+use identity::Did;
+use gents_pack::plugin::PluginOutcome;
 
 async fn selected_surface_runtime() -> (gents_inference::test_support::TestDb, ToolRuntimeContext) {
     use gents_store::identity::NodeIdentity as _;
@@ -1969,9 +1974,6 @@ async fn tool_construction_without_the_root_reader_names_the_grant_that_fixes_it
         .unwrap()
         .to_string_lossy()
         .into_owned();
-    // The runtime carries its home, as `serve` hands the home to the plugin
-    // host, so the refusal names this node's `--home`.
-    runtime.plugins = std::sync::Arc::new(crate::plugin_host::NoPluginHost);
     let agent_did = runtime.agent_identity.as_ref().unwrap().did().to_owned();
     let document = preset_tools_document("reader-missing", "ReadOnly", "Off", false, false);
     let mut document = document;
@@ -2013,8 +2015,8 @@ async fn tool_construction_without_the_root_reader_names_the_grant_that_fixes_it
         panic!("a published root the Agent cannot read is the reader-missing cause: {error:#}");
     };
     assert_eq!(
-        named_root,
-        &std::path::PathBuf::from(&root_text),
+        named_root.as_deref(),
+        Some(std::path::Path::new(&root_text)),
         "the refusal names the published root the grant matches"
     );
     let refusal_text = error.to_string();
@@ -3089,4 +3091,235 @@ fn provider_limits_is_available_under_an_agent_self_config_grant() {
         .tool_names
         .iter()
         .any(|name| name == "provider_limits"));
+}
+
+/// A host that carries a home and delegates everything else, so a test sees the
+/// runtime's home reach the guard exactly as `serve` gives it.
+struct HomePluginHost(NoPluginHost, std::path::PathBuf);
+
+#[async_trait::async_trait]
+impl PluginHost for HomePluginHost {
+    fn home(&self) -> Option<&std::path::Path> {
+        Some(&self.1)
+    }
+    fn installed(&self) -> anyhow::Result<Vec<InstalledPlugin>> {
+        PluginHost::installed(&self.0)
+    }
+    fn installed_record(&self, coordinate: &str) -> anyhow::Result<InstalledPlugin> {
+        PluginHost::installed_record(&self.0, coordinate)
+    }
+    fn resolve(
+        &self,
+        coordinate: &str,
+        pinned: Option<&str>,
+    ) -> anyhow::Result<InstalledPlugin> {
+        PluginHost::resolve(&self.0, coordinate, pinned)
+    }
+    async fn call_outcome(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+    ) -> anyhow::Result<PluginOutcome> {
+        PluginHost::call_outcome(&self.0, record, input).await
+    }
+    async fn run_plugin_once(
+        self: std::sync::Arc<Self>,
+        coordinate: &str,
+        selected: &[PluginToolRef],
+        node: std::sync::Arc<defra_node::Node>,
+        node_did: &str,
+        agent_did: Option<&str>,
+        input: serde_json::Value,
+    ) -> anyhow::Result<(serde_json::Value, Option<String>, Option<String>)> {
+        std::sync::Arc::new(NoPluginHost)
+            .run_plugin_once(coordinate, selected, node, node_did, agent_did, input)
+            .await
+    }
+    fn application_write_tool(
+        &self,
+        access: gents_store::config_client::ConfigAccess,
+        collections: std::collections::BTreeSet<String>,
+        actor: Option<Did>,
+    ) -> anyhow::Result<Box<dyn ToolDyn>> {
+        PluginHost::application_write_tool(&self.0, access, collections, actor)
+    }
+    fn plugin_tool(
+        self: std::sync::Arc<Self>,
+        plugin: &PluginToolRef,
+        read_root: Option<std::path::PathBuf>,
+        node: std::sync::Arc<defra_node::Node>,
+        node_did: &str,
+        agent_did: Option<&str>,
+    ) -> anyhow::Result<Box<dyn ToolDyn>> {
+        std::sync::Arc::new(NoPluginHost).plugin_tool(plugin, read_root, node, node_did, agent_did)
+    }
+}
+
+/// `build_tools` copies the runtime's home onto the guard before it validates,
+/// so the refusal the operator reads carries this node's `--home` — the fact a
+/// grant run against another node's home gets wrong.
+#[tokio::test]
+async fn build_tools_passes_the_nodes_home_into_the_refusal() {
+    let (db, mut runtime) = selected_surface_runtime().await;
+    let node = db.node.clone();
+    let ceiling = tempfile::tempdir().unwrap();
+    let root = ceiling.path().join("shared-root");
+    std::fs::create_dir_all(&root).unwrap();
+    let root_text = root.to_string_lossy().into_owned();
+    let home = std::fs::canonicalize(tempfile::tempdir().unwrap().path().to_path_buf()).unwrap();
+    let home_text = home.to_string_lossy().into_owned();
+    // Published with no reader, as an Agent created apart from its Tools leaves it.
+    let publisher = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        runtime.node_did.parse().unwrap(),
+    );
+    let published = publisher
+        .write(
+            "test.workspace.root",
+            &format!(
+                r#"mutation {{ create_WorkspaceRoot(input: {{node_did:"{}", root_path:"{}", enabled:true}}) {{_docID}} }}"#,
+                gents_store::graphql::escape_graphql_string(&runtime.node_did),
+                gents_store::graphql::escape_graphql_string(&root_text),
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(gents_store::graphql::created_doc_id(&published, "WorkspaceRoot").is_ok());
+    let agent = runtime.agent_identity.clone().unwrap();
+    let mut document = preset_tools_document("home-flow", "ReadOnly", "Off", false, false);
+    document.host.as_mut().unwrap().root = Some(root_text.clone());
+    let config = AgentToolSurfaceConfig::from_tools_document(
+        agent.did(),
+        &document,
+        &ToolCeiling::readonly_at(ceiling.path()),
+        Vec::new(),
+    )
+    .unwrap();
+    let surface = config
+        .resolve(&node, &runtime.node_did, &crate::plugin_host::NoPluginHost)
+        .await
+        .unwrap();
+    // Exactly what `serve` does: the plugin host carries the node's home.
+    runtime.plugins = std::sync::Arc::new(HomePluginHost(
+        crate::plugin_host::NoPluginHost,
+        home.clone(),
+    ));
+    let error = match surface.build_tools(&runtime).await {
+        Ok(_) => panic!("an Agent with no reader on its root cannot build its surface"),
+        Err(error) => error,
+    };
+    let refusal = tool_root_refusal(error.as_ref()).expect("the refusal is typed");
+    let ToolRootRefusal::ReaderMissing { home: named, .. } = refusal else {
+        panic!("a published root the Agent cannot read is the reader cause: {error:#}");
+    };
+    assert_eq!(
+        named.as_deref(),
+        Some(home.as_path()),
+        "the guard carries the runtime's home"
+    );
+    assert!(
+        error.to_string().contains(&format!("--home {home_text}")),
+        "the refusal's grant applies to this node: {error}"
+    );
+    node.shutdown().await.unwrap();
+}
+
+/// An Agent that reads root A while its tools point at published, enabled root
+/// B, which it does not read, is denied for B — the same missing grant on B.
+#[tokio::test]
+async fn an_agent_reading_one_root_and_working_in_another_names_the_grant_on_b() {
+    let (db, runtime) = selected_surface_runtime().await;
+    let node = db.node.clone();
+    let base = tempfile::tempdir().unwrap();
+    let root_a = base.path().join("root-a");
+    let root_b = base.path().join("root-b");
+    std::fs::create_dir_all(&root_a).unwrap();
+    std::fs::create_dir_all(&root_b).unwrap();
+    let agent = runtime.agent_identity.clone().unwrap();
+    let publisher = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        runtime.node_did.parse().unwrap(),
+    );
+    for path in [&root_a, &root_b] {
+        let published = publisher
+            .write(
+                "test.workspace.root",
+                &format!(
+                    r#"mutation {{ create_WorkspaceRoot(input: {{node_did:"{}", root_path:"{}", enabled:true}}) {{_docID}} }}"#,
+                    gents_store::graphql::escape_graphql_string(&runtime.node_did),
+                    gents_store::graphql::escape_graphql_string(&path.to_string_lossy()),
+                ),
+            )
+            .await
+            .unwrap();
+        let doc = gents_store::graphql::created_doc_id(&published, "WorkspaceRoot").unwrap();
+        if path == &root_a {
+            publisher
+                .add_actor_relationship(
+                    "WorkspaceRoot",
+                    &doc,
+                    "reader",
+                    &agent.did().parse().unwrap(),
+                )
+                .await
+                .unwrap();
+        }
+    }
+    let mut document = preset_tools_document("ab", "ReadOnly", "Off", false, false);
+    document.host.as_mut().unwrap().root = Some(root_b.to_string_lossy().into_owned());
+    let config = AgentToolSurfaceConfig::from_tools_document(
+        agent.did(),
+        &document,
+        &ToolCeiling::readonly_at(base.path()),
+        Vec::new(),
+    )
+    .unwrap();
+    let surface = config
+        .resolve(&node, &runtime.node_did, &crate::plugin_host::NoPluginHost)
+        .await
+        .unwrap();
+    let guard = surface.root_execution_guard().cloned().unwrap();
+    let error = guard
+        .validate(&node, agent.as_ref())
+        .await
+        .expect_err("root B is published but this Agent does not read it");
+    let refusal = tool_root_refusal(error.as_ref()).expect("the refusal is typed");
+    let ToolRootRefusal::ReaderMissing { root, .. } = refusal else {
+        panic!("a published root the Agent cannot read is the reader cause: {error:#}");
+    };
+    assert_eq!(
+        root.as_deref(),
+        Some(root_b.as_path()),
+        "the grant names root B, not the root the Agent already reads"
+    );
+    assert!(
+        error.to_string().contains(&root_b.to_string_lossy().into_owned()),
+        "{error}"
+    );
+    node.shutdown().await.unwrap();
+}
+
+/// With no home, the grant stays copy-pasteable and says what to add.
+#[tokio::test]
+async fn a_refusal_without_the_home_states_the_grant_and_says_to_add_the_home() {
+    let refusal = ToolRootRefusal::ReaderMissing {
+        agent_did: "did:key:agent".to_owned(),
+        root: Some(std::path::PathBuf::from("/work")),
+        tool_root: std::path::PathBuf::from("/work"),
+        home: None,
+    };
+    let text = refusal.to_string();
+    assert!(
+        text.contains(
+            "`gents config workspace-root grant-reader --path /work --agent-did did:key:agent`"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("<this node's home>"), "{text}");
+    assert!(text.contains("adding `--home` with this node's home"), "{text}");
+    assert_eq!(
+        gents_protocol::node_readiness::unavailable_rejection_reason(&text),
+        Some(gents_protocol::node_readiness::AgentReadinessUnavailableReason::WorkspaceRootReaderMissing),
+        "{text}"
+    );
 }
