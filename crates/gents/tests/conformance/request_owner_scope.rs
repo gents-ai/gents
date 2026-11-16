@@ -283,7 +283,7 @@ async fn create_recovery_request(
         "execution_origin": "interactive",
         "created_at": created_at,
         "retry_count": 0,
-        "max_retries": gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        "max_retries": gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
         "request_hop": 0,
     });
     if RequestLifecycleState::is_terminal_str(Some(lifecycle_state)) {
@@ -359,7 +359,7 @@ async fn create_queue_request(
             "execution_origin": execution_origin,
             "created_at": created_at,
             "retry_count": 0,
-            "max_retries": gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+            "max_retries": gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES,
             "request_hop": 0,
         }),
         Some(agent_did),

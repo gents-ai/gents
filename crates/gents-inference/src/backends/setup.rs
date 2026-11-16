@@ -153,6 +153,10 @@ pub fn inference_setup_catalog() -> InferenceSetupCatalog {
                 Some(crate::resolved::DEFAULT_REPEATED_TOOL_FAILURE_LIMIT as i64),
             ),
             (
+                "maxRequestRetries",
+                Some(gents_documents::inference_defaults::DEFAULT_REQUEST_MAX_RETRIES as i64),
+            ),
+            (
                 "streamBatchMs",
                 Some(crate::resolved::DEFAULT_STREAM_BATCH_MS as i64),
             ),

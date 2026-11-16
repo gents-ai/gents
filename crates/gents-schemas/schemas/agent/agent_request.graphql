@@ -76,7 +76,11 @@ type AgentRequest @policy(id: "fd59b3cc10193581adb497fd6d55c7e740f4866f720af6f18
     # Runtime-derived execution deadline; excluded from requester signatures.
     deadline: String
     retry_count: Int @immutable
-    max_retries: Int @immutable
+    # Successor budget from InferenceExecution.max_request_retries, not a
+    # caller choice: the first claim pins it (a retry successor inherits its
+    # parent's pin) and later claims preserve it via the execution generation
+    # CAS. Cannot be immutable at document creation.
+    max_retries: Int
     interrupt_requested_at: String
     valid_until: String @immutable
     # Session-message lineage, filled only on agent_new/agent_message calls or

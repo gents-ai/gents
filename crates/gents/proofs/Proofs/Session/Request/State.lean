@@ -163,6 +163,7 @@ structure RequestContext where
   claimTime    : Time
   currentTime  : Time
   retryCount   : Nat
+  /-- The successor budget the first claim pins (`Request.PinnedRetryBudget.claimPin`). -/
   maxRetries   : Nat
   messageSeq   : Nat
   persistence  : PersistenceState

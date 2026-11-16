@@ -635,6 +635,7 @@ pub(crate) fn agent_config_from_documents(
     let resolved_max_turns = inference.max_turns()?;
     let max_invalid_tool_calls = inference.max_invalid_tool_calls()?;
     let repeated_tool_failure_limit = inference.repeated_tool_failure_limit()?;
+    let max_request_retries = inference.max_request_retries()?;
     anyhow::ensure!(
         agent_config.node_did == principal.node_did,
         "Agent {} belongs to a different runtime node",
@@ -683,6 +684,7 @@ pub(crate) fn agent_config_from_documents(
         max_total_tokens,
         max_invalid_tool_calls,
         repeated_tool_failure_limit,
+        max_request_retries,
         system_prompt: context
             .and_then(|context| context.system_prompt.clone())
             .unwrap_or_default(),
