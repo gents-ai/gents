@@ -256,6 +256,7 @@ fn every_boxed_or_compatibility_holder_reaches_its_store_classifier() {
         HomeError::LockHeld(StoreLockHeld {
             home: "/home".into(),
             holder_pid: Some(7),
+            releasing: false,
         })
     };
     let label = || "gents.identity".to_string();
