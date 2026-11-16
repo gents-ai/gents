@@ -24,6 +24,7 @@ pub struct ToolRuntimeContext {
     pub(super) configuration: gents_inference::resolved::ResolvedConfiguration,
     pub(super) plugins: Arc<dyn PluginHost>,
     pub(super) tasks: Arc<dyn TaskRunService>,
+    pub(super) registry_url: Option<String>,
 }
 
 impl ToolRuntimeContext {
@@ -68,6 +69,7 @@ impl ToolRuntimeContext {
             configuration: gents_inference::resolved::ResolvedConfiguration::Static,
             plugins: Arc::new(NoPluginHost),
             tasks: Arc::new(NoTaskRunService),
+            registry_url: None,
         }
     }
 
@@ -90,6 +92,7 @@ impl ToolRuntimeContext {
             configuration: gents_inference::resolved::ResolvedConfiguration::Static,
             plugins: Arc::new(NoPluginHost),
             tasks: Arc::new(NoTaskRunService),
+            registry_url: None,
         }
     }
 
@@ -130,6 +133,12 @@ impl ToolRuntimeContext {
 
     pub fn with_tasks(mut self, tasks: Arc<dyn TaskRunService>) -> Self {
         self.tasks = tasks;
+        self
+    }
+
+    /// The pack registry the host serves with; `None` is the public registry.
+    pub fn with_registry_url(mut self, registry_url: Option<String>) -> Self {
+        self.registry_url = registry_url;
         self
     }
 

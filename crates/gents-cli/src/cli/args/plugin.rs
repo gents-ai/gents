@@ -130,7 +130,7 @@ pub(crate) struct PluginPublishArgs {
     pub(crate) file: PathBuf,
     #[arg(
         long,
-        help = "Plugin registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Plugin registry base URL. Defaults to the public registry"
     )]
     pub(crate) registry: Option<String>,
     #[arg(
@@ -156,7 +156,7 @@ pub(crate) struct PluginInstallArgs {
     pub(crate) version: Option<String>,
     #[arg(
         long,
-        help = "Plugin registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+        help = "Plugin registry base URL. Defaults to the public registry"
     )]
     pub(crate) registry: Option<String>,
     #[arg(long, help = "Home to install into; defaults to ~/.gents")]
