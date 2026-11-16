@@ -9,9 +9,6 @@ use gents_pack::{
     plugin::http_calls, plugin::PluginBudget, plugin::PluginOutcome, plugin::PluginVerdict,
 };
 
-/// The unset default for `PluginBudget::max_rounds`; a pack declaration can
-/// raise the per-invocation budget up to `MAX_DECLARED_ROUNDS`.
-pub const MAX_ROUNDS: u32 = gents_pack::plugin::DEFAULT_MAX_ROUNDS;
 pub const FINAL_ROUND_RESERVE_DIVISOR: u32 = 8;
 
 pub type Round = Arc<dyn Fn(Value, PluginBudget) -> Result<PluginOutcome> + Send + Sync>;
@@ -430,7 +427,7 @@ mod tests {
             memory_bytes: 1 << 20,
             wall_clock: Duration::from_secs(5),
             max_output_bytes: 1 << 20,
-            max_rounds: MAX_ROUNDS,
+            max_rounds: gents_pack::plugin::DEFAULT_MAX_ROUNDS,
         };
         let outcome = drive(calls, json!({"state": {"n": 1}}), budget, round)
             .await
