@@ -45,6 +45,8 @@ pub const GOAL_FIELDS: &str = r#"
     wrapup_requested
     wrapup_completed
     infrastructure_retry_count
+    blocked_audit_threshold
+    max_infrastructure_retries
     last_failure
     completion_evidence
     auto_resume_at_reset

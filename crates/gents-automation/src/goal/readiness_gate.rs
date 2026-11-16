@@ -60,6 +60,8 @@ pub struct GoalContinuationFacts {
     pub infrastructure_retries: i64,
     pub wrapup_requested: bool,
     pub wrapup_completed: bool,
+    /// The Goal's pinned infrastructure retry limit.
+    pub max_infrastructure_retries: i64,
 }
 
 pub fn observe_goal_agent_readiness(
@@ -94,6 +96,7 @@ fn base_goal_decision(cause: GoalFailureCause, facts: &GoalContinuationFacts) ->
             facts.infrastructure_retries,
             facts.wrapup_requested,
             facts.wrapup_completed,
+            facts.max_infrastructure_retries,
         ),
         GoalFailureCause::GoalControlUnavailable => decide_goal_continuation(
             facts.status,
@@ -106,6 +109,7 @@ fn base_goal_decision(cause: GoalFailureCause, facts: &GoalContinuationFacts) ->
             facts.infrastructure_retries,
             facts.wrapup_requested,
             facts.wrapup_completed,
+            facts.max_infrastructure_retries,
         ),
         GoalFailureCause::AgentUnavailable => decide_goal_continuation(
             facts.status,
@@ -118,6 +122,7 @@ fn base_goal_decision(cause: GoalFailureCause, facts: &GoalContinuationFacts) ->
             facts.infrastructure_retries,
             facts.wrapup_requested,
             facts.wrapup_completed,
+            facts.max_infrastructure_retries,
         ),
     }
 }
