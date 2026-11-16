@@ -634,6 +634,7 @@ fn failed(row: &Value, class: &str) {
 
 #[tokio::test]
 async fn named_run_source_boundaries_follow_the_model_and_preserve_accepted_arguments() {
+    gents_lean_vocab::snapshot().await;
     let step = step0(
         json!({"result": {"answer": 42}}),
         Options {
