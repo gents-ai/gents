@@ -26,8 +26,24 @@ if [[ -L "${lake_link}" && "$(readlink "${lake_link}")" == "${cache_dir}" ]]; th
   exit 0
 fi
 
-if [[ -e "${lake_link}" || -L "${lake_link}" ]]; then
-  echo "::error::${lake_link} exists but is not the expected runner-local cache link."
+# A link to another cache, or a real .lake left by a build before this runner's
+# cache existed, is build output inside the job's own checkout: replace it.
+# Anything else, or a proofs directory that resolves outside the checkout, is
+# refused rather than removed.
+proofs_dir="$(cd "$(dirname "${lake_link}")" && pwd -P)"
+workspace_dir="$(cd "${GITHUB_WORKSPACE}" && pwd -P)"
+if [[ "${proofs_dir}" != "${workspace_dir}/"* ]]; then
+  echo "::error::${lake_link} resolves outside ${GITHUB_WORKSPACE}; refusing to replace it."
+  exit 1
+fi
+if [[ -L "${lake_link}" ]]; then
+  echo "Replacing stale Lean cache link ${lake_link} -> $(readlink "${lake_link}")"
+  rm -f "${lake_link}"
+elif [[ -d "${lake_link}" ]]; then
+  echo "Replacing stray Lean build directory ${lake_link}"
+  rm -rf "${lake_link}"
+elif [[ -e "${lake_link}" ]]; then
+  echo "::error::${lake_link} exists but is neither a directory nor a link; refusing to replace it."
   exit 1
 fi
 
