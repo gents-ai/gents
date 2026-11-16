@@ -696,7 +696,9 @@ pub async fn allow_general_agent_target(
     .unwrap();
 }
 
-pub struct StoppingParent;
+pub struct StoppingParent {
+    pub child_started: Arc<tokio::sync::Notify>,
+}
 
 impl ToolDyn for StoppingParent {
     fn name(&self) -> String {
@@ -716,13 +718,12 @@ impl ToolDyn for StoppingParent {
     fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
-            // A script that exhausts its own allowance drops the child call it awaits.
-            let stopped = tokio::time::timeout(
-                std::time::Duration::from_millis(200),
-                dispatcher.call(1, "stall", "{}"),
-            )
-            .await;
-            assert!(stopped.is_err(), "the child outlives the script");
+            let mut child = Box::pin(dispatcher.call(1, "stall", "{}"));
+            tokio::select! {
+                _ = self.child_started.notified() => {}
+                result = &mut child => panic!("the child completed before the parent stopped: {result:?}"),
+            }
+            drop(child);
             Err(ToolError::ReportedFailure {
                 class: gents_loop::tool_call_lifecycle::FailureClass::External,
                 text: "the plugin exceeded its wall-clock budget".into(),
@@ -731,7 +732,9 @@ impl ToolDyn for StoppingParent {
     }
 }
 
-pub struct Stall;
+pub struct Stall {
+    pub started: Arc<tokio::sync::Notify>,
+}
 
 impl ToolDyn for Stall {
     fn name(&self) -> String {
@@ -749,7 +752,10 @@ impl ToolDyn for Stall {
     }
 
     fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(std::future::pending())
+        Box::pin(async move {
+            self.started.notify_one();
+            std::future::pending().await
+        })
     }
 }
 
