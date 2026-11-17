@@ -7,7 +7,10 @@ struct Admitted {
     ready: Option<EffectResult>,
 }
 
-impl<H: SessionHook + 'static> EffectDispatcher<H> {
+impl<H> EffectDispatcher<H>
+where
+    H: SessionHook + 'static,
+{
     async fn finish_effect(&self, id: &str, result: EffectResult) -> EffectResult {
         let result = match self
             .hook
