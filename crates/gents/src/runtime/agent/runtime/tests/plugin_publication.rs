@@ -1396,18 +1396,26 @@ async fn real_policy_publication_recovery(mixed_startup: bool, hold_past_budget:
             .unwrap();
         assert!(demotion.unavailable_agents.contains_key(&plugin));
         forward_tx.send(demotion).await.unwrap();
-        tokio::time::timeout(STALL_CEILING, async {
-            loop {
-                active_rx.changed().await.unwrap();
-                let active = active_rx.borrow_and_update();
-                if !active.dispatchers.contains_key(&plugin) {
-                    assert!(active.dispatchers[&free].same_channel(&unrelated));
-                    break;
+        if mixed_startup {
+            // It was already absent in the degraded startup snapshot. The
+            // identical busy proposal is correctly a supervisor no-op, so
+            // no watch generation change is required or expected here.
+            assert!(!active_rx.borrow().dispatchers.contains_key(&plugin));
+            assert!(active_rx.borrow().dispatchers[&free].same_channel(&unrelated));
+        } else {
+            tokio::time::timeout(STALL_CEILING, async {
+                loop {
+                    active_rx.changed().await.unwrap();
+                    let active = active_rx.borrow_and_update();
+                    if !active.dispatchers.contains_key(&plugin) {
+                        assert!(active.dispatchers[&free].same_channel(&unrelated));
+                        break;
+                    }
                 }
-            }
-        })
-        .await
-        .unwrap();
+            })
+            .await
+            .unwrap();
+        }
     }
     drop(guard); // No config/health event is sent at or after release.
     let recovered = tokio::time::timeout(STALL_CEILING, async {

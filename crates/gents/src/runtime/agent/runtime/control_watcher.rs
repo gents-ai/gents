@@ -85,7 +85,7 @@ pub(super) async fn run_control_watcher_with_timing(
     .await
 }
 
-async fn run_control_watcher_inner(
+pub(super) async fn run_control_watcher_inner(
     inputs: ControlWatcherInputs,
     timing: ControlWatcherTiming,
     #[cfg(test)] probe: Option<WatcherTestProbe>,
@@ -563,19 +563,19 @@ fn busy_park_wake_is_not_fingerprint_deduplicated() {
 
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum WatcherFailure {
+pub(super) enum WatcherFailure {
     Reload,
     Resolve,
 }
 #[cfg(test)]
-enum WatcherTestEvent {
+pub(super) enum WatcherTestEvent {
     FailedIdle(Option<tokio::time::Instant>),
     Attempt(tokio::time::Instant, tokio::time::Instant),
 }
 #[cfg(test)]
-struct WatcherTestProbe {
-    failure: std::sync::Mutex<Option<WatcherFailure>>,
-    events: mpsc::UnboundedSender<WatcherTestEvent>,
+pub(super) struct WatcherTestProbe {
+    pub(super) failure: std::sync::Mutex<Option<WatcherFailure>>,
+    pub(super) events: mpsc::UnboundedSender<WatcherTestEvent>,
 }
 #[cfg(test)]
 impl WatcherTestProbe {
@@ -586,134 +586,5 @@ impl WatcherTestProbe {
             anyhow::bail!("injected single watcher operation failure");
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-#[tokio::test]
-async fn failed_reload_and_resolve_call_sites_reset_the_next_event_epoch() {
-    use super::tests::support::*;
-    for stage in [WatcherFailure::Reload, WatcherFailure::Resolve] {
-        let endpoint = MockModelEndpoint::start("default").unwrap();
-        let fixture = plugin_runtime_fixture(
-            "failed-watcher-epoch",
-            "backend-failed-watcher-epoch",
-            endpoint.endpoint(),
-        )
-        .await
-        .unwrap();
-        let agent = crate::Gents::from_default_agent_documents(
-            fixture.node.clone(),
-            fixture.runtime.clone(),
-            crate::runtime::agent::DocumentRuntimeOptions {
-                backend_admission: Some(fixture.admission()),
-                tool_ceiling: gents_tools::surface::ToolCeiling::meta_only(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        let context = agent.document_runtime_context().cloned().unwrap();
-        let owner = fixture.runtime.did().to_owned();
-        let status = RuntimeStatusHandle::new(fixture.node.clone(), &owner);
-        status
-            .initialize_startup(agent.default_agent_did())
-            .await
-            .unwrap();
-        let runtime = ToolRuntimeContext::new_with_node_did(
-            fixture.node.clone(),
-            Default::default(),
-            Default::default(),
-            "localhost",
-            None,
-            &owner,
-            Some(context.identity.clone()),
-        )
-        .with_plugins(context.plugins.clone());
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let (health_tx, health_rx) = mpsc::channel(1);
-        let (proposals_tx, mut proposals_rx) = mpsc::channel(4);
-        let (events, mut observed) = mpsc::unbounded_channel();
-        let timing = ControlWatcherTiming {
-            publication_wait: Duration::from_millis(100),
-            debounce: Duration::from_millis(10),
-            local_debounce: Duration::from_millis(10),
-            settle_retry: Duration::from_millis(1),
-            settle_window: Duration::ZERO,
-            idle_sleep: Duration::from_secs(3600),
-        };
-        let watcher = tokio::spawn(run_control_watcher_inner(
-            ControlWatcherInputs {
-                node: fixture.node.clone(),
-                backend_admission: fixture.admission(),
-                subscription: subscribe_control_changes(&fixture.node).unwrap(),
-                node_did: owner.clone(),
-                resolve_context: context,
-                tool_runtime: runtime,
-                proposals_tx,
-                runtime_status: status,
-                health_events_rx: health_rx,
-                shutdown: shutdown_rx,
-            },
-            timing,
-            Some(WatcherTestProbe {
-                failure: std::sync::Mutex::new(Some(stage)),
-                events,
-            }),
-        ));
-        match stage {
-            WatcherFailure::Reload => merge_fixture_document(
-                &fixture.user_access,
-                "test.failed_epoch.reload",
-                gents_store::collection::Collection::AgentContext,
-                &owner,
-                &format!("{}:context", agent.default_agent_did()),
-                serde_json::json!({"system_prompt":"reload to exercise the failed-idle call site"}),
-            )
-            .await,
-            WatcherFailure::Resolve => health_tx.send(()).await.unwrap(),
-        }
-        tokio::time::timeout(crate::support::live_inference::STALL_CEILING, async {
-            loop {
-                if let WatcherTestEvent::FailedIdle(deadline) = observed.recv().await.unwrap() {
-                    assert!(
-                        deadline.is_none(),
-                        "the actual failed-idle branch kept its stale epoch"
-                    );
-                    break;
-                }
-            }
-        })
-        .await
-        .unwrap();
-        let sent = tokio::time::Instant::now();
-        health_tx.send(()).await.unwrap();
-        let (deadline, attempt) =
-            tokio::time::timeout(crate::support::live_inference::STALL_CEILING, async {
-                loop {
-                    if let WatcherTestEvent::Attempt(deadline, attempt) =
-                        observed.recv().await.unwrap()
-                    {
-                        break (deadline, attempt);
-                    }
-                }
-            })
-            .await
-            .unwrap();
-        assert!(
-            attempt >= sent + timing.debounce,
-            "the next event lost its debounce"
-        );
-        assert!(
-            deadline >= sent + timing.publication_wait,
-            "the next event inherited the expired wait budget"
-        );
-        assert!(proposals_rx.recv().await.is_some());
-        shutdown_tx.send(true).unwrap();
-        tokio::time::timeout(crate::support::live_inference::STALL_CEILING, watcher)
-            .await
-            .unwrap()
-            .unwrap()
-            .unwrap();
     }
 }
