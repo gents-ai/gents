@@ -2617,6 +2617,7 @@ async fn plugin_resolution_surfaces(
         Some(absent_home.path().to_path_buf()),
     ));
     let installed_home = tempfile::tempdir().unwrap();
+    gents_pack::plugin::store::bootstrap_store(installed_home.path()).unwrap();
     let record: gents_pack::plugin::store::InstalledPlugin =
         serde_json::from_value(serde_json::json!({
             "namespace": "fixture",

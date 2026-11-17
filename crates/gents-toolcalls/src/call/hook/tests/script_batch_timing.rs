@@ -70,6 +70,7 @@ async fn scratch_persisted_script_batch_timing() {
         std::fs::read(std::env::var_os("GENTS_SCRIPT_WASM").expect("GENTS_SCRIPT_WASM")).unwrap();
     let bytes = gents_pack::plugin::test_fixtures::build_plugin_afb_bytes(&wasm);
     let (_, mut record) = gents_pack::plugin::test_fixtures::installed_echo();
+    gents_pack::plugin::store::bootstrap_store(home.path()).unwrap();
     let digest = format!("{:x}", sha2::Sha256::digest(&bytes));
     gents_pack::plugin::store::store_bytes(home.path(), &digest, &bytes).unwrap();
     record.digest = format!("sha256:{digest}");

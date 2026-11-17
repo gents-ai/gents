@@ -705,6 +705,7 @@ fn install_engine_wat(job: &Job, wat: &str) -> InstalledPlugin {
     let (source, record) = installed_plugin(wat, None);
     let hex = record.digest.strip_prefix("sha256:").unwrap();
     let home = &job.runtime.home;
+    store::bootstrap_store(home).unwrap();
     store::store_bytes(home, hex, &store::read_bytes(source.path(), hex).unwrap()).unwrap();
     let record = InstalledPlugin {
         namespace: "acme".into(),

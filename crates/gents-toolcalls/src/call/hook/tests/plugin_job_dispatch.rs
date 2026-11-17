@@ -182,6 +182,7 @@ fn install_plugin(
     } else {
         branching_wat(output.to_string().as_bytes(), later.to_string().as_bytes())
     };
+    store::bootstrap_store(home).unwrap();
     let (source, mut record) = installed_plugin(&wat, None);
     let hex = record.digest.strip_prefix("sha256:").unwrap().to_owned();
     store::store_bytes(home, &hex, &store::read_bytes(source.path(), &hex).unwrap()).unwrap();

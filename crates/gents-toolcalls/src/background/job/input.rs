@@ -1641,6 +1641,7 @@ pub(crate) mod tests {
         let node = open_with_agent().await;
         let home = tempfile::tempdir().unwrap();
         let cwd = tempfile::tempdir().unwrap();
+        gents_pack::plugin::store::bootstrap_store(home.path()).unwrap();
         gents_pack::plugin::store::write_record(home.path(), &plugin()).unwrap();
         let owner = ConfigAccess::local_as(node.clone(), identity::Did::new(node_did()).unwrap());
         let tools: Tools = serde_json::from_value(json!({
