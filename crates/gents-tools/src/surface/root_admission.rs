@@ -139,6 +139,58 @@ impl ToolRootRefusal {
     }
 }
 
+/// How the node publishes the root an Agent's host tools read: the premise Lean
+/// `Runtime.StartupDegraded.RootPublishing` names. Variants follow the model's
+/// declaration order, which is how the replayed cases spell them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RootPublishing {
+    NoPolicy,
+    PublishedEnabled,
+    PublishedDisabled,
+}
+
+/// What the policy said about the root the Agent's tools read, as Lean
+/// `Runtime.StartupDegraded.RootDenial` names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RootDenialKind {
+    Admitted,
+    NoAllowedRoots,
+    Outside,
+}
+
+impl RootDenialKind {
+    /// The guard's own denial, in the model's terms. `NoAllowedRoots` is its
+    /// own case; **every other** denial means the path fell outside the roots
+    /// this actor may use, and folds to `Outside`.
+    pub fn of(denial: RootDenialReason) -> Self {
+        match denial {
+            RootDenialReason::NoAllowedRoots => Self::NoAllowedRoots,
+            _ => Self::Outside,
+        }
+    }
+}
+
+/// Lean `Runtime.StartupDegraded.toolSurfaceReason`: the reason the runtime
+/// reports for a tool surface it could not build, from how the node publishes
+/// the root and what the policy said about it. A root the node publishes and
+/// enables that the Agent cannot read is the missing reader; every other
+/// denial is the unadmitted surface.
+pub fn tool_surface_reason(
+    publishing: RootPublishing,
+    denial: RootDenialKind,
+) -> gents_protocol::node_readiness::AgentReadinessUnavailableReason {
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
+    match (publishing, denial) {
+        (
+            RootPublishing::PublishedEnabled,
+            RootDenialKind::NoAllowedRoots | RootDenialKind::Outside,
+        ) => Reason::WorkspaceRootReaderMissing,
+        _ => Reason::ToolSurfaceUnavailable,
+    }
+}
+
 /// The reader-missing cause is the one a copy-pasteable grant fixes, and it has
 /// four spellings: root and home known, root known, home known, neither. It is
 /// its own value so the variant's `#[error]` stays a single reference and every
