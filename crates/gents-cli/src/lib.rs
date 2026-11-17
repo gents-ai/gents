@@ -580,6 +580,12 @@ pub(crate) async fn resolve_config_access_under_plugin_store(
     Ok((access, home))
 }
 
+/// How long an offline command waits for a previous holder of the home's
+/// store that declared its release, such as the node an earlier command in
+/// this process shut down (Lean `StoreHandoff.decide`); a serving runtime is
+/// refused at once.
+const OFFLINE_STORE_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub(crate) async fn resolve_pack_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
@@ -637,7 +643,13 @@ async fn resolve_config_access_inner(
         "the initialized data directory {} is unavailable",
         data_dir.display()
     );
-    let claim = gents_store::local::home::lock_store(&home_dir, &data_dir).map_err(|error| {
+    let claim = gents_store::local::home::acquire_store(
+        &home_dir,
+        &data_dir,
+        OFFLINE_STORE_RELEASE_WAIT,
+    )
+    .await
+    .map_err(|error| {
         let held = error.lock_held().is_some();
         let error = anyhow::Error::from(error);
         if held {
