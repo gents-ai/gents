@@ -1634,9 +1634,16 @@ fn pack_install_wire_previews_fresh_authored_slot_as_skipped() -> Result<()> {
         &fixture.tempdir.path().join("job_plugin_fixture"),
         |config| {
             config["agents"] = serde_json::json!([{"agent_slot": "fresh-worker",
-            "context_id": "fresh-context", "inference_profile_id": "fresh-profile"}]);
+            "context_id": "fresh-context", "inference_profile_id": "gents:inference-slot:worker"}]);
         },
     )?;
+    let manifest_path = fixture
+        .tempdir
+        .path()
+        .join("job_plugin_fixture/manifest.json");
+    let mut manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest_path)?)?;
+    manifest["inference_slots"] = serde_json::json!([{"name": "worker", "description": "Fresh preview worker", "agents": ["fresh-worker"]}]);
+    write_json_file(&manifest_path, &manifest)?;
     let preview = fixture.install_job_pack(&["--preview", "--wire", &fixture.agent])?;
     assert_eq!(preview["wired"][0]["slot"], "fresh-worker", "{preview}");
     assert_eq!(preview["wired"][0]["skipped"], true);

@@ -323,8 +323,12 @@ async fn hosted_fresh_install_preview_plans_wiring_without_publication() {
     let config_path = path.join("pack_config.json");
     let mut authored: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
-    authored["agents"] = json!([{"agent_slot": "fresh-worker", "context_id": "fresh-context", "inference_profile_id": "fresh-profile"}]);
+    authored["agents"] = json!([{"agent_slot": "fresh-worker", "context_id": "fresh-context", "inference_profile_id": "gents:inference-slot:worker"}]);
     std::fs::write(&config_path, serde_json::to_vec(&authored).unwrap()).unwrap();
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["inference_slots"] = json!([{"name": "worker", "description": "Fresh preview worker", "agents": ["fresh-worker"]}]);
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let (fresh_bytes, _) = gents_pack::pack::archive::pack_dir(&path).unwrap();
     let fresh_archive = PackArchive::from_bytes(&fresh_bytes).unwrap();
     let mut fresh_request: serde_json::Value =

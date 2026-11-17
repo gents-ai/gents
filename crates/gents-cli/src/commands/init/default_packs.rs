@@ -388,75 +388,6 @@ fn dynamic_workflows_enabled(tools: &gents_documents::Tools, plugins: &[String])
         })
 }
 
-/// Separate explicit operator transition. Wire/init never call this owner.
-async fn enable_dynamic_workflows(
-    access: &gents_store::config_client::ConfigAccess,
-    owner: &str,
-    engineer: &str,
-    source: &gents_pack::pack::resolved_pack::ResolvedPack,
-) -> Result<Value> {
-    let config = gents_pack::pack::load_pack_recorded_config(
-        access,
-        source.manifest(),
-        &gents_pack::pack::PackInstallOptions {
-            node_did: owner.to_owned(),
-        },
-        &|path| Ok(source.asset(path)?.to_vec()),
-        &|name| (name == "GENTS_PACK_NODE_DID").then(|| owner.to_owned()),
-    )
-    .await?;
-    let jobs: Vec<_> = source
-        .manifest()
-        .metadata
-        .plugins
-        .iter()
-        .filter(|p| p.job.0)
-        .map(|p| {
-            let coordinate = format!("{}/{}", source.manifest().metadata.namespace, p.name);
-            let job = config
-                .tools
-                .iter()
-                .flat_map(|t| t.integrations.iter())
-                .flat_map(|i| i.plugins.iter().flatten())
-                .find(|p| p.plugin == coordinate)
-                .and_then(|p| p.job.as_ref())
-                .with_context(|| format!("{coordinate} has no pack job targets"))?;
-            Ok((coordinate, job.policy.dynamic_targets.clone()))
-        })
-        .collect::<Result<_>>()?;
-    anyhow::ensure!(!jobs.is_empty(), "Dynamic Workflows has no dynamic plugins");
-    access
-        .transact_write("operator.enable_dynamic_workflows", |txn| {
-            let jobs = &jobs;
-            Box::pin(async move {
-                let (_, tools) =
-                    gents_documents::load_agent_context_and_tools_in_txn(txn, owner, engineer)
-                        .await?;
-                let mut tools = tools.context("Engineer has no Tools")?;
-                let mut policies = Vec::new();
-                for (coordinate, targets) in jobs {
-                    policies.push(gents_pack::pack::operator_enable_dynamic(
-                        &mut tools, coordinate, targets,
-                    )?);
-                }
-                let plugins: Vec<_> = jobs
-                    .iter()
-                    .map(|(coordinate, _)| coordinate.clone())
-                    .collect();
-                let enabled = dynamic_workflows_enabled(&tools, &plugins);
-                anyhow::ensure!(enabled, "explicit enable did not establish run policy");
-                gents_documents::write_tools_document_in_txn(
-                    txn,
-                    &tools,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await?;
-                Ok(json!({"enabled":enabled, "policies":policies}))
-            })
-        })
-        .await
-}
-
 /// An installed core pack's record and what it leaves on the Engineer.
 type Installed = (gents_pack::pack::HomePackInstall, Result<Wiring, String>);
 
@@ -503,8 +434,30 @@ async fn engineer_packs(home: &Path) -> Result<Option<Vec<(CorePack, Option<Inst
 /// Each core pack as `home` has it, with `archives` the release's. A home
 /// whose default agent is not the Engineer has none.
 pub(crate) async fn status(home: &Path, archives: Archives<'_>) -> Result<Vec<PackStatus>> {
-    let Some(packs) = engineer_packs(home).await? else {
-        return Ok(Vec::new());
+    let packs = match engineer_packs(home).await {
+        Ok(Some(packs)) => packs,
+        Ok(None) => return Ok(Vec::new()),
+        Err(error) => {
+            // Opening the local store validates plugin protection metadata.
+            // If that fails, no pack's runtime state is observable. Preserve
+            // the diagnostic as Unknown rather than fail the entire status.
+            let reason = format!("cannot observe core-pack status: {error:#}");
+            return Ok(CorePack::ALL
+                .into_iter()
+                .map(|pack| {
+                    let (purpose, without) = describe(pack);
+                    PackStatus {
+                        pack: pack.coordinate(),
+                        purpose,
+                        without,
+                        state: PackState::Unknown,
+                        version: None,
+                        reason: Some(reason.clone()),
+                        enable_with: None,
+                    }
+                })
+                .collect());
+        }
     };
     Ok(packs
         .into_iter()
@@ -750,7 +703,7 @@ async fn apply(
             Vec::new()
         };
         let dynamic_enable = if consent == Consent::Explicit && pack == CorePack::DynamicWorkflows {
-            Some(enable_dynamic_workflows(&wire_access, &owner, engineer, &source).await
+            Some(gents_pack::pack::plugin_wire::enable_pack_dynamic(&wire_access, &owner, engineer, &source, home, gents_service::home_state::load_held_user_identity).await
                 .with_context(|| format!("{coordinate} wiring completed, but enabling run policy failed in a second transaction; retryable: run {} again", enable_command(home, pack)))?)
         } else {
             None
@@ -1910,7 +1863,12 @@ mod tests {
             .unwrap();
         assert_eq!(workflow.state, PackState::Unknown);
         assert!(!workflow.reason.as_deref().unwrap().is_empty());
-        assert!(listed.iter().any(|p| p.state == PackState::Installed));
+        assert!(listed.iter().all(|p| p.state == PackState::Unknown));
+        assert!(workflow
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("workflow.json"));
     }
 
     /// A home set up before any inference provider exists, as the desktop

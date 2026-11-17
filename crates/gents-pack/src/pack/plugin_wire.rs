@@ -241,6 +241,142 @@ pub async fn wire_pack_plugins(
     .await
 }
 
+/// Separate explicit operator transition. Wire/init never call this owner.
+pub async fn enable_pack_dynamic(
+    access: &gents_store::config_client::ConfigAccess,
+    owner: &str,
+    engineer: &str,
+    source: &crate::pack::resolved_pack::ResolvedPack,
+    home: &Path,
+    held_user: LoadHeldUser,
+) -> Result<Value> {
+    if let ConfigAccess::Graphql(endpoint) = access {
+        if access.actor_did().as_deref() == Some(owner) {
+            return operator_remote(
+                endpoint,
+                owner,
+                &PackOperatorAction::EnableDynamic {
+                    digest: source.digest().to_owned(),
+                    agent: engineer.to_owned(),
+                },
+            )
+            .await;
+        }
+    }
+    let config = crate::pack::load_pack_recorded_config(
+        access,
+        source.manifest(),
+        &crate::pack::PackInstallOptions {
+            node_did: owner.to_owned(),
+        },
+        &|path| Ok(source.asset(path)?.to_vec()),
+        &|name| (name == "GENTS_PACK_NODE_DID").then(|| owner.to_owned()),
+    )
+    .await?;
+    let jobs: Vec<_> = source
+        .manifest()
+        .metadata
+        .plugins
+        .iter()
+        .filter(|p| p.job.0)
+        .map(|p| {
+            let coordinate = format!("{}/{}", source.manifest().metadata.namespace, p.name);
+            let job = config
+                .tools
+                .iter()
+                .flat_map(|t| t.integrations.iter())
+                .flat_map(|i| i.plugins.iter().flatten())
+                .find(|p| p.plugin == coordinate)
+                .and_then(|p| p.job.as_ref())
+                .with_context(|| format!("{coordinate} has no pack job targets"))?;
+            Ok((coordinate, job.policy.dynamic_targets.clone()))
+        })
+        .collect::<Result<_>>()?;
+    anyhow::ensure!(!jobs.is_empty(), "Dynamic Workflows has no dynamic plugins");
+    if matches!(access, ConfigAccess::Local(_)) {
+        let client = held_user(home).await?;
+        anyhow::ensure!(
+            access.actor_did().as_deref() == Some(client.did()),
+            "pack enable requires the held User identity selected by the local transaction"
+        );
+        let scope = PackApprovalScope {
+            node_did: owner.to_owned(),
+            pack_digests: vec![source.digest().to_owned()],
+            nonce: uuid::Uuid::new_v4().to_string(),
+        };
+        let approver = Arc::new(LocalWireApprover {
+            actor: client.client_signing_capability()?,
+            scope: scope.clone(),
+        });
+        access
+            .transact_write_verified_pack_with_finality(
+                "operator.enable_dynamic_workflows",
+                scope,
+                approver,
+                |txn| {
+                    let jobs = &jobs;
+                    Box::pin(enable_dynamic_in_txn(txn, owner, engineer, jobs))
+                },
+            )
+            .await
+            .map_err(|failure| {
+                if failure.unconfirmed {
+                    failure
+                        .error
+                        .context("enable commit was not confirmed; inspect policy before retrying")
+                } else {
+                    failure.error
+                }
+            })
+    } else {
+        access
+            .transact_write("operator.enable_dynamic_workflows", |txn| {
+                let jobs = &jobs;
+                Box::pin(enable_dynamic_in_txn(txn, owner, engineer, jobs))
+            })
+            .await
+    }
+}
+
+async fn enable_dynamic_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    engineer: &str,
+    jobs: &[(String, Vec<String>)],
+) -> Result<Value> {
+    let (_, tools) =
+        gents_documents::load_agent_context_and_tools_in_txn(txn, owner, engineer).await?;
+    let mut tools = tools.context("Engineer has no Tools")?;
+    let mut policies = Vec::new();
+    for (coordinate, targets) in jobs {
+        policies.push(crate::pack::operator_enable_dynamic(
+            &mut tools, coordinate, targets,
+        )?);
+    }
+    let plugins: Vec<_> = jobs
+        .iter()
+        .map(|(coordinate, _)| coordinate.clone())
+        .collect();
+    let enabled = !plugins.is_empty()
+        && plugins.iter().all(|coordinate| {
+            let job = tools
+                .integrations
+                .as_ref()
+                .and_then(|i| i.plugins.as_ref())
+                .and_then(|p| p.iter().find(|p| &p.plugin == coordinate))
+                .and_then(|p| p.job.as_ref());
+            crate::pack::dynamic_enabled(job)
+        });
+    anyhow::ensure!(enabled, "explicit enable did not establish run policy");
+    gents_documents::write_tools_document_in_txn(
+        txn,
+        &tools,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
+    Ok(json!({"enabled":enabled, "policies":policies}))
+}
+
 /// Options for a wiring batch. Dynamic enablement is a separate operator
 /// transition; neither preview nor apply can elevate stored dynamic policy.
 #[derive(Debug, Clone, Copy, Default)]
@@ -283,6 +419,26 @@ pub async fn wire_pack_batch(
                     })
                 })
                 .collect());
+        }
+    }
+    if let ConfigAccess::Graphql(endpoint) = access {
+        if access.actor_did().as_deref() == Some(owner) {
+            let value = operator_remote(
+                endpoint,
+                owner,
+                &PackOperatorAction::WireBatch {
+                    digest: pack.digest().to_owned(),
+                    agents: agents.to_vec(),
+                    preview,
+                    tool_calls_consent,
+                },
+            )
+            .await?;
+            let mut receipts: Vec<Value> = serde_json::from_value(value)?;
+            for receipt in &mut receipts {
+                super::plugin_wiring::render_wire_receipt(receipt, warning_surface)?;
+            }
+            return Ok(receipts);
         }
     }
     let namespace = &pack.manifest().metadata.namespace;
@@ -626,12 +782,74 @@ pub struct WireCommand {
     pub request: WireRequest,
 }
 
+/// Explicit operations admitted by the existing Node-signed operator route.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PackOperatorAction {
+    WireBatch {
+        digest: String,
+        agents: Vec<String>,
+        preview: bool,
+        tool_calls_consent: bool,
+    },
+    EnableDynamic {
+        digest: String,
+        agent: String,
+    },
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackOperatorCommand {
+    pub node_did: String,
+    pub action: PackOperatorAction,
+}
+
+/// Backwards compatible with single-plugin wire requests.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+pub enum OperatorCommand {
+    Single(WireCommand),
+    Pack(PackOperatorCommand),
+}
+
+impl OperatorCommand {
+    pub fn node_did(&self) -> &str {
+        match self {
+            Self::Single(command) => &command.node_did,
+            Self::Pack(command) => &command.node_did,
+        }
+    }
+}
+
+pub async fn operator_remote(
+    endpoint: &gents_store::config_client::GraphqlEndpoint,
+    owner: &str,
+    action: &PackOperatorAction,
+) -> Result<Value> {
+    send_operator(endpoint, &json!({"node_did": owner, "action": action})).await
+}
+
 /// Sends `request` to the runtime serving `endpoint`'s node, once: its
 /// outcome is unconfirmed when no answer arrives, so it is never retried.
 pub async fn wire_remote(
     endpoint: &gents_store::config_client::GraphqlEndpoint,
     owner: &str,
     request: &WireRequest,
+) -> Result<Value> {
+    send_operator(
+        endpoint,
+        &serde_json::to_value(WireCommand {
+            node_did: owner.to_owned(),
+            request: request.clone(),
+        })?,
+    )
+    .await
+}
+
+async fn send_operator(
+    endpoint: &gents_store::config_client::GraphqlEndpoint,
+    command: &Value,
 ) -> Result<Value> {
     let mut url = reqwest::Url::parse(endpoint.url())?;
     anyhow::ensure!(
@@ -653,10 +871,7 @@ pub async fn wire_remote(
         .build()?;
     let response = endpoint
         .authorize(client.post(url))?
-        .json(&WireCommand {
-            node_did: owner.to_owned(),
-            request: request.clone(),
-        })
+        .json(command)
         .send()
         .await
         .map_err(|error| {

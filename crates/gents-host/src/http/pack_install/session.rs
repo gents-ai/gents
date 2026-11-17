@@ -722,7 +722,7 @@ async fn preview(
             anyhow::anyhow!("a hosted preview takes a documents pack"),
         ));
     }
-    super::install_owned(state.clone(), home, received, access)
+    super::install_owned(&state.node_did, home, received, access)
         .await
         .map_err(|error| {
             SessionFailure::change_refusal(&error).unwrap_or_else(|| {
