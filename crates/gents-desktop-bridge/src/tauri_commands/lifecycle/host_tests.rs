@@ -41,6 +41,9 @@ async fn an_existing_listener_reservation_prevents_desktop_from_opening_the_stor
     assert_eq!(error.code, BridgeErrorCode::ClientStartFailed);
     assert!(current_core(&app.state::<DesktopAppState>()).is_none());
     assert!(!paths.principal_metadata_path().exists());
+    tokio::time::timeout(Duration::from_secs(10), released.released())
+        .await
+        .expect("exclusion releases the store once the client is gone");
     let claim = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
     drop(claim);
     drop(listener);
@@ -79,6 +82,8 @@ async fn desktop_start_publishes_its_client_and_exclusion_closes_attachments_bef
     let state = app.state::<DesktopAppState>();
     let core = current_core(&state).unwrap();
     let client_did = core.node_identity().did().to_owned();
+    let released = core.store_release().expect("a claimed client");
+    drop(core);
     let stream = local::connect(&paths).await.unwrap();
     let mut client = LengthDelimitedCodec::builder().new_framed(stream);
     client
