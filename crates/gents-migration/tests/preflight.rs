@@ -216,10 +216,19 @@ async fn hidden_tool_names_append_preserves_existing_field_ids() {
     let fresh = fresh_node().await;
     fresh.add_collection(schemas::TOOLS).await.unwrap();
     let fresh_tools = fresh.get_collection("Tools").unwrap().unwrap();
-    assert_eq!(
-        serde_json::to_value(&after.fields).unwrap(),
-        serde_json::to_value(&fresh_tools.fields).unwrap()
-    );
+    // DefraDB appends the patch field, while fresh SDL registration sorts fields.
+    // Compare complete definitions by name, including FieldID, not list order.
+    let patched_fields: std::collections::BTreeMap<_, _> = after
+        .fields
+        .iter()
+        .map(|field| (field.name.clone(), serde_json::to_value(field).unwrap()))
+        .collect();
+    let fresh_fields: std::collections::BTreeMap<_, _> = fresh_tools
+        .fields
+        .iter()
+        .map(|field| (field.name.clone(), serde_json::to_value(field).unwrap()))
+        .collect();
+    assert_eq!(patched_fields, fresh_fields);
     fresh.shutdown().await.unwrap();
     node.shutdown().await.unwrap();
 }
