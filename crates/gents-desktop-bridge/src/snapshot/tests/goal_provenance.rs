@@ -655,7 +655,12 @@ async fn paged_native_forks_follow_goal_provenance() {
             .as_array()
             .unwrap()
             .iter()
-            .filter(|row| row["request_doc_id"] == request)
+            // Authored request context is a separate user row. This helper
+            // selects the prompt, not every row attached to the same request.
+            .filter(|row| {
+                row["request_doc_id"] == request
+                    && row["message_key"] == format!("authored:{request}:prompt")
+            })
             .map(|row| row["message_key"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>();
         assert_eq!(keys.len(), 1, "{request} publishes one prompt: {messages}");
