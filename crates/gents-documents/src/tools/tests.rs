@@ -192,3 +192,40 @@ fn hidden_remote_names_use_selected_invocations_not_the_service_catalog() {
         .validate_hidden_tools(&crate::MergedSurfaceTools::default())
         .is_err());
 }
+
+#[test]
+fn hidden_datastore_and_plugin_names_must_be_selected_not_just_available() {
+    use gents_store::collection::Collection;
+    let mut tools = document(json!({
+        "datastore":{"datastore_tool_surface_ids":["selected"]},
+        "integrations":{"plugins":[{"plugin":"script/script","tool_calls":true},{"plugin":"team/schema"}]},
+        "hidden_tool_names":["read_selected", "schema"]
+    }));
+    let surface = |id: &str, name: &str| -> crate::DatastoreToolSurfaceDocument {
+        serde_json::from_value(json!({"node_did":"owner","surface_id":id,
+            "entries":[{"kind":"query","tool_name":name,"collection":"Records","fields":["name"],"description":"Reads rows."}]})).unwrap()
+    };
+    let selected = surface("selected", "read_selected");
+    let available = surface("available", "read_available");
+    let validate = |tools: &Tools| {
+        crate::ConfigReferences::from_documents(
+            "owner",
+            [
+                (Collection::Tools, serde_json::to_value(tools).unwrap()),
+                (
+                    Collection::DatastoreToolSurface,
+                    serde_json::to_value(&selected).unwrap(),
+                ),
+                (
+                    Collection::DatastoreToolSurface,
+                    serde_json::to_value(&available).unwrap(),
+                ),
+            ],
+        )
+        .unwrap()
+        .validate()
+    };
+    validate(&tools).unwrap();
+    tools.hidden_tool_names = vec!["read_available".into()];
+    assert!(validate(&tools).is_err());
+}
