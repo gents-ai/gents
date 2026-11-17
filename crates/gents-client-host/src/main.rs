@@ -98,7 +98,7 @@ async fn client_main(args: Args) -> Result<()> {
                 "commands": protocol::ClientCommand::NAMES,
                 "os": std::env::consts::OS,
                 "arch": std::env::consts::ARCH,
-                "transportSupported": cfg!(any(unix, windows)),
+                "transportSupported": cfg!(unix),
                 "localRuntimeCli": true,
                 "runtimeKeyUnlock": true,
                 "runtimeKeyUnlockAndPrepare": true,
@@ -112,6 +112,10 @@ async fn client_main(args: Args) -> Result<()> {
         output.write_all(b"\n")?;
         return Ok(());
     }
+    anyhow::ensure!(
+        cfg!(unix),
+        "The native Gents client requires a Unix host. Use WSL or a remote Linux host on Windows."
+    );
     gents_desktop_bridge::logging::init_tracing_with_config(gents_desktop_bridge::TracingConfig {
         filter: None,
         console: true,
