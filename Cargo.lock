@@ -6697,6 +6697,7 @@ version = "1.0.0-rc2"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "blake3",
  "bs58",
  "chrono",

@@ -41,11 +41,10 @@ pub(super) async fn auto_commit(
         Some(variables) => serde_json::json!({"query": mutation, "variables": variables}),
         None => serde_json::json!({"query": mutation}),
     };
+    let client = http_client().await?;
     let response = endpoint
-        .authorize(http_client().await?.post(endpoint.url()))?
-        .json(&body)
-        .send()
-        .await
+        .send_resolving(|endpoint| Ok(endpoint.authorize(client.post(endpoint.url()))?.json(&body)))
+        .await?
         .map_err(|source| ConfigClientError::PostMutation {
             endpoint: endpoint.to_string(),
             source,
@@ -80,6 +79,27 @@ pub(super) async fn query_with_options(
     options: GraphqlRequestOptions,
 ) -> Result<Value> {
     ensure_query_document(query)?;
+    let answered = query_once(endpoint, query, variables, options).await;
+    let refused = match &answered {
+        Err(ConfigClientError::Protocol(error)) => {
+            error.transport_error().and_then(reqwest::Error::status)
+        }
+        _ => None,
+    };
+    match refused {
+        Some(status) if endpoint.recovers_refusal(status).await => {
+            query_once(endpoint, query, variables, options).await
+        }
+        _ => answered,
+    }
+}
+
+async fn query_once(
+    endpoint: &GraphqlEndpoint,
+    query: &str,
+    variables: Option<&Value>,
+    options: GraphqlRequestOptions,
+) -> Result<Value> {
     let authorization = endpoint.authorization()?;
     Ok(match variables {
         Some(variables) => {
@@ -110,9 +130,8 @@ pub(super) async fn txn_begin(
         path
     };
     let response = endpoint
-        .authorize(client.post(url))?
-        .send()
-        .await
+        .send_resolving(|endpoint| endpoint.authorize(client.post(&url)))
+        .await?
         .map_err(|source| ConfigClientError::PostTxBegin {
             endpoint: endpoint.to_string(),
             source,

@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    resend, CredentialRefusal, DelegationAudience, HeldAudienceChange, ReportedDelegationAudience,
+    resend, CredentialAnswer, CredentialRefusal, DelegationAudience, HeldAudienceChange,
+    PresentedCredential, ReportedDelegationAudience,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -98,5 +99,58 @@ fn a_refused_request_is_sent_again_as_the_lean_model_says() {
             Change::Forgotten => HeldAudienceChange::Forgotten,
         };
         resend(input.resent, refusal, &record)
+    });
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Answer {
+    Unauthorized,
+    Forbidden,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Credential {
+    Anonymous,
+    CallerBearer,
+    SignerRequired,
+    IdentityToken,
+    Delegation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RefusalOut {
+    DelegationRequired,
+    DelegationRefused,
+    Other,
+}
+
+#[test]
+fn a_refused_request_is_read_as_the_lean_model_reads_it() {
+    gents_lean_vocab::families::identity_held_audience_refusal_of::replay::<
+        Answer,
+        Credential,
+        RefusalOut,
+    >(|input| {
+        let answer = CredentialAnswer::of_status(match input.answer {
+            Answer::Unauthorized => 401,
+            Answer::Forbidden => 403,
+            Answer::Other => 500,
+        });
+        let presented = match input.presented {
+            Credential::IdentityToken => PresentedCredential::IdentityToken,
+            Credential::Delegation => PresentedCredential::Delegation,
+            Credential::Anonymous | Credential::CallerBearer | Credential::SignerRequired => {
+                PresentedCredential::None
+            }
+        };
+        match CredentialRefusal::of(answer, presented) {
+            CredentialRefusal::DelegationRequired => RefusalOut::DelegationRequired,
+            CredentialRefusal::DelegationRefused => RefusalOut::DelegationRefused,
+            CredentialRefusal::Other => RefusalOut::Other,
+        }
     });
 }

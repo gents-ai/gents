@@ -90,9 +90,8 @@ where
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
     let mut response = endpoint
-        .authorize(client.post(url).json(body))?
-        .send()
-        .await?
+        .send_resolving(|endpoint| endpoint.authorize(client.post(url.clone()).json(body)))
+        .await??
         .error_for_status()?;
     if response
         .content_length()

@@ -35,11 +35,7 @@ impl crate::client::ClientCore {
             let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
                 self.node_identity().private_key_bytes(),
             )?;
-            crate::client::home_endpoint::user_at(
-                graphql,
-                &capability,
-                record.delegation_audience.as_ref(),
-            )?
+            crate::client::home_endpoint::user_on(graphql, &capability, record)?
         } else {
             return Ok(None);
         };
@@ -66,9 +62,8 @@ impl crate::client::ClientCore {
             .timeout(std::time::Duration::from_secs(2))
             .build()?;
         let mut response = endpoint
-            .authorize(client.post(url).json(key))?
-            .send()
-            .await
+            .send_resolving(|endpoint| endpoint.authorize(client.post(url.clone()).json(key)))
+            .await?
             .map_err(|error| {
                 let message = error.to_string();
                 crate::error::BridgeError::runtime_http_error(error, message)

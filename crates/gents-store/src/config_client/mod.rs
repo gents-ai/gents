@@ -53,6 +53,7 @@ mod error;
 #[cfg(test)]
 mod event_policy_conformance;
 mod graphql;
+mod held_audience;
 pub mod node_deferred_operation;
 mod node_document_publication;
 mod node_permissions;
@@ -170,6 +171,7 @@ pub use delegation::mint_with_lifetime_for_test;
 pub use delegation::{DelegationError, VERA_DELEGATION_LIFETIME};
 pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
 pub use error::{ConfigClientError, RerunNote, RerunRequest, TransactionConflict};
+pub use held_audience::ResolveAudience;
 pub use relationships::ConfigRelationshipGrant;
 pub(crate) use retry::access_owner;
 pub use retry::TransactionFailure;
@@ -198,7 +200,7 @@ pub struct GraphqlEndpoint {
     delegated_authorization: Option<reqwest::header::HeaderValue>,
     client_signed_agent_creates: bool,
     client_signing_capability: Option<ClientSigningCapability>,
-    delegation_audience: Option<Arc<gents_protocol::delegation_audience::DelegationAudience>>,
+    delegation_audience: held_audience::HeldAudienceCell,
     pack_replay: Option<pack_effect::PackReplayHandle>,
     extensions: crate::node_extension::Extensions,
 }
@@ -211,7 +213,7 @@ impl GraphqlEndpoint {
             delegated_authorization: None,
             client_signed_agent_creates: false,
             client_signing_capability: None,
-            delegation_audience: None,
+            delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
         }
@@ -224,7 +226,7 @@ impl GraphqlEndpoint {
             delegated_authorization: None,
             client_signed_agent_creates: false,
             client_signing_capability: None,
-            delegation_audience: None,
+            delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
         }
@@ -247,7 +249,7 @@ impl GraphqlEndpoint {
             delegated_authorization: Some(header),
             client_signed_agent_creates: false,
             client_signing_capability: None,
-            delegation_audience: None,
+            delegation_audience: held_audience::HeldAudienceCell::default(),
             pack_replay: None,
             extensions: crate::node_extension::Extensions::default(),
         })
@@ -316,11 +318,11 @@ impl GraphqlEndpoint {
         reported: gents_protocol::delegation_audience::ReportedDelegationAudience,
     ) -> Result<Self> {
         use gents_protocol::delegation_audience::ReportedDelegationAudience as Reported;
-        self.delegation_audience = match reported {
+        self.delegation_audience = held_audience::HeldAudienceCell::new(match reported {
             Reported::Absent => None,
-            Reported::Named(audience) => Some(Arc::new(audience)),
+            Reported::Named(audience) => Some(audience),
             Reported::Unavailable => return Err(DelegationError::AudienceUnavailable.into()),
-        };
+        });
         Ok(self)
     }
 
@@ -391,7 +393,7 @@ impl GraphqlEndpoint {
     pub fn mints_delegations(&self) -> bool {
         self.delegated_authorization.is_none()
             && self.client_signing_capability.is_some()
-            && self.delegation_audience.is_some()
+            && self.delegation_audience.get().is_some()
     }
 
     pub fn authorization(&self) -> Result<Option<String>> {
@@ -404,7 +406,7 @@ impl GraphqlEndpoint {
         let Some(capability) = &self.client_signing_capability else {
             return Err(ConfigClientError::ClientAgentSignerRequired);
         };
-        let authorization = match &self.delegation_audience {
+        let authorization = match &self.delegation_audience.get() {
             Some(node) => format!("Bearer {}", delegation::mint(capability, node)?),
             None => crate::identity::defradb_bearer_authorization_with_config(
                 did,

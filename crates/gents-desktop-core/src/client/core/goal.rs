@@ -531,8 +531,10 @@ mod tests {
         assert!(
             requests
                 .iter()
-                .all(|request| request.headers.contains_key("authorization")),
-            "every runtime read is signed as the User"
+                .all(|request| request.headers.contains_key("authorization")
+                    || (request.method == wiremock::http::Method::GET
+                        && request.url.path() == "/status")),
+            "every runtime read but the public status is signed as the User"
         );
         assert!(
             warm.is_err(),

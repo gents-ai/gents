@@ -98,5 +98,43 @@ pub fn resend(resent: bool, refusal: CredentialRefusal, record: &HeldAudienceCha
         )
 }
 
+/// What a node answered a request with, as far as its credential goes
+/// (`Identity.HeldAudience.Answer`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialAnswer {
+    Unauthorized,
+    Forbidden,
+    Other,
+}
+
+impl CredentialAnswer {
+    pub fn of_status(status: u16) -> Self {
+        match status {
+            401 => Self::Unauthorized,
+            403 => Self::Forbidden,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// The credential a request presented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresentedCredential {
+    None,
+    IdentityToken,
+    Delegation,
+}
+
+impl CredentialRefusal {
+    /// `Identity.HeldAudience.refusalOf`.
+    pub fn of(answer: CredentialAnswer, presented: PresentedCredential) -> Self {
+        match (answer, presented) {
+            (CredentialAnswer::Other, _) | (_, PresentedCredential::None) => Self::Other,
+            (_, PresentedCredential::IdentityToken) => Self::DelegationRequired,
+            (_, PresentedCredential::Delegation) => Self::DelegationRefused,
+        }
+    }
+}
+
 #[cfg(test)]
 mod conformance;

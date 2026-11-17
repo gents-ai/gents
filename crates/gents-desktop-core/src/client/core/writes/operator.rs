@@ -119,7 +119,13 @@ impl ClientCore {
                         self.node_identity.private_key_bytes(),
                     )
                     .ok()?;
-                let endpoint = crate::client::home_endpoint::user_for(record, &capability)?;
+                let endpoint = crate::client::home_endpoint::user_saved(
+                    record.operator_graphql()?,
+                    &capability,
+                    record,
+                    &self.sync_state,
+                )
+                .ok()?;
                 gents::runtime::lifecycle_hooks::compose_endpoint(
                     endpoint.with_client_signed_agent_creates(),
                 )
@@ -209,10 +215,11 @@ impl ClientCore {
                     )?;
                 Ok(ConfigAccess::Graphql(
                     gents::runtime::lifecycle_hooks::compose_endpoint(
-                        crate::client::home_endpoint::user_at(
+                        crate::client::home_endpoint::user_saved(
                             url,
                             &capability,
-                            record.delegation_audience.as_ref(),
+                            &record,
+                            &self.sync_state,
                         )?
                         .with_client_signed_agent_creates(),
                     )?,
@@ -249,12 +256,10 @@ impl ClientCore {
             self.node_identity.private_key_bytes(),
         )
         .map_err(LocalHomeAccessError::Signing)?;
-        Ok(crate::client::home_endpoint::user_at(
-            url,
-            &capability,
-            record.delegation_audience.as_ref(),
+        Ok(
+            crate::client::home_endpoint::user_saved(url, &capability, record, &self.sync_state)
+                .map_err(LocalHomeAccessError::Signing)?
+                .with_client_signed_agent_creates(),
         )
-        .map_err(LocalHomeAccessError::Signing)?
-        .with_client_signed_agent_creates())
     }
 }

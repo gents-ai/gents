@@ -510,13 +510,7 @@ impl crate::client::ClientCore {
             .graphql
             .as_deref()
             .context("runtime has no HTTP endpoint")?;
-        read_inference_setup_state_from(
-            graphql,
-            record.delegation_audience.as_ref(),
-            node_did,
-            self.node_identity(),
-        )
-        .await
+        read_inference_setup_state_from(graphql, Some(record), node_did, self.node_identity()).await
     }
 }
 
@@ -524,7 +518,7 @@ impl crate::client::ClientCore {
 /// opened; bound the HTTP wait as well as the response body.
 async fn read_inference_setup_state_from(
     graphql: &str,
-    audience: Option<&gents_protocol::delegation_audience::DelegationAudience>,
+    record: Option<&crate::client::PeerRecord>,
     node_did: &str,
     client_identity: &crate::client::PrincipalIdentity,
 ) -> anyhow::Result<InferenceSetupState> {
@@ -551,11 +545,13 @@ async fn read_inference_setup_state_from(
     let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         client_identity.private_key_bytes(),
     )?;
-    let endpoint = crate::client::home_endpoint::user_at(graphql, &capability, audience)?;
+    let endpoint = match record {
+        Some(record) => crate::client::home_endpoint::user_on(graphql, &capability, record)?,
+        None => crate::client::home_endpoint::user_at(graphql, &capability, None)?,
+    };
     let mut response = endpoint
-        .authorize(client.get(url))?
-        .send()
-        .await
+        .send_resolving(|endpoint| endpoint.authorize(client.get(url.clone())))
+        .await?
         .map_err(|error| {
             crate::error::BridgeError::runtime_http_error(
                 error,

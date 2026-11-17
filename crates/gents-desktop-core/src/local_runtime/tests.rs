@@ -639,12 +639,15 @@ async fn hosted_runtime_status_reads_as_the_user_and_never_loads_the_node_key() 
         "{error:#}"
     );
     assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
-    assert!(server
-        .received_requests()
-        .await
-        .unwrap()
+    let requests = server.received_requests().await.unwrap();
+    let (signed, public): (Vec<_>, Vec<_>) = requests
         .iter()
-        .all(|request| request.headers.contains_key("authorization")));
+        .partition(|request| request.headers.contains_key("authorization"));
+    assert!(signed.len() >= 2);
+    assert!(
+        public.iter().all(|request| request.url.path() == "/status"),
+        "only the public status, read after a refusal, goes unsigned"
+    );
 }
 
 #[test]

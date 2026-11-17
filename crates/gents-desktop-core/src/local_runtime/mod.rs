@@ -509,9 +509,8 @@ async fn read_runtime_status(
     let status_url = runtime_status_url(endpoint.url())?;
     let client = runtime_http_client().await?;
     let response = endpoint
-        .authorize(client.get(&status_url))?
-        .send()
-        .await
+        .send_resolving(|endpoint| endpoint.authorize(client.get(&status_url)))
+        .await?
         .map_err(|error| {
             crate::error::BridgeError::runtime_http_error(
                 error,

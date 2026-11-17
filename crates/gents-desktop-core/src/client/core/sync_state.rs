@@ -24,7 +24,7 @@ pub(in crate::client) struct ClientSyncStateOwner {
 
 impl ClientSyncStateOwner {
     #[cfg(test)]
-    pub(super) async fn for_test(
+    pub(in crate::client) async fn for_test(
         records: Vec<PeerRecord>,
         peers: Vec<ClientPeerStatus>,
     ) -> (tempfile::TempDir, Self) {
