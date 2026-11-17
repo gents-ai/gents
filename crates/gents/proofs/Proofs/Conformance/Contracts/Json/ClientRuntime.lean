@@ -901,25 +901,33 @@ def outputViewJson : StreamingResponse.View → String
       (",\"message\":" ++ canonicalMessageJson message ++
        ",\"native\":" ++ reconstructedMessageJson native)
 
+/-- One fixture row. A tool result carries the byte sizes the reducer
+measures for it: its payload is `originalBytes` bytes, and `stubBytes` is the
+stub that would replace it. -/
 structure CompactionRowWire where
   role : String
   kind : String
   text : Option String
   callIds : List String
   callId : Option String
+  originalBytes : Option Nat
+  stubBytes : Option Nat
   deriving Lean.ToJson
 
-def CompactionRowWire.ofModel (row : Transcript.MessageRow) : CompactionRowWire :=
+def CompactionRowWire.ofModel (sizes : Compaction.ResultSizes) (row : Transcript.MessageRow) :
+    CompactionRowWire :=
   match row.kind with
   | .ordinary =>
       { role := row.role.toDefraDB, kind := "ordinary", text := some s!"ordinary-{row.messageId}"
-        callIds := [], callId := none }
+        callIds := [], callId := none, originalBytes := none, stubBytes := none }
   | .assistantToolCalls calls =>
       { role := row.role.toDefraDB, kind := "assistant_tool_calls", text := none
-        callIds := (calls.sort (· ≤ ·)).map Compaction.fixtureNativeCallKey, callId := none }
-  | .toolResult call _ =>
+        callIds := (calls.sort (· ≤ ·)).map Compaction.fixtureNativeCallKey, callId := none
+        originalBytes := none, stubBytes := none }
+  | .toolResult call key =>
       { role := row.role.toDefraDB, kind := "tool_result", text := none, callIds := []
-        callId := some (Compaction.fixtureNativeCallKey call) }
+        callId := some (Compaction.fixtureNativeCallKey call)
+        originalBytes := some (sizes key).originalBytes, stubBytes := some (sizes key).stubBytes }
 
 def compactionCallSymbol (key : String) : Nat :=
   if key == "2" then Compaction.fixtureSecondCallSymbol else Compaction.fixtureCallSymbol
@@ -929,14 +937,27 @@ def CompactionRowWire.toModel (index : Nat) (row : CompactionRowWire) : Transcri
     role := (Transcript.MessageRole.fromDefraDB? row.role).getD .user
     kind := match row.kind with
       | "assistant_tool_calls" => .assistantToolCalls (row.callIds.map compactionCallSymbol).toFinset
-      | "tool_result" => .toolResult (compactionCallSymbol (row.callId.getD "")) ⟨0, 0, 37⟩
+      | "tool_result" => .toolResult (compactionCallSymbol (row.callId.getD "")) ⟨0, index, 37⟩
       | _ => .ordinary }
 
 def compactionRowsToModel (rows : List CompactionRowWire) : List Transcript.MessageRow :=
   ((List.range rows.length).zip rows).map fun (index, row) => row.toModel index
 
+/-- The measured sizes of the wire's tool results, keyed as `toModel` keys them. -/
+def compactionSizesToModel (rows : List CompactionRowWire) :
+    List (Transcript.ToolResultKey × Compaction.StubSizes) :=
+  ((List.range rows.length).zip rows).filterMap fun (index, row) =>
+    match row.kind, row.originalBytes, row.stubBytes with
+    | "tool_result", some originalBytes, some stubBytes =>
+        some (⟨0, index, 37⟩, ⟨originalBytes, stubBytes⟩)
+    | _, _, _ => none
+
+def compactionCaseWire (c : Compaction.CompactionReducerCase) : List CompactionRowWire :=
+  c.inputRows.map (CompactionRowWire.ofModel (Compaction.sizesOf c.inputSizes))
+
 example : Compaction.compactionReducerCases.all fun c =>
-    decide (compactionRowsToModel (c.inputRows.map CompactionRowWire.ofModel) = c.inputRows) := by
+    decide (compactionRowsToModel (compactionCaseWire c) = c.inputRows) &&
+      decide (compactionSizesToModel (compactionCaseWire c) = c.inputSizes) := by
   native_decide
 
 example : Compaction.compactionReducerCases.all (·.legal) := by native_decide
@@ -961,7 +982,7 @@ def compactionReducerOfName : String → Compaction.Reducer
 def compactionReducerInputs : List CompactionReducerInput :=
   Compaction.compactionReducerCases.map fun c =>
     { name := c.name, legal := c.legal, reducer := compactionReducerOfName c.reducer
-      inputRows := c.inputRows.map CompactionRowWire.ofModel, splitIndex := c.splitIndex
+      inputRows := compactionCaseWire c, splitIndex := c.splitIndex
       publicationReady := c.publicationReady }
 
 example : Compaction.compactionReducerCases.all fun c =>
@@ -970,7 +991,8 @@ example : Compaction.compactionReducerCases.all fun c =>
 
 def compactionModelCase (i : CompactionReducerInput) : Compaction.CompactionReducerCase :=
   Compaction.reducerCase i.name "" i.reducer 0 i.splitIndex i.publicationReady
-    (some (compactionRowsToModel i.inputRows))
+    (some (compactionRowsToModel i.inputRows)) Compaction.largeOutput
+    (some (compactionSizesToModel i.inputRows))
 
 def compactionSummarizes (i : CompactionReducerInput) : Bool :=
   match i.reducer with
@@ -1007,13 +1029,15 @@ structure CompactionReducerApplyOutput where
   preservesOrder : Bool
   reducerIsIdentity : Bool
   reducerIsIdempotent : Bool
+  stubbedResults : Nat
   deriving Lean.ToJson
 
 def compactionReducerApplyOutput (i : CompactionReducerInput) : CompactionReducerApplyOutput :=
   let c := compactionModelCase i
   { postMessageCount := c.postMessageCount, retainedCount := c.retainedCount
     preservesPairs := c.preservesPairs, preservesOrder := c.preservesOrder
-    reducerIsIdentity := c.reducerIsIdentity, reducerIsIdempotent := c.reducerIsIdempotent }
+    reducerIsIdentity := c.reducerIsIdentity, reducerIsIdempotent := c.reducerIsIdempotent
+    stubbedResults := c.stubbedResults }
 
 @[conformance_family]
 def compactionReducerApply : Family CompactionReducerInput CompactionReducerApplyOutput where
