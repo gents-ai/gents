@@ -105,6 +105,30 @@ struct PluginAttemptError {
     receipt: PluginExecutionReceipt,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum PluginResolutionError {
+    #[error("invalid plugin coordinate {coordinate}")]
+    Coordinate {
+        coordinate: String,
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error("plugin {coordinate} is not installed: this runtime has no plugin directory")]
+    NoHome { coordinate: String },
+    #[error("resolving plugin {coordinate}: {source}")]
+    Published {
+        coordinate: String,
+        #[source]
+        source: store::PublishedPluginReadError,
+    },
+    #[error("plugin {coordinate} is installed as {installed}, not the pinned {pinned}; reinstall it or update the pin")]
+    PinMismatch {
+        coordinate: String,
+        installed: String,
+        pinned: String,
+    },
+}
+
 fn plugin_attempt_error(error: &anyhow::Error) -> Option<&PluginAttemptError> {
     error.downcast_ref::<PluginAttemptError>()
 }
@@ -587,19 +611,37 @@ impl PluginExecutor {
         )
     }
 
-    pub fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin> {
-        let (namespace, name) = gents_documents::plugin_coordinate::parse_coordinate(coordinate)?;
-        let home = self.home.as_deref().with_context(|| {
-            format!("plugin {coordinate} is not installed: this runtime has no plugin directory")
-        })?;
-        let (record, _store) = store::read_published_record(home, namespace, name)
-            .with_context(|| format!("plugin {coordinate} is not installed"))?;
+    pub fn resolve(
+        &self,
+        coordinate: &str,
+        pinned: Option<&str>,
+    ) -> std::result::Result<InstalledPlugin, PluginResolutionError> {
+        let (namespace, name) = gents_documents::plugin_coordinate::parse_coordinate(coordinate)
+            .map_err(|source| PluginResolutionError::Coordinate {
+                coordinate: coordinate.to_owned(),
+                source,
+            })?;
+        let home = self
+            .home
+            .as_deref()
+            .ok_or_else(|| PluginResolutionError::NoHome {
+                coordinate: coordinate.to_owned(),
+            })?;
+        let (record, _store) =
+            store::read_published_record(home, namespace, name).map_err(|source| {
+                PluginResolutionError::Published {
+                    coordinate: coordinate.to_owned(),
+                    source,
+                }
+            })?;
         if let Some(pinned) = pinned {
-            anyhow::ensure!(
-                record.digest == pinned,
-                "plugin {coordinate} is installed as {}, not the pinned {pinned}; reinstall it or update the pin",
-                record.digest
-            );
+            if record.digest != pinned {
+                return Err(PluginResolutionError::PinMismatch {
+                    coordinate: coordinate.to_owned(),
+                    installed: record.digest,
+                    pinned: pinned.to_owned(),
+                });
+            }
         }
         Ok(record)
     }
@@ -867,7 +909,7 @@ impl gents_tools::plugin_host::PluginHost for PluginExecutor {
     }
 
     fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin> {
-        PluginExecutor::resolve(self, coordinate, pinned)
+        PluginExecutor::resolve(self, coordinate, pinned).map_err(Into::into)
     }
 
     async fn call_outcome(

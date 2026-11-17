@@ -22,6 +22,26 @@ fn staged_plugin_resolution_conforms_to_lean() {
     });
 }
 
+#[test]
+fn busy_plugin_resolution_preserves_the_typed_publication_cause() {
+    let (home, _) = installed_echo();
+    let executor = PluginExecutor::new(Some(home.path().to_owned()));
+    let guard = store::try_lock_store(home.path()).unwrap();
+    let error = anyhow::Error::new(executor.resolve("team/plugin", None).unwrap_err())
+        .context("building plugin tool");
+    assert!(store::PublishedPluginReadError::error_chain_is_busy(
+        error.as_ref()
+    ));
+    assert!(format!("{error:#}").contains("plugin store is busy"));
+    assert!(!format!("{error:#}").contains("not installed"));
+    drop(guard);
+    assert!(executor.resolve("team/plugin", None).is_ok());
+    let missing = executor.resolve("team/missing", None).unwrap_err();
+    assert!(!store::PublishedPluginReadError::error_chain_is_busy(
+        &missing
+    ));
+}
+
 fn tool_ref(digest: Option<&str>) -> PluginToolRef {
     PluginToolRef {
         tool_calls: false,
