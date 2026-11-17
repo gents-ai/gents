@@ -5135,11 +5135,7 @@ const LEAN_GENERATOR_RUNS: &[&str] = &[
 #[rustfmt::skip]
 const LEAN_GENERATOR_ON_RUNTIME_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-automation/src/goal/client_control/start_tests.rs", 1),
-    ("crates/gents-cli/tests/cli_enrollment/live_delegation.rs", 1),
-    ("crates/gents-cli/tests/cli_enrollment/live_two_agent.rs", 1),
     ("crates/gents-desktop-bridge/src/snapshot/tests/goal_provenance.rs", 1),
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/tests/readiness.rs", 1),
-    ("crates/gents-desktop-core/src/client/core/sync_state.rs", 1),
     ("crates/gents-host/src/http/access_tests.rs", 1),
     ("crates/gents-loop/src/end_to_end_test.rs", 1),
 ];

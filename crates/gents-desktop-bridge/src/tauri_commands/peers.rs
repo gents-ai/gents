@@ -20,11 +20,14 @@ pub async fn desktop_runtime_access_request(
 }
 
 #[tauri::command]
-pub async fn desktop_runtime_remove<R: Runtime>(
+pub async fn desktop_runtime_remove<R>(
     app: AppHandle<R>,
     node_did: String,
     state: State<'_, DesktopAppState>,
-) -> Result<RuntimeRemoveResponse, BridgeError> {
+) -> Result<RuntimeRemoveResponse, BridgeError>
+where
+    R: Runtime,
+{
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     let removed = crate::commands::forget_runtime(&core, node_did)
@@ -35,12 +38,15 @@ pub async fn desktop_runtime_remove<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_runtime_rename<R: Runtime>(
+pub async fn desktop_runtime_rename<R>(
     app: AppHandle<R>,
     node_did: String,
     label: String,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopClientSnapshot, BridgeError> {
+) -> Result<DesktopClientSnapshot, BridgeError>
+where
+    R: Runtime,
+{
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     crate::commands::rename_runtime(&core, node_did, label)
