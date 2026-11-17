@@ -1065,9 +1065,8 @@ def native_tests(label, packages, flags, filterset, expected):
     """One `cargo nextest run`: one build, one parallel pool across its crates and binaries.
 
     Its JUnit report then fails a crate, or a macOS-only target, that ran no
-    test, as `cargo_test` did. (A separate `nextest list` first would rebuild:
-    the core packs' build script reruns once a build has written beside them.)
-    `expected` holds binary ids, or packages for every binary of one.
+    test, as `cargo_test` did. `expected` holds binary ids, or packages for
+    every binary of one.
     """
     arguments = [*[flag for package in packages for flag in ("-p", package)], *flags]
     features = sorted({feature for package in packages for feature in feature_flags(package)[1:]})
@@ -1481,7 +1480,30 @@ def kept_target():
     return [os.environ["CARGO_TARGET_DIR"]] if os.environ.get("CARGO_TARGET_DIR") else []
 
 
+def keep_core_packs_fresh():
+    """Give gents-core-packs' build script an empty core packs directory to watch.
+
+    Cargo reruns a build script whose `rerun-if-changed` path is missing, so
+    without one every Cargo invocation of a job rebuilt gents-core-packs and each
+    crate above it (gents-cli, gents-client-host): four times in one
+    test:macos-only job (dispatch 44116567619). Empty, it embeds the same no
+    archives a missing directory does. A CI runner keeps it beside its Cargo
+    target, which outlives the checkout's `git clean`, so the first build of a
+    job reuses those crates too; elsewhere it is the default target/core-packs,
+    where `make core-packs` writes real ones.
+    """
+    if os.environ.get("GENTS_CORE_PACKS_DIR"):
+        return
+    if os.environ.get("GITHUB_ACTIONS") and os.environ.get("CARGO_TARGET_DIR"):
+        directory = Path(os.environ["CARGO_TARGET_DIR"]) / "core-packs-none"
+        os.environ["GENTS_CORE_PACKS_DIR"] = str(directory)
+    else:
+        directory = ROOT / "target" / "core-packs"
+    directory.mkdir(parents=True, exist_ok=True)
+
+
 def run(selection, job):
+    keep_core_packs_fresh()
     if job.startswith("shard:") and job.count(":") == 2:
         _, name, index = job.split(":")
         if f"shard:{name}" not in selection["jobs"]:
