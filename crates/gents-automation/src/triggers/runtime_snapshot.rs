@@ -44,24 +44,42 @@ impl PartialEq for ResolvedWatcherIdentity {
 impl Eq for ResolvedWatcherIdentity {}
 
 /// Allowlisted requester-visible causes. Diagnostics and their context are
-/// deliberately separate: neither paths, provider bodies nor ACP details are
-/// safe to copy to an AgentRequest failure_reason.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// deliberately separate: raw paths, provider bodies and ACP diagnostics
+/// must not be copied to AgentRequest.failure_reason. The root owner alone
+/// supplies the selected public grant facts needed to fix a reader refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublicUnavailableCause {
     PluginPublicationBusy,
+    /// Only the root owner's ReaderMissing variant, never an arbitrary
+    /// diagnostic string. Its Display contains B5's actionable grant text.
+    WorkspaceRootReaderMissing(gents_tools::surface::ToolRootRefusal),
 }
 
 impl PublicUnavailableCause {
     pub fn from_error(error: &anyhow::Error) -> Option<Self> {
-        gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(error.as_ref())
-            .then_some(Self::PluginPublicationBusy)
+        if gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(error.as_ref())
+        {
+            return Some(Self::PluginPublicationBusy);
+        }
+        let refusal = gents_tools::surface::tool_root_refusal(error.as_ref())?;
+        if matches!(
+            refusal,
+            gents_tools::surface::ToolRootRefusal::ReaderMissing { .. }
+        ) && gents_tools::surface::tool_surface_reason(refusal.publishing(), refusal.denial())
+            == AgentReadinessUnavailableReason::WorkspaceRootReaderMissing
+        {
+            Some(Self::WorkspaceRootReaderMissing(refusal.clone()))
+        } else {
+            None
+        }
     }
 
-    pub fn message(self) -> &'static str {
+    pub fn message(&self) -> String {
         match self {
             Self::PluginPublicationBusy => {
-                gents_protocol::node_readiness::PLUGIN_PUBLICATION_BUSY_MESSAGE
+                gents_protocol::node_readiness::PLUGIN_PUBLICATION_BUSY_MESSAGE.to_owned()
             }
+            Self::WorkspaceRootReaderMissing(refusal) => refusal.to_string(),
         }
     }
 }

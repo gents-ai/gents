@@ -34,7 +34,7 @@ impl AgentAdmissionObservation {
     }
 
     pub(crate) fn public_cause(&self, agent_did: &str) -> Option<PublicUnavailableCause> {
-        self.public_causes.get(agent_did).copied()
+        self.public_causes.get(agent_did).cloned()
     }
 
     pub(crate) fn source_generation(&self) -> u64 {
@@ -870,7 +870,7 @@ async fn persist_candidate(
                 state
                     .demotions
                     .get(&(agent.clone(), *generation))
-                    .and_then(|demotion| demotion.public_cause)
+                    .and_then(|demotion| demotion.public_cause.clone())
                     .map(|cause| (agent.clone(), cause))
             })
             .collect(),

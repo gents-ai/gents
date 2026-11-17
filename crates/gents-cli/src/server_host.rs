@@ -28,14 +28,27 @@ pub async fn ensure_standard_home(
     runtime: &tokio::runtime::Handle,
     options: ProvisionOptions,
 ) -> Result<()> {
+    ensure_standard_home_with_core_packs(runtime, options, gents_core_packs::archives()).await
+}
+
+/// Provision with caller-supplied core archives; also used by integration tests.
+#[doc(hidden)]
+pub async fn ensure_standard_home_with_core_packs(
+    runtime: &tokio::runtime::Handle,
+    options: ProvisionOptions,
+    archives: &'static [(&'static str, &'static [u8])],
+) -> Result<()> {
     gents_store::local::storage_backend::drive_unsendable(runtime, move || {
-        ensure_standard_home_inner(options)
+        ensure_standard_home_inner(options, archives)
     })
     .await
     .context("joining managed Gents provision task")?
 }
 
-async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
+async fn ensure_standard_home_inner(
+    options: ProvisionOptions,
+    archives: &[(&str, &[u8])],
+) -> Result<()> {
     if let Some(mut stored) = gents_service::home_state::read_init_config(&options.home)? {
         stored.tool_ceiling = options.tool_ceiling;
         stored.tool_root = options
@@ -90,7 +103,12 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
         unreachable!("standard provision argv must parse as init")
     };
     args.no_default_packs = !options.default_packs;
-    let initialized = crate::commands::init::init_home(args).await?;
+    let initialized = crate::commands::init::init_home_for_entry(
+        args,
+        archives,
+        crate::commands::init::default_packs::InitEntryPoint::Desktop,
+    )
+    .await?;
     for pack in initialized["default_packs"]["not_installed"]
         .as_array()
         .into_iter()

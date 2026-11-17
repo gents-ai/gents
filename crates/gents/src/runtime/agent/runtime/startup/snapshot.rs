@@ -60,10 +60,19 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents_until(
                 return Err(error)
                     .context("plugin publication deferred; keeping the active runtime generation");
             }
-            let reason = UnavailableAgent::new(
-                gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
-                format!("building tool surface: {error:#}"),
-            ).with_error_cause(&error);
+            // Preserve B5's Lean-owned root-denial classification, and B12's
+            // typed publication cause. Raw error context stays diagnostic-only.
+            let refusal = gents_tools::surface::tool_root_refusal(error.as_ref());
+            let (publishing, denial) = refusal.map_or(
+                (
+                    gents_tools::surface::RootPublishing::NoPolicy,
+                    gents_tools::surface::RootDenialKind::Admitted,
+                ),
+                |refusal| (refusal.publishing(), refusal.denial()),
+            );
+            let cause = gents_tools::surface::tool_surface_reason(publishing, denial);
+            let reason = UnavailableAgent::new(cause, format!("building tool surface: {error:#}"))
+                .with_error_cause(&error);
             tracing::error!(
                 agent_did = %agent_did,
                 public_reason = ?reason.public_reason,

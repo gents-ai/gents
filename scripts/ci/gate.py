@@ -17,6 +17,7 @@ import importlib.util
 import json
 import os
 import re
+import selectors
 import shlex
 import signal
 import subprocess
@@ -474,6 +475,53 @@ def sh(command, cwd=ROOT, env=None):
     return status == 0
 
 
+PIPE_DRAIN_TIMEOUT = 3.0
+PIPE_DRAIN_HARD_CAP = 60.0
+
+
+def output_lines(process, state):
+    """Drain output until EOF, or a bounded time after the direct child exits."""
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    pending = b""
+    exited_at = None
+    last_data = None
+    try:
+        while True:
+            now = time.monotonic()
+            if process.poll() is not None and exited_at is None:
+                exited_at = last_data = now
+            # Read ready bytes before checking the idle deadline. The hard cap
+            # still bounds a descendant that continuously writes forever.
+            ready = selector.select(0.1)
+            now = time.monotonic()
+            if exited_at is not None and now - exited_at >= PIPE_DRAIN_HARD_CAP:
+                state["pipe_held"] = True
+                if pending:
+                    yield pending
+                return
+            if not ready:
+                if last_data is not None and now - last_data >= PIPE_DRAIN_TIMEOUT:
+                    state["pipe_held"] = True
+                    if pending:
+                        yield pending
+                    return
+                continue
+            chunk = os.read(process.stdout.fileno(), 65536)
+            if not chunk:
+                if pending:
+                    yield pending
+                return
+            if exited_at is not None:
+                last_data = now
+            pending += chunk
+            while b"\n" in pending:
+                line, pending = pending.split(b"\n", 1)
+                yield line + b"\n"
+    finally:
+        selector.close()
+
+
 def cargo_test(label, arguments, harness=(), expect_tests=True, capture=True, isolate_target=False):
     """`cargo test` that fails when it runs no test or when a test hangs.
 
@@ -497,7 +545,7 @@ def cargo_test(label, arguments, harness=(), expect_tests=True, capture=True, is
              "testing": False}
 
     def read():
-        for raw in process.stdout:
+        for raw in output_lines(process, state):
             line = raw.decode("utf-8", "replace")
             sys.stdout.write(line)
             sys.stdout.flush()
@@ -535,10 +583,20 @@ def cargo_test(label, arguments, harness=(), expect_tests=True, capture=True, is
                 pass
             break
     process.wait()
-    reader.join(timeout=10)
+    reader.join()
     process.stdout.close()
     ran = state["passed"] + state["failed"]
-    if hung:
+    if state.get("pipe_held"):
+        holders = subprocess.run(["ps", "-g", str(process.pid), "-o", "pid=,ppid=,command="],
+                                 capture_output=True, text=True, check=False)
+        print(f"Leftover process group {process.pid}:\n{holders.stdout or '(none reported)'}", flush=True)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        verdict = (f"output pipe still held by a descendant after child {process.pid} "
+                   f"exited with code {process.returncode} (idle drain timeout {PIPE_DRAIN_TIMEOUT}s)")
+    elif hung:
         verdict = f"hung after {TEST_TIMEOUT}s: {', '.join(hung)}"
     elif process.returncode != 0:
         verdict = f"exit {process.returncode}"
@@ -694,14 +752,17 @@ def nextest(arguments, cwd=ROOT, label=None, expect=None):
     started = time.time()
     process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     counts = ""
-    for raw in process.stdout:
+    state = {}
+    for raw in output_lines(process, state):
         line = raw.decode("utf-8", "replace")
         sys.stdout.write(line)
         sys.stdout.flush()
         if match := SUMMARY.match(line.rstrip()):
             counts = f"{match.group(2)} run: {match.group(3).strip()}"
     process.wait()
-    verdict = "ok" if process.returncode == 0 else f"exit {process.returncode}"
+    process.stdout.close()
+    verdict = (f"output pipe still held by a descendant after child {process.pid} exited with code {process.returncode} (idle drain timeout {PIPE_DRAIN_TIMEOUT}s)"
+               if state.get("pipe_held") else "ok" if process.returncode == 0 else f"exit {process.returncode}")
     results.append((label or shlex.join(command), verdict, counts, time.time() - started))
     if verdict != "ok":
         print(f"::error::{label}: {verdict} ({counts})", flush=True)

@@ -16,6 +16,7 @@ mod backup_conformance;
 mod execute;
 mod files;
 mod notices;
+mod preflight;
 mod recovery;
 mod repair_backups;
 mod stage;
@@ -132,12 +133,18 @@ fn operation_dir(home: &Path, id: uuid::Uuid) -> PathBuf {
 }
 
 async fn emit(value: &impl Serialize) -> Result<()> {
+    emit_to(value, &mut tokio::io::stdout()).await
+}
+
+async fn emit_to<W: tokio::io::AsyncWrite + Unpin>(
+    value: &impl Serialize,
+    writer: &mut W,
+) -> Result<()> {
     use tokio::io::AsyncWriteExt as _;
     let mut bytes = serde_json::to_vec(value)?;
     bytes.push(b'\n');
-    let mut stdout = tokio::io::stdout();
-    stdout.write_all(&bytes).await?;
-    stdout.flush().await?;
+    writer.write_all(&bytes).await?;
+    writer.flush().await?;
     Ok(())
 }
 
@@ -311,29 +318,60 @@ pub fn executable_digest(path: &Path) -> Result<String> {
 }
 
 pub async fn check(home: Option<PathBuf>) -> Result<()> {
-    emit(&check_metadata(home).await?).await
+    check_to(home, preflight::check_store_key, &mut tokio::io::stdout()).await
 }
 
-async fn check_metadata(home: Option<PathBuf>) -> Result<serde_json::Value> {
+async fn check_to<W: tokio::io::AsyncWrite + Unpin>(
+    home: Option<PathBuf>,
+    reader: impl FnOnce(
+            &Path,
+            Option<&gents_store::local::store_key::StoreEncryption>,
+        ) -> std::result::Result<bool, preflight::PreflightError>
+        + Send
+        + 'static,
+    stdout: &mut W,
+) -> Result<()> {
+    match check_metadata_with_reader(home, reader).await {
+        Ok(metadata) => emit_to(&metadata, stdout).await,
+        Err(error) => {
+            if let Some(failure) = preflight::failure_metadata(&error) {
+                emit_to(&failure, stdout).await?;
+            }
+            Err(error)
+        }
+    }
+}
+
+async fn check_metadata_with_reader(
+    home: Option<PathBuf>,
+    reader: impl FnOnce(
+            &Path,
+            Option<&gents_store::local::store_key::StoreEncryption>,
+        ) -> std::result::Result<bool, preflight::PreflightError>
+        + Send
+        + 'static,
+) -> Result<serde_json::Value> {
     let Some(home) = home else {
         return Ok(metadata(false));
     };
     let _keychain = crate::process_resources::prevent_keychain_prompts(true)?;
-    let (identity, state, settings) = tokio::task::spawn_blocking(move || -> Result<_> {
-        gents_store::local::storage_backend::reject_legacy_store(
-            &gents_store::local::home::default_data_dir(&home),
-        )?;
-        let config = read_init_config(&home)?.context("home must be initialized")?;
-        let state = read_runtime_state(&home)?.context("runtime endpoint missing")?;
-        let settings = NetworkSettings::read(&home)?;
-        let identity = crate::home_state::load_initialized_home_identity(&home, &config)?;
-        anyhow::ensure!(
-            state.node_did == config.node_did,
-            "runtime identity mismatch"
-        );
-        Ok((identity, state, settings))
-    })
-    .await??;
+    let (identity, state, settings, store_key_checked) =
+        tokio::task::spawn_blocking(move || -> Result<_> {
+            gents_store::local::storage_backend::reject_legacy_store(
+                &gents_store::local::home::default_data_dir(&home),
+            )?;
+            let config = read_init_config(&home)?.context("home must be initialized")?;
+            let store_key_checked = reader(&home, config.store_encryption.as_ref())?;
+            let state = read_runtime_state(&home)?.context("runtime endpoint missing")?;
+            let settings = NetworkSettings::read(&home)?;
+            let identity = crate::home_state::load_initialized_home_identity(&home, &config)?;
+            anyhow::ensure!(
+                state.node_did == config.node_did,
+                "runtime identity mismatch"
+            );
+            Ok((identity, state, settings, store_key_checked))
+        })
+        .await??;
     execute::endpoint(&state.graphql, &settings)?;
     let access = gents_store::config_client::ConfigAccess::Graphql(
         gents_store::config_client::GraphqlEndpoint::as_principal(state.graphql, identity.did())
@@ -351,6 +389,7 @@ async fn check_metadata(home: Option<PathBuf>) -> Result<serde_json::Value> {
         eprintln!("warning: {mismatch}");
     }
     let mut metadata = metadata(true);
+    metadata["keychain_store_key_checked"] = serde_json::json!(store_key_checked);
     metadata["non_canonical_lineages"] = serde_json::json!(lineage);
     Ok(metadata)
 }
@@ -723,7 +762,19 @@ pub(crate) async fn can_update_live(home: &Path) -> Result<bool> {
     if observed.build != installed {
         return Ok(false);
     }
-    match check_metadata(Some(home.to_path_buf())).await {
+    repair_preflight_with_reader(home, preflight::check_store_key).await
+}
+
+async fn repair_preflight_with_reader(
+    home: &Path,
+    reader: impl FnOnce(
+            &Path,
+            Option<&gents_store::local::store_key::StoreEncryption>,
+        ) -> std::result::Result<bool, preflight::PreflightError>
+        + Send
+        + 'static,
+) -> Result<bool> {
+    match check_metadata_with_reader(Some(home.to_path_buf()), reader).await {
         Ok(_) => Ok(true),
         Err(error)
             if gents_store::local::storage_backend::incompatible_store(
