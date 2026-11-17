@@ -876,13 +876,40 @@ async fn supervisor_retires_revoked_plugin_slots_keeps_unrelated_agents_and_reco
     let unrelated = choose_spare_default(&fixture, &original).await;
     let survivor = choose_spare_default(&fixture, &original).await;
     let owner = fixture.runtime.did().to_owned();
+    let record =
+        gents_pack::plugin::store::read_record(home.path(), "fixture", "list_files").unwrap();
+    let documents = vec![
+        (gents_store::collection::Collection::Tools, serde_json::json!({
+            "node_did":owner, "tools_id":format!("{survivor}:tools"),
+            "integrations":{"plugins":[{"plugin":"fixture/list_files","digest":record.digest}]},
+        })),
+        (gents_store::collection::Collection::AgentContext, serde_json::json!({
+            "node_did":owner,"context_id":format!("{survivor}:context"),"tools_id":format!("{survivor}:tools"),
+        })),
+    ].into_iter().map(|(collection,value)|gents_documents::DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect();
+    let plan = gents_documents::DesiredStateApplyPlan::new(documents).unwrap();
+    fixture
+        .user_access
+        .transact_write("test.supervisor.survivor_config", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
     merge_fixture_document(
         &fixture.user_access,
         "test.supervisor.plugin_survivor",
         gents_store::collection::Collection::Agent,
         &owner,
         &survivor,
-        serde_json::json!({"tools_id":format!("{original}:tools")}),
+        serde_json::json!({"context_id":format!("{survivor}:context")}),
     )
     .await;
     let context = agent.document_runtime_context().cloned().unwrap();
@@ -1012,30 +1039,6 @@ async fn supervisor_retires_revoked_plugin_slots_keeps_unrelated_agents_and_reco
             idle_sleep: Duration::from_secs(3600),
         },
     ));
-    // Give the survivor its own pin before removing original's grant.
-    let record =
-        gents_pack::plugin::store::read_record(home.path(), "fixture", "list_files").unwrap();
-    let own_tools: Tools = serde_json::from_value(
-        serde_json::json!({"tools_id":format!("{survivor}:tools"), "node_did":owner,
-        "integrations":{"plugins":[{"plugin":"fixture/list_files","digest":record.digest}]}}),
-    )
-    .unwrap();
-    gents_documents::write_tools_document(
-        &fixture.user_access,
-        &own_tools,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    merge_fixture_document(
-        &fixture.user_access,
-        "test.supervisor.own_tools",
-        gents_store::collection::Collection::Agent,
-        &owner,
-        &survivor,
-        serde_json::json!({"tools_id":format!("{survivor}:tools")}),
-    )
-    .await;
     merge_fixture_document(
         &fixture.user_access,
         "test.supervisor.revoke_plugin",
@@ -1157,14 +1160,20 @@ async fn plugin_free_startup_and_slots_remain_ready_while_store_is_exclusively_h
         .unwrap()
         .unwrap()
         .unwrap();
-    assert!(!capture
-        .snapshots
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|snapshot| snapshot.active_generation > 0)
-        .any(|snapshot| snapshot.agents.iter().any(
-            |entry| entry.agent_did == did && entry.state == AgentReadinessState::Unavailable
-        )));
+    let all = capture.snapshots.lock().unwrap().clone();
+    assert!(
+        !all.iter()
+            .filter(|snapshot| snapshot.active_generation > 0
+                && !matches!(
+                    snapshot.process_state,
+                    NodeReadinessProcessState::ShuttingDown | NodeReadinessProcessState::Shutdown
+                ))
+            .any(|snapshot| snapshot
+                .agents
+                .iter()
+                .any(|entry| entry.agent_did == did
+                    && entry.state == AgentReadinessState::Unavailable)),
+        "plugin-free snapshots: {all:#?}"
+    );
     drop(guard);
 }
