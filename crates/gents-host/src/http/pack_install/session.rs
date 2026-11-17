@@ -54,7 +54,14 @@ pub async fn install_session(
     identity: defra_http::ExtractIdentity,
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
+    #[cfg(test)] build: Option<axum::Extension<gents_protocol::build_info::BuildInfo>>,
 ) -> Response {
+    #[cfg(test)]
+    let state = {
+        let mut state = state;
+        state.runtime_build_override = build.map(|axum::Extension(build)| build);
+        state
+    };
     let Some(actor) = identity.did().cloned() else {
         return refused(
             StatusCode::UNAUTHORIZED,
@@ -507,7 +514,7 @@ async fn run_inner(
             // The other half of the handshake: which build proposed this plan.
             // The build this runtime is, supplied by the binary that has the
             // core packs (this crate carries none).
-            "build": crate::http::pack_install::runtime_build(),
+            "build": state.pack_install_build(),
         }),
     )
     .await

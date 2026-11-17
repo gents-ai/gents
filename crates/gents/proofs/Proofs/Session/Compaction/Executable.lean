@@ -5,6 +5,35 @@ namespace Compaction
 
 open Transcript (MessageRow StrictlyIncreasingMessages)
 
+theorem stubFloor_cases :
+    stubEligible 10 11 = false ∧ stubEligible 10 10 = false ∧
+      stubEligible 11 10 = true := by decide
+
+/-! ## Measured fixture sizes
+
+Byte sizes the Rust reducer measures for the conformance fixtures: a fixture
+tool result's payload is `originalBytes` bytes, and its stub names the call's
+tool and path, the call id and that byte count. The replay asserts the real
+measurements equal these inputs, so they are inputs, not expectations. -/
+
+/-- A large output: its stub is smaller. -/
+def largeOutput : StubSizes := ⟨4096, 126⟩
+/-- A tiny output: its stub would be larger. -/
+def tinyOutput : StubSizes := ⟨2, 123⟩
+/-- An output exactly the size of its stub. -/
+def stubSizedOutput : StubSizes := ⟨125, 125⟩
+/-- An output one byte larger than its stub. -/
+def oneOverStubOutput : StubSizes := ⟨126, 125⟩
+/-- A large output whose call is unknown (an orphaned result). -/
+def largeOrphanOutput : StubSizes := ⟨4096, 99⟩
+
+def resultKeys (msgs : List MessageRow) : List Transcript.ToolResultKey :=
+  msgs.filterMap fun row => row.kind.toolResultKey?
+
+def uniformSizes (sizes : StubSizes) (msgs : List MessageRow) :
+    List (Transcript.ToolResultKey × StubSizes) :=
+  (resultKeys msgs).map fun key => (key, sizes)
+
 def fixtureCallSymbol : Nat := PromptView.providerCallSymbol "1" none
 def fixtureSecondCallSymbol : Nat := PromptView.providerCallSymbol "2" none
 
@@ -23,13 +52,13 @@ def fixtureNativeCallKey (symbol : Nat) : String :=
 def caseFixture : Nat → List Transcript.MessageRow
   | 1 => [⟨0, 0, 0, .user, .toolResult fixtureCallSymbol ⟨0, 0, 37⟩⟩]
   | 2 => [⟨0, 0, 0, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
-          ⟨1, 0, 1, .user, .toolResult fixtureCallSymbol ⟨0, 0, 37⟩⟩]
+          ⟨1, 0, 1, .user, .toolResult fixtureCallSymbol ⟨0, 1, 37⟩⟩]
   | 3 => [⟨0, 0, 0, .user, .ordinary⟩,
           ⟨1, 0, 1, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
-          ⟨2, 0, 2, .user, .toolResult fixtureCallSymbol ⟨0, 0, 37⟩⟩]
+          ⟨2, 0, 2, .user, .toolResult fixtureCallSymbol ⟨0, 2, 37⟩⟩]
   | 4 => [⟨0, 0, 0, .user, .ordinary⟩,
           ⟨1, 0, 1, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
-          ⟨2, 0, 2, .user, .toolResult fixtureCallSymbol ⟨0, 0, 37⟩⟩,
+          ⟨2, 0, 2, .user, .toolResult fixtureCallSymbol ⟨0, 2, 37⟩⟩,
           ⟨3, 0, 3, .assistant, .ordinary⟩]
   | _ => []
 
@@ -143,6 +172,8 @@ structure CompactionReducerCase where
   reducer             : String
   legal               : Bool
   inputRows           : List MessageRow
+  /-- Measured sizes of each input tool result, in row order. -/
+  inputSizes          : List (Transcript.ToolResultKey × StubSizes)
   projectedPrefixReady : Bool
   preMessageCount     : Nat
   postMessageCount    : Nat
@@ -156,6 +187,8 @@ structure CompactionReducerCase where
   safeToReduce        : Bool
   reducerIsIdentity   : Bool
   reducerIsIdempotent : Bool
+  /-- Tool results the reducer replaced with a stub. -/
+  stubbedResults      : Nat
 
   splitIndex          : Nat
 
@@ -371,11 +404,21 @@ theorem distinct_native_keys_have_distinct_symbols :
 
 
 
+/-- Tool result rows carrying a stub's identity. Fixture inputs never do. -/
+def stubbedResultCount (msgs : List MessageRow) : Nat :=
+  (msgs.filter fun row => match row.kind with
+    | .toolResult _ key => key.payloadHash == 0
+    | _ => false).length
+
 def reducerCase (name group : String) (reducer : Reducer)
     (count splitIndex : Nat) (publicationReady : Bool := true)
-    (inputOverride : Option (List MessageRow) := none) :
+    (inputOverride : Option (List MessageRow) := none)
+    (resultSizes : StubSizes := largeOutput)
+    (sizeOverride : Option (List (Transcript.ToolResultKey × StubSizes)) := none) :
     CompactionReducerCase :=
   let source := inputOverride.getD (caseFixture count)
+  let table := sizeOverride.getD (uniformSizes resultSizes source)
+  let sizes := sizesOf table
   let view : PromptView := ⟨0, source, none, fun id =>
     if publicationReady then
       source.find? (fun row => row.messageId == id) |>.map
@@ -383,13 +426,14 @@ def reducerCase (name group : String) (reducer : Reducer)
     else none⟩
   let reduce := fun (input : PromptView) => match reducer with
     | .identity => identityReducer input
-    | .strip => { input with messages := strip input.messages }
+    | .strip => { input with messages := strip sizes input.messages }
     | .summarize => summarize (fun _ => splitIndex) ⟨1⟩ input
-    | .providerView => { input with messages := providerViewTurn input.messages }
+    | .providerView => { input with messages := providerViewTurn sizes input.messages }
   let reduced := reduce view
   let reapplied := reduce reduced
   { name, group, reducer := reducer.name, legal := true
   , inputRows := source
+  , inputSizes := table
   , projectedPrefixReady := decide (PromptView.canCompactProjection view)
   , preMessageCount := source.length
   , postMessageCount := reduced.messages.length
@@ -409,9 +453,21 @@ def reducerCase (name group : String) (reducer : Reducer)
   , reducerIsIdentity := decide (reduced.messages = source ∧ reduced.summary = view.summary)
   , reducerIsIdempotent := decide
       (reapplied.messages = reduced.messages ∧ reapplied.summary = reduced.summary)
+  , stubbedResults := stubbedResultCount reduced.messages
   , splitIndex
   , safeBoundary := pairSafeBoundary source splitIndex
   , retainedCount := reduced.messages.length }
+
+/-- One turn with two calls: the first returns a tiny output, the second a
+large one. -/
+def twoResultTurn : List MessageRow :=
+  [ ⟨0, 0, 0, .assistant,
+      .assistantToolCalls {fixtureCallSymbol, fixtureSecondCallSymbol}⟩
+  , ⟨1, 0, 1, .user, .toolResult fixtureCallSymbol ⟨0, 1, 37⟩⟩
+  , ⟨2, 0, 2, .user, .toolResult fixtureSecondCallSymbol ⟨0, 2, 37⟩⟩ ]
+
+def twoResultTurnSizes : List (Transcript.ToolResultKey × StubSizes) :=
+  [(⟨0, 1, 37⟩, tinyOutput), (⟨0, 2, 37⟩, largeOutput)]
 
 def compactionReducerCases : List CompactionReducerCase :=
   [ reducerCase "identity_reducer_is_no_op" "witness" .identity 0 0
@@ -430,7 +486,18 @@ def compactionReducerCases : List CompactionReducerCase :=
   , reducerCase "summarize_blocked_when_header_loading" "summarize" .summarize 4 2 false
   , reducerCase "summarize_cannot_split_a_leading_turn" "summarize" .summarize 2 1
   , reducerCase "provider_view_is_idempotent" "provider_view" .providerView 3 0
-  , reducerCase "provider_view_drops_orphaned_result" "provider_view" .providerView 1 0
+  , reducerCase "provider_view_drops_orphaned_result" "provider_view" .providerView 1 0 true none
+      largeOrphanOutput
+  , reducerCase "strip_keeps_output_smaller_than_its_stub" "stub_floor" .strip 2 0 true none
+      tinyOutput
+  , reducerCase "strip_keeps_output_equal_to_its_stub" "stub_floor" .strip 2 0 true none
+      stubSizedOutput
+  , reducerCase "strip_replaces_output_one_byte_over_its_stub" "stub_floor" .strip 2 0 true none
+      oneOverStubOutput
+  , reducerCase "provider_view_keeps_output_no_larger_than_its_stub" "stub_floor"
+      .providerView 3 0 true none stubSizedOutput
+  , reducerCase "strip_decides_each_result_of_a_turn_by_its_own_size" "stub_floor" .strip 0 0
+      true (some twoResultTurn) largeOutput (some twoResultTurnSizes)
   , reducerCase "closed_turn_allows_projection_after_unresolved_history" "projection" .providerView 0 0 true
       (some [⟨0, 0, 0, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
              ⟨1, 0, 1, .user, .ordinary⟩])
@@ -441,7 +508,7 @@ def compactionReducerCases : List CompactionReducerCase :=
       (some [⟨0, 0, 0, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
              ⟨1, 0, 1, .user, .ordinary⟩]) ]
 
-theorem compactionReducerCases_count : compactionReducerCases.length = 20 := by decide
+theorem compactionReducerCases_count : compactionReducerCases.length = 25 := by decide
 
 theorem stable_published_prefix_gate_opens :
     (reducerCase "allowed" "publication" .summarize 4 2).safeToReduce = true := by
@@ -449,6 +516,18 @@ theorem stable_published_prefix_gate_opens :
 
 theorem strip_fixture_changes_payload :
     (reducerCase "strip" "witness" .strip 2 0).reducerIsIdentity = false := by decide
+
+/-- The floor in the fixtures: a stub no smaller than its output leaves the
+history untouched, one byte smaller replaces it, and a turn's results are
+decided one by one. -/
+theorem stub_floor_fixtures :
+    (reducerCase "tiny" "stub_floor" .strip 2 0 true none tinyOutput).reducerIsIdentity = true ∧
+    (reducerCase "equal" "stub_floor" .strip 2 0 true none stubSizedOutput).reducerIsIdentity
+      = true ∧
+    (reducerCase "over" "stub_floor" .strip 2 0 true none oneOverStubOutput).stubbedResults = 1 ∧
+    (reducerCase "turn" "stub_floor" .strip 0 0 true (some twoResultTurn) largeOutput
+      (some twoResultTurnSizes)).stubbedResults = 1 := by
+  decide
 
 theorem strip_and_provider_fixtures_idempotent :
     (reducerCase "strip" "witness" .strip 2 0).reducerIsIdempotent = true ∧
@@ -499,11 +578,16 @@ def cursorFixture : List Transcript.MessageRow :=
 def cursorCandidates (msgs : List Transcript.MessageRow) : List Nat :=
   (List.range msgs.length).map fun offset => msgs.length - offset
 
+/-- The cursor fixture's outputs are small (`"discard me"`, `"result"`), so no
+stub saves bytes and none is measured. -/
+def cursorSizes : ResultSizes := sizesOf []
+
 def findCursor (msgs : List Transcript.MessageRow) (compacted : Nat) : Option Nat :=
   (cursorCandidates msgs).find? fun cursor => decide (
-    providerViewGlobal msgs =
-        providerViewGlobal (msgs.take cursor) ++ providerViewGlobal (msgs.drop cursor) ∧
-      (providerViewGlobal (msgs.take cursor)).length = compacted)
+    providerViewGlobal cursorSizes msgs =
+        providerViewGlobal cursorSizes (msgs.take cursor) ++
+          providerViewGlobal cursorSizes (msgs.drop cursor) ∧
+      (providerViewGlobal cursorSizes (msgs.take cursor)).length = compacted)
 
 structure CompactionCursorCase where
   name           : String
