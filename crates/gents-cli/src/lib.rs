@@ -441,6 +441,10 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Config { command } => commands::config::dispatch(command).await,
         Command::Runtime { command } => match command {
             RuntimeCommand::Server(args) => {
+                // The one process the service manager runs, whose stderr becomes
+                // `runtime-errors.log`: from here every line it prints is stamped.
+                // An interactive command keeps its stderr untouched.
+                gents::runtime::native_logging::install_service_stderr_sink();
                 gents_host::serve::serve(
                     *args,
                     runtime,
