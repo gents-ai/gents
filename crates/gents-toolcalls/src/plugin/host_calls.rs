@@ -291,7 +291,7 @@ pub async fn run(
             Some(call) = receiver.recv() => {
                 let host_started = std::time::Instant::now();
                 let response = tokio::time::timeout_at(deadline, serve(&call.bytes, &mut tools, deadline)).await;
-                tracing::info!(request_bytes = call.bytes.len(), elapsed_us = host_started.elapsed().as_micros() as u64, "script host round");
+                tracing::debug!(request_bytes = call.bytes.len(), elapsed_us = host_started.elapsed().as_micros() as u64, "script host round");
                 match response {
                     Ok(Ok(value)) => { let _ = call.reply.send(serde_json::to_vec(&value).map_err(anyhow::Error::from)?); }
                     Ok(Err(reason)) => return Ok(failure(PluginVerdict::Failed, reason)),

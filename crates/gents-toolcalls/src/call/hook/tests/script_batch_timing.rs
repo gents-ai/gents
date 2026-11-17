@@ -35,7 +35,7 @@ async fn scratch_persisted_script_batch_timing() {
     use sha2::Digest;
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(tracing::Level::DEBUG)
         .try_init();
     let home = tempfile::tempdir().unwrap();
     let db = gents_inference::test_support::test_db(

@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use gents_loop::tool::ToolDefinition;
+use gents_loop::tool_effects::parallel::MAX_PARALLEL_READ_TOOLS;
 use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
 use gents_protocol::plugin_tool_call_limits::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
 use serde::Deserialize;
@@ -19,7 +20,7 @@ pub fn supported(_name: &str, _job_tools: &BTreeSet<String>) -> bool {
 
 pub fn composition_note() -> String {
     format!(
-        "\nThis plugin may call up to {MAX_EFFECTS} of this request's tools, with trusted reads batched up to four and all other calls in order, with their existing permissions and lifecycle behavior."
+        "\nThis plugin may call up to {MAX_EFFECTS} of this request's tools, with trusted reads batched up to {MAX_PARALLEL_READ_TOOLS} and all other calls in order, with their existing permissions and lifecycle behavior."
     )
 }
 

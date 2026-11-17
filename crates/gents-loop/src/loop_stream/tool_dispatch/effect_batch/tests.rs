@@ -48,6 +48,7 @@ struct Hook {
     terminate: Option<u32>,
     terminate_result: Option<u32>,
     skip: Option<u32>,
+    fail_reservation: Option<u32>,
 }
 #[async_trait::async_trait]
 impl SessionHook for Hook {
@@ -63,6 +64,9 @@ impl SessionHook for Hook {
             .lock()
             .unwrap()
             .push(format!("reserve:{ordinal}"));
+        if self.fail_reservation == Some(ordinal) {
+            return Err(format!("reservation {ordinal} unavailable"));
+        }
         Ok(ordinal.to_string())
     }
     async fn on_completion_call_with_context(
@@ -159,6 +163,7 @@ fn setup() -> (EffectDispatcher<Hook>, Arc<Hook>, Events) {
         terminate: None,
         terminate_result: None,
         skip: None,
+        fail_reservation: None,
     });
     let dispatcher = EffectDispatcher {
         tools: Arc::new(vec![Box::new(Probe(events.clone()))]),
@@ -262,9 +267,14 @@ async fn terminating_admission_cancels_earlier_rows_without_starting_bodies() {
     dispatcher.hook = hook;
     let results =
         scope_request_tool_execution(None, Default::default(), dispatcher.batch(calls(4))).await;
-    assert!(results
-        .iter()
-        .any(|result| matches!(result, Err(ToolEffectError::Fatal(_)))));
+    let errors: Vec<_> = results
+        .into_iter()
+        .map(|result| match result {
+            Err(ToolEffectError::Fatal(reason)) => reason,
+            other => panic!("unexpected termination result: {other:?}"),
+        })
+        .collect();
+    assert_eq!(errors, ["approval terminated", "approval terminated"]);
     let events = events.lock().unwrap();
     assert!(!events.iter().any(|e| e.starts_with("start:")));
     assert!(events.contains(&"finish:1:true".into()));
@@ -377,4 +387,69 @@ async fn four_one_second_reads_wall_clock() {
             .count(),
         4
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn unavailable_reservation_preserves_reason_and_full_vector_at_every_position() {
+    for ordinal in [1, 2] {
+        let (mut dispatcher, mut hook, events) = setup();
+        drop(dispatcher.hook);
+        Arc::get_mut(&mut hook).unwrap().fail_reservation = Some(ordinal);
+        dispatcher.hook = hook;
+        let results =
+            scope_request_tool_execution(None, Default::default(), dispatcher.batch(calls(6)))
+                .await;
+        let outcomes: Vec<_> = results
+            .into_iter()
+            .map(|result| match result {
+                Ok(ToolOutcome::Cancelled) => "cancelled".to_owned(),
+                Err(ToolEffectError::Unavailable(reason)) => reason,
+                other => panic!("unexpected reservation failure outcome: {other:?}"),
+            })
+            .collect();
+        let reason = format!("reservation {ordinal} unavailable");
+        let mut expected = vec!["cancelled".to_owned(); (ordinal - 1) as usize];
+        expected.resize(6, reason);
+        assert_eq!(outcomes, expected);
+        assert!(dispatcher.fatal.lock().await.is_none());
+        let events = events.lock().unwrap();
+        assert!(!events.iter().any(|e| e.starts_with("start:")));
+        for earlier in 1..ordinal {
+            assert!(events.contains(&format!("finish:{earlier}:true")));
+        }
+        assert!(!events.contains(&format!("reserve:{}", ordinal + 1)));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelling_request_mid_group_drains_all_started_children() {
+    let (dispatcher, _, events) = setup();
+    let token = tokio_util::sync::CancellationToken::new();
+    let work = scope_request_tool_execution(None, token.clone(), dispatcher.batch(calls(4)));
+    tokio::pin!(work);
+    assert!(tokio::time::timeout(Duration::from_millis(1), &mut work)
+        .await
+        .is_err());
+    assert_eq!(
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.starts_with("start:"))
+            .count(),
+        4
+    );
+    token.cancel();
+    let results = work.await;
+    assert_eq!(results.len(), 4);
+    assert!(results
+        .iter()
+        .all(|r| matches!(r, Ok(ToolOutcome::Cancelled))));
+    assert!(dispatcher.fatal.lock().await.is_none());
+    let events = events.lock().unwrap();
+    for ordinal in 1..=4 {
+        assert!(events.contains(&format!("result:{ordinal}")));
+        assert!(events.contains(&format!("finish:{ordinal}:false")));
+        assert!(!events.contains(&format!("end:{ordinal}")));
+    }
 }

@@ -1,7 +1,9 @@
 ---- MODULE ScriptEffectBatch ----
 \* lean: none
 \* crates: gents-loop, gents-toolcalls
-\* models: ToolExecution.Parallel.effectWidth, ToolExecution.Parallel.accepted, ToolExecution.Parallel.orderedResults
+\* models: ToolExecution.Parallel.effectWidth
+\* Scope: approval/body/barrier interleavings only; not skip, failure, cancel,
+\* terminate or result projection (covered by Rust owner tests).
 \* Batch width is supplied by running ScriptEffectBatchCases.lean, not
 \* recomputed here. Actors ask, approve, execute and settle nondeterministically.
 EXTENDS Naturals, Sequences, FiniteSets, ScriptEffectBatchCases

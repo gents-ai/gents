@@ -42,7 +42,7 @@ where
             )
             .await
             .map_err(Unavailable)?;
-        tracing::info!(
+        tracing::debug!(
             ordinal = call.ordinal,
             phase = "reserve",
             elapsed_us = started.elapsed().as_micros() as u64,
@@ -73,7 +73,7 @@ where
                 ToolCallHookAction::Terminate { reason } => Some(Err(Fatal(reason))),
             }
         };
-        tracing::info!(
+        tracing::debug!(
             ordinal = call.ordinal,
             phase = "admit_and_before_hook",
             elapsed_us = started.elapsed().as_micros() as u64,
@@ -105,7 +105,7 @@ where
             .foreground_live_output_writer(&admitted.internal_id)
             .await;
         let session = self.hook.session_id().await;
-        tracing::info!(
+        tracing::debug!(
             ordinal = call.ordinal,
             phase = "execution_context",
             elapsed_us = started.elapsed().as_micros() as u64,
@@ -120,7 +120,7 @@ where
             session,
         )
         .await;
-        tracing::info!(
+        tracing::debug!(
             ordinal = call.ordinal,
             phase = "tool_body",
             elapsed_us = started.elapsed().as_micros() as u64,
@@ -142,7 +142,7 @@ where
             HookAction::Terminate { reason } => Err(ToolEffectError::Fatal(reason)),
         };
         let result = self.finish_effect(&admitted.internal_id, result).await;
-        tracing::info!(
+        tracing::debug!(
             ordinal = call.ordinal,
             phase = "result_and_finish",
             elapsed_us = started.elapsed().as_micros() as u64,
@@ -191,6 +191,35 @@ where
                                 break;
                             }
                         }
+                    }
+                    if let Some(Unavailable(reason)) = &failure {
+                        // A reservation failed: no body in this read group has started.
+                        // Preserve the same nonfatal reason at every failure position.
+                        for item in admitted {
+                            if let Some(ready) = item.ready {
+                                results.push(ready);
+                            } else {
+                                let cleanup = self
+                                    .hook
+                                    .finish_tool_effect(
+                                        &item.internal_id,
+                                        Some(&ToolOutcome::Cancelled),
+                                    )
+                                    .await;
+                                match cleanup {
+                                    Ok(()) => results.push(Ok(ToolOutcome::Cancelled)),
+                                    Err(error) => {
+                                        self.fatal
+                                            .lock()
+                                            .await
+                                            .get_or_insert_with(|| error.clone());
+                                        results.push(Err(Fatal(error)));
+                                    }
+                                }
+                            }
+                        }
+                        results.resize_with(calls.len(), || Err(Unavailable(reason.clone())));
+                        break;
                     }
                     if let Some(error) = failure {
                         let reason = match &error {
