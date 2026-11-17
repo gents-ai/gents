@@ -473,18 +473,31 @@ mod tests {
     /// so every refusal fixture names one.
     const GROK: &str = "grok-4.7";
 
+    /// xAI's refusal, **captured verbatim from the live node** on 2026-11-16
+    /// (2026-11-16T19:01:05Z, tool call `plugin-effect:bae-25641432…:7`).
+    ///
+    /// Not a reconstruction: it is 339 bytes, carries an em dash, and writes its
+    /// counter as `tokens (actual/limit): 691791/600000` — the parenthesised
+    /// label contains a `/` of its own, which is what a naive pair reader trips
+    /// on. It also names the model and says "rolling 24-hour window".
+    /// Segment by segment, so no `\` line-continuation can drop a space: the
+    /// captured text is 336 characters and every space in it matters.
+    const GROK_REFUSAL_CAPTURED: &str =     concat!(
+        "agent stream failed: CompletionError: ProviderError: provider usage limit reached ",
+        "(reset time not reported): You've used all the included free usage for model grok-4.7 ",
+        "for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): ",
+        "691791/600000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok",
+    );
+
     fn grok_refusal(minute: u32) -> CallEvidence {
         CallEvidence {
             call_id: Some(format!("call-{minute}")),
             at: at(&format!("2026-11-17T09:{minute:02}:00Z")),
             call_state: "failed".to_owned(),
             model_name: Some(GROK.to_owned()),
-            // PLAN.md's words, verbatim.
-            failure_reason: Some(
-                "ProviderError: used all the included free usage for model grok-4.7 ... \
-                 rolling 24-hour window — tokens 691791/600000"
-                    .to_owned(),
-            ),
+            // Captured verbatim from the live node, 2026-11-16T19:01:05Z
+            // (tool call plugin-effect:bae-25641432…:7).
+            failure_reason: Some(GROK_REFUSAL_CAPTURED.to_owned()),
             provider_total_tokens: None,
         }
     }

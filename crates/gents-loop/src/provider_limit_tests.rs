@@ -493,10 +493,14 @@ fn account_rotated_alone_is_a_marker_and_forgery_is_neutralized() {
 /// It states a window and a counter; it does not state an absolute reset.
 #[test]
 fn a_free_usage_refusal_is_exhaustion_with_its_window_and_counter() {
-    // PLAN.md's own words, verbatim: "used all the included free usage for
-    // model grok-4.7 ... rolling 24-hour window — tokens 691791/600000".
-    let body = "used all the included free usage for model grok-4.7 ... \
-                rolling 24-hour window — tokens 691791/600000";
+    // xAI's refusal, captured verbatim from the live node on 2026-11-16
+    // (2026-11-16T19:01:05Z, tool call plugin-effect:bae-25641432…:7).
+    let body =     concat!(
+        "agent stream failed: CompletionError: ProviderError: provider usage limit reached ",
+        "(reset time not reported): You've used all the included free usage for model grok-4.7 ",
+        "for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): ",
+        "691791/600000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok",
+    );
     let limit = classify_provider_limit(body, now()).expect("a free-usage refusal classifies");
     let ProviderLimit::UsageExhausted(usage) = limit else {
         panic!("free-usage exhaustion, not a throttle: {limit:?}");
@@ -615,14 +619,82 @@ fn a_zero_json_cap_is_unstated() {
     assert_eq!(usage.cap, None, "a cap of zero is not a cap");
 }
 
+/// The captured xAI refusal, verbatim, read for exactly what it states.
+///
+/// This is the fixture the item exists for: 339 bytes, an em dash, a model name,
+/// a "rolling 24-hour window", and a counter written `tokens (actual/limit):
+/// 691791/600000`. The parenthesised label carries its own `/`, so a pair reader
+/// that takes the first `digits/digits` — or that only skips one word — finds
+/// nothing and the real refusal loses its counter and cap.
+///
+/// Captured from the live node on 2026-11-16 (19:01:05Z, tool call
+/// `plugin-effect:bae-25641432…:7`).
+#[test]
+fn the_captured_xai_refusal_reads_every_field_it_states() {
+    let body =     concat!(
+        "agent stream failed: CompletionError: ProviderError: provider usage limit reached ",
+        "(reset time not reported): You've used all the included free usage for model grok-4.7 ",
+        "for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): ",
+        "691791/600000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok",
+    );
+    assert_eq!(body.chars().count(), 336, "the captured text, unchanged");
+
+    let limit = classify_provider_limit(body, now()).expect("it classifies");
+    let ProviderLimit::UsageExhausted(usage) = limit else {
+        panic!("a spent quota, not a throttle: {limit:?}");
+    };
+    assert_eq!(
+        usage.used,
+        Some(691_791),
+        "the counter beside (actual/limit)"
+    );
+    assert_eq!(usage.cap, Some(600_000), "the limit beside (actual/limit)");
+    assert_eq!(
+        usage.window,
+        Some(LimitWindow::Rolling24h),
+        "xAI states this window, so it is provider-reported"
+    );
+    assert_eq!(
+        usage.resets_at, None,
+        "\"resets over a rolling 24-hour window\" names no instant, so none is asserted"
+    );
+
+    // The URL's `/supergrok` must not read as a per-second rate.
+    assert!(
+        matches!(
+            classify_provider_limit(body, now()),
+            Some(ProviderLimit::UsageExhausted(_))
+        ),
+        "a path in the upgrade link is not a rate"
+    );
+
+    // And the persisted row carries the statement, so a re-read keeps it.
+    let stored = persisted_failure_reason(body, now());
+    assert!(
+        stored.contains("[usage-limit used=691791 cap=600000 window=rolling_24h]"),
+        "the marker states exactly what xAI stated: {stored}"
+    );
+    let reread = classify_provider_limit(&stored, now()).expect("the stored row re-classifies");
+    let ProviderLimit::UsageExhausted(reread) = reread else {
+        panic!("expected exhaustion: {reread:?}");
+    };
+    assert_eq!((reread.used, reread.cap), (Some(691_791), Some(600_000)));
+    assert_eq!(reread.window, Some(LimitWindow::Rolling24h));
+}
+
 /// The parsed statement survives persistence: the `Display` text carries it in
 /// a marker ahead of the bounded detail, so re-classifying the stored row reads
 /// the provider's own numbers rather than 300 characters of prose.
 #[test]
 fn the_persisted_row_carries_the_parsed_statement() {
-    // PLAN.md verbatim, as above.
-    let body = "used all the included free usage for model grok-4.7 ... \
-                rolling 24-hour window — tokens 691791/600000";
+    // xAI's own text, captured from the live node — the `(actual/limit):` shape
+    // is what makes this a real test of the pair reader rather than a tidy one.
+    let body =     concat!(
+        "agent stream failed: CompletionError: ProviderError: provider usage limit reached ",
+        "(reset time not reported): You've used all the included free usage for model grok-4.7 ",
+        "for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): ",
+        "691791/600000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok",
+    );
     let first = classify_provider_limit(body, now()).expect("it classifies");
     assert!(
         matches!(first, ProviderLimit::UsageExhausted(_)),

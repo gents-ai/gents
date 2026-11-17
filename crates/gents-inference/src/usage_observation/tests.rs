@@ -1028,9 +1028,15 @@ async fn seed_session_chain(
 
 /// The provided refusal, in the words a Grok free-tier refusal uses: a stated
 /// window and a stated counter, and no reset time at all.
-/// PLAN.md's words, verbatim — no "will refresh later", which this node invented.
-const GROK_REFUSAL: &str = "used all the included free usage for model grok-4.7 ... \
-                            rolling 24-hour window — tokens 691791/600000";
+/// xAI's refusal, **captured verbatim from the live node** on 2026-11-16
+/// (2026-11-16T19:01:05Z, tool call `plugin-effect:bae-25641432…:7`). 339 bytes,
+/// with the em dash and the `tokens (actual/limit):` shape xAI really sends.
+const GROK_REFUSAL: &str = concat!(
+    "agent stream failed: CompletionError: ProviderError: provider usage limit reached ",
+    "(reset time not reported): You've used all the included free usage for model grok-4.7 ",
+    "for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): ",
+    "691791/600000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok",
+);
 
 /// The model the refusal names. xAI says "for model grok-4.7", and evidence is
 /// scoped by model, so a call seeded without one is evidence about no model.

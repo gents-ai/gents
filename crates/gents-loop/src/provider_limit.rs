@@ -690,10 +690,22 @@ fn token_pair(lower: &str) -> Option<(u64, u64)> {
     None
 }
 
-/// The first `used/cap` at the start of `text`, allowing a separator word
-/// ("used", "remaining", ":") and whitespace between it and the digits.
+/// The first `used/cap` at the start of `text`, allowing the lead-ins providers
+/// actually put between the word `tokens` and the digits:
+///
+/// * `tokens 691791/600000`
+/// * `tokens: 691791/600000`
+/// * `tokens (actual/limit): 691791/600000` — xAI's own shape
+///
+/// The parenthesised label is skipped as a whole, which matters because it
+/// contains a `/` of its own: reading that as the separator gives no pair at all.
 fn pair_after_anchor(text: &str) -> Option<(u64, u64)> {
     let mut rest = text.trim_start();
+    // A parenthesised label, then whatever punctuation follows it.
+    if let Some(after_open) = rest.strip_prefix('(') {
+        let close = after_open.find(')')?;
+        rest = after_open[close + 1..].trim_start();
+    }
     // One optional lead-in word, then optional punctuation and space.
     for lead in [":", "used", "remaining", "of", "=", "-"] {
         if let Some(tail) = rest.strip_prefix(lead) {
