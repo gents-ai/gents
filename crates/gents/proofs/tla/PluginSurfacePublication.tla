@@ -34,16 +34,16 @@ Construct ==
         THEN /\ remaining' = remaining - 1
              /\ UNCHANGED <<constructing, ready, prematureFailure, busyDemotion>>
         ELSE /\ constructing' = FALSE
-             /\ ready' = IF locked /\ KeepPrevious /\ keepPrevious(locked) THEN ready ELSE ~locked
-             /\ busyDemotion' = locked /\ HavePrevious /\ ~KeepPrevious
-             /\ prematureFailure' = locked /\ remaining > 0 /\ ~HavePrevious
+             /\ ready' = (IF locked /\ KeepPrevious /\ keepPrevious(locked) THEN ready ELSE ~locked)
+             /\ busyDemotion' = (locked /\ HavePrevious /\ ~KeepPrevious)
+             /\ prematureFailure' = (locked /\ remaining > 0 /\ ~HavePrevious)
              /\ UNCHANGED remaining
   /\ UNCHANGED <<locked, request>>
 
 Route ==
   /\ request = "pending"
-  /\ ready \/ ~constructing
-  /\ request' = IF ready THEN "completed" ELSE "failed"
+  /\ (ready \/ ~constructing)
+  /\ request' = (IF ready THEN "completed" ELSE "failed")
   /\ UNCHANGED <<locked, remaining, constructing, ready, prematureFailure, busyDemotion>>
 
 Next == Release \/ Construct \/ Route
