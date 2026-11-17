@@ -205,13 +205,63 @@ pub fn persisted_failure_reason(text: &str, now: DateTime<Utc>) -> String {
     }
 }
 
+/// The windows providers actually state, as a closed set.
+///
+/// Closed on purpose: the window reaches `for_model`, so a free-text window
+/// would put provider text in front of a model, and an unbounded string is
+/// something a hostile body can forge out of. Parsed once, at classification
+/// time, from the body; the enum is what is carried everywhere after that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LimitWindow {
+    /// xAI's own words: "rolling 24-hour window".
+    Rolling24h,
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+impl LimitWindow {
+    /// The label every surface shows. This is the only spelling that exists, so
+    /// nothing outside this enum can appear as a window.
+    pub fn label(self) -> &'static str {
+        match self {
+            LimitWindow::Rolling24h => "rolling 24-hour",
+            LimitWindow::Daily => "daily",
+            LimitWindow::Weekly => "weekly",
+            LimitWindow::Monthly => "monthly",
+        }
+    }
+
+    /// The marker's token, which is also what a reader parses back.
+    pub fn token(self) -> &'static str {
+        match self {
+            LimitWindow::Rolling24h => "rolling_24h",
+            LimitWindow::Daily => "daily",
+            LimitWindow::Weekly => "weekly",
+            LimitWindow::Monthly => "monthly",
+        }
+    }
+
+    /// The inverse of [`Self::token`]. Anything else — a forged or newer token —
+    /// is no window at all rather than a guess.
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "rolling_24h" => Some(LimitWindow::Rolling24h),
+            "daily" => Some(LimitWindow::Daily),
+            "weekly" => Some(LimitWindow::Weekly),
+            "monthly" => Some(LimitWindow::Monthly),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageLimit {
     pub resets_at: Option<DateTime<Utc>>,
     pub detail: String,
-    /// The window the provider named, when it named one: "rolling 24-hour".
-    /// `None` means the provider did not state it, not that it is 24 hours.
-    pub window: Option<String>,
+    /// The window the provider named, when it named one. `None` means the
+    /// provider did not state it, not that it is 24 hours.
+    pub window: Option<LimitWindow>,
     /// The counter the provider reported, e.g. 691791 of 600000.
     pub used: Option<u64>,
     /// The cap the provider named. `None` means unstated — never inferred from
@@ -229,16 +279,28 @@ pub struct UsageLimit {
 /// cannot truncate it away. A row persisted before this change has no marker and
 /// still parses from the prose it kept.
 const LIMIT_OPEN: &str = "[usage-limit";
+const LIMIT_CLOSE: char = ']';
 
+// The marker as it sits in a persisted reason: `[usage-limit used=691791
+// cap=600000 window=rolling_24h]`. Every token is either a decimal `u64` or a
+// member of `LimitWindow`'s closed set, so nothing a provider wrote can become a
+// field: there is no free text in it at all.
 impl fmt::Display for UsageLimit {
+    /// `provider usage limit reached [usage-limit …] (resets at …): detail`.
+    ///
+    /// The marker sits **immediately** after the prefix and before everything
+    /// else, so a reader can find it by position rather than by searching: a
+    /// provider body that merely contains a marker-shaped string cannot be
+    /// mistaken for one this node wrote, because it is not at that position.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.resets_at {
-            Some(at) => write!(f, "{USAGE_LIMIT_PREFIX} (resets at {})", rfc3339(at))?,
-            None => write!(f, "{USAGE_LIMIT_PREFIX} (reset time not reported)")?,
-        }
+        write!(f, "{USAGE_LIMIT_PREFIX}")?;
         let marker = self.statement_marker();
         if !marker.is_empty() {
             write!(f, " {marker}")?;
+        }
+        match self.resets_at {
+            Some(at) => write!(f, " (resets at {})", rfc3339(at))?,
+            None => write!(f, " (reset time not reported)")?,
         }
         if !self.detail.is_empty() {
             write!(f, ": {}", self.detail)?;
@@ -248,7 +310,7 @@ impl fmt::Display for UsageLimit {
 }
 
 impl UsageLimit {
-    /// `[used=691791 cap=600000 window=rolling+24-hour]`, or empty when the
+    /// `[used=691791 cap=600000 window=rolling_24h]`, or empty when the
     /// provider stated nothing beyond the refusal.
     fn statement_marker(&self) -> String {
         if self.used.is_none() && self.cap.is_none() && self.window.is_none() {
@@ -261,38 +323,64 @@ impl UsageLimit {
         if let Some(cap) = self.cap {
             marker.push_str(&format!(" cap={cap}"));
         }
-        if let Some(window) = &self.window {
-            // A space would split the token, so it is encoded as '+' — reversible,
-            // unlike replacing every hyphen in a label like "rolling 24-hour".
-            marker.push_str(&format!(" window={}", window.replace(' ', "+")));
+        if let Some(window) = self.window {
+            // A closed-set token, so a window can never carry a tab, a newline,
+            // a `]` or another field.
+            marker.push_str(&format!(" window={}", window.token()));
         }
-        marker.push(']');
+        marker.push(LIMIT_CLOSE);
         marker
     }
 }
 
 /// The statement a persisted `failure_reason` carries, if it carries one.
 ///
-/// Read before the prose, so the counter and cap are exactly what the provider
-/// stated at the time of the refusal rather than a re-parse of 300 characters.
+/// Found by **position**, not by searching: the text must *start* with this
+/// node's prefix and the marker must be the very next token. A body that merely
+/// contains `[usage-limit …]` — because a provider echoed it, or because the
+/// provider wrote it — is not a marker this node wrote, so it cannot forge one.
+///
+/// Every field is also constrained: `used`/`cap` are decimal and `cap > 0`, and
+/// `window` is a closed-set token. A field that does not parse is not a field.
 fn stored_statement(text: &str) -> UsageStatement {
-    let Some(start) = text.find(LIMIT_OPEN) else {
+    let Some(after_prefix) = text.strip_prefix(USAGE_LIMIT_PREFIX) else {
         return UsageStatement::default();
     };
-    let rest = &text[start + LIMIT_OPEN.len()..];
-    let Some(end) = rest.find(']') else {
+    let Some(rest) = after_prefix.trim_start().strip_prefix(LIMIT_OPEN) else {
         return UsageStatement::default();
     };
+    let Some(end) = rest.find(LIMIT_CLOSE) else {
+        return UsageStatement::default();
+    };
+    // A marker this node wrote has no whitespace inside a field and no field
+    // outside the three it knows; a body that merely starts with the prefix and
+    // then contains a bracket is not one.
+    let inside = &rest[..end];
+    if inside.chars().any(|c| c.is_control()) {
+        return UsageStatement::default();
+    }
     let mut statement = UsageStatement::default();
-    for field in rest[..end].split_whitespace() {
+    let mut saw_field = false;
+    for field in inside.split_whitespace() {
         match field.split_once('=') {
-            Some(("used", value)) => statement.used = value.parse::<u64>().ok(),
-            Some(("cap", value)) => {
-                statement.cap = value.parse::<u64>().ok().filter(|cap| *cap > 0)
+            Some(("used", value)) => {
+                statement.used = value.parse::<u64>().ok();
+                saw_field = true;
             }
-            Some(("window", value)) => statement.window = Some(value.replace('+', " ")),
-            _ => {}
+            Some(("cap", value)) => {
+                statement.cap = value.parse::<u64>().ok().filter(|cap| *cap > 0);
+                saw_field = true;
+            }
+            Some(("window", value)) => {
+                statement.window = LimitWindow::from_token(value);
+                saw_field = true;
+            }
+            // An unknown token means this is not a marker this node wrote.
+            _ => return UsageStatement::default(),
         }
+    }
+    if !saw_field {
+        return UsageStatement::default();
     }
     statement
 }
@@ -369,7 +457,7 @@ pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<Provide
 /// either would be worse than saying unknown.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct UsageStatement {
-    window: Option<String>,
+    window: Option<LimitWindow>,
     used: Option<u64>,
     cap: Option<u64>,
 }
@@ -406,9 +494,11 @@ impl UsageStatement {
             statement.window = Some(window);
         }
         if let Some(json) = body_json {
-            statement.window = statement
-                .window
-                .or_else(|| json_str(json, &["window", "period", "quota_window"]));
+            statement.window = statement.window.or_else(|| {
+                json_str(json, &["window", "period", "quota_window"])
+                    .as_deref()
+                    .and_then(json_window)
+            });
             statement.used = json_u64(json, &["used", "usage", "tokens_used", "consumed"]);
             // A JSON `limit: 0` is not a cap either; Lean `establishes` requires
             // cap > 0, so zero is unstated rather than a spent allowance.
@@ -436,23 +526,53 @@ impl UsageStatement {
 /// that period as the enforced limit, and reporting it as the provider's window
 /// would assert something it never said. Those count only beside the word
 /// `window`, or in a "limit"/"quota" phrase.
-fn named_window(lower: &str) -> Option<String> {
-    for (needle, label) in [
-        ("rolling 24-hour", "rolling 24-hour"),
-        ("rolling 24 hour", "rolling 24-hour"),
-        ("24-hour window", "24-hour"),
-        ("24 hour window", "24-hour"),
-    ] {
+fn named_window(lower: &str) -> Option<LimitWindow> {
+    for needle in ["rolling 24-hour", "rolling 24 hour"] {
         if lower.contains(needle) {
-            return Some(label.to_owned());
+            return Some(LimitWindow::Rolling24h);
         }
     }
-    for period in ["daily", "weekly", "monthly"] {
+    for needle in ["24-hour window", "24 hour window"] {
+        if lower.contains(needle) {
+            return Some(LimitWindow::Rolling24h);
+        }
+    }
+    for (period, window) in [
+        ("daily", LimitWindow::Daily),
+        ("weekly", LimitWindow::Weekly),
+        ("monthly", LimitWindow::Monthly),
+    ] {
         if period_window_stated(lower, period) {
-            return Some(period.to_owned());
+            return Some(window);
         }
     }
     None
+}
+
+/// A JSON window field, mapped into the closed set. Anything else is no window,
+/// so a provider's free text cannot become the window a model reads.
+fn json_window(text: &str) -> Option<LimitWindow> {
+    let lower = text.to_ascii_lowercase();
+    let squashed: String = lower
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let squashed = squashed.trim_matches('-');
+    let collapsed = squashed
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    match collapsed.as_str() {
+        "rolling-24-hour" | "rolling-24h" | "rolling-24-hours" | "24-hour" | "24h" => {
+            Some(LimitWindow::Rolling24h)
+        }
+        "daily" | "day" => Some(LimitWindow::Daily),
+        "weekly" | "week" => Some(LimitWindow::Weekly),
+        "monthly" | "month" => Some(LimitWindow::Monthly),
+        // Anything else is no window: provider free text never becomes one.
+        _ => None,
+    }
 }
 
 /// Whether `period` appears in the body as the stated limit window: "daily
@@ -480,26 +600,76 @@ fn period_window_stated(lower: &str, period: &str) -> bool {
 /// Whether the body names a rate faster than a day — per minute, second or hour.
 /// Such a rate is a throttle's window, and outranks quota wording beside it.
 fn sub_day_rate_window(lower: &str) -> bool {
-    const SUB_DAY: &[&str] = &[
+    // A rate word standing on its own. Matching bare substrings made `/security`
+    // and `/minimum` read as "per second"/"per minute" and turned a genuine
+    // exhaustion into a throttle, so each hit is checked for a clean boundary
+    // before it counts.
+    const RATE_WORDS: &[&str] = &[
+        "min", "minute", "minutes", "sec", "second", "seconds", "hr", "hour", "hours",
+    ];
+    // Phrases that already contain their own boundaries.
+    const RATE_PHRASES: &[&str] = &[
         "per minute",
         "per-minute",
-        "/minute",
-        "/min",
         "per second",
         "per-second",
-        "/second",
-        "/sec",
         "per hour",
         "per-hour",
-        "/hour",
-        "/hr",
-        "requests/min",
-        "req/min",
-        "requests/min",
-        "rpm",
-        "tpm",
     ];
-    SUB_DAY.iter().any(|needle| lower.contains(needle))
+    if RATE_PHRASES.iter().any(|needle| lower.contains(needle)) {
+        return true;
+    }
+    // `rpm`/`tpm` as a standalone word, not the tail of another word.
+    for word in ["rpm", "tpm"] {
+        if token_present(lower, word) {
+            return true;
+        }
+    }
+    // `/min`, `/sec`, `/hr` and friends: the character after the unit must not
+    // continue the word, which is what keeps `/security` out.
+    for marker in ['/'] {
+        let mut from = 0;
+        while let Some(found) = lower[from..].find(marker) {
+            let after = &lower[from + found + marker.len_utf8()..];
+            for unit in RATE_WORDS {
+                if let Some(tail) = after.strip_prefix(unit) {
+                    // The unit must end where the word ends: `/security` fails on
+                    // 'u', and `/hours-left` fails on '-' — a path segment, not a
+                    // rate. Only a separator or the end of the text counts.
+                    if tail
+                        .chars()
+                        .next()
+                        .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+                    {
+                        return true;
+                    }
+                }
+            }
+            from = from + found + marker.len_utf8();
+        }
+    }
+    false
+}
+
+/// Whether `word` appears as its own token: bounded by non-alphanumerics.
+fn token_present(lower: &str, word: &str) -> bool {
+    let mut from = 0;
+    while let Some(found) = lower[from..].find(word) {
+        let at = from + found;
+        let before_ok = lower[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_ascii_alphanumeric());
+        let after_ok = lower[at + word.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_ascii_alphanumeric());
+        if before_ok && after_ok {
+            return true;
+        }
+        from = at + word.len();
+    }
+    false
 }
 
 /// `tokens 691791/600000`, anchored on the word `tokens`.

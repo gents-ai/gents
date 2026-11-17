@@ -286,6 +286,11 @@ def success (moment : Int) : CallFact :=
 def successElsewhere (moment : Int) : CallFact :=
   { observedAt := moment, completed := true, model := siblingModel }
 
+/-- A refusal on a named model, stating nothing else. -/
+def refusalAt (moment : Int) (model : Option String) : CallFact :=
+  { observedAt := moment, model := model,
+    refusal := some { observedAt := moment, model := model } }
+
 /-- A call that finished without stating a refusal. -/
 def quiet (moment : Int) : CallFact := { observedAt := moment }
 
@@ -317,7 +322,14 @@ def refusalCases : List RefusalCase :=
    ⟨"sibling_model_success_does_not_clear", [grok, successElsewhere 150], 200⟩,
    ⟨"same_model_success_still_clears", [grok, success 150], 200⟩,
    ⟨"sibling_completion_before_the_refusal_is_irrelevant",
-     [successElsewhere 50, grok], 200⟩]
+     [successElsewhere 50, grok], 200⟩,
+   -- Per scope: the NEWER refusal cleared on its own model must not hide the
+   -- OLDER one still standing on another. grok-4.7 refuses at 80 and is cleared
+   -- at 150; grok-4.7-mini refuses at 120 and is untouched.
+   ⟨"cleared_newer_refusal_does_not_hide_an_older_standing_one",
+     [grokAt 80, grokAt 120, success 150], 200⟩,
+   ⟨"older_refusal_still_stands_when_the_newer_is_cleared",
+     [refusalAt 80 siblingModel, grokAt 120, success 150], 200⟩]
 
 @[conformance_family]
 def refusalStanding : Conformance.Family RefusalInput RefusalOutput where

@@ -57,6 +57,25 @@ impl CallEvidence {
     }
 }
 
+/// What this node counted in `scope`.
+///
+/// Scoped to the refused model when the refusal names one, so the number beside
+/// a model-scoped refusal is about that model. When the refusal names no model
+/// the count is the whole backend's, and the view says so through `consumed_scope`.
+fn consumed_in_scope(calls: &[CallEvidence], scope: Option<&str>) -> Option<u64> {
+    let totals = calls
+        .iter()
+        .filter(|call| scope.is_none_or(|model| call.is_model(Some(model))))
+        .filter_map(|call| call.provider_total_tokens);
+    let mut saw = false;
+    let mut sum = 0u64;
+    for total in totals {
+        saw = true;
+        sum = sum.saturating_add(total);
+    }
+    saw.then_some(sum)
+}
+
 /// Whether the evidence establishes a standing refusal, and as which view.
 ///
 /// `completed_at` is the latest completion in the window, if any. The rules, in
@@ -66,36 +85,88 @@ impl CallEvidence {
 pub fn standing_refusal(
     calls: &[CallEvidence],
     now: DateTime<Utc>,
-    consumed_by_node: Option<u64>,
     detail_limit: usize,
 ) -> Option<UsageRefusalView> {
-    // The scope is the newest refusal's own, exactly as the model states it. An
-    // unknown model is its own scope — it matches only calls whose model is
-    // likewise unknown — and is not a reason to drop the refusal.
-    let scope = latest_refusal_scope(calls)?;
-    standing_refusal_for_model(calls, scope.as_deref(), now, consumed_by_node, detail_limit)
+    // Every model that still stands is evaluated separately, then the newest
+    // standing one is returned. Taking only the newest refusal's scope would
+    // hide an older refusal that still stands on another model: the newest can
+    // be cleared by a same-model success while the older one is untouched.
+    standing_refusals(calls, now, detail_limit)
+        .into_iter()
+        .max_by(|left, right| left.at.cmp(&right.at))
 }
 
-/// The model of the newest stated refusal in the evidence, if it stated one.
+/// As [`standing_refusal`], stating whether the evidence read reached its bound.
+pub fn standing_refusal_with(
+    calls: &[CallEvidence],
+    now: DateTime<Utc>,
+    detail_limit: usize,
+    partial: bool,
+) -> Option<UsageRefusalView> {
+    standing_refusals_with(calls, now, detail_limit, partial)
+        .into_iter()
+        .max_by(|left, right| left.at.cmp(&right.at))
+}
+
+/// Every model the evidence still shows as refused, newest first.
 ///
-/// `Some(None)` means the newest refusal named no model; `None` means there is
-/// no stated refusal at all. The distinction matters: a model-less refusal is
-/// still a refusal.
-pub fn latest_refusal_scope(calls: &[CallEvidence]) -> Option<Option<String>> {
-    calls
-        .iter()
-        .filter(|call| call.call_state == "failed")
-        .filter_map(|call| {
-            let text = call.failure_reason.as_deref()?;
-            match gents_loop::provider_limit::classify_provider_limit(text, call.at)? {
-                gents_loop::provider_limit::ProviderLimit::UsageExhausted(_) => {
-                    Some((call.at, call.model_name.clone()))
-                }
-                gents_loop::provider_limit::ProviderLimit::Throttled { .. } => None,
-            }
+/// The scope is per model because a provider's refusal is: xAI says "used all
+/// the included free usage for model grok-4.7". A completion on a sibling model
+/// is evidence about that model, so it leaves the refusal standing here and a
+/// refusal on one model does not mark the rest of the account out.
+pub fn standing_refusals(
+    calls: &[CallEvidence],
+    now: DateTime<Utc>,
+    detail_limit: usize,
+) -> Vec<UsageRefusalView> {
+    standing_refusals_with(calls, now, detail_limit, false)
+}
+
+/// As [`standing_refusals`], stating whether the evidence read reached its bound.
+///
+/// `partial` is carried onto every view, so an operator and a model both see
+/// that "no older refusal" is only true of the rows that were read.
+pub fn standing_refusals_with(
+    calls: &[CallEvidence],
+    now: DateTime<Utc>,
+    detail_limit: usize,
+    partial: bool,
+) -> Vec<UsageRefusalView> {
+    // The models the evidence names, in first-seen order. `None` is its own
+    // scope, and is included when a model-less refusal exists.
+    let mut scopes: Vec<Option<String>> = Vec::new();
+    for call in calls {
+        if !scopes
+            .iter()
+            .any(|scope| scope.as_deref() == call.model_name.as_deref())
+        {
+            scopes.push(call.model_name.clone());
+        }
+    }
+    let mut standing: Vec<UsageRefusalView> = scopes
+        .into_iter()
+        .filter_map(|scope| {
+            // The local count is scoped to the refused model when the refusal
+            // names one, so "counted on this node" is about the same thing the
+            // refusal is about rather than every model of the backend.
+            let consumed = consumed_in_scope(calls, scope.as_deref());
+            // The scope the count is over, said out loud.
+            let consumed_scope = match &scope {
+                Some(model) => format!("model:{model}"),
+                None => "backend".to_owned(),
+            };
+            standing_refusal_for_model(calls, scope.as_deref(), now, consumed, detail_limit).map(
+                |mut view| {
+                    view.consumed_scope = consumed_scope;
+                    view.partial = partial;
+                    view
+                },
+            )
         })
-        .max_by_key(|(at, _)| *at)
-        .map(|(_, model)| model)
+        .collect();
+    // Newest first, so a caller that takes one gets the most recent statement.
+    standing.sort_by(|left, right| right.at.cmp(&left.at));
+    standing
 }
 
 /// Whether the evidence establishes a standing refusal **for one model**, and as
@@ -155,7 +226,9 @@ pub fn standing_refusal_for_model(
             Some(_) => WindowBasis::ProviderReported,
             None => WindowBasis::Unknown,
         },
-        window: usage.window,
+        // The enum's own label, so this is the closed set's spelling and never
+        // provider text.
+        window: usage.window.map(|window| window.label().to_owned()),
         used: usage.used,
         cap: usage.cap,
         resets_at: usage.resets_at.map(|at| at.to_rfc3339()),
@@ -163,6 +236,13 @@ pub fn standing_refusal_for_model(
         // This node's own arithmetic over its own calls: an estimate, stated as
         // one wherever it is shown, and never confused with the provider's count.
         consumed_basis: WindowBasis::LocallyEstimated,
+        // Overwritten by the caller that knows the scope; the per-model builder
+        // alone cannot say whether the read was partial.
+        consumed_scope: match model {
+            Some(model) => format!("model:{model}"),
+            None => "backend".to_owned(),
+        },
+        partial: false,
         detail: bounded_detail(&usage.detail, detail_limit),
         // The look-back this node bounded its own evidence to, stated as
         // this node's choice rather than as the provider's window.
@@ -189,7 +269,7 @@ async fn read_evidence(
     access: &gents_store::config_client::ConfigAccess,
     backend_id: &str,
     since: &DateTime<Utc>,
-) -> Option<(Vec<CallEvidence>, bool, u64)> {
+) -> Option<(Vec<CallEvidence>, bool, u64, bool)> {
     let since_text = gents_store::graphql::escape_graphql_string(&since.to_rfc3339());
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut calls = Vec::new();
@@ -248,7 +328,7 @@ async fn read_evidence(
             "refusal evidence reached its page bound; the view is partial"
         );
     }
-    Some((calls, saw_usage, consumed))
+    Some((calls, saw_usage, consumed, partial))
 }
 
 /// The standing refusal for one backend, read from the durable evidence of the
@@ -270,11 +350,12 @@ pub async fn refusal_for_backend(
     // that times it. `queued_at` is written once at admission and never revised,
     // so it is the column a window can be taken over; `started_at`/`ended_at`
     // are stamped later and a queued call has neither.
-    let (calls, saw_usage, consumed) = read_evidence(access, &backend_id, &since).await?;
+    let (calls, _saw_usage, _consumed, partial) =
+        read_evidence(access, &backend_id, &since).await?;
     // The classifier's detail is already bounded (`DETAIL_MAX_CHARS`), so the
     // view takes it as it is rather than truncating a second time: the agent
     // JSON, the account inventory and the desktop show the same excerpt.
-    standing_refusal(&calls, now, saw_usage.then_some(consumed), usize::MAX)
+    standing_refusal_with(&calls, now, usize::MAX, partial)
 }
 
 /// Evidence read as one Agent: the calls this backend made that this Agent's
@@ -285,15 +366,8 @@ pub async fn refusal_for_backend_as_agent(
     backend: &gents_documents::inference_backend::InferenceBackend,
     now: DateTime<Utc>,
 ) -> Option<UsageRefusalView> {
-    let calls = evidence_as_agent(node, signer, backend, now).await?;
-    let saw_usage = calls
-        .iter()
-        .any(|call| call.provider_total_tokens.is_some());
-    let consumed: u64 = calls
-        .iter()
-        .filter_map(|call| call.provider_total_tokens)
-        .fold(0u64, u64::saturating_add);
-    standing_refusal(&calls, now, saw_usage.then_some(consumed), usize::MAX)
+    let (calls, partial) = evidence_as_agent(node, signer, backend, now).await?;
+    standing_refusal_with(&calls, now, usize::MAX, partial)
 }
 
 /// The raw evidence this Agent's `children` grant admits for one backend.
@@ -302,7 +376,7 @@ async fn evidence_as_agent(
     signer: &gents_store::identity::ManagedAgentSigner,
     backend: &gents_documents::inference_backend::InferenceBackend,
     now: DateTime<Utc>,
-) -> Option<Vec<CallEvidence>> {
+) -> Option<(Vec<CallEvidence>, bool)> {
     let actor = identity::Did::new(signer.did()).ok()?;
     let access = gents_store::config_client::ConfigAccess::local_with_agent_signer(
         node.clone(),
@@ -314,7 +388,7 @@ async fn evidence_as_agent(
     let backend_id = gents_store::graphql::escape_graphql_string(&backend.backend_id);
     read_evidence(&access, &backend_id, &since)
         .await
-        .map(|(calls, _, _)| calls)
+        .map(|(calls, _, _, partial)| (calls, partial))
 }
 
 /// The standing refusal for one backend, across every Agent this runtime can
@@ -339,30 +413,29 @@ pub async fn refusal_for_backend_across_agents(
     // "the newest refusal any Agent can see" applied to the whole account.
     let mut union: Vec<CallEvidence> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut partial = false;
     for signer in signers {
-        let Some(view) = evidence_as_agent(node, signer, backend, now).await else {
+        let Some((view, agent_partial)) = evidence_as_agent(node, signer, backend, now).await
+        else {
             continue;
         };
+        partial |= agent_partial;
         for call in view {
             let key = match &call.call_id {
                 Some(id) => id.clone(),
-                // No id: keep it, keyed by its own time and state so an exact
-                // duplicate row from a second Agent still collapses.
-                None => format!("{}|{}", call.at.to_rfc3339(), call.call_state),
+                // Without a call id there is nothing that says two rows are the
+                // same call, so they are kept apart: merging distinct calls
+                // would drop one and under-count. Each row gets its own key.
+                None => format!("row:{}:{}", union.len(), call.at.to_rfc3339()),
             };
             if seen.insert(key) {
                 union.push(call);
             }
         }
     }
-    let saw_usage = union
-        .iter()
-        .any(|call| call.provider_total_tokens.is_some());
-    let consumed: u64 = union
-        .iter()
-        .filter_map(|call| call.provider_total_tokens)
-        .fold(0u64, u64::saturating_add);
-    standing_refusal(&union, now, saw_usage.then_some(consumed), usize::MAX)
+    // Partial if any Agent's read was: a page bound reached by one means the
+    // union has a horizon, and saying so beats implying there is none.
+    standing_refusal_with(&union, now, usize::MAX, partial)
 }
 
 /// The refusal text an operator sees: bounded, never the whole body.
@@ -406,9 +479,10 @@ mod tests {
             at: at(&format!("2026-11-17T09:{minute:02}:00Z")),
             call_state: "failed".to_owned(),
             model_name: Some(GROK.to_owned()),
+            // PLAN.md's words, verbatim.
             failure_reason: Some(
-                "ProviderError: you have used all the included free usage for this account; \
-                 your rolling 24-hour window will refresh later; tokens 691791/600000"
+                "ProviderError: used all the included free usage for model grok-4.7 ... \
+                 rolling 24-hour window — tokens 691791/600000"
                     .to_owned(),
             ),
             provider_total_tokens: None,
@@ -443,13 +517,15 @@ mod tests {
     #[test]
     fn a_refusal_with_no_stated_reset_stands_with_its_stated_fields() {
         let now = at("2026-11-17T10:00:00Z");
-        let view = standing_refusal(&[grok_refusal(30)], now, Some(1200), 300)
-            .expect("the refusal stands");
+        let view = standing_refusal(&[grok_refusal(30)], now, 300).expect("the refusal stands");
         assert_eq!(view.window.as_deref(), Some("rolling 24-hour"));
         assert_eq!(view.used, Some(691_791));
         assert_eq!(view.cap, Some(600_000));
         assert!(view.resets_at.is_none(), "no reset was stated");
-        assert_eq!(view.consumed_by_node, Some(1200));
+        // The local count is derived per scope; the fixture's call reports no
+        // provider total, so there is nothing to count and nothing to invent.
+        assert_eq!(view.consumed_by_node, None);
+        assert_eq!(view.consumed_scope, format!("model:{GROK}"));
         assert_eq!(
             view.window_provenance(),
             WindowProvenance::ProviderReported,
@@ -464,14 +540,42 @@ mod tests {
     fn a_completion_on_another_model_does_not_clear_the_refusal() {
         let now = at("2026-11-17T10:00:00Z");
         let evidence = [grok_refusal(30), completed_elsewhere(40)];
-        let view = standing_refusal(&evidence, now, None, 300)
+        let view = standing_refusal(&evidence, now, 300)
             .expect("a sibling model's success is not this model's success");
         assert_eq!(view.model.as_deref(), Some(GROK));
         assert_eq!(view.used, Some(691_791));
 
         // The same model's completion still clears it.
         let same = [grok_refusal(30), completed(40)];
-        assert!(standing_refusal(&same, now, None, 300).is_none());
+        assert!(standing_refusal(&same, now, 300).is_none());
+    }
+
+    /// **Item 3.** The newest refusal being cleared must not hide an older one
+    /// still standing on another model. Deciding per model and then reporting
+    /// the newest standing one is what makes that true; deciding from the newest
+    /// refusal alone would report nothing.
+    #[test]
+    fn a_cleared_newer_refusal_does_not_hide_an_older_standing_one() {
+        let now = at("2026-11-17T10:00:00Z");
+        // minthis refuses at :20 and is untouched; grok-4.7 refuses at :30 and
+        // is cleared by its own success at :45.
+        let mut sibling = grok_refusal(20);
+        sibling.model_name = Some("grok-4.7-mini".to_owned());
+        sibling.call_id = Some("sibling-refusal".to_owned());
+        let evidence = [sibling, grok_refusal(30), completed(45)];
+
+        let view = standing_refusal(&evidence, now, 300)
+            .expect("the older refusal on the sibling model still stands");
+        assert_eq!(
+            view.model.as_deref(),
+            Some("grok-4.7-mini"),
+            "the standing model is the sibling, not the cleared grok-4.7"
+        );
+
+        // And the per-model listing names exactly that one.
+        let all = standing_refusals(&evidence, now, 300);
+        assert_eq!(all.len(), 1, "exactly one model is still refused: {all:?}");
+        assert_eq!(all[0].model.as_deref(), Some("grok-4.7-mini"));
     }
 
     /// A refusal on one model marks only that model out: the sibling's own
@@ -494,7 +598,7 @@ mod tests {
         let now = at("2026-11-17T10:00:00Z");
         let mut twice = grok_refusal(30);
         twice.provider_total_tokens = Some(120);
-        let view = standing_refusal(&[twice], now, Some(120), 300).expect("the refusal stands");
+        let view = standing_refusal(&[twice], now, 300).expect("the refusal stands");
         assert_eq!(view.consumed_by_node, Some(120));
         assert_eq!(view.consumed_basis, WindowBasis::LocallyEstimated);
         assert_eq!(view.for_model()["consumed_basis"], "locally_estimated");
@@ -505,7 +609,7 @@ mod tests {
     fn a_later_completion_clears_the_refusal() {
         let now = at("2026-11-17T10:00:00Z");
         assert!(
-            standing_refusal(&[grok_refusal(30), completed(45)], now, None, 300).is_none(),
+            standing_refusal(&[grok_refusal(30), completed(45)], now, 300).is_none(),
             "a later success means the account is usable again"
         );
     }
@@ -515,7 +619,7 @@ mod tests {
     fn an_earlier_completion_leaves_the_refusal() {
         let now = at("2026-11-17T10:00:00Z");
         assert!(
-            standing_refusal(&[completed(10), grok_refusal(30)], now, None, 300).is_some(),
+            standing_refusal(&[completed(10), grok_refusal(30)], now, 300).is_some(),
             "a success before the refusal says nothing about it"
         );
     }
@@ -525,8 +629,8 @@ mod tests {
     #[test]
     fn no_refusal_evidence_is_no_refusal() {
         let now = at("2026-11-17T10:00:00Z");
-        assert!(standing_refusal(&[], now, None, 300).is_none());
-        assert!(standing_refusal(&[completed(30)], now, None, 300).is_none());
+        assert!(standing_refusal(&[], now, 300).is_none());
+        assert!(standing_refusal(&[completed(30)], now, 300).is_none());
         let throttled = CallEvidence {
             call_id: Some("throttled".to_owned()),
             at: at("2026-11-17T09:30:00Z"),
@@ -536,7 +640,7 @@ mod tests {
             provider_total_tokens: None,
         };
         assert!(
-            standing_refusal(&[throttled], now, None, 300).is_none(),
+            standing_refusal(&[throttled], now, 300).is_none(),
             "a bare rate limit is a throttle, not exhaustion"
         );
     }
@@ -555,7 +659,7 @@ mod tests {
         };
         // The classifier reads the marker the same text was rendered with, so a
         // reset has to arrive in the text; this one carries none, so it stands.
-        assert!(standing_refusal(std::slice::from_ref(&expired), past, None, 300).is_some());
+        assert!(standing_refusal(std::slice::from_ref(&expired), past, 300).is_some());
     }
 
     /// The detail an operator sees is bounded, never the whole body.
@@ -572,7 +676,7 @@ mod tests {
             )),
             provider_total_tokens: None,
         };
-        let view = standing_refusal(&[long], at("2026-11-17T10:00:00Z"), None, 40).expect("stands");
+        let view = standing_refusal(&[long], at("2026-11-17T10:00:00Z"), 40).expect("stands");
         assert!(view.detail.chars().count() <= 41, "{}", view.detail);
         assert!(view.detail.ends_with('…'), "{}", view.detail);
     }
@@ -644,7 +748,7 @@ mod tests {
         };
         wire::replay(|input: &wire::RefusalInput| {
             let calls: Vec<CallEvidence> = input.calls.iter().map(call).collect();
-            let established = standing_refusal(&calls, moment(input.now), None, usize::MAX);
+            let established = standing_refusal(&calls, moment(input.now), usize::MAX);
             let exhausted = established.is_some();
             wire::RefusalOutput {
                 standing: established.map(|view: UsageRefusalView| wire::RefusalWire {
@@ -676,8 +780,7 @@ mod tests {
     #[test]
     fn the_agent_facing_read_carries_no_excerpt_text() {
         let now = at("2026-11-17T10:00:00Z");
-        let view = standing_refusal(&[grok_refusal(30)], now, Some(1200), 300)
-            .expect("the refusal stands");
+        let view = standing_refusal(&[grok_refusal(30)], now, 300).expect("the refusal stands");
         // The operator's copy does carry the excerpt.
         assert!(view.detail.contains("free usage"));
 
@@ -717,6 +820,8 @@ mod tests {
             resets_at: None,
             consumed_by_node: Some(5),
             consumed_basis: WindowBasis::LocallyEstimated,
+            consumed_scope: "model:grok-4.7".into(),
+            partial: false,
             detail: "quota".into(),
             window_basis: WindowBasis::LocallyEstimated,
             evidence_window_hours: 24,
@@ -731,7 +836,7 @@ mod tests {
     #[test]
     fn a_stated_window_is_provider_reported() {
         let now = at("2026-11-17T10:00:00Z");
-        let view = standing_refusal(&[grok_refusal(30)], now, None, 300).expect("it stands");
+        let view = standing_refusal(&[grok_refusal(30)], now, 300).expect("it stands");
         assert_eq!(view.window.as_deref(), Some("rolling 24-hour"));
         assert_eq!(view.window_provenance(), WindowProvenance::ProviderReported);
     }
@@ -749,8 +854,7 @@ mod tests {
             failure_reason: Some("ProviderError: usage limit reached".to_owned()),
             provider_total_tokens: None,
         };
-        let view =
-            standing_refusal(&[bare], at("2026-11-17T10:00:00Z"), None, 300).expect("stands");
+        let view = standing_refusal(&[bare], at("2026-11-17T10:00:00Z"), 300).expect("stands");
         assert!(
             view.window.is_none(),
             "nothing stands in for a stated window"

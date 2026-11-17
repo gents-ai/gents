@@ -50,6 +50,12 @@ pub struct UsageRefusalView {
     /// Whose count `consumed_by_node` is: `locally_estimated` always, because it
     /// is this node's arithmetic over its own calls.
     pub consumed_basis: String,
+    /// What `consumed_by_node` counts: the refused model, or `backend` for a
+    /// refusal that named none.
+    pub consumed_scope: String,
+    /// Whether the evidence read reached its bound, so "no older refusal" is only
+    /// true of the rows that were read.
+    pub partial: bool,
     /// A bounded excerpt of the provider's words, never the whole body.
     pub detail: String,
     /// Whose window `window` names: `provider_reported` when the provider
@@ -112,6 +118,8 @@ pub(crate) async fn account_usage_views(
                     "locally_estimated".into()
                 }
             },
+            consumed_scope: refusal.consumed_scope.clone(),
+            partial: refusal.partial,
             detail: refusal.detail.clone(),
             // Stated by the view, not inferred from `window.is_some()`: a
             // provider that named no window leaves `window` null rather than

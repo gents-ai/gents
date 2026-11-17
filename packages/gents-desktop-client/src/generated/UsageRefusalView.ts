@@ -31,6 +31,16 @@ consumedByNode: number | null,
  */
 consumedBasis: string,
 /**
+ * What `consumed_by_node` counts: the refused model, or `backend` for a
+ * refusal that named none.
+ */
+consumedScope: string,
+/**
+ * Whether the evidence read reached its bound, so "no older refusal" is only
+ * true of the rows that were read.
+ */
+partial: boolean,
+/**
  * A bounded excerpt of the provider's words, never the whole body.
  */
 detail: string,

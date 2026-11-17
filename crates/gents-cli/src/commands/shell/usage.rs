@@ -91,13 +91,23 @@ pub(super) fn rows(reads: &[AccountUsageRead], now: DateTime<Utc>) -> Vec<MenuRo
                 Tone::Warn,
             ));
             rows.push(row(format!("   {}", refusal.detail), Tone::Label));
+            if refusal.partial {
+                rows.push(row(
+                    "   partial: the evidence read reached its bound".to_owned(),
+                    Tone::Label,
+                ));
+            }
             // This node's own count, labelled: it is this node's estimate over
             // its own look-back, never the provider's counter and never a
             // percentage.
             if let Some(consumed) = refusal.consumed_by_node {
                 rows.push(row(
                     format!(
-                        "   {consumed} counted on this node, last {}h (locally estimated)",
+                        "   {consumed} counted on this node for {}, last {}h (locally estimated)",
+                        refusal
+                            .consumed_scope
+                            .strip_prefix("model:")
+                            .unwrap_or(refusal.consumed_scope.as_str()),
                         refusal.evidence_window_hours
                     ),
                     Tone::Label,

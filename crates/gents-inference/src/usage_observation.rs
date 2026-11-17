@@ -184,20 +184,6 @@ pub struct UsageCache {
     /// these; the runtime key alone sees nothing. Empty means the runtime holds
     /// no agent yet, and then no refusal is evidenced — never a wrong one.
     agent_signers: Vec<gents_store::identity::ManagedAgentSigner>,
-    /// Standing refusals, keyed by backend and the evidence window's start.
-    ///
-    /// A usage read asks about every account, and each refusal costs one query
-    /// per Agent, so an uncached read re-queried the same rows on every call.
-    /// The key includes the window's start, so an entry expires by the clock
-    /// rather than by an invalidation that could be missed.
-    refusals: tokio::sync::Mutex<rapidhash::RapidHashMap<RefusalKey, Option<UsageRefusalView>>>,
-}
-
-/// One backend's refusal in one evidence window.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct RefusalKey {
-    backend_id: String,
-    since: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -219,35 +205,28 @@ impl UsageCache {
         &self.endpoints
     }
 
-    /// The standing refusal for one backend, cached for the evidence window.
+    /// The standing refusal for one backend.
     ///
-    /// Each refusal costs one `InferenceCall` query per Agent the runtime holds,
-    /// which is the expensive part of a usage read; the cache makes the second
-    /// read in the same window free. The window's own start is part of the key,
-    /// so the entry turns over with the clock.
+    /// Deliberately **uncached**. A cache keyed by the evidence window's start
+    /// was a fresh key on every call (every caller passes a new `now`), so it
+    /// never hit and grew unbounded; and even keyed correctly it would answer
+    /// "not exhausted" for its lifetime after a new failed call, and "still
+    /// exhausted" after a clearing completion. Correctness beats the per-read
+    /// cost, which is bounded: pages × Agents × backends, on explicit usage
+    /// reads only, and each query bounded by `EVIDENCE_PAGE`/`EVIDENCE_MAX_PAGES`.
     pub async fn refusal_for_backend(
         &self,
         node: &std::sync::Arc<defra_node::Node>,
         backend: &InferenceBackend,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Option<UsageRefusalView> {
-        let since = crate::usage_refusal::evidence_since(now);
-        let key = RefusalKey {
-            backend_id: backend.backend_id.clone(),
-            since: since.to_rfc3339(),
-        };
-        if let Some(cached) = self.refusals.lock().await.get(&key).cloned() {
-            return cached;
-        }
-        let read = crate::usage_refusal::refusal_for_backend_across_agents(
+        crate::usage_refusal::refusal_for_backend_across_agents(
             node,
             &self.agent_signers,
             backend,
             now,
         )
-        .await;
-        self.refusals.lock().await.insert(key, read.clone());
-        read
+        .await
     }
 
     /// Give the cache the Agent signers whose inference calls this runtime may
@@ -718,6 +697,14 @@ pub struct UsageRefusalView {
     /// Whose count [`Self::consumed_by_node`] is. It is this node's arithmetic
     /// over its own calls, so it is `LocallyEstimated` and never the provider's.
     pub consumed_basis: WindowBasis,
+    /// What [`Self::consumed_by_node`] counts: the refused model when the
+    /// refusal names one, the whole backend when it does not. Said out loud so
+    /// a backend-wide number beside a model-scoped refusal cannot be misread.
+    pub consumed_scope: String,
+    /// Whether the evidence read reached its page bound before the window ended.
+    /// When true, an older refusal beyond the horizon was not seen, so "no
+    /// refusal" is weaker: it means none within the rows that were read.
+    pub partial: bool,
     /// A bounded excerpt of what the provider said. Operator-facing only: the
     /// CLI and the desktop show it, and [`Self::for_model`] leaves it out.
     pub detail: String,
@@ -768,6 +755,8 @@ impl UsageRefusalView {
         "resets_at",
         "consumed_by_node",
         "consumed_basis",
+        "consumed_scope",
+        "partial",
     ];
 
     pub fn for_model(&self) -> serde_json::Value {

@@ -492,10 +492,25 @@ fn refusal_lines(row: &AccountRow) -> Vec<String> {
         lines.push(format!("    provider said: {}", refusal.detail));
     }
     if let Some(consumed) = refusal.consumed_by_node {
+        // What was counted, so a model-scoped refusal is not paired with a
+        // backend-wide number by accident.
+        let scope = match refusal.consumed_scope.as_str() {
+            "backend" => "backend-wide".to_owned(),
+            other => other.strip_prefix("model:").unwrap_or(other).to_owned(),
+        };
         lines.push(format!(
-            "    {consumed} counted on this node, last {}h (locally estimated)",
+            "    {consumed} counted on this node for {scope}, last {}h (locally estimated)",
             refusal.evidence_window_hours
         ));
+    }
+    if refusal.partial {
+        // Said rather than silent: the read reached its bound, so an older
+        // refusal beyond it was not seen.
+        lines.push(
+            "    partial: the evidence read reached its bound, so an older refusal \
+             may lie beyond it"
+                .to_owned(),
+        );
     }
     lines
 }

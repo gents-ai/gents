@@ -1028,8 +1028,9 @@ async fn seed_session_chain(
 
 /// The provided refusal, in the words a Grok free-tier refusal uses: a stated
 /// window and a stated counter, and no reset time at all.
-const GROK_REFUSAL: &str = "you have used all the included free usage for this account; \
-                             your rolling 24-hour window will refresh later; tokens 691791/600000";
+/// PLAN.md's words, verbatim — no "will refresh later", which this node invented.
+const GROK_REFUSAL: &str = "used all the included free usage for model grok-4.7 ... \
+                            rolling 24-hour window — tokens 691791/600000";
 
 /// The model the refusal names. xAI says "for model grok-4.7", and evidence is
 /// scoped by model, so a call seeded without one is evidence about no model.

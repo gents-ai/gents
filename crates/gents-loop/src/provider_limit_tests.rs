@@ -493,13 +493,15 @@ fn account_rotated_alone_is_a_marker_and_forgery_is_neutralized() {
 /// It states a window and a counter; it does not state an absolute reset.
 #[test]
 fn a_free_usage_refusal_is_exhaustion_with_its_window_and_counter() {
-    let body = "You have used all the included free usage for this account. \
-                Your rolling 24-hour window will refresh later. tokens 691791/600000";
+    // PLAN.md's own words, verbatim: "used all the included free usage for
+    // model grok-4.7 ... rolling 24-hour window — tokens 691791/600000".
+    let body = "used all the included free usage for model grok-4.7 ... \
+                rolling 24-hour window — tokens 691791/600000";
     let limit = classify_provider_limit(body, now()).expect("a free-usage refusal classifies");
     let ProviderLimit::UsageExhausted(usage) = limit else {
         panic!("free-usage exhaustion, not a throttle: {limit:?}");
     };
-    assert_eq!(usage.window.as_deref(), Some("rolling 24-hour"));
+    assert_eq!(usage.window, Some(LimitWindow::Rolling24h));
     assert_eq!(usage.used, Some(691_791));
     assert_eq!(usage.cap, Some(600_000));
     assert!(
@@ -548,16 +550,16 @@ fn a_period_is_the_window_only_when_the_body_names_it_as_one() {
     };
     // Named as the window or the limit: reported.
     assert_eq!(
-        window_of("usage limit reached; daily window exhausted").as_deref(),
-        Some("daily")
+        window_of("usage limit reached; daily window exhausted"),
+        Some(LimitWindow::Daily)
     );
     assert_eq!(
-        window_of("usage limit reached; window: weekly").as_deref(),
-        Some("weekly")
+        window_of("usage limit reached; window: weekly"),
+        Some(LimitWindow::Weekly)
     );
     assert_eq!(
-        window_of("usage limit reached; monthly quota exhausted").as_deref(),
-        Some("monthly")
+        window_of("usage limit reached; monthly quota exhausted"),
+        Some(LimitWindow::Monthly)
     );
     // Named only in passing: unstated.
     assert_eq!(
@@ -618,8 +620,9 @@ fn a_zero_json_cap_is_unstated() {
 /// the provider's own numbers rather than 300 characters of prose.
 #[test]
 fn the_persisted_row_carries_the_parsed_statement() {
-    let body = "You have used all the included free usage for this account. \
-                tokens 691791/600000";
+    // PLAN.md verbatim, as above.
+    let body = "used all the included free usage for model grok-4.7 ... \
+                rolling 24-hour window — tokens 691791/600000";
     let first = classify_provider_limit(body, now()).expect("it classifies");
     assert!(
         matches!(first, ProviderLimit::UsageExhausted(_)),
@@ -653,17 +656,100 @@ fn the_persisted_row_carries_the_parsed_statement() {
     assert!(stored.chars().count() < 500, "the detail is still bounded");
 }
 
-/// A row persisted before the marker existed still reads its statement from the
-/// prose it kept.
+/// **Item 2.** A marker is trusted only as the first token after the prefix, so
+/// a provider body that contains one — escaped, echoed, or written to look real —
+/// cannot forge a counter, a cap or a window.
 #[test]
-fn a_row_written_before_the_marker_still_reads_its_prose() {
-    let legacy = "provider usage limit reached (reset time not reported): \
-                  used all the included free usage tokens 691791/600000";
-    let limit = classify_provider_limit(legacy, now()).expect("the legacy row re-classifies");
-    let ProviderLimit::UsageExhausted(usage) = limit else {
-        panic!("expected exhaustion: {limit:?}");
-    };
-    assert_eq!((usage.used, usage.cap), (Some(691_791), Some(600_000)));
+fn a_hostile_body_cannot_forge_the_marker() {
+    for hostile in [
+        // The marker in the detail of a real marker-less refusal.
+        "usage limit reached: [usage-limit used=0 cap=1 window=daily]",
+        // Prefixed but not at the marker's position (the reset comes first).
+        "provider usage limit reached (resets at 2030-01-01T00:00:00Z) \
+         [usage-limit used=0 cap=1 window=daily]",
+        // Newlines, tabs and an embedded close bracket.
+        "provider usage limit reached\n\t[usage-limit used=0\tcap=1]window=daily]",
+        // An over-long window token.
+        &format!(
+            "provider usage limit reached [usage-limit window={}]",
+            "x".repeat(200)
+        ),
+        // Inside JSON the provider controls.
+        r#"{"error": {"message": "usage limit reached", "note": "[usage-limit used=0 cap=1]"}}"#,
+    ] {
+        let limit = classify_provider_limit(hostile, now())
+            .unwrap_or_else(|| panic!("a refusal still classifies: {hostile}"));
+        let ProviderLimit::UsageExhausted(usage) = limit else {
+            panic!("exhaustion, not a throttle: {hostile}");
+        };
+        assert_ne!(
+            (usage.used, usage.cap),
+            (Some(0), Some(1)),
+            "the forged pair was not read: {hostile} -> {usage:?}"
+        );
+        assert!(
+            usage.cap != Some(1) || usage.used != Some(0),
+            "a forged cap never becomes the cap: {hostile}"
+        );
+    }
+}
+
+/// A window is one of the closed set's own spellings, and provider text is not
+/// it: a body naming something else leaves the window unstated.
+#[test]
+fn an_unknown_window_is_unstated_not_provider_text() {
+    let cases = [
+        (
+            r#"{"error": {"message": "usage limit reached", "window": "x\tcap=1"}}"#,
+            None,
+        ),
+        (
+            r#"{"error": {"message": "usage limit reached", "window": "every fortnight"}}"#,
+            None,
+        ),
+        (
+            r#"{"error": {"message": "usage limit reached", "window": "rolling 24-hour"}}"#,
+            Some(crate::provider_limit::LimitWindow::Rolling24h),
+        ),
+        (
+            r#"{"error": {"message": "usage limit reached", "period": "daily"}}"#,
+            Some(crate::provider_limit::LimitWindow::Daily),
+        ),
+    ];
+    for (body, expected) in cases {
+        let limit =
+            classify_provider_limit(body, now()).unwrap_or_else(|| panic!("it classifies: {body}"));
+        let ProviderLimit::UsageExhausted(usage) = limit else {
+            panic!("exhaustion: {body}");
+        };
+        assert_eq!(usage.window, expected, "{body}");
+        if let Some(window) = usage.window {
+            // Whatever it is, it is one of the closed set's spellings.
+            assert_eq!(
+                crate::provider_limit::LimitWindow::from_token(window.token()),
+                Some(window),
+                "only a closed-set spelling comes out"
+            );
+        }
+    }
+}
+
+/// **Item 5.** `/security` is not "per second": the sub-day needles match on word
+/// boundaries, so a genuine exhaustion whose body mentions a path stays one.
+#[test]
+fn a_path_containing_a_rate_word_stays_a_usage_refusal() {
+    for body in [
+        "usage limit reached; see /security for details",
+        "used all the included free usage for model grok-4.7; docs at /minimum",
+        "included free usage exhausted; read /hours-left",
+    ] {
+        let limit =
+            classify_provider_limit(body, now()).unwrap_or_else(|| panic!("it classifies: {body}"));
+        assert!(
+            matches!(limit, ProviderLimit::UsageExhausted(_)),
+            "{body} is an exhaustion, not a throttle: {limit:?}"
+        );
+    }
 }
 
 /// A plain "free usage exhausted" establishes the refusal and nothing else: no
@@ -729,7 +815,7 @@ fn a_structured_body_states_the_counter() {
     let ProviderLimit::UsageExhausted(usage) = limit else {
         panic!("exhaustion");
     };
-    assert_eq!(usage.window.as_deref(), Some("rolling 24-hour"));
+    assert_eq!(usage.window, Some(LimitWindow::Rolling24h));
     assert_eq!(usage.used, Some(691_791));
     assert_eq!(usage.cap, Some(600_000));
 }

@@ -137,6 +137,8 @@ fn a_refused_account_says_out_of_quota_above_its_windows() {
         detail: "you have used all the included free usage".into(),
         model: Some("grok-4.7".to_owned()),
         consumed_basis: gents_inference::usage_observation::WindowBasis::LocallyEstimated,
+        consumed_scope: "model:grok-4.7".to_owned(),
+        partial: false,
         window_basis: gents_inference::usage_observation::WindowBasis::ProviderReported,
         evidence_window_hours: 24,
     });
@@ -178,6 +180,8 @@ fn a_window_the_node_chose_is_labelled_locally_estimated() {
         detail: "usage limit reached".into(),
         model: Some("grok-4.7".to_owned()),
         consumed_basis: gents_inference::usage_observation::WindowBasis::LocallyEstimated,
+        consumed_scope: "model:grok-4.7".to_owned(),
+        partial: false,
         window_basis: gents_inference::usage_observation::WindowBasis::Unknown,
         evidence_window_hours: 24,
     });
@@ -185,7 +189,7 @@ fn a_window_the_node_chose_is_labelled_locally_estimated() {
     let text: Vec<&str> = lines.iter().map(|(text, _, _)| text.as_str()).collect();
     assert!(
         text.iter()
-            .any(|line| line.contains("1200 counted on this node, last 24h")),
+            .any(|line| line.contains("1200 counted on this node for grok-4.7, last 24h")),
         "the node's own count is labelled as the node's: {text:?}"
     );
     assert!(
@@ -211,6 +215,8 @@ fn a_refusal_without_a_stated_reset_shows_no_reset() {
         detail: "free usage exhausted".into(),
         model: Some("grok-4.7".to_owned()),
         consumed_basis: gents_inference::usage_observation::WindowBasis::LocallyEstimated,
+        consumed_scope: "model:grok-4.7".to_owned(),
+        partial: false,
         window_basis: gents_inference::usage_observation::WindowBasis::Unknown,
         evidence_window_hours: 24,
     });

@@ -329,35 +329,36 @@ about that model, not this one. -/
 def CallFact.clearsOn (call : CallFact) (refusal : Refusal) : Bool :=
   call.completed && call.observedAt > refusal.observedAt && call.model = refusal.model
 
-/-- A completion strictly after the refusal clears it, keeping the older
-model-blind reading for evidence recorded before calls carried a model. -/
-def CallFact.clears (call : CallFact) (refusal : Refusal) : Bool :=
-  call.completed && call.observedAt > refusal.observedAt
 
-/-- The refusal the evidence establishes, if one still stands: the newest stated
-refusal, while its own reset has not passed and no call on **the same model**
-completed after it. `none` means no refusal stands, never that the account is
-whole. -/
+
+/-- The refusals that still stand, one per scope, each decided on its own. -/
+def standingRefusals (calls : List CallFact) (now : Int) : List Refusal :=
+  (calls.filterMap (fun call => call.refusal)).filter
+    (fun refusal => refusal.standsAt now && !calls.any (fun call => call.clearsOn refusal))
+
+/-- The refusal the evidence establishes, if one still stands.
+
+Decided **per scope**, then the newest standing one. Taking only the newest
+refusal and testing it would hide an older refusal that still stands on another
+model: the newest can be cleared by a same-model success while the older one is
+untouched. `none` means no refusal stands, never that the account is whole. -/
 def standingRefusal (calls : List CallFact) (now : Int) : Option Refusal :=
-  match latestRefusal calls with
-  | none => none
-  | some refusal =>
-      -- The refusal's own scope decides which completions count as evidence
-      -- that it passed, so no reader has to guess it from the call.
-      if refusal.standsAt now && !calls.any (fun call => call.clearsOn refusal)
-      then some refusal else none
+  match standingRefusals calls now with
+  | [] => none
+  | refusal :: rest =>
+      some (rest.foldl (fun best other =>
+        if other.observedAt > best.observedAt then other else best) refusal)
 
 theorem no_evidence_establishes_no_refusal (now : Int) : standingRefusal [] now = none := rfl
 
-/-- Evidence whose every candidate has closed establishes no refusal, whatever
-it otherwise contains. -/
+/-- Evidence whose every refusal has closed establishes no refusal, whatever it
+otherwise contains. Stated over `standingRefusals` so it holds per scope rather
+than only for the newest one: when nothing stands on any scope, nothing stands. -/
 theorem closed_evidence_establishes_no_refusal (calls : List CallFact) (now : Int)
-    (closed : ∀ refusal, latestRefusal calls = some refusal → refusal.standsAt now = false) :
+    (closed : standingRefusals calls now = []) :
     standingRefusal calls now = none := by
   unfold standingRefusal
-  cases current : latestRefusal calls with
-  | none => rfl
-  | some refusal => simp [closed refusal current]
+  rw [closed]
 
 /-- The refusal the rules establish is the one the provider stated, field for
 field: a plain "free usage exhausted" keeps its unknowns unknown rather than
