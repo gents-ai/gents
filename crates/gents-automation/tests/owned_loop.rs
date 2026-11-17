@@ -160,6 +160,8 @@ async fn managed_terminal_tool_result_terminates_loop() {
 async fn tool_call_turn_executes_threads_result_and_completes() {
     let (_db, hook, writer, mut lifecycle) = owned_test_hook().await;
     let prompt = Message::user("use the echo tool");
+    // Large enough that its stub saves bytes: a smaller output stays verbatim.
+    let echoed = format!("ECHOED {}", "e".repeat(512));
 
     let model = ScriptedModel::new_turns(vec![
         vec![
@@ -177,7 +179,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     ]);
     let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(EchoTool {
         name: "echo".to_string(),
-        output: "ECHOED".to_string(),
+        output: echoed.clone(),
     })];
 
     let stream = run_loop_stream(
@@ -197,7 +199,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     )
     .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
-    assert_eq!(collected.tool_results, vec!["ECHOED".to_string()]);
+    assert_eq!(collected.tool_results, vec![echoed]);
     assert_eq!(collected.final_text.as_deref(), Some("done"));
 
     let dispatched = model.seen_histories().await;

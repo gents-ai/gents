@@ -1627,6 +1627,217 @@ fn strip_keeps_small_and_unicode_results_verbatim() {
     }
 }
 
+fn tool_result_blocks_msg(call_id: &str, blocks: &[&str]) -> Message {
+    Message::User {
+        content: vec![UserContent::ToolResult(ToolResult {
+            id: call_id.to_string(),
+            call_id: Some(call_id.to_string()),
+            content: blocks
+                .iter()
+                .map(|text| {
+                    ToolResultContent::Text(Text {
+                        text: text.to_string(),
+                    })
+                })
+                .collect(),
+        })],
+    }
+}
+
+fn sole_stub_sizes(messages: &[Message]) -> history::StubSizes {
+    let [sizes] = history::tool_result_stub_sizes(messages)[..] else {
+        panic!("expected exactly one tool result");
+    };
+    sizes
+}
+
+#[test]
+fn strip_keeps_output_equal_to_its_stub_and_replaces_one_byte_more() {
+    let history_for = |bytes: usize| {
+        vec![
+            tool_call_msg("read_file", r#"{"path":"/tmp/x"}"#),
+            tool_result_msg("call-1", &"x".repeat(bytes)),
+        ]
+    };
+    // The stub names the byte count, so find the output exactly as large as
+    // the stub that would replace it.
+    let mut bytes = 1;
+    for _ in 0..8 {
+        bytes = sole_stub_sizes(&history_for(bytes)).stub_bytes;
+    }
+
+    let equal = history_for(bytes);
+    assert_eq!(
+        sole_stub_sizes(&equal),
+        history::StubSizes {
+            original_bytes: bytes,
+            stub_bytes: bytes
+        }
+    );
+    let (stripped, _) = strip_tool_results(equal.clone());
+    assert_eq!(stripped, equal, "an equal-size stub saves nothing");
+
+    let over = history_for(bytes + 1);
+    let sizes = sole_stub_sizes(&over);
+    assert!(sizes.stub_saves_bytes(), "{sizes:?}");
+    let (stripped, _) = strip_tool_results(over);
+    let stub = sole_tool_result_text(&stripped[1]);
+    assert!(stub.starts_with("[tool: read_file(/tmp/x), call_id: call-1,"));
+    assert_eq!(stub.len(), sizes.stub_bytes);
+    assert!(stub.len() < bytes + 1);
+}
+
+#[test]
+fn strip_measures_a_multiblock_result_by_all_its_blocks() {
+    // Each block alone is smaller than the stub; together they are larger.
+    let block = "y".repeat(80);
+    let large = vec![
+        tool_call_msg("read_file", r#"{"path":"/tmp/x"}"#),
+        tool_result_blocks_msg("call-1", &[&block, &block, &block]),
+    ];
+    let sizes = sole_stub_sizes(&large);
+    assert_eq!(sizes.original_bytes, 240);
+    assert!(sizes.stub_saves_bytes(), "{sizes:?}");
+    let (stripped, _) = strip_tool_results(large);
+    assert!(sole_tool_result_text(&stripped[1]).contains(", 240 bytes"));
+
+    let small = vec![
+        tool_call_msg("read_file", r#"{"path":"/tmp/x"}"#),
+        tool_result_blocks_msg("call-1", &["ok", "🙂"]),
+    ];
+    assert!(!sole_stub_sizes(&small).stub_saves_bytes());
+    assert_eq!(strip_tool_results(small.clone()).0, small);
+}
+
+#[test]
+fn strip_decides_each_result_of_one_message_by_its_own_size() {
+    let messages = vec![
+        Message::Assistant {
+            request_id: None,
+            id: None,
+            content: vec![tool_call_content("call-a"), tool_call_content("call-b")],
+        },
+        Message::User {
+            content: vec![
+                UserContent::ToolResult(ToolResult {
+                    id: "call-a".to_string(),
+                    call_id: Some("call-a".to_string()),
+                    content: vec![ToolResultContent::Text(Text {
+                        text: "ok".to_string(),
+                    })],
+                }),
+                UserContent::ToolResult(ToolResult {
+                    id: "call-b".to_string(),
+                    call_id: Some("call-b".to_string()),
+                    content: vec![ToolResultContent::Text(Text {
+                        text: "z".repeat(4096),
+                    })],
+                }),
+            ],
+        },
+    ];
+    let (stripped, _) = strip_tool_results(messages);
+    let Message::User { content } = &stripped[1] else {
+        panic!("expected user message");
+    };
+    let texts = content
+        .iter()
+        .map(|item| match item {
+            UserContent::ToolResult(result) => match first_content(&result.content) {
+                ToolResultContent::Text(text) => text.text.clone(),
+                other => panic!("expected text, got {other:?}"),
+            },
+            other => panic!("expected tool result, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(texts[0], "ok");
+    assert!(texts[1].starts_with("[tool: echo, call_id: call-b, 4096 bytes"));
+    assert_eq!(strip_tool_results(stripped.clone()).0, stripped);
+}
+
+/// The external premise of the Lean model (`Compaction.StubSizes`): what
+/// stripping measures for a tool result depends only on that result and its
+/// own call. So a kept result measures the same on the next pass, a stub
+/// measures as its own replacement (never stubbed again), and dropping other
+/// rows (the sanitizer) changes no surviving result's sizes.
+#[test]
+fn stub_sizes_depend_only_on_the_result() {
+    let messages = vec![
+        tool_result_msg("orphan", &"o".repeat(600)),
+        text_msg("user", "go"),
+        Message::Assistant {
+            request_id: None,
+            id: None,
+            content: vec![
+                tool_call_content("call-a"),
+                tool_call_content("call-b"),
+                tool_call_content("unanswered"),
+            ],
+        },
+        tool_result_msg("call-a", "ok"),
+        tool_result_blocks_msg("call-b", &[&"b".repeat(300), "tail"]),
+        text_msg("assistant", "next"),
+        tool_call_msg("read_file", r#"{"path":"/tmp/x"}"#),
+        tool_result_msg("call-1", &"x".repeat(5000)),
+    ];
+    let call_ids = |messages: &[Message]| {
+        messages
+            .iter()
+            .flat_map(|message| match message {
+                Message::User { content } => content
+                    .iter()
+                    .filter_map(|item| match item {
+                        UserContent::ToolResult(result) => result.call_id.clone(),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let measured = |messages: &[Message]| {
+        call_ids(messages)
+            .into_iter()
+            .zip(history::tool_result_stub_sizes(messages))
+            .collect::<Vec<_>>()
+    };
+
+    let before = measured(&messages);
+    assert!(before.iter().any(|(_, sizes)| sizes.stub_saves_bytes()));
+    assert!(before.iter().any(|(_, sizes)| !sizes.stub_saves_bytes()));
+
+    let (stripped, _) = strip_tool_results(messages.clone());
+    for ((call, first), (_, second)) in before.iter().zip(measured(&stripped)) {
+        if first.stub_saves_bytes() {
+            assert_eq!(
+                second,
+                history::StubSizes {
+                    original_bytes: first.stub_bytes,
+                    stub_bytes: first.stub_bytes
+                },
+                "{call}: a stub rebuilds to itself"
+            );
+        } else {
+            assert_eq!(second, *first, "{call}: a kept result measures the same");
+        }
+    }
+    assert_eq!(strip_tool_results(stripped.clone()).0, stripped);
+
+    let sanitized = sanitize_association_with_sources(messages)
+        .into_iter()
+        .map(|sourced| sourced.message)
+        .collect::<Vec<_>>();
+    let surviving = measured(&sanitized);
+    assert!(surviving.len() < before.len(), "the orphan is dropped");
+    for (call, sizes) in surviving {
+        let (_, raw) = before
+            .iter()
+            .find(|(raw_call, _)| *raw_call == call)
+            .expect("a surviving result was in the raw history");
+        assert_eq!(sizes, *raw, "{call}: sanitizing other rows changes nothing");
+    }
+}
+
 #[test]
 fn strip_extracts_read_and_modified_files() {
     let messages = vec![
