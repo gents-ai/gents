@@ -11,7 +11,7 @@ use crate::support::builder_runtime::{
     builder_actors, fixture_agent, runtime_builder, spawn_runtime, submit_request,
 };
 use crate::support::interrupt::BootedAgent;
-use crate::support::live_inference::wait_for_request_terminal;
+use crate::support::live_inference::{wait_for_request_terminal, STALL_CEILING};
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
@@ -54,12 +54,7 @@ async fn per_request_store_growth_follows_new_content_not_history() {
             )
             .await;
             assert_eq!(
-                wait_for_request_terminal(
-                    &actors.agent_access,
-                    &request_id,
-                    std::time::Duration::from_secs(60),
-                )
-                .await,
+                wait_for_request_terminal(&actors.agent_access, &request_id, STALL_CEILING).await,
                 "completed",
             );
         }
@@ -75,12 +70,7 @@ async fn per_request_store_growth_follows_new_content_not_history() {
         )
         .await;
         assert_eq!(
-            wait_for_request_terminal(
-                &actors.agent_access,
-                &request_id,
-                std::time::Duration::from_secs(60),
-            )
-            .await,
+            wait_for_request_terminal(&actors.agent_access, &request_id, STALL_CEILING).await,
             "completed",
         );
     }
@@ -314,7 +304,6 @@ async fn boot_agent(db: &TestDb, actors: &RequestActors) -> BootedAgent {
     .backend_id(BACKEND_ID)
     .model_name(MODEL)
     .stream_batch_ms(STREAM_BATCH_MS)
-    .deadline_duration_secs(60)
     .context_window(CONTEXT_WINDOW)
     .compaction_threshold(COMPACTION_THRESHOLD)
     .compaction_strategy(CompactionStrategy::StripToolResults)
