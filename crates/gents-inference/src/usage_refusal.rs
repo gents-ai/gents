@@ -112,11 +112,26 @@ pub async fn refusal_for_backend(
     backend: &gents_documents::inference_backend::InferenceBackend,
     now: DateTime<Utc>,
 ) -> Option<UsageRefusalView> {
+    refusal_for_backend_within(access, backend, now, usize::MAX).await
+}
+
+/// The same, with the operator excerpt bounded as a caller asks. Every read path
+/// but this one takes the classifier's own bound.
+pub async fn refusal_for_backend_within(
+    access: &gents_store::config_client::ConfigAccess,
+    backend: &gents_documents::inference_backend::InferenceBackend,
+    now: DateTime<Utc>,
+    detail_limit: usize,
+) -> Option<UsageRefusalView> {
     let since = evidence_since(now);
     let backend_id = gents_store::graphql::escape_graphql_string(&backend.backend_id);
-    let since = gents_store::graphql::escape_graphql_string(&since.to_rfc3339());
+    let since_text = gents_store::graphql::escape_graphql_string(&since.to_rfc3339());
+    // `InferenceCall` carries no `created_at`: it is the call's own lifecycle
+    // that times it. `queued_at` is written once at admission and never revised,
+    // so it is the column a window can be taken over; `started_at`/`ended_at`
+    // are stamped later and a queued call has neither.
     let query = format!(
-        r#"{{ InferenceCall(filter: {{backend_id: {{_eq: "{backend_id}"}}, created_at: {{_gt: "{since}"}}}}, order: {{created_at: DESC}}, limit: 200) {{ call_state failure_reason created_at provider_total_tokens }} }}"#
+        r#"{{ InferenceCall(filter: {{backend_id: {{_eq: "{backend_id}"}}, queued_at: {{_gt: "{since_text}"}}}}, order: {{queued_at: DESC}}, limit: 200) {{ call_state failure_reason queued_at provider_total_tokens }} }}"#
     );
     let response = access.execute(&query).await.ok()?;
     let rows = response["data"]["InferenceCall"].as_array()?;
@@ -124,7 +139,7 @@ pub async fn refusal_for_backend(
     let mut consumed: u64 = 0;
     let mut saw_usage = false;
     for row in rows {
-        let Some(created_at) = row["created_at"]
+        let Some(queued_at) = row["queued_at"]
             .as_str()
             .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
             .map(|at| at.with_timezone(&Utc))
@@ -138,14 +153,69 @@ pub async fn refusal_for_backend(
             saw_usage = true;
         }
         calls.push(CallEvidence {
-            at: created_at,
+            at: queued_at,
             call_state: row["call_state"].as_str().unwrap_or_default().to_owned(),
             failure_reason: row["failure_reason"].as_str().map(str::to_owned),
         });
     }
-    // The classifier's detail is already bounded (DETAIL_MAX_CHARS), so the view
-    // takes it as it is rather than truncating a second time.
-    standing_refusal(&calls, now, saw_usage.then_some(consumed), usize::MAX)
+    standing_refusal(&calls, now, saw_usage.then_some(consumed), detail_limit)
+}
+
+/// Evidence read as one Agent: the calls this backend made that this Agent's
+/// own `children` grant admits.
+pub async fn refusal_for_backend_as_agent(
+    node: &std::sync::Arc<defra_node::Node>,
+    signer: &gents_store::identity::ManagedAgentSigner,
+    backend: &gents_documents::inference_backend::InferenceBackend,
+    now: DateTime<Utc>,
+) -> Option<UsageRefusalView> {
+    let actor = identity::Did::new(signer.did()).ok()?;
+    let access = gents_store::config_client::ConfigAccess::local_with_agent_signer(
+        node.clone(),
+        actor,
+        signer.clone(),
+    )
+    .ok()?;
+    refusal_for_backend(&access, backend, now).await
+}
+
+/// The standing refusal for one backend, across every Agent this runtime can
+/// read evidence as.
+///
+/// `InferenceCall` is in the `children` policy resource, so the runtime key
+/// alone reads none of it: each row admits the Agent that worked it. The
+/// refusal is therefore read once per Agent and the newest refusal among them
+/// stands — the same rule the Lean model states for one list, applied to the
+/// evidence the runtime holds. With no Agent, nothing is evidenced.
+pub async fn refusal_for_backend_across_agents(
+    node: &std::sync::Arc<defra_node::Node>,
+    signers: &[gents_store::identity::ManagedAgentSigner],
+    backend: &gents_documents::inference_backend::InferenceBackend,
+    now: DateTime<Utc>,
+) -> Option<UsageRefusalView> {
+    let mut newest: Option<UsageRefusalView> = None;
+    let mut consumed: Option<u64> = None;
+    for signer in signers {
+        let Some(view) = refusal_for_backend_as_agent(node, signer, backend, now).await else {
+            continue;
+        };
+        consumed = match (consumed, view.consumed_by_node) {
+            (Some(total), Some(here)) => Some(total.saturating_add(here)),
+            (None, here) => here,
+            (total, None) => total,
+        };
+        let later = match &newest {
+            Some(current) => view.at.as_str() > current.at.as_str(),
+            None => true,
+        };
+        if later {
+            newest = Some(view);
+        }
+    }
+    newest.map(|view| UsageRefusalView {
+        consumed_by_node: consumed,
+        ..view
+    })
 }
 
 /// The refusal text an operator sees: bounded, never the whole body.

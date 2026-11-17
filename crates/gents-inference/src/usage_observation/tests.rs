@@ -843,7 +843,7 @@ async fn node_read_outcomes_hold_no_secrets() {
     let reads = node_read(
         &cache,
         &node,
-        did,
+        &did,
         UsageTrigger::Open,
         None,
         &grok_endpoints(&url),
@@ -868,6 +868,384 @@ fn cached_open_and_refresh_follow_the_executable_model() {
                 .map(|time| DateTime::from_timestamp(i64::try_from(time).unwrap(), 0).unwrap()),
         )
     });
+}
+
+/// A node whose runtime identity may write calls AND whose agent signer may:
+/// the `InferenceCall` collection is policy-gated on `children`, so the seed a
+/// daemon would leave needs a signed agent, not the unsigned runtime actor.
+async fn refusal_fixture() -> (
+    Arc<EmbeddedNode>,
+    String,
+    ConfigAccess,
+    gents_store::config_client::ConfigAccess,
+    gents_store::identity::ManagedAgentSigner,
+) {
+    use gents_store::config_client::NodePermission;
+    let (db, _user, user_access, binding) = crate::test_support::signed_test_node(
+        "usage-observation",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
+    let node = db.node.clone();
+    let did = db.node_identity.did().to_owned();
+    let agent = gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .expect("agent identity");
+    let signer = agent.managed_agent_signer().expect("agent signer");
+    let admin = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(&did).expect("node did"),
+    );
+    let actor = identity::Did::new(signer.did()).expect("agent did");
+    for permission in [
+        NodePermission::CollectionGet,
+        NodePermission::DocumentRead,
+        NodePermission::DocumentUpdate,
+        NodePermission::DocumentDelete,
+        NodePermission::DacRelationAdd,
+        NodePermission::DacRelationDelete,
+    ] {
+        admin
+            .grant_node_permission(&actor, permission)
+            .await
+            .expect("grant");
+    }
+    let agent_access = gents_store::config_client::ConfigAccess::local_with_agent_signer(
+        node.clone(),
+        actor,
+        signer.clone(),
+    )
+    .expect("agent access");
+    (node, did, user_access, agent_access, signer)
+}
+
+/// Leaves one failed call in the node's own durable record, the way the daemon
+/// leaves it: the classifier's rendered text in `failure_reason`, and the tokens
+/// it reported. The refusal has to be readable from that record alone.
+async fn seed_refused_call(
+    access: &ConfigAccess,
+    node_did: &str,
+    backend_id: &str,
+    call_id: &str,
+    queued_at: &str,
+    call_state: &str,
+    failure_reason: Option<&str>,
+    provider_total_tokens: Option<u64>,
+) -> String {
+    let escape = gents_store::graphql::escape_graphql_string;
+    let failure = failure_reason
+        .map(|text| format!(r#", failure_reason: "{}""#, escape(text)))
+        .unwrap_or_default();
+    let tokens = provider_total_tokens
+        .map(|total| format!(", provider_total_tokens: {total}"))
+        .unwrap_or_default();
+    let (call_id, request_id, request_doc) = (
+        escape(call_id),
+        escape(&format!("{call_id}-request")),
+        escape(&format!("{call_id}-request-doc")),
+    );
+    let (backend_id, node_did, queued_at, call_state) = (
+        escape(backend_id),
+        escape(node_did),
+        escape(queued_at),
+        escape(call_state),
+    );
+    let response = access
+        .write(
+            "test.seed_refused_call",
+            &format!(
+                r#"mutation {{ add_InferenceCall(input: {{
+                call_id: "{call_id}", runtime_instance_id: "usage-refusal-runtime",
+                request_id: "{request_id}", request_doc_id: "{request_doc}",
+                call_seq: 1, backend_id: "{backend_id}", agent_did: "{node_did}",
+                node_did: "{node_did}", call_kind: "inference", attempt: 1,
+                call_state: "{call_state}", queued_at: "{queued_at}", priority: 0,
+                queue_depth_at_enqueue: 0, controller_generation: 0,
+                backend_config_fingerprint: "usage-refusal"{failure}{tokens}
+            }}) {{ _docID }} }}"#,
+            ),
+        )
+        .await
+        .expect("seed call");
+    gents_store::graphql::created_doc_id(&response, "InferenceCall").expect("call doc id")
+}
+
+/// Production writes every call's `parent` edge to its session, and the session
+/// admits the agent that works it. That chain is what makes a call readable to
+/// anyone other than the agent that signed it, so the seed has to build it too.
+async fn seed_session_chain(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    call_doc_id: &str,
+) {
+    let escape = gents_store::graphql::escape_graphql_string;
+    let response = access
+        .write(
+            "test.seed_session",
+            &format!(
+                r#"mutation {{ add_AgentSession(input: {{
+                session_id: "{}", node_did: "{}", requester_did: "{}", agent_did: "{}",
+                created_at: "2026-11-17T09:00:00Z"
+            }}) {{ _docID }} }}"#,
+                escape(session_id),
+                escape(node_did),
+                escape(node_did),
+                escape(node_did),
+            ),
+        )
+        .await
+        .expect("seed session");
+    let session_doc =
+        gents_store::graphql::created_doc_id(&response, "AgentSession").expect("session doc id");
+    access
+        .add_resource_relationship(
+            "InferenceCall",
+            call_doc_id,
+            "parent",
+            "sessions",
+            &session_doc,
+        )
+        .await
+        .expect("call parent edge");
+}
+
+/// The provided refusal, in the words a Grok free-tier refusal uses: a stated
+/// window and a stated counter, and no reset time at all.
+const GROK_REFUSAL: &str = "you have used all the included free usage for this account; \
+                             your rolling 24-hour window will refresh later; tokens 691791/600000";
+
+/// The item's whole point, at the read path: an account the provider refused is
+/// reported as exhausted from the node's own durable record, with the fields
+/// the provider stated and nothing invented for the fields it did not — and the
+/// same record says so through every view, because there is one DTO.
+#[tokio::test]
+async fn a_refused_account_is_exhausted_from_evidence_and_says_so_everywhere() {
+    let (node, did, user_access, agent_access, signer) = refusal_fixture().await;
+    let cache = UsageCache::default().with_agent_signers(vec![signer.clone()]);
+    let now = Utc::now();
+    sign_in(&node, &did, GROK, now + Duration::hours(1), None).await;
+    store_backends(
+        &user_access,
+        &[oauth_backend(
+            &did,
+            "XaiGrokOAuth",
+            "backend-usage-a",
+            None,
+            true,
+        )],
+    )
+    .await;
+    let call_doc = seed_refused_call(
+        &agent_access,
+        &did,
+        "backend-usage-a",
+        "usage-refusal-call",
+        &(now - Duration::minutes(30)).to_rfc3339(),
+        "failed",
+        Some(GROK_REFUSAL),
+        Some(1200),
+    )
+    .await;
+    seed_session_chain(&agent_access, &did, "usage-refusal-session", &call_doc).await;
+    let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
+
+    let reads = node_read(
+        &cache,
+        &node,
+        &did,
+        UsageTrigger::Open,
+        None,
+        &grok_endpoints(&url),
+    )
+    .await;
+    handle.await.unwrap();
+
+    let read = reads.first().expect("one account");
+    let refusal = read.refusal.as_ref().expect("the refusal is evidenced");
+    assert_eq!(refusal.window.as_deref(), Some("rolling 24-hour"));
+    // A counter on a cap below what the provider reported is what the provider
+    // said, so both numbers are kept rather than reconciled into a percentage.
+    assert_eq!((refusal.used, refusal.cap), (Some(691_791), Some(600_000)));
+    assert!(refusal.resets_at.is_none(), "no reset was stated");
+    assert_eq!(refusal.consumed_by_node, Some(1200));
+    assert_eq!(
+        refusal.window_provenance(),
+        crate::usage_refusal::WindowProvenance::ProviderReported
+    );
+    // The percentage side is untouched: a refusal does not ride a window.
+    let usage = read.usage.as_ref().expect("usage view");
+    assert!(
+        usage.windows.iter().all(|window| window.used_pct != 100.0),
+        "a refusal must not appear as a synthetic 100%: {usage:?}"
+    );
+
+    // The same DTO is what both agent-facing reads render, so both say it.
+    use gents_loop::tool::Tool as _;
+    let tool = ProviderLimitsTool {
+        node: node.clone(),
+        node_did: did.clone(),
+        cache: Arc::new(UsageCache::default().with_agent_signers(vec![signer])),
+    };
+    let output: Value =
+        serde_json::from_str(&tool.call(ProviderLimitsArgs {}).await.unwrap()).expect("tool json");
+    assert_eq!(
+        output["accounts"][0]["refusal"]["window"],
+        "rolling 24-hour"
+    );
+    assert_eq!(output["accounts"][0]["refusal"]["used"], 691_791);
+    assert_eq!(output["accounts"][0]["refusal"]["cap"], 600_000);
+    assert!(
+        output["accounts"][0]["refusal"]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.len() <= 301),
+        "the excerpt is bounded: {output}"
+    );
+}
+
+/// A restart empties the in-memory cache; the refusal does not go with it,
+/// because it is derived from the durable record rather than remembered.
+#[tokio::test]
+async fn a_restart_with_an_empty_cache_still_shows_the_refusal() {
+    let (node, did, user_access, agent_access, signer) = refusal_fixture().await;
+    let now = Utc::now();
+    sign_in(&node, &did, GROK, now + Duration::hours(1), None).await;
+    store_backends(
+        &user_access,
+        &[oauth_backend(
+            &did,
+            "XaiGrokOAuth",
+            "backend-usage-a",
+            None,
+            true,
+        )],
+    )
+    .await;
+    seed_refused_call(
+        &agent_access,
+        &did,
+        "backend-usage-a",
+        "usage-refusal-call",
+        &(now - Duration::minutes(30)).to_rfc3339(),
+        "failed",
+        Some(GROK_REFUSAL),
+        None,
+    )
+    .await;
+
+    let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
+    let reads = node_read(
+        &UsageCache::default().with_agent_signers(vec![signer.clone()]),
+        &node,
+        &did,
+        UsageTrigger::Open,
+        None,
+        &grok_endpoints(&url),
+    )
+    .await;
+    handle.await.unwrap();
+    assert!(
+        reads[0].refusal.is_some(),
+        "the record outlives the cache: {reads:?}"
+    );
+}
+
+/// A completion after the refusal means the account served again, so the
+/// refusal no longer stands even though the failed call is still recorded.
+#[tokio::test]
+async fn a_later_completed_call_clears_the_refusal_at_the_read_path() {
+    let cache = UsageCache::default();
+    let (node, did, user_access, agent_access, _signer) = refusal_fixture().await;
+    let now = Utc::now();
+    sign_in(&node, &did, GROK, now + Duration::hours(1), None).await;
+    store_backends(
+        &user_access,
+        &[oauth_backend(
+            &did,
+            "XaiGrokOAuth",
+            "backend-usage-a",
+            None,
+            true,
+        )],
+    )
+    .await;
+    seed_refused_call(
+        &agent_access,
+        &did,
+        "backend-usage-a",
+        "usage-refusal-call",
+        &(now - Duration::minutes(40)).to_rfc3339(),
+        "failed",
+        Some(GROK_REFUSAL),
+        None,
+    )
+    .await;
+    seed_refused_call(
+        &agent_access,
+        &did,
+        "backend-usage-a",
+        "usage-clearing-call",
+        &(now - Duration::minutes(10)).to_rfc3339(),
+        "completed",
+        None,
+        None,
+    )
+    .await;
+    let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
+    let reads = node_read(
+        &cache,
+        &node,
+        &did,
+        UsageTrigger::Open,
+        None,
+        &grok_endpoints(&url),
+    )
+    .await;
+    handle.await.unwrap();
+    assert!(reads[0].refusal.is_none(), "{reads:?}");
+}
+
+/// Evidence outside the analytical window is not the refusal the node acts on,
+/// and the window it used is stated as its own choice rather than the
+/// provider's, because the provider named none.
+#[tokio::test]
+async fn evidence_older_than_the_window_is_not_a_standing_refusal() {
+    let (node, did, user_access, agent_access, signer) = refusal_fixture().await;
+    let now = Utc::now();
+    sign_in(&node, &did, GROK, now + Duration::hours(1), None).await;
+    store_backends(
+        &user_access,
+        &[oauth_backend(
+            &did,
+            "XaiGrokOAuth",
+            "backend-usage-a",
+            None,
+            true,
+        )],
+    )
+    .await;
+    seed_refused_call(
+        &agent_access,
+        &did,
+        "backend-usage-a",
+        "usage-stale-call",
+        &(now - Duration::hours(30)).to_rfc3339(),
+        "failed",
+        Some("you have used all the included free usage"),
+        None,
+    )
+    .await;
+    let (url, handle) = test_support::one_shot_token_server(200, GROK_BILLING_BODY).await;
+    let reads = node_read(
+        &UsageCache::default().with_agent_signers(vec![signer.clone()]),
+        &node,
+        &did,
+        UsageTrigger::Open,
+        None,
+        &grok_endpoints(&url),
+    )
+    .await;
+    handle.await.unwrap();
+    assert!(reads[0].refusal.is_none(), "outside the window: {reads:?}");
 }
 
 fn used_u64(stored: Option<UsageObservation>, label: &str) -> Option<u64> {

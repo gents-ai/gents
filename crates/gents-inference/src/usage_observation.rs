@@ -178,6 +178,12 @@ pub struct UsageCache {
     endpoints: UsageEndpoints,
     entries: tokio::sync::Mutex<rapidhash::RapidHashMap<CacheKey, UsageObservation>>,
     claude_accounts: gents_claude::pool::AccountPool<String>,
+    /// The managed Agent signers this runtime holds. `InferenceCall` lives in the
+    /// `children` policy resource, whose read is granted per document to the
+    /// agent that works it, so a refusal can only be read back through one of
+    /// these; the runtime key alone sees nothing. Empty means the runtime holds
+    /// no agent yet, and then no refusal is evidenced — never a wrong one.
+    agent_signers: Vec<gents_store::identity::ManagedAgentSigner>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -197,6 +203,20 @@ impl UsageCache {
 
     pub fn endpoints(&self) -> &UsageEndpoints {
         &self.endpoints
+    }
+
+    /// Give the cache the Agent signers whose inference calls this runtime may
+    /// read, so a refusal can be derived from durable evidence.
+    pub fn with_agent_signers(
+        mut self,
+        agent_signers: Vec<gents_store::identity::ManagedAgentSigner>,
+    ) -> Self {
+        self.agent_signers = agent_signers;
+        self
+    }
+
+    pub fn agent_signers(&self) -> &[gents_store::identity::ManagedAgentSigner] {
+        &self.agent_signers
     }
 
     /// Rotation state of this runtime's Claude accounts, keyed by `credential_id`.
@@ -763,7 +783,15 @@ pub async fn read_node_usage(
                 .flatten();
             // A standing refusal, from the durable evidence of this account's
             // calls. Diagnostics only: it never changes the outcome or a route.
-            let refusal = crate::usage_refusal::refusal_for_backend(&access, &backend, now).await;
+            // The evidence is read as each Agent this runtime holds, because
+            // `InferenceCall` admits only the Agent that worked the call.
+            let refusal = crate::usage_refusal::refusal_for_backend_across_agents(
+                &node,
+                cache.agent_signers(),
+                &backend,
+                now,
+            )
+            .await;
             AccountUsageRead {
                 outcome,
                 usage: Some(usage_view(stored.as_ref(), backend.provider_kind, now)),
