@@ -490,7 +490,15 @@ async fn run_inner(
     };
     send(
         &mut *socket.lock().await,
-        json!({"type":"ready", "scope":scope, "preparation":stage.preparation()}),
+        json!({
+            "type": "ready",
+            "scope": scope,
+            "preparation": stage.preparation(),
+            // The other half of the handshake: which build proposed this plan.
+            // The build this runtime is, supplied by the binary that has the
+            // core packs (this crate carries none).
+            "build": crate::http::pack_install::runtime_build(),
+        }),
     )
     .await
     .map_err(|error| (error, "not_installed"))?;

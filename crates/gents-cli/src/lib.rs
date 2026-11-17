@@ -330,6 +330,31 @@ pub fn run_cli() -> Result<()> {
     runtime.block_on(async_main(runtime.handle().clone()))
 }
 
+/// This binary's build identity. The core pack archives are compiled into this
+/// crate, so the list is assembled here and passed to whoever needs it (the
+/// install handshake), rather than every crate taking a dependency on them.
+pub fn current_build() -> gents_protocol::build_info::BuildInfo {
+    let core_packs = gents_core_packs::archives()
+        .iter()
+        .map(
+            |(coordinate, bytes)| gents_protocol::build_info::CorePackBuild {
+                coordinate: (*coordinate).to_owned(),
+                digest: format!(
+                    "sha256:{}",
+                    gents_pack::plugin::store::content_digest_hex(bytes)
+                ),
+            },
+        )
+        .collect();
+    let build = version::build_version();
+    gents_protocol::build_info::BuildInfo::from_parts(
+        build.version.to_owned(),
+        build.build.git_sha.map(str::to_owned),
+        build.build.git_dirty,
+        core_packs,
+    )
+}
+
 async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let cli = Cli::parse();
     let command = match cli.command {
@@ -398,6 +423,11 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Some(&command),
         std::env::var("GENTS_SYSTEM_LOG").ok().as_deref(),
     );
+    // Unconditionally, before the dispatch: more than the foreground runtime
+    // serves installs -- `PrepareRuntime` and the desktop bridge do too -- and
+    // each must report this binary's real identity rather than an unverifiable
+    // fallback.
+    gents_host::http::pack_install::set_runtime_build(current_build());
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
         Command::Server(args) => {
@@ -461,8 +491,24 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
             RuntimeCommand::Diagnose(args) => commands::diagnose::diagnose(args).await,
             RuntimeCommand::P2p { command } => commands::p2p::dispatch(command).await,
             RuntimeCommand::Desktop { command } => commands::desktop::run(command).await,
-            RuntimeCommand::Version => {
-                print!("{}", version::version_text());
+            RuntimeCommand::Version { json } => {
+                let build = current_build();
+                if json {
+                    // The release metadata plus the build identity an install
+                    // handshake compares, so a mismatch can be checked without
+                    // starting anything.
+                    let mut record = serde_json::to_value(version::build_version())?;
+                    if let Some(object) = record.as_object_mut() {
+                        object.insert("build_identity".to_owned(), serde_json::to_value(&build)?);
+                    }
+                    println!("{}", serde_json::to_string_pretty(&record)?);
+                } else {
+                    print!("{}", version::version_text());
+                    println!("{}", build.summary());
+                    for pack in &build.core_packs {
+                        println!("  {} {}", pack.coordinate, pack.digest);
+                    }
+                }
                 Ok(())
             }
         },

@@ -28,6 +28,7 @@ fn body(root: &PackArchive, dependencies: &[Arc<PackArchive>], node_did: &str) -
         grant_authority: false,
         explicit: true,
         wire: Vec::new(),
+        client_build: gents_protocol::build_info::BuildInfo::current(Vec::new()),
     })
     .unwrap()
 }

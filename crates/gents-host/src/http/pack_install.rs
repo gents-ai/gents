@@ -83,6 +83,11 @@ struct InstallRequest {
     grant_authority: bool,
     explicit: bool,
     wire: Vec<String>,
+    /// The client's build identity. A plan is prepared twice, so the runtime
+    /// can say which builds prepared the two halves when they disagree.
+    /// Required: a peer without it is an older build, and that is refused by
+    /// name rather than tolerated silently (no back-compat before 1.0).
+    client_build: gents_protocol::build_info::BuildInfo,
 }
 
 /// Repacks a verified archive from its declared files and confirms the
@@ -129,6 +134,7 @@ pub async fn install_remote(
     dependencies: &[ResolvedPack],
     args: &DocumentsInstallRequest,
     explicit: bool,
+    client_build: gents_protocol::build_info::BuildInfo,
 ) -> Result<serde_json::Value> {
     let mut url = reqwest::Url::parse(endpoint.url())?;
     anyhow::ensure!(
@@ -144,7 +150,8 @@ pub async fn install_remote(
         .strip_suffix("/api/v0/graphql")
         .context("remote pack install requires a Gents runtime GraphQL endpoint")?;
     url.set_path(&format!("{prefix}{PATH}"));
-    let body = encode_install_request(pack, dependencies, args, owner, explicit).await?;
+    let body =
+        encode_install_request(pack, dependencies, args, owner, explicit, client_build).await?;
     let client = tokio::task::spawn_blocking(|| {
         reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -178,6 +185,9 @@ pub async fn encode_install_request(
     args: &DocumentsInstallRequest,
     owner: &str,
     explicit: bool,
+    // The build preparing this half of the plan. The caller supplies it,
+    // because the core pack archives live in the binary, not in this crate.
+    client_build: gents_protocol::build_info::BuildInfo,
 ) -> Result<serde_json::Value> {
     let root = pack.shared_archive();
     let root_source = pack.provenance();
@@ -218,6 +228,9 @@ pub async fn encode_install_request(
             grant_authority,
             explicit,
             wire,
+            // So a disagreement names both halves' builds, not only that they
+            // differ.
+            client_build,
         })?;
         Ok::<_, anyhow::Error>(serde_json::from_slice(&body)?)
     })
@@ -462,3 +475,26 @@ async fn install_owned(
 #[cfg(test)]
 #[path = "pack_install_tests.rs"]
 mod tests;
+
+/// The build of the process serving installs. The binary sets it once, at
+/// startup, because the core pack archives are compiled into the binary and not
+/// into this crate; a test that does not set it gets the crate's own version
+/// with no packs, which is a real (if minimal) answer rather than a guess.
+static RUNTIME_BUILD: std::sync::OnceLock<gents_protocol::build_info::BuildInfo> =
+    std::sync::OnceLock::new();
+
+/// Record this process's build, so an install handshake can state it. Called
+/// once by the runtime binary; a later call keeps the first.
+pub fn set_runtime_build(build: gents_protocol::build_info::BuildInfo) {
+    let _ = RUNTIME_BUILD.set(build);
+}
+
+/// This process's build as the handshake reports it. A process that recorded
+/// none states that plainly, so the refusal says "unverifiable" instead of
+/// reporting a build whose commit was never captured.
+pub fn runtime_build() -> gents_protocol::build_info::BuildInfo {
+    RUNTIME_BUILD
+        .get()
+        .cloned()
+        .unwrap_or(gents_protocol::build_info::BuildInfo::UNVERIFIABLE)
+}

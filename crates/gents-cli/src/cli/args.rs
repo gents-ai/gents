@@ -282,7 +282,11 @@ pub(crate) enum RuntimeCommand {
         command: DesktopCommand,
     },
     #[command(about = "Print build and release metadata")]
-    Version,
+    Version {
+        /// Print the whole record as JSON, which is what a script compares.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
