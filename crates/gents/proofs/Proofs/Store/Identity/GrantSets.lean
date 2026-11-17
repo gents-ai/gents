@@ -41,23 +41,32 @@ def nativePermissions : List String :=
    "sync-p2p-branchable-collection", "verify-signature", "add-lens", "list-lens",
    "list-action", "refresh-view", "gc-view", "add-view", "set-migration"]
 
+/-- The native permissions the Node is not granted: reading past document ACP,
+and switching document or node access control off, back on, or clearing it. -/
+def withheldFromNode : List String :=
+  ["bypass-dac", "enable-dac", "disable-dac", "purge-dac", "re-enable-nac", "disable-nac",
+   "purge-nac"]
+
 /-- What the Node holds, the NAC owner being the init User
-(`NodeProvisioning.nacOwner`): every native permission outside the admin class,
+(`NodeProvisioning.nacOwner`): every native permission but `withheldFromNode`,
 granted by the owner when the fresh store is first opened, before anything
 else is written. External premise (the pinned DefraDB revision): a node
 operation's own check passes the node's DID whatever it holds, but a document
-read, write or relationship change checks the acting identity's NAC grants with
-no node exception, so a Node that does not own NAC needs these granted. The
-admin class, `bypass-dac` among it, stays with the owner: the Node reads only
-what document ACP grants it. -/
+read, write or relationship change, and a source projection, checks the acting
+identity's NAC grants with no node exception, so a Node that does not own NAC
+needs these granted. It keeps the NAC relation operations, so it projects the
+Agent baselines of the documents it publishes and delegates what it holds, as
+it did as owner; the held-bounded rule still refuses it the admin relation and
+every admin-class permission (`node_runtime_cannot_grant_admin`), which only
+the owner issues. -/
 def nodeRuntimePermissions : List String :=
-  nativePermissions.filter (!adminClass.contains ·)
+  nativePermissions.filter (!withheldFromNode.contains ·)
 
 theorem node_runtime_does_not_read_past_dac :
     nodeRuntimePermissions.contains "bypass-dac" = false := by decide
 
-theorem node_runtime_holds_no_admin_class :
-    nodeRuntimePermissions.all (!adminClass.contains ·) = true := by decide
+theorem node_runtime_switches_no_enforcement :
+    withheldFromNode.all (!nodeRuntimePermissions.contains ·) = true := by decide
 
 theorem node_runtime_reads_and_writes_documents :
     ["get-collection", "read-document", "update-document", "delete-document",
@@ -253,6 +262,19 @@ theorem missing_operation_admits_nothing (r : Holder) (c : Change)
     (notAdmin : r.admin = false) (missing : r.holds (nacOperation c.delete) = false) :
     admits r c = false := by
   cases rel : c.relation <;> simp [admits, notAdmin, rel, missing]
+
+/-- The Node as a delegate: it projects every Agent baseline permission, and is
+refused the admin relation and `bypass-dac`. -/
+theorem node_runtime_projects_the_agent_baseline :
+    GrantSet.agentBaseline.permissions.all (fun p =>
+      admits ⟨false, nodeRuntimePermissions⟩ ⟨.permission p, false, true, false⟩) = true := by
+  decide
+
+theorem node_runtime_cannot_grant_admin :
+    admits ⟨false, nodeRuntimePermissions⟩ ⟨.admin, false, true, false⟩ = false ∧
+      admits ⟨false, nodeRuntimePermissions⟩ ⟨.permission "bypass-dac", false, true, false⟩ =
+        false := by
+  decide
 
 theorem recipients_receive_expected_sets :
     receives .initUser = [.householdOwner] ∧

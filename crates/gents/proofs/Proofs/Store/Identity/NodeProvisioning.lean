@@ -136,8 +136,9 @@ owner, an admin, or a delegate holding both the operation and the permission.
 
 Decision (2026-11-17): the init User owns NAC, named when its fresh store is
 first opened; the Node never owns it and holds only the permissions the owner
-grants it then (`GrantSets.nodeRuntimePermissions`, outside the admin class),
-so the runtime reads only what document ACP grants the actor it runs as.
+grants it then (`GrantSets.nodeRuntimePermissions`: all but `bypass-dac` and
+the enforcement switches), so the runtime reads only what document ACP grants
+the actor it runs as.
 Every NAC relationship change the runtime principal makes in process (the
 bootstrap, trial and enrollment grants among them) is issued as that owner:
 native takes an in-process call's identity as named, so the runtime names the

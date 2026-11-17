@@ -2862,10 +2862,9 @@ mod tests {
         drop(worker);
         drop(runtime);
         drop(node);
-        assert!(
-            initialize_disposable_home(&home, false).await.is_err(),
-            "reinit must not restore revoked permissions"
-        );
+        initialize_disposable_home(&home, false)
+            .await
+            .expect("the init User keeps owning NAC, so setting the home up again succeeds");
         let node = Arc::new(
             crate::persistent_node_builder(&home, &data)
                 .await

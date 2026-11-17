@@ -63,7 +63,7 @@ impl Fixture {
             home.node.clone(),
             ::identity::Did::new(owner.clone()).unwrap(),
         );
-        gents_store::identity::GrantSet::OperatorUser
+        gents_store::identity::GrantSet::HouseholdOwner
             .grant(&admin, &::identity::Did::new(evaluator.did()).unwrap())
             .await
             .unwrap();
@@ -81,17 +81,9 @@ impl Fixture {
         let binding =
             gents_store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
         let mut initial = vec![(Collection::Node, json!({"node_did": &owner}))];
-        let (client_documents, owner_documents): (Vec<_>, Vec<_>) =
-            documents(&owner).into_iter().partition(|(collection, _)| {
-                !matches!(collection, Collection::Tools | Collection::AgentContext)
-            });
-        initial.extend(client_documents);
+        initial.extend(documents(&owner));
         install(&ctx.access, initial).await;
-        // Tools and AgentContext are source-projected, so the Node owner writes
-        // them; the baseline Agent is installed with its recorded slot binding
-        // so optimization can prove the installed baseline.
-        install(&admin, owner_documents).await;
-        install_baseline(&admin, &owner, &pack, &binding).await;
+        install_baseline(&ctx.access, &owner, &pack, &binding).await;
         gents_documents::test_support::set_test_default_agent_as(
             &ctx.access,
             &owner,
@@ -344,7 +336,8 @@ fn documents(owner: &str) -> Vec<(Collection, Value)> {
 }
 
 /// Installs the subject pack's Agent with its recorded slot binding, bound to
-/// the `local` profile, as the Node owner.
+/// the `local` profile, as the evaluator, the trial's init User, so
+/// optimization can prove the installed baseline.
 async fn install_baseline(
     owner_access: &ConfigAccess,
     owner: &str,
