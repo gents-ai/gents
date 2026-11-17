@@ -34,41 +34,18 @@ pub async fn wire_handler(
         )
             .into_response();
     }
-    let Some(runtime) = state.activation_runtime.get() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "runtime is not active"})),
-        )
-            .into_response();
-    };
-    let Some(home) = state.home.as_deref() else {
+    let Some(home) = state.home.as_deref().map(std::path::PathBuf::from) else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({"error": "runtime plugin store unavailable"})),
         )
             .into_response();
     };
-    let home = std::path::PathBuf::from(home);
-    // A pin is published under the held User's approval, and the local
-    // transaction must select that same User as its actor.
-    let user = match gents_service::home_state::load_held_user_identity(&home).await {
-        Ok(user) => user,
+    let access = match held_user_access(&state, &home).await {
+        Ok(access) => access,
         Err(error) => {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": format!("the runtime's User identity is unavailable: {error:#}")})),
-            )
-                .into_response()
-        }
-    };
-    let access = match identity::Did::new(user.did()) {
-        Ok(actor) => gents_store::config_client::ConfigAccess::local_as(
-            runtime.observation_node().clone(),
-            actor,
-        ),
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": format!("{error:#}")})),
             )
                 .into_response()
@@ -93,4 +70,27 @@ pub async fn wire_handler(
         Ok(Err(error)) => (StatusCode::UNPROCESSABLE_ENTITY, Json(serde_json::json!({"error": format!("{error:#}"), "outcome": "unconfirmed"}))).into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": format!("pack wiring outcome unconfirmed: {error}"), "outcome": "unconfirmed"}))).into_response(),
     }
+}
+
+/// The runtime's local access as the User its home holds, which a pin
+/// published under that User's approval must select as its actor. Only a
+/// home whose access control the node decides itself holds one in use
+/// (`runtime_signs_with_held_user_key`).
+pub(crate) async fn held_user_access(
+    state: &RuntimeHttpState,
+    home: &std::path::Path,
+) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
+    use anyhow::Context as _;
+    gents_store::local::document_acp::runtime_signs_with_held_user_key(state.document_acp)?;
+    let runtime = state
+        .activation_runtime
+        .get()
+        .context("runtime is not active")?;
+    let user = gents_service::home_state::load_held_user_identity(home)
+        .await
+        .context("the runtime's User identity is unavailable")?;
+    Ok(gents_store::config_client::ConfigAccess::local_as(
+        runtime.observation_node().clone(),
+        identity::Did::new(user.did())?,
+    ))
 }

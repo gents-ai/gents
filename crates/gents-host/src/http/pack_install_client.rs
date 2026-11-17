@@ -70,6 +70,23 @@ impl PackInstallSession {
         node_did: &str,
         pack_digests: &[String],
     ) -> Result<Self> {
+        Self::open(
+            endpoint,
+            json!({"type": "start", "request": request}),
+            node_did,
+            pack_digests,
+        )
+        .await
+    }
+
+    /// Open a session whose first message is `first`, for the effects of
+    /// `pack_digests` on `node_did`.
+    pub async fn open(
+        endpoint: &GraphqlEndpoint,
+        first: Value,
+        node_did: &str,
+        pack_digests: &[String],
+    ) -> Result<Self> {
         let actor = endpoint.held_client_signing_capability()?.clone();
         let mut url = reqwest::Url::parse(endpoint.url())?;
         ensure!(
@@ -103,10 +120,7 @@ impl PackInstallSession {
             .await
             .context("connecting remote pack install")?;
         let presented_at = std::time::Instant::now();
-        let mut start = serde_json::Map::new();
-        start.insert("type".into(), "start".into());
-        start.insert("request".into(), request);
-        send(&mut socket, Value::Object(start)).await?;
+        send(&mut socket, first).await?;
         let (scope, preparation) = match receive(&mut socket).await? {
             ServerMessage::Ready { scope, preparation } => (scope, preparation),
             ServerMessage::Failed { error, outcome } => {
@@ -439,7 +453,10 @@ pub async fn install_remote(
     args: &gents_pack::pack::install_flow::DocumentsInstallRequest,
     explicit: bool,
 ) -> Result<Value> {
-    ensure!(args.wire.is_empty(), "remote pack install does not yet support --wire with client-held signing; install the pack and wire it separately on the owning node");
+    ensure!(
+        args.wire.is_empty(),
+        "a hosted pack install carries no wiring; its plugins are wired after it"
+    );
     let request =
         super::pack_install::encode_install_request(pack, dependencies, args, owner, explicit)
             .await?;

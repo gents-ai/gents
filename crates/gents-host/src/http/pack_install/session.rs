@@ -17,6 +17,8 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use super::{decode_install_request, delegated_install_access, refused, InstallRequest, MAX_BODY};
+
+mod wire;
 use crate::http::router::RuntimeHttpState;
 
 #[derive(Deserialize)]
@@ -24,6 +26,10 @@ use crate::http::router::RuntimeHttpState;
 enum ClientMessage {
     Start {
         request: InstallRequest,
+    },
+    /// Wire an installed plugin, the client signing each write.
+    Wire {
+        command: gents_pack::pack::plugin_wire::WireCommand,
     },
     SchemasReady {
         evidence: PackSchemaEvidence,
@@ -425,12 +431,22 @@ async fn run_inner(
         })
         .await
         .map_err(|error| (error, "not_installed"))?;
+    let first = receive(&mut *socket.lock().await, &refresher)
+        .await
+        .map_err(|error| (error, "not_installed"))?;
+    let request = match first {
+        ClientMessage::Start { request } => request,
+        ClientMessage::Wire { command } => {
+            return wire::run(socket, state, &home, &user_access, refresher, command).await
+        }
+        _ => {
+            return Err((
+                anyhow::anyhow!("pack session requires a start request"),
+                "not_installed",
+            ))
+        }
+    };
     let prepare = async {
-        let ClientMessage::Start { request } =
-            receive(&mut *socket.lock().await, &refresher).await?
-        else {
-            anyhow::bail!("pack session requires a start request");
-        };
         anyhow::ensure!(
             !request.preview && request.wire.is_empty(),
             "hosted pack session cannot preview or wire plugins"

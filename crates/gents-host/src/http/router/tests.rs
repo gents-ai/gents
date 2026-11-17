@@ -483,6 +483,182 @@ async fn operator_wire_reaches_the_runtime_writer_as_the_lean_model_allows() {
     }
 }
 
+/// The home's GraphQL beside the contract routes, as one runtime serves
+/// both: the request keeps its `Host`, which its credential names.
+fn forward_graphql(
+    upstream: String,
+) -> impl Fn(
+    axum::http::HeaderMap,
+    axum::body::Bytes,
+) -> futures::future::BoxFuture<'static, axum::response::Response>
+       + Clone
+       + Send
+       + Sync
+       + 'static {
+    move |headers, body| {
+        let upstream = upstream.clone();
+        Box::pin(async move {
+            let mut request = reqwest::Client::new().post(&upstream).body(body);
+            for name in [header::AUTHORIZATION, header::HOST, header::CONTENT_TYPE] {
+                if let Some(value) = headers.get(&name) {
+                    request = request.header(name, value);
+                }
+            }
+            let response = request.send().await.unwrap();
+            let status = response.status();
+            let bytes = response.bytes().await.unwrap();
+            (status, bytes).into_response()
+        })
+    }
+}
+
+/// A User wires an installed plugin through the runtime of a home whatever
+/// decides its access: the runtime holds the plugin store and runs the
+/// transaction, the client signs each write with its own key, and the
+/// runtime never loads a User key of its own.
+#[tokio::test]
+async fn a_client_wires_a_plugin_through_the_runtime_signing_each_write_itself() {
+    use gents_pack::pack::plugin_wire::WireRequest;
+    use gents_store::local::document_acp::DocumentAcp;
+    let home = crate::test_support::ClientHome::new().await;
+    let identity = home.home.identity.clone();
+    let owner = identity.did().to_owned();
+    let binding = home.agent("fixture").await;
+    home.mark_backend_healthy(&binding).await;
+    let configuration: gents_documents::PackConfig = serde_json::from_value(json!({
+        "node": {"node_did": owner},
+        "tools": [{"node_did": owner, "tools_id": "client-wire-tools"}],
+        "contexts": [{"node_did": owner, "context_id": "client-wire-context", "tools_id": "client-wire-tools"}],
+        "agents": [{"node_did": owner, "agent_did": binding.agent_did,
+            "creation_nonce": binding.creation_nonce, "context_id": "client-wire-context",
+            "inference_profile_id": format!("{}:inference", binding.agent_did), "enabled": true}]
+    }))
+    .unwrap();
+    let plan = gents_documents::DesiredStateApplyPlan::from_pack_config(&configuration).unwrap();
+    home.access
+        .transact_write("test.client_wire.context", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    let runtime = gents::Gents::builder()
+        .node(home.node().clone())
+        .backend_admission(home.home.backend_admission())
+        .identity(identity.clone())
+        .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
+        .agent("fixture")
+        .identity_binding(binding.clone())
+        .backend_id(format!("{}:backend", binding.agent_did))
+        .model_name("test-model")
+        .done()
+        .build()
+        .await
+        .unwrap();
+    let (mut plugin, artifact) = gents_pack::plugin::test_fixtures::build_plugin_pack(
+        "client_wire",
+        &gents_pack::plugin::test_fixtures::constant_output_wat(br#"{}"#),
+        None,
+    );
+    plugin.name = "tool".into();
+    for document_acp in [DocumentAcp::Local, DocumentAcp::Vera] {
+        let plugin_home = tempfile::tempdir().unwrap();
+        let installed = gents_pack::plugin::install::install_from_pack(
+            plugin_home.path(),
+            "acme",
+            "acme/client_wire",
+            "1.0.0",
+            &format!("sha256:{}", "b".repeat(64)),
+            &plugin,
+            &artifact,
+            None,
+            Default::default(),
+            Default::default(),
+            false,
+        )
+        .unwrap();
+        let (activation_runtime, activation_observation) = empty_activation_state();
+        assert!(activation_runtime.set(runtime.clone()).is_ok());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let graphql = format!("http://{addr}/api/v0/graphql");
+        let app = runtime_contract_router(
+            graphql.clone(),
+            GraphqlEndpoint::anonymous(graphql.clone()),
+            "client-wire".into(),
+            owner.clone(),
+            "readwrite".into(),
+            Ok(None),
+            Vec::new(),
+            Some(plugin_home.path().display().to_string()),
+            None,
+            None,
+            None,
+            None,
+            crate::http::enrollment::empty_issuer_handle(),
+            crate::http::enrollment::empty_decision_service_handle(),
+            activation_runtime,
+            activation_observation,
+            Default::default(),
+            Default::default(),
+            document_acp,
+        )
+        .contract
+        .route(
+            "/api/v0/graphql",
+            post(forward_graphql(
+                home.home.graphql_endpoint().unwrap().to_owned(),
+            )),
+        );
+        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        let report = crate::http::pack_wire_client::wire_as_client(
+            crate::test_support::user_endpoint(&graphql, &home.user),
+            owner.clone(),
+            plugin_home.path().to_owned(),
+            WireRequest {
+                plugin: "acme/tool".into(),
+                agent: binding.agent_did.clone(),
+                targets_from: Vec::new(),
+                remove: false,
+                preview: false,
+                dynamic_consent: false,
+                tool_calls_consent: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(report["preview"], false, "{document_acp:?}: {report}");
+        let rows = home
+            .access
+            .execute("{ Tools { tools_id integrations } }")
+            .await
+            .unwrap();
+        assert!(
+            rows["data"]["Tools"].as_array().unwrap().iter().any(|row| {
+                row["tools_id"] == "client-wire-tools"
+                    && row["integrations"]["plugins"]
+                        .as_array()
+                        .is_some_and(|plugins| {
+                            plugins.iter().any(|entry| {
+                                entry["plugin"] == "acme/tool"
+                                    && entry["digest"] == installed.digest
+                            })
+                        })
+            }),
+            "{document_acp:?}: {rows}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn operator_inventory_authenticates_and_reads_native_metadata() {
     use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};

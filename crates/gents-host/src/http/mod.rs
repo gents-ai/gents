@@ -18,6 +18,7 @@ pub mod pack_install;
 pub mod pack_install_client;
 mod pack_watch;
 pub mod pack_wire;
+pub mod pack_wire_client;
 pub mod private_reader;
 pub mod prometheus;
 pub mod router;

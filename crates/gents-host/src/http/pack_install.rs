@@ -460,13 +460,14 @@ async fn install_owned(
     .await
     .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
     if !args.wire.is_empty() && !args.preview {
+        let held = crate::http::pack_wire::held_user_access(&state, &home).await?;
         result["wired"] = gents_pack::pack::plugin_wire::wire_pack_plugins(
-            &access,
+            &held,
             &state.node_did,
             &home,
             &root,
             &args.wire,
-            gents_service::home_state::load_held_user_identity,
+            crate::http::pack_wire_client::SIGNERS,
         )
         .await?
         .into();
