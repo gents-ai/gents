@@ -3561,7 +3561,7 @@ fn hidden_invocation_selection_matches_tool_surface_names() {
         serde_json::json!({"host":{"files":{"mode":"ReadWrite"},"bash":{"mode":"Unrestricted","background_enabled":true},"cli":[{"name":"custom_cli"}]}}),
         serde_json::json!({"built_ins":{"enable_schema_tool":true,"enable_p2p_tool":true,"enable_goal_tools":true,"enable_goal_creation":true},"self_config":{"enable_self_config":true},"datastore":{"enable_defra_query":true,"write_collections":["Example"]},"agents":{"enabled":true}}),
         serde_json::json!({"integrations":{"plugins":[{"plugin":"script/script","tool_calls":true},{"plugin":"pack/worker"}]}}),
-        serde_json::json!({"remote":{"services":[{"mcp_service_id":"discovery","tool_names":["search"]},{"mcp_service_id":"flat","style":"Flat","tool_names":["fetch"],"background_tool_names":["fetch"]}]}}),
+        serde_json::json!({"remote":{"services":[{"mcp_service_id":"discovery","tool_names":["search"]},{"mcp_service_id":"flat","style":"flat","tool_names":["fetch"],"background_tool_names":["fetch"]}]}}),
     ];
     let mut cases = Vec::new();
     let mut universe = std::collections::BTreeSet::from([
