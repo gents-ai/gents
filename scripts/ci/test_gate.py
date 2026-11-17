@@ -163,10 +163,16 @@ class Selection(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(select(path)["ios_check"])
 
-    def test_the_ios_check_builds_incrementally_in_its_own_kept_tree(self):
+    def test_side_lint_builds_are_incremental_in_their_own_kept_trees(self):
         with mock.patch.dict(os.environ, {"CARGO_TARGET_DIR": "/cache/runner-a"}):
-            self.assertEqual(gate.ios_check_env(), {"CARGO_TARGET_DIR": "/cache/runner-a/ios-check",
-                                                    "CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""})
+            self.assertEqual(gate.side_tree_env("ios-check"), {"CARGO_TARGET_DIR": "/cache/runner-a/ios-check",
+                                                               "CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""})
+
+    def test_the_live_suites_are_linted_only_when_they_or_their_crates_changed(self):
+        self.assertEqual(select("crates/gents-store/src/graphql.rs")["live_e2e_lint"], ["gents", "gents-cli"])
+        self.assertEqual(select("crates/gents-cli/src/lib.rs")["live_e2e_lint"], ["gents-cli"])
+        self.assertEqual(select("crates/gents-media-host/src/lib.rs")["live_e2e_lint"], [])
+        self.assertEqual(select("packages/gents-desktop-ui/src/index.ts")["live_e2e_lint"], [])
 
     def test_a_draft_tests_what_it_changes_and_lints_what_depends_on_it(self):
         selection = select("crates/gents-store/src/graphql.rs", tier="draft")

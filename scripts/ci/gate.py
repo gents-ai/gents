@@ -746,6 +746,9 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
         # workspace crate it depends on changed (the toolchain and lock change
         # everything).
         "ios_check": "gents-desktop-tauri" in built,
+        # The live suites (`live-e2e`) run after merge; lint them when they or a
+        # crate they use changed.
+        "live_e2e_lint": [package for package in ("gents", "gents-cli") if package in built],
         "runs_on": {role: runner(role) for role in WORKFLOW_ROLES},
     }
 
@@ -921,10 +924,10 @@ def run_lint(selection):
     # The product build: no test targets, so no dev-dependency features.
     sh(["cargo", "check", *packages, *profile])
     sh(["cargo", "clippy", *packages, "--all-targets", *profile, "--", "-D", "warnings"])
-    # Live suites run after merge; they must still compile.
-    for package in ("gents", "gents-cli"):
-        if package in affected:
-            sh(["cargo", "check", "-p", package, "--tests", "--features", "live-e2e", *profile])
+    # Live suites run after merge; they must still compile and lint clean.
+    for package in selection.get("live_e2e_lint", []):
+        sh(["cargo", "clippy", "-p", package, "--tests", "--features", "live-e2e", *profile, "--", "-D", "warnings"],
+           env={**os.environ, **side_tree_env("live-e2e")})
     if "gents-loop" in affected:
         sh(["cargo", "build", "-p", "gents-loop", "--target", "wasm32-wasip1", *profile])
     if "gents-lens-fixture-add-label" in affected:
@@ -935,7 +938,7 @@ def run_lint(selection):
         # iOS shares the desktop crates; desktop-only Tauri APIs break it silently (#890).
         sh(["rustup", "target", "add", "aarch64-apple-ios-sim"])
         sh(["cargo", "check", "-p", "gents-desktop-tauri", "--lib", "--target", "aarch64-apple-ios-sim", *profile],
-           env={**os.environ, **ios_check_env()})
+           env={**os.environ, **side_tree_env("ios-check")})
 
 
 def run_contract(selection):
@@ -1588,20 +1591,21 @@ def kept_target():
     return [os.environ["CARGO_TARGET_DIR"]] if os.environ.get("CARGO_TARGET_DIR") else []
 
 
-def ios_check_env():
-    """The iOS check's own target tree inside the kept one, built incrementally.
+def side_tree_env(name):
+    """A lint build's own target tree inside the kept one, built incrementally.
 
-    It re-checks every workspace crate for another target, which took 38 min
-    from scratch on a Studio (#3926). sccache cannot serve that, so this tree is
-    incremental and its own: incremental units in the shared tree would
-    replace the non-incremental ones the other builds reuse. Inside the kept
-    tree, it survives the checkout's `git clean` and its size counts toward the
-    runner's reclamation.
+    The iOS check and the live-e2e lints build every workspace crate under a
+    target or feature set no other build shares (38 and 11 min from scratch on
+    a Studio, #3926), which sccache does not serve. Each gets its own
+    incremental tree: incremental units in the shared tree would replace the
+    non-incremental ones the other builds reuse. Inside the kept tree, it
+    survives the checkout's `git clean` and counts toward the runner's
+    reclamation.
     """
     target = os.environ.get("CARGO_TARGET_DIR")
     if not target:
         return {"CARGO_INCREMENTAL": "1"}
-    return {"CARGO_TARGET_DIR": str(Path(target) / "ios-check"), "CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""}
+    return {"CARGO_TARGET_DIR": str(Path(target) / name), "CARGO_INCREMENTAL": "1", "RUSTC_WRAPPER": ""}
 
 
 def keep_core_packs_fresh():
