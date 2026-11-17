@@ -1,5 +1,6 @@
 import Proofs.Store.Identity.NodeProvisioning
 import Proofs.Store.Identity.NodeProvisioningConformance
+import Proofs.Store.Identity.GrantSets
 import Proofs.Conformance.Family
 import Proofs.Tools.SelfConfig.CategoryGrants
 
@@ -114,6 +115,17 @@ statuses a production start reaches. -/
 def runtimeNac : Family NacInput NacOutput where
   inputs := [{ status := .enabled }, { status := .disabledTemporarily }]
   model := nacModel
+
+structure NodeRuntimeInput where
+  recipient : String
+  deriving ToJson
+
+/-- The permissions the owner grants the Node when its fresh store is first
+opened (`GrantSets.nodeRuntimePermissions`). -/
+@[conformance_family]
+def nodeRuntimeGrants : Family NodeRuntimeInput (List String) where
+  inputs := [{ recipient := "node" }]
+  model := fun _ => GrantSets.nodeRuntimePermissions
 
 /-- model-production-gap: every production node open enables NAC, so no
 production path observes a node whose NAC was never configured. -/

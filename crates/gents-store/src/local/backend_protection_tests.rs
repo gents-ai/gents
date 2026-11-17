@@ -140,10 +140,16 @@ async fn an_uncheckable_copy_leaves_the_original_store_untouched() -> anyhow::Re
             .map(|key| key.did().to_owned())
     })
     .await??;
+    let owner_path = home.join("owner.key");
+    let owner = tokio::task::spawn_blocking(move || {
+        crate::identity::KeyIdentity::load_or_create(owner_path, None)
+            .map(|key| key.did().to_owned())
+    })
+    .await??;
     let key = StoreKey::from_host(&[19; 32])?;
     super::backend_protection::FreshBackendStore::observe(&data, &lock)
         .await?
-        .initialize(&key, Some(&did))
+        .initialize(&key, Some(&did), &identity::Did::new(owner)?)
         .await?;
     ProtectedBackendStore::open(&data, &key, &lock)
         .await?

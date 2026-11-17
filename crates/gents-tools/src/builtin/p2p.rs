@@ -877,6 +877,7 @@ impl P2pTool {
                             gents_store::identity::EnrollmentApproval {
                                 approver,
                                 runtime: &runtime,
+                                nac_owner: &runtime,
                                 node: actor.as_ref(),
                                 request: &request,
                                 expected: None,

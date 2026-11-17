@@ -960,7 +960,7 @@ mod tests {
     /// A home as `gents init` leaves it: its config, store key and a fresh
     /// protected store whose provenance names the runtime.
     async fn initialized_home_with_store(temp: &Path) -> PathBuf {
-        gents_service::home_state::client_identity_for_new_node()
+        let client = gents_service::home_state::client_identity_for_new_node()
             .await
             .unwrap();
         let home = initialized_home(temp);
@@ -975,7 +975,11 @@ mod tests {
         gents_store::local::backend_protection::FreshBackendStore::observe(&data, &lock)
             .await
             .unwrap()
-            .initialize(&key, Some(identity.did()))
+            .initialize(
+                &key,
+                Some(identity.did()),
+                &identity::Did::new(client.did()).unwrap(),
+            )
             .await
             .unwrap();
         drop(lock);

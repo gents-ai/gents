@@ -44,6 +44,8 @@ pub enum BackendProtectionError {
          re-enable NAC as the node owner or an admin before starting"
     )]
     NodeAcpNotEnabled { status: String },
+    #[error("node access control must be owned by the home's User, not its Node")]
+    NodeOwnedNodeAcp,
     #[error("the store could not be checked on a copy; the original was not opened")]
     CopyCheck(#[source] Box<super::store_compat::StoreCompatibilityError>),
     #[error("backend protection storage operation failed")]
@@ -129,17 +131,28 @@ impl<'a> FreshBackendStore<'a> {
 
     /// The temporary native Node has no HTTP or P2P transport. An interrupted
     /// initialization or partial marker is never promoted on a later open.
-    pub async fn initialize(self, key: &StoreKey, node_did: Option<&str>) -> Result<()> {
+    /// Node access control is set up here, once, owned by `nac_owner`
+    /// (`Identity.NodeProvisioning.nacOwner`); every later open keeps it.
+    pub async fn initialize(
+        self,
+        key: &StoreKey,
+        node_did: Option<&str>,
+        nac_owner: &identity::Did,
+    ) -> Result<()> {
         let did = node_did
             .filter(|did| !did.is_empty())
             .ok_or(BackendProtectionError::InvalidProvenance)?;
+        if nac_owner.as_str() == did {
+            return Err(BackendProtectionError::NodeOwnedNodeAcp);
+        }
         let mut builder = super::store_key::persistent_builder(&self.data, key)
             .map_err(|error| BackendProtectionError::Schema(error.into()))?;
         builder = builder
             .with_node_identity_did(did.to_owned())
-            .with_node_acp_enabled();
+            .with_node_acp_owner(nac_owner.as_str());
         let node = builder.build().await?;
         let result = async {
+            grant_node_runtime(&node, nac_owner, did).await?;
             crate::schema::ensure_runtime_schemas(&node)
                 .await
                 .map_err(BackendProtectionError::Schema)?;
@@ -327,6 +340,21 @@ impl BackendAdmission {
         }
         validate_binding(node).await
     }
+}
+
+/// The owner grants the Node `Identity.GrantSets.nodeRuntimePermissions` once,
+/// when the fresh store is first opened and before anything else is written.
+async fn grant_node_runtime(
+    node: &defra_node::Node,
+    owner: &identity::Did,
+    node_did: &str,
+) -> Result<()> {
+    let context = defra_core::RequestContext::default().with_identity(Some(owner.to_string()));
+    for permission in crate::identity::node_runtime_permissions() {
+        node.add_nac_actor_relationship_as(&context, permission.as_str(), node_did)
+            .await?;
+    }
+    Ok(())
 }
 
 /// `Identity.NodeProvisioning.runtimeMayStart`: every authorization decision

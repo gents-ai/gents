@@ -141,6 +141,16 @@ impl GrantSet {
     }
 }
 
+/// `Identity.GrantSets.nodeRuntimePermissions`: every native node permission
+/// outside the admin class, which the NAC owner grants the Node when its fresh
+/// store is first opened.
+pub fn node_runtime_permissions() -> impl Iterator<Item = NodePermission> {
+    NodePermission::all()
+        .iter()
+        .copied()
+        .filter(|permission| !permission.is_admin_class())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Relation {
     Admin,

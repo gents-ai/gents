@@ -62,8 +62,9 @@ consumes a one-shot marker for a verified fresh store. The authenticated client
 and matching runtime principal are separately required. An absent Node means an
 authoritative absence, not an empty actor-filtered read. The bootstrap grants
 are the direct sets `GrantSets.directSets` names for the init User and the
-default Agent; configuration is published after them. A lost or ambiguous
-reservation response grants nothing; after a crash, a durable reservation cannot authorize replay. -/
+default Agent, issued as the NAC owner (`nacOwner`); configuration is published
+after them. A lost or ambiguous reservation response grants nothing; after a
+crash, a durable reservation cannot authorize replay. -/
 structure BootstrapObservation where
   exclusive : Bool
   matchingRuntime : Bool
@@ -123,6 +124,32 @@ def NacStatus.name : NacStatus → String
   | .notConfigured => "not_configured"
   | .enabled => "enabled"
   | .disabledTemporarily => "disabled_temporarily"
+
+/-- Who owns node access control (NAC) on a home's store.
+
+External premise (the pinned DefraDB revision, defradb.rs #2744): while NAC is
+enabled, the NAC owner and every holder of `bypass-dac` (the native `admin`
+relation confers it) read past document ACP. The node's own DID passes every
+node-operation check whatever NAC holds for it (`check_node_access`), but a NAC
+relationship change has no such exception: native admits it only from the
+owner, an admin, or a delegate holding both the operation and the permission.
+
+Decision (2026-11-17): the init User owns NAC, named when its fresh store is
+first opened; the Node never owns it and holds only the permissions the owner
+grants it then (`GrantSets.nodeRuntimePermissions`, outside the admin class),
+so the runtime reads only what document ACP grants the actor it runs as.
+Every NAC relationship change the runtime principal makes in process (the
+bootstrap, trial and enrollment grants among them) is issued as that owner:
+native takes an in-process call's identity as named, so the runtime names the
+owner without holding its key and keeps the NAC authority it had as owner,
+without its read bypass. Over HTTP the owning User issues them with its own
+client. -/
+inductive NacOwner where
+  | initUser
+  | node
+  deriving DecidableEq, Repr
+
+def nacOwner : NacOwner := .initUser
 
 /-- Runtime invariant: the runtime operates only with node ACP (NAC) enabled.
 Every authorization decision in this model assumes it. Native premise: while

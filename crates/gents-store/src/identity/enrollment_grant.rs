@@ -244,13 +244,18 @@ impl From<ConfigClientError> for EnrollmentGrantError {
 /// Grant `member` the authority one verified client enrollment derives (Lean
 /// `Identity.EnrollmentGrant.grant`). `owner` is the Node document's owner,
 /// which alone can observe and add the Node `administrator` relation;
-/// `runtime` is the runtime principal that writes the receipt and issues the
-/// node permissions. The receipt is committed before any tuple is issued, so
-/// an interrupted grant never leaves authority that revocation cannot find; a
-/// repeated grant of a request with a live receipt reissues exactly its tuples.
+/// `runtime` is the runtime principal that writes the receipt; `nac_owner`
+/// issues the node permissions as the NAC owner, the only actor native admits
+/// for the admin-class ones (`Identity.NodeProvisioning.nacOwner`): the
+/// runtime principal in process, whose NAC changes are issued as the owner, or
+/// the owning User's own client. The receipt is committed before any tuple is
+/// issued, so an interrupted grant never leaves authority that revocation
+/// cannot find; a repeated grant of a request with a live receipt reissues
+/// exactly its tuples.
 pub async fn grant_enrollment_authority(
     owner: &ConfigAccess,
     runtime: &ConfigAccess,
+    nac_owner: &ConfigAccess,
     node_doc_id: &str,
     request_id: &str,
     member: &identity::Did,
@@ -265,7 +270,7 @@ pub async fn grant_enrollment_authority(
                 request_id: request_id.to_owned(),
             });
         }
-        issue(owner, runtime, node_doc_id, member, &existing.tuples).await?;
+        issue(owner, nac_owner, node_doc_id, member, &existing.tuples).await?;
         return Ok(EnrollmentGrantOutcome {
             recorded: existing.tuples.clone(),
             reissued: true,
@@ -330,7 +335,7 @@ pub async fn grant_enrollment_authority(
             })
         })
         .await?;
-    issue(owner, runtime, node_doc_id, member, &recorded).await?;
+    issue(owner, nac_owner, node_doc_id, member, &recorded).await?;
     Ok(EnrollmentGrantOutcome {
         recorded,
         reissued: false,
@@ -339,7 +344,7 @@ pub async fn grant_enrollment_authority(
 
 async fn issue(
     owner: &ConfigAccess,
-    runtime: &ConfigAccess,
+    nac_owner: &ConfigAccess,
     node_doc_id: &str,
     member: &identity::Did,
     tuples: &[EnrollmentGrantTuple],
@@ -357,7 +362,7 @@ async fn issue(
                     .await
             }
             EnrollmentGrantTuple::Permission(permission) => {
-                runtime.grant_node_permission(member, *permission).await
+                nac_owner.grant_node_permission(member, *permission).await
             }
         };
         result.map_err(|source| EnrollmentGrantError::Issue {
@@ -420,14 +425,15 @@ impl EnrollmentGrantWithdrawal {
 
     /// Native node permissions are not transactional, so they are revoked
     /// before the revision commits: a failure leaves the member with less
-    /// authority, never more, and the receipt stays live for a retry.
+    /// authority, never more, and the receipt stays live for a retry. They are
+    /// revoked as the NAC owner, as they were issued.
     pub async fn revoke_node_permissions(
         &self,
-        runtime: &ConfigAccess,
+        nac_owner: &ConfigAccess,
     ) -> Result<(), EnrollmentGrantError> {
         for tuple in &self.tuples {
             if let EnrollmentGrantTuple::Permission(permission) = tuple {
-                runtime
+                nac_owner
                     .revoke_node_permission(&self.member, *permission)
                     .await
                     .map_err(|source| EnrollmentGrantError::Revoke {
@@ -456,6 +462,7 @@ impl EnrollmentGrantWithdrawal {
         &self,
         approver: &ConfigAccess,
         runtime: &ConfigAccess,
+        nac_owner: &ConfigAccess,
         node_doc_id: &str,
     ) -> Result<(), EnrollmentGrantError> {
         if self
@@ -475,7 +482,7 @@ impl EnrollmentGrantWithdrawal {
                     source,
                 })?;
         }
-        self.revoke_node_permissions(runtime).await?;
+        self.revoke_node_permissions(nac_owner).await?;
         runtime
             .transact_write("client_access.retire_grant", |txn| {
                 Box::pin(async move { self.retire_receipts_in_txn(txn).await })

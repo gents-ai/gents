@@ -147,6 +147,8 @@ pub enum ConfigClientError {
     TransactionActorMismatch,
     #[error("validated managed Agent signing capability is required")]
     ManagedAgentSignerRequired,
+    #[error("node access control has no owner to issue this change as")]
+    NodeAcpOwnerUnknown,
     #[error("a document relationship requires an authenticated actor")]
     RelationshipActorRequired,
     #[error("invalid transaction owner observation response")]

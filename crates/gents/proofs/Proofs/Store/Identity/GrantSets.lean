@@ -22,6 +22,48 @@ def adminClass : List String :=
   ["bypass-dac", "add-nac-relation", "delete-nac-relation", "disable-nac",
    "re-enable-nac", "purge-nac", "enable-dac", "disable-dac", "purge-dac"]
 
+/-- Every native node permission, by wire name. External premise: the pinned
+DefraDB revision's `NodePermission::all`. -/
+def nativePermissions : List String :=
+  ["bypass-dac", "enable-dac", "disable-dac", "purge-dac", "get-dac-status",
+   "add-dac-relation", "delete-dac-relation", "add-dac-policy",
+   "re-enable-nac", "disable-nac", "purge-nac", "get-nac-status",
+   "add-nac-relation", "delete-nac-relation",
+   "patch-collection", "get-collection", "truncate-collection",
+   "read-document", "update-document", "delete-document",
+   "list-index", "new-index", "delete-index", "new-encrypted-index",
+   "list-encrypted-index", "list-all-encrypted-index", "delete-encrypted-index",
+   "get-p2p-peer-info", "connect-p2p-peer", "disconnect-p2p-peer",
+   "get-p2p-active-peers", "add-p2p-replicator", "delete-p2p-replicator",
+   "list-p2p-replicator", "add-p2p-collection", "delete-p2p-collection",
+   "list-p2p-collection", "add-p2p-document", "delete-p2p-document",
+   "list-p2p-document", "sync-p2p-documents", "sync-p2p-collection-versions",
+   "sync-p2p-branchable-collection", "verify-signature", "add-lens", "list-lens",
+   "list-action", "refresh-view", "gc-view", "add-view", "set-migration"]
+
+/-- What the Node holds, the NAC owner being the init User
+(`NodeProvisioning.nacOwner`): every native permission outside the admin class,
+granted by the owner when the fresh store is first opened, before anything
+else is written. External premise (the pinned DefraDB revision): a node
+operation's own check passes the node's DID whatever it holds, but a document
+read, write or relationship change checks the acting identity's NAC grants with
+no node exception, so a Node that does not own NAC needs these granted. The
+admin class, `bypass-dac` among it, stays with the owner: the Node reads only
+what document ACP grants it. -/
+def nodeRuntimePermissions : List String :=
+  nativePermissions.filter (!adminClass.contains ·)
+
+theorem node_runtime_does_not_read_past_dac :
+    nodeRuntimePermissions.contains "bypass-dac" = false := by decide
+
+theorem node_runtime_holds_no_admin_class :
+    nodeRuntimePermissions.all (!adminClass.contains ·) = true := by decide
+
+theorem node_runtime_reads_and_writes_documents :
+    ["get-collection", "read-document", "update-document", "delete-document",
+      "add-dac-relation", "delete-dac-relation"].all nodeRuntimePermissions.contains = true := by
+  decide
+
 def nacOperation (delete : Bool) : String :=
   if delete then "delete-nac-relation" else "add-nac-relation"
 
@@ -111,7 +153,10 @@ def Recipient.name : Recipient → String
 
 /-- Direct grants, issued once by the admission that creates the recipient:
 init (or trial installation) for the init User and the default Agent,
-enrollment for an enrolled User. They persist until an explicit revocation. -/
+enrollment for an enrolled User. Each is issued as the NAC owner
+(`NodeProvisioning.nacOwner`), the only actor native admits for the admin
+relation and the admin-class permissions they include. They persist until an
+explicit revocation. -/
 def directSets : Recipient → List GrantSet
   | .initUser => [.householdOwner]
   | .enrolledUser => [.operatorUser]

@@ -592,6 +592,10 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "node_provisioning_runtime_nac")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "node_provisioning_node_runtime_grants")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "family" "node_provisioning_runtime_nac_unreached"
       "model-production-gap: every production node open enables NAC, so no production path observes a node whose NAC was never configured (not_configured).")

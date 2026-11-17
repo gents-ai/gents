@@ -340,11 +340,17 @@ pub(crate) async fn init_home_with_core_packs(
         &mut stored,
     )
     .await?;
+    let client_identity = if fresh_store {
+        gents_service::home_state::client_identity_for_new_node().await?
+    } else {
+        gents_service::home_state::client_identity_for(&home_dir).await?
+    };
     if let Some(fresh_backend) = fresh_backend {
         fresh_backend
             .initialize(
                 &store_key,
                 Some(initialized_identity.node_identity_did.as_str()),
+                &identity::Did::new(client_identity.did())?,
             )
             .await?;
     }
@@ -378,11 +384,6 @@ pub(crate) async fn init_home_with_core_packs(
             .context("building embedded DefraDB node for init")?,
     );
     stage("embedded_node_built");
-    let client_identity = if fresh_store {
-        gents_service::home_state::client_identity_for_new_node().await?
-    } else {
-        gents_service::home_state::client_identity_for(&home_dir).await?
-    };
     let held_store_access = ConfigAccess::claimed_local_as(
         node_arc,
         store_lock,
@@ -961,7 +962,11 @@ pub(crate) async fn write_identity_only_home_metadata(
     .await?;
     if let Some(fresh_backend) = fresh_backend {
         fresh_backend
-            .initialize(&store_key, Some(initialized_identity.identity.did()))
+            .initialize(
+                &store_key,
+                Some(initialized_identity.identity.did()),
+                &identity::Did::new(options.owner)?,
+            )
             .await?;
         bootstrap_identity_only_owner(
             options.home,
@@ -998,7 +1003,7 @@ pub(crate) async fn write_identity_only_home_metadata(
 
 /// An identity-only home has no default Agent, so its fresh-store bootstrap
 /// grants only the init User's direct set, under the same consumed reservation
-/// and from the same Node principal as full initialization.
+/// and as the same NAC owner as full initialization.
 async fn bootstrap_identity_only_owner(
     home: &Path,
     data_dir: &Path,
@@ -2596,14 +2601,22 @@ mod tests {
             .is_none());
         let key = gents_store::local::store_key::StoreKey::from_host(&[7; 32])?;
         let path = directory.path().join("node.key");
-        let did = tokio::task::spawn_blocking(move || -> Result<String> {
-            Ok(KeyIdentity::load_or_create(path, None)?.did().to_owned())
+        let owner_path = directory.path().join("owner.key");
+        let (did, owner) = tokio::task::spawn_blocking(move || -> Result<(String, String)> {
+            Ok((
+                KeyIdentity::load_or_create(path, None)?.did().to_owned(),
+                KeyIdentity::load_or_create(owner_path, None)?
+                    .did()
+                    .to_owned(),
+            ))
         })
         .await??;
         let fresh =
             gents_store::local::backend_protection::FreshBackendStore::observe(&data, &_lock)
                 .await?;
-        let result = fresh.initialize(&key, Some(&did)).await;
+        let result = fresh
+            .initialize(&key, Some(&did), &identity::Did::new(owner)?)
+            .await;
         assert_eq!(result.is_ok(), case["origin"].as_bool().unwrap());
         result?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -2818,9 +2831,8 @@ mod tests {
         agent_sets.extend(modeled("default-agent", "projected"));
         let granted = holds(client_did.clone(), client_sets.clone()).await
             && holds(agent.clone(), agent_sets).await;
-        for set in &client_sets {
-            set.revoke(&runtime, &client_did).await.unwrap();
-        }
+        // The init User owns NAC, whose admin native never revokes; the
+        // default Agent's direct grants are what revocation withdraws.
         for set in &agent_direct {
             set.revoke(&runtime, &agent).await.unwrap();
         }
@@ -2864,9 +2876,10 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        assert!(
-            !node.nac_manager().is_admin(&client_did).await.unwrap(),
-            "revocation must survive reinit"
+        assert_eq!(
+            node.nac_manager().owner().await.as_ref(),
+            Some(&client_did),
+            "the init User keeps owning NAC across reinit"
         );
         for (permission, held) in after_revoke {
             assert_eq!(

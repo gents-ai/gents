@@ -362,7 +362,13 @@ async fn test_db_at_with_tool_policy(
         )
         .await?;
         let key = store_key(&path, &data_path).await?;
-        fresh.initialize(&key, Some(&did)).await?;
+        let owner_path = path.join("owner.key");
+        let owner =
+            tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(owner_path, None))
+                .await??;
+        fresh
+            .initialize(&key, Some(&did), &owner.did().parse()?)
+            .await?;
         key
     };
     let (node, endpoint) = start(
