@@ -353,7 +353,11 @@ pub(in crate::runtime::agent::runtime) async fn build_slot_surface_fenced(
     mut tool_surface: Arc<ToolSurface>,
 ) -> Result<PreparedSlotSurface> {
     let _guard = if needs_publication_fence(tool_surface.has_plugin_tools()) {
-        surface::publication_guard(runtime.plugin_home()).await?
+        surface::pinned_publication_guard_until(
+            runtime.plugin_store_pin(),
+            tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        )
+        .await?
     } else {
         None
     };

@@ -15,13 +15,6 @@ pub enum StoreAbsent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-enum Mode {
-    Read,
-    Bootstrap,
-    Writer,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 enum Outcome {
     Acquired,
     Absent,
@@ -40,8 +33,8 @@ struct Decision {
     outcome: Outcome,
     creates: bool,
 }
-fn acquire(mode: Mode, o: Observation) -> Decision {
-    if !o.same_home || (mode == Mode::Read && (!o.store_present || !o.lock_present)) {
+fn acquire(o: Observation) -> Decision {
+    if !o.same_home || !o.store_present || !o.lock_present {
         Decision {
             outcome: Outcome::Absent,
             creates: false,
@@ -53,7 +46,7 @@ fn acquire(mode: Mode, o: Observation) -> Decision {
             } else {
                 Outcome::Acquired
             },
-            creates: mode != Mode::Read && (!o.store_present || !o.lock_present),
+            creates: false,
         }
     }
 }
@@ -68,12 +61,28 @@ pub struct StoreReadIdentity {
     lock_identity: same_file::Handle,
 }
 
+fn admit(observation: Observation) -> std::result::Result<(), PublishedPluginReadError> {
+    match acquire(observation).outcome {
+        Outcome::Acquired => Ok(()),
+        Outcome::Busy => Err(PublishedPluginReadError::Busy),
+        Outcome::Absent if !observation.same_home => Err(StoreAbsent::Replaced.into()),
+        Outcome::Absent => Err(StoreAbsent::Missing.into()),
+    }
+}
+
 fn absent_or_io(error: std::io::Error) -> PublishedPluginReadError {
     if matches!(
         error.kind(),
         std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
     ) {
-        StoreAbsent::Missing.into()
+        admit(Observation {
+            same_home: true,
+            store_present: false,
+            lock_present: false,
+            contended: false,
+        })
+        .err()
+        .expect("missing read is absent")
     } else {
         PublishedPluginReadError::Read(error.into())
     }
@@ -117,27 +126,48 @@ impl StoreReadIdentity {
         Ok(identity)
     }
 
-    /// Read-only identity checks cannot recreate a retired/replaced pathname.
-    pub fn validate(&self) -> std::result::Result<(), PublishedPluginReadError> {
-        let current = same_file::Handle::from_path(&self.home).map_err(absent_or_io)?;
-        let pinned = same_file::Handle::from_file(self.home_dir.try_clone().map_err(absent_or_io)?)
-            .map_err(absent_or_io)?;
-        if current != pinned {
-            return Err(StoreAbsent::Replaced.into());
+    /// Observe native state without deciding admission. The same decision
+    /// replayed against Lean consumes this observation in validate/try_shared.
+    fn observation(
+        &self,
+        contended: bool,
+    ) -> std::result::Result<Observation, PublishedPluginReadError> {
+        fn matches(
+            path: &Path,
+            pinned: &same_file::Handle,
+        ) -> std::result::Result<(bool, bool), PublishedPluginReadError> {
+            match same_file::Handle::from_path(path) {
+                Ok(current) => Ok((true, current == *pinned)),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                    ) =>
+                {
+                    Ok((false, true))
+                }
+                Err(error) => Err(absent_or_io(error)),
+            }
         }
-        let current =
-            same_file::Handle::from_path(plugins_root(&self.home)).map_err(absent_or_io)?;
-        let pinned =
+        let home_pin =
+            same_file::Handle::from_file(self.home_dir.try_clone().map_err(absent_or_io)?)
+                .map_err(absent_or_io)?;
+        let store_pin =
             same_file::Handle::from_file(self.store_dir.try_clone().map_err(absent_or_io)?)
                 .map_err(absent_or_io)?;
-        if current != pinned {
-            return Err(StoreAbsent::Replaced.into());
-        }
-        let current = same_file::Handle::from_path(lock_path(&self.home)).map_err(absent_or_io)?;
-        if current != self.lock_identity {
-            return Err(StoreAbsent::Replaced.into());
-        }
-        Ok(())
+        let (home_present, home_same) = matches(&self.home, &home_pin)?;
+        let (store_present, store_same) = matches(&plugins_root(&self.home), &store_pin)?;
+        let (lock_present, lock_same) = matches(&lock_path(&self.home), &self.lock_identity)?;
+        Ok(Observation {
+            same_home: home_same && store_same && lock_same,
+            store_present: home_present && store_present,
+            lock_present,
+            contended,
+        })
+    }
+
+    pub fn validate(&self) -> std::result::Result<(), PublishedPluginReadError> {
+        admit(self.observation(false)?)
     }
 
     pub fn try_shared(&self) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
@@ -152,21 +182,8 @@ impl StoreReadIdentity {
             return Err(StoreAbsent::Replaced.into());
         }
         let lock = gents_store::local::file_lock::FileLock::try_shared(file);
-        self.validate()?;
         let contended = matches!(&lock, Err(std::fs::TryLockError::WouldBlock));
-        let decision = acquire(
-            Mode::Read,
-            Observation {
-                same_home: true,
-                store_present: true,
-                lock_present: true,
-                contended,
-            },
-        );
-        debug_assert!(!decision.creates);
-        if decision.outcome == Outcome::Busy {
-            return Err(PublishedPluginReadError::Busy);
-        }
+        admit(self.observation(contended)?)?;
         let lock = lock.map_err(|error| PublishedPluginReadError::Read(error.into()))?;
         Ok(StoreGuard {
             home: self.home.clone(),
@@ -175,36 +192,69 @@ impl StoreReadIdentity {
     }
 }
 
-/// Capturing a failed pin is intentional: a runtime cannot later adopt a new
-/// home because the old one happened to be absent at its creation.
+/// The original home handle is retained even before a plugin store exists.
+/// Only a never-successful store capture can retry, and only in that same home.
 #[derive(Debug, Clone)]
-pub struct StoreReadPin(std::result::Result<Arc<StoreReadIdentity>, Arc<PublishedPluginReadError>>);
+pub struct StoreReadPin(Arc<std::sync::Mutex<PinState>>);
+#[derive(Debug)]
+struct PinState {
+    home: PathBuf,
+    home_identity: Option<same_file::Handle>,
+    store: Option<Arc<StoreReadIdentity>>,
+}
 impl StoreReadPin {
     pub fn capture(home: &Path) -> Self {
-        Self(
-            StoreReadIdentity::capture(home)
-                .map(Arc::new)
-                .map_err(Arc::new),
-        )
+        let pin = Self(Arc::new(std::sync::Mutex::new(PinState {
+            home: home.to_owned(),
+            home_identity: same_file::Handle::from_path(home).ok(),
+            store: None,
+        })));
+        let _ = pin.identity();
+        pin
+    }
+    fn identity(&self) -> std::result::Result<Arc<StoreReadIdentity>, PublishedPluginReadError> {
+        let mut state = self.0.lock().map_err(|_| {
+            PublishedPluginReadError::Read(anyhow::anyhow!("store identity mutex poisoned"))
+        })?;
+        if let Some(identity) = &state.store {
+            return Ok(identity.clone());
+        }
+        let current = same_file::Handle::from_path(&state.home).map_err(absent_or_io)?;
+        if state
+            .home_identity
+            .as_ref()
+            .is_some_and(|home| *home != current)
+        {
+            return Err(StoreAbsent::Replaced.into());
+        }
+        if state.home_identity.is_none() {
+            state.home_identity = Some(current);
+        }
+        let identity = Arc::new(StoreReadIdentity::capture(&state.home)?);
+        let captured_home =
+            same_file::Handle::from_file(identity.home_dir.try_clone().map_err(absent_or_io)?)
+                .map_err(absent_or_io)?;
+        if state
+            .home_identity
+            .as_ref()
+            .is_some_and(|home| *home != captured_home)
+        {
+            return Err(StoreAbsent::Replaced.into());
+        }
+        state.store = Some(identity.clone());
+        Ok(identity)
+    }
+    pub fn is_captured(&self) -> bool {
+        self.0
+            .lock()
+            .map(|state| state.store.is_some())
+            .unwrap_or(false)
     }
     pub fn validate(&self) -> std::result::Result<(), PublishedPluginReadError> {
-        match &self.0 {
-            Ok(identity) => identity.validate(),
-            Err(error) => match error.as_ref() {
-                PublishedPluginReadError::StoreAbsent(reason) => Err((*reason).into()),
-                _ => Err(PublishedPluginReadError::Pinned(error.clone())),
-            },
-        }
+        self.identity()?.validate()
     }
-
     pub fn try_shared(&self) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
-        match &self.0 {
-            Ok(identity) => identity.try_shared(),
-            Err(error) => match error.as_ref() {
-                PublishedPluginReadError::StoreAbsent(reason) => Err((*reason).into()),
-                _ => Err(PublishedPluginReadError::Pinned(error.clone())),
-            },
-        }
+        self.identity()?.try_shared()
     }
 }
 

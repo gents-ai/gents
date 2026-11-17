@@ -26,7 +26,8 @@ fn absent_read_creates_neither_directory_nor_lock() {
 #[test]
 fn bootstrap_then_read_and_both_writer_contentions() {
     let home = tempfile::tempdir().unwrap();
-    let bootstrap = bootstrap_store(home.path()).unwrap();
+    bootstrap_store(home.path()).unwrap();
+    let bootstrap = try_lock_store(home.path()).unwrap();
     assert!(matches!(
         try_lock_store_shared(home.path()),
         Err(PublishedPluginReadError::Busy)
@@ -45,7 +46,7 @@ fn pinned_read_refuses_a_replaced_home_or_lock_without_writing() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     std::fs::create_dir(&home).unwrap();
-    drop(bootstrap_store(&home).unwrap());
+    bootstrap_store(&home).unwrap();
     let pin = StoreReadIdentity::capture(&home).unwrap();
     std::fs::rename(&home, root.path().join("old-home")).unwrap();
     std::fs::create_dir(&home).unwrap();
@@ -55,7 +56,7 @@ fn pinned_read_refuses_a_replaced_home_or_lock_without_writing() {
     ));
     assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
     // Even an independently bootstrapped new home cannot be adopted by pin.
-    drop(bootstrap_store(&home).unwrap());
+    bootstrap_store(&home).unwrap();
     assert!(matches!(
         pin.try_shared(),
         Err(PublishedPluginReadError::StoreAbsent(StoreAbsent::Replaced))
@@ -70,12 +71,91 @@ fn pinned_read_refuses_a_replaced_home_or_lock_without_writing() {
 }
 
 #[test]
-fn a_missing_pin_never_adopts_a_later_bootstrap() {
+fn a_missing_store_pin_recaptures_after_bootstrap_in_the_original_home_only() {
     let home = tempfile::tempdir().unwrap();
     let pin = StoreReadPin::capture(home.path());
-    drop(bootstrap_store(home.path()).unwrap());
-    let error = pin.try_shared().err().unwrap();
-    assert!(PublishedPluginReadError::error_chain_is_absent(&error));
+    assert!(matches!(
+        pin.try_shared(),
+        Err(PublishedPluginReadError::StoreAbsent(StoreAbsent::Missing))
+    ));
+    bootstrap_store(home.path()).unwrap();
+    assert!(pin.try_shared().is_ok());
+}
+
+#[test]
+fn an_uncaptured_store_cannot_adopt_a_replaced_existing_home() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    let pin = StoreReadPin::capture(&home);
+    std::fs::rename(&home, root.path().join("old")).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    bootstrap_store(&home).unwrap();
+    assert!(matches!(
+        pin.try_shared(),
+        Err(PublishedPluginReadError::StoreAbsent(StoreAbsent::Replaced))
+    ));
+}
+
+#[test]
+fn capture_pins_an_existing_store_before_the_first_read() {
+    let home = tempfile::tempdir().unwrap();
+    bootstrap_store(home.path()).unwrap();
+    let pin = StoreReadPin::capture(home.path());
+    assert!(pin.is_captured());
+    std::fs::rename(home.path().join("plugins"), home.path().join("retired")).unwrap();
+    bootstrap_store(home.path()).unwrap();
+    assert!(matches!(
+        pin.try_shared(),
+        Err(PublishedPluginReadError::StoreAbsent(StoreAbsent::Replaced))
+    ));
+}
+
+#[test]
+fn an_initially_absent_home_can_capture_its_first_store_but_not_a_later_one() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let pin = StoreReadPin::capture(&home);
+    assert!(!pin.is_captured());
+    assert!(matches!(
+        pin.try_shared(),
+        Err(PublishedPluginReadError::StoreAbsent(StoreAbsent::Missing))
+    ));
+    assert!(!home.exists());
+    bootstrap_store(&home).unwrap();
+    assert!(pin.try_shared().is_ok());
+    std::fs::rename(&home, root.path().join("retired")).unwrap();
+    bootstrap_store(&home).unwrap();
+    assert!(matches!(
+        pin.try_shared(),
+        Err(PublishedPluginReadError::StoreAbsent(StoreAbsent::Replaced))
+    ));
+}
+
+#[test]
+fn bootstrap_does_not_contend_with_existing_shared_readers() {
+    let home = tempfile::tempdir().unwrap();
+    bootstrap_store(home.path()).unwrap();
+    let first = try_lock_store_shared(home.path()).unwrap();
+    bootstrap_store(home.path()).unwrap();
+    let second = try_lock_store_shared(home.path()).unwrap();
+    assert!(try_lock_store(home.path()).is_err());
+    drop((first, second));
+    assert!(try_lock_store(home.path()).is_ok());
+}
+
+#[test]
+fn a_captured_removed_home_is_missing_and_never_recreated() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    bootstrap_store(&home).unwrap();
+    let pin = StoreReadPin::capture(&home);
+    std::fs::remove_dir_all(&home).unwrap();
+    assert!(matches!(
+        pin.try_shared(),
+        Err(PublishedPluginReadError::StoreAbsent(StoreAbsent::Missing))
+    ));
+    assert!(!home.exists());
 }
 
 #[test]
@@ -84,17 +164,15 @@ fn acquisition_decisions_replay_the_lean_owner() {
     use std::process::{Command, Stdio};
     let mut inputs = Vec::new();
     let mut actual = Vec::new();
-    for mode in [Mode::Read, Mode::Bootstrap, Mode::Writer] {
-        for bits in 0..16 {
-            let observation = Observation {
-                same_home: bits & 1 != 0,
-                store_present: bits & 2 != 0,
-                lock_present: bits & 4 != 0,
-                contended: bits & 8 != 0,
-            };
-            inputs.push(serde_json::json!({"mode":mode,"observation":observation}));
-            actual.push(acquire(mode, observation));
-        }
+    for bits in 0..16 {
+        let observation = Observation {
+            same_home: bits & 1 != 0,
+            store_present: bits & 2 != 0,
+            lock_present: bits & 4 != 0,
+            contended: bits & 8 != 0,
+        };
+        inputs.push(serde_json::json!({"observation":observation}));
+        actual.push(acquire(observation));
     }
     let dir = gents_lean_contract::proofs_dir().unwrap();
     gents_lean_contract::run_lake_build(&dir).unwrap();
@@ -122,7 +200,7 @@ fn pinned_reader_refuses_a_replaced_store_and_does_not_recreate_a_removed_home()
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     std::fs::create_dir(&home).unwrap();
-    drop(bootstrap_store(&home).unwrap());
+    bootstrap_store(&home).unwrap();
     let pin = StoreReadIdentity::capture(&home).unwrap();
     std::fs::rename(home.join("plugins"), home.join("retired-plugins")).unwrap();
     std::fs::create_dir(home.join("plugins")).unwrap();
@@ -143,7 +221,7 @@ fn pinned_reader_refuses_a_replaced_store_and_does_not_recreate_a_removed_home()
 fn existing_shared_lock_needs_no_write_permission() {
     use std::os::unix::fs::PermissionsExt;
     let home = tempfile::tempdir().unwrap();
-    drop(bootstrap_store(home.path()).unwrap());
+    bootstrap_store(home.path()).unwrap();
     let lock = lock_path(home.path());
     std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o400)).unwrap();
     let pin = StoreReadIdentity::capture(home.path()).unwrap();

@@ -2,9 +2,8 @@ import Proofs.Store.PluginStoreHome
 import Lean
 namespace Conformance.PluginStoreHome
 open Lean _root_.PluginStoreHome
-deriving instance FromJson, ToJson for Mode, Outcome, Observation, Decision
+deriving instance FromJson, ToJson for Outcome, Observation, Decision
 structure Input where
-  mode : Mode
   observation : Observation
   deriving FromJson, ToJson
 end Conformance.PluginStoreHome
@@ -15,4 +14,4 @@ def main : IO Unit := do
   | .error reason => throw (IO.userError reason)
   | .ok inputs => IO.println ((Lean.toJson
       ((inputs : List Conformance.PluginStoreHome.Input).map fun i =>
-        PluginStoreHome.acquire i.mode i.observation)).compress)
+        PluginStoreHome.acquire i.observation)).compress)

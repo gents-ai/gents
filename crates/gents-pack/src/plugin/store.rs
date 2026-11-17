@@ -307,10 +307,7 @@ impl StoreGuard {
 
 /// The shared install lock and exclusive release lock prevent deleting bytes
 /// after a concurrent install writes them but before its record is visible.
-pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
-    if !exclusive {
-        return lock_store_shared_existing(home);
-    }
+pub fn lock_store(home: &Path) -> Result<StoreGuard> {
     let path = plugins_root(home).join(".store.lock");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -331,27 +328,24 @@ pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
     })
 }
 
-#[expect(
-    clippy::disallowed_methods,
-    reason = "synchronous caller waits for an existing advisory read lease"
-)]
-fn lock_store_shared_existing(home: &Path) -> Result<StoreGuard> {
-    let identity = StoreReadIdentity::capture(home)?;
-    loop {
-        match identity.try_shared() {
-            Ok(guard) => return Ok(guard),
-            Err(PublishedPluginReadError::Busy) => {
-                std::thread::sleep(std::time::Duration::from_millis(20))
-            }
-            Err(error) => return Err(error.into()),
-        }
-    }
-}
-
-/// Explicit cold-start acquisition. It creates the store just as a writer
-/// does, before a runtime pins a noncreating read identity.
-pub fn bootstrap_store(home: &Path) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
-    try_lock_store_writer(home)
+/// Explicit cold-start setup of the directory/lock inode only; projection
+/// subsequently takes its ordinary shared read lease.
+pub fn bootstrap_store(home: &Path) -> std::result::Result<(), PublishedPluginReadError> {
+    let path = lock_path(home);
+    std::fs::create_dir_all(plugins_root(home))
+        .map_err(|error| PublishedPluginReadError::Read(error.into()))?;
+    // Bootstrap publishes only the stable lock inode, never plugin records.
+    // Do not contend with existing readers: projection takes its usual shared
+    // lease after this handle is closed. Writers keep their exclusive lease.
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|error| PublishedPluginReadError::Read(error.into()))?;
+    drop(file);
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -362,8 +356,6 @@ pub enum PublishedPluginReadError {
     StoreAbsent(#[from] StoreAbsent),
     #[error("reading the published plugin store")]
     Read(#[source] anyhow::Error),
-    #[error("capturing the runtime's plugin store identity")]
-    Pinned(#[source] std::sync::Arc<PublishedPluginReadError>),
 }
 
 impl PublishedPluginReadError {

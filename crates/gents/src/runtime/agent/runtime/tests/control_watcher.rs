@@ -1001,7 +1001,6 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     let node = fixture.node.clone();
     let identity = fixture.runtime.clone();
     let plugin_home = tempfile::tempdir().unwrap();
-    drop(gents_pack::plugin::store::bootstrap_store(plugin_home.path()).unwrap());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
@@ -1115,7 +1114,6 @@ async fn control_watcher_wake_follows_the_lean_tool_admission_model() {
         let node = fixture.node.clone();
         let identity = fixture.runtime.clone();
         let plugin_home = tempfile::tempdir().unwrap();
-        drop(gents_pack::plugin::store::bootstrap_store(plugin_home.path()).unwrap());
         let agent = crate::Gents::from_default_agent_documents(
             node.clone(),
             identity,
@@ -1384,7 +1382,7 @@ async fn control_watcher_stops_without_proposing_into_a_replaced_plugin_home() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     std::fs::create_dir(&home).unwrap();
-    drop(gents_pack::plugin::store::bootstrap_store(&home).unwrap());
+    gents_pack::plugin::store::bootstrap_store(&home).unwrap();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         fixture.runtime.clone(),
@@ -1432,4 +1430,52 @@ async fn control_watcher_stops_without_proposing_into_a_replaced_plugin_home() {
         "no new-generation proposal"
     );
     assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn control_watcher_plugin_free_startup_does_not_bootstrap_a_store() {
+    for existing_home in [false, true] {
+        let fixture = plugin_runtime_fixture(
+            "control-watcher-unbootstrapped-startup",
+            "backend-unbootstrapped-startup",
+            "http://127.0.0.1:8118/v1",
+        )
+        .await
+        .unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        if existing_home {
+            std::fs::create_dir(&home).unwrap();
+        }
+        let agent = crate::Gents::from_default_agent_documents(
+            fixture.node.clone(),
+            fixture.runtime.clone(),
+            crate::runtime::agent::DocumentRuntimeOptions {
+                backend_admission: Some(fixture.admission()),
+                tool_ceiling: ToolCeiling::meta_only(),
+                plugin_home: Some(home.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let context = agent.document_runtime_context().unwrap();
+        let runtime = test_tool_runtime(&fixture.node, agent.node_did(), context);
+        let status = RuntimeStatusHandle::new(fixture.node.clone(), agent.node_did());
+        status
+            .initialize_startup(agent.default_agent_did())
+            .await
+            .unwrap();
+        let (_, snapshot) = super::super::startup::resolve_startup_until(
+            &agent,
+            &runtime,
+            &status,
+            tokio::time::Instant::now() + PROPOSAL_TIMEOUT,
+        )
+        .await
+        .expect("plugin-free startup does not require a store");
+        assert!(snapshot.agents.contains_key(agent.default_agent_did()));
+        assert!(!home.join("plugins").exists());
+        assert_eq!(home.exists(), existing_home);
+    }
 }

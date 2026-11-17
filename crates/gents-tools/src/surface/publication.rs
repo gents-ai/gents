@@ -36,13 +36,19 @@ pub async fn publication_guard_until(
 pub async fn pinned_publication_guard_until(
     pin: Option<&gents_pack::plugin::store::StoreReadPin>,
     deadline: Instant,
-) -> Result<Option<gents_pack::plugin::store::StoreGuard>> {
+) -> std::result::Result<Option<gents_pack::plugin::store::StoreGuard>, PublishedPluginReadError> {
     let Some(pin) = pin else {
         return Ok(None);
     };
-    wait(deadline, || pin.try_shared().map_err(Into::into))
-        .await
-        .map(Some)
+    loop {
+        match pin.try_shared() {
+            Ok(guard) => return Ok(Some(guard)),
+            Err(PublishedPluginReadError::Busy) if Instant::now() < deadline => {
+                tokio::time::sleep_until(deadline.min(Instant::now() + PUBLICATION_POLL)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn may_retry(busy: bool, budget_available: bool) -> bool {
@@ -90,7 +96,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let home = root.path().join("home");
         std::fs::create_dir(&home).unwrap();
-        drop(gents_pack::plugin::store::bootstrap_store(&home).unwrap());
+        gents_pack::plugin::store::bootstrap_store(&home).unwrap();
         let pin = gents_pack::plugin::store::StoreReadPin::capture(&home);
         assert!(pinned_publication_guard_until(Some(&pin), Instant::now())
             .await
@@ -101,12 +107,7 @@ mod tests {
             .await
             .err()
             .unwrap();
-        assert!(PublishedPluginReadError::error_chain_is_absent(
-            error.as_ref()
-        ));
-        assert!(!PublishedPluginReadError::error_chain_is_busy(
-            error.as_ref()
-        ));
+        assert!(matches!(error, PublishedPluginReadError::StoreAbsent(_)));
         assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
     }
 
