@@ -59,7 +59,7 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
             "--display-name",
             "Research Assistant",
             "--system-prompt",
-            "Research the requested topic and write a concise evidence-backed report.",
+            "Use the config tool to configure yourself and write a concise report.",
             "--preset",
             "write",
             "--root",
