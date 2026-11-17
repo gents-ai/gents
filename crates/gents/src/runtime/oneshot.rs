@@ -66,11 +66,11 @@ pub async fn run_openai_oneshot_with_tools_admitted(
         )
         .await?;
     let allowed_targets = surface::resolve_agent_target_descriptions(&tool_surface);
-    let prompt_builder = LayeredPromptBuilder::new(agent, &tool_surface, &allowed_targets);
     let output_obligations = tool_surface.output_obligations();
 
     let lsp_pool = tool_runtime.lsp_pool.clone();
     let mut tools = tool_surface.build_tools(&tool_runtime).await?;
+    let prompt_builder = LayeredPromptBuilder::new(agent, &tool_surface, &allowed_targets, &tools);
     tools.extend(extra_tools);
     let tools = Arc::new(tools);
     let background_tool_registry = BackgroundToolRegistry::from_config(

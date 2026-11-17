@@ -3536,3 +3536,96 @@ fn hidden_tool_names_change_presentation_not_effective_grants_or_ceiling() {
         .any(|warning| warning.code == "hidden_tool_unavailable"));
     assert!(narrowed.tool_names.contains(&"script".into()));
 }
+
+#[test]
+fn hidden_invocation_selection_matches_tool_surface_names() {
+    // Check positive AND negative membership across a union of distinct selections.
+    // No custom factory is supplied: those are process-owned, not Tools selections.
+    let root = tempfile::tempdir().unwrap();
+    let ceiling = ToolCeiling::readwrite(root.path()).with_cli_tool(cli_tool(
+        "custom_cli",
+        "/usr/bin/true",
+        "probe",
+    ));
+    let surfaces = vec![serde_json::from_value::<gents_documents::DatastoreToolSurfaceDocument>(serde_json::json!({
+        "surface_id":"parity-data", "node_did":"did:test:test", "entries":[
+            {"tool_name":"record_example", "collection":"Example", "description":"Record", "fields":[{"name":"name","required":true}]},
+            {"kind":"query", "tool_name":"find_example", "collection":"Example", "description":"Find", "fields":["name"], "filter_fields":[]}
+        ]
+    })).unwrap()];
+    let fixtures = [
+        serde_json::json!({"datastore":{"datastore_tool_surface_ids":["parity-data"]}}),
+        serde_json::json!({}),
+        serde_json::json!({"built_ins":{"enable_session_history_tool":false,"enable_context_budget":false,"enable_goal_tools":false}}),
+        serde_json::json!({"host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"ReadOnly"}}}),
+        serde_json::json!({"host":{"files":{"mode":"ReadWrite"},"bash":{"mode":"Unrestricted","background_enabled":true},"cli":[{"name":"custom_cli","binary_path":"/usr/bin/true"}]}}),
+        serde_json::json!({"built_ins":{"enable_schema_tool":true,"enable_p2p_tool":true,"enable_goal_tools":true,"enable_goal_creation":true},"self_config":{"enable_self_config":true},"datastore":{"enable_defra_query":true,"write_collections":["Example"]},"agents":{"enabled":true}}),
+        serde_json::json!({"integrations":{"plugins":[{"plugin":"script/script","tool_calls":true},{"plugin":"pack/worker"}]}}),
+        serde_json::json!({"remote":{"services":[{"mcp_service_id":"discovery","tool_names":["search"]},{"mcp_service_id":"flat","style":"Flat","tool_names":["fetch"],"background_tool_names":["fetch"]}]}}),
+    ];
+    let mut cases = Vec::new();
+    let mut universe = std::collections::BTreeSet::from([
+        "unselected".to_string(),
+        "agent_new".into(),
+        "load_skill".into(),
+    ]);
+    for fixture in fixtures {
+        let mut document = tools_document(fixture);
+        document.host.get_or_insert_with(Default::default).root =
+            Some(root.path().to_string_lossy().into_owned());
+        let merged = gents_documents::merge_datastore_tool_surfaces(&document, &surfaces).unwrap();
+        let config = AgentToolSurfaceConfig::from_tools_document_with_surfaces(
+            "parity",
+            &document,
+            &surfaces,
+            &ceiling,
+            Vec::new(),
+        )
+        .unwrap();
+        let surface =
+            config.resolve_with_agent_tools_for_mcp_presence(true, config.agent_tools().clone());
+        let names = surface.tool_names();
+        universe.extend(names.iter().cloned());
+        cases.push((document, merged, names));
+    }
+    for (document, merged, names) in cases {
+        for name in &universe {
+            assert_eq!(
+                document.selects_invocation(name, &merged),
+                names.contains(name),
+                "name={name} Tools={document:?} surface={names:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn hidden_runtime_script_unresolved_or_ceiling_removed_advertises_repair_tools() {
+    let (_db, runtime) = selected_surface_runtime().await;
+    let document = tools_document(serde_json::json!({
+        "built_ins":{"enable_context_budget":true},
+        "hidden_tool_names":["context_budget"],
+        "integrations":{"plugins":[{"plugin":"not_installed/script","tool_calls":true}]}
+    }));
+    for remove_script in [false, true] {
+        let mut policy = ToolCeiling::meta_only().policy().clone();
+        if remove_script {
+            policy.plugin_tools = EndpointScope::none();
+        }
+        let config = AgentToolSurfaceConfig::from_tools_document(
+            "recovery",
+            &document,
+            &ToolCeiling::meta_only().with_policy(policy),
+            Vec::new(),
+        )
+        .unwrap();
+        let surface = config.resolve_with_agent_tools_for_mcp_presence(false, Default::default());
+        let tools = surface
+            .build_tools(&runtime)
+            .await
+            .expect("presentation cannot prevent startup");
+        assert!(tools.iter().any(|tool| tool.name() == "context_budget"));
+        assert!(tools.iter().all(|tool| !tool.hidden()));
+        assert!(!tools.iter().any(|tool| tool.name() == "script"));
+    }
+}

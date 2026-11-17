@@ -27,7 +27,8 @@ impl Tools {
         Ok(())
     }
 
-    fn selects_invocation(&self, name: &str, merged: &crate::MergedSurfaceTools) -> bool {
+    /// Whether this exact invocation is selected before runtime ceilings and availability.
+    pub fn selects_invocation(&self, name: &str, merged: &crate::MergedSurfaceTools) -> bool {
         let host = self.host.as_ref();
         let files = host
             .and_then(|host| host.files.as_ref())

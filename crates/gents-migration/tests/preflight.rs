@@ -213,6 +213,14 @@ async fn hidden_tool_names_append_preserves_existing_field_ids() {
             field.id
         );
     }
+    let fresh = fresh_node().await;
+    fresh.add_collection(schemas::TOOLS).await.unwrap();
+    let fresh_tools = fresh.get_collection("Tools").unwrap().unwrap();
+    assert_eq!(
+        serde_json::to_value(&after.fields).unwrap(),
+        serde_json::to_value(&fresh_tools.fields).unwrap()
+    );
+    fresh.shutdown().await.unwrap();
     node.shutdown().await.unwrap();
 }
 
