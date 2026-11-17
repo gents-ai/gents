@@ -194,6 +194,58 @@ pub const CORRUPT_TOOL_ARGS_589: &str = "{\"raw_schema\": false, \
      <function=describe_tool>\", \"raw_schema\": false, \
      \"service_id\": \"observability-mcp\", \"tool_name\": \"list_hosts\"}";
 
+/// Document ACP's own answer for `actor` on one document of `collection`,
+/// asked of the policy directly. A read as `actor` would also carry any node
+/// `bypass-dac` it holds: the hosting node key and a native admin read every
+/// document (Lean `Identity.Household.readObserved`, gents#3747), so a fixture
+/// states what the relationships grant through this check and what the
+/// hosting runtime observes through its own read.
+pub async fn document_acp_allows(
+    node: &defra_node::Node,
+    actor: &str,
+    collection: &str,
+    doc_id: &str,
+    permission: defra_node::DocumentPermission,
+) -> bool {
+    let binding = node
+        .get_collection(collection)
+        .unwrap_or_else(|error| panic!("collection {collection}: {error}"))
+        .unwrap_or_else(|| panic!("collection {collection} is not defined"))
+        .policy
+        .unwrap_or_else(|| panic!("collection {collection} has no document policy"));
+    node.document_acp()
+        .check_doc_access(
+            &defra_node::AcpIdentity::Authenticated(
+                actor
+                    .parse()
+                    .unwrap_or_else(|error| panic!("actor {actor}: {error}")),
+            ),
+            permission,
+            &binding.id,
+            &binding.resource_name,
+            doc_id,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("document ACP check for {actor} on {doc_id}: {error}"))
+}
+
+/// Document ACP's read answer for `actor` (see [`document_acp_allows`]).
+pub async fn document_acp_reads(
+    node: &defra_node::Node,
+    actor: &str,
+    collection: &str,
+    doc_id: &str,
+) -> bool {
+    document_acp_allows(
+        node,
+        actor,
+        collection,
+        doc_id,
+        defra_node::DocumentPermission::Read,
+    )
+    .await
+}
+
 /// The verified signer of `cid`, read under document ACP as `reader`: a
 /// private row's block is visible only to an actor its policy admits, so an
 /// anonymous node read of it fails closed.

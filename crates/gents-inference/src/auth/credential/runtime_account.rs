@@ -328,10 +328,21 @@ mod tests {
         user_access
             .delete_actor_relationship("OAuthCredential", &doc, "runtime_writer", &runtime_did)
             .await?;
+        // Document ACP no longer grants the runtime the credential; the
+        // hosting node key still reads it past document ACP (gents#3747).
+        assert!(
+            !gents_store::test_support::document_acp_reads(
+                &db.node,
+                runtime.did(),
+                "OAuthCredential",
+                &doc
+            )
+            .await
+        );
         let visible = admin
             .execute("{ OAuthCredential { _docID access_token } }")
             .await?;
-        assert!(visible["data"]["OAuthCredential"]
+        assert!(!visible["data"]["OAuthCredential"]
             .as_array()
             .unwrap()
             .is_empty());
@@ -349,8 +360,10 @@ mod tests {
             empty.is_ok(),
             case("visible-empty")["allowed"].as_bool().unwrap()
         );
-        assert_eq!(empty?, None);
-        let unavailable = agent
+        // The Agent's transaction reads the runtime default as the hosting
+        // runtime, which still reads the credential past document ACP.
+        assert_eq!(empty?.as_deref(), Some("named"));
+        let still_served = agent
             .transact_readonly("test.reset_account.revoked", |txn| {
                 Box::pin(async move {
                     super::runtime_oauth_account_served_before(
@@ -366,7 +379,7 @@ mod tests {
                 })
             })
             .await?;
-        assert!(!unavailable);
+        assert!(still_served);
         Ok(())
     }
 }

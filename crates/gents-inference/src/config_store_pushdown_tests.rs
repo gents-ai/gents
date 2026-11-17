@@ -89,8 +89,7 @@ async fn set_node_hop_cap(owner: &ConfigAccess, node_did: &str, cap: u32) -> any
 }
 
 #[tokio::test]
-async fn agent_transaction_reads_hidden_node_cap_as_runtime_and_fails_closed() -> anyhow::Result<()>
-{
+async fn agent_transaction_reads_the_node_cap_as_the_hosting_runtime() -> anyhow::Result<()> {
     let (db, user, user_access, binding) = crate::test_support::signed_test_node(
         "runtime-hop-cap",
         gents_store::node_extension::Extensions::none(),
@@ -134,7 +133,14 @@ async fn agent_transaction_reads_hidden_node_cap_as_runtime_and_fails_closed() -
             &identity::Did::new(runtime.did())?,
         )
         .await?;
-    assert_eq!(observe(runtime.did().to_owned()).await?, None);
+    // Document ACP withdraws the runtime's read of its Node; the hosting node
+    // key still reads the cap past document ACP (gents#3747), so the cap is no
+    // longer hidden from the runtime by revoking `runtime_reader`.
+    assert!(
+        !gents_store::test_support::document_acp_reads(&db.node, runtime.did(), "Node", node_doc)
+            .await
+    );
+    assert_eq!(observe(runtime.did().to_owned()).await?, Some(Some(1)));
     Ok(())
 }
 

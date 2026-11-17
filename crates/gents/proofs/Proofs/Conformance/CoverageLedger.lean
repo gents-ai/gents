@@ -2024,6 +2024,11 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "mailbox_access_claim_tool_context")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (boundaryCoverage
+      "family"
+      "plugin_job_dispatch_later_step_unreached"
+      "model-production-gap: the hosting node key reads its Node past document ACP (gents#3747), so no served fixture builds a Node the runtime cannot read; plugin_job_dispatch_later_step replays the readable caps.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
       "mailbox_access_sweep_actors"
