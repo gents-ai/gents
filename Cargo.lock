@@ -7331,6 +7331,8 @@ version = "1.0.0-rc2"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "gents",
