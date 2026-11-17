@@ -262,6 +262,11 @@ impl ToolSurface {
         &self.allowed_mcp_service_ids
     }
 
+    /// A plugin-free surface has no dependency on store publication.
+    pub fn has_plugin_tools(&self) -> bool {
+        !self.plugin_tools.is_empty()
+    }
+
     pub fn plugin_resolutions(
         &self,
     ) -> &[(

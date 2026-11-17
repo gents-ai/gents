@@ -147,6 +147,7 @@ pub(super) async fn run_control_watcher_with_timing(
                             } else {
                                 dirty = false;
                                 settle_deadline = None;
+                                clear_publication_epoch(&mut publication_deadline);
                                 sleep.as_mut().reset(tokio::time::Instant::now() + timing.idle_sleep);
                             }
                             continue;
@@ -167,11 +168,10 @@ pub(super) async fn run_control_watcher_with_timing(
                         .publish_error(&pending_summary)
                         .await;
                 }
-                if pending_visibility && publication_deadline.is_none_or(|deadline| tokio::time::Instant::now() < deadline)
+                if pending_visibility
                 {
                     dirty = true;
-                    publication_deadline.get_or_insert_with(|| tokio::time::Instant::now() + timing.publication_wait);
-                    sleep.as_mut().reset(publication_retry_at(publication_deadline, timing.settle_retry));
+                    sleep.as_mut().reset(tokio::time::Instant::now() + timing.settle_retry);
                     continue;
                 }
                 let phase_announced = phase_transition_pending;
@@ -257,6 +257,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     } else {
                         dirty = false;
                         settle_deadline = None;
+                        clear_publication_epoch(&mut publication_deadline);
                         sleep
                             .as_mut()
                             .reset(tokio::time::Instant::now() + timing.idle_sleep);
@@ -270,7 +271,7 @@ pub(super) async fn run_control_watcher_with_timing(
                 }
                 dirty = publication_busy;
                 settle_deadline = None;
-                if !publication_busy { publication_deadline = None; }
+                if !publication_busy { clear_publication_epoch(&mut publication_deadline); }
                 sleep.as_mut().reset(tokio::time::Instant::now() + if publication_busy { timing.settle_retry } else { timing.idle_sleep });
             }
             Some(()) = health_events_rx.recv() => {
@@ -284,7 +285,7 @@ pub(super) async fn run_control_watcher_with_timing(
                 runtime_status
                     .set_reconcile_phase(ReconcilePhase::Debouncing)
                     .await;
-                sleep.as_mut().reset((tokio::time::Instant::now() + timing.debounce).min(publication_deadline.unwrap_or_else(tokio::time::Instant::now)));
+                sleep.as_mut().reset(publication_debounce_at(publication_deadline, timing.debounce));
             }
             batch = subscription.recv() => {
                 let Some(batch) = batch else {
@@ -306,7 +307,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     runtime_status
                         .set_reconcile_phase(ReconcilePhase::Debouncing)
                         .await;
-                    sleep.as_mut().reset((tokio::time::Instant::now() + timing.debounce).min(publication_deadline.unwrap_or_else(tokio::time::Instant::now)));
+                    sleep.as_mut().reset(publication_debounce_at(publication_deadline, timing.debounce));
                     continue;
                 }
 
@@ -428,7 +429,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     } else {
                         timing.local_debounce
                     };
-                    sleep.as_mut().reset((tokio::time::Instant::now() + debounce).min(publication_deadline.unwrap_or_else(tokio::time::Instant::now)));
+                    sleep.as_mut().reset(publication_debounce_at(publication_deadline, debounce));
                 }
             }
         }
@@ -483,4 +484,32 @@ async fn publication_retry_cannot_sleep_past_the_epoch_budget_or_spin_after_expi
         publication_retry_at(Some(deadline), Duration::from_secs(5)),
         deadline + Duration::from_secs(5)
     );
+}
+
+fn clear_publication_epoch(deadline: &mut Option<tokio::time::Instant>) {
+    *deadline = None;
+}
+
+fn publication_debounce_at(
+    deadline: Option<tokio::time::Instant>,
+    debounce: Duration,
+) -> tokio::time::Instant {
+    let now = tokio::time::Instant::now();
+    (now + debounce).min(deadline.unwrap_or(now + debounce))
+}
+
+#[cfg(test)]
+#[tokio::test(start_paused = true)]
+async fn failed_reconcile_idle_clears_the_budget_before_the_next_event() {
+    let mut deadline = Some(tokio::time::Instant::now());
+    tokio::time::advance(Duration::from_secs(70)).await;
+    clear_publication_epoch(&mut deadline);
+    assert!(deadline.is_none());
+    let now = tokio::time::Instant::now();
+    let next = *deadline.get_or_insert_with(|| now + Duration::from_secs(60));
+    assert_eq!(
+        publication_debounce_at(deadline, Duration::from_millis(250)),
+        now + Duration::from_millis(250)
+    );
+    assert_eq!(next - now, Duration::from_secs(60));
 }

@@ -252,13 +252,24 @@ async fn resolve_startup(
             return Err(error);
         }
     };
-    let publication = gents_tools::surface::publication_guard(tool_runtime.plugin_home()).await?;
     let mut resolved_snapshot = match resolve_startup_snapshot(agent).await {
         Ok(snapshot) => snapshot,
         Err(error) => {
             runtime_status.publish_error(&format!("{error:#}")).await;
             return Err(error);
         }
+    };
+    // Resolve first: a plugin-free startup must not depend on the store.
+    // Busy selected plugins have a typed unavailable cause even when their
+    // surface could not be resolved on the first pass.
+    let requires_publication = resolved_snapshot.tool_surfaces.values().any(|surface| surface.has_plugin_tools())
+        || resolved_snapshot.unavailable_agents.values().any(|unavailable| unavailable.public_cause == Some(gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::PluginPublicationBusy));
+    let publication = if super::context::needs_publication_fence(requires_publication) {
+        let guard = gents_tools::surface::publication_guard(tool_runtime.plugin_home()).await?;
+        resolved_snapshot = resolve_startup_snapshot(agent).await?;
+        guard
+    } else {
+        None
     };
     if let Err(error) = validate_startup_snapshot(agent, tool_runtime, &mut resolved_snapshot).await
     {

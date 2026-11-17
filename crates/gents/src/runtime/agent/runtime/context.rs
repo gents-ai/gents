@@ -351,7 +351,11 @@ pub(in crate::runtime::agent::runtime) async fn build_slot_surface_fenced(
     mut agent: surface::AgentWithTools,
     mut tool_surface: Arc<ToolSurface>,
 ) -> Result<PreparedSlotSurface> {
-    let _guard = surface::publication_guard(runtime.plugin_home()).await?;
+    let _guard = if needs_publication_fence(tool_surface.has_plugin_tools()) {
+        surface::publication_guard(runtime.plugin_home()).await?
+    } else {
+        None
+    };
     let mut refreshed = false;
     loop {
         let tools = tool_surface
@@ -506,4 +510,14 @@ mod startup_barrier_tests {
             case.check(observed);
         }
     }
+}
+
+pub(in crate::runtime::agent::runtime) fn needs_publication_fence(has_plugins: bool) -> bool {
+    has_plugins
+}
+
+#[cfg(test)]
+#[test]
+fn plugin_free_surface_fencing_replays_the_lean_owner() {
+    gents_lean_vocab::families::runtime_reconcile_surface_publication_needs_publication_fence::replay(|i| needs_publication_fence(i.has_plugins));
 }

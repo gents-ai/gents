@@ -799,7 +799,7 @@ async fn startup_shutdown_cancels_publication_wait_without_releasing_the_writer(
 
 /// Revocation is valid only after a different enabled default is selected.
 /// Exercise the signed configuration owner rather than bypass its invariant.
-async fn choose_spare_default(fixture: &PluginRuntimeFixture, previous: &str) {
+async fn choose_spare_default(fixture: &PluginRuntimeFixture, previous: &str) -> String {
     let actor = fixture.user_access.actor_did().unwrap().parse().unwrap();
     let binding = gents_store::identity::provision_agent_identity_authorized(
         &fixture.node,
@@ -836,4 +836,335 @@ async fn choose_spare_default(fixture: &PluginRuntimeFixture, previous: &str) {
         })
         .await
         .unwrap();
+    binding.agent_did
+}
+
+#[derive(Debug)]
+enum SupervisorPublicationEvent {
+    Started(String, u64, bool),
+    Retired(String, u64),
+}
+
+struct RetiredPublicationSlot(
+    mpsc::UnboundedSender<SupervisorPublicationEvent>,
+    String,
+    u64,
+);
+impl Drop for RetiredPublicationSlot {
+    fn drop(&mut self) {
+        let _ = self
+            .0
+            .send(SupervisorPublicationEvent::Retired(self.1.clone(), self.2));
+    }
+}
+
+#[tokio::test]
+async fn supervisor_retires_revoked_plugin_slots_keeps_unrelated_agents_and_recovers_after_release()
+{
+    use crate::runtime::agent::reconcile::GenerationSupervisor;
+    let endpoint = MockModelEndpoint::start("default").unwrap();
+    let fixture = plugin_runtime_fixture(
+        "supervised-publication",
+        "backend-supervised-publication",
+        endpoint.endpoint(),
+    )
+    .await
+    .unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let agent = configured_publication_agent(&fixture, home.path()).await;
+    let original = agent.default_agent_did().to_owned();
+    let unrelated = choose_spare_default(&fixture, &original).await;
+    let survivor = choose_spare_default(&fixture, &original).await;
+    let owner = fixture.runtime.did().to_owned();
+    merge_fixture_document(
+        &fixture.user_access,
+        "test.supervisor.plugin_survivor",
+        gents_store::collection::Collection::Agent,
+        &owner,
+        &survivor,
+        serde_json::json!({"tools_id":format!("{original}:tools")}),
+    )
+    .await;
+    let context = agent.document_runtime_context().cloned().unwrap();
+    let view = crate::runtime::agent::document_view::load_document_runtime_view_as(
+        &fixture.node,
+        &owner,
+        context.identity.did(),
+    )
+    .await
+    .unwrap();
+    let initial =
+        crate::runtime::agent::document_view::resolve_document_runtime_snapshot_from_view(
+            &fixture.node,
+            &context,
+            &view,
+        )
+        .await
+        .unwrap();
+    assert_eq!(initial.agents.len(), 3);
+    let tool_runtime = gents_tools::surface::ToolRuntimeContext::new_with_node_did(
+        fixture.node.clone(),
+        Default::default(),
+        Default::default(),
+        "localhost",
+        None,
+        &owner,
+        Some(context.identity.clone()),
+    )
+    .with_plugins(context.plugins.clone());
+    let status = RuntimeStatusHandle::new(fixture.node.clone(), &owner);
+    status.initialize_startup(&survivor).await.unwrap();
+    let (events_tx, mut events) = mpsc::unbounded_channel();
+    let runner = {
+        let runtime = tool_runtime.clone();
+        let resolve = context.clone();
+        move |pair: gents_tools::surface::AgentWithTools,
+              surface: Arc<gents_tools::surface::ToolSurface>,
+              requests: Arc<
+            tokio::sync::Mutex<mpsc::Receiver<gents_protocol::row::AgentRequest>>,
+        >,
+              _capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
+              generation: u64,
+              mut shutdown: watch::Receiver<bool>| {
+            let runtime = runtime.clone();
+            let resolve = resolve.clone();
+            let events = events_tx.clone();
+            async move {
+                let did = pair.agent.agent_did.clone();
+                let _retirement = RetiredPublicationSlot(events.clone(), did.clone(), generation);
+                let prepared = super::super::context::build_slot_surface_fenced(
+                    &runtime,
+                    Some(&resolve),
+                    pair,
+                    surface,
+                )
+                .await?;
+                let _ = events.send(SupervisorPublicationEvent::Started(
+                    did,
+                    generation,
+                    prepared.surface.has_plugin_tools(),
+                ));
+                let mut requests = requests.lock().await;
+                loop {
+                    tokio::select! {
+                        _ = shutdown.changed() => break,
+                        request = requests.recv() => if request.is_none() { break; },
+                    }
+                }
+                anyhow::Ok(())
+            }
+        }
+    };
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let supervisor = GenerationSupervisor::bootstrap(
+        initial,
+        gents_inference::admission::AdmissionRegistry::new(fixture.node.clone()),
+        crate::runtime::agent::retry::RetryPolicy {
+            max_retries: 3,
+            base_delay_ms: 1,
+            max_delay_ms: 2,
+        },
+        runner,
+        status.clone(),
+        shutdown_rx.clone(),
+        None,
+    )
+    .await
+    .unwrap();
+    let unrelated_dispatcher = supervisor.current_snapshot().dispatchers[&unrelated].clone();
+    let (active_tx, mut active_rx) = watch::channel(supervisor.current_snapshot());
+    let (proposals_tx, proposals_rx) = mpsc::channel(4);
+    let supervising = tokio::spawn(supervisor.run(active_tx, proposals_rx, shutdown_rx.clone()));
+    let mut observed = Vec::new();
+    tokio::time::timeout(STALL_CEILING, async {
+        while observed
+            .iter()
+            .filter(|e| matches!(e, SupervisorPublicationEvent::Started(_, 1, _)))
+            .count()
+            < 3
+        {
+            observed.push(events.recv().await.unwrap());
+        }
+    })
+    .await
+    .unwrap();
+    let guard = gents_pack::plugin::store::try_lock_store(home.path()).unwrap();
+    let (health_tx, health_rx) = mpsc::channel(1);
+    let watcher = tokio::spawn(run_control_watcher_with_timing(
+        ControlWatcherInputs {
+            node: fixture.node.clone(),
+            backend_admission: fixture.admission(),
+            subscription: subscribe_control_changes(&fixture.node).unwrap(),
+            node_did: owner.clone(),
+            resolve_context: context,
+            tool_runtime,
+            proposals_tx,
+            runtime_status: status,
+            health_events_rx: health_rx,
+            shutdown: shutdown_rx,
+        },
+        ControlWatcherTiming {
+            publication_wait: Duration::from_millis(20),
+            debounce: Duration::from_millis(1),
+            local_debounce: Duration::from_millis(1),
+            settle_retry: Duration::from_millis(1),
+            settle_window: Duration::from_millis(1),
+            idle_sleep: Duration::from_secs(3600),
+        },
+    ));
+    // Give the survivor its own pin before removing original's grant.
+    let record =
+        gents_pack::plugin::store::read_record(home.path(), "fixture", "list_files").unwrap();
+    let own_tools: Tools = serde_json::from_value(
+        serde_json::json!({"tools_id":format!("{survivor}:tools"), "node_did":owner,
+        "integrations":{"plugins":[{"plugin":"fixture/list_files","digest":record.digest}]}}),
+    )
+    .unwrap();
+    gents_documents::write_tools_document(
+        &fixture.user_access,
+        &own_tools,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
+    merge_fixture_document(
+        &fixture.user_access,
+        "test.supervisor.own_tools",
+        gents_store::collection::Collection::Agent,
+        &owner,
+        &survivor,
+        serde_json::json!({"tools_id":format!("{survivor}:tools")}),
+    )
+    .await;
+    merge_fixture_document(
+        &fixture.user_access,
+        "test.supervisor.revoke_plugin",
+        gents_store::collection::Collection::Tools,
+        &owner,
+        &format!("{original}:tools"),
+        serde_json::json!({"integrations":{"plugins":null}}),
+    )
+    .await;
+    health_tx.send(()).await.unwrap();
+    tokio::time::timeout(STALL_CEILING, async {
+        loop {
+            active_rx.changed().await.unwrap();
+            let snapshot = active_rx.borrow_and_update();
+            if snapshot.generation > 1
+                && snapshot.dispatchers.contains_key(&original)
+                && !snapshot.tool_surfaces[&original].has_plugin_tools()
+                && snapshot.unavailable_agents.contains_key(&survivor)
+            {
+                assert!(snapshot.dispatchers[&unrelated].same_channel(&unrelated_dispatcher));
+                break;
+            }
+        }
+    })
+    .await
+    .expect("supervisor did not apply plugin revocation before release");
+    tokio::time::timeout(STALL_CEILING, async {
+        loop {
+            observed.push(events.recv().await.unwrap());
+            let retired = observed.iter().any(|e| matches!(e, SupervisorPublicationEvent::Retired(did, 1) if did == &original));
+            let rebuilt = observed.iter().any(|e| matches!(e, SupervisorPublicationEvent::Started(did, generation, false) if did == &original && *generation > 1));
+            if retired && rebuilt { break; }
+        }
+    }).await.expect("revoked slot was not retired and rebuilt without its plugin");
+    assert!(gents_pack::plugin::store::try_lock_store_shared(home.path()).is_err());
+    drop(guard); // No event after releasing the lease.
+    tokio::time::timeout(STALL_CEILING, async {
+        loop {
+            active_rx.changed().await.unwrap();
+            let snapshot = active_rx.borrow_and_update();
+            if snapshot.dispatchers.contains_key(&survivor) {
+                assert!(snapshot.dispatchers.contains_key(&original));
+                assert!(snapshot.dispatchers[&unrelated].same_channel(&unrelated_dispatcher));
+                assert!(!snapshot.tool_surfaces[&original].has_plugin_tools());
+                break;
+            }
+        }
+        loop {
+            if matches!(events.recv().await.unwrap(), SupervisorPublicationEvent::Started(did, generation, true) if did == survivor && generation > 1) { break; }
+        }
+    }).await.expect("publication release stranded the demoted plugin agent");
+    shutdown_tx.send(true).unwrap();
+    tokio::time::timeout(STALL_CEILING, watcher)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(STALL_CEILING, supervising)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn plugin_free_startup_and_slots_remain_ready_while_store_is_exclusively_held() {
+    let endpoint = MockModelEndpoint::start("default").unwrap();
+    let fixture = plugin_runtime_fixture(
+        "plugin-free-publication",
+        "backend-plugin-free-publication",
+        endpoint.endpoint(),
+    )
+    .await
+    .unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let agent = configured_publication_agent(&fixture, home.path()).await;
+    let did = agent.default_agent_did().to_owned();
+    merge_fixture_document(
+        &fixture.user_access,
+        "test.plugin_free.tools",
+        gents_store::collection::Collection::Tools,
+        fixture.runtime.did(),
+        &format!("{did}:tools"),
+        serde_json::json!({"integrations":{"plugins":null}}),
+    )
+    .await;
+    let guard = gents_pack::plugin::store::try_lock_store(home.path()).unwrap();
+    let (published, mut snapshots) = mpsc::unbounded_channel();
+    let capture = Arc::new(PublicationReadinessCapture {
+        node: fixture.node.clone(),
+        snapshots: Default::default(),
+        published,
+    });
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let run = tokio::spawn(super::super::startup::run_agent_with_readiness_writer(
+        agent,
+        shutdown_rx,
+        capture.clone(),
+        Duration::from_millis(1),
+    ));
+    tokio::time::timeout(STALL_CEILING, async {
+        loop {
+            let snapshot = snapshots.recv().await.unwrap();
+            if snapshot.process_state == NodeReadinessProcessState::Ready
+                && snapshot.agents.iter().any(|entry| {
+                    entry.agent_did == did && entry.state == AgentReadinessState::Ready
+                })
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("plugin-free startup waited on the plugin publication lock");
+    assert!(gents_pack::plugin::store::try_lock_store_shared(home.path()).is_err());
+    shutdown_tx.send(true).unwrap();
+    tokio::time::timeout(STALL_CEILING, run)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(!capture
+        .snapshots
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|snapshot| snapshot.active_generation > 0)
+        .any(|snapshot| snapshot.agents.iter().any(
+            |entry| entry.agent_did == did && entry.state == AgentReadinessState::Unavailable
+        )));
+    drop(guard);
 }
