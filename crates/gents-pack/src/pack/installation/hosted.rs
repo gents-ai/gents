@@ -50,9 +50,88 @@ pub struct HostedPackStage {
 #[derive(Debug, thiserror::Error)]
 pub enum HostedPackStageError {
     #[error(transparent)]
-    Rejected(anyhow::Error),
+    Rejected(HostedRejection),
     #[error(transparent)]
     Unconfirmed(anyhow::Error),
+}
+
+/// Why a hosted pack's document transaction was refused, with nothing
+/// installed. A refusal that names documents only (collection and id) keeps
+/// its own variant, built by matching `PackChangeError`, so the runtime can
+/// show it to the client as written; everything else is `Other`.
+#[derive(Debug)]
+pub enum HostedRejection {
+    /// Documents of the pack were edited since it was installed.
+    Edited {
+        coordinate: String,
+        edited: Vec<String>,
+    },
+    /// Documents the pack would write already exist with other content.
+    Differing {
+        coordinate: String,
+        differing: Vec<String>,
+    },
+    /// Any other refusal; its chain can quote values and is not shown.
+    Other(anyhow::Error),
+}
+
+impl HostedRejection {
+    /// The rejection a refused pack change carries, by variant.
+    pub fn of(error: super::PackChangeError) -> Self {
+        match error {
+            super::PackChangeError::Edited { coordinate, edited } => {
+                Self::Edited { coordinate, edited }
+            }
+            super::PackChangeError::Differing {
+                coordinate,
+                differing,
+            } => Self::Differing {
+                coordinate,
+                differing,
+            },
+            other => Self::Other(other.into_anyhow().context(
+                "pack document transaction was rejected; local plugin records were restored",
+            )),
+        }
+    }
+
+    /// The refusal as the pack change error whose text it shows.
+    fn as_change(&self) -> Option<super::PackChangeError> {
+        match self {
+            Self::Edited { coordinate, edited } => Some(super::PackChangeError::Edited {
+                coordinate: coordinate.clone(),
+                edited: edited.clone(),
+            }),
+            Self::Differing {
+                coordinate,
+                differing,
+            } => Some(super::PackChangeError::Differing {
+                coordinate: coordinate.clone(),
+                differing: differing.clone(),
+            }),
+            Self::Other(_) => None,
+        }
+    }
+}
+
+impl std::fmt::Display for HostedRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self, self.as_change()) {
+            (_, Some(change)) => std::fmt::Display::fmt(&change, f),
+            (Self::Other(error), None) if f.alternate() => write!(f, "{error:#}"),
+            (Self::Other(error), None) => write!(f, "{error}"),
+            (_, None) => Ok(()),
+        }
+    }
+}
+
+impl std::error::Error for HostedRejection {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Other(error) => error.source(),
+            Self::Edited { .. } | Self::Differing { .. } => None,
+        }
+    }
 }
 
 pub async fn stage_hosted_pack(
@@ -174,8 +253,10 @@ impl HostedPackStage {
             && scope.pack_digests == self.pack_digests
             && !scope.nonce.is_empty())
         {
-            return Err(HostedPackStageError::Rejected(anyhow::anyhow!(
-                "hosted pack approval scope does not match the staged archive graph"
+            return Err(HostedPackStageError::Rejected(HostedRejection::Other(
+                anyhow::anyhow!(
+                    "hosted pack approval scope does not match the staged archive graph"
+                ),
             )));
         }
         let graph = self.graph.clone();
@@ -217,8 +298,11 @@ impl HostedPackStage {
                             profile_policy,
                         )
                         .await?;
-                        finish.client_finished(txn.interpreter()).await?;
-                        Ok::<_, anyhow::Error>(reports)
+                        finish
+                            .client_finished(txn.interpreter())
+                            .await
+                            .map_err(anyhow::Error::new)?;
+                        Ok::<_, super::PackChangeError>(reports)
                     })
                 },
             )
@@ -248,11 +332,9 @@ impl HostedPackStage {
         home_result.map_err(HostedPackStageError::Unconfirmed)?;
         result.map_err(|error| {
             if rejected {
-                HostedPackStageError::Rejected(error.error.context(
-                    "pack document transaction was rejected; local plugin records were restored",
-                ))
+                HostedPackStageError::Rejected(HostedRejection::of(error.error))
             } else {
-                HostedPackStageError::Unconfirmed(error.error.context(
+                HostedPackStageError::Unconfirmed(error.error.into_anyhow().context(
                     "pack document outcome was not confirmed; local plugins remain published",
                 ))
             }

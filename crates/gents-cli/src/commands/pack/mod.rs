@@ -21,7 +21,7 @@ pub(crate) mod update;
 pub(crate) mod wire;
 use crate::cli::*;
 use anyhow::Result;
-pub(crate) use install::{install, install_documents_pack};
+pub(crate) use install::{install, install_documents_pack, print_install_warnings};
 pub(crate) use scope::{
     plugin_notification_scope, record_plugin_retirement, resolve_home_owner_under_plugin_store,
     resolve_scope_owner, warn_on_unrecorded_removal,

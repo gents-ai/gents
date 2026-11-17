@@ -833,6 +833,20 @@ pub fn test_runtime_handle() -> tokio::runtime::Handle {
     tokio::runtime::Handle::current()
 }
 
+/// The build a test router serves installs as. A test hands it to its router
+/// (`axum::Extension`, read by `RuntimeHttpState::pack_install_build`) and to
+/// its client, never to the process-global record, so handshake tests stay
+/// independent of each other and of their order; a test of a mismatch changes
+/// a field on the client's side.
+pub fn test_runtime_build() -> gents_protocol::build_info::BuildInfo {
+    gents_protocol::build_info::BuildInfo::from_parts(
+        "0.0.0-test".to_owned(),
+        Some("7e57b0117e57".to_owned()),
+        Some(false),
+        Vec::new(),
+    )
+}
+
 pub fn pack_fixture_dir(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../gents/tests/fixtures/packs")
