@@ -1055,8 +1055,8 @@ async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
     // handshake's verifiable-build requirement intact.
     crate::http::pack_install::set_runtime_build(
         gents_protocol::build_info::BuildInfo::from_parts(
-            "hosted-install-test",
-            Some("hosted-install-fixture"),
+            "hosted-install-test".to_owned(),
+            Some("hosted-install-fixture".to_owned()),
             None,
             Vec::new(),
         ),
