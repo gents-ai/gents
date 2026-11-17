@@ -301,7 +301,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
             owned_config(4),
         );
         let collected = gents_tools::runtime_context::scope_request_tool_execution(
-            Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
+            Some(gents_store::test_support::unreached_deadline_at()),
             tokio_util::sync::CancellationToken::new(),
             Box::pin(collect_owned_scripted_stream(
                 stream,
