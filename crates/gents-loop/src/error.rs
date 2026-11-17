@@ -80,8 +80,11 @@ pub enum InferenceError {
         retry_after: Option<std::time::Duration>,
     },
 
+    /// Boxed so a provider's stated window, counter and cap can grow this
+    /// payload without inflating every `Result` that carries an
+    /// `InferenceError` (and `CompactionError` through `LoopStreamError`).
     #[error("{0}")]
-    UsageLimited(crate::provider_limit::UsageLimit),
+    UsageLimited(Box<crate::provider_limit::UsageLimit>),
 
     /// The provider rejected the request because its input exceeds the
     /// model's context window. `input_tokens` and `limit` are the provider's
@@ -286,7 +289,7 @@ fn classify_cause(cause: &LoopFailureCause, report: &ProviderReport, text: &str)
     ) {
         match classify_provider_limit(reason, chrono::Utc::now()) {
             Some(ProviderLimit::UsageExhausted(limit)) => {
-                return InferenceError::UsageLimited(limit);
+                return InferenceError::UsageLimited(Box::new(limit));
             }
             Some(ProviderLimit::Throttled { retry_after }) => {
                 return InferenceError::RateLimited { retry_after };

@@ -108,3 +108,254 @@ it("holds the panel's shape while the first read is out, not saying none were re
   expect(panel.querySelector('[aria-busy="true"]')).toBeNull();
   expect(screen.getByText("No account limits have been reported.")).toBeInTheDocument();
 });
+
+/* A refusal is the provider's own statement that the account is out, so it must
+   show above the meters — an exhausted account can have no window to fill. */
+it("shows a provider refusal above the meters, with only the fields it stated", () => {
+  const refusal = {
+    at: new Date().toISOString(),
+    model: "grok-4.7",
+    window: "rolling 24-hour",
+    used: 691_791,
+    cap: 600_000,
+    resetsAt: null,
+    consumedByNode: 1200,
+    consumedBasis: "locally_estimated",
+    consumedScope: "model:grok-4.7",
+    partial: false,
+    detail: "you have used all the included free usage for this account",
+    windowProvenance: "provider_reported",
+    evidenceWindowHours: 24,
+  };
+  const views = [
+    {
+      label: "Grok",
+      provider: "XaiGrokOAuth",
+      backendIds: ["grok"],
+      /* an exhausted account with no window at all: the percentages say
+         nothing, which is exactly why the banner cannot be a percentage */
+      windows: [],
+      plan: null,
+      note: "unknown",
+      readAt: null,
+      readError: null,
+      read: "read",
+      refusal,
+    },
+  ];
+  render(<AllProviderLimits views={views} onRefresh={async () => {}} />);
+  expect(screen.getByText("Out of quota")).toBeTruthy();
+  /* the stated counter and cap, never a derived percentage */
+  expect(screen.getByText(/691,791 of 600,000/)).toBeTruthy();
+  expect(screen.queryByText("100%")).toBeNull();
+  /* the bounded excerpt is what the provider said, not a computed figure */
+  expect(
+    screen.getByText(/you have used all the included free usage/),
+  ).toBeTruthy();
+});
+
+it("never shows a window the provider did not state as its own", () => {
+  /* xAI's text names "rolling 24-hour" -> reported. A provider that names
+     none leaves the window null, and the node's own count says it is the
+     node's, labelled "locally estimated". */
+  const refusal = (provenance: string) => ({
+    at: new Date().toISOString(),
+    model: "grok-4.7",
+    window: provenance === "provider_reported" ? "rolling 24-hour" : null,
+    used: 691_791,
+    cap: 600_000,
+    resetsAt: null,
+    consumedByNode: 1200,
+    consumedBasis: "locally_estimated",
+    consumedScope: "model:grok-4.7",
+    partial: false,
+    detail: "usage limit reached",
+    windowProvenance: provenance,
+    evidenceWindowHours: 24,
+  });
+  const view = (provenance: string) => [
+    {
+      label: "Grok",
+      provider: "XaiGrokOAuth",
+      backendIds: ["grok"],
+      windows: [],
+      plan: null,
+      note: null,
+      readAt: null,
+      readError: null,
+      read: "read",
+      refusal: refusal(provenance),
+    },
+  ];
+
+  const stated = render(
+    <AllProviderLimits views={view("provider_reported")} onRefresh={async () => {}} />,
+  );
+  expect(screen.getByText(/rolling 24-hour window/)).toBeTruthy();
+  /* the node's own count is always labelled as the node's */
+  expect(screen.getByText(/1,200 counted on this node/)).toBeTruthy();
+  stated.unmount();
+
+  const unknown = render(
+    <AllProviderLimits views={view("unknown")} onRefresh={async () => {}} />,
+  );
+  /* no window at all, so none is presented as the provider's */
+  expect(screen.queryByText(/rolling 24-hour/)).toBeNull();
+  expect(screen.queryByText(/, locally estimated/)).toBeNull();
+  expect(screen.getByText(/1,200 counted on this node/)).toBeTruthy();
+  unknown.unmount();
+});
+
+it("labels what the local count covers, and says when the search was truncated", () => {
+  /* The review's items 1 and 2: the screen must say which scope the local count
+     is over, and must show a truncated search even when no refusal stands —
+     "no refusal" from a truncated read is not the same finding as "none". */
+  const base = (over: Record<string, unknown>) => [
+    {
+      label: "Grok",
+      provider: "XaiGrokOAuth",
+      backendIds: ["grok"],
+      windows: [],
+      plan: null,
+      note: null,
+      readAt: null,
+      readError: null,
+      read: "read",
+      ...over,
+    },
+  ];
+
+  /* A refusal naming a model: the count says it is about that model. */
+  const withRefusal = render(
+    <AllProviderLimits
+      views={base({
+        refusal: {
+          at: new Date().toISOString(),
+          model: "grok-4.7",
+          window: null,
+          used: null,
+          cap: null,
+          resetsAt: null,
+          consumedByNode: 1200,
+          consumedBasis: "locally_estimated",
+          consumedScope: "model:grok-4.7",
+          partial: true,
+          detail: "usage limit reached",
+          windowProvenance: "unknown",
+          evidenceWindowHours: 24,
+        },
+        refusalPartial: true,
+      })}
+      onRefresh={async () => {}}
+    />,
+  );
+  expect(screen.getByText(/1,200 counted on this node for grok-4\.7/)).toBeTruthy();
+  expect(screen.getByText(/locally estimated/)).toBeTruthy();
+  expect(screen.getByText(/reached its bound/)).toBeTruthy();
+  withRefusal.unmount();
+
+  /* No refusal, but the search was truncated: the truncation is still shown. */
+  const noRefusal = render(
+    <AllProviderLimits
+      views={base({ refusal: null, refusalPartial: true })}
+      onRefresh={async () => {}}
+    />,
+  );
+  expect(screen.getByText(/partial: the evidence read reached its bound/)).toBeTruthy();
+  noRefusal.unmount();
+
+  /* No refusal and a complete search: nothing is said. */
+  const clean = render(
+    <AllProviderLimits
+      views={base({ refusal: null, refusalPartial: false })}
+      onRefresh={async () => {}}
+    />,
+  );
+  expect(screen.queryByText(/reached its bound/)).toBeNull();
+  clean.unmount();
+});
+
+it("keeps the counter and cap even when the provider stated a reset", () => {
+  /* The review's nit: a reset time used to replace the statement, so a refusal
+     that said both "691791 of 600000" and "resets Thursday" showed only the
+     reset. The counter is what the provider reported; a reset does not make it
+     unstated. The model the provider named is stated too. */
+  const refusal = {
+    at: new Date().toISOString(),
+    model: "grok-4.7",
+    window: "rolling 24-hour",
+    used: 691_791,
+    cap: 600_000,
+    resetsAt: new Date(Date.now() + 3_600_000).toISOString(),
+    consumedByNode: null,
+    consumedBasis: "locally_estimated",
+    consumedScope: "model:grok-4.7",
+    partial: false,
+    detail: "you have used all the included free usage for this account",
+    windowProvenance: "provider_reported",
+    evidenceWindowHours: 24,
+  };
+  const views = [
+    {
+      label: "Grok",
+      provider: "XaiGrokOAuth",
+      backendIds: ["grok"],
+      windows: [],
+      plan: null,
+      note: null,
+      readAt: null,
+      readError: null,
+      read: "read",
+      refusal,
+    },
+  ];
+  const rendered = render(
+    <AllProviderLimits views={views} onRefresh={async () => {}} />,
+  );
+  expect(screen.getByText(/691,791 of 600,000/)).toBeTruthy();
+  expect(screen.getByText(/grok-4.7/)).toBeTruthy();
+  expect(screen.getByText(/Resets/)).toBeTruthy();
+  rendered.unmount();
+});
+
+it("says the reset when the provider stated one, and that none was stated otherwise", () => {
+  const refusal = (resetsAt: string | null) => ({
+    at: new Date().toISOString(),
+    model: "grok-4.7",
+    window: null,
+    used: null,
+    cap: null,
+    resetsAt,
+    consumedByNode: null,
+    consumedBasis: "locally_estimated",
+    consumedScope: "model:grok-4.7",
+    partial: false,
+    detail: "free usage exhausted",
+    windowProvenance: "unknown",
+    evidenceWindowHours: 24,
+  });
+  const view = (resetsAt: string | null) => [
+    {
+      label: "Grok",
+      provider: "XaiGrokOAuth",
+      backendIds: [],
+      windows: [],
+      plan: null,
+      note: null,
+      readAt: null,
+      readError: null,
+      read: "read",
+      refusal: refusal(resetsAt),
+    },
+  ];
+  const { unmount } = render(
+    <AllProviderLimits
+      views={view(new Date(Date.now() + 3_600_000).toISOString())}
+      onRefresh={async () => {}}
+    />,
+  );
+  expect(screen.getByText(/Resets/)).toBeTruthy();
+  unmount();
+  render(<AllProviderLimits views={view(null)} onRefresh={async () => {}} />);
+  expect(screen.getByText(/No reset stated/)).toBeTruthy();
+});

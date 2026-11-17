@@ -22,6 +22,55 @@ pub struct AccountUsageView {
     pub read_at: Option<String>,
     pub read_error: Option<String>,
     pub read: Option<String>,
+    /// The provider's own refusal, when one stands. Beside the windows rather
+    /// than among them: a refusal states a fact, not a percentage.
+    pub refusal: Option<UsageRefusalView>,
+    /// Whether the evidence search for `refusal` reached its page bound. Present
+    /// when `refusal` is null too: "no refusal in a truncated search" is not the
+    /// same finding as "none", and the screen says which it has.
+    pub refusal_partial: bool,
+}
+
+/// A standing provider refusal, as the provider stated it. Every field past
+/// the timestamp is optional because a refusal establishes only what it says:
+/// plain "free usage exhausted" gives no cap, no counter and no reset, and the
+/// screen shows those as unknown rather than as 0 or 100%.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageRefusalView {
+    pub at: String,
+    /// The model the refusal is about. A provider refuses per model, so this is
+    /// what the screen says is out, not the whole account.
+    pub model: Option<String>,
+    /// The window the provider named, e.g. "rolling 24-hour".
+    pub window: Option<String>,
+    pub used: Option<u64>,
+    pub cap: Option<u64>,
+    /// Absolute only; a relative "refreshes in 24 hours" leaves this null.
+    pub resets_at: Option<String>,
+    /// What this node itself observed in the window: an estimate, always, and
+    /// `consumed_basis` says so.
+    pub consumed_by_node: Option<u64>,
+    /// Whose count `consumed_by_node` is: `locally_estimated` always, because it
+    /// is this node's arithmetic over its own calls.
+    pub consumed_basis: String,
+    /// What `consumed_by_node` counts: the refused model, or `backend` for a
+    /// refusal that named none.
+    pub consumed_scope: String,
+    /// Whether the evidence read reached its bound, so "no older refusal" is only
+    /// true of the rows that were read.
+    pub partial: bool,
+    /// A bounded excerpt of the provider's words, never the whole body.
+    pub detail: String,
+    /// Whose window `window` names: `provider_reported` when the provider
+    /// stated one, `unknown` when it named none and this node asserts none (`window`
+    /// is then null),
+    /// `locally_estimated` for a window this node chose, which is never
+    /// reported as the provider's.
+    pub window_provenance: String,
+    /// How far back this node looked in its own recorded calls. Always this
+    /// node's choice: the provider never said its evidence window is this one.
+    pub evidence_window_hours: i64,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -55,11 +104,48 @@ pub(crate) async fn account_usage_views(
         .filter(|reads| reads.node_did == node_did)
         .map_or(&[][..], |reads| reads.reads.as_slice());
     let time = |at: chrono::DateTime<chrono::Utc>| at.to_rfc3339();
+    let refusal_view =
+        |refusal: &gents_inference::usage_observation::UsageRefusalView| UsageRefusalView {
+            at: refusal.at.clone(),
+            model: refusal.model.clone(),
+            window: refusal.window.clone(),
+            used: refusal.used,
+            cap: refusal.cap,
+            resets_at: refusal.resets_at.clone(),
+            consumed_by_node: refusal.consumed_by_node,
+            consumed_basis: match refusal.consumed_basis {
+                gents_inference::usage_observation::WindowBasis::ProviderReported => {
+                    "provider_reported".into()
+                }
+                gents_inference::usage_observation::WindowBasis::Unknown => "unknown".into(),
+                gents_inference::usage_observation::WindowBasis::LocallyEstimated => {
+                    "locally_estimated".into()
+                }
+            },
+            consumed_scope: refusal.consumed_scope.clone(),
+            partial: refusal.partial,
+            detail: refusal.detail.clone(),
+            // Stated by the view, not inferred from `window.is_some()`: a
+            // provider that named no window leaves `window` null rather than
+            // borrowing the node's look-back as its own.
+            window_provenance: match refusal.window_basis {
+                gents_inference::usage_observation::WindowBasis::ProviderReported => {
+                    "provider_reported".into()
+                }
+                // The same word Lean and Rust use: `unknown`, never "unstated".
+                gents_inference::usage_observation::WindowBasis::Unknown => "unknown".into(),
+                gents_inference::usage_observation::WindowBasis::LocallyEstimated => {
+                    "locally_estimated".into()
+                }
+            },
+            evidence_window_hours: refusal.evidence_window_hours,
+        };
     let views = reads
         .iter()
         .map(|read| {
             let usage = read.usage.as_ref();
             AccountUsageView {
+                refusal_partial: read.refusal_partial,
                 label: read.label.clone(),
                 provider: read.provider.clone(),
                 backend_ids: backends
@@ -96,6 +182,7 @@ pub(crate) async fn account_usage_views(
                     UsageRead::Disabled => "disabled".into(),
                     UsageRead::Unavailable(reason) => format!("unavailable: {reason}"),
                 }),
+                refusal: read.refusal.as_ref().map(refusal_view),
             }
         })
         .collect();

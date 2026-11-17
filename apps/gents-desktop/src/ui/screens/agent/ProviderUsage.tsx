@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { RotateCw } from "lucide-react";
+import { Ban, RotateCw } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { Skeleton } from "@gents/ui/components/skeleton";
 import { cn } from "@gents/ui/lib/utils";
@@ -7,6 +7,7 @@ import { Hint } from "@/screens/Hint";
 import { setupErrorMessage } from "../../../lib/setupErrors";
 import type {
   AccountUsageView,
+  UsageRefusalView,
   UsageWindowView,
 } from "@source-inc/gents-desktop-client";
 import { ProviderLogo } from "../ProviderLogo";
@@ -52,6 +53,11 @@ const INK = {
 
 export function resetsIn(w: UsageWindowView, now: number) {
   return w.resetsAt ? `resets in ${shortDuration(Date.parse(w.resetsAt) - now)}` : null;
+}
+
+/** The same wording for an instant that came from a refusal rather than a window. */
+export function resetsInMoment(at: string, now: number) {
+  return `resets in ${shortDuration(Date.parse(at) - now)}`;
 }
 
 /** the window of an account closest to its limit */
@@ -191,11 +197,29 @@ function WindowBar({
 }
 
 /** Where a node's accounts stand against their limits, said only once one is
-    near or at its limit: the closest window decides. */
+    near or at its limit: a provider's refusal decides first, because an
+    exhausted account can have no window to be near a limit of, then the
+    closest window. */
 export function limitNote(
   views: readonly AccountUsageView[],
   now: number,
 ): { text: string; tone: "warning" | "destructive"; title: string } | null {
+  /* a refusal is the provider's own statement that the account is out: it
+     stands whatever the percentages say, and states no percentage itself */
+  for (const view of views) {
+    const refusal = view.refusal;
+    if (!refusal) continue;
+    /* a refusal whose stated reset has passed no longer limits anything */
+    if (refusal.resetsAt && Date.parse(refusal.resetsAt) <= now) continue;
+    const title = `${providerTitle(view)}: ${refusalNote(refusal)}`;
+    return {
+      text: refusal.resetsAt
+        ? `Out of quota · ${resetsInMoment(refusal.resetsAt, now)}`
+        : "Out of quota",
+      tone: "destructive",
+      title,
+    };
+  }
   let worst: { view: AccountUsageView; window: UsageWindowView } | null = null;
   for (const view of views)
     for (const window of view.windows) {
@@ -242,6 +266,110 @@ export function usageWindowGroup(window: UsageWindowView) {
   if (["daily", "weekly", "monthly", "credits"].includes(window.label))
     return "Spending limits";
   return "Quota windows";
+}
+
+/** What a refusal states, in the words it stated it: no percentage is ever
+    derived here, because a refusal establishes no cap and no counter.
+
+    A window is shown only when the provider named one. When it named none the
+    node's own look-back is stated as exactly that, "locally estimated", and
+    never as the provider's window. */
+export function refusalDetail(refusal: UsageRefusalView) {
+  const parts: string[] = [];
+  if (refusal.used != null && refusal.cap != null)
+    parts.push(`${refusal.used.toLocaleString()} of ${refusal.cap.toLocaleString()}`);
+  else if (refusal.cap != null) parts.push(`cap ${refusal.cap.toLocaleString()}`);
+  else if (refusal.used != null)
+    parts.push(`${refusal.used.toLocaleString()} consumed`);
+  if (refusal.window && refusal.windowProvenance === "provider_reported")
+    parts.push(`${refusal.window} window`);
+  else if (refusal.windowProvenance === "locally_estimated" && refusal.window)
+    parts.push(`${refusal.window} window, locally estimated`);
+  return parts.join(" · ");
+}
+
+/** What this node has itself counted in its own look-back, labelled so it can
+    never be read as the provider's counter — and stating *what* it counted: the
+    refused model when the refusal names one, the whole backend when it does not. */
+export function nodeEstimate(refusal: UsageRefusalView): string | null {
+  if (refusal.consumedByNode == null) return null;
+  const scope = refusal.consumedScope.startsWith("model:")
+    ? refusal.consumedScope.slice("model:".length)
+    : "this backend";
+  return `${refusal.consumedByNode.toLocaleString()} counted on this node for ${scope}, last ${refusal.evidenceWindowHours}h (locally estimated)`;
+}
+
+/** Said when the evidence read reached its bound, so "no refusal" from a
+    truncated search is not read as "none". Independent of whether a refusal
+    stands: the truncation is a property of the search, not the finding. */
+export function partialNote(partial: boolean): string | null {
+  return partial
+    ? "partial: the evidence read reached its bound, so an older refusal may lie beyond it"
+    : null;
+}
+
+/** How a refusal reads in one line: what the provider stated — the model it is
+    about, its counter and cap, its window — plus when it said capacity returns.
+
+    A stated reset ADDS to the statement rather than replacing it: the counter
+    and cap are what the provider reported, and a reset time does not make them
+    unstated. */
+export function refusalNote(refusal: UsageRefusalView) {
+  const parts: string[] = [];
+  if (refusal.model) parts.push(refusal.model);
+  const stated = refusalDetail(refusal);
+  if (stated) parts.push(stated);
+  if (refusal.resetsAt) {
+    parts.push(
+      `Resets ${new Date(refusal.resetsAt).toLocaleString([], {
+        weekday: "short",
+        hour: "numeric",
+        minute: "2-digit",
+      })}`,
+    );
+  } else if (!stated) {
+    /* a provider that gave no reset time has not said when it ends; the node's
+       own evidence window is the query's bound, not the provider's answer */
+    parts.push("No reset stated");
+  }
+  return parts.join(" · ");
+}
+
+/** A provider's refusal, above the meters: the account is out of quota, which
+    the percentages may not show at all. */
+export function RefusalBanner({ refusal }: { refusal: UsageRefusalView }) {
+  return (
+    <div
+      role="status"
+      className="grid gap-1 rounded-lg bg-destructive/10 px-2.5 py-2 text-xs"
+    >
+      <p className="flex items-center gap-1.5 font-medium text-destructive">
+        <Ban className="size-3.5 shrink-0" aria-hidden />
+        Out of quota
+        <span className="font-normal text-muted-foreground">
+          · {refusalNote(refusal)}
+        </span>
+      </p>
+      {refusal.detail && (
+        <p
+          title={
+            refusal.windowProvenance === "unknown"
+              ? `Searched this node's last ${refusal.evidenceWindowHours}h of calls; the provider named no window`
+              : undefined
+          }
+          className="line-clamp-2 text-muted-foreground"
+        >
+          {refusal.detail}
+        </p>
+      )}
+      {nodeEstimate(refusal) && (
+        <p className="text-muted-foreground">{nodeEstimate(refusal)}</p>
+      )}
+      {partialNote(refusal.partial) && (
+        <p className="text-muted-foreground">{partialNote(refusal.partial)}</p>
+      )}
+    </div>
+  );
 }
 
 export function UsageRows({ view }: { view?: AccountUsageView }) {
@@ -408,7 +536,19 @@ export function AllProviderLimits({
             {view.read === "disabled" ? (
               <p className="text-xs text-muted-foreground">Disabled</p>
             ) : (
-              <UsageRows view={view} />
+              <>
+                {/* a refusal goes above the meters: an exhausted account can
+                    have no window to fill, so the percentages may say nothing */}
+                {view.refusal && <RefusalBanner refusal={view.refusal} />}
+                {/* Shown when no refusal stands too: a truncated search is a
+                    property of the search, not of the finding. */}
+                {!view.refusal && partialNote(view.refusalPartial) && (
+                  <p className="text-muted-foreground">
+                    {partialNote(view.refusalPartial)}
+                  </p>
+                )}
+                <UsageRows view={view} />
+              </>
             )}
           </div>
         ))}

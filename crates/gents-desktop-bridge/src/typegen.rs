@@ -5,7 +5,9 @@ mod commands;
 use gents_desktop_core::local_runtime::DesktopInitSummary;
 use ts_rs::TS;
 
-use crate::accounts::usage::{AccountUsageView, ProviderUsageReadRequest, UsageWindowView};
+use crate::accounts::usage::{
+    AccountUsageView, ProviderUsageReadRequest, UsageRefusalView, UsageWindowView,
+};
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::inference_setup::InferenceSetupState;
 use crate::tauri_commands::inference_setup::{
@@ -418,6 +420,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::provider_recovery::ProviderRecoveryApply,
         crate::provider_recovery::ProviderRecoveryResult,
         UsageWindowView,
+        UsageRefusalView,
         gents_protocol::job::JobProgress,
         gents_protocol::job::JobView,
         gents_protocol::job::JobControlKind,
