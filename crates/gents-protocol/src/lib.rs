@@ -1,6 +1,7 @@
 pub mod adapter_projection_kind;
 pub mod agent_identity;
 pub mod background_completion;
+pub mod build_info;
 pub mod canonical;
 pub mod chatgpt_oauth;
 pub mod client_installation;

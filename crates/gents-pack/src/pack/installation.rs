@@ -1285,6 +1285,7 @@ pub async fn record_plugin_retirement_as(
         PluginStoreLocation { home, coordinate },
         None,
         PluginStageContext {
+            pin_moves: &[],
             node_binding: None,
             changes: None,
             retired: true,
@@ -1310,6 +1311,7 @@ pub async fn record_plugin_store_change_as_with_node_binding(
         location,
         installed,
         PluginStageContext {
+            pin_moves: &[],
             node_binding,
             changes: None,
             retired: false,
@@ -1337,6 +1339,40 @@ pub async fn record_staged_plugin_store_change(
         PluginStoreLocation { home, coordinate },
         installed,
         PluginStageContext {
+            pin_moves: &[],
+            node_binding: None,
+            changes: Some(changes),
+            retired: false,
+        },
+        profile_policy,
+    )
+    .await
+}
+
+/// The explicitly reviewed Tools edits share this stage's signed transaction
+/// and its outcome classification; no pin is changed before publication.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "staged notification inputs plus reviewed pin edits"
+)]
+pub async fn record_staged_plugin_store_change_with_pins(
+    access: &ConfigAccess,
+    owner: &str,
+    home: &Path,
+    coordinate: &str,
+    installed: Option<&PackIdentity>,
+    changes: &crate::pack::plugin_lifecycle::PluginStageChanges,
+    pin_moves: &[super::pin_moves::PluginPinMove],
+    profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
+) -> std::result::Result<(), PluginStoreChangeError> {
+    record_plugin_store_change_with_stage(
+        access,
+        owner,
+        None,
+        PluginStoreLocation { home, coordinate },
+        installed,
+        PluginStageContext {
+            pin_moves,
             node_binding: None,
             changes: Some(changes),
             retired: false,
@@ -1374,6 +1410,7 @@ pub struct PluginStoreLocation<'a> {
 }
 
 pub(crate) struct PluginStageContext<'a> {
+    pub(crate) pin_moves: &'a [super::pin_moves::PluginPinMove],
     pub(crate) node_binding: Option<&'a gents_documents::ConfigurationNodeBinding>,
     pub(crate) changes: Option<&'a crate::pack::plugin_lifecycle::PluginStageChanges>,
     /// The plugins were retired, so the node's record of them is released
@@ -1391,6 +1428,7 @@ async fn record_plugin_store_change_with_stage(
     profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
 ) -> std::result::Result<(), PluginStoreChangeError> {
     let PluginStageContext {
+        pin_moves,
         node_binding,
         changes,
         retired,
@@ -1420,6 +1458,7 @@ async fn record_plugin_store_change_with_stage(
                     )
                     .await?;
                 }
+                super::pin_moves::apply(txn, owner, pin_moves, profile_policy).await?;
                 write_plugin_record(
                     txn,
                     owner,

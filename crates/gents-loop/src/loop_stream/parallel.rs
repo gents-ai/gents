@@ -1,18 +1,5 @@
-/// Reserve invalid-call budget before dispatch and stop at any duplicate,
-/// because repetition decisions depend on preceding results.
-pub(super) fn read_prefix<'a>(
-    calls: impl IntoIterator<Item = (&'a str, &'a str, bool)>,
-    limit: usize,
-) -> usize {
-    let mut seen = Vec::new();
-    for (name, args, read) in calls.into_iter().take(limit) {
-        if !read || seen.contains(&(name, args)) {
-            break;
-        }
-        seen.push((name, args));
-    }
-    seen.len()
-}
+#[cfg(test)]
+use crate::tool_effects::parallel::read_prefix;
 
 fn unique<T>(ids: &[T]) -> bool
 where

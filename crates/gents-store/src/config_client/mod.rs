@@ -26,9 +26,10 @@ mod client_pack_evidence;
 pub mod client_request_input;
 pub mod client_signed_agent;
 pub use client_pack_evidence::{
-    prepare_pack_evidence, prepare_pack_evidence_from_history, prepare_pack_evidence_in_txn,
-    prepare_pack_relationship, prepare_pack_schema_approval, verify_pack_schema_approval,
-    PackApprovalScope, PackEvidence, PackEvidenceError, PackMutation, PackRelationship,
+    describe_json_disagreement, prepare_pack_evidence, prepare_pack_evidence_from_history,
+    prepare_pack_evidence_in_txn, prepare_pack_relationship, prepare_pack_schema_approval,
+    verify_pack_schema_approval, PackApprovalScope, PackEvidence, PackEvidenceError, PackMutation,
+    PackMutationDiff, PackMutationDifference, PackMutationKind, PackRelationship,
     PackRelationshipEvidence, PackRelationshipTarget, PackSchemaEvidence,
 };
 pub use client_request_input::{client_request_input, ClientRequestInputError};

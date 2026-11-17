@@ -69,3 +69,46 @@ fn try_lock_store_reports_contention_without_waiting() {
     };
     assert!(format!("{error:#}").contains("store is busy"));
 }
+
+#[tokio::test]
+async fn installer_waits_for_a_reconcile_read_lease_and_is_cancellation_safe() {
+    let home = tempfile::tempdir().unwrap();
+    let reconcile = try_lock_store_shared(home.path()).unwrap();
+    let mut waiting = Box::pin(lock_store_until(
+        home.path(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+    ));
+    assert!(futures::poll!(waiting.as_mut()).is_pending());
+    drop(reconcile);
+    let installed = waiting.await.unwrap();
+    assert!(!lock_is_free(home.path()));
+    drop(installed);
+    assert!(lock_is_free(home.path()));
+
+    let reconcile = try_lock_store_shared(home.path()).unwrap();
+    let mut cancelled = Box::pin(lock_store_until(
+        home.path(),
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+    ));
+    assert!(futures::poll!(cancelled.as_mut()).is_pending());
+    drop(cancelled);
+    drop(reconcile);
+    assert!(
+        lock_is_free(home.path()),
+        "no abandoned blocking task may later acquire the writer lease"
+    );
+}
+
+#[tokio::test]
+async fn installer_wait_timeout_preserves_typed_busy() {
+    let home = tempfile::tempdir().unwrap();
+    let reconcile = try_lock_store_shared(home.path()).unwrap();
+    let error = lock_store_until(home.path(), tokio::time::Instant::now())
+        .await
+        .err()
+        .expect("busy lease must exhaust its budget");
+    assert!(PublishedPluginReadError::error_chain_is_busy(
+        error.as_ref()
+    ));
+    drop(reconcile);
+}

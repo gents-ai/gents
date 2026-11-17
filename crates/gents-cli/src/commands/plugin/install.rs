@@ -51,6 +51,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
                 .into_iter()
                 .collect::<Result<Vec<_>>>()?;
         let pack_args = gents_pack::pack::install_flow::DocumentsInstallRequest {
+            move_pin_tools: Vec::new(),
             home: home.clone(),
             remote: false,
             inference_slots: Vec::new(),
@@ -69,6 +70,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             &dependencies,
             &pack_args,
             true,
+            crate::current_build(),
         )
         .await?;
         return crate::print_json(&result);

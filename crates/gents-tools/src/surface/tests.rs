@@ -3385,6 +3385,50 @@ async fn a_reader_read_the_actor_may_not_make_reports_unknown_and_still_lists() 
     node.shutdown().await.unwrap();
 }
 
+/// The generic path is pinned too: a `Denied` refusal's facts answer
+/// `toolSurfaceUnavailable`, so the split between the two causes is asserted on
+/// both sides and not only for the reader.
+#[test]
+fn a_denied_refusal_keeps_the_generic_tool_surface_cause() {
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
+    let denied = ToolRootRefusal::Denied {
+        agent_did: "did:key:agent".to_owned(),
+        root: std::path::PathBuf::from("/outside"),
+        denial: gents_session::workspace::root_resolution::RootDenialReason::NoAllowedRoots,
+        publishing: RootPublishing::PublishedDisabled,
+        denial_kind: RootDenialKind::NoAllowedRoots,
+    };
+    assert_eq!(
+        tool_surface_reason(denied.publishing(), denied.denial()),
+        AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+        "a denial over no enabled published root is the generic surface"
+    );
+    // Every way the policy fails before it publishes keeps the generic cause.
+    for publishing in [RootPublishing::NoPolicy, RootPublishing::PublishedDisabled] {
+        for denial in [
+            RootDenialKind::Admitted,
+            RootDenialKind::NoAllowedRoots,
+            RootDenialKind::Outside,
+        ] {
+            assert_eq!(
+                tool_surface_reason(publishing, denial),
+                AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+                "only an enabled published root makes it the reader: {publishing:?} {denial:?}"
+            );
+        }
+    }
+    // And a refusal that never reached the policy states no premise.
+    let early = ToolRootRefusal::NoExplicitRoot {
+        agent_did: "did:key:agent".to_owned(),
+    };
+    assert_eq!(early.publishing(), RootPublishing::NoPolicy);
+    assert_eq!(early.denial(), RootDenialKind::Admitted);
+    assert_eq!(
+        tool_surface_reason(early.publishing(), early.denial()),
+        AgentReadinessUnavailableReason::ToolSurfaceUnavailable
+    );
+}
+
 /// A published root nested *under* the tool root does not cover it: admission
 /// requires the tools to sit inside an allowed root, so the grant such a root
 /// would name admits nothing. Only a published root the tools sit inside does.

@@ -656,15 +656,19 @@ pub struct ForwardingProxy {
 }
 
 impl ForwardingProxy {
-    pub async fn spawn(upstream_graphql: &str, hook: ProxyHook) -> Self {
+    pub fn router(upstream_graphql: &str, hook: ProxyHook) -> axum::Router {
         let upstream = upstream_graphql
             .strip_suffix("/api/v0/graphql")
             .expect("upstream GraphQL endpoint")
             .to_owned();
         let state = (upstream, hook, reqwest::Client::new());
-        let router = axum::Router::new()
+        axum::Router::new()
             .fallback(forward)
-            .with_state(std::sync::Arc::new(state));
+            .with_state(std::sync::Arc::new(state))
+    }
+
+    pub async fn spawn(upstream_graphql: &str, hook: ProxyHook) -> Self {
+        let router = Self::router(upstream_graphql, hook);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {

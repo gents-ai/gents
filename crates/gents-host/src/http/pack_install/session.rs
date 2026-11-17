@@ -410,6 +410,16 @@ async fn run_inner(
             &overrides,
         )
         .await?;
+        prepared
+            .prepare_pin_moves(
+                &access,
+                &state.node_did,
+                &received.request.move_pin_tools,
+                &std::iter::once(received.root.archive())
+                    .chain(received.dependencies.iter().map(|d| d.archive()))
+                    .collect::<Vec<_>>(),
+            )
+            .await?;
         gents_pack::pack::resolved_pack::ResolvedPack::record_graph_sources(
             &mut prepared,
             &received.root,
@@ -490,7 +500,15 @@ async fn run_inner(
     };
     send(
         &mut *socket.lock().await,
-        json!({"type":"ready", "scope":scope, "preparation":stage.preparation()}),
+        json!({
+            "type": "ready",
+            "scope": scope,
+            "preparation": stage.preparation(),
+            // The other half of the handshake: which build proposed this plan.
+            // The build this runtime is, supplied by the binary that has the
+            // core packs (this crate carries none).
+            "build": crate::http::pack_install::runtime_build(),
+        }),
     )
     .await
     .map_err(|error| (error, "not_installed"))?;

@@ -121,18 +121,52 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
     Ok(())
 }
 
-pub(super) fn render_request_context_message(
-    agent_config: &gents_inference::resolved::ResolvedAgent,
+pub(super) async fn render_request_context_message(
+    node: &std::sync::Arc<defra_node::Node>,
+    profile_model: &str,
     tool_config: &gents_tools::surface::AgentToolSurfaceConfig,
     request: &AgentRequest,
     frozen_instruction_manifest: Option<&str>,
 ) -> Result<Option<Message>> {
+    // Whether this request runs in a verified workflow child. The answer comes
+    // from the session's creation receipt, so a user-authored string can never
+    // put the sentence in a prompt that should not have it.
+    let plugin_job_child = plugin_job_child(node, request).await;
     Ok(assemble_request_context_message(
-        &agent_config.model_name,
+        profile_model,
         frozen_instruction_manifest,
         gents_session::workspace::request_workspace_cwd(request).as_deref(),
         tool_config.host_tools().read_root(),
+        plugin_job_child,
     ))
+}
+
+/// Whether `request` runs in a session a plugin job opened, from that session's
+/// verified creation receipt.
+///
+/// A read that fails says `false`, because one context sentence is not worth
+/// failing a turn over -- but it **logs** at warn: a transient failure would
+/// otherwise drop the sentence mid-session with no trace, which changes the
+/// prompt's prefix and so the model's cache, for no visible reason.
+async fn plugin_job_child(node: &std::sync::Arc<defra_node::Node>, request: &AgentRequest) -> bool {
+    let scope = gents_protocol::session::SessionScope {
+        node_did: request.node_did.clone(),
+        session_id: request.session_id.clone(),
+        requester_did: request.requester_did.clone(),
+    };
+    let access = gents_store::config_client::ConfigAccess::local(node.clone());
+    match gents_session::session::origin::verified_plugin_job_child(&access, &scope).await {
+        Ok(is_child) => is_child,
+        Err(error) => {
+            tracing::warn!(
+                node_did = %request.node_did,
+                session_id = %request.session_id,
+                error = %format!("{error:#}"),
+                "could not read the session's creation receipt; rendering its context as a non-child, so a workflow child may miss the sentence telling it where its answer returns"
+            );
+            false
+        }
+    }
 }
 
 fn assemble_request_context_message(
@@ -140,11 +174,13 @@ fn assemble_request_context_message(
     frozen_instruction_manifest: Option<&str>,
     live_cwd: Option<&std::path::Path>,
     live_tool_root: Option<&std::path::Path>,
+    plugin_job_child: bool,
 ) -> Option<Message> {
-    let mut body = gents_session::workspace::instruction_body_for_request(
+    let mut body = gents_session::workspace::instruction_body_for_request_with_origin(
         frozen_instruction_manifest,
         live_cwd,
         live_tool_root,
+        plugin_job_child,
     )
     .unwrap_or_default();
     let model = model.trim();
@@ -1811,13 +1847,58 @@ pub(super) mod tests {
 #[cfg(test)]
 mod profile_model_tests {
     #[test]
+    fn profile_model_and_workflow_child_context_are_independent() {
+        use gents_session::workspace::{
+            instruction_body_for_request, InstructionFile, InstructionManifest,
+            WORKFLOW_RESULT_RETURN_INSTRUCTION,
+        };
+        let manifest = InstructionManifest::new(
+            "test-base",
+            vec![InstructionFile::from_bytes(
+                "AGENTS.md",
+                b"Keep these rules.",
+            )],
+        )
+        .to_json_string();
+        for frozen in [None, Some(manifest.as_str())] {
+            let original = instruction_body_for_request(frozen, None, None);
+            for model in ["", "default", "unknown", " model-a "] {
+                for child in [false, true] {
+                    let mut expected = original.clone().unwrap_or_default();
+                    if child {
+                        if !expected.is_empty() {
+                            expected.push_str("\n\n");
+                        }
+                        expected.push_str(WORKFLOW_RESULT_RETURN_INSTRUCTION);
+                    }
+                    if model.trim() == "model-a" {
+                        if !expected.is_empty() {
+                            expected.push('\n');
+                        }
+                        expected.push_str("Your profile's model: model-a.");
+                    }
+                    assert_eq!(
+                        super::assemble_request_context_message(model, frozen, None, None, child),
+                        (!expected.is_empty()).then(|| super::Message::user(format!(
+                            "<context>\n{expected}\n</context>"
+                        ))),
+                        "model={model:?}, child={child}, frozen={frozen:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn profile_model_line_omits_placeholders() {
         for model in ["", " ", "default", "unknown", " DEFAULT "] {
-            assert!(super::assemble_request_context_message(model, None, None, None).is_none());
+            assert!(
+                super::assemble_request_context_message(model, None, None, None, false).is_none()
+            );
         }
         for model in ["model-a", "model-b"] {
             assert_eq!(
-                super::assemble_request_context_message(model, None, None, None),
+                super::assemble_request_context_message(model, None, None, None, false),
                 Some(super::Message::user(format!(
                     "<context>\nYour profile's model: {model}.\n</context>"
                 )))

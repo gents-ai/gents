@@ -35,7 +35,7 @@ pub fn install_from_pack(
     data_collection_fields: BTreeMap<String, Vec<String>>,
     consent: bool,
 ) -> Result<InstalledPlugin> {
-    let lock = store::try_lock_store(home)?;
+    let lock = store::wait_for_store(home)?;
     install_from_pack_locked(
         &lock,
         home,
@@ -157,7 +157,7 @@ pub fn install_pack_plugins_with_bindings<'a>(
     bindings: &BTreeMap<String, String>,
     publish_local: impl FnOnce(&[InstalledPlugin]) -> Result<()>,
 ) -> Result<Vec<InstalledPlugin>> {
-    let lock = store::try_lock_store(home)?;
+    let lock = store::wait_for_store(home)?;
     store::list_records(home)?;
     let previous = snapshot_pack_plugin_records(home, manifest)?;
     let result = (|| {
@@ -444,8 +444,12 @@ pub(crate) async fn stage_pack_graph(
     let cleanup = gents_store::drop_cleanup::DropCleanup::current();
     let home = home.to_owned();
     let owner = owner.to_owned();
+    let lock = store::lock_store_until(
+        &home,
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+    )
+    .await?;
     tokio::task::spawn_blocking(move || {
-        let lock = store::try_lock_store(&home)?;
         store::list_records(&home)?;
         let mut previous = Vec::new();
         let mut seen = std::collections::BTreeSet::new();

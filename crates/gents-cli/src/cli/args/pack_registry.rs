@@ -214,6 +214,9 @@ pub(crate) struct PackOutdatedArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackUpdateArgs {
+    #[arg(long = "move-pin-tools", value_name = "TOOLS_ID", action = clap::ArgAction::Append, requires = "package",
+        help = "Atomically move existing plugin pins only in this named Tools document; repeat for each Tools ID")]
+    pub(crate) move_pin_tools: Vec<String>,
     #[arg(help = "The installed pack to update; every outdated pack when omitted")]
     pub(crate) package: Option<String>,
     #[arg(
@@ -281,6 +284,9 @@ pub(crate) struct PackStarterArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackInstallArgs {
+    #[arg(long = "move-pin-tools", value_name = "TOOLS_ID", action = clap::ArgAction::Append,
+        help = "Atomically move existing plugin pins only in this named Tools document; repeat for each Tools ID")]
+    pub(crate) move_pin_tools: Vec<String>,
     #[arg(help = "A local path/sha256:<hex>, an installed coordinate, or a registry name")]
     pub(crate) package: String,
     #[arg(

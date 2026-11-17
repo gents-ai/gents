@@ -1046,3 +1046,168 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
     let (status, body) = usage_route(&state, command, Some(owner.as_ref())).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "replay: {body}");
 }
+
+#[tokio::test]
+async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
+    use gents_store::identity::NodeIdentity as _;
+    let home = crate::test_support::ClientHome::new().await;
+    let owner = home.node_did().to_owned();
+    let binding = home.agent("hosted-pin-update").await;
+    home.mark_backend_healthy(&binding).await;
+    let plugin_home = tempfile::tempdir().unwrap();
+    let runtime = gents::Gents::builder()
+        .node(home.node().clone())
+        .backend_admission(home.home.backend_admission())
+        .identity(home.home.identity.clone())
+        .plugin_home(plugin_home.path())
+        .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
+        .agent("hosted-pin-update")
+        .identity_binding(binding.clone())
+        .backend_id(format!("{}:backend", binding.agent_did))
+        .model_name("test-model")
+        .done()
+        .build()
+        .await
+        .unwrap();
+    let (_pack_guard, pack_root) =
+        gents_pack::test_support::fixture_pack_copy("bind_plugin_fixture", &json!({"hosted":true}));
+    let (bytes, _) = gents_pack::pack::archive::pack_dir(&pack_root).unwrap();
+    let archive = gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let replacements = gents_pack::pack::pin_moves::replacement_digests([&archive]).unwrap();
+    let old = format!("sha256:{}", "0".repeat(64));
+    for id in ["hosted-named", "hosted-second", "hosted-omitted"] {
+        let tools = serde_json::from_value(json!({
+            "tools_id":id, "node_did":owner,
+            "integrations":{"plugins":[{"plugin":"fixture/list_files","digest":old}]}
+        }))
+        .unwrap();
+        gents_documents::write_tools_document(
+            &home.access,
+            &tools,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
+    }
+    let (activation, observation) = empty_activation_state();
+    assert!(activation.set(runtime).is_ok());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = runtime_contract_router(
+        home.graphql().to_owned(),
+        GraphqlEndpoint::anonymous(home.graphql()),
+        "hosted-pin-update".into(),
+        owner.clone(),
+        "readwrite".into(),
+        Ok(None),
+        Vec::new(),
+        Some(plugin_home.path().display().to_string()),
+        None,
+        None,
+        None,
+        None,
+        crate::http::enrollment::empty_issuer_handle(),
+        crate::http::enrollment::empty_decision_service_handle(),
+        activation,
+        observation,
+        Default::default(),
+        Default::default(),
+    )
+    .contract
+    .merge(crate::test_support::ForwardingProxy::router(
+        home.graphql(),
+        std::sync::Arc::new(|_, _| Box::pin(async { crate::test_support::ProxyDecision::Forward })),
+    ));
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    }));
+    let endpoint =
+        GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), home.user.did())
+            .with_client_signing_capability(home.user.client_signing_capability().unwrap())
+            .unwrap();
+    let pack = gents_pack::pack::resolved_pack::ResolvedPack::received(
+        archive,
+        gents_pack::pack::PackSource::Local { file_name: None },
+    )
+    .unwrap();
+    let mut change =
+        gents_protocol::operations::pack::PackChangeInput::of("fixture/bind_plugin_fixture");
+    change.move_pin_tools = vec!["hosted-named".into()];
+    let conflict = |id: &str| gents_pack::pack::node_packs::PluginPinConflict {
+        plugin: "fixture/list_files".into(),
+        replacement: replacements["fixture/list_files"].clone(),
+        agent: binding.agent_did.clone(),
+        tools: id.into(),
+        pin: old.clone(),
+        integrations: json!({}),
+        previous_integrations: json!({}),
+    };
+    // Follow the production guidance, including its pre-existing explicit
+    // selection and BOTH conflicting Tools, through the real signing session.
+    let next = gents_tools::builtin::self_config::pack_installer::pin_update_call(
+        gents_protocol::operations::pack::PackOperation::Update,
+        &change,
+        &[conflict("hosted-named"), conflict("hosted-second")],
+        pack.digest(),
+        gents_protocol::operations::pack::EditedDocuments::Refuse,
+    );
+    assert_eq!(next["argv"][1], "update");
+    let ids = next["argv"].as_array().unwrap()[3..]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| {
+            assert_eq!(pair[0], "--move-pin-tools");
+            pair[1].as_str().unwrap().to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["hosted-named", "hosted-second"]);
+    let args = gents_pack::pack::install_flow::DocumentsInstallRequest {
+        move_pin_tools: ids,
+        home: plugin_home.path().to_owned(),
+        remote: true,
+        inference_slots: Vec::new(),
+        dependency_variables: Vec::new(),
+        bind_agents: Vec::new(),
+        preview: false,
+        force_rebind_concrete_did: false,
+        edited: gents_protocol::operations::pack::EditedDocuments::Refuse,
+        grant_authority: false,
+        wire: Vec::new(),
+    };
+    crate::http::pack_install_client::install_remote(&endpoint, &owner, &pack, &[], &args, true)
+        .await
+        .unwrap();
+    let rows = home
+        .access
+        .execute("{ Tools {tools_id integrations _version {cid}} }")
+        .await
+        .unwrap();
+    let rows = rows["data"]["Tools"].as_array().unwrap();
+    let named = rows
+        .iter()
+        .find(|row| row["tools_id"] == "hosted-named")
+        .unwrap();
+    let second = rows
+        .iter()
+        .find(|row| row["tools_id"] == "hosted-second")
+        .unwrap();
+    assert_eq!(
+        second["integrations"]["plugins"][0]["digest"],
+        replacements["fixture/list_files"]
+    );
+    let omitted = rows
+        .iter()
+        .find(|row| row["tools_id"] == "hosted-omitted")
+        .unwrap();
+    assert_eq!(
+        named["integrations"]["plugins"][0]["digest"],
+        replacements["fixture/list_files"]
+    );
+    assert_eq!(omitted["integrations"]["plugins"][0]["digest"], old);
+    let cid = named["_version"][0]["cid"].as_str().unwrap();
+    assert_eq!(
+        home.node().verified_block_signer_did(cid).await.unwrap(),
+        home.user.did()
+    );
+}

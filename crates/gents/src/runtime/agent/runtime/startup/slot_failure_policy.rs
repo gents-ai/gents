@@ -7,15 +7,16 @@ use tokio_util::sync::CancellationToken;
 use crate::runtime::agent::runtime::context::StartupBarrier;
 use crate::runtime::status::RuntimeStatusHandle;
 
-pub(super) struct StartupSlotFailurePolicy {
-    pub(super) barrier: Arc<StartupBarrier>,
-    pub(super) runtime_status: RuntimeStatusHandle,
-    pub(super) admission_gate: crate::runtime::agent::runtime::router::RuntimeAdmissionGate,
-    pub(super) runtime_cancel: CancellationToken,
-    pub(super) fatal_error: mpsc::UnboundedSender<anyhow::Error>,
-    pub(super) observer:
+pub(in crate::runtime::agent::runtime) struct StartupSlotFailurePolicy {
+    pub(in crate::runtime::agent::runtime) barrier: Arc<StartupBarrier>,
+    pub(in crate::runtime::agent::runtime) runtime_status: RuntimeStatusHandle,
+    pub(in crate::runtime::agent::runtime) admission_gate:
+        crate::runtime::agent::runtime::router::RuntimeAdmissionGate,
+    pub(in crate::runtime::agent::runtime) runtime_cancel: CancellationToken,
+    pub(in crate::runtime::agent::runtime) fatal_error: mpsc::UnboundedSender<anyhow::Error>,
+    pub(in crate::runtime::agent::runtime) observer:
         Option<Arc<dyn crate::runtime::startup_readiness::StartupBuildFailureObserver>>,
-    pub(super) budget: u32,
+    pub(in crate::runtime::agent::runtime) budget: u32,
 }
 
 #[async_trait::async_trait]
@@ -47,18 +48,25 @@ impl crate::runtime::agent::reconcile::SlotFailurePolicy for StartupSlotFailureP
         Ok(())
     }
 
-    async fn try_demote(&self, agent_did: &str, generation: u64, error: &str) -> Result<bool> {
+    async fn try_demote(
+        &self,
+        agent_did: &str,
+        generation: u64,
+        error: &anyhow::Error,
+    ) -> Result<bool> {
         if !self.barrier.is_pending(agent_did, generation).await {
             return Ok(false);
         }
+        let cause =
+            gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::from_error(error);
         let reason = format!(
-            "demoted after {} consecutive startup build failures; last error: {error}",
+            "demoted after {} consecutive startup build failures; last error: {error:#}",
             self.build_failure_budget()
         );
         let applied = match self
             .runtime_status
             .readiness()
-            .demote_slot(agent_did, generation, reason)
+            .demote_slot_with_cause(agent_did, generation, reason, cause)
             .await
         {
             Ok(applied) => applied,
@@ -89,6 +97,13 @@ impl crate::runtime::agent::reconcile::SlotFailurePolicy for StartupSlotFailureP
              re-admits it on its next reconcile with a fresh budget."
         );
         Ok(true)
+    }
+
+    fn on_slot_parked(&self, error: &anyhow::Error) {
+        if gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(error.as_ref())
+        {
+            self.runtime_status.request_publication_recovery();
+        }
     }
 
     async fn on_slot_retired(&self, agent_did: &str, generation: u64, recreated: bool) {

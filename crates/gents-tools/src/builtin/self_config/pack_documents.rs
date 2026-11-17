@@ -78,9 +78,10 @@ impl PackInstaller {
         })).collect::<Vec<_>>();
         if !commit {
             return ordered! {
-                "ready": blockers.is_empty(), "committed": false,
+                "ready": blockers.is_empty(), "committed": false, "pin_moves": prepared.pin_moves,
                 "apply_with": blockers.is_empty().then(|| json!({
                     "argv_prefix": ["pack", operation, distribution.pinned_spec(&args.package), "--digest", distribution.digest()],
+                    "repeat_move_pin_tools": args.move_pin_tools,
                     "repeat_inference_slots": args.inference_slots, "repeat_variables": repeat_variables(&args.variables),
                 })),
                 "installation_blockers": blockers,

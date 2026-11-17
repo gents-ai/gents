@@ -179,11 +179,13 @@ where
             gents_session::workspace::frozen_instruction_manifest_from_overlay(overlay.as_ref())
                 .map(str::to_owned);
         let request_context_message = super::super::inference::render_request_context_message(
-            &self.agent_config,
+            &self.node,
+            &self.agent_config.model_name,
             &self.tool_config,
             request,
             frozen_instruction_manifest.as_deref(),
-        )?;
+        )
+        .await?;
         let prompt = |folded: gents_session::request::lifecycle::queue::FoldedInput| -> Result<_> {
             Ok(crate::runtime::agent::loop_stream::FoldedPrompt {
                 key: folded.key(),

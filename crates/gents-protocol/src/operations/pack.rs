@@ -159,6 +159,8 @@ impl PackVariables {
 /// One requested install, update or inspection of a pack.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackChangeInput {
+    /// Existing Tools IDs whose shipped plugin pins this install moves atomically.
+    pub move_pin_tools: Vec<String>,
     pub package: String,
     pub variables: PackVariables,
     /// Declared inference slot to profile ID.
@@ -169,6 +171,7 @@ pub struct PackChangeInput {
 impl PackChangeInput {
     pub fn of(package: &str) -> Self {
         Self {
+            move_pin_tools: Vec::new(),
             package: package.to_owned(),
             variables: PackVariables::default(),
             inference_slots: BTreeMap::new(),

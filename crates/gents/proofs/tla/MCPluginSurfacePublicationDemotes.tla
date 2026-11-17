@@ -1,0 +1,3 @@
+---- MODULE MCPluginSurfacePublicationDemotes ----
+EXTENDS PluginSurfacePublication
+====

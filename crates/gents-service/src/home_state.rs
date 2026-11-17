@@ -33,7 +33,12 @@ fn default_home_dir() -> PathBuf {
         Ok(home) => home,
         Err(HomeError::HomeDirUnresolved) => PathBuf::from(".gents"),
         Err(error) => {
-            eprintln!("Error: {}", ErrorChain(&error));
+            // A startup outage: stamped when this process is the service
+            // runtime, whose stderr is `runtime-errors.log`.
+            gents::runtime::native_logging::service_stderr(&format!(
+                "Error: {}",
+                ErrorChain(&error)
+            ));
             std::process::exit(1);
         }
     }

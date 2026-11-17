@@ -330,6 +330,31 @@ pub fn run_cli() -> Result<()> {
     runtime.block_on(async_main(runtime.handle().clone()))
 }
 
+/// This binary's build identity. The core pack archives are compiled into this
+/// crate, so the list is assembled here and passed to whoever needs it (the
+/// install handshake), rather than every crate taking a dependency on them.
+pub fn current_build() -> gents_protocol::build_info::BuildInfo {
+    let core_packs = gents_core_packs::archives()
+        .iter()
+        .map(
+            |(coordinate, bytes)| gents_protocol::build_info::CorePackBuild {
+                coordinate: (*coordinate).to_owned(),
+                digest: format!(
+                    "sha256:{}",
+                    gents_pack::plugin::store::content_digest_hex(bytes)
+                ),
+            },
+        )
+        .collect();
+    let build = version::build_version();
+    gents_protocol::build_info::BuildInfo::from_parts(
+        build.version.to_owned(),
+        build.build.git_sha.map(str::to_owned),
+        build.build.git_dirty,
+        core_packs,
+    )
+}
+
 async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let cli = Cli::parse();
     let command = match cli.command {
@@ -391,6 +416,18 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         gents_service::repair::home::refuse_older_home(&resolve_home_dir(home.as_deref())).await?;
     }
     let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER)?;
+    // Before the dispatch, so both spellings of the foreground runtime install
+    // the stamped stderr sink through one site: the installed service runs
+    // top-level `server`, and a prompt may type `runtime server`.
+    install_service_sink_if_runtime(
+        Some(&command),
+        std::env::var("GENTS_SYSTEM_LOG").ok().as_deref(),
+    );
+    // Unconditionally, before the dispatch: more than the foreground runtime
+    // serves installs -- `PrepareRuntime` and the desktop bridge do too -- and
+    // each must report this binary's real identity rather than an unverifiable
+    // fallback.
+    gents_host::http::pack_install::set_runtime_build(current_build());
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
         Command::Server(args) => {
@@ -454,8 +491,24 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
             RuntimeCommand::Diagnose(args) => commands::diagnose::diagnose(args).await,
             RuntimeCommand::P2p { command } => commands::p2p::dispatch(command).await,
             RuntimeCommand::Desktop { command } => commands::desktop::run(command).await,
-            RuntimeCommand::Version => {
-                print!("{}", version::version_text());
+            RuntimeCommand::Version { json } => {
+                let build = current_build();
+                if json {
+                    // The release metadata plus the build identity an install
+                    // handshake compares, so a mismatch can be checked without
+                    // starting anything.
+                    let mut record = serde_json::to_value(version::build_version())?;
+                    if let Some(object) = record.as_object_mut() {
+                        object.insert("build_identity".to_owned(), serde_json::to_value(&build)?);
+                    }
+                    println!("{}", serde_json::to_string_pretty(&record)?);
+                } else {
+                    print!("{}", version::version_text());
+                    println!("{}", build.summary());
+                    for pack in &build.core_packs {
+                        println!("  {} {}", pack.coordinate, pack.digest);
+                    }
+                }
                 Ok(())
             }
         },
@@ -843,6 +896,41 @@ pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
     )
 }
 
+/// Whether a parsed command starts the foreground runtime — the process a
+/// service definition runs, whose stderr the service manager captures into
+/// `runtime-errors.log`. Both spellings count: the installed definitions run
+/// top-level `gents server --home <home>` (`native_service.rs`), while a person
+/// at a prompt may type either `server` or `runtime server`.
+fn starts_foreground_runtime(command: Option<&Command>) -> bool {
+    matches!(
+        command,
+        Some(Command::Server(_))
+            | Some(Command::Runtime {
+                command: RuntimeCommand::Server(_),
+            })
+    )
+}
+
+/// Install the stamped stderr sink when this process is the service runtime, so
+/// every line it writes into the service manager's log starts with an instant.
+///
+/// Two conditions, both required:
+/// - the parsed command is the foreground runtime, either spelling, and
+/// - `GENTS_SYSTEM_LOG=1`, which both service definitions set
+///   (`native_service.rs` launchd and systemd) and a terminal does not.
+///
+/// The second keeps a person who types `gents server` in a terminal
+/// byte-identical to before: their stderr is not a captured log, so it is not
+/// stamped. One call site for both spellings, so a definition cannot select an
+/// arm that forgets it.
+fn install_service_sink_if_runtime(command: Option<&Command>, system_log: Option<&str>) -> bool {
+    let service_runtime = starts_foreground_runtime(command) && system_log == Some("1");
+    if service_runtime {
+        gents::runtime::native_logging::install_service_stderr_sink();
+    }
+    service_runtime
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -851,6 +939,119 @@ mod tests {
     use gents_service::home_state::write_init_config;
     use gents_service::state::StoredInitConfig;
     use gents_store::identity::NodeIdentity as _;
+
+    /// The blocker this closes: an installed service definition runs
+    /// `gents server --home <home>`, not `runtime server`, so the sink has to be
+    /// installed on the arm the definition actually selects.
+    ///
+    /// The argv is not written here: both definitions are rendered for real and
+    /// their argv read back out of the rendered text, so a definition that
+    /// changed to `runtime server`, added a flag, or stopped setting
+    /// `GENTS_SYSTEM_LOG=1` fails this test instead of passing a look-alike.
+    #[test]
+    fn the_installed_service_argv_selects_an_arm_that_installs_the_sink() {
+        use crate::{install_service_sink_if_runtime, starts_foreground_runtime, Cli};
+        use gents_service::native_service::{
+            launchd_arguments, render_launchd, render_systemd, systemd_arguments,
+            NativeServiceConfig,
+        };
+
+        let home = std::env::temp_dir().join("gents-argv-dispatch-test");
+        let config =
+            NativeServiceConfig::new(home, std::path::PathBuf::from("/usr/local/bin/gents"))
+                .expect("a home and an absolute executable make a service config");
+
+        // launchd: `ProgramArguments` is the argv itself.
+        let plist = render_launchd(&config).expect("the launchd definition renders");
+        let launchd = launchd_arguments(&plist).expect("the rendered plist has an argv");
+        // systemd: `ExecStart` wraps the invocation in `/usr/bin/env …`, so the
+        // executable and its arguments come after the assignments.
+        let unit = render_systemd(&config).expect("the systemd definition renders");
+        let systemd = systemd_arguments(&unit).expect("the rendered unit has an ExecStart");
+
+        // Where the subcommand starts. launchd's `ProgramArguments[0]` is the
+        // executable, so its invocation is what follows it; systemd's
+        // `ExecStart` is `/usr/bin/env`, the assignments, then the executable.
+        // Both are found by their own `server` token rather than by an index, so
+        // a definition inserting a flag does not silently shift this test.
+        let launchd_invocation = launchd
+            .iter()
+            .position(|value| value == "server")
+            .expect("the plist runs the server subcommand");
+        let systemd_invocation = systemd
+            .iter()
+            .position(|value| value == "server")
+            .expect("the unit runs the server subcommand");
+        assert_eq!(
+            launchd.get(launchd_invocation - 1).map(String::as_str),
+            Some("/usr/local/bin/gents"),
+            "the launchd element before the subcommand is the executable"
+        );
+        for (label, argv, from) in [
+            ("launchd", &launchd, launchd_invocation),
+            ("systemd", &systemd, systemd_invocation),
+        ] {
+            // Both definitions set GENTS_SYSTEM_LOG=1; only the rendered text
+            // proves it, so read it from there rather than assuming.
+            if label == "launchd" {
+                assert!(
+                    plist.contains("<key>GENTS_SYSTEM_LOG</key><string>1</string>"),
+                    "the launchd definition sets GENTS_SYSTEM_LOG=1"
+                );
+            } else {
+                assert!(
+                    systemd.iter().any(|value| value == "GENTS_SYSTEM_LOG=1"),
+                    "the systemd definition sets GENTS_SYSTEM_LOG=1: {systemd:?}"
+                );
+            }
+            let invocation = &argv[from..];
+            // The spawned argv is `gents server --home <home>`: what the parser
+            // must see is the executable then its arguments.
+            let mut parse_argv = vec!["gents".to_owned()];
+            parse_argv.extend(invocation.iter().cloned());
+            let cli = Cli::try_parse_from(&parse_argv)
+                .unwrap_or_else(|error| panic!("{label} argv parses: {error}: {parse_argv:?}"));
+            assert_eq!(
+                invocation.first().map(String::as_str),
+                Some("server"),
+                "{label} runs the top-level server subcommand"
+            );
+            assert!(
+                starts_foreground_runtime(cli.command.as_ref()),
+                "{label} selects the foreground runtime arm: {parse_argv:?}"
+            );
+        }
+        // The systemd argv is the environment plus the invocation, and the
+        // invocation is exactly `server --home <home>`.
+        assert_eq!(systemd.first().map(String::as_str), Some("/usr/bin/env"));
+        assert_eq!(
+            systemd.get(systemd_invocation).map(String::as_str),
+            Some("server")
+        );
+        assert_eq!(
+            systemd.get(systemd_invocation + 1).map(String::as_str),
+            Some("--home")
+        );
+
+        // A terminal runs `server` without the variable: the sink stays out, so
+        // its stderr is byte-identical to before.
+        let cli = Cli::try_parse_from(["gents", "server"]).expect("the prompt spelling");
+        assert!(starts_foreground_runtime(cli.command.as_ref()));
+        assert!(
+            !install_service_sink_if_runtime(cli.command.as_ref(), None),
+            "a terminal does not set GENTS_SYSTEM_LOG=1"
+        );
+        assert!(
+            install_service_sink_if_runtime(cli.command.as_ref(), Some("1")),
+            "the definition's variable installs the sink"
+        );
+        // And an interactive command installs nothing, variable or not.
+        let cli = Cli::try_parse_from(["gents", "status"]).expect("valid argv");
+        assert!(!install_service_sink_if_runtime(
+            cli.command.as_ref(),
+            Some("1")
+        ));
+    }
 
     #[tokio::test]
     async fn initialized_offline_node_reuses_the_home_signer() {
