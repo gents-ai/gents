@@ -187,6 +187,16 @@ impl StoreReadPin {
                 .map_err(Arc::new),
         )
     }
+    pub fn validate(&self) -> std::result::Result<(), PublishedPluginReadError> {
+        match &self.0 {
+            Ok(identity) => identity.validate(),
+            Err(error) => match error.as_ref() {
+                PublishedPluginReadError::StoreAbsent(reason) => Err((*reason).into()),
+                _ => Err(PublishedPluginReadError::Pinned(error.clone())),
+            },
+        }
+    }
+
     pub fn try_shared(&self) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
         match &self.0 {
             Ok(identity) => identity.try_shared(),

@@ -325,6 +325,9 @@ pub(super) async fn resolve_startup_until(
     if resolved_snapshot.unavailable_agents.values().any(|unavailable| unavailable.public_cause == Some(gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::PluginPublicationBusy)) {
         runtime_status.request_publication_recovery();
     }
+    if let Some(pin) = tool_runtime.plugin_store_pin() {
+        pin.validate()?;
+    }
     drop(publication);
     log_recovery(
         &agent.node,

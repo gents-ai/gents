@@ -243,6 +243,12 @@ pub(super) async fn run_control_watcher_inner(
                         &tool_runtime, &mut snapshot, deadline,
                         defer_authority(publication_busy, tokio::time::Instant::now() < deadline),
                     ).await?;
+                    if let Some(pin) = tool_runtime.plugin_store_pin() {
+                        if let Err(error) = pin.validate() {
+                            store_absent = gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_absent(&error);
+                            return Err(error.into());
+                        }
+                    }
                     drop(publication);
                     anyhow::Ok(snapshot)
                 };

@@ -323,12 +323,8 @@ pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
         .truncate(false)
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
-    let lock = if exclusive {
-        gents_store::local::file_lock::FileLock::exclusive(file)
-    } else {
-        gents_store::local::file_lock::FileLock::shared(file)
-    }
-    .with_context(|| format!("locking {}", path.display()))?;
+    let lock = gents_store::local::file_lock::FileLock::exclusive(file)
+        .with_context(|| format!("locking {}", path.display()))?;
     Ok(StoreGuard {
         home: home.to_owned(),
         _lock: lock,
@@ -355,7 +351,7 @@ fn lock_store_shared_existing(home: &Path) -> Result<StoreGuard> {
 /// Explicit cold-start acquisition. It creates the store just as a writer
 /// does, before a runtime pins a noncreating read identity.
 pub fn bootstrap_store(home: &Path) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
-    try_lock_store_mode(home, true)
+    try_lock_store_writer(home)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -393,7 +389,7 @@ impl PublishedPluginReadError {
 pub fn wait_for_store(home: &Path) -> Result<StoreGuard> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
-        match try_lock_store_mode(home, true) {
+        match try_lock_store_writer(home) {
             Ok(guard) => return Ok(guard),
             Err(PublishedPluginReadError::Busy) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(
@@ -413,7 +409,7 @@ pub fn wait_for_store(home: &Path) -> Result<StoreGuard> {
 /// leaves a blocking task acquiring an unobserved lease after shutdown.
 pub async fn lock_store_until(home: &Path, deadline: tokio::time::Instant) -> Result<StoreGuard> {
     loop {
-        match try_lock_store_mode(home, true) {
+        match try_lock_store_writer(home) {
             Ok(guard) => return Ok(guard),
             Err(PublishedPluginReadError::Busy) if tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep_until(
@@ -431,7 +427,7 @@ pub async fn lock_store_until(home: &Path, deadline: tokio::time::Instant) -> Re
 }
 
 pub fn try_lock_store(home: &Path) -> Result<StoreGuard> {
-    try_lock_store_mode(home, true).map_err(Into::into)
+    try_lock_store_writer(home).map_err(Into::into)
 }
 
 pub fn try_lock_store_shared(
@@ -440,10 +436,7 @@ pub fn try_lock_store_shared(
     StoreReadIdentity::capture(home)?.try_shared()
 }
 
-fn try_lock_store_mode(
-    home: &Path,
-    exclusive: bool,
-) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
+fn try_lock_store_writer(home: &Path) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
     let path = plugins_root(home).join(".store.lock");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -458,11 +451,7 @@ fn try_lock_store_mode(
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))
         .map_err(PublishedPluginReadError::Read)?;
-    let result = if exclusive {
-        gents_store::local::file_lock::FileLock::try_exclusive(file)
-    } else {
-        gents_store::local::file_lock::FileLock::try_shared(file)
-    };
+    let result = gents_store::local::file_lock::FileLock::try_exclusive(file);
     let lock = match result {
         Ok(lock) => lock,
         Err(std::fs::TryLockError::WouldBlock) => return Err(PublishedPluginReadError::Busy),
