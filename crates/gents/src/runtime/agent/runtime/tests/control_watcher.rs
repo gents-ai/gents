@@ -1053,7 +1053,11 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
         "while the plugin is missing the agent's tools cannot build"
     );
 
-    gents_pack::plugin::store::write_record(plugin_home.path(), &installed_record()).unwrap();
+    {
+        // Model the install's writer boundary, not a creating read at startup.
+        let _writer = gents_pack::plugin::store::lock_store(plugin_home.path()).unwrap();
+        gents_pack::plugin::store::write_record(plugin_home.path(), &installed_record()).unwrap();
+    }
     record_plugin_install(
         &fixture.agent_access,
         &fixture.node_binding,
