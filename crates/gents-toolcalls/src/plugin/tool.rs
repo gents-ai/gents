@@ -138,7 +138,7 @@ impl PluginTool {
 
 impl ToolDyn for PluginTool {
     fn hidden(&self) -> bool {
-        self.inner.hidden()
+        false
     }
     fn name(&self) -> String {
         self.definition.name.clone()
