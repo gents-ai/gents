@@ -475,6 +475,116 @@ mod tests {
         node.shutdown().await.expect("node shutdown");
     }
 
+    /// The access the offline operator CLI builds: a local client whose actor is
+    /// proven by an endpoint holding that actor's client signing key.
+    fn operator_access(
+        directory: &std::path::Path,
+        node: &std::sync::Arc<defra_node::Node>,
+    ) -> (ConfigAccess, identity::Did) {
+        let path = directory.join("client.key");
+        let actor = crate::identity::KeyIdentity::load_or_create(&path, None)
+            .expect("a client key is created");
+        let key = crate::identity::load_file_identity(&path)
+            .expect("the client key loads")
+            .private_key_bytes();
+        let capability = super::super::ClientSigningCapability::from_ed25519_key(&key)
+            .expect("an ed25519 key makes a client signing capability");
+        assert_eq!(capability.did(), actor.did());
+        let endpoint =
+            super::super::GraphqlEndpoint::as_principal("http://127.0.0.1:1/api/v0/graphql", actor.did())
+                .with_client_signing_capability(capability)
+                .expect("the endpoint holds the capability it was given");
+        let access = ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(actor.did()).expect("a key identity makes a DID"),
+        )
+        .with_client_signed_writes_through(endpoint)
+        .expect("the client key must belong to the access's actor");
+        (access, identity::Did::new(actor.did()).expect("a key identity makes a DID"))
+    }
+
+    /// The unsigned relationship read is a proof of operator, not the absence
+    /// of an Agent signer: a signer-less Local client the runtime or session
+    /// side built must be refused, and only the access holding the client
+    /// signing key may read relationships without one.
+    #[tokio::test]
+    async fn only_a_client_signed_local_access_reads_relationships_unsigned() {
+        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let owner = identity::Did::new(
+            node.node_identity_did()
+                .expect("fixture node has an identity"),
+        )
+        .unwrap();
+        let yaml = "name: Relationship reader proof\nresources:\n  - name: parents\n    relations:\n      - name: reader\n        types: [actor]\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n  - name: children\n    relations:\n      - name: parent\n        types: [parents]\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n";
+        let policy = node
+            .add_dac_policy_as(
+                &defra_core::RequestContext::default().with_identity(Some(owner.to_string())),
+                yaml,
+            )
+            .await
+            .unwrap();
+        let owner_access = ConfigAccess::local_as(node.clone(), owner.clone());
+        owner_access
+            .add_collection(&format!(
+                "type Parent @policy(id: \"{policy}\", resource: \"parents\") {{ name: String }}\ntype Child @policy(id: \"{policy}\", resource: \"children\") {{ name: String }}"
+            ))
+            .await
+            .unwrap();
+        let created = owner_access
+            .write(
+                "test.relationships.proof",
+                "mutation { add_Parent(input: {name: \"parent\"}) { _docID } }",
+            )
+            .await
+            .unwrap();
+        let parent = created["data"]["add_Parent"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let reader = identity::Did::new("did:key:reader").unwrap();
+        owner_access
+            .add_actor_relationship("Parent", &parent, "reader", &reader)
+            .await
+            .unwrap();
+
+        // A signer-less Local access with an asserted identity, of the shape the
+        // runtime and session side build: no client signing key backs it, so it
+        // must not inherit the operator's unsigned read.
+        let asserted = ConfigAccess::local_with_optional_agent_signer(
+            node.clone(),
+            reader.clone(),
+            None,
+        )
+        .unwrap();
+        assert!(asserted.client_endpoint().is_none());
+        assert!(matches!(
+            asserted
+                .list_document_relationships_as_node("Parent", &parent)
+                .await,
+            Err(ConfigClientError::ManagedAgentSignerRequired)
+        ));
+
+        // The operator's access is the one built with the endpoint holding the
+        // client signing key, exactly as the offline CLI builds it.
+        let key_directory = tempfile::tempdir().unwrap();
+        let (operator, operator_did) = operator_access(key_directory.path(), &node);
+        owner_access
+            .add_actor_relationship("Parent", &parent, "reader", &operator_did)
+            .await
+            .unwrap();
+        let relationships = operator
+            .list_document_relationships_as_node("Parent", &parent)
+            .await
+            .unwrap();
+        assert!(
+            relationships
+                .iter()
+                .any(|relationship| relationship.subject == operator_did.as_str()),
+            "the operator reads the grant it made: {relationships:?}"
+        );
+        node.shutdown().await.expect("node shutdown");
+    }
+
     #[test]
     fn resource_target_round_trips_and_rejects_unrepresentable_ids() {
         assert_eq!(

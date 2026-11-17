@@ -536,6 +536,7 @@ mod tests {
     use serde_json::json;
 
     use super::{accounts_json, claude_auth_gate, reason_next_step};
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
     use gents_inference::auth::credential::AccountSummary;
 
     /// Every reason a diagnose entry states has a step an operator can take; the
@@ -544,7 +545,7 @@ mod tests {
     fn the_reader_cause_gives_a_next_step_with_the_grant_on_this_home() {
         let home = std::path::Path::new("/Users/someone/.gents-one");
         let step = reason_next_step(
-            gents_protocol::node_readiness::AgentReadinessUnavailableReason::WorkspaceRootReaderMissing,
+            AgentReadinessUnavailableReason::WorkspaceRootReaderMissing,
             home,
         )
         .expect("the reader cause names a step");
@@ -559,23 +560,24 @@ mod tests {
         );
         assert_eq!(
             reason_next_step(
-                gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+                AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
                 home,
             )
             .as_deref(),
             Some("Check installed plugins and Tools configuration on the node.")
         );
-        let between = gents_protocol::node_readiness::AgentReadinessUnavailableReason::ALL
-            .into_iter()
-            .filter(|reason| {
-                matches!(
+        assert_eq!(
+            AgentReadinessUnavailableReason::ALL
+                .into_iter()
+                .filter(|reason| matches!(
                     reason,
-                    gents_protocol::node_readiness::AgentReadinessUnavailableReason::WorkspaceRootReaderMissing
-                        | gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable
-                )
-            })
-            .count();
-        assert_eq!(between, 2, "the two causes with a step stay two");
+                    AgentReadinessUnavailableReason::WorkspaceRootReaderMissing
+                        | AgentReadinessUnavailableReason::ToolSurfaceUnavailable
+                ))
+                .count(),
+            2,
+            "exactly the two causes with a single call of their own"
+        );
     }
 
     fn account(label: &str, enabled: bool, expires_in_minutes: i64) -> AccountSummary {
