@@ -612,6 +612,23 @@ async fn title_observation_uses_selected_agent_session_access() {
         .unwrap(),
         GeneratedTitleNeed::Needed
     );
+    // Document ACP gives the runtime no read of the selected Agent's session;
+    // the hosting node key still observes it past document ACP (gents#3747).
+    let session = first_access
+        .execute(r#"{ AgentSession(filter: {session_id: {_eq: "title-target"}}) {_docID} }"#)
+        .await
+        .unwrap();
+    assert!(
+        !gents_store::test_support::document_acp_reads(
+            &db.node,
+            node_did,
+            "AgentSession",
+            session["data"]["AgentSession"][0]["_docID"]
+                .as_str()
+                .unwrap()
+        )
+        .await
+    );
     assert_eq!(
         super::observations::session_needs_generated_title(
             &runtime_access,
@@ -621,7 +638,7 @@ async fn title_observation_uses_selected_agent_session_access() {
         )
         .await
         .unwrap(),
-        GeneratedTitleNeed::SessionUnreadable
+        GeneratedTitleNeed::Needed
     );
     assert_eq!(
         super::observations::session_needs_generated_title(

@@ -1903,12 +1903,14 @@ mod tests {
         let sibling_access =
             ConfigAccess::local_as(node.clone(), sibling.agent_did.parse().unwrap());
         let runtime_access = ConfigAccess::local_as(node.clone(), runtime.did().parse().unwrap());
-        let session_query = "{ AgentSession { session_id } }";
+        let session_query = "{ AgentSession { _docID session_id } }";
+        // The hosting node key reads the session past document ACP
+        // (gents#3747); document ACP itself gives the runtime no read.
         for (reader, expected) in [
             (&access, 1),
             (&agent_access, 1),
             (&sibling_access, 0),
-            (&runtime_access, 0),
+            (&runtime_access, 1),
         ] {
             let result = reader.execute(session_query).await.unwrap();
             assert_eq!(
@@ -1916,6 +1918,18 @@ mod tests {
                 expected
             );
         }
+        let session = access.execute(session_query).await.unwrap();
+        assert!(
+            !gents_store::test_support::document_acp_reads(
+                &node,
+                runtime.did(),
+                "AgentSession",
+                session["data"]["AgentSession"][0]["_docID"]
+                    .as_str()
+                    .unwrap()
+            )
+            .await
+        );
         assert_eq!(
             crate::session::load_session_requester_scope(
                 &node,
@@ -2009,14 +2023,26 @@ mod tests {
         let unattended = user_sessions["data"]["AgentSession"][0]["_docID"]
             .as_str()
             .unwrap();
-        let hidden = runtime_access
+        // Document ACP gives the runtime no read of the User's unattended
+        // session; the hosting node key observes it past document ACP
+        // (gents#3747).
+        assert!(
+            !gents_store::test_support::document_acp_reads(
+                &node,
+                runtime.did(),
+                "AgentSession",
+                unattended
+            )
+            .await
+        );
+        let observed = runtime_access
             .execute("{ AgentSession(filter:{session_id:{_eq:\"unattended\"}}) { _docID } }")
             .await
             .unwrap();
-        assert!(hidden["data"]["AgentSession"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        assert_eq!(
+            observed["data"]["AgentSession"].as_array().map(Vec::len),
+            Some(1)
+        );
         access
             .transact_write("test.client.delete_unattended", |txn| {
                 Box::pin(async move { txn.delete_session_for_native_fixture(unattended).await })

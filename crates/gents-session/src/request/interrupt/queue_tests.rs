@@ -818,12 +818,24 @@ async fn desktop_interrupt_observation(
     .await
     .unwrap();
     let first = latch(&fixture.agent_access, parent).await;
-    assert_eq!(
+    // Document ACP gives the Node no read of the User-owned request; the
+    // hosting node key's default read observes the latched interrupt past
+    // document ACP (gents#3747).
+    assert!(
+        !gents_store::test_support::document_acp_reads(
+            &fixture.db.node,
+            fixture.db.node_identity.did(),
+            "AgentRequest",
+            &parent.doc_id
+        )
+        .await,
+        "document ACP gives the Node no read of the User-owned request"
+    );
+    assert!(
         fetch_interrupt_requested_at_by_doc_id(&fixture.db.node, &parent.doc_id)
             .await
-            .unwrap(),
-        None,
-        "the Node's default read cannot observe the User-owned request"
+            .unwrap()
+            .is_some()
     );
     assert_eq!(
         fetch_interrupt_requested_at_by_doc_id_with_access(&fixture.agent_access, &parent.doc_id)
