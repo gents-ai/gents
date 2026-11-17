@@ -43,13 +43,52 @@ impl PartialEq for ResolvedWatcherIdentity {
 }
 impl Eq for ResolvedWatcherIdentity {}
 
+/// Allowlisted requester-visible causes. Diagnostics and their context are
+/// deliberately separate: raw paths, provider bodies and ACP diagnostics
+/// must not be copied to AgentRequest.failure_reason. The root owner alone
+/// supplies the selected public grant facts needed to fix a reader refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublicUnavailableCause {
+    PluginPublicationBusy,
+    /// Only the root owner's ReaderMissing variant, never an arbitrary
+    /// diagnostic string. Its Display contains B5's actionable grant text.
+    WorkspaceRootReaderMissing(gents_tools::surface::ToolRootRefusal),
+}
+
+impl PublicUnavailableCause {
+    pub fn from_error(error: &anyhow::Error) -> Option<Self> {
+        if gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(error.as_ref())
+        {
+            return Some(Self::PluginPublicationBusy);
+        }
+        let refusal = gents_tools::surface::tool_root_refusal(error.as_ref())?;
+        if matches!(
+            refusal,
+            gents_tools::surface::ToolRootRefusal::ReaderMissing { .. }
+        ) && gents_tools::surface::tool_surface_reason(refusal.publishing(), refusal.denial())
+            == AgentReadinessUnavailableReason::WorkspaceRootReaderMissing
+        {
+            Some(Self::WorkspaceRootReaderMissing(refusal.clone()))
+        } else {
+            None
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            Self::PluginPublicationBusy => {
+                gents_protocol::node_readiness::PLUGIN_PUBLICATION_BUSY_MESSAGE.to_owned()
+            }
+            Self::WorkspaceRootReaderMissing(refusal) => refusal.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnavailableAgent {
     pub public_reason: AgentReadinessUnavailableReason,
     pub diagnostic: String,
-    /// A cause whose rejection says more than its reason's fixed wording: the
-    /// text a request is rejected with, carrying the facts its fix needs.
-    pub public_text: Option<String>,
+    pub public_cause: Option<PublicUnavailableCause>,
     pub awaiting_first_probe: bool,
     pub watcher_identity: Option<ResolvedWatcherIdentity>,
 }
@@ -62,15 +101,14 @@ impl UnavailableAgent {
         Self {
             public_reason,
             diagnostic: diagnostic.into(),
-            public_text: None,
+            public_cause: None,
             awaiting_first_probe: false,
             watcher_identity: None,
         }
     }
 
-    /// The rejection text a cause states itself, beyond its reason's wording.
-    pub fn with_public_message(mut self, text: impl Into<String>) -> Self {
-        self.public_text = Some(text.into());
+    pub fn with_error_cause(mut self, error: &anyhow::Error) -> Self {
+        self.public_cause = PublicUnavailableCause::from_error(error);
         self
     }
 
@@ -90,14 +128,6 @@ impl UnavailableAgent {
     pub fn public_message(&self) -> &'static str {
         self.public_reason.public_message()
     }
-
-    /// The text a request rejected for this Agent carries: the cause's own when
-    /// it has one, its reason's wording otherwise.
-    pub fn rejection_text(&self) -> &str {
-        self.public_text
-            .as_deref()
-            .unwrap_or_else(|| self.public_reason.public_message())
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,9 +137,6 @@ pub enum EffectiveAgentAdmission<'a> {
     Unavailable {
         public_reason: AgentReadinessUnavailableReason,
         diagnostic: &'a str,
-        /// The text a rejected request carries: the cause's own when it says
-        /// more than its reason's wording, that wording otherwise.
-        rejection_text: &'a str,
     },
     Unassigned,
 }
@@ -134,10 +161,6 @@ pub fn effective_agent_admission<'a>(
                 diagnostic: startup_diagnostic
                     .or_else(|| unavailable.map(|unavailable| unavailable.diagnostic.as_str()))
                     .expect("unavailable admission has a diagnostic source"),
-                rejection_text: unavailable.map_or_else(
-                    || public_reason.public_message(),
-                    UnavailableAgent::rejection_text,
-                ),
             }
         }
         EffectiveAgentReadinessAdmission::Unassigned => EffectiveAgentAdmission::Unassigned,

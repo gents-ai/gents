@@ -105,13 +105,50 @@ struct PluginAttemptError {
     receipt: PluginExecutionReceipt,
 }
 
-fn plugin_attempt_error(error: &anyhow::Error) -> Option<&PluginAttemptError> {
-    error.downcast_ref::<PluginAttemptError>()
+pub(super) fn digest_in_pins(pins: &[&str], running: &str) -> bool {
+    pins.contains(&running)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PluginResolutionError {
+    #[error("invalid plugin coordinate {coordinate}")]
+    Coordinate {
+        coordinate: String,
+        #[source]
+        source: gents_protocol::error_chain::PassedThrough,
+    },
+    #[error("plugin {coordinate} is not installed: this runtime has no plugin directory")]
+    NoHome { coordinate: String },
+    #[error("resolving plugin {coordinate}: {source}")]
+    Published {
+        coordinate: String,
+        #[source]
+        source: store::PublishedPluginReadError,
+    },
+    #[error("plugin {coordinate} is installed as {installed}, not the pinned {pinned}; reinstall it or update the pin")]
+    PinMismatch {
+        coordinate: String,
+        installed: String,
+        pinned: String,
+    },
+}
+
+impl PluginResolutionError {
+    pub fn error_chain_is_pin_mismatch(error: &anyhow::Error) -> bool {
+        executor_error::<Self>(error).is_some_and(|cause| matches!(cause, Self::PinMismatch { .. }))
+    }
+}
+
+fn executor_error<E>(error: &anyhow::Error) -> Option<&E>
+where
+    E: std::error::Error + 'static,
+{
+    gents_protocol::error_chain::find_map_source(error.as_ref(), |cause| cause.downcast_ref::<E>())
 }
 
 pub(crate) fn publication_busy(error: &anyhow::Error) -> bool {
     store::PublishedPluginReadError::error_chain_is_busy(error.as_ref())
-        || plugin_attempt_error(error).is_some_and(|attempt| {
+        || executor_error::<PluginAttemptError>(error).is_some_and(|attempt| {
             store::PublishedPluginReadError::error_chain_is_busy(attempt.source.as_ref())
         })
 }
@@ -587,19 +624,37 @@ impl PluginExecutor {
         )
     }
 
-    pub fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin> {
-        let (namespace, name) = gents_documents::plugin_coordinate::parse_coordinate(coordinate)?;
-        let home = self.home.as_deref().with_context(|| {
-            format!("plugin {coordinate} is not installed: this runtime has no plugin directory")
-        })?;
-        let (record, _store) = store::read_published_record(home, namespace, name)
-            .with_context(|| format!("plugin {coordinate} is not installed"))?;
+    pub fn resolve(
+        &self,
+        coordinate: &str,
+        pinned: Option<&str>,
+    ) -> std::result::Result<InstalledPlugin, PluginResolutionError> {
+        let (namespace, name) = gents_documents::plugin_coordinate::parse_coordinate(coordinate)
+            .map_err(|source| PluginResolutionError::Coordinate {
+                coordinate: coordinate.to_owned(),
+                source: gents_protocol::error_chain::PassedThrough::new(source),
+            })?;
+        let home = self
+            .home
+            .as_deref()
+            .ok_or_else(|| PluginResolutionError::NoHome {
+                coordinate: coordinate.to_owned(),
+            })?;
+        let (record, _store) =
+            store::read_published_record(home, namespace, name).map_err(|source| {
+                PluginResolutionError::Published {
+                    coordinate: coordinate.to_owned(),
+                    source,
+                }
+            })?;
         if let Some(pinned) = pinned {
-            anyhow::ensure!(
-                record.digest == pinned,
-                "plugin {coordinate} is installed as {}, not the pinned {pinned}; reinstall it or update the pin",
-                record.digest
-            );
+            if !digest_in_pins(&[pinned], &record.digest) {
+                return Err(PluginResolutionError::PinMismatch {
+                    coordinate: coordinate.to_owned(),
+                    installed: record.digest,
+                    pinned: pinned.to_owned(),
+                });
+            }
         }
         Ok(record)
     }
@@ -867,7 +922,7 @@ impl gents_tools::plugin_host::PluginHost for PluginExecutor {
     }
 
     fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin> {
-        PluginExecutor::resolve(self, coordinate, pinned)
+        PluginExecutor::resolve(self, coordinate, pinned).map_err(Into::into)
     }
 
     async fn call_outcome(
@@ -939,7 +994,7 @@ fn receipt_of(
 ) -> PluginExecutionReceipt {
     match result {
         Ok(call) => call.receipt.clone(),
-        Err(error) => plugin_attempt_error(error)
+        Err(error) => executor_error::<PluginAttemptError>(error)
             .map(|error| error.receipt.clone())
             .unwrap_or(refused),
     }

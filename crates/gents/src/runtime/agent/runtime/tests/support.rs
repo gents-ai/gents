@@ -91,7 +91,7 @@ pub(super) async fn plugin_runtime_fixture(
         (Collection::AgentContext, json!({"node_did":runtime.did(), "context_id":context_id, "tools_id":tools_id})),
         (Collection::Tools, json!({"node_did":runtime.did(), "tools_id":tools_id})),
         (Collection::InferenceProfile, json!({"node_did":runtime.did(), "profile_id":profile_id, "backend_id":backend_id, "model_name":"default"})),
-        (Collection::InferenceBackend, json!({"node_did":runtime.did(), "backend_id":backend_id, "name":backend_id, "provider_kind":"OpenAiCompatible", "endpoint":endpoint, "max_concurrent":1, "auth":{"kind":"unauthenticated"}})),
+        (Collection::InferenceBackend, json!({"node_did":runtime.did(), "backend_id":backend_id, "name":backend_id, "provider_kind":"OpenAiCompatible", "openai_wire_api":"chat_completions", "endpoint":endpoint, "max_concurrent":1, "auth":{"kind":"unauthenticated"}})),
     ].into_iter().map(|(collection, value)| DesiredStateApplyDocument { collection, add: value.clone(), update: value }).collect();
     let plan = DesiredStateApplyPlan::new(docs)?;
     user_access

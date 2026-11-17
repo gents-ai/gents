@@ -243,8 +243,9 @@ pub(super) async fn resolve_behavior_surfaces(
                     agent_config.agent.agent_did.clone(),
                     UnavailableAgent::new(
                         AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
-                        error.to_string(),
-                    ),
+                        format!("{error:#}"),
+                    )
+                    .with_error_cause(&error),
                 );
             }
         }

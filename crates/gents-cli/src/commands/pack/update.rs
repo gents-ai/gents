@@ -147,6 +147,7 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> 
             continue;
         };
         let install_args = PackInstallArgs {
+            move_pin_tools: args.move_pin_tools.clone(),
             package: format!("{coordinate}@{latest}"),
             inference_slots: args.inference_slots.clone(),
             dependency_variables: Vec::new(),
@@ -209,6 +210,41 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<(), PackChangeError> 
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn update_pin_moves_are_explicit_and_require_a_named_pack() {
+        let cli = crate::cli::Cli::try_parse_from([
+            "gents",
+            "config",
+            "pack",
+            "update",
+            "acme/pack",
+            "--move-pin-tools",
+            "one",
+            "--move-pin-tools",
+            "two",
+        ])
+        .unwrap();
+        let Some(crate::cli::Command::Config {
+            command:
+                crate::cli::ConfigCommand::Pack {
+                    command: crate::cli::PackCommand::Update(args),
+                },
+        }) = cli.command
+        else {
+            panic!("pack update command")
+        };
+        assert_eq!(args.move_pin_tools, ["one", "two"]);
+        assert!(crate::cli::Cli::try_parse_from([
+            "gents",
+            "config",
+            "pack",
+            "update",
+            "--move-pin-tools",
+            "one",
+        ])
+        .is_err());
+    }
 
     fn build_document_pack(version: &str) -> (Vec<u8>, String) {
         let dir = tempfile::tempdir().unwrap();
@@ -289,6 +325,7 @@ mod tests {
         )
         .await;
         crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
+            move_pin_tools: Vec::new(),
             package: "demo_pack".to_owned(),
             inference_slots: Vec::new(),
             dependency_variables: Vec::new(),
@@ -316,6 +353,7 @@ mod tests {
         )
         .await;
         let report = crate::request_helpers::capture_report(update(PackUpdateArgs {
+            move_pin_tools: Vec::new(),
             package: None,
             inference_slots: Vec::new(),
             scope,
@@ -428,6 +466,7 @@ mod tests {
                 .unwrap()
                 .to_owned();
             crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
+                move_pin_tools: Vec::new(),
                 package,
                 inference_slots: vec![slot.clone()],
                 dependency_variables: Vec::new(),
@@ -478,6 +517,7 @@ mod tests {
         };
         let fixture = super::super::test_support::fixture_dir("assets_fixture");
         crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
+            move_pin_tools: Vec::new(),
             package: fixture.to_str().unwrap().to_owned(),
             dependency_variables: Vec::new(),
             bind_agents: Vec::new(),
@@ -505,6 +545,7 @@ mod tests {
         let (elsewhere, _elsewhere) = serve("another_pack").await;
         let update_from = |registry| {
             let failed = crate::request_helpers::capture_report(update(PackUpdateArgs {
+                move_pin_tools: Vec::new(),
                 package: Some("fixture/assets_fixture".to_owned()),
                 inference_slots: Vec::new(),
                 scope: scope.clone(),
@@ -527,6 +568,7 @@ mod tests {
         registry: Option<String>,
     ) -> PackInstallArgs {
         PackInstallArgs {
+            move_pin_tools: Vec::new(),
             package,
             inference_slots: Vec::new(),
             dependency_variables: Vec::new(),
@@ -635,6 +677,7 @@ mod tests {
             )
             .await;
             let report = crate::request_helpers::capture_report(update(PackUpdateArgs {
+                move_pin_tools: Vec::new(),
                 package: None,
                 inference_slots: Vec::new(),
                 scope,
@@ -682,6 +725,7 @@ mod tests {
         };
         let fixture = super::super::test_support::fixture_dir("assets_fixture");
         crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
+            move_pin_tools: Vec::new(),
             package: fixture.to_str().unwrap().to_owned(),
             inference_slots: Vec::new(),
             dependency_variables: Vec::new(),

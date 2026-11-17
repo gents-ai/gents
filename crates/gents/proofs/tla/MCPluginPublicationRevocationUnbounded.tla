@@ -1,0 +1,3 @@
+---- MODULE MCPluginPublicationRevocationUnbounded ----
+EXTENDS PluginPublicationRevocation
+====

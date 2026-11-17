@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::runtime::agent::ProcessLifecycleState;
-use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
+use gents_automation::triggers::runtime_snapshot::{ActiveRuntimeSnapshot, PublicUnavailableCause};
 use gents_store::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +21,7 @@ pub(crate) struct AgentAdmissionObservation {
     process_state: NodeReadinessProcessState,
     source_generation: u64,
     demotions: BTreeMap<String, String>,
+    public_causes: BTreeMap<String, PublicUnavailableCause>,
 }
 
 impl AgentAdmissionObservation {
@@ -30,6 +31,10 @@ impl AgentAdmissionObservation {
 
     pub(crate) fn demotion_reason(&self, agent_did: &str) -> Option<&str> {
         self.demotions.get(agent_did).map(String::as_str)
+    }
+
+    pub(crate) fn public_cause(&self, agent_did: &str) -> Option<PublicUnavailableCause> {
+        self.public_causes.get(agent_did).cloned()
     }
 
     pub(crate) fn source_generation(&self) -> u64 {
@@ -49,6 +54,7 @@ impl AgentAdmissionObservation {
             process_state: NodeReadinessProcessState::Ready,
             source_generation,
             demotions: demotions.into_iter().collect(),
+            public_causes: BTreeMap::new(),
         }
     }
 }
@@ -59,6 +65,7 @@ impl Default for AgentAdmissionObservation {
             process_state: NodeReadinessProcessState::Uninitialized,
             source_generation: 0,
             demotions: BTreeMap::new(),
+            public_causes: BTreeMap::new(),
         }
     }
 }
@@ -126,13 +133,19 @@ struct ReadinessSource {
 }
 
 #[derive(Clone)]
+struct SlotDemotion {
+    diagnostic: String,
+    public_cause: Option<PublicUnavailableCause>,
+}
+
+#[derive(Clone)]
 struct PublisherState {
     node_did: String,
     process_state: NodeReadinessProcessState,
     router_generation: u64,
     source: Option<ReadinessSource>,
     registered_slots: BTreeSet<(String, u64)>,
-    demotions: BTreeMap<(String, u64), String>,
+    demotions: BTreeMap<(String, u64), SlotDemotion>,
     persisted: Option<NodeReadinessSnapshot>,
     updated_at: String,
     persist_attempt_timeout: Option<Duration>,
@@ -183,6 +196,7 @@ enum Command {
         agent_did: String,
         generation: u64,
         diagnostic: String,
+        public_cause: Option<PublicUnavailableCause>,
         ack: oneshot::Sender<Result<bool>>,
     },
     RetireSlot {
@@ -372,16 +386,29 @@ impl NodeReadinessPublisherHandle {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn demote_slot(
         &self,
         agent_did: &str,
         generation: u64,
         diagnostic: String,
     ) -> Result<bool> {
+        self.demote_slot_with_cause(agent_did, generation, diagnostic, None)
+            .await
+    }
+
+    pub(crate) async fn demote_slot_with_cause(
+        &self,
+        agent_did: &str,
+        generation: u64,
+        diagnostic: String,
+        public_cause: Option<PublicUnavailableCause>,
+    ) -> Result<bool> {
         self.send(|ack| Command::DemoteSlot {
             agent_did: agent_did.to_string(),
             generation,
             diagnostic,
+            public_cause,
             ack,
         })
         .await
@@ -658,6 +685,7 @@ async fn run_publisher(
                 agent_did,
                 generation,
                 diagnostic,
+                public_cause,
                 ack,
             } => {
                 let applied = state
@@ -665,9 +693,13 @@ async fn run_publisher(
                     .contains(&(agent_did.clone(), generation));
                 let mut candidate = state.clone();
                 if applied {
-                    candidate
-                        .demotions
-                        .insert((agent_did, generation), diagnostic);
+                    candidate.demotions.insert(
+                        (agent_did, generation),
+                        SlotDemotion {
+                            diagnostic,
+                            public_cause,
+                        },
+                    );
                 }
                 let result = if applied {
                     commit_candidate(
@@ -831,6 +863,17 @@ async fn persist_candidate(
     Ok(AgentAdmissionObservation {
         process_state: state.process_state,
         source_generation: source.active_generation,
+        public_causes: source
+            .slot_generations
+            .iter()
+            .filter_map(|(agent, generation)| {
+                state
+                    .demotions
+                    .get(&(agent.clone(), *generation))
+                    .and_then(|demotion| demotion.public_cause.clone())
+                    .map(|cause| (agent.clone(), cause))
+            })
+            .collect(),
         demotions: source
             .slot_generations
             .iter()
@@ -838,7 +881,7 @@ async fn persist_candidate(
                 state
                     .demotions
                     .get(&(agent_did.clone(), *generation))
-                    .map(|diagnostic| (agent_did.clone(), diagnostic.clone()))
+                    .map(|demotion| (agent_did.clone(), demotion.diagnostic.clone()))
             })
             .collect(),
     })

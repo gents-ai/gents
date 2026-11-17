@@ -99,7 +99,9 @@ async fn generated_startup_demotions_release_only_durable_current_obligations() 
             observer: None,
             budget: 1,
         };
-        let result = policy.try_demote("general", 1, "executor failed").await;
+        let result = policy
+            .try_demote("general", 1, &anyhow::anyhow!("executor failed"))
+            .await;
         case.check(family::DemoteObservation {
             applied: result.ok(),
             pending: barrier.is_pending("general", 1).await,

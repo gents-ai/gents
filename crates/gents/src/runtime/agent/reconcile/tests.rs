@@ -1784,7 +1784,12 @@ impl SlotFailurePolicy for PublisherBackedSlotFailurePolicy {
         Ok(())
     }
 
-    async fn try_demote(&self, agent_did: &str, generation: u64, error: &str) -> Result<bool> {
+    async fn try_demote(
+        &self,
+        agent_did: &str,
+        generation: u64,
+        error: &anyhow::Error,
+    ) -> Result<bool> {
         self.runtime_status
             .readiness()
             .demote_slot(agent_did, generation, error.to_string())
@@ -1819,7 +1824,12 @@ impl SlotFailurePolicy for FailSecondRegistrationPolicy {
         Ok(())
     }
 
-    async fn try_demote(&self, _agent_did: &str, _generation: u64, _error: &str) -> Result<bool> {
+    async fn try_demote(
+        &self,
+        _agent_did: &str,
+        _generation: u64,
+        _error: &anyhow::Error,
+    ) -> Result<bool> {
         Ok(false)
     }
 
@@ -2487,7 +2497,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
             &self,
             _agent_did: &str,
             _generation: u64,
-            _error: &str,
+            _error: &anyhow::Error,
         ) -> Result<bool> {
             self.demote_calls.fetch_add(1, Ordering::SeqCst);
             Ok(false)
@@ -2748,4 +2758,89 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
         installed_snapshot.configuration_fingerprint(),
         "a same-artifact reinstall that changes the declaration must refresh the slot"
     );
+}
+
+#[tokio::test]
+async fn matching_recovered_proposal_recreates_a_parked_slot_instead_of_nooping() {
+    struct Parked(Arc<Notify>);
+    #[async_trait::async_trait]
+    impl SlotFailurePolicy for Parked {
+        fn build_failure_budget(&self) -> u32 {
+            1
+        }
+        async fn on_slot_created(&self, _: &str, _: u64) -> Result<()> {
+            Ok(())
+        }
+        async fn try_demote(&self, _: &str, _: u64, _: &anyhow::Error) -> Result<bool> {
+            self.0.notify_one();
+            Ok(true)
+        }
+        async fn on_slot_retired(&self, _: &str, _: u64, _: bool) {}
+    }
+    let db = test_node().await;
+    let node = db.node.clone();
+    let pair = PendingAgent::new("parked-recovery")
+        .build_with_identity_for_test(test_identity("parked-recovery"));
+    let did = pair.agent.agent_did.clone();
+    let snapshot = snapshot_for_agents(&node, &did, vec![pair]).await;
+    let runtime_status = runtime_status_handle(&node, node.node_identity_did().unwrap());
+    let parked = Arc::new(Notify::new());
+    let (started_tx, mut started) = mpsc::unbounded_channel();
+    let runner = move |_: AgentWithTools,
+                       _: Arc<ToolSurface>,
+                       _: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                       _: Arc<WorkerCapacity>,
+                       generation: u64,
+                       mut shutdown: watch::Receiver<bool>| {
+        let started = started_tx.clone();
+        async move {
+            if generation == 1 {
+                return Err(anyhow::Error::new(
+                    gents_pack::plugin::store::PublishedPluginReadError::Busy,
+                ));
+            }
+            let _ = started.send(generation);
+            let _ = shutdown.changed().await;
+            Ok(())
+        }
+    };
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let mut supervisor = GenerationSupervisor::bootstrap(
+        snapshot.clone(),
+        AdmissionRegistry::new(node),
+        RetryPolicy {
+            max_retries: 1,
+            base_delay_ms: 1,
+            max_delay_ms: 2,
+        },
+        runner,
+        runtime_status,
+        shutdown_rx.clone(),
+        Some(Arc::new(Parked(parked.clone()))),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(30), parked.notified())
+        .await
+        .unwrap();
+    assert!(supervisor.active_slots[&did].parked());
+    let (active_tx, _active_rx) = watch::channel(supervisor.current_snapshot());
+    supervisor
+        .handle_proposal(snapshot, &active_tx, shutdown_rx)
+        .await
+        .unwrap();
+    assert_eq!(
+        supervisor.current_snapshot.generation, 2,
+        "identical fingerprints cannot keep a demoted slot parked"
+    );
+    assert_eq!(supervisor.active_slots[&did].generation, 2);
+    assert!(!supervisor.active_slots[&did].parked());
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(30), started.recv())
+            .await
+            .unwrap(),
+        Some(2)
+    );
+    shutdown_tx.send(true).unwrap();
+    supervisor.shutdown_slots().await.unwrap();
 }

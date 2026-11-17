@@ -18,7 +18,7 @@ use gents_tools::surface::ToolRuntimeContext;
 mod lifecycle_coordinator;
 mod recovery;
 mod shutdown;
-mod slot_failure_policy;
+pub(super) mod slot_failure_policy;
 pub(super) mod snapshot;
 mod tasks;
 
@@ -26,7 +26,7 @@ use self::lifecycle_coordinator::RuntimeLifecycleCoordinator;
 use self::recovery::log_recovery;
 use self::shutdown::{shutdown_runtime, OwnedRuntimeTasks};
 use self::slot_failure_policy::StartupSlotFailurePolicy;
-use self::snapshot::{resolve_startup_snapshot, validate_startup_snapshot};
+use self::snapshot::resolve_startup_snapshot;
 use self::tasks::StartupTasks;
 
 enum BackgroundTaskResult {
@@ -240,6 +240,24 @@ async fn resolve_startup(
     Option<super::control_watcher::ControlSubscription>,
     gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot,
 )> {
+    resolve_startup_until(
+        agent,
+        tool_runtime,
+        runtime_status,
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+    )
+    .await
+}
+
+pub(super) async fn resolve_startup_until(
+    agent: &Gents,
+    tool_runtime: &ToolRuntimeContext,
+    runtime_status: &RuntimeStatusHandle,
+    deadline: tokio::time::Instant,
+) -> Result<(
+    Option<super::control_watcher::ControlSubscription>,
+    gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot,
+)> {
     // Subscribe before reading startup configuration so racing commits remain pending.
     let control_subscription = match agent
         .document_runtime_context()
@@ -259,11 +277,52 @@ async fn resolve_startup(
             return Err(error);
         }
     };
-    if let Err(error) = validate_startup_snapshot(agent, tool_runtime, &mut resolved_snapshot).await
+    // Resolve first: a plugin-free startup must not depend on the store.
+    // Busy selected plugins have a typed unavailable cause even when their
+    // surface could not be resolved on the first pass.
+    let requires_publication = resolved_snapshot.tool_surfaces.values().any(|surface| surface.has_plugin_tools())
+        || resolved_snapshot.unavailable_agents.values().any(|unavailable| unavailable.public_cause == Some(gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::PluginPublicationBusy));
+    let publication = if super::context::needs_publication_fence(requires_publication) {
+        match gents_tools::surface::publication_guard_until(tool_runtime.plugin_home(), deadline)
+            .await
+        {
+            Ok(guard) => {
+                resolved_snapshot = match resolve_startup_snapshot(agent).await {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        runtime_status.publish_error(&format!("{error:#}")).await;
+                        return Err(error);
+                    }
+                };
+                guard
+            }
+            Err(error) if snapshot::preserve_generation_for_surface_error(&error) => {
+                runtime_status.request_publication_recovery();
+                None
+            }
+            Err(error) => {
+                runtime_status.publish_error(&format!("{error:#}")).await;
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+    if let Err(error) = snapshot::validate_startup_snapshot_until(
+        agent,
+        tool_runtime,
+        &mut resolved_snapshot,
+        deadline,
+    )
+    .await
     {
         runtime_status.publish_error(&format!("{error:#}")).await;
         return Err(error);
     }
+    if resolved_snapshot.unavailable_agents.values().any(|unavailable| unavailable.public_cause == Some(gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::PluginPublicationBusy)) {
+        runtime_status.request_publication_recovery();
+    }
+    drop(publication);
     log_recovery(
         &agent.node,
         agent.node_did(),
@@ -329,8 +388,11 @@ async fn run_agent_owned(
     .with_usage_cache(agent.usage_cache().clone());
     registry::probe_and_promote_enabled_backends(&agent.node).await;
 
-    let (control_subscription, resolved_snapshot) =
-        resolve_startup(&agent, &tool_runtime, &runtime_status).await?;
+    let (control_subscription, resolved_snapshot) = tokio::select! {
+        biased;
+        _ = external_shutdown.changed() => return Ok(()),
+        result = resolve_startup(&agent, &tool_runtime, &runtime_status) => result?,
+    };
 
     let startup_barrier = Arc::new(StartupBarrier::new(
         &resolved_snapshot

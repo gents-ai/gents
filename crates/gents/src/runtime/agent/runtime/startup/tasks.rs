@@ -53,6 +53,7 @@ pub(super) fn runtime_context(
         agent.service_admission(),
     );
     let runtime = RuntimeContext {
+        document_context: agent.document_runtime_context().cloned(),
         node: agent.node.clone(),
         tool_runtime,
         admission_registry: admission_registry.clone(),
@@ -540,6 +541,8 @@ pub(super) fn spawn_control_watcher(
     control_tool_runtime: ToolRuntimeContext,
     backend_health_events_rx: mpsc::Receiver<()>,
 ) {
+    use tracing::instrument::WithSubscriber;
+
     let StartupTasks {
         agent,
         shutdown,
@@ -559,24 +562,27 @@ pub(super) fn spawn_control_watcher(
         let control_backend_admission = agent.backend_admission.clone();
         let control_runtime_status = runtime_status.clone();
         let control_shutdown = shutdown.clone();
-        background_tasks.spawn(async move {
-            BackgroundTaskResult::Control(
-                super::super::control_watcher::run_control_watcher(
-                    super::super::control_watcher::ControlWatcherInputs {
-                        node: control_node,
-                        backend_admission: control_backend_admission,
-                        subscription: control_subscription,
-                        node_did: control_node_did,
-                        resolve_context: control_context,
-                        tool_runtime: control_tool_runtime,
-                        proposals_tx: control_tx,
-                        runtime_status: control_runtime_status,
-                        health_events_rx: backend_health_events_rx,
-                        shutdown: control_shutdown,
-                    },
+        background_tasks.spawn(
+            async move {
+                BackgroundTaskResult::Control(
+                    super::super::control_watcher::run_control_watcher(
+                        super::super::control_watcher::ControlWatcherInputs {
+                            node: control_node,
+                            backend_admission: control_backend_admission,
+                            subscription: control_subscription,
+                            node_did: control_node_did,
+                            resolve_context: control_context,
+                            tool_runtime: control_tool_runtime,
+                            proposals_tx: control_tx,
+                            runtime_status: control_runtime_status,
+                            health_events_rx: backend_health_events_rx,
+                            shutdown: control_shutdown,
+                        },
+                    )
+                    .await,
                 )
-                .await,
-            )
-        });
+            }
+            .with_current_subscriber(),
+        );
     }
 }

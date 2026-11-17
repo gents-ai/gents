@@ -45,9 +45,17 @@ pub(super) struct AgentSlot {
     pub(super) worker_task_count: usize,
     pub(super) queue_capacity: usize,
     pub(super) generation: u64,
+    standing: Arc<std::sync::Mutex<BuildStanding>>,
 }
 
 impl AgentSlot {
+    pub(super) fn parked(&self) -> bool {
+        self.standing
+            .lock()
+            .map(|standing| *standing == BuildStanding::Demoted)
+            .unwrap_or(true)
+    }
+
     pub(super) fn matches(
         &self,
         agent_config: &AgentWithTools,
@@ -65,14 +73,20 @@ pub(crate) trait SlotFailurePolicy: Send + Sync {
     fn build_failure_budget(&self) -> u32;
     fn on_build_failure(&self, _agent_did: &str, _failure_number: u32, _error: &str) {}
     async fn on_slot_created(&self, agent_did: &str, generation: u64) -> Result<()>;
-    async fn try_demote(&self, agent_did: &str, generation: u64, error: &str) -> Result<bool>;
+    async fn try_demote(
+        &self,
+        agent_did: &str,
+        generation: u64,
+        error: &anyhow::Error,
+    ) -> Result<bool>;
+    fn on_slot_parked(&self, _error: &anyhow::Error) {}
     async fn on_slot_retired(&self, agent_did: &str, generation: u64, recreated: bool);
 }
 
 async fn handle_slot_failure(
     agent_did: &str,
     generation: u64,
-    error: &str,
+    error: &anyhow::Error,
     failure_policy: Option<&dyn SlotFailurePolicy>,
     standing: &Arc<std::sync::Mutex<BuildStanding>>,
     shutdown: &mut watch::Receiver<bool>,
@@ -110,7 +124,7 @@ async fn handle_slot_failure(
         }
     };
     if let Some(failure_number) = failure_number {
-        policy.on_build_failure(agent_did, failure_number, error);
+        policy.on_build_failure(agent_did, failure_number, &format!("{error:#}"));
     }
     match verdict {
         Verdict::Restart | Verdict::StillPending => return false,
@@ -121,7 +135,7 @@ async fn handle_slot_failure(
         Verdict::Transitioned => {}
     }
     match policy.try_demote(agent_did, generation, error).await {
-        Ok(true) => {}
+        Ok(true) => policy.on_slot_parked(error),
         Ok(false) => tracing::warn!(
             agent_did,
             generation,
@@ -328,7 +342,7 @@ where
             capacity,
             shutdown,
             state_rx,
-            standing,
+            standing: standing.clone(),
         },
         executor_capacity,
         runner,
@@ -345,6 +359,7 @@ where
         worker_task_count: executor_capacity,
         queue_capacity: AGENT_EXECUTOR_QUEUE_CAPACITY,
         generation,
+        standing,
     }
 }
 
@@ -468,7 +483,7 @@ where
                 if handle_slot_failure(
                     &agent_config.agent.agent_did,
                     generation,
-                    &format!("{error:#}"),
+                    &error,
                     failure_policy.as_deref(),
                     &standing,
                     &mut shutdown,
@@ -494,7 +509,7 @@ where
                 if handle_slot_failure(
                     &agent_config.agent.agent_did,
                     generation,
-                    "agent runner panicked",
+                    &anyhow::anyhow!("agent runner panicked"),
                     failure_policy.as_deref(),
                     &standing,
                     &mut shutdown,
