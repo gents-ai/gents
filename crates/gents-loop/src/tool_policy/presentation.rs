@@ -24,6 +24,14 @@ pub fn admissible(granted: bool, hidden: bool, origin: InvocationOrigin) -> bool
     }
 }
 
+pub fn presentation_refused(granted: bool, hidden: bool, provider_origin: bool) -> bool {
+    granted && hidden && provider_origin
+}
+
+pub fn effective_hidden(hidden: bool, script_ready: bool) -> bool {
+    hidden && script_ready
+}
+
 pub fn is_gateway(name: &str) -> bool {
     matches!(name, "script" | "config" | "load_skill" | "spawn_process")
 }
@@ -39,7 +47,7 @@ pub fn configuration_valid(
 
 #[derive(Debug, thiserror::Error)]
 pub enum AdmissionRefusal {
-    #[error("tool '{name}' is script-only for direct model calls. Inspect `tools.{name}.parameters`, then call `await tools.{name}({{...}})` through script")]
+    #[error("tool '{name}' is script-only for direct model calls. Inspect `tools.{name}.parameters`, then call `await tools.{name}({{...}})` through `script`")]
     Hidden { name: String },
     #[error("tool '{name}' is not in this request's granted tool surface")]
     Unavailable { name: String },
@@ -51,16 +59,15 @@ pub fn admit(
     origin: InvocationOrigin,
 ) -> Result<(), AdmissionRefusal> {
     let tool = tools.iter().find(|tool| tool.name() == name);
-    if admissible(
-        tool.is_some(),
-        tool.is_some_and(|tool| tool.hidden()),
-        origin,
-    ) {
-        Ok(())
-    } else if tool.is_some() {
+    let granted = tool.is_some();
+    let hidden = tool.is_some_and(|tool| tool.hidden());
+    if presentation_refused(granted, hidden, origin == InvocationOrigin::Provider) {
         Err(AdmissionRefusal::Hidden { name: name.into() })
-    } else {
+    } else if origin == InvocationOrigin::Composition && !granted {
         Err(AdmissionRefusal::Unavailable { name: name.into() })
+    } else {
+        // Unknown provider names retain on_tool_call and the existing dispatch owner.
+        Ok(())
     }
 }
 
@@ -75,10 +82,14 @@ pub fn present_tools(
 ) -> Result<Vec<Box<dyn ToolDyn>>, PresentationError> {
     let gateway_hidden = hidden_names.iter().any(|name| is_gateway(name));
     let script_ready = script_ready && tools.iter().any(|tool| tool.name() == "script");
-    if !configuration_valid(!hidden_names.is_empty(), true, script_ready, gateway_hidden) {
+    if gateway_hidden {
         return Err(PresentationError);
     }
     if hidden_names.is_empty() {
+        return Ok(tools);
+    }
+    if !script_ready {
+        tracing::warn!("hidden_tool_names inactive: script is unavailable; advertising all granted tools so configuration can be repaired");
         return Ok(tools);
     }
     let has_hidden = tools.iter().any(|tool| hidden_names.contains(&tool.name()));
@@ -88,7 +99,7 @@ pub fn present_tools(
             let name = tool.name();
             PresentedTool::wrap(
                 tool,
-                hidden_names.contains(&name),
+                effective_hidden(hidden_names.contains(&name), script_ready),
                 has_hidden && name == "script",
             )
         })
@@ -164,6 +175,9 @@ mod tests {
 
     struct Named(&'static str);
     impl ToolDyn for Named {
+        fn hidden(&self) -> bool {
+            false
+        }
         fn name(&self) -> String {
             self.0.into()
         }
@@ -213,8 +227,13 @@ mod tests {
             admit(&unavailable, "unavailable", InvocationOrigin::Composition),
             Err(AdmissionRefusal::Unavailable { .. })
         ));
-        assert!(present_tools(surface(), &["query".into()], false).is_err());
-        assert!(present_tools(vec![Box::new(Named("query"))], &["query".into()], true).is_err());
+        for recovered in [
+            present_tools(surface(), &["query".into()], false).unwrap(),
+            present_tools(vec![Box::new(Named("query"))], &["query".into()], true).unwrap(),
+        ] {
+            assert!(recovered.iter().all(|tool| !tool.hidden()));
+            assert!(admit(&recovered, "query", InvocationOrigin::Provider).is_ok());
+        }
         for gateway in ["script", "config", "load_skill", "spawn_process"] {
             assert!(present_tools(surface(), &[gateway.into()], true).is_err());
         }
@@ -222,6 +241,12 @@ mod tests {
 
     #[test]
     fn presentation_conforms_to_lean() {
+        gents_lean_vocab::families::tool_presentation_presentation_refused::replay(|i| {
+            presentation_refused(i.granted, i.hidden, i.provider_origin)
+        });
+        gents_lean_vocab::families::tool_presentation_effective_hidden::replay(|i| {
+            effective_hidden(i.hidden, i.script_ready)
+        });
         for case in gents_lean_vocab::families::tool_presentation_gateways::cases() {
             case.check(is_gateway(&case.input));
         }

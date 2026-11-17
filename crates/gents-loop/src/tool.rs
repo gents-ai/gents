@@ -143,9 +143,7 @@ pub struct ToolDispatchResult {
 }
 
 pub trait ToolDyn: Send + Sync {
-    fn hidden(&self) -> bool {
-        false
-    }
+    fn hidden(&self) -> bool;
     fn name(&self) -> String;
     fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition>;
     fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>>;
@@ -192,6 +190,9 @@ impl<T> ToolDyn for T
 where
     T: Tool,
 {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         Tool::name(self)
     }
@@ -281,6 +282,9 @@ struct RequestBoundTool {
 }
 
 impl ToolDyn for RequestBoundTool {
+    fn hidden(&self) -> bool {
+        self.tools[self.index].hidden()
+    }
     fn name(&self) -> String {
         self.tools[self.index].name()
     }

@@ -820,7 +820,6 @@ mod tests {
             .unwrap()
             .model_facing_text()
             .contains("script"));
-        assert!(!hook.invoked.load(Ordering::SeqCst));
         let call = gents_protocol::message::ToolCall::new(
             "hidden".into(),
             gents_protocol::message::ToolFunction::new(
@@ -876,6 +875,9 @@ mod tests {
     }
 
     impl ToolDyn for ReadyAfterWallDeadline {
+        fn hidden(&self) -> bool {
+            false
+        }
         fn name(&self) -> String {
             "ready_after_wall_deadline".into()
         }
@@ -917,6 +919,9 @@ mod tests {
     }
 
     impl ToolDyn for AdmissionGate {
+        fn hidden(&self) -> bool {
+            false
+        }
         fn name(&self) -> String {
             self.name.into()
         }

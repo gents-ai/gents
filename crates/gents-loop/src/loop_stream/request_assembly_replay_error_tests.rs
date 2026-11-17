@@ -1148,9 +1148,12 @@ async fn every_provider_assembly_rechecks_configuration_before_reading_input() {
 async fn hidden_tool_provider_projection_preserves_default_bytes_and_reduces_accounting() {
     use crate::provider_input::ProviderInputCounter;
     use crate::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-    use crate::tool_policy::presentation::{AdmissionRefusal, InvocationOrigin, PresentedTool};
+    use crate::tool_policy::presentation::{present_tools, AdmissionRefusal, InvocationOrigin};
     struct Tool;
     impl ToolDyn for Tool {
+        fn hidden(&self) -> bool {
+            false
+        }
         fn name(&self) -> String {
             "query".into()
         }
@@ -1167,9 +1170,46 @@ async fn hidden_tool_provider_projection_preserves_default_bytes_and_reduces_acc
             Box::pin(async { Ok("rows".into()) })
         }
     }
-    let plain: Vec<Box<dyn ToolDyn>> = vec![Box::new(Tool)];
-    let visible: Vec<Box<dyn ToolDyn>> = vec![PresentedTool::wrap(Box::new(Tool), false, false)];
-    let hidden: Vec<Box<dyn ToolDyn>> = vec![PresentedTool::wrap(Box::new(Tool), true, false)];
+    struct Script;
+    impl ToolDyn for Script {
+        fn hidden(&self) -> bool {
+            false
+        }
+        fn name(&self) -> String {
+            "script".into()
+        }
+        fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
+            Box::pin(async {
+                ToolDefinition {
+                    name: "script".into(),
+                    description: "Script".into(),
+                    parameters: serde_json::json!({"type":"object"}),
+                }
+            })
+        }
+        fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+            Box::pin(async { Ok("script".into()) })
+        }
+    }
+    let request = || crate::tool::ToolRequestContext {
+        request_id: "request".into(),
+        request_doc_id: "doc".into(),
+        node_did: "node".into(),
+        agent_did: "agent".into(),
+        session_id: "session".into(),
+        caused_by_source_doc_id: None,
+        admitted_client: None,
+    };
+    let surface = || -> Vec<Box<dyn ToolDyn>> { vec![Box::new(Tool), Box::new(Script)] };
+    let plain = crate::tool::bind_request_tools(std::sync::Arc::new(surface()), request());
+    let visible = crate::tool::bind_request_tools(
+        std::sync::Arc::new(present_tools(surface(), &[], true).unwrap()),
+        request(),
+    );
+    let hidden = crate::tool::bind_request_tools(
+        std::sync::Arc::new(present_tools(surface(), &["query".into()], true).unwrap()),
+        request(),
+    );
     let config = replay_assembly_config();
     let original = super::build_request(
         &AssemblyOnlyModel,
@@ -1231,8 +1271,16 @@ async fn hidden_tool_provider_projection_preserves_default_bytes_and_reduces_acc
                     .estimated_input_tokens
         );
     }
-    assert_eq!(original.tools.len(), 1);
-    assert!(projected.tools.is_empty());
+    assert_eq!(original.tools.len(), 2);
+    assert_eq!(projected.tools.len(), 1);
+    assert_eq!(projected.tools[0].name, "script");
+    assert!(
+        crate::loop_stream::tool_dispatch::admit_tool(&hidden, "query", "{}")
+            .unwrap()
+            .model_facing_text()
+            .contains("`script`")
+    );
+    assert!(crate::loop_stream::tool_dispatch::admit_tool(&visible, "query", "{}").is_none());
     assert_eq!(hidden[0].definition(String::new()).await.name, "query");
     assert!(matches!(
         crate::tool_policy::presentation::admit(&hidden, "query", InvocationOrigin::Provider),

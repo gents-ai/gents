@@ -3,6 +3,9 @@ use gents_store::identity::NodeIdentity;
 struct PendingTool;
 
 impl gents_loop::tool::ToolDyn for PendingTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "slow_tool".into()
     }

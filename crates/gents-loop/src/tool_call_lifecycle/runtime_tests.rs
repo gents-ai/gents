@@ -5,6 +5,9 @@ use crate::tool::ToolDefinition;
 struct PendingTool;
 
 impl ToolDyn for PendingTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "pending".to_string()
     }
@@ -27,6 +30,9 @@ impl ToolDyn for PendingTool {
 struct FastTool;
 
 impl ToolDyn for FastTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "fast".to_string()
     }
@@ -64,6 +70,9 @@ struct ReceiptTool {
 }
 
 impl ToolDyn for ReceiptTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "receipt".into()
     }
