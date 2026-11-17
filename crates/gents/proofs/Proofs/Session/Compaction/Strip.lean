@@ -59,10 +59,6 @@ the stub saves bytes, otherwise the result unchanged. -/
 def stripKey (sizes : ResultSizes) (key : ToolResultKey) : ToolResultKey :=
   if stubs sizes key then stubKey key else key
 
-/-- The bytes a tool result occupies after stripping. -/
-def strippedBytes (sizes : ResultSizes) (key : ToolResultKey) : Nat :=
-  if stubs sizes key then (sizes key).stubBytes else (sizes key).originalBytes
-
 theorem stripKey_of_stubs {sizes : ResultSizes} {key : ToolResultKey}
     (h : stubs sizes key = true) : stripKey sizes key = stubKey key := by
   simp [stripKey, h]
@@ -91,23 +87,8 @@ theorem stripKey_of_stub_identity (sizes : ResultSizes) {key : ToolResultKey}
   · exact h
   · rfl
 
-/-- The floor: stripping never makes a tool result larger. -/
-theorem strippedBytes_le (sizes : ResultSizes) (key : ToolResultKey) :
-    strippedBytes sizes key ≤ (sizes key).originalBytes := by
-  unfold strippedBytes
-  cases h : stubs sizes key
-  · simp
-  · simp only [if_true]
-    exact Nat.le_of_lt ((stubEligible_iff _ _).mp h)
-
-/-- A replaced result is strictly smaller than its output. -/
-theorem strippedBytes_lt_of_stubs {sizes : ResultSizes} {key : ToolResultKey}
-    (h : stubs sizes key = true) : strippedBytes sizes key < (sizes key).originalBytes := by
-  simp only [strippedBytes, h, if_true]
-  exact (stubEligible_iff _ _).mp h
-
-/-- A stub that is not strictly smaller (in particular one of equal size)
-leaves the result byte for byte as it was. -/
+/-- The floor: a stub that is not strictly smaller than the output it would
+replace (in particular one of equal size) leaves the result as it was. -/
 theorem stripKey_keeps_unless_smaller {sizes : ResultSizes} {key : ToolResultKey}
     (h : ¬ (sizes key).stubBytes < (sizes key).originalBytes) : stripKey sizes key = key := by
   apply stripKey_of_not_stubs

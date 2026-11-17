@@ -100,7 +100,9 @@ pub fn strip_tool_results_sourced(
 }
 
 /// The calls a tool result's stub may name: those of the latest assistant
-/// message that made any.
+/// message that made any. A call id repeated in one message names its first
+/// call, as the sanitizer keeps the first, so a result measures the same in
+/// the raw history and in the provider view.
 fn record_tool_calls(
     content: &[AssistantContent],
     tool_calls: &mut RapidHashMap<String, ToolCallInfo>,
@@ -113,7 +115,9 @@ fn record_tool_calls(
     }
     for item in content {
         if let AssistantContent::ToolCall(tool_call) = item {
-            tool_calls.insert(tool_call_key(tool_call), ToolCallInfo::from(tool_call));
+            tool_calls
+                .entry(tool_call_key(tool_call))
+                .or_insert_with(|| ToolCallInfo::from(tool_call));
         }
     }
 }
@@ -135,8 +139,24 @@ impl StubSizes {
     }
 }
 
+/// Measures one tool result: its sizes and the stub that would replace it.
+/// The one measurement both stripping and the tests use.
+fn measure_tool_result(
+    tool_result: &ToolResult,
+    tool_calls: &RapidHashMap<String, ToolCallInfo>,
+) -> (StubSizes, String) {
+    let stub = stub_candidate(tool_result, tool_calls);
+    let sizes = StubSizes {
+        original_bytes: tool_result_byte_count(tool_result),
+        stub_bytes: stub.len(),
+    };
+    (sizes, stub)
+}
+
 /// Measures every tool result in `messages`, in order, as
 /// `strip_tool_results` measures it when deciding whether to stub it.
+/// Test support: the conformance replay checks fixture sizes against it.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn tool_result_stub_sizes(messages: &[Message]) -> Vec<StubSizes> {
     let mut tool_calls = RapidHashMap::new();
     let mut sizes = Vec::new();
@@ -145,10 +165,9 @@ pub fn tool_result_stub_sizes(messages: &[Message]) -> Vec<StubSizes> {
             Message::Assistant { content, .. } => record_tool_calls(content, &mut tool_calls),
             Message::User { content } => {
                 sizes.extend(content.iter().filter_map(|item| match item {
-                    UserContent::ToolResult(tool_result) => Some(StubSizes {
-                        original_bytes: tool_result_byte_count(tool_result),
-                        stub_bytes: stub_candidate(tool_result, &tool_calls).len(),
-                    }),
+                    UserContent::ToolResult(tool_result) => {
+                        Some(measure_tool_result(tool_result, &tool_calls).0)
+                    }
                     _ => None,
                 }));
             }
@@ -662,11 +681,7 @@ fn strip_tool_result(
     mut tool_result: ToolResult,
     tool_calls: &RapidHashMap<String, ToolCallInfo>,
 ) -> ToolResult {
-    let stub = stub_candidate(&tool_result, tool_calls);
-    let sizes = StubSizes {
-        original_bytes: tool_result_byte_count(&tool_result),
-        stub_bytes: stub.len(),
-    };
+    let (sizes, stub) = measure_tool_result(&tool_result, tool_calls);
     if !sizes.stub_saves_bytes() {
         return tool_result;
     }
@@ -684,10 +699,9 @@ fn stub_candidate(
     let byte_count = existing
         .as_ref()
         .map_or_else(|| tool_result_byte_count(tool_result), |it| it.byte_count);
-    let truncated = existing.as_ref().map_or_else(
-        || tool_result_was_truncated(tool_result),
-        |it| it.truncated,
-    );
+    let truncated = existing
+        .as_ref()
+        .map_or_else(|| tool_result_was_truncated(tool_result), |it| it.truncated);
 
     let call_id = tool_result_key(tool_result);
     let info = tool_calls.get(&call_id);

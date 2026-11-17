@@ -1759,9 +1759,22 @@ fn strip_decides_each_result_of_one_message_by_its_own_size() {
 /// stripping measures for a tool result depends only on that result and its
 /// own call. So a kept result measures the same on the next pass, a stub
 /// measures as its own replacement (never stubbed again), and dropping other
-/// rows (the sanitizer) changes no surviving result's sizes.
+/// rows (the sanitizer) changes no surviving result's sizes. A call id
+/// repeated in one message names its first call, the one the sanitizer keeps.
 #[test]
 fn stub_sizes_depend_only_on_the_result() {
+    let long_path = format!("/tmp/{}", "p".repeat(200));
+    let duplicate_read = AssistantContent::ToolCall(ToolCall {
+        raw_arguments: None,
+        id: "dup".to_string(),
+        call_id: Some("dup".to_string()),
+        function: crate::llm::message::ToolFunction {
+            name: "read_file".to_string(),
+            arguments: serde_json::json!({ "path": long_path }),
+        },
+        signature: None,
+        additional_params: None,
+    });
     let messages = vec![
         tool_result_msg("orphan", &"o".repeat(600)),
         text_msg("user", "go"),
@@ -1779,6 +1792,14 @@ fn stub_sizes_depend_only_on_the_result() {
         text_msg("assistant", "next"),
         tool_call_msg("read_file", r#"{"path":"/tmp/x"}"#),
         tool_result_msg("call-1", &"x".repeat(5000)),
+        // The first `dup` call's stub is shorter than this output; the
+        // second's, naming a long path, is longer.
+        Message::Assistant {
+            request_id: None,
+            id: None,
+            content: vec![tool_call_content("dup"), duplicate_read],
+        },
+        tool_result_msg("dup", &"d".repeat(150)),
     ];
     let call_ids = |messages: &[Message]| {
         messages
@@ -1803,6 +1824,11 @@ fn stub_sizes_depend_only_on_the_result() {
     };
 
     let before = measured(&messages);
+    let (_, duplicate) = before.iter().find(|(call, _)| call == "dup").unwrap();
+    assert!(
+        duplicate.stub_saves_bytes(),
+        "a duplicate id is measured against its first call: {duplicate:?}"
+    );
     assert!(before.iter().any(|(_, sizes)| sizes.stub_saves_bytes()));
     assert!(before.iter().any(|(_, sizes)| !sizes.stub_saves_bytes()));
 
@@ -1836,6 +1862,14 @@ fn stub_sizes_depend_only_on_the_result() {
             .expect("a surviving result was in the raw history");
         assert_eq!(sizes, *raw, "{call}: sanitizing other rows changes nothing");
     }
+
+    // The provider view is a fixed point: stripping what the sanitizer kept
+    // of a stripped history changes nothing.
+    let view = sanitize_association_with_sources(stripped)
+        .into_iter()
+        .map(|sourced| sourced.message)
+        .collect::<Vec<_>>();
+    assert_eq!(strip_tool_results(view.clone()).0, view);
 }
 
 #[test]
