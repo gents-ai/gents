@@ -49,3 +49,14 @@ theorem parked_is_recreated (configurationMatches : Bool) : recreateSlot configu
   simp [recreateSlot]
 
 end RuntimeReconcile.SurfacePublication
+
+namespace RuntimeReconcile.SurfacePublication
+
+/-- A pending busy-park wake cannot be deduplicated by config fingerprints.
+It remains pending until a proposal can be constructed without contention. -/
+def sendRecoveredProposal (changed recoveryPending : Bool) : Bool := changed || recoveryPending
+
+theorem parked_recovery_not_deduplicated (changed : Bool) :
+    sendRecoveredProposal changed true = true := by simp [sendRecoveredProposal]
+
+end RuntimeReconcile.SurfacePublication
