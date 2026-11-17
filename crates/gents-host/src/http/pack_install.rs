@@ -152,10 +152,8 @@ pub async fn install_remote(
     })
     .await??;
     let response = endpoint
-        .authorize(client.post(url))?
-        .json(&body)
-        .send()
-        .await
+        .send_resolving(|endpoint| Ok(endpoint.authorize(client.post(url.clone()))?.json(&body)))
+        .await?
         .context(
             "remote pack install outcome is unconfirmed; inspect the runtime before retrying",
         )?;

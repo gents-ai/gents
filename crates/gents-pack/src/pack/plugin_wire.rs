@@ -481,14 +481,13 @@ pub async fn wire_remote(
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
+    let command = WireCommand {
+        node_did: owner.to_owned(),
+        request: request.clone(),
+    };
     let response = endpoint
-        .authorize(client.post(url))?
-        .json(&WireCommand {
-            node_did: owner.to_owned(),
-            request: request.clone(),
-        })
-        .send()
-        .await
+        .send_resolving(|endpoint| Ok(endpoint.authorize(client.post(url.clone()))?.json(&command)))
+        .await?
         .map_err(|error| {
             anyhow::anyhow!(
             "pack wiring outcome is unconfirmed; inspect the agent's Tools before retrying: {error}"

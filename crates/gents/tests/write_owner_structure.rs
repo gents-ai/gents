@@ -2044,6 +2044,136 @@ fn ambient_request_context_only_shrinks() {
     );
 }
 
+/// A request a client endpoint authorizes is sent through
+/// `GraphqlEndpoint::send_resolving`, so a refusal of its credential reads the
+/// home's status again and is sent once more (`Identity.HeldAudience.resend`),
+/// or inside a transaction through `authorize_in_transaction`, whose
+/// transaction recovers as a unit (`Identity.HeldAudience.resendUnit`).
+/// Entries name why each remaining direct `authorize` stays; the list only
+/// shrinks.
+#[rustfmt::skip]
+const UNRECOVERED_AUTHORIZE_ALLOWLIST: &[(&str, usize, &str)] = &[
+    ("crates/gents-cli/src/commands/fleet.rs", 1, "sent through gents_host::http_client, which takes a built request; give it a builder"),
+    ("crates/gents-cli/src/commands/p2p/connect.rs", 1, "sent through gents_host::http_client, which takes a built request; give it a builder"),
+    ("crates/gents-cli/src/commands/p2p/mod.rs", 1, "sent through gents_host::http_client, which takes a built request; give it a builder"),
+    ("crates/gents-cli/src/commands/p2p/replicators.rs", 3, "sent through gents_host::http_client, which takes a built request; give it a builder"),
+    ("crates/gents-desktop-core/src/pack_watch.rs", 1, "a long poll raced against cancellation; send it through send_resolving inside the race"),
+    ("crates/gents-desktop-core/src/remote_admin/http_impl.rs", 1, "a signed remote admin request built in steps; build it in a send_resolving closure"),
+    ("crates/gents-host/src/p2p_status.rs", 1, "sent through gents_host::http_client, which takes a built request; give it a builder"),
+    ("crates/gents-host/src/readiness.rs", 1, "an operator request built and sent outside send_resolving; move its send into it"),
+    ("crates/gents-service/src/runtime_control.rs", 1, "an operator request built and sent outside send_resolving; move its send into it"),
+    ("crates/gents-service/src/service_update/execute.rs", 2, "an operator request built and sent outside send_resolving; move its send into it"),
+    ("crates/gents-store/src/config_client/graphql.rs", 2, "a transaction's commit and discard: its transaction recovers as a unit (resendUnit) and a refused commit is told"),
+    ("crates/gents-store/src/config_client/mod.rs", 1, "authorize_in_transaction, the one authorizer of requests inside a transaction"),
+];
+
+#[derive(Default)]
+struct UnrecoveredAuthorizeVisitor {
+    resolving: usize,
+    sites: usize,
+}
+
+impl<'ast> Visit<'ast> for UnrecoveredAuthorizeVisitor {
+    fn visit_item(&mut self, item: &'ast syn::Item) {
+        if !item_cfg_test(item) {
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !cfg_test(&item.attrs) {
+            visit::visit_impl_item_fn(self, item);
+        }
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "authorize" && call.args.len() == 1 && self.resolving == 0 {
+            self.sites += 1;
+        }
+        if call.method == "send_resolving" {
+            self.visit_expr(&call.receiver);
+            self.resolving += 1;
+            for argument in &call.args {
+                self.visit_expr(argument);
+            }
+            self.resolving -= 1;
+        } else {
+            visit::visit_expr_method_call(self, call);
+        }
+    }
+}
+
+fn unrecovered_authorize_sites(syntax: &syn::File) -> usize {
+    let mut visitor = UnrecoveredAuthorizeVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+#[test]
+fn client_requests_recover_a_refused_credential() {
+    let root = repo_root();
+    let actual = parse_production(&root, production_sources(&root))
+        .into_iter()
+        .map(|(relative, syntax)| (relative, unrecovered_authorize_sites(&syntax)))
+        .filter(|(_, sites)| *sites > 0)
+        .collect::<BTreeMap<_, _>>();
+    let allowed = UNRECOVERED_AUTHORIZE_ALLOWLIST
+        .iter()
+        .map(|(path, count, _)| (path.to_string(), *count))
+        .collect::<BTreeMap<_, _>>();
+    let mut violations = Vec::new();
+    for path in allowed.keys().chain(actual.keys()).collect::<BTreeSet<_>>() {
+        let found = actual.get(path).copied().unwrap_or_default();
+        match allowed.get(path).copied() {
+            None => violations.push(format!(
+                "{path}: {found} new request(s) authorized outside `send_resolving`; send through it so a refused credential recovers"
+            )),
+            Some(limit) if found > limit => violations.push(format!(
+                "{path}: {found} requests authorized outside `send_resolving` exceed the allowlisted {limit}"
+            )),
+            Some(limit) if found < limit => violations.push(format!(
+                "{path}: {found} requests authorized outside `send_resolving`; lower the allowlist entry from {limit}"
+            )),
+            Some(_) => {}
+        }
+    }
+    let current = actual
+        .iter()
+        .map(|(path, count)| format!("    (\"{path}\", {count}, \"<reason>\"),"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        violations.is_empty(),
+        "refused credential recovery ratchet failed:\n{}\n\ncurrent sites:\n{current}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn credential_recovery_fence_counts_authorize_outside_send_resolving() {
+    for (source, sites) in [
+        ("fn f() { e.authorize(c.get(u))?.send(); }", 1),
+        ("fn f() { e.send_resolving(|e| e.authorize(c.get(u))); }", 0),
+        (
+            "fn f() { e.send_resolving(|e| Ok(e.authorize(c.get(u))?.json(&b))); }",
+            0,
+        ),
+        ("fn f() { e.authorize_in_transaction(c.get(u), id); }", 0),
+        (
+            "fn f() { e.authorize(c.get(u)).and(e.send_resolving(|e| e.authorize(r))); }",
+            1,
+        ),
+        ("#[cfg(test)] mod tests { fn f() { e.authorize(r); } }", 0),
+        (
+            "impl E { #[cfg(test)] fn f(&self) { self.authorize(r); } }",
+            0,
+        ),
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(unrecovered_authorize_sites(&syntax), sites, "{source}");
+    }
+}
+
 #[test]
 fn ambient_context_counts_statics_outside_test_items() {
     let syntax = syn::parse_file(

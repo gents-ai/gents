@@ -81,7 +81,9 @@ impl ConfigAccess {
             Self::Graphql(endpoint) => {
                 let url = format!("{}/acp/node/status", graphql_api_base(endpoint.url())?);
                 let client = graphql::http_client().await?;
-                let response = endpoint.authorize(client.get(url))?.send().await?;
+                let response = endpoint
+                    .send_resolving(|endpoint| endpoint.authorize(client.get(&url)))
+                    .await??;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::HttpOperationStatus {
@@ -124,9 +126,10 @@ impl ConfigAccess {
                 let url = format!("{}/acp/node/explain", graphql_api_base(endpoint.url())?);
                 let client = graphql::http_client().await?;
                 let response = endpoint
-                    .authorize(client.get(url).query(&[("subject", subject.as_str())]))?
-                    .send()
-                    .await?;
+                    .send_resolving(|endpoint| {
+                        endpoint.authorize(client.get(&url).query(&[("subject", subject.as_str())]))
+                    })
+                    .await??;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::HttpOperationStatus {
@@ -175,13 +178,14 @@ impl ConfigAccess {
                 );
                 let client = graphql::http_client().await?;
                 let response = endpoint
-                    .authorize(
-                        client
-                            .get(url)
-                            .query(&[("collection", collection), ("docID", doc_id)]),
-                    )?
-                    .send()
-                    .await?;
+                    .send_resolving(|endpoint| {
+                        endpoint.authorize(
+                            client
+                                .get(&url)
+                                .query(&[("collection", collection), ("docID", doc_id)]),
+                        )
+                    })
+                    .await??;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::HttpOperationStatus {
@@ -238,12 +242,16 @@ impl ConfigAccess {
                 let body = serde_json::json!({
                     "Relation": relation, "TargetActor": target.as_str(),
                 });
-                let request = if delete {
-                    client.delete(url)
-                } else {
-                    client.post(url)
-                };
-                let response = endpoint.authorize(request.json(&body))?.send().await?;
+                let response = endpoint
+                    .send_resolving(|endpoint| {
+                        let request = if delete {
+                            client.delete(&url)
+                        } else {
+                            client.post(&url)
+                        };
+                        endpoint.authorize(request.json(&body))
+                    })
+                    .await??;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::NodePermissionStatus {

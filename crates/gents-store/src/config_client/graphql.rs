@@ -176,8 +176,7 @@ pub(super) async fn txn_execute(
     variables: &Value,
 ) -> Result<Value> {
     let response = endpoint
-        .authorize(client.post(endpoint.url()))?
-        .header("x-defradb-tx", id)
+        .authorize_in_transaction(client.post(endpoint.url()), id)?
         .json(&serde_json::json!({"query": query, "variables": variables}))
         .send()
         .await

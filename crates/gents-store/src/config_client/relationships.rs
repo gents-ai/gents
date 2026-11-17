@@ -218,9 +218,14 @@ impl ConfigAccess {
                 } else {
                     reqwest::Method::POST
                 };
-                let response = endpoint.authorize(client.request(method, url).json(&serde_json::json!({
+                let body = serde_json::json!({
                     "collection": collection, "doc_id": doc_id, "relation": relation, "target_actor": target,
-                })))?.send().await?;
+                });
+                let response = endpoint
+                    .send_resolving(|endpoint| {
+                        endpoint.authorize(client.request(method.clone(), &url).json(&body))
+                    })
+                    .await??;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::DocumentRelationshipStatus {

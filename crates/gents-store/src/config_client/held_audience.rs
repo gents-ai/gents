@@ -2,8 +2,8 @@ use std::sync::{Arc, RwLock};
 
 use futures::future::BoxFuture;
 use gents_protocol::delegation_audience::{
-    resend, CredentialAnswer, CredentialRefusal, DelegationAudience, PresentedCredential,
-    ReportedDelegationAudience,
+    resend, CredentialAnswer, CredentialRefusal, DelegationAudience, HeldAudienceChange,
+    PresentedCredential, ReportedDelegationAudience,
 };
 
 use super::{ConfigClientError, GraphqlEndpoint};
@@ -100,28 +100,41 @@ impl GraphqlEndpoint {
         }
     }
 
-    /// Whether a request this endpoint sent and its node answered with
-    /// `status` is to be sent once more, after the home's status was read
-    /// again and the audience it reports kept.
-    pub async fn recovers_refusal(&self, status: reqwest::StatusCode) -> bool {
+    /// Read the home's status again after its node answered a request this
+    /// endpoint sent with `status`, and keep the audience it reports. `None`
+    /// when the answer refuses no credential this endpoint presented
+    /// (`Identity.HeldAudience.refusalOf`) or no status could be read.
+    pub(super) async fn reread_after_refusal(
+        &self,
+        status: reqwest::StatusCode,
+    ) -> Option<(CredentialRefusal, HeldAudienceChange)> {
         let refusal = CredentialRefusal::of(
             CredentialAnswer::of_status(status.as_u16()),
             self.presented_credential(),
         );
         if refusal == CredentialRefusal::Other {
-            return false;
+            return None;
         }
-        let Some(resolver) = &self.delegation_audience.0.resolver else {
-            return false;
-        };
-        let Some(reported) = resolver.resolve().await else {
-            return false;
-        };
+        let resolver = self.delegation_audience.0.resolver.clone()?;
+        // A task of its own keeps a caller's future `Sync`, as a tool's
+        // definition future must be, whatever future the resolver returns.
+        let reported = tokio::spawn(async move { resolver.resolve().await })
+            .await
+            .ok()??;
         let held = self.delegation_audience.get();
         let change = reported.change_for(held.as_ref());
         self.delegation_audience
             .set(change.clone().held_after(held));
-        resend(false, refusal, &change)
+        Some((refusal, change))
+    }
+
+    /// Whether a request this endpoint sent and its node answered with
+    /// `status` is to be sent once more, after the home's status was read
+    /// again and the audience it reports kept.
+    pub async fn recovers_refusal(&self, status: reqwest::StatusCode) -> bool {
+        self.reread_after_refusal(status)
+            .await
+            .is_some_and(|(refusal, change)| resend(false, refusal, &change))
     }
 
     /// Send the request `build` makes, and once more when its refusal is
@@ -318,6 +331,105 @@ mod tests {
             assert_eq!(server.presented().len(), 1);
             assert_eq!(status.reads.load(Ordering::SeqCst), 1);
         }
+    }
+
+    /// A node whose transactions outlive no restart: it opens one for any
+    /// caller and refuses a statement inside it that presents a delegation
+    /// for another deployment, as the runtime that replaced it would.
+    async fn transacting_node(deployment: u64) -> Node {
+        let presented = Arc::new(Mutex::new(Vec::new()));
+        let seen = presented.clone();
+        let router = axum::Router::new().fallback(
+            move |method: axum::http::Method, uri: axum::http::Uri, headers: HeaderMap| {
+                let seen = seen.clone();
+                async move {
+                    let ok = |body| (StatusCode::OK, axum::Json(body));
+                    if uri.path().ends_with("/tx") {
+                        return ok(serde_json::json!({"id": 7}));
+                    }
+                    if uri.path().contains("/tx/") || method == axum::http::Method::DELETE {
+                        return ok(serde_json::json!({}));
+                    }
+                    let audience = presented_for(&headers);
+                    seen.lock().unwrap().push(audience);
+                    if audience == Some(deployment) {
+                        ok(serde_json::json!({"data": {"Node": []}}))
+                    } else {
+                        (StatusCode::FORBIDDEN, axum::Json(serde_json::json!({})))
+                    }
+                }
+            },
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await });
+        Node {
+            url: format!("http://{address}/api/v0/graphql"),
+            presented,
+        }
+    }
+
+    async fn transact(endpoint: GraphqlEndpoint) -> (bool, usize) {
+        let runs = AtomicUsize::new(0);
+        let access = crate::config_client::ConfigAccess::Graphql(endpoint);
+        let committed = access
+            .transact_readonly("held_audience.unit", |txn| {
+                runs.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    txn.execute("query { Node { _docID } }").await?;
+                    Ok::<_, crate::config_client::ConfigClientError>(())
+                })
+            })
+            .await
+            .is_ok();
+        (committed, runs.load(Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn a_transaction_refused_after_a_restart_runs_again_whole_once() {
+        let server = transacting_node(2).await;
+        let status = status(ReportedDelegationAudience::Named(audience(2)));
+        let endpoint = endpoint(
+            &server,
+            ReportedDelegationAudience::Named(audience(1)),
+            &status,
+        )
+        .await;
+        assert_eq!(transact(endpoint).await, (true, 2));
+        assert_eq!(server.presented(), vec![Some(1), Some(2)]);
+    }
+
+    #[tokio::test]
+    async fn a_transaction_whose_refusal_the_status_does_not_change_runs_once() {
+        for reports in [
+            ReportedDelegationAudience::Named(audience(1)),
+            ReportedDelegationAudience::Absent,
+            ReportedDelegationAudience::Unavailable,
+        ] {
+            let server = transacting_node(2).await;
+            let status = status(reports);
+            let endpoint = endpoint(
+                &server,
+                ReportedDelegationAudience::Named(audience(1)),
+                &status,
+            )
+            .await;
+            assert_eq!(transact(endpoint).await, (false, 1));
+            assert_eq!(status.reads.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_transaction_refused_again_is_run_only_twice() {
+        let server = transacting_node(3).await;
+        let status = status(ReportedDelegationAudience::Named(audience(2)));
+        let endpoint = endpoint(
+            &server,
+            ReportedDelegationAudience::Named(audience(1)),
+            &status,
+        )
+        .await;
+        assert_eq!(transact(endpoint).await, (false, 2));
     }
 
     #[tokio::test]

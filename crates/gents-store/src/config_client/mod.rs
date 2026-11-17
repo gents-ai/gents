@@ -427,6 +427,17 @@ impl GraphqlEndpoint {
         Ok(Some(value))
     }
 
+    /// Authorize a request inside the transaction `id`. Its transaction
+    /// recovers a refusal of its credential as a unit
+    /// (`Identity.HeldAudience.resendUnit`), never the request alone.
+    pub(crate) fn authorize_in_transaction(
+        &self,
+        request: reqwest::RequestBuilder,
+        id: &str,
+    ) -> Result<reqwest::RequestBuilder> {
+        Ok(self.authorize(request)?.header("x-defradb-tx", id))
+    }
+
     pub fn authorize(&self, request: reqwest::RequestBuilder) -> Result<reqwest::RequestBuilder> {
         Ok(match self.authorization_header()? {
             Some(value) => request.header(reqwest::header::AUTHORIZATION, value),
@@ -822,11 +833,13 @@ impl ConfigAccess {
                 let url = format!("{api_base}/collections");
                 let client = graphql::http_client().await?;
                 let response = graphql
-                    .authorize(client.post(&url))?
-                    .header(reqwest::header::CONTENT_TYPE, "text/plain; charset=utf-8")
-                    .body(sdl.to_owned())
-                    .send()
-                    .await
+                    .send_resolving(|graphql| {
+                        Ok(graphql
+                            .authorize(client.post(&url))?
+                            .header(reqwest::header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                            .body(sdl.to_owned()))
+                    })
+                    .await?
                     .map_err(|source| ConfigClientError::PostSchema {
                         url: url.clone(),
                         source,
@@ -895,9 +908,8 @@ impl ConfigAccess {
                 let url = format!("{api_base}/collections?get_inactive=true");
                 let client = graphql::http_client().await?;
                 let versions: Value = graphql
-                    .authorize(client.get(&url))?
-                    .send()
-                    .await
+                    .send_resolving(|graphql| graphql.authorize(client.get(&url)))
+                    .await?
                     .map_err(|source| ConfigClientError::FetchCollectionVersions {
                         url: url.clone(),
                         source,
@@ -962,9 +974,8 @@ impl ConfigAccess {
                 let url = format!("{api_base}/collections?get_inactive=true");
                 let client = graphql::http_client().await?;
                 let versions: Value = graphql
-                    .authorize(client.get(&url))?
-                    .send()
-                    .await
+                    .send_resolving(|graphql| graphql.authorize(client.get(&url)))
+                    .await?
                     .map_err(|source| ConfigClientError::FetchCollectionVersions {
                         url: url.clone(),
                         source,

@@ -541,6 +541,29 @@ impl ConfigClientError {
             })
     }
 
+    /// The 401 or 403 a node answered this request with, which may refuse
+    /// the credential it presented (`Identity.HeldAudience.refusalOf`).
+    pub(crate) fn credential_refusal_status(&self) -> Option<reqwest::StatusCode> {
+        let status = match self.access() {
+            Self::NodePermissionStatus { status, .. }
+            | Self::HttpOperationStatus { status, .. }
+            | Self::RelationshipStatus { status, .. }
+            | Self::DocumentRelationshipStatus { status, .. }
+            | Self::OwnerStagedRouteStatus { status, .. }
+            | Self::SchemaStatus { status, .. }
+            | Self::SchemaOperationStatus { status, .. }
+            | Self::TxBeginStatus { status, .. }
+            | Self::TxCommitStatus { status, .. }
+            | Self::TxDiscardStatus { status, .. } => Some(*status),
+            access => access.transport_error().and_then(reqwest::Error::status),
+        }?;
+        matches!(
+            status,
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        )
+        .then_some(status)
+    }
+
     /// The HTTP transport source held by this typed access error, if any.
     pub fn transport_error(&self) -> Option<&reqwest::Error> {
         match self {

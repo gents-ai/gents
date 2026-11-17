@@ -654,9 +654,9 @@ impl ConfigApplyTxn<'_> {
                 } else {
                     reqwest::Method::POST
                 };
-                let response = endpoint.authorize(client.request(method, url).header("x-defradb-tx", id).json(&json!({
+                let response = endpoint.authorize_in_transaction(client.request(method, url).json(&json!({
                     "collection": collection, "doc_id": doc_id, "relation": relation, "target_actor": target,
-                })))?.send().await?;
+                })), id)?.send().await?;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(ConfigClientError::RelationshipStatus {
@@ -1089,9 +1089,12 @@ impl ConfigApplyTxn<'_> {
             graphql_api_base(endpoint.url())?
         );
         let response = endpoint
-            .authorize(client.post(url).header("x-defradb-tx", id).json(&json!({
-                "collection": collection, "doc_ids": doc_ids,
-            })))?
+            .authorize_in_transaction(
+                client.post(url).json(&json!({
+                    "collection": collection, "doc_ids": doc_ids,
+                })),
+                id,
+            )?
             .send()
             .await?
             .error_for_status()?;
@@ -1137,7 +1140,7 @@ impl ConfigApplyTxn<'_> {
                     graphql_api_base(endpoint.url())?
                 );
                 let versions: Value = endpoint
-                    .authorize(client.get(&url).header("x-defradb-tx", id))?
+                    .authorize_in_transaction(client.get(&url), id)?
                     .send()
                     .await?
                     .error_for_status()?
