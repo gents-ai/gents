@@ -7,8 +7,8 @@ use gents_documents::{
 use gents_documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools};
 use gents_protocol::agent_identity::{AgentAdmissionFacts, AgentIdentityBinding};
 use gents_protocol::operations::agent::{
-    AgentCreateInput, AgentCreateOperation, AgentOperationError, AgentOperationKind, AgentOutcome,
-    AgentReceipt,
+    AgentCreateInput, AgentCreateOperation, AgentOmittedCapability, AgentOperationError,
+    AgentOperationKind, AgentOutcome, AgentReceipt,
 };
 use gents_protocol::operations::NextCall;
 use gents_session::session::output_render::Ordered;
@@ -863,6 +863,8 @@ async fn agent_apply_in_txn(
     let mut documents = Vec::new();
     let doc: Agent;
     let mut root_access = None;
+    let mut not_copied = Vec::new();
+    let mut prompt_warning = None;
     match &op {
         agent::AgentOperation::Create(input) if args.context_id.is_present() => {
             let context_id = args
@@ -925,7 +927,25 @@ async fn agent_apply_in_txn(
             };
             if operation == "clone" {
                 if let Some(tools) = tools.as_mut() {
-                    tools.self_config = None;
+                    if let Some(dropped) = tools.self_config.take() {
+                        let value = json!({"tools_id": format!("{id}:tools"), "node_did": owner, "self_config": dropped});
+                        let payload = serde_json::to_string(&value)?;
+                        let quoted = format!("'{}'", payload.replace('\'', "'\\''"));
+                        let home_arg = home
+                            .map(|h| format!("'{}'", h.to_string_lossy().replace('\'', "'\\''")))
+                            .unwrap_or_else(|| "<HOME>".to_owned());
+                        not_copied.push(AgentOmittedCapability {
+                            capability: "tools.self_config (all settings in this group)".to_owned(),
+                            grant_command: format!("printf '%s' {quoted} > ./clone-self-config.json && gents config tools set --home {home_arg} --file ./clone-self-config.json"),
+                        });
+                        if context
+                            .system_prompt
+                            .as_deref()
+                            .is_some_and(|p| p.to_lowercase().contains("config"))
+                        {
+                            prompt_warning = Some("The cloned prompt mentions config, but the clone lacks self_config.".to_owned());
+                        }
+                    }
                 }
             }
             if let Some(preset) = args.preset.value() {
@@ -1183,6 +1203,8 @@ async fn agent_apply_in_txn(
         operation: kind,
         agent_did: id,
         host_root_access: root_access,
+        not_copied,
+        prompt_warning,
         agent: doc,
         make_default: args.make_default,
     })
