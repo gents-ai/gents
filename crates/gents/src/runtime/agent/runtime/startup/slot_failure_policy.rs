@@ -47,18 +47,25 @@ impl crate::runtime::agent::reconcile::SlotFailurePolicy for StartupSlotFailureP
         Ok(())
     }
 
-    async fn try_demote(&self, agent_did: &str, generation: u64, error: &str) -> Result<bool> {
+    async fn try_demote(
+        &self,
+        agent_did: &str,
+        generation: u64,
+        error: &anyhow::Error,
+    ) -> Result<bool> {
         if !self.barrier.is_pending(agent_did, generation).await {
             return Ok(false);
         }
+        let cause =
+            gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::from_error(error);
         let reason = format!(
-            "demoted after {} consecutive startup build failures; last error: {error}",
+            "demoted after {} consecutive startup build failures; last error: {error:#}",
             self.build_failure_budget()
         );
         let applied = match self
             .runtime_status
             .readiness()
-            .demote_slot(agent_did, generation, reason)
+            .demote_slot_with_cause(agent_did, generation, reason, cause)
             .await
         {
             Ok(applied) => applied,

@@ -43,10 +43,34 @@ impl PartialEq for ResolvedWatcherIdentity {
 }
 impl Eq for ResolvedWatcherIdentity {}
 
+/// Allowlisted requester-visible causes. Diagnostics and their context are
+/// deliberately separate: neither paths, provider bodies nor ACP details are
+/// safe to copy to an AgentRequest failure_reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicUnavailableCause {
+    PluginPublicationBusy,
+}
+
+impl PublicUnavailableCause {
+    pub fn from_error(error: &anyhow::Error) -> Option<Self> {
+        gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(error.as_ref())
+            .then_some(Self::PluginPublicationBusy)
+    }
+
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::PluginPublicationBusy => {
+                gents_protocol::node_readiness::PLUGIN_PUBLICATION_BUSY_MESSAGE
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnavailableAgent {
     pub public_reason: AgentReadinessUnavailableReason,
     pub diagnostic: String,
+    pub public_cause: Option<PublicUnavailableCause>,
     pub awaiting_first_probe: bool,
     pub watcher_identity: Option<ResolvedWatcherIdentity>,
 }
@@ -59,9 +83,15 @@ impl UnavailableAgent {
         Self {
             public_reason,
             diagnostic: diagnostic.into(),
+            public_cause: None,
             awaiting_first_probe: false,
             watcher_identity: None,
         }
+    }
+
+    pub fn with_error_cause(mut self, error: &anyhow::Error) -> Self {
+        self.public_cause = PublicUnavailableCause::from_error(error);
+        self
     }
 
     pub fn with_awaiting_first_probe(mut self, awaiting_first_probe: bool) -> Self {

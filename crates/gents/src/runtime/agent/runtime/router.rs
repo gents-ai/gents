@@ -405,7 +405,17 @@ where
                     node_did.as_str(),
                     request,
                     resolution.agent_did.as_str(),
-                    &unavailable_failure_reason(public_reason, diagnostic),
+                    &unavailable_failure_reason(
+                        public_reason,
+                        if startup_diagnostic.is_some() {
+                            admission_observation.public_cause(&resolution.agent_did)
+                        } else {
+                            routed_snapshot
+                                .unavailable_agents
+                                .get(&resolution.agent_did)
+                                .and_then(|agent| agent.public_cause)
+                        },
+                    ),
                 )
                 .await?;
             }
@@ -700,20 +710,43 @@ pub(super) fn format_pending_visibility_error(details: &[String]) -> String {
 
 fn unavailable_failure_reason(
     reason: gents_protocol::node_readiness::AgentReadinessUnavailableReason,
-    diagnostic: &str,
+    cause: Option<gents_automation::triggers::runtime_snapshot::PublicUnavailableCause>,
 ) -> String {
-    format!("{}: {diagnostic}", reason.public_message())
+    match cause {
+        Some(cause) => format!("{}: {}", reason.public_message(), cause.message()),
+        None => reason.public_message().to_owned(),
+    }
 }
 
 #[cfg(test)]
 #[test]
-fn unavailable_requests_keep_publication_failure_diagnostics() {
-    let cause = anyhow::Error::new(gents_pack::plugin::store::PublishedPluginReadError::Busy)
-        .context("plugin publication wait exhausted after bounded retries");
-    let reason = unavailable_failure_reason(
-        gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
-        &format!("{cause:#}"),
+fn unavailable_requests_publish_only_typed_public_causes() {
+    use gents_automation::triggers::runtime_snapshot::PublicUnavailableCause;
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
+    let private = "PRIVATE /home/operator/store token=secret provider-response ACP details";
+    let busy = anyhow::Error::new(gents_pack::plugin::store::PublishedPluginReadError::Busy)
+        .context(private);
+    let cause = PublicUnavailableCause::from_error(&busy);
+    assert_eq!(cause, Some(PublicUnavailableCause::PluginPublicationBusy));
+    let reasons = Reason::ALL;
+    for reason in reasons {
+        for cause in [None, cause] {
+            let public = unavailable_failure_reason(reason, cause);
+            assert!(!public.contains("PRIVATE"));
+            assert!(!public.contains("secret"));
+            assert_eq!(
+                gents_protocol::node_readiness::unavailable_rejection_reason(&public),
+                Some(reason)
+            );
+            if cause.is_some() {
+                assert!(public.contains("plugin store is busy"));
+            } else {
+                assert_eq!(public, reason.public_message());
+            }
+        }
+    }
+    assert_eq!(
+        PublicUnavailableCause::from_error(&anyhow::anyhow!(private)),
+        None
     );
-    assert!(reason.contains("plugin store is busy"), "{reason}");
-    assert!(reason.contains("wait exhausted"), "{reason}");
 }

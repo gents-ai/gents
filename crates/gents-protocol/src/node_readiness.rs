@@ -108,6 +108,11 @@ pub fn is_behavior_unavailable_rejection(failure_reason: &str) -> bool {
         || unavailable_rejection_reason(failure_reason).is_some()
 }
 
+/// Only this allowlisted suffix is requester-safe. Private diagnostics must
+/// never be interpolated into the machine-recognized refusal message.
+pub const PLUGIN_PUBLICATION_BUSY_MESSAGE: &str =
+    "plugin store is busy; publication wait budget exhausted";
+
 /// The readiness reason a rejection's `failure_reason` states, on the external
 /// premise of [`is_behavior_unavailable_rejection`].
 pub fn unavailable_rejection_reason(
@@ -115,7 +120,13 @@ pub fn unavailable_rejection_reason(
 ) -> Option<AgentReadinessUnavailableReason> {
     AgentReadinessUnavailableReason::ALL
         .into_iter()
-        .find(|reason| reason.public_message() == failure_reason)
+        .find(|reason| {
+            reason.public_message() == failure_reason
+                || failure_reason
+                    .strip_prefix(reason.public_message())
+                    .and_then(|suffix| suffix.strip_prefix(": "))
+                    == Some(PLUGIN_PUBLICATION_BUSY_MESSAGE)
+        })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -649,5 +660,24 @@ mod conformance {
             ReconcilePhase::Diffing,
             ReconcilePhase::Applying,
         ]);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn only_allowlisted_public_causes_extend_readiness_refusals() {
+    for reason in AgentReadinessUnavailableReason::ALL {
+        let safe = format!(
+            "{}: {PLUGIN_PUBLICATION_BUSY_MESSAGE}",
+            reason.public_message()
+        );
+        assert_eq!(unavailable_rejection_reason(&safe), Some(reason));
+        assert_eq!(
+            unavailable_rejection_reason(&format!(
+                "{}: private diagnostic",
+                reason.public_message()
+            )),
+            None
+        );
     }
 }

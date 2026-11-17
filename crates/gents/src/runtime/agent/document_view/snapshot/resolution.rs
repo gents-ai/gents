@@ -244,7 +244,8 @@ pub(super) async fn resolve_behavior_surfaces(
                     UnavailableAgent::new(
                         AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
                         format!("{error:#}"),
-                    ),
+                    )
+                    .with_error_cause(&error),
                 );
             }
         }

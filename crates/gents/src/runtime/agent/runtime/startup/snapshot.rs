@@ -76,7 +76,7 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents_until(
             let reason = UnavailableAgent::new(
                 gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
                 format!("building tool surface: {error:#}"),
-            );
+            ).with_error_cause(&error);
             tracing::error!(
                 agent_did = %agent_did,
                 public_reason = ?reason.public_reason,
