@@ -1463,6 +1463,47 @@ async fn publish_home_config(
             let mut documents = documents.clone();
             let created_by = created_by.clone();
             Box::pin(async move {
+                // A re-init rebuilds the default Tools. Preserve plugin selections
+                // inside this transaction so starter wiring never mistakes an
+                // operator's existing check/off block for a fresh consent request.
+                let default_tools_id = default_tools_id_for_agent(default_agent_did);
+                for document in &mut documents {
+                    if document.collection != Collection::Tools
+                        || document.add["tools_id"].as_str() != Some(&default_tools_id)
+                    {
+                        continue;
+                    }
+                    if let Some((_, stored)) = read_desired_state_record_in_txn(
+                        txn,
+                        Collection::Tools,
+                        node_did,
+                        &default_tools_id,
+                    )
+                    .await?
+                    {
+                        let stored: Tools = serde_json::from_value(stored)?;
+                        let mut desired: Tools = serde_json::from_value(document.add.clone())?;
+                        if let Some(plugins) = stored.integrations.and_then(|i| i.plugins) {
+                            desired
+                                .integrations
+                                .get_or_insert_with(Default::default)
+                                .plugins = Some(plugins);
+                            // Preserve their already granted targets; this adds no new authority.
+                            if let Some(agents) = stored.agents {
+                                let desired_agents =
+                                    desired.agents.get_or_insert_with(Default::default);
+                                for target in agents.target_ids {
+                                    if !desired_agents.target_ids.contains(&target) {
+                                        desired_agents.target_ids.push(target);
+                                    }
+                                }
+                            }
+                        }
+                        let value = serde_json::to_value(desired)?;
+                        document.add = value.clone();
+                        document.update = value;
+                    }
+                }
                 let mut node_document =
                     read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
                         .await?

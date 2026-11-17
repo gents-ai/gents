@@ -35,6 +35,15 @@ export type WireReport = {
   changed: string[];
   job: PluginJobSettings | null;
   warnings: string[];
+  policy_warnings?: {
+    code: "dynamic_mode_kept" | "dynamic_targets_kept" | "dynamic_run_repinned";
+    plugin: string;
+    requested: PluginJobSettings["policy"] | null;
+    kept: PluginJobSettings["policy"];
+    previous_digest: string | null;
+    installed_digest: string;
+    remedy: string;
+  }[];
   next_call: string | null;
 };
 

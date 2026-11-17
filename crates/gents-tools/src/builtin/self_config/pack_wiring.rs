@@ -41,7 +41,7 @@ impl PackInstaller {
         let agent = agent.unwrap_or(self.core.agent_did());
         let (namespace, _) = node_packs::split_pack_coordinate(&coordinate);
         let access = self.core.access()?;
-        let mut wired = Vec::new();
+        let mut plans = Vec::new();
         for shipped in &record.plugins {
             let plugin = PluginWiring::installed_plugin(home, namespace, &shipped.name)
                 .with_context(|| {
@@ -52,38 +52,52 @@ impl PackInstaller {
             wiring.remove = remove;
             wiring.preview = !commit;
             wiring.next_step = "config [\"tools\",\"get\"]".to_owned();
-            let wiring = &wiring;
-            let owner = self.core.node_did();
-            let report = if commit {
-                access
-                    .transact_write("self_config.pack_wire", |txn| {
-                        Box::pin(async move {
-                            guard_shared_wiring(txn, owner, agent, holds_catalog_grant).await?;
-                            wiring
-                                .apply(txn, &gents_inference::resolved::ProviderProfilePolicy)
-                                .await
-                        })
-                    })
-                    .await?
-            } else {
-                access
-                    .transact_readonly("self_config.pack_wire.preview", |txn| {
-                        Box::pin(async move {
-                            guard_shared_wiring(txn, owner, agent, holds_catalog_grant).await?;
-                            wiring
-                                .apply(txn, &gents_inference::resolved::ProviderProfilePolicy)
-                                .await
-                        })
-                    })
-                    .await?
-            };
-            wired.push(json!({
-                "plugin": format!("{namespace}/{}", shipped.name),
-                "changed": report.changed,
-                "job": report.job,
-                "warnings": report.warnings,
-            }));
+            plans.push(wiring);
         }
+        let owner = self.core.node_did();
+        let reports = if commit {
+            access
+                .transact_write("self_config.pack_wire", |txn| {
+                    let plans = &plans;
+                    Box::pin(async move {
+                        guard_shared_wiring(txn, owner, agent, holds_catalog_grant).await?;
+                        gents_pack::pack::wiring::apply_batch(
+                            txn,
+                            plans,
+                            false,
+                            &gents_inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await
+                    })
+                })
+                .await?
+        } else {
+            access
+                .transact_readonly("self_config.pack_wire.preview", |txn| {
+                    let plans = &plans;
+                    Box::pin(async move {
+                        guard_shared_wiring(txn, owner, agent, holds_catalog_grant).await?;
+                        gents_pack::pack::wiring::apply_batch(
+                            txn,
+                            plans,
+                            true,
+                            &gents_inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await
+                    })
+                })
+                .await?
+        };
+        let wired: Vec<_> = plans
+            .iter()
+            .zip(reports)
+            .map(|(plan, report)| {
+                wire_receipt(
+                    &format!("{}/{}", plan.plugin.namespace, plan.plugin.name),
+                    report,
+                )
+            })
+            .collect();
         let call = |verb: &[&str]| {
             let mut argv = verb.to_vec();
             argv.push(&coordinate);
@@ -132,4 +146,57 @@ async fn guard_shared_wiring(
         }
     }
     Ok(())
+}
+
+fn wire_receipt(plugin: &str, mut report: gents_pack::pack::WireReport) -> serde_json::Value {
+    for warning in &mut report.policy_warnings {
+        warning.render_for(gents_pack::pack::PolicyWarningSurface::ConfigTool);
+    }
+    json!({
+        "plugin": plugin,
+        "changed": report.changed,
+        "job": report.job,
+        "warnings": report.warnings,
+        "policy_warnings": report.policy_warnings,
+    })
+}
+
+#[cfg(test)]
+mod policy_receipt_tests {
+    use super::*;
+    #[test]
+    fn pack_wire_and_preview_keep_surface_native_policy_warnings() {
+        use gents_protocol::job::{DynamicMode, JobPolicy};
+        let report = gents_pack::pack::WireReport {
+            changed: Vec::new(),
+            job: None,
+            warnings: Vec::new(),
+            next_call: None,
+            policy_warnings: vec![gents_pack::pack::PolicyWarning {
+                code: gents_pack::pack::PolicyWarningCode::DynamicModeKept,
+                plugin: "test/job".to_owned(),
+                requested: Some(JobPolicy {
+                    dynamic: DynamicMode::Run,
+                    ..Default::default()
+                }),
+                kept: JobPolicy {
+                    dynamic: DynamicMode::Check,
+                    ..Default::default()
+                },
+                previous_digest: Some("old".to_owned()),
+                installed_digest: "new".to_owned(),
+                tools_id: "operator-tools".to_owned(),
+                remedy: "CLI wording must not leak".to_owned(),
+            }],
+        };
+        let receipt = wire_receipt("test/job", report);
+        let warning = &receipt["policy_warnings"][0];
+        assert_eq!(warning["code"], "dynamic_mode_kept");
+        assert_eq!(warning["kept"]["dynamic"], "check");
+        assert_eq!(warning["requested"]["dynamic"], "run");
+        let remedy = warning["remedy"].as_str().unwrap();
+        assert!(remedy.contains("argv:[\"tools\",\"get\"]"));
+        assert!(remedy.contains("argv:[\"tools\",\"update\"]"));
+        assert!(!remedy.contains("gents config"));
+    }
 }

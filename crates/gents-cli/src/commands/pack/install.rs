@@ -331,13 +331,14 @@ pub(super) async fn install_documents_report(
                 }
             }
         }
-        if !args.wire.is_empty() && !args.preview && args.scope.graphql.is_none() {
-            output["wired"] = wire_pack_plugins(
+        if !args.wire.is_empty() && args.scope.graphql.is_none() {
+            output["wired"] = gents_pack::pack::plugin_wire::wire_pack_batch(
                 &access,
                 &owner,
                 &home,
                 pack,
                 &args.wire,
+                false, false, args.preview,
                 gents_service::home_state::load_held_user_identity,
             )
             .await?
@@ -428,6 +429,30 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                         .await?,
                     )
                     .map_err(anyhow::Error::from)?;
+                }
+                if !args.wire.is_empty() {
+                    let home = args
+                        .scope
+                        .home
+                        .as_ref()
+                        .context("pack preview --wire requires --home")?;
+                    let (access, owner) = resolve_scope_owner(&args.scope).await?;
+                    let wired = gents_pack::pack::plugin_wire::wire_pack_batch(
+                        &access,
+                        &owner,
+                        home,
+                        &pack,
+                        &args.wire,
+                        false,
+                        false,
+                        true,
+                        gents_service::home_state::load_held_user_identity,
+                    )
+                    .await;
+                    if let Some(node) = access.local_node() {
+                        node.shutdown().await.map_err(anyhow::Error::from)?;
+                    }
+                    preview["wired"] = wired?.into();
                 }
                 return Ok(crate::print_json(&preview)?);
             }

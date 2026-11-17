@@ -170,6 +170,12 @@ fn wiring_conforms_to_the_model() {
                         (source.pack.clone(), source.targets.clone(), via)
                     })
                     .collect();
+                let existing = tools
+                    .integrations
+                    .as_ref()
+                    .and_then(|i| i.plugins.as_ref())
+                    .and_then(|entries| entries.iter().find(|e| e.plugin == step.plugin.coordinate))
+                    .and_then(|e| e.job.clone());
                 let (after, after_context, report) = match step.action {
                     Action::Wire => wire_plugin(
                         &tools,
@@ -184,7 +190,13 @@ fn wiring_conforms_to_the_model() {
                             consent_tool_calls(&mut tools, &step.plugin.coordinate, &mut report);
                         }
                         if step.consent_dynamic {
-                            consent_dynamic_run(&mut tools, &step.plugin.coordinate, &mut report);
+                            consent_dynamic_run(
+                                &mut tools,
+                                &step.plugin.coordinate,
+                                &mut report,
+                                existing.as_ref(),
+                                reviewed.as_ref(),
+                            );
                         }
                         (tools, context, report)
                     }),
@@ -209,10 +221,9 @@ fn wiring_conforms_to_the_model() {
                         .iter()
                         .map(|text| warning(text))
                         .chain(report.policy_warnings.iter().map(|w| match w.code {
-                            "dynamic_mode_kept" => Warning::DynamicModeKept,
-                            "dynamic_targets_kept" => Warning::DynamicTargetsKept,
-                            "dynamic_run_repinned" => Warning::DynamicRunRepinned,
-                            other => panic!("unknown policy warning: {other}"),
+                            PolicyWarningCode::DynamicModeKept => Warning::DynamicModeKept,
+                            PolicyWarningCode::DynamicTargetsKept => Warning::DynamicTargetsKept,
+                            PolicyWarningCode::DynamicRunRepinned => Warning::DynamicRunRepinned,
                         }))
                         .collect(),
                     next_call: report.next_call.is_some(),
@@ -260,7 +271,14 @@ fn the_report_names_the_next_call_and_what_check_refuses() {
     );
 
     let (mut consented, mut consented_report) = (tools.clone(), report);
-    consent_dynamic_run(&mut consented, "acme/runner", &mut consented_report);
+    let incoming = policy_block(DynamicMode::Run, &[]);
+    consent_dynamic_run(
+        &mut consented,
+        "acme/runner",
+        &mut consented_report,
+        None,
+        Some(&incoming),
+    );
     assert!(consented_report
         .changed
         .iter()
@@ -360,22 +378,26 @@ fn rewire_keeps_policy_and_reports_requested_and_kept_authority() {
             assert_eq!(kept.policy.dynamic_targets, strs(&["b", "a"]));
             let codes: Vec<_> = report.policy_warnings.iter().map(|w| w.code).collect();
             assert_eq!(
-                codes.contains(&"dynamic_mode_kept"),
+                codes.contains(&PolicyWarningCode::DynamicModeKept),
                 existing_mode != incoming_mode
             );
             assert_eq!(
-                codes.contains(&"dynamic_targets_kept"),
+                codes.contains(&PolicyWarningCode::DynamicTargetsKept),
                 incoming_mode != DynamicMode::Off
             );
             for advisory in report.policy_warnings {
                 assert_eq!(advisory.requested, Some(incoming.policy.clone()));
                 assert_eq!(advisory.kept, existing.policy);
-                assert!(advisory
-                    .remedy
-                    .contains("config tools show 'operator-tools'"));
-                assert!(advisory
-                    .remedy
-                    .contains("config tools set --file tools.json"));
+                if incoming_mode != DynamicMode::Off {
+                    assert!(advisory
+                        .remedy
+                        .contains("config tools show 'operator-tools'"));
+                    assert!(advisory
+                        .remedy
+                        .contains("config tools set --file tools.json"));
+                } else {
+                    assert!(!advisory.remedy.contains("To explicitly widen"));
+                }
                 let json = serde_json::to_value(advisory).unwrap();
                 assert!(matches!(
                     json["kept"]["dynamic"].as_str(),
@@ -399,7 +421,7 @@ fn rewire_run_across_digest_warns_once_but_same_digest_does_not() {
         wire_plugin(&tools, &context, &updated, Some(&existing), &[], &[]).unwrap();
     assert_eq!(report.policy_warnings.len(), 1);
     let warning = &report.policy_warnings[0];
-    assert_eq!(warning.code, "dynamic_run_repinned");
+    assert_eq!(warning.code, PolicyWarningCode::DynamicRunRepinned);
     assert_eq!(
         warning.previous_digest.as_deref(),
         Some(plugin.digest.as_str())

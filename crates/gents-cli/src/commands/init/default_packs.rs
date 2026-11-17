@@ -357,6 +357,8 @@ async fn observed_wiring(
     Ok(Wiring {
         wired,
         tool_calls: !selections.is_empty() && selections.iter().all(|plugin| plugin.tool_calls),
+        // This is only a consent signal to the wiring owner. Each plugin must
+        // independently request incoming run and have no existing job block.
         consent_dynamic: selections.iter().any(|plugin| {
             plugin
                 .job
@@ -973,6 +975,10 @@ mod tests {
     /// whose pack Tools ship its block at `check`, with a worker agent whose
     /// rootless host Tools take the Engineer's root.
     async fn fixture_archives() -> Vec<(String, Vec<u8>)> {
+        fixture_archives_with_two_jobs(false).await
+    }
+
+    async fn fixture_archives_with_two_jobs(two_jobs: bool) -> Vec<(String, Vec<u8>)> {
         let build = |name: &'static str| {
             tokio::task::spawn_blocking(move || {
                 crate::commands::plugin::testing::build_plugin_afb(
@@ -984,6 +990,11 @@ mod tests {
         let (web, workflow, script) =
             tokio::join!(build("web_fetch"), build("workflow"), build("script"));
         let (web, workflow, script) = (web.unwrap(), workflow.unwrap(), script.unwrap());
+        let check_job = if two_jobs {
+            Some(build("workflow_check").await.unwrap())
+        } else {
+            None
+        };
         let packs = tempfile::tempdir().unwrap();
         CorePack::ALL
             .into_iter()
@@ -1057,6 +1068,29 @@ mod tests {
                     | CorePack::Charts
                     | CorePack::DataTables
                     | CorePack::Script => {}
+                }
+                if two_jobs && pack == CorePack::DynamicWorkflows {
+                    manifest["plugins"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(plugin_entry("workflow_check", json!("None"), true));
+                    manifest["assets"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push("plugins/workflow_check.afb".into());
+                    files.push((
+                        "plugins/workflow_check.afb".to_owned(),
+                        check_job.as_ref().unwrap().clone(),
+                    ));
+                    let plugins = config["tools"][1]["integrations"]["plugins"]
+                        .as_array_mut()
+                        .unwrap();
+                    plugins[0]["job"]["policy"]["dynamic"] = "check".into();
+                    plugins[0]["job"]["policy"]["dynamic_targets"] = json!(["wf-read-only"]);
+                    let mut second = plugins[0].clone();
+                    second["plugin"] = "gents/workflow_check".into();
+                    second["job"]["policy"]["dynamic"] = "check".into();
+                    plugins.push(second);
                 }
                 files.push((
                     "pack_config.json".to_owned(),
@@ -1317,6 +1351,344 @@ mod tests {
             listed.iter().all(|pack| pack.state == PackState::Installed),
             "{listed:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn wire_batch_rolls_back_late_failure_across_two_agents_and_plugins() {
+        use gents_pack::pack::wiring::{apply_batch, PluginWiring};
+        use gents_store::config_client::ConfigApplyTxn;
+        let owned = fixture_archives_with_two_jobs(true).await;
+        let archives = borrowed(&owned);
+        let home = tempfile::tempdir().unwrap();
+        let initialized = crate::commands::init::init_home_with_core_packs(
+            init_args(home.path(), &[]),
+            &archives,
+        )
+        .await
+        .unwrap();
+        let engineer = initialized["default_agent_did"].as_str().unwrap();
+        let (access, owner) = command::resolve_scope_owner(&scope(home.path()))
+            .await
+            .unwrap();
+        let config = engineer_config(&access, &owner, home.path(), engineer)
+            .await
+            .unwrap();
+        let agents: Value = serde_json::from_str(
+            &config
+                .call(json!({"argv":["agent","list"]}).to_string())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let worker = agents["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["display_name"] == "Workflow read-only worker")
+            .unwrap()["agent_did"]
+            .as_str()
+            .unwrap();
+        let agent_ids = [engineer, worker];
+        let mut plans = Vec::new();
+        for agent in agent_ids {
+            for name in ["workflow", "workflow_check"] {
+                let plugin = PluginWiring::installed_plugin(home.path(), "gents", name).unwrap();
+                plans.push(
+                    PluginWiring::read(&access, &owner, home.path(), agent, plugin, &[])
+                        .await
+                        .unwrap(),
+                );
+            }
+        }
+        let snapshot = || {
+            access.transact_readonly("test.batch_snapshot", |txn| {
+                let owner = &owner;
+                let agent_ids = &agent_ids;
+                Box::pin(async move {
+                    let mut values = Vec::new();
+                    for agent in agent_ids {
+                        values.push(serde_json::to_value(
+                            gents_documents::load_agent_context_and_tools_in_txn(txn, owner, agent)
+                                .await?,
+                        )?);
+                    }
+                    Ok::<_, anyhow::Error>(values)
+                })
+            })
+        };
+        let before = snapshot().await.unwrap();
+        for fail_after in 1..=4 {
+            let (result, count) = ConfigApplyTxn::with_successful_mutation_failure_at(
+                Some(fail_after),
+                access.transact_write("test.batch_atomic", |txn| {
+                    let plans = &plans;
+                    Box::pin(async move {
+                        apply_batch(
+                            txn,
+                            plans,
+                            false,
+                            &gents_inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await
+                    })
+                }),
+            )
+            .await;
+            assert!(result.is_err(), "failure {fail_after} must abort the batch");
+            assert_eq!(count, fail_after);
+            assert_eq!(
+                snapshot().await.unwrap(),
+                before,
+                "partial publication at mutation {fail_after}"
+            );
+        }
+        let reports = access
+            .transact_write("test.batch_atomic_success", |txn| {
+                let plans = &plans;
+                Box::pin(async move {
+                    apply_batch(
+                        txn,
+                        plans,
+                        false,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(reports.len(), 4);
+        let after = snapshot().await.unwrap();
+        for pair in &after {
+            let entries = pair[1]["integrations"]["plugins"].as_array().unwrap();
+            for name in ["gents/workflow", "gents/workflow_check"] {
+                assert!(entries.iter().any(|p| p["plugin"] == name), "{pair}");
+            }
+        }
+        // Race an actual Tools replacement against the signed batch commit.
+        // The verified-pack owner is single-attempt: it must expose a typed
+        // retryable conflict, not overwrite the operator or partially publish.
+        let installed = gents_pack::pack::read_home_install(
+            home.path(),
+            CorePack::DynamicWorkflows.coordinate(),
+        )
+        .unwrap()
+        .unwrap();
+        let pack = gents_pack::pack::resolved_pack::resolve_pack_source(
+            &installed.digest,
+            None,
+            home.path(),
+        )
+        .await
+        .unwrap();
+        // Force a real re-pin; an idempotent no-op has no mutation at which the
+        // existing race harness can pause.
+        let current = snapshot().await.unwrap();
+        let mut repin: gents_documents::Tools =
+            serde_json::from_value(current[0][1].clone()).unwrap();
+        repin
+            .integrations
+            .as_mut()
+            .unwrap()
+            .plugins
+            .as_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|p| p.plugin == "gents/workflow")
+            .unwrap()
+            .digest = Some(format!("sha256:{}", "0".repeat(64)));
+        gents_documents::write_tools_document(
+            &access,
+            &repin,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
+        let raced_before = snapshot().await.unwrap();
+        let mut edited: gents_documents::Tools =
+            serde_json::from_value(raced_before[0][1].clone()).unwrap();
+        let plugin = edited
+            .integrations
+            .as_mut()
+            .unwrap()
+            .plugins
+            .as_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|p| p.plugin == "gents/workflow")
+            .unwrap();
+        plugin.job.as_mut().unwrap().policy.dynamic = gents_protocol::job::DynamicMode::Off;
+        edited.display_name = Some("concurrent tools set".to_owned());
+        let concurrently_stored = edited.clone();
+        let other_access = access.clone();
+        let (result, raced) = ConfigApplyTxn::with_concurrent_write_before_commit(
+            gents_pack::pack::plugin_wire::wire_pack_plugins_consenting(
+                &access,
+                &owner,
+                home.path(),
+                &pack,
+                &[engineer.to_owned(), worker.to_owned()],
+                true,
+                false,
+                gents_service::home_state::load_held_user_identity,
+            ),
+            async move {
+                gents_documents::write_tools_document(
+                    &other_access,
+                    &edited,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .unwrap();
+            },
+        )
+        .await;
+        assert!(
+            raced,
+            "concurrent write hook did not run; result={result:?}"
+        );
+        let error = result.expect_err("the concurrent Tools change must conflict");
+        assert!(
+            gents_store::config_client::is_classified_transaction_conflict(&error),
+            "{error:#}"
+        );
+        assert_eq!(
+            gents_store::config_client::classified_conflict_repeatable(&error),
+            Some(true)
+        );
+        let raced_after = snapshot().await.unwrap();
+        assert_eq!(
+            serde_json::from_value::<gents_documents::Tools>(raced_after[0][1].clone()).unwrap(),
+            concurrently_stored
+        );
+        assert_eq!(raced_after[0][0], raced_before[0][0]);
+        assert_eq!(raced_after[1], raced_before[1]);
+        // A fresh retry reads and keeps the just-stored off policy.
+        let retry = gents_pack::pack::plugin_wire::wire_pack_plugins_consenting(
+            &access,
+            &owner,
+            home.path(),
+            &pack,
+            &[engineer.to_owned(), worker.to_owned()],
+            true,
+            false,
+            gents_service::home_state::load_held_user_identity,
+        )
+        .await
+        .unwrap();
+        assert_eq!(retry[0]["report"]["job"]["policy"]["dynamic"], "off");
+        assert_eq!(
+            retry[0]["report"]["policy_warnings"][0]["kept"]["dynamic"],
+            "off"
+        );
+        drop(config);
+        access.local_node().unwrap().shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn init_rerun_preserves_two_plugin_operator_policy() {
+        let owned = fixture_archives_with_two_jobs(true).await;
+        let archives = borrowed(&owned);
+        let home = tempfile::tempdir().unwrap();
+        let initialized = crate::commands::init::init_home_with_core_packs(
+            init_args(home.path(), &[]),
+            &archives,
+        )
+        .await
+        .unwrap();
+        let engineer = initialized["default_agent_did"].as_str().unwrap();
+        let first_enable = enable(home.path(), &archives, &[CorePack::DynamicWorkflows])
+            .await
+            .unwrap();
+        assert_eq!(first_enable["failed"], json!([]), "{first_enable}");
+        let (access, owner) = command::resolve_scope_owner(&scope(home.path()))
+            .await
+            .unwrap();
+        let config = engineer_config(&access, &owner, home.path(), engineer)
+            .await
+            .unwrap();
+        let call = |args: Value| {
+            let config = &config;
+            async move {
+                serde_json::from_str::<Value>(&config.call(args.to_string()).await.unwrap())
+                    .unwrap()
+            }
+        };
+        let before = call(json!({"argv":["tools","get"]})).await;
+        let mut integrations = before["document"]["integrations"].clone();
+        for plugin in integrations["plugins"].as_array_mut().unwrap() {
+            if plugin["plugin"] == "gents/workflow" {
+                plugin["job"]["policy"]["dynamic"] = "check".into();
+            }
+        }
+        call(json!({"argv":["tools","update"],"set":{"integrations": integrations}})).await;
+        // Packs cannot ship run. Model an explicit operator edit to the installed
+        // reviewed Tools after the valid check-only pack has been installed.
+        let reviewed = call(json!({"argv":["tools","get"], "target_id":"workflow-caller"})).await;
+        let mut reviewed_integrations = reviewed["document"]["integrations"].clone();
+        reviewed_integrations["plugins"][0]["job"]["policy"]["dynamic"] = "run".into();
+        call(
+            json!({"argv":["tools","update"], "target_id":"workflow-caller",
+            "set":{"integrations":reviewed_integrations}}),
+        )
+        .await;
+        // The actual config-tool preview and apply must both carry the typed warning.
+        for argv in [
+            json!(["pack", "preview", "wire", "gents/dynamic_workflows"]),
+            json!(["pack", "wire", "gents/dynamic_workflows"]),
+        ] {
+            let receipt = call(json!({"argv":argv})).await;
+            let warning = &receipt["wired"][0]["policy_warnings"][0];
+            assert_eq!(warning["requested"]["dynamic"], "run", "{receipt}");
+            assert_eq!(warning["kept"]["dynamic"], "check", "{receipt}");
+            assert!(warning["remedy"]
+                .as_str()
+                .unwrap()
+                .contains("argv:[\"tools\",\"update\"]"));
+        }
+        drop(config);
+        access.local_node().unwrap().shutdown().await.unwrap();
+        drop(access);
+        // Re-running init and explicit enable must not treat pack-wide consent as
+        // consent to raise an existing job or a second plugin requesting check.
+        crate::commands::init::init_home_with_core_packs(init_args(home.path(), &[]), &archives)
+            .await
+            .unwrap();
+        let enabled = enable(home.path(), &archives, &[CorePack::DynamicWorkflows])
+            .await
+            .unwrap();
+        assert_eq!(enabled["failed"], json!([]), "{enabled}");
+        let (access, owner) = command::resolve_scope_owner(&scope(home.path()))
+            .await
+            .unwrap();
+        let (_, tools) = access
+            .transact_readonly("test.two_plugin_policy", |txn| {
+                let owner = &owner;
+                Box::pin(async move {
+                    gents_documents::load_agent_context_and_tools_in_txn(txn, owner, engineer).await
+                })
+            })
+            .await
+            .unwrap();
+        let tools = tools.unwrap();
+        for coordinate in ["gents/workflow", "gents/workflow_check"] {
+            let plugin = tools
+                .integrations
+                .as_ref()
+                .unwrap()
+                .plugins
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|p| p.plugin == coordinate)
+                .unwrap();
+            assert_eq!(
+                plugin.job.as_ref().unwrap().policy.dynamic,
+                gents_protocol::job::DynamicMode::Check,
+                "{coordinate}"
+            );
+        }
+        access.local_node().unwrap().shutdown().await.unwrap();
     }
 
     /// A home set up before any inference provider exists, as the desktop

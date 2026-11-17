@@ -113,7 +113,7 @@ pub fn enabled_wiring(pack: CorePack) -> Wiring {
         CorePack::DynamicWorkflows => Wiring {
             wired: true,
             tool_calls: false,
-            consent_dynamic: true,
+            consent_dynamic: false,
             root_readers: true,
             agents_active: true,
         },

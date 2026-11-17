@@ -154,9 +154,7 @@ async fn wire_in_owned(
     .await?;
     plan.remove = request.remove;
     plan.preview = request.preview;
-    plan.dynamic_consent = request
-        .dynamic_consent
-        .then_some(crate::pack::consent_dynamic_run as _);
+    plan.dynamic_consent = request.dynamic_consent;
     plan.tool_calls_consent = request.tool_calls_consent;
     plan.next_step = explain_tools_command(&request.agent);
     let report = if request.preview {
@@ -256,32 +254,169 @@ pub async fn wire_pack_plugins_consenting(
     tool_calls_consent: bool,
     held_user: LoadHeldUser,
 ) -> Result<Vec<Value>> {
+    wire_pack_batch(
+        access,
+        owner,
+        home,
+        pack,
+        agents,
+        dynamic_consent,
+        tool_calls_consent,
+        false,
+        held_user,
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "batch has explicit consent and preview modes"
+)]
+pub async fn wire_pack_batch(
+    access: &ConfigAccess,
+    owner: &str,
+    home: &Path,
+    pack: &ResolvedPack,
+    agents: &[String],
+    dynamic_consent: bool,
+    tool_calls_consent: bool,
+    preview: bool,
+    held_user: LoadHeldUser,
+) -> Result<Vec<Value>> {
+    if agents.is_empty() || pack.manifest().metadata.plugins.is_empty() {
+        return Ok(Vec::new());
+    }
+    anyhow::ensure!(
+        preview || matches!(access, ConfigAccess::Local(_)),
+        "batch plugin wiring requires the owning local node transaction"
+    );
     let namespace = &pack.manifest().metadata.namespace;
-    let mut requests = Vec::new();
+    let lock_home = home.to_owned();
+    let _guard =
+        tokio::task::spawn_blocking(move || crate::plugin::store::try_lock_store(&lock_home))
+            .await??;
+    let preview_config = if preview && pack.manifest().config.is_some() {
+        Some(crate::pack::load_pack_config(
+            pack.manifest(),
+            &crate::pack::PackInstallOptions {
+                node_did: owner.to_owned(),
+            },
+            &|path| Ok(pack.asset(path)?.to_vec()),
+            &|name| {
+                if name == "GENTS_PACK_NODE_DID" {
+                    Some(owner.to_owned())
+                } else {
+                    None
+                }
+            },
+        )?)
+    } else {
+        None
+    };
+    let mut plans = Vec::new();
     for agent in agents {
-        for plugin in &pack.manifest().metadata.plugins {
-            requests.push(WireRequest {
-                plugin: format!("{namespace}/{}", plugin.name),
-                agent: agent.clone(),
-                targets_from: Vec::new(),
-                remove: false,
-                preview: true,
-                dynamic_consent,
-                tool_calls_consent,
-            });
+        for shipped in &pack.manifest().metadata.plugins {
+            let plugin = if preview {
+                use sha2::{Digest, Sha256};
+                let artifact = pack.asset(&shipped.artifact)?;
+                crate::plugin::store::InstalledPlugin {
+                    namespace: namespace.clone(),
+                    name: shipped.name.clone(),
+                    version: pack.manifest().version.clone(),
+                    digest: format!("sha256:{:x}", Sha256::digest(artifact)),
+                    language: shipped.language.clone(),
+                    declaration: shipped.clone(),
+                    granted: None,
+                    instructions: shipped
+                        .instructions
+                        .as_ref()
+                        .map(|path| {
+                            pack.asset(path)
+                                .and_then(|bytes| Ok(std::str::from_utf8(bytes)?.to_owned()))
+                        })
+                        .transpose()?,
+                    owner_pack_coordinate: Some(format!("{namespace}/{}", pack.manifest().name)),
+                    owner_pack_digest: Some(pack.digest().to_owned()),
+                    model_binding: None,
+                    data_unique_keys: Default::default(),
+                    data_collection_fields: Default::default(),
+                    data_collection_schemas: Default::default(),
+                    plugin_interface: pack.manifest().plugin_interface,
+                }
+            } else {
+                read_record(home, namespace, &shipped.name)?
+            };
+            let mut plan =
+                crate::pack::wiring::PluginWiring::read(access, owner, home, agent, plugin, &[])
+                    .await?;
+            if preview {
+                let coordinate = format!("{namespace}/{}", shipped.name);
+                plan.reviewed_override = Some(preview_config.as_ref().and_then(|config| {
+                    config
+                        .tools
+                        .iter()
+                        .flat_map(|t| {
+                            t.integrations
+                                .as_ref()
+                                .and_then(|i| i.plugins.as_ref())
+                                .into_iter()
+                                .flatten()
+                        })
+                        .find(|p| p.plugin == coordinate && p.job.is_some())
+                        .and_then(|p| p.job.clone())
+                }));
+            }
+            plan.preview = preview;
+            plan.dynamic_consent = dynamic_consent;
+            plan.tool_calls_consent = tool_calls_consent;
+            plan.next_step = explain_tools_command(agent);
+            plans.push(plan);
         }
     }
-    // Preflight all pairs before writing. Apply rechecks in each transaction;
-    // concurrent mutation/storage failure is not covered by batch rollback.
-    for request in &requests {
-        wire_in(access, owner, home, request, held_user).await?;
-    }
-    let mut wired = Vec::new();
-    for mut request in requests {
-        request.preview = false;
-        wired.push(wire_in(access, owner, home, &request, held_user).await?);
-    }
-    Ok(wired)
+    let reports = if preview {
+        access
+            .transact_readonly("pack.wire_batch.preview", |txn| {
+                let plans = &plans;
+                Box::pin(async move {
+                    crate::pack::wiring::apply_batch(
+                        txn,
+                        plans,
+                        true,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
+            })
+            .await?
+    } else {
+        let client = held_user(home).await?;
+        anyhow::ensure!(
+            access.actor_did().as_deref() == Some(client.did()),
+            "pack wire requires the held User identity selected by the local transaction"
+        );
+        let scope = PackApprovalScope {
+            node_did: owner.to_owned(),
+            pack_digests: plans.iter().map(|p| p.plugin.digest.clone()).collect(),
+            nonce: uuid::Uuid::new_v4().to_string(),
+        };
+        let approver = Arc::new(LocalWireApprover {
+            actor: client.client_signing_capability()?,
+            scope: scope.clone(),
+        });
+        access.transact_verified_pack_with_approver("pack.wire_batch", scope, approver, |txn| {
+            let plans = &plans;
+            Box::pin(async move { crate::pack::wiring::apply_batch(txn.approved_interpreter()?, plans, false,
+                &gents_inference::resolved::ProviderProfilePolicy).await })
+        }).await.map_err(|failure| if failure.unconfirmed {
+            failure.error.context("batch wiring commit was not confirmed; inspect all targets before retrying")
+        } else { failure.error })?
+    };
+    Ok(plans.iter().zip(reports).map(|(plan, report)| json!({
+        "plugin": format!("{}/{}", plan.plugin.namespace, plan.plugin.name),
+        "agent": plan.agent, "preview": preview,
+        "authority": describe_plugin_authority(&plan.plugin.declaration, &plan.plugin.ceiling()),
+        "report": report,
+    })).collect())
 }
 
 /// What the plugins of `manifest` and its `dependencies` ask for beyond a

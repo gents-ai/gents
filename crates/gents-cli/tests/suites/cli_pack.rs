@@ -1639,7 +1639,18 @@ fn pack_install_wire_receipt_warns_and_keeps_operator_run() -> Result<()> {
         ],
     )?;
     let before = fixture.agent_tools()?;
+    let preview = fixture.install_job_pack(&["--preview", "--wire", &fixture.agent])?;
+    assert_eq!(
+        fixture.agent_tools()?,
+        before,
+        "install preview wrote Tools"
+    );
+    assert_eq!(
+        preview["wired"][0]["report"]["policy_warnings"][0]["kept"]["dynamic"],
+        "run"
+    );
     let receipt = fixture.install_job_pack(&["--wire", &fixture.agent])?;
+    assert_eq!(preview["wired"][0]["report"], receipt["wired"][0]["report"]);
     let warning = &receipt["wired"][0]["report"]["policy_warnings"][0];
     assert_eq!(warning["code"], "dynamic_mode_kept");
     assert_eq!(warning["requested"]["dynamic"], "off");

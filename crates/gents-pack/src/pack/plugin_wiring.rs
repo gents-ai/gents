@@ -23,16 +23,32 @@ fn union_into(list: &mut Vec<String>, items: &[String]) {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyWarningCode {
+    DynamicModeKept,
+    DynamicTargetsKept,
+    DynamicRunRepinned,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum PolicyWarningSurface {
+    #[default]
+    Cli,
+    ConfigTool,
+}
+
 /// Structured policy advisory carried by wire, preview and install receipts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PolicyWarning {
-    pub code: &'static str,
+    pub code: PolicyWarningCode,
     pub plugin: String,
     pub requested: Option<gents_protocol::job::JobPolicy>,
     pub kept: gents_protocol::job::JobPolicy,
     pub previous_digest: Option<String>,
     pub installed_digest: String,
     pub remedy: String,
+    pub tools_id: String,
 }
 
 /// Existing mode and target order always win (Lean `merge`).
@@ -53,8 +69,46 @@ fn merge_job_blocks(
     merged
 }
 
+impl PolicyWarning {
+    pub fn render_for(&mut self, surface: PolicyWarningSurface) {
+        use gents_protocol::job::DynamicMode;
+        let rank = |mode| match mode {
+            DynamicMode::Off => 0,
+            DynamicMode::Check => 1,
+            DynamicMode::Run => 2,
+        };
+        let needs_more = self.requested.as_ref().is_some_and(|requested| {
+            rank(requested.dynamic) > rank(self.kept.dynamic)
+                || (requested.dynamic != DynamicMode::Off
+                    && requested
+                        .dynamic_targets
+                        .iter()
+                        .any(|t| !self.kept.dynamic_targets.contains(t)))
+        });
+        self.remedy = if !needs_more {
+            "Operator policy retained. No widening is needed. Review retained run authority when a plugin digest changes.".to_owned()
+        } else {
+            match surface {
+                PolicyWarningSurface::Cli => format!(
+                    "Operator policy retained; no policy change is required to wire. To explicitly widen, \
+                     run `gents config tools show '{}' --home <node-home> > tools.json`, \
+                     remove read-only _docID (retain tools_id, node_did and every settings group), \
+                     edit this plugin's job.policy, then \
+                     `gents config tools set --file tools.json --home <node-home>`. \
+                     Use the same home/endpoint as this request.", self.tools_id.replace('\'', "'\"'\"'")),
+                PolicyWarningSurface::ConfigTool => format!(
+                    "Operator policy retained; no policy change is required to wire. To explicitly widen, \
+                     call config with argv:[\"tools\",\"get\"] and target_id:{:?}, then \
+                     argv:[\"tools\",\"update\"] with the same target_id and set.integrations \
+                     containing the complete returned integrations group with only this plugin's \
+                     job.policy edited. Retain every unrelated entry and setting.", self.tools_id),
+            }
+        };
+    }
+}
+
 fn policy_warning(
-    code: &'static str,
+    code: PolicyWarningCode,
     plugin: &str,
     tools_id: &str,
     requested: Option<&gents_protocol::job::JobPolicy>,
@@ -62,11 +116,18 @@ fn policy_warning(
     previous_digest: Option<String>,
     installed_digest: &str,
 ) -> PolicyWarning {
-    PolicyWarning {
-        code, plugin: plugin.to_owned(), requested: requested.cloned(), kept: kept.clone(),
-        previous_digest, installed_digest: installed_digest.to_owned(),
-        remedy: format!("Operator policy retained; wiring does not widen it. To explicitly widen, run `gents config tools show '{}' --home <node-home> > tools.json`, remove read-only _docID (retain tools_id, node_did and every settings group), edit this plugin's job.policy, then `gents config tools set --file tools.json --home <node-home>`. Use the same home/endpoint as this request. No policy change is required to wire.", tools_id.replace('\'', "'\"'\"'")),
-    }
+    let mut warning = PolicyWarning {
+        code,
+        plugin: plugin.to_owned(),
+        requested: requested.cloned(),
+        kept: kept.clone(),
+        previous_digest,
+        installed_digest: installed_digest.to_owned(),
+        remedy: String::new(),
+        tools_id: tools_id.to_owned(),
+    };
+    warning.render_for(PolicyWarningSurface::Cli);
+    warning
 }
 
 /// Wires an installed plugin into an agent's Tools and Context: the plugin
@@ -146,7 +207,7 @@ pub fn wire_plugin(
             if let Some(existing) = job.as_ref() {
                 let mut codes = Vec::new();
                 if existing.policy.dynamic != incoming.policy.dynamic {
-                    codes.push("dynamic_mode_kept");
+                    codes.push(PolicyWarningCode::DynamicModeKept);
                 }
                 if incoming.policy.dynamic != gents_protocol::job::DynamicMode::Off
                     && incoming
@@ -155,7 +216,7 @@ pub fn wire_plugin(
                         .iter()
                         .any(|t| !existing.policy.dynamic_targets.contains(t))
                 {
-                    codes.push("dynamic_targets_kept");
+                    codes.push(PolicyWarningCode::DynamicTargetsKept);
                 }
                 for code in codes {
                     policy_warnings.push(policy_warning(
@@ -253,7 +314,7 @@ pub fn wire_plugin(
                 .filter(|j| j.policy.dynamic == gents_protocol::job::DynamicMode::Run)
             {
                 policy_warnings.push(policy_warning(
-                    "dynamic_run_repinned",
+                    PolicyWarningCode::DynamicRunRepinned,
                     &coordinate,
                     &tools_id,
                     reviewed_job.map(|j| &j.policy),
@@ -262,6 +323,12 @@ pub fn wire_plugin(
                     &plugin.digest,
                 ));
             }
+        }
+    }
+    if let Some(stored) = &job {
+        for warning in &mut policy_warnings {
+            warning.kept = stored.policy.clone();
+            warning.render_for(PolicyWarningSurface::Cli);
         }
     }
     let next_call = (plugin.declaration.job.0 && job.is_none()).then(|| {
@@ -302,7 +369,18 @@ pub fn consent_tool_calls(tools: &mut Tools, coordinate: &str, report: &mut Wire
 /// Applies the node owner's consent to dynamic scripts to `coordinate`'s job
 /// block (Lean `consentedDynamic`): `check` becomes `run`, and the report
 /// records the grant in place of the `check` warning.
-pub fn consent_dynamic_run(tools: &mut Tools, coordinate: &str, report: &mut WireReport) {
+pub fn consent_dynamic_run(
+    tools: &mut Tools,
+    coordinate: &str,
+    report: &mut WireReport,
+    existing: Option<&gents_protocol::job::PluginJobSettings>,
+    incoming: Option<&gents_protocol::job::PluginJobSettings>,
+) {
+    if existing.is_some()
+        || !incoming.is_some_and(|j| j.policy.dynamic == gents_protocol::job::DynamicMode::Run)
+    {
+        return;
+    }
     let Some(job) = tools
         .integrations
         .iter_mut()

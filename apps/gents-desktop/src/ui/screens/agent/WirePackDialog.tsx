@@ -149,6 +149,13 @@ export function WirePackDialog({
                 preview.report.next_call && <li>{preview.report.next_call}</li>
               )}
               {preview.authority && <li>Authority: {preview.authority}</li>}
+              {preview.report.policy_warnings?.map((warning) => (
+                <li key={`${warning.plugin}:${warning.code}`} data-testid="wire-policy-warning">
+                  {warning.code}: requested {warning.requested?.dynamic ?? "none"}
+                  {" "}[{warning.requested?.dynamic_targets.join(", ") ?? ""}]; kept {warning.kept.dynamic}
+                  {" "}[{warning.kept.dynamic_targets.join(", ")}]. {warning.remedy}
+                </li>
+              ))}
               {preview.report.warnings.map((warning) => (
                 <li key={warning}>{warning}</li>
               ))}
