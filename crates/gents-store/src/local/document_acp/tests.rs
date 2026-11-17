@@ -250,3 +250,23 @@ fn the_http_edge_matches_the_lean_model() {
         }
     });
 }
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Publication {
+    Proceeds,
+    AwaitsTransportGrants,
+}
+
+#[test]
+fn node_publication_matches_the_lean_model() {
+    gents_lean_vocab::families::identity_node_publication_publication::replay::<
+        Provider,
+        Publication,
+    >(
+        |input| match super::publication(document_acp(input.provider)) {
+            super::Publication::Proceeds => Publication::Proceeds,
+            super::Publication::AwaitsTransportGrants => Publication::AwaitsTransportGrants,
+        },
+    );
+}

@@ -87,6 +87,12 @@ pub enum DocumentAcpError {
     )]
     DelegationRequired,
     #[error(
+        "this home decides document access through Vera, where the runtime does not yet publish \
+         peer records as its Node, since Vera has no grant of transport relationships yet \
+         (defradb.rs#2980)"
+    )]
+    TransportGrantsAwaitProvider,
+    #[error(
         "this home's embedded Vera deployment was created under a different {what} than this \
          Gents build and node identity give it; open the home with the Gents version that \
          created it"
@@ -133,6 +139,7 @@ impl DocumentAcpError {
             | Self::NotYetUsable
             | Self::HeldUserKey
             | Self::DelegationRequired
+            | Self::TransportGrantsAwaitProvider
             | Self::Inspect { .. } => None,
         }
     }
@@ -173,6 +180,30 @@ pub fn node_delegation_audience(node: &defra_node::Node) -> Option<DelegationAud
     {
         let _ = node;
         None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Publication {
+    Proceeds,
+    AwaitsTransportGrants,
+}
+
+/// Whether the runtime publishes peer records as its Node
+/// (`Identity.NodePublication.publication`).
+pub fn publication(provider: DocumentAcp) -> Publication {
+    match provider {
+        DocumentAcp::Local => Publication::Proceeds,
+        DocumentAcp::Vera => Publication::AwaitsTransportGrants,
+    }
+}
+
+/// Refuses a Node-run peer publication on `node` before anything is written
+/// while its provider grants no transport relationships.
+pub fn ensure_node_publication(node: &defra_node::Node) -> Result<()> {
+    match publication(provider_of(node)) {
+        Publication::Proceeds => Ok(()),
+        Publication::AwaitsTransportGrants => Err(DocumentAcpError::TransportGrantsAwaitProvider),
     }
 }
 
