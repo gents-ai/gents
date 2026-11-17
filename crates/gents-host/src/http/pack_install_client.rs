@@ -135,15 +135,17 @@ async fn first_reply(
     client_build: &gents_protocol::build_info::BuildInfo,
 ) -> std::result::Result<(ServerMessage, usize), PackInstallHandshakeError> {
     match receive_sized(socket).await {
-        // An older runtime's `InstallRequest` has `deny_unknown_fields`, so it
-        // rejects the client's `client_build` by name, and it sends no class.
-        // That is the "older runtime" case, with its own next step.
+        // Every failure of this build's runtime carries a class, so one without
+        // is an older runtime (its `InstallRequest` has `deny_unknown_fields`
+        // and refuses the client's `client_build`). That is the "older
+        // runtime" case, with its own next step, told by the missing class
+        // rather than by the runtime's text.
         Ok((
             ServerMessage::Failed {
                 error, class: None, ..
             },
             _,
-        )) if error.contains("client_build") => Err(PackInstallHandshakeError::OlderRuntime {
+        )) => Err(PackInstallHandshakeError::OlderRuntime {
             client: client_build.summary(),
             detail_bytes: error.len(),
         }),
