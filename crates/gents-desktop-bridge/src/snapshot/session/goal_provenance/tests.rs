@@ -20,7 +20,9 @@ pub(crate) async fn assert_paged_native_forks(
         access,
         ForkParams {
             source_session_id: source,
-            boundary: ForkBoundary::UserTurn(3),
+            // Each runtime turn publishes context + prompt user rows, followed
+            // by one answer. Native fork boundaries count both stored user rows.
+            boundary: ForkBoundary::UserTurn(6),
             caller_node_did: &session.node_did,
             caller_requester_did: session.requester_did.as_deref(),
             target_agent_did: None,
@@ -28,7 +30,7 @@ pub(crate) async fn assert_paged_native_forks(
     )
     .await
     .unwrap();
-    assert_eq!(first.copied_messages, 6);
+    assert_eq!(first.copied_messages, 9);
     assert_native_pages(
         access,
         session,
@@ -42,7 +44,7 @@ pub(crate) async fn assert_paged_native_forks(
         access,
         ForkParams {
             source_session_id: &first.session_id,
-            boundary: ForkBoundary::UserTurn(2),
+            boundary: ForkBoundary::UserTurn(4),
             caller_node_did: &session.node_did,
             caller_requester_did: session.requester_did.as_deref(),
             target_agent_did: None,
@@ -50,7 +52,7 @@ pub(crate) async fn assert_paged_native_forks(
     )
     .await
     .unwrap();
-    assert_eq!(second.copied_messages, 4);
+    assert_eq!(second.copied_messages, 6);
     assert_native_pages(
         access,
         session,
