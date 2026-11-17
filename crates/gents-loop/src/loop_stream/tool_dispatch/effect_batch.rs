@@ -193,6 +193,11 @@ where
                         }
                     }
                     if let Some(Unavailable(reason)) = &failure {
+                        if width == 1 {
+                            results.push(Err(Unavailable(reason.clone())));
+                            continue;
+                        }
+                        let group_end = results.len() + width;
                         // A reservation failed: no body in this read group has started.
                         // Preserve the same nonfatal reason at every failure position.
                         for item in admitted {
@@ -218,12 +223,15 @@ where
                                 }
                             }
                         }
-                        results.resize_with(calls.len(), || Err(Unavailable(reason.clone())));
-                        break;
+                        results.resize_with(group_end, || Err(Unavailable(reason.clone())));
+                        if results.iter().any(|result| matches!(result, Err(Fatal(_)))) {
+                            break;
+                        }
+                        continue;
                     }
                     if let Some(error) = failure {
-                        let reason = match &error {
-                            Fatal(reason) | Unavailable(reason) => reason,
+                        let Fatal(reason) = &error else {
+                            unreachable!("unavailable handled above");
                         };
                         for item in admitted {
                             if let Some(ready) = item.ready {
@@ -235,12 +243,8 @@ where
                                 results.push(cleanup);
                             }
                         }
-                        let fatal = matches!(error, Fatal(_)) || width > 1;
                         results.push(Err(error));
-                        if fatal {
-                            break;
-                        }
-                        continue;
+                        break;
                     }
                     let token = scope.cancellation_token.child_token();
                     let outputs = join_all(group.iter().zip(admitted).map(|(call, item)| {

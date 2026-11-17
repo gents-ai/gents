@@ -49,6 +49,7 @@ struct Hook {
     terminate_result: Option<u32>,
     skip: Option<u32>,
     fail_reservation: Option<u32>,
+    fail_finish: Option<u32>,
 }
 #[async_trait::async_trait]
 impl SessionHook for Hook {
@@ -138,6 +139,9 @@ impl SessionHook for Hook {
             .lock()
             .unwrap()
             .push(format!("finish:{id}:{}", interruption.is_some()));
+        if id.parse().ok() == self.fail_finish {
+            return Err("finish failed".into());
+        }
         Ok(())
     }
     async fn foreground_live_output_writer(
@@ -164,6 +168,7 @@ fn setup() -> (EffectDispatcher<Hook>, Arc<Hook>, Events) {
         terminate_result: None,
         skip: None,
         fail_reservation: None,
+        fail_finish: None,
     });
     let dispatcher = EffectDispatcher {
         tools: Arc::new(vec![Box::new(Probe(events.clone()))]),
@@ -399,25 +404,30 @@ async fn unavailable_reservation_preserves_reason_and_full_vector_at_every_posit
         let results =
             scope_request_tool_execution(None, Default::default(), dispatcher.batch(calls(6)))
                 .await;
-        let outcomes: Vec<_> = results
-            .into_iter()
-            .map(|result| match result {
-                Ok(ToolOutcome::Cancelled) => "cancelled".to_owned(),
-                Err(ToolEffectError::Unavailable(reason)) => reason,
-                other => panic!("unexpected reservation failure outcome: {other:?}"),
-            })
-            .collect();
-        let reason = format!("reservation {ordinal} unavailable");
-        let mut expected = vec!["cancelled".to_owned(); (ordinal - 1) as usize];
-        expected.resize(6, reason);
-        assert_eq!(outcomes, expected);
+        assert_eq!(results.len(), 6);
+        for (index, result) in results.iter().enumerate() {
+            if index < (ordinal - 1) as usize {
+                assert!(matches!(result, Ok(ToolOutcome::Cancelled)));
+            } else if index < 4 {
+                assert!(
+                    matches!(result, Err(ToolEffectError::Unavailable(reason)) if reason == &format!("reservation {ordinal} unavailable"))
+                );
+            } else {
+                assert_eq!(
+                    result.as_ref().unwrap().model_facing_text(),
+                    (index + 1).to_string()
+                );
+            }
+        }
         assert!(dispatcher.fatal.lock().await.is_none());
         let events = events.lock().unwrap();
-        assert!(!events.iter().any(|e| e.starts_with("start:")));
+        assert!(!events
+            .iter()
+            .any(|e| (1..=4).any(|i| *e == format!("start:{i}"))));
+        assert!(events.contains(&"start:5".to_owned()));
         for earlier in 1..ordinal {
             assert!(events.contains(&format!("finish:{earlier}:true")));
         }
-        assert!(!events.contains(&format!("reserve:{}", ordinal + 1)));
     }
 }
 
@@ -452,4 +462,60 @@ async fn cancelling_request_mid_group_drains_all_started_children() {
         assert!(events.contains(&format!("finish:{ordinal}:false")));
         assert!(!events.contains(&format!("end:{ordinal}")));
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_writer_reservation_does_not_block_next_writer() {
+    let (mut dispatcher, mut hook, events) = setup();
+    drop(dispatcher.hook);
+    Arc::get_mut(&mut hook).unwrap().fail_reservation = Some(1);
+    dispatcher.hook = hook;
+    let mut requests = calls(2);
+    for (i, call) in requests.iter_mut().enumerate() {
+        call.arguments = json!({"id":i+1,"write":true}).to_string();
+    }
+    let results =
+        scope_request_tool_execution(None, Default::default(), dispatcher.batch(requests)).await;
+    assert!(matches!(&results[0], Err(ToolEffectError::Unavailable(_))));
+    assert_eq!(results[1].as_ref().unwrap().model_facing_text(), "2");
+    assert!(events.lock().unwrap().contains(&"start:2".to_owned()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_read_group_does_not_block_following_writer() {
+    let (mut dispatcher, mut hook, events) = setup();
+    drop(dispatcher.hook);
+    Arc::get_mut(&mut hook).unwrap().fail_reservation = Some(2);
+    dispatcher.hook = hook;
+    let mut requests = calls(3);
+    requests[2].arguments = json!({"id":3,"write":true}).to_string();
+    let results =
+        scope_request_tool_execution(None, Default::default(), dispatcher.batch(requests)).await;
+    assert!(matches!(&results[0], Ok(ToolOutcome::Cancelled)));
+    assert!(matches!(&results[1], Err(ToolEffectError::Unavailable(_))));
+    assert_eq!(results[2].as_ref().unwrap().model_facing_text(), "3");
+    assert!(events.lock().unwrap().contains(&"start:3".to_owned()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_cleanup_is_fatal_and_stops_later_groups() {
+    let (mut dispatcher, mut hook, _) = setup();
+    drop(dispatcher.hook);
+    let hook_mut = Arc::get_mut(&mut hook).unwrap();
+    hook_mut.fail_reservation = Some(2);
+    hook_mut.fail_finish = Some(1);
+    dispatcher.hook = hook;
+    let mut requests = calls(3);
+    requests[2].arguments = json!({"id":3,"write":true}).to_string();
+    let results =
+        scope_request_tool_execution(None, Default::default(), dispatcher.batch(requests)).await;
+    assert!(
+        matches!(&results[0], Err(ToolEffectError::Fatal(reason)) if reason == "finish failed")
+    );
+    assert!(matches!(&results[1], Err(ToolEffectError::Unavailable(_))));
+    assert_eq!(results.len(), 2);
+    assert_eq!(
+        dispatcher.fatal.lock().await.as_deref(),
+        Some("finish failed")
+    );
 }
