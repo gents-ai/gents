@@ -1,3 +1,5 @@
+import Proofs.Shared.Basic
+
 namespace ToolPolicy.PluginPublication
 
 inductive Phase where

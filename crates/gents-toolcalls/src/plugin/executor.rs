@@ -111,7 +111,7 @@ pub enum PluginResolutionError {
     Coordinate {
         coordinate: String,
         #[source]
-        source: anyhow::Error,
+        source: gents_protocol::error_chain::PassedThrough,
     },
     #[error("plugin {coordinate} is not installed: this runtime has no plugin directory")]
     NoHome { coordinate: String },
@@ -619,7 +619,7 @@ impl PluginExecutor {
         let (namespace, name) = gents_documents::plugin_coordinate::parse_coordinate(coordinate)
             .map_err(|source| PluginResolutionError::Coordinate {
                 coordinate: coordinate.to_owned(),
-                source,
+                source: gents_protocol::error_chain::PassedThrough::new(source),
             })?;
         let home = self
             .home

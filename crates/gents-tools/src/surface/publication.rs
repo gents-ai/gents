@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use gents_pack::plugin::store::PublishedPluginReadError;
 use tokio::time::Instant;
 
+pub const PLUGIN_PUBLICATION_WAIT_EVENT_TARGET: &str = "gents_tool_surface_publication";
+
 pub(super) const PUBLICATION_WAIT: Duration = Duration::from_secs(60);
 const PUBLICATION_POLL: Duration = Duration::from_millis(100);
 
@@ -33,8 +35,10 @@ pub(super) async fn wait<T>(
                         Err(error)
                     };
                 }
+                if attempts == 0 {
+                    tracing::warn!(target: PLUGIN_PUBLICATION_WAIT_EVENT_TARGET, cause = %format!("{error:#}"), "waiting for plugin publication before constructing tool surface");
+                }
                 attempts += 1;
-                tracing::warn!(attempts, cause = %format!("{error:#}"), "waiting for plugin publication before constructing tool surface");
                 tokio::time::sleep_until(deadline.min(now + PUBLICATION_POLL)).await;
             }
         }
