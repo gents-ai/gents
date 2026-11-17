@@ -79,6 +79,28 @@ fn option_result(function: &ItemFn, result: &str, borrowed: bool) -> bool {
     compact(target) == result
 }
 
+fn external_premise(function: &ItemFn) -> bool {
+    function.attrs.iter().any(|attr| {
+        if !attr.path().is_ident("doc") {
+            return false;
+        }
+        let syn::Meta::NameValue(meta) = &attr.meta else {
+            return false;
+        };
+        let syn::Expr::Lit(literal) = &meta.value else {
+            return false;
+        };
+        let syn::Lit::Str(text) = &literal.lit else {
+            return false;
+        };
+        text.value().lines().any(|line| {
+            line.trim_start()
+                .strip_prefix("External premise:")
+                .is_some_and(|statement| !statement.trim().is_empty())
+        })
+    })
+}
+
 fn compliant(syntax: &syn::File, function: &ItemFn, entry: &Registration) -> bool {
     let exported_result = syntax.items.iter().any(|item| {
         matches!(item, syn::Item::Enum(item)
@@ -106,14 +128,7 @@ fn compliant(syntax: &syn::File, function: &ItemFn, entry: &Registration) -> boo
                 && compact(&function.block).contains(&format!("find_source::<{}>", entry.result))
         }
         Kind::PersistedText => {
-            let premise = function.attrs.iter().any(|attr| {
-                attr.path().is_ident("doc")
-                    && attr
-                        .to_token_stream()
-                        .to_string()
-                        .contains("External premise:")
-            });
-            premise
+            external_premise(function)
                 && input.trim_end_matches(',').ends_with(":&str")
                 && option_result(function, entry.result, false)
                 && error_text_sites(&function_file).len() == 1
@@ -204,4 +219,35 @@ fn registrations_validate_contracts_and_do_not_hide_other_functions() {
     function.attrs.clear();
     let function = function.clone();
     assert!(!compliant(&invalid, &function, adapter));
+}
+
+#[test]
+fn every_registration_resolves_to_a_compliant_function() {
+    for entry in REGISTRY {
+        let path = repo_root().join(entry.path);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("stale classifier path {}: {error}", path.display()));
+        let syntax = syn::parse_file(&text).unwrap();
+        let _ = debt_syntax(entry.path, &syntax, matches!(entry.kind, Kind::Owner));
+    }
+}
+
+#[test]
+fn external_premise_requires_a_line_start_and_a_statement() {
+    let inline: ItemFn = syn::parse_quote! {
+        /// Somewhere External premise: not an actual premise line.
+        fn invalid() {}
+    };
+    let empty: ItemFn = syn::parse_quote! {
+        /// External premise:
+        fn invalid() {}
+    };
+    let stated: ItemFn = syn::parse_quote! {
+        /// Other documentation.
+        /// External premise: peer text has no typed kind.
+        fn valid() {}
+    };
+    assert!(!external_premise(&inline));
+    assert!(!external_premise(&empty));
+    assert!(external_premise(&stated));
 }

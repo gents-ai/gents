@@ -179,7 +179,23 @@ async fn submit_create(
     let access = ConfigAccess::Graphql(endpoint);
     let mut receipt = create_agent(&access, owner, identity_binding, &input).await?;
     target_host_root_receipt(&mut receipt, home, graphql)?;
-    target_not_copied_receipt(&mut receipt, home, graphql);
+    if let Some(entries) = receipt.get_mut("not_copied").and_then(Value::as_array_mut) {
+        for entry in entries {
+            if let Some(command) = entry
+                .get("grant_command")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+            {
+                let targeted = with_target(&command, home, graphql);
+                if targeted != command {
+                    entry["grant_command"] = Value::String(targeted);
+                    if let Some(fields) = entry.as_object_mut() {
+                        fields.remove("target_note");
+                    }
+                }
+            }
+        }
+    }
     print_json(&receipt)
 }
 
@@ -198,30 +214,6 @@ fn target_host_root_receipt(
         receipt["host_root_access"]["target_guidance"] = Value::Null;
     }
     Ok(())
-}
-
-fn target_not_copied_receipt(
-    receipt: &mut Value,
-    home: Option<&std::path::Path>,
-    graphql: Option<&str>,
-) {
-    if let Some(entries) = receipt.get_mut("not_copied").and_then(Value::as_array_mut) {
-        for entry in entries {
-            if let Some(command) = entry
-                .get("grant_command")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-            {
-                let targeted = with_target(&command, home, graphql);
-                if targeted != command {
-                    entry["grant_command"] = Value::String(targeted);
-                    if let Some(fields) = entry.as_object_mut() {
-                        fields.remove("target_note");
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// `command` addressed to the runtime this invocation selected.

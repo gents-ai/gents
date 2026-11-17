@@ -113,16 +113,16 @@ impl PackInstallSession {
             // Only the decode error means "unreadable handshake". A closed or
             // lost connection is its own case and must not be reported as a
             // build problem.
-            Err(ReceiveError::Decode(error)) => {
+            Err(error @ ReceiveError::Decode(_)) => {
                 return Err(PackInstallHandshakeError::UnreadableHandshake {
                     client: client_build.summary(),
-                    detail: error.to_string(),
+                    detail: gents_protocol::error_chain::ErrorChain(&error).to_string(),
                 }
                 .into());
             }
             Err(error) => {
                 return Err(PackInstallHandshakeError::ConnectionLost {
-                    detail: error.to_string(),
+                    detail: gents_protocol::error_chain::ErrorChain(&error).to_string(),
                 }
                 .into());
             }
@@ -346,13 +346,13 @@ async fn send(socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>, value: Va
 
 #[derive(Debug, thiserror::Error)]
 enum ReceiveError {
-    #[error("invalid remote pack install message: {0}")]
+    #[error("invalid remote pack install message")]
     Decode(#[from] serde_json::Error),
-    #[error("decoding remote pack install message: {0}")]
+    #[error("decoding remote pack install message")]
     Worker(#[from] tokio::task::JoinError),
     #[error("remote pack install connection closed; inspect the runtime before retrying")]
     Closed,
-    #[error("remote pack install connection lost; inspect the runtime before retrying: {0}")]
+    #[error("remote pack install connection lost; inspect the runtime before retrying")]
     Transport(#[source] Box<tokio_tungstenite::tungstenite::Error>),
 }
 
@@ -364,7 +364,7 @@ pub(super) enum LegacyHandshakeRefusal {
 /// unversioned Failed.error text rather than publishing a structured reason.
 fn legacy_handshake_refusal(error: &str) -> Option<LegacyHandshakeRefusal> {
     error
-        .contains("client_build")
+        .contains("unknown field `client_build`")
         .then_some(LegacyHandshakeRefusal::OlderRuntime)
 }
 
@@ -1041,6 +1041,8 @@ mod tests {
             Some(LegacyHandshakeRefusal::OlderRuntime)
         ));
         assert!(legacy_handshake_refusal("runtime unavailable").is_none());
+        assert!(legacy_handshake_refusal("client_build mismatched").is_none());
+        assert!(legacy_handshake_refusal("unknown field `client_build_extra`").is_none());
         let invalid = serde_json::from_str::<ServerMessage>("not json")
             .err()
             .unwrap();
@@ -1049,6 +1051,12 @@ mod tests {
         let closed = ReceiveError::Closed;
         assert!(!matches!(closed, ReceiveError::Decode(_)));
         assert!(std::error::Error::source(&decoded).is_some());
+        let rendered = gents_protocol::error_chain::ErrorChain(&decoded).to_string();
+        assert!(
+            rendered.starts_with("invalid remote pack install message: "),
+            "{rendered}"
+        );
+        assert_eq!(rendered.matches("expected ident").count(), 1, "{rendered}");
     }
 
     #[test]
@@ -1059,7 +1067,7 @@ mod tests {
         }
         .to_string();
         assert!(older.contains("gents runtime service update"), "{older}");
-        assert!(older.contains("client_build"), "{older}");
+        assert!(older.contains("unknown field `client_build`"), "{older}");
 
         let lost = PackInstallHandshakeError::ConnectionLost {
             detail: "connection reset".to_owned(),
