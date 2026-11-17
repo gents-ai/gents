@@ -1683,6 +1683,7 @@ async fn title_observation<T>(fixture: &TitleFixture, outcome: Option<OutputOutc
 where
     T: serde::de::DeserializeOwned,
 {
+    gents_lean_vocab::snapshot().await;
     let (state, terminal) = fixture.terminal_row().await;
     let (_, messages) = fixture.output_rows().await;
     let terminal_selection = terminal.map(|terminal| match terminal {
@@ -1939,6 +1940,7 @@ async fn wait_for_title_streams(fixture: &TitleFixture, minimum: usize, fields: 
 
 #[tokio::test]
 async fn title_reasoning_survives_parent_terminal_under_own_request() {
+    gents_lean_vocab::snapshot().await;
     for case in
         gents_lean_vocab::families::native_execution_contracts_title_parent_terminal::cases()
     {
@@ -1977,6 +1979,7 @@ async fn title_reasoning_survives_parent_terminal_under_own_request() {
 
 #[tokio::test]
 async fn title_timeout_drains_each_received_reasoning_attempt_as_partial() {
+    gents_lean_vocab::snapshot().await;
     for case in gents_lean_vocab::families::native_execution_contracts_title_timeout::cases() {
         let fields = title_fields(&case.input.raw);
         let fixture = TitleFixture::new().await;
@@ -2015,6 +2018,7 @@ async fn title_timeout_drains_each_received_reasoning_attempt_as_partial() {
 
 #[tokio::test]
 async fn crashed_title_recovers_committed_reasoning_without_publication() {
+    gents_lean_vocab::snapshot().await;
     for case in gents_lean_vocab::families::native_execution_contracts_title_crash_recovery::cases()
     {
         let fields = title_fields(&case.input.raw);
@@ -2136,6 +2140,7 @@ async fn missing_title_capture_fails_before_provider_dispatch() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
+    gents_lean_vocab::snapshot().await;
     let capture = TitleWarningCapture::default();
     let warnings = capture.0.clone();
     let subscriber = tracing::Dispatch::new(Registry::default().with(capture));
@@ -2720,6 +2725,7 @@ async fn owned_title_shutdown_reports_fenced_partial_without_terminalizing() {
 
 #[tokio::test]
 async fn reasoning_only_title_retains_each_attempt_and_uses_bounded_fallback() {
+    gents_lean_vocab::snapshot().await;
     let capture = TitleWarningCapture::default();
     let warnings = capture.0.clone();
     let subscriber = tracing::Dispatch::new(Registry::default().with(capture));

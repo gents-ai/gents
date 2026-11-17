@@ -63,6 +63,7 @@ type ReadinessCase = gents_lean_vocab::family::Case<
 
 #[tokio::test]
 async fn claim_readiness_follows_the_delegated_publication_model() {
+    gents_lean_vocab::snapshot().await;
     let mut runs: [Vec<ReadinessCase>; 2] = [Vec::new(), Vec::new()];
     for case in gents_lean_vocab::families::delegated_publication_claim_readiness::cases() {
         let same_agent = case.input.parent_agent == case.input.target_agent;
@@ -100,6 +101,7 @@ async fn observe_readiness(
     request: &AgentRequest,
     request_doc: &str,
 ) -> gents_lean_vocab::families::delegated_publication_claim_readiness::ReadinessOutput {
+    gents_lean_vocab::snapshot().await;
     let query = format!(
         r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{ _docID relationships_pending }} }}"#,
         gents_store::graphql::escape_graphql_string(request_doc)
@@ -124,6 +126,7 @@ async fn observe_readiness(
 }
 
 async fn exercise_readiness(same_agent: bool, cases: Vec<ReadinessCase>) {
+    gents_lean_vocab::snapshot().await;
     let (published, partial): (Vec<_>, Vec<_>) = cases
         .into_iter()
         .partition(|case| publishes_every_relation(&case.input));
