@@ -3,7 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::response::IntoResponse as _;
 use defra_node::{EmbeddedVeraActor, EmbeddedVeraConfig, EmbeddedVeraDeployment, Node};
-use gents_lean_vocab::families::client_delegation_authentication as family;
+
 use gents_protocol::client_authentication::ClientAuthentication;
 
 use super::runtime_authentication;
@@ -94,7 +94,7 @@ async fn client_held_delegations_match_the_native_verifier() -> anyhow::Result<(
     assert!(defra_core::signing::get_identity(client.did()).is_none());
     assert!(defra_core::signing::get_identity(other.did()).is_none());
     let mut tokens = Vec::new();
-    for case in family::cases() {
+    for case in gents_lean_vocab::families::client_delegation_authentication::cases() {
         let input = &case.input;
         let capability = if input.issuer_matches {
             &client
@@ -200,11 +200,11 @@ async fn client_held_delegations_match_the_native_verifier() -> anyhow::Result<(
 #[test]
 fn request_credentials_never_inherit_another_callers_token() -> anyhow::Result<()> {
     use super::ClientAuthorization;
-    use gents_lean_vocab::families::identity_client_delegation_credential_for_actor as credentials;
 
     let client = ClientSigningCapability::from_ed25519_key(&signing_key()?)?;
     let other = ClientSigningCapability::from_ed25519_key(&signing_key()?)?;
-    for case in credentials::cases() {
+    for case in gents_lean_vocab::families::identity_client_delegation_credential_for_actor::cases()
+    {
         for ambient in [false, true] {
             let input = &case.input;
             let actor = if input.actor_matches {

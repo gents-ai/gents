@@ -72,7 +72,7 @@ describe("ClientShell presentation agreement", () => {
     const { presentationCases: cases, recoveryCases } =
       await generatedPresentationCases();
     expect(cases).toHaveLength(22);
-    expect(recoveryCases).toHaveLength(16);
+    expect(recoveryCases).toHaveLength(11);
     for (const contractCase of recoveryCases) {
       const actual =
         contractCase.surface === "transport"

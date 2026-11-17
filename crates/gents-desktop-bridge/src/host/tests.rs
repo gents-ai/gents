@@ -363,62 +363,60 @@ async fn inference_setup_state_rejects_an_unconfigured_runtime() {
 
 #[tokio::test]
 async fn inference_settings_read_survives_a_concurrent_projection_replacement() {
-    use identity::Identity as _;
-
-    let (core, directory) = crate::tests::support::boot_core().await;
-    let home = directory.path().join("runtime");
-    std::fs::create_dir_all(&home).unwrap();
-    let key_path = home.join("node.key");
-    let identity = gents_store::identity::load_or_create_file_identity(&key_path).unwrap();
-    let did = identity.did().unwrap().to_string();
-    let store = core.stores().ensure(&did);
-    let database = gents_store::test_support::wire_database::WireDatabase::spawn(
-        json!({"Node": [{"_docID": "node", "node_did": did, "display_name": "Current settings"}]}),
-        std::sync::Arc::new(move |collection| {
-            if collection == "Node" {
-                store.replace_snapshot(
-                    gents_observe::client_projection::store::ClientStore::default(),
-                );
-            }
-            Box::pin(async { Ok(()) })
-        }),
-    )
-    .await;
-    let graphql = database.graphql.clone();
-    std::fs::write(
-        home.join("init.json"),
-        json!({"node_name":"Local", "node_did":did, "key_path":key_path}).to_string(),
-    )
-    .unwrap();
-    std::fs::write(
-        home.join("runtime.json"),
-        json!({"node_name":"Local", "node_did":did, "graphql":graphql, "p2p_transport":"iroh"})
-            .to_string(),
-    )
-    .unwrap();
+    let (core, _directory) = crate::tests::support::boot_core().await;
+    let server = wiremock::MockServer::start().await;
+    let did = "did:test:settings-runtime";
+    crate::client_test_support::runtime_metadata(&server, did).await;
+    let store = core.stores().ensure(did);
+    let fresh = gents_observe::client_projection::store::ClientStore::from_rows(
+        gents_observe::client_projection::store::ClientStoreRows {
+            nodes: vec![serde_json::from_value(
+                json!({"node_did":did,"display_name":"Current settings"}),
+            )
+            .unwrap()],
+            ..Default::default()
+        },
+    );
+    let settings = gents_observe::client_inference::InferenceSetupState::project(&fresh, did);
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path(
+            gents_observe::client_inference::INFERENCE_SETTINGS_PATH,
+        ))
+        .respond_with(move |_: &wiremock::Request| {
+            store.replace_snapshot(gents_observe::client_projection::store::ClientStore::default());
+            wiremock::ResponseTemplate::new(200).set_body_json(
+                gents_observe::client_inference::InferenceSettingsResponse {
+                    contract_version:
+                        gents_observe::client_inference::INFERENCE_SETTINGS_CONTRACT_VERSION,
+                    state: settings.clone(),
+                },
+            )
+        })
+        .mount(&server)
+        .await;
     core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
-        node_did: did.to_string(),
-        label: ("Local").to_string(),
-        graphql: graphql.to_string(),
-        local_node_home: Some(home.to_string_lossy().into_owned()),
+        node_did: did.into(),
+        label: "Settings runtime".into(),
+        graphql: format!("{}/api/v0/graphql", server.uri()),
+        local_node_home: None,
         access_request: None,
         access_state: None,
     })
     .await
     .unwrap();
-    let result = ClientHost::new(core.clone())
+    let settings = ClientHost::new(core.clone())
         .execute(
             protocol::ClientCommand::InferenceSetupState {
-                node_did: did.clone(),
+                node_did: did.into(),
             },
             &super::approvals::AttachmentApprovals::default(),
             CancellationToken::new(),
         )
-        .await;
-    core.shutdown().await.unwrap();
-    let settings = result.unwrap();
+        .await
+        .unwrap();
     assert_eq!(settings["nodeDid"], did);
     assert_eq!(settings["node"]["displayName"], "Current settings");
+    core.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -456,6 +454,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
         .to_string(),
     )
     .unwrap();
+    crate::client_test_support::runtime_metadata(&server, &did).await;
     core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
         node_did: did.to_string(),
         label: ("Local").to_string(),

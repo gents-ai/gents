@@ -39,7 +39,7 @@ async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
     )
     .unwrap();
     let public = serde_json::json!({
-        "service":"gents", "version":env!("CARGO_PKG_VERSION"),
+        "client_authentication": {"kind":"local"}, "service":"gents", "version":env!("CARGO_PKG_VERSION"),
         "lifecycle":"ready", "node_did":did, "graphql":graphql,
     });
     Mock::given(method("GET"))
@@ -144,10 +144,8 @@ async fn generated_fresh_startup_preserves_enrollment_authority() {
             .await
             .unwrap(),
         );
-        let access = gents_store::config_client::ConfigAccess::local_as(
-            core.node_arc(),
-            ::identity::Did::new(core.node_identity().did()).unwrap(),
-        );
+        let runtime = gents::client_test_support::ServedRuntimeHome::start().await;
+        let access = runtime.user_access();
         let query = "{ NetworkEnrollmentRequest { _docID } NetworkEnrollmentDecision { _docID } NetworkAuthorizationRevision { _docID } }";
         let before = access.execute(query).await.unwrap();
         for name in [
@@ -226,7 +224,7 @@ async fn managed_readiness_after_desktop_enrollment_reads_the_private_status() {
     .unwrap();
 
     let public = serde_json::json!({
-        "service":"gents", "version":env!("CARGO_PKG_VERSION"),
+        "client_authentication": {"kind":"local"}, "service":"gents", "version":env!("CARGO_PKG_VERSION"),
         "lifecycle":"ready", "node_did":did, "graphql":graphql,
     });
     Mock::given(method("GET"))
@@ -260,7 +258,7 @@ async fn managed_readiness_after_desktop_enrollment_reads_the_private_status() {
         tool_ceiling: ManagedServerToolCeiling::Readwrite,
         tool_root: Some(root.clone()),
     };
-    let user = user_status_signer(&state, &home)
+    let user = user_status_signer(&state)
         .await
         .expect("the provisioned admin signs the relaunch read");
     assert_eq!(user.did(), admin.did());

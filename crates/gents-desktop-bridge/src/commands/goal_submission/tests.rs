@@ -74,8 +74,8 @@ async fn missing_goal_preparation_never_allocates_or_resubmits_work() -> Result<
         let error = resume_goal_submission(&core, request, serde_json::from_value(receipt)?).await.unwrap_err();
         assert!(error.to_string().contains("preparation is unavailable"), "{error}");
         assert_eq!(core.stores().ensure("did:fixture:runtime").focused_request_id().as_deref(),Some("another-chat"));
-        let rows=ConfigAccess::local(core.node_arc()).execute("{AgentSession {session_id} AgentRequest {request_id} PendingChatSubmission {request_id}}").await?;
-        for name in ["AgentSession","AgentRequest","PendingChatSubmission"] {
+        let rows=ConfigAccess::local(core.node_arc()).execute("{ClientAuthoredSubmission {submission_id} PendingChatSubmission {request_id}}").await?;
+        for name in ["ClientAuthoredSubmission","PendingChatSubmission"] {
             assert_eq!(rows["data"][name],json!([]),"{name}");
         }
         Ok::<_, anyhow::Error>(())

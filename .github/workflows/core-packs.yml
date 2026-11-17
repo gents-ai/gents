@@ -62,7 +62,7 @@ jobs:
           set -euo pipefail
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential clang cmake git jq libclang-dev libssl-dev \
+            build-essential clang cmake git jq libclang-dev libdbus-1-dev libssl-dev \
             nodejs pkg-config protobuf-compiler python3
 
       - name: Build the CLI that builds the packs

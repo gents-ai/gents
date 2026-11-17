@@ -159,12 +159,15 @@ impl ClientHost {
             ClientCommand::InferenceCatalog {} => {
                 encode(gents_inference::backends::setup::inference_setup_catalog())
             }
-            ClientCommand::InferenceSetupState { node_did } => encode(
-                self.core
-                    .read_inference_setup_state(&node_did)
-                    .await
-                    .map_err(backend_error)?,
-            ),
+            ClientCommand::InferenceSetupState { node_did } => {
+                self.require_configured_runtime(&node_did).await?;
+                encode(
+                    self.core
+                        .read_inference_setup_state(&node_did)
+                        .await
+                        .map_err(backend_error)?,
+                )
+            }
 
             ClientCommand::InferenceModelsDiscover { request } => {
                 self.require_configured_runtime(&request.node_did).await?;

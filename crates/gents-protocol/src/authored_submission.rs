@@ -62,8 +62,7 @@ pub fn authored_session_id(submission: &str, session: Option<&str>) -> String {
 mod conformance {
     #[test]
     fn authored_session_binding_matches_model() {
-        use gents_lean_vocab::families::client_delegation_outbox_session as contract;
-        for case in contract::cases() {
+        for case in gents_lean_vocab::families::client_delegation_outbox_session::cases() {
             case.check(super::authored_session_id(
                 &case.input.submission,
                 case.input.session.as_deref(),

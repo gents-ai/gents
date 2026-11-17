@@ -634,7 +634,15 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let paths = gents_desktop_core::client::DesktopPaths::from_root(home.path().join("cli"));
         let url = "http://127.0.0.1:9191/api/v0/graphql";
-        std::fs::write(super::init_config_path(home.path()), "{}").unwrap();
+        std::fs::write(
+            super::init_config_path(home.path()),
+            serde_json::json!({
+                "home": home.path(), "node_name": "runtime", "node_did": "did:key:runtime",
+                "key_path": null, "tool_ceiling": crate::args::ToolCeilingArg::Readwrite, "tool_root": null,
+            })
+            .to_string(),
+        )
+        .unwrap();
         assert!(
             super::home_graphql_endpoint_with_paths(home.path(), url, &paths)
                 .await
@@ -649,6 +657,19 @@ mod tests {
             .unwrap();
         let access = gents_store::config_client::ConfigAccess::Graphql(endpoint);
         assert_eq!(access.actor_did().as_deref(), Some(identity.did()));
+        let signer = access.client_signer().unwrap();
+        let payload = b"client-held command signing";
+        let signature = gents_store::identity::NodeIdentity::sign(&signer, payload)
+            .await
+            .unwrap();
+        assert!(gents_store::identity::NodeIdentity::verify(
+            &identity,
+            identity.did(),
+            payload,
+            &signature,
+        )
+        .await
+        .unwrap());
         assert!(super::home_graphql_endpoint_with_paths(
             home.path(),
             "https://unrelated.example/api/v0/graphql",

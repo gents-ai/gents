@@ -32,12 +32,28 @@ async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() ->
     core.connect_runtime(RuntimeConnection {
         node_did: runtime.node_did().into(),
         label: "Hosted runtime".into(),
-        graphql: runtime.graphql().into(),
+        graphql: "http://127.0.0.1:9/api/v0/graphql".into(),
         local_node_home: None,
         access_request: None,
         access_state: None,
     })
     .await?;
+    let invalid = core
+        .send_message(MessageSendInput {
+            node_did: runtime.node_did().into(),
+            request_id: Some("empty-chat-request".into()),
+            content: " \n ".into(),
+            ..Default::default()
+        })
+        .await;
+    assert!(invalid.is_err());
+    assert!(outbox::pending(
+        &core.node_arc(),
+        core.node_identity().did(),
+        runtime.node_did()
+    )
+    .await?
+    .is_empty());
     let message = MessageSendInput {
         node_did: runtime.node_did().into(),
         session_id: Some("offline-chat-session".into()),
@@ -90,6 +106,15 @@ async fn disconnected_chat_and_goal_are_delivered_once_after_client_restart() ->
         .as_array()
         .unwrap()
         .is_empty());
+    core.connect_runtime(RuntimeConnection {
+        node_did: runtime.node_did().into(),
+        label: "Hosted runtime".into(),
+        graphql: runtime.graphql().into(),
+        local_node_home: None,
+        access_request: None,
+        access_state: None,
+    })
+    .await?;
     core.shutdown().await?;
     drop(core);
     let core = Arc::new(

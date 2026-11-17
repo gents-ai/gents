@@ -451,10 +451,44 @@ async fn trial_http(
         .with_extra_routes(metadata)
         .with_authenticated_routes(
             agent_identity_routes(served.clone())
+                .merge(trial_inference_settings_routes(served.clone()))
                 .merge(client_access::routes(served))
                 .merge(owner_staged.router()),
         );
     Ok((config, endpoint, owner_staged))
+}
+
+fn trial_inference_settings_routes(served: ServedNode) -> axum::Router {
+    axum::Router::new().route(
+        gents_observe::client_inference::INFERENCE_SETTINGS_PATH,
+        axum::routing::get(move |identity: defra_http::ExtractIdentity, headers: axum::http::HeaderMap| {
+            let served = served.clone();
+            async move {
+                use axum::response::IntoResponse;
+                let Some((node, runtime)) = served.get().and_then(|(node, runtime)| Some((node.upgrade()?, runtime))) else {
+                    return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                };
+                let Some(actor) = identity.did().cloned() else {
+                    return axum::http::StatusCode::UNAUTHORIZED.into_response();
+                };
+                let authorization = match gents_store::config_client::client_authentication::ClientAuthorization::from_http(&identity, &headers) {
+                    Ok(authorization) => authorization,
+                    Err(_) => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
+                };
+                let access = match gents_store::config_client::ConfigAccess::local_as(node, actor).with_client_authorization(authorization) {
+                    Ok(access) => access,
+                    Err(_) => return axum::http::StatusCode::FORBIDDEN.into_response(),
+                };
+                match gents_observe::client_inference::load_inference_setup_state(&access, runtime.did()).await {
+                    Ok(settings) => axum::Json(gents_observe::client_inference::InferenceSettingsResponse {
+                        contract_version: gents_observe::client_inference::INFERENCE_SETTINGS_CONTRACT_VERSION,
+                        state: settings.for_client_observation(),
+                    }).into_response(),
+                    Err(_) => axum::http::StatusCode::FORBIDDEN.into_response(),
+                }
+            }
+        }),
+    )
 }
 
 /// A trial home serves Agent identity provisioning and agent admission facts

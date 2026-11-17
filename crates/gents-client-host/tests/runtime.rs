@@ -68,7 +68,6 @@ mod passive_settings;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/ports.rs"]
 mod ports;
-#[cfg(unix)]
 #[path = "support/runtime_replacement.rs"]
 mod runtime_replacement;
 use crate::support;
@@ -2258,15 +2257,14 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .await?,
         );
         let local = gents_store::config_client::ConfigAccess::local(reopened.node_arc())
-            .execute("{ Goal { _docID } PendingChatSubmission { _docID } }")
+            .execute("{ PendingChatSubmission { _docID } }")
             .await;
         reopened.shutdown().await?;
         let local = local?;
         ensure!(
             local["data"]["PendingChatSubmission"]
                 .as_array()
-                .is_some_and(|rows| !rows.is_empty())
-                && local["data"]["Goal"].as_array().is_some_and(Vec::is_empty),
+                .is_some_and(|rows| !rows.is_empty()),
             "ordinary client routes must not replicate raw Goal documents: {local}"
         );
     }

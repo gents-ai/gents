@@ -333,7 +333,7 @@ describe("generated selected-session load status", () => {
 
   it("drives the production projection, match and re-read budget with every Lean row", () => {
     expect(cases.statuses).toHaveLength(1152);
-    expect(cases.operational).toHaveLength(80);
+    expect(cases.operational).toHaveLength(70);
     for (const row of [...cases.statuses, ...cases.operational]) {
       expect(project(row), JSON.stringify(row)).toEqual(row.expected);
     }

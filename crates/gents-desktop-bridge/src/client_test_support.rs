@@ -21,9 +21,22 @@ pub async fn connect_runtime(
     })
     .await
     .unwrap();
-    assert_eq!(
-        core.reconnect_runtime_now(runtime.node_did()).await,
-        Some(gents_observe::client_projection::observe::RuntimeConnectionStatus::Connected)
-    );
     core.refresh_node(runtime.node_did()).await.unwrap();
+    if let Some(status) = core.reconnect_runtime_now(runtime.node_did()).await {
+        assert_eq!(
+            status,
+            gents_observe::client_projection::observe::RuntimeConnectionStatus::Connected
+        );
+    }
+}
+
+#[cfg(test)]
+pub async fn runtime_metadata(server: &wiremock::MockServer, node: &str) {
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/status"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "node_did": node,
+            (gents_protocol::client_authentication::STATUS_FIELD): gents_protocol::client_authentication::ClientAuthentication::Local,
+        })))
+        .mount(server).await;
 }

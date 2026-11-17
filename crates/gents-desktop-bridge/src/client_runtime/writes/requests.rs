@@ -54,6 +54,47 @@ impl ClientRuntime {
     where
         M: std::future::Future<Output = Result<MessageSendBody>>,
     {
+        if let (Some(request_id), Some(session_id)) = (&route.request_id, &route.session_id) {
+            let acknowledged = gents_store::client_journal::outbox::lookup(
+                &self.node,
+                self.node_identity.did(),
+                &route.node_did,
+                request_id,
+            )
+            .await?
+            .is_some_and(|record| !record.pending);
+            let observed = self
+                .stores
+                .snapshot(&route.node_did)
+                .requests
+                .iter()
+                .any(|row| {
+                    row.request_id == *request_id
+                        && row.session_id.as_ref() == Some(session_id)
+                        && row.node_did.as_ref() == Some(&route.node_did)
+                });
+            let connected = self.stores.runtime_connection(&route.node_did)
+                == Some(
+                    gents_observe::client_projection::observe::RuntimeConnectionStatus::Connected,
+                );
+            if acknowledged || observed || connected {
+                let access = self.session_queue_access(&route.node_did)?;
+                if let Some(receipt) = gents_session::operations::request::recover_send(
+                    &access,
+                    &self.node_identity,
+                    &route,
+                )
+                .await?
+                {
+                    return Ok(SubmittedRequest {
+                        request_id: receipt.request_id,
+                        session_id: receipt.session_id,
+                        node_did: receipt.node_did,
+                        agent_did: receipt.agent_did,
+                    });
+                }
+            }
+        }
         let body = message.await?;
         let steer = body.delivery == gents_protocol::operations::request::DeliveryChoice::Steer;
         let input = MessageSendInput {

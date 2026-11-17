@@ -107,10 +107,9 @@ fn archive_moves_the_home_and_client_state_to_a_sibling_backup_and_spares_other_
         );
     }
     for retained in [
-        "peers.json",
+        "connections.json",
         "principal.json",
         "principal.ed25519.key",
-        "node.iroh.key",
     ] {
         assert!(
             desktop.root().join(retained).exists(),
@@ -314,7 +313,7 @@ async fn client_start_archives_state_paired_with_a_missing_home() {
     let (temp, state) = orchestration_state();
     let desktop = state.policy.desktop_paths.clone();
     write(&desktop.node_data_dir().join("MANIFEST"), "REGOMAN");
-    write(desktop.runtime_directory_path(), "{}");
+    write(desktop.runtime_directory_path(), r#"{"connections":[]}"#);
     write(desktop.identity_key_path(), "existing User key");
     write(
         desktop.principal_metadata_path(),

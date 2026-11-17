@@ -103,6 +103,66 @@ pub async fn get(
     }
 }
 
+pub async fn recover_send(
+    access: &ConfigAccess,
+    signer: &dyn NodeIdentity,
+    route: &MessageSendRoute,
+) -> Result<Option<RequestReceipt>, RequestOperationError> {
+    let Some(request_id) = route
+        .request_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let Some(session_id) = route
+        .session_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    let actor = target::client_actor(access, signer)?;
+    let requester =
+        crate::session::client_requester_scope(access, &route.node_did, session_id, &actor)
+            .await
+            .map_err(RequestOperationError::passthrough)?;
+    recover_scoped_send(access, &route.node_did, session_id, &requester, request_id).await
+}
+
+async fn recover_scoped_send(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    requester: &str,
+    request_id: &str,
+) -> Result<Option<RequestReceipt>, RequestOperationError> {
+    let held = held_client_request(
+        access,
+        ClientRequestScope {
+            node_did,
+            session_id,
+            requester_did: requester,
+            request_id,
+        },
+    )
+    .await
+    .map_err(|error| target::submission_error(request_id, error))?;
+    match held {
+        Some(held) => read::receipt(
+            access,
+            node_did,
+            &held.session_id,
+            requester,
+            &held.request_id,
+            None,
+        )
+        .await
+        .map(Some),
+        None => Ok(None),
+    }
+}
+
 pub async fn send(
     access: &ConfigAccess,
     signer: &dyn NodeIdentity,
@@ -155,27 +215,10 @@ where
         .await
         .map_err(RequestOperationError::passthrough)?;
     if supplied_request_id.is_some() {
-        let held = held_client_request(
-            access,
-            ClientRequestScope {
-                node_did: &node_did,
-                session_id: &session_id,
-                requester_did: &requester,
-                request_id: &request_id,
-            },
-        )
-        .await
-        .map_err(|error| target::submission_error(&request_id, error))?;
-        if let Some(held) = held {
-            return read::receipt(
-                access,
-                &node_did,
-                &held.session_id,
-                &requester,
-                &held.request_id,
-                None,
-            )
-            .await;
+        if let Some(receipt) =
+            recover_scoped_send(access, &node_did, &session_id, &requester, &request_id).await?
+        {
+            return Ok(receipt);
         }
     }
     let MessageSendBody {

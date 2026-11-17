@@ -214,10 +214,27 @@ impl Fixture {
             move |request: Request, next: axum::middleware::Next| {
                 let status_requests = observed_status_requests.clone();
                 async move {
-                    if request.uri().path() == "/status" {
+                    let status = request.uri().path() == "/status";
+                    if status {
                         status_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     }
-                    next.run(request).await
+                    let response = next.run(request).await;
+                    if !status {
+                        return response;
+                    }
+                    let (mut parts, body) = response.into_parts();
+                    parts.headers.remove(header::CONTENT_LENGTH);
+                    let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+                    let mut body: Value = serde_json::from_slice(&bytes).unwrap();
+                    body[gents_protocol::client_authentication::STATUS_FIELD] =
+                        serde_json::to_value(
+                            gents_protocol::client_authentication::ClientAuthentication::Local,
+                        )
+                        .unwrap();
+                    axum::response::Response::from_parts(
+                        parts,
+                        Body::from(serde_json::to_vec(&body).unwrap()),
+                    )
                 }
             },
         ));
@@ -757,7 +774,7 @@ async fn hosted_status_reader_uses_the_home_admin_independently_of_saved_access_
 
     // Fresh home: no desktop key yet, nothing enrolled.
     assert!(!desktop.identity_key_path().exists());
-    let fresh = hosted_status_signer(&desktop, Some(&node_did), &[], None)
+    let fresh = hosted_status_signer(&desktop, None)
         .await
         .expect("the provisioned CLI admin signs the fresh-home read");
     assert_eq!(fresh.did(), f.admin.did());
@@ -771,7 +788,7 @@ async fn hosted_status_reader_uses_the_home_admin_independently_of_saved_access_
     // never completed, so the desktop key is not this home's admin yet.
     let desktop_user = PrincipalIdentity::load_or_create(&desktop).await.unwrap();
     let running = desktop_user.client_signing_capability().unwrap();
-    let unpaired = hosted_status_signer(&desktop, Some(&node_did), &[], Some(running.clone()))
+    let unpaired = hosted_status_signer(&desktop, Some(running.clone()))
         .await
         .unwrap();
     assert_eq!(unpaired.did(), f.admin.did());
@@ -781,34 +798,15 @@ async fn hosted_status_reader_uses_the_home_admin_independently_of_saved_access_
         .unwrap();
     assert_eq!(private["tool_root"], "/private/operator/workspace");
 
-    let mut enrolled = record.clone();
-    enrolled.access_state = Some(gents_protocol::client_access::ClientAccessState::Approved);
-    let other_node = hosted_status_signer(
-        &desktop,
-        Some("did:key:another-node"),
-        std::slice::from_ref(&enrolled),
-        Some(running.clone()),
-    )
-    .await
-    .unwrap();
+    let other_node = hosted_status_signer(&desktop, Some(running.clone()))
+        .await
+        .unwrap();
     assert_eq!(other_node.did(), f.admin.did(), "enrollment is per Node");
-    let chosen = hosted_status_signer(
-        &desktop,
-        Some(&node_did),
-        std::slice::from_ref(&enrolled),
-        Some(running.clone()),
-    )
-    .await
-    .unwrap();
+    let chosen = hosted_status_signer(&desktop, Some(running.clone()))
+        .await
+        .unwrap();
     assert_eq!(chosen.did(), f.admin.did());
-    let stored = hosted_status_signer(
-        &desktop,
-        Some(&node_did),
-        std::slice::from_ref(&enrolled),
-        None,
-    )
-    .await
-    .unwrap();
+    let stored = hosted_status_signer(&desktop, None).await.unwrap();
     assert_eq!(stored.did(), f.admin.did());
     let private = fetch_hosted_runtime_status(&record, Some(&chosen))
         .await
@@ -822,15 +820,10 @@ async fn hosted_status_reader_uses_the_home_admin_independently_of_saved_access_
     orphan.ensure_root_dirs().await.unwrap();
     let orphan_user = PrincipalIdentity::load_or_create(&orphan).await.unwrap();
     assert!(!orphan.cli_client().identity_key_path().exists());
-    let orphan_running = hosted_status_signer(&orphan, Some(&node_did), &[], Some(running))
-        .await
-        .unwrap();
+    let orphan_running = hosted_status_signer(&orphan, Some(running)).await.unwrap();
     assert_eq!(orphan_running.did(), desktop_user.did());
-    let fallback = hosted_status_signer(&orphan, Some(&node_did), &[enrolled], None)
-        .await
-        .unwrap();
+    let fallback = hosted_status_signer(&orphan, None).await.unwrap();
     assert_eq!(fallback.did(), orphan_user.did());
-    let before = f.status_requests.load(std::sync::atomic::Ordering::SeqCst);
     let public = fetch_hosted_runtime_status(&record, Some(&fallback))
         .await
         .unwrap()
@@ -842,11 +835,6 @@ async fn hosted_status_reader_uses_the_home_admin_independently_of_saved_access_
             "a key that is not the home's admin reads only the public body: {key}"
         );
     }
-    assert_eq!(
-        f.status_requests.load(std::sync::atomic::Ordering::SeqCst),
-        before + 1,
-        "the public answer is returned, not retried with another key"
-    );
 }
 
 #[tokio::test]

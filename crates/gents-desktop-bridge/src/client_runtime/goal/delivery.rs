@@ -165,6 +165,18 @@ impl ClientRuntime {
         input: RequestInput,
         resume_reference: Option<&GoalSubmissionReference>,
     ) -> Result<SessionGoalControlReceipt> {
+        if let Some(reference) = resume_reference {
+            let retained =
+                records::goal::lookup(&self.node, self.node_identity.did(), node_did, command_id)
+                    .await?
+                    .context(
+                        "Goal caller preparation is unavailable; its delivery remains unconfirmed",
+                    )?;
+            anyhow::ensure!(
+                retained.reference == *reference,
+                "Goal caller reference changed"
+            );
+        }
         super::ensure_runtime_connection(node_did, self.connection_for_write(node_did)?.as_ref())?;
         let queued = gents_store::client_journal::outbox::reserve(
             &self.node,
@@ -191,18 +203,6 @@ impl ClientRuntime {
                 .context("the acknowledged Goal has no verified receipt");
         }
         self.require_reachable(&queued)?;
-        if let Some(reference) = resume_reference {
-            let retained =
-                records::goal::lookup(&self.node, self.node_identity.did(), node_did, command_id)
-                    .await?
-                    .context(
-                        "Goal caller preparation is unavailable; its delivery remains unconfirmed",
-                    )?;
-            anyhow::ensure!(
-                retained.reference == *reference,
-                "Goal caller reference changed"
-            );
-        }
         let _delivery = self.delivery_lock.lock().await;
         while let Some(next) = gents_store::client_journal::outbox::next(
             &self.node,

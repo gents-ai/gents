@@ -541,14 +541,6 @@ def enrollmentPolicyAllowed (i : EnrollmentPolicyInput) : Allowed :=
   { allowed := allowed 5 (enrollmentPolicyState i.name) i.actor "enrollment_records" i.document
       i.permission }
 
-/-- The thin-client scenario writes its own enrollment request with no local
-Node and asks native ACP and the authenticated GraphQL server for each actor's
-access to it. -/
-@[conformance_family]
-def enrollmentPolicyThin : Family EnrollmentPolicyInput Allowed where
-  inputs := enrollmentPolicyInputs.filter (·.name.startsWith "thin-")
-  model := enrollmentPolicyAllowed
-
 /-- model-production-gap: the thin-client scenario builds only the request a
 client writes before it has a Node; no production scenario builds the admin's
 received request, its parent, the revoked admin reader or the terminal

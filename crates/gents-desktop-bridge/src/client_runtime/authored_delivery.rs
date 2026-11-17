@@ -177,6 +177,9 @@ impl ClientRuntime {
     }
 
     pub(super) async fn retain_chat(&self, mut input: MessageSendInput) -> Result<outbox::Record> {
+        if !input.input.has_authored_input(&input.content) {
+            return Err(RequestOperationError::ContentRequired.into());
+        }
         input
             .request_id
             .get_or_insert_with(|| uuid::Uuid::new_v4().to_string());

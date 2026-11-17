@@ -108,7 +108,7 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_runtime_remove", "fleet-admin"),
         ("desktop_runtime_rename", "fleet-admin"),
         ("desktop_runtime_access_request", "fleet-admin"),
-        ("desktop_runtime_access_list", "fleet-admin"),
+        ("desktop_runtime_access_list", "fleet-read"),
         ("desktop_runtime_access_decide", "fleet-admin"),
         ("desktop_operations_snapshot", "operations-read"),
         ("desktop_session_provenance", "operations-read"),

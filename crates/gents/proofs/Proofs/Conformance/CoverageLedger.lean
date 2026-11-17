@@ -835,10 +835,6 @@ def caseCoverage : List CoverageEntry :=
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
-      "enrollment_pending_requests_listing")
-      "authenticated-enrollment" [Surface.operatorUi]
-  , tagged (consumerCoverage
-      "family"
       "client_sync_health_cases_projection")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
@@ -1958,10 +1954,6 @@ def caseCoverage : List CoverageEntry :=
       "workspace_root_access_root_access"
       "User publication fences on native Node update and commits the physical parent; raw direct creates remain outside the writer-fencing premise.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
-  , tagged (consumerCoverage
-      "family"
-      "workspace_root_access_unrelated_agent_read")
-      "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
       "family"
       "workspace_capability_child_revocation"
@@ -2121,10 +2113,6 @@ def caseCoverage : List CoverageEntry :=
       "family"
       "client_agent_journal_local_signer")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "family"
-      "file_review_route_contracts_subscription")
-      "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"
       "file_review_routes")
@@ -2894,8 +2882,6 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "agent_identity_replication_admission")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "family" "agent_identity_desktop_subscription")
-      "identity-permission" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
       "family"
       "worker_capacity_contracts_transition"

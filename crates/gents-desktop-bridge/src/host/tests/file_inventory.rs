@@ -87,6 +87,7 @@ async fn inventory_requests_go_to_the_runtime_as_the_desktop_client() -> Result<
         )
         .await?,
     );
+    crate::client_test_support::runtime_metadata(&server, runtime.did()).await;
     core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
         node_did: (runtime.did()).to_string(),
         label: ("Inventory runtime").to_string(),

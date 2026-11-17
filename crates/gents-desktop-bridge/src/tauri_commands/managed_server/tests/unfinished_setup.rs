@@ -12,7 +12,7 @@ fn unfinished_home(temp: &Path) -> (PathBuf, gents_desktop_core::client::Desktop
         "",
     );
     let desktop = gents_desktop_core::client::DesktopPaths::from_root(temp.join("desktop"));
-    write(desktop.runtime_directory_path(), r#"{"peers":[]}"#);
+    write(desktop.runtime_directory_path(), r#"{"connections": []}"#);
     (home, desktop)
 }
 
@@ -70,7 +70,7 @@ async fn an_unfinished_home_is_recognized_only_before_it_served_or_paired() {
 
     write(
         desktop.runtime_directory_path(),
-        r#"{"peers":[{"peer_id":"p","node_did":"did:key:forge","label":"Forge","addr":"iroh://forge","source":"enrollment","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}"#,
+        r#"{"connections": [{"node_did": "did:key:forge", "label": "Forge", "graphql": "http://127.0.0.1:9191/api/v0/graphql", "local_node_home": null, "access_request": null, "access_state": null}]}"#,
     );
     assert!(
         !unfinished_local_setup(&state, Some(&home)).await,
@@ -148,10 +148,7 @@ async fn backing_up_drops_the_pairing_with_the_node_it_retired() {
     write(
         desktop.runtime_directory_path(),
         &format!(
-            r#"{{"peers":[
-              {{"peer_id":"local","node_did":"did:key:forge","label":"Forge","addr":"iroh://forge","source":"enrollment","graphql":"http://127.0.0.1:9191/api/v0/graphql","local_node_home":{home:?},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}},
-              {{"peer_id":"remote","node_did":"did:key:remote","label":"Mandrake","addr":"iroh://mandrake","source":"enrollment","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}}
-            ]}}"#,
+            r#"{{"connections": [{{"node_did": "did:key:forge", "label": "Forge", "graphql": "http://127.0.0.1:9191/api/v0/graphql", "local_node_home": {home:?}, "access_request": null, "access_state": null}}, {{"node_did": "did:key:remote", "label": "Mandrake", "graphql": "http://127.0.0.1:9191/api/v0/graphql", "local_node_home": null, "access_request": null, "access_state": null}}]}}"#,
             home = home.to_string_lossy()
         ),
     );

@@ -1,10 +1,4 @@
 use super::*;
-use gents_lean_vocab::families::{
-    client_authored_outbox_acknowledge as acknowledgement,
-    client_delegation_outbox_preparation as preparation,
-    client_delegation_outbox_reservation as reservation,
-    client_delegation_outbox_selection as selection,
-};
 
 fn token(reservation: Reservation) -> String {
     serde_json::to_value(reservation)
@@ -16,7 +10,7 @@ fn token(reservation: Reservation) -> String {
 
 #[test]
 fn authored_outbox_transitions_follow_the_model() {
-    for case in reservation::cases() {
+    for case in gents_lean_vocab::families::client_delegation_outbox_reservation::cases() {
         let input = &case.input;
         case.check(token(reserve_decision(
             input.local_signer,
@@ -25,7 +19,7 @@ fn authored_outbox_transitions_follow_the_model() {
             input.same,
         )));
     }
-    for case in preparation::cases() {
+    for case in gents_lean_vocab::families::client_delegation_outbox_preparation::cases() {
         let input = &case.input;
         case.check(token(prepare_decision(
             input.binding_matches,
@@ -34,11 +28,11 @@ fn authored_outbox_transitions_follow_the_model() {
             input.same,
         )));
     }
-    for case in acknowledgement::cases() {
+    for case in gents_lean_vocab::families::client_authored_outbox_acknowledge::cases() {
         let input = &case.input;
         case.check(acknowledges(input.binding_matches, input.runtime_confirmed));
     }
-    for case in selection::cases() {
+    for case in gents_lean_vocab::families::client_delegation_outbox_selection::cases() {
         let input = &case.input;
         case.check(select(&input.pending, input.steer.as_deref()).map(str::to_owned));
     }

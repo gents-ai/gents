@@ -262,6 +262,7 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
         .to_string(),
     )
     .unwrap();
+    crate::client_test_support::runtime_metadata(&server, &node_did).await;
     core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
         node_did: node_did.to_string(),
         label: ("Live test").to_string(),

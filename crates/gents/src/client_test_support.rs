@@ -810,7 +810,9 @@ pub async fn write_other_version_client_store(
     let mut builder = defra_node::Node::builder()
         .data_path(paths.node_data_dir())
         .with_storage_backend(defra_node::StorageBackend::Regolith)
-        .with_node_identity_did(identity.did());
+        .with_signing_key(defra_node::SigningKey::Ed25519(
+            identity.private_key_bytes().to_vec(),
+        ));
     if encrypted {
         let record = StoreEncryption::prepare(
             StoreKeyCustodyChoice::File,

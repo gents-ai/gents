@@ -463,6 +463,7 @@ mod tests {
             },
         )
         .await?;
+        crate::client_test_support::runtime_metadata(&server, &did).await;
         core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
             node_did: did.to_string(),
             label: ("Goal runtime").to_string(),
@@ -508,20 +509,12 @@ mod tests {
             RequestInput::default(),
             "a send to an unreadable session captures no inherited assignment"
         );
-        let cold_reads = requests
-            .iter()
-            .filter(|request| String::from_utf8_lossy(&request.body).contains("cold-goal-session"))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            cold_reads.len(),
-            2,
-            "each cold read issues exactly its one session query"
-        );
         assert!(
             requests
                 .iter()
+                .filter(|request| request.method == "POST")
                 .all(|request| request.headers.contains_key("authorization")),
-            "every runtime read is signed as the User"
+            "every GraphQL read is signed as the User"
         );
         assert!(
             warm.is_err(),

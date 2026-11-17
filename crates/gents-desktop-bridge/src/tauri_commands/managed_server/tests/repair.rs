@@ -95,7 +95,7 @@ async fn a_remote_only_or_disabled_desktop_is_left_alone_even_with_a_preference(
 }
 
 #[tokio::test]
-async fn unreadable_saved_connections_are_reported_as_repaired() {
+async fn unreadable_saved_connections_are_refused_without_discarding_them() {
     let (_temp, state) = orchestration_state();
     let paths = &state.policy.desktop_paths;
     std::fs::create_dir_all(paths.root()).unwrap();
@@ -103,26 +103,11 @@ async fn unreadable_saved_connections_are_reported_as_repaired() {
     let result = repair_with(&state, true, |_| async { ready() })
         .await
         .unwrap();
-    assert_eq!(result.outcome, ManagedServerRepairOutcome::Ready);
-    assert!(result.saved_runtimes.is_empty());
-    assert!(!paths.runtime_directory_path().exists());
-    let set_aside = std::fs::read_dir(paths.root())
-        .unwrap()
-        .filter_map(Result::ok)
-        .find(|entry| {
-            entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("peers.json.unreadable-")
-        })
-        .expect("the unreadable copy is kept")
-        .path();
+    assert_eq!(result.outcome, ManagedServerRepairOutcome::Blocked);
+    assert!(result.blocker.is_some());
     assert_eq!(
-        result.repaired,
-        vec![format!(
-        "Saved connections couldn't be read and were set aside at {}; add your remote nodes again",
-        set_aside.display()
-    )]
+        std::fs::read_to_string(paths.runtime_directory_path()).unwrap(),
+        "{ not json"
     );
 }
 
@@ -218,7 +203,7 @@ async fn a_late_failure_keeps_the_notes_already_gathered() {
         .unwrap();
     assert_eq!(result.outcome, ManagedServerRepairOutcome::Blocked);
     assert!(result.blocker.is_some());
-    assert_eq!(result.repaired.len(), 1);
+    assert!(result.repaired.is_empty());
 }
 
 #[tokio::test]
@@ -396,15 +381,15 @@ async fn a_removed_home_reports_the_lost_local_node_and_where_its_data_went() {
         &stored.to_string(),
     );
     let peer = serde_json::json!({
-        "peer_id": "old-local", "label": "Forge", "addr": "endpoint",
-        "node_did": "did:key:gone", "source": "enrollment",
+        "label": "Forge", "access_request": null, "access_state": null,
+        "node_did": "did:key:gone",
         "graphql": "http://127.0.0.1:21919/api/v0/graphql",
         "local_node_home": home.to_string_lossy(),
-        "created_at": "2026-11-12T02:33:54Z", "updated_at": "2026-11-12T02:35:09Z"
+
     });
     write(
         paths.runtime_directory_path(),
-        &serde_json::json!({ "peers": [peer] }).to_string(),
+        &serde_json::json!({ "connections": [peer] }).to_string(),
     );
 
     let result = repair_with(&state, true, |_| async {
@@ -436,24 +421,13 @@ async fn a_node_serving_a_deleted_folder_is_a_lost_node_not_a_repair() {
 }
 
 #[tokio::test]
-async fn a_preference_written_by_another_version_is_set_aside_so_setup_starts_fresh() {
+async fn an_unreadable_preference_is_refused_without_discarding_it() {
     let (_temp, state) = orchestration_state();
     let root = state.policy.desktop_paths.root();
     let path = root.join(MANAGED_SERVER_CONFIG);
-    write(
-        &path,
-        "{\n  \"agentName\": \"Forge\",\n  \"toolCeiling\": \"readwrite\",\n  \"toolRoot\": \"/Users/someone\"\n}",
-    );
-    assert!(load_preference(&state).await.unwrap().is_none());
-    assert!(!path.exists());
-    assert!(tree(root)
-        .iter()
-        .any(|name| name.starts_with("managed-server.json.unreadable-")));
-
-    write(&path, "{\n  \"nodeName\": \"Fo");
-    assert!(load_preference(&state).await.is_err());
-    assert!(
-        path.exists(),
-        "a partly written preference is left in place"
-    );
+    for value in [r#"{"agentName":"Forge"}"#, r#"{"nodeName":"Fo"#] {
+        write(&path, value);
+        assert!(load_preference(&state).await.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), value);
+    }
 }

@@ -2,7 +2,7 @@ import Proofs.Clients.ClientShell.ChatReadiness
 import Proofs.Conformance.Functions.Clients
 
 namespace ClientChatReadiness
-attribute [conformance_function] causeToken nextActionToken
+attribute [conformance_function] causeToken
 end ClientChatReadiness
 
 namespace Conformance.ChatReadinessCases
@@ -29,17 +29,7 @@ private def fenceModel (i : FenceInput) : FenceOutput :=
       | .ready => none | .notReady cause => some cause }
 
 @[conformance_family]
-def savedRecord : Family FenceInput FenceOutput where
-  inputs := fenceInputs.filter (·.route.isSome)
-  model := fenceModel
-
-@[conformance_family]
 def writeFence : Family FenceInput FenceOutput where
-  inputs := fenceInputs
-  model := fenceModel
-
-@[conformance_family]
-def writeSelection : Family FenceInput FenceOutput where
   inputs := fenceInputs
   model := fenceModel
 

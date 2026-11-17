@@ -187,7 +187,7 @@ export function selectionMatches(
 }
 
 export type SessionLoadingLayer =
-  "localDatabase" | "p2p" | "sessionSync" | "sync" | "runtime" | "inference";
+  "localDatabase" | "sessionSync" | "sync" | "runtime" | "inference";
 
 export type SessionLoadingAction =
   "retryLocal" | "reloadSession" | "configureInference";
@@ -314,7 +314,7 @@ function sessionStatusFromOperational(
   return {
     layer:
       operational.layer === "route"
-        ? "p2p"
+        ? "runtime"
         : operational.layer === "sync"
           ? "sync"
           : operational.layer === "inference"

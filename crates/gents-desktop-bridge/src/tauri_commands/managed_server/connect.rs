@@ -78,7 +78,7 @@ async fn serving_node(
     node_home: &Path,
 ) -> Result<ManagedServerStatus, BridgeError> {
     let refused = |code, message: String| Err(BridgeError::new(code, message));
-    match observe_port_readiness(node_home, user_status_signer(state, node_home).await.as_ref())
+    match observe_port_readiness(node_home, user_status_signer(state).await.as_ref())
         .await?
     {
         PortReadiness::Ready(status) => Ok(status),

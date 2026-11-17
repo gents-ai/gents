@@ -122,9 +122,16 @@ fn runtime_cause(status: Option<RuntimeConnectionStatus>) -> Option<SyncHealthCa
 mod tests {
     use super::*;
     #[test]
+    fn recovery_actions_follow_the_model() {
+        gents_lean_vocab::families::client_sync_health_cause_next_action::replay::<
+            SyncHealthCause,
+            SyncNextAction,
+        >(|input| input.cause.next_action());
+    }
+
+    #[test]
     fn connection_health_follows_the_model() {
-        use gents_lean_vocab::families::client_sync_health_cases_projection as contract;
-        for case in contract::cases() {
+        for case in gents_lean_vocab::families::client_sync_health_cases_projection::cases() {
             let statuses = case.input.runtimes.iter().map(|status| {
                 status.as_deref().map(|status| match status {
                     "connecting" => RuntimeConnectionStatus::Connecting,
@@ -136,13 +143,15 @@ mod tests {
                 })
             });
             let view = project_sync_health(statuses);
-            case.check(contract::ViewOutput {
-                state: view.state.as_str().into(),
-                cause: view.cause.map(|cause| cause.as_str().into()),
-                next_action: view.next_action.map(|action| action.as_str().into()),
-                runtime_count: view.runtime_count as u64,
-                connected_runtime_count: view.connected_runtime_count as u64,
-            });
+            case.check(
+                gents_lean_vocab::families::client_sync_health_cases_projection::ViewOutput {
+                    state: view.state.as_str().into(),
+                    cause: view.cause.map(|cause| cause.as_str().into()),
+                    next_action: view.next_action.map(|action| action.as_str().into()),
+                    runtime_count: view.runtime_count as u64,
+                    connected_runtime_count: view.connected_runtime_count as u64,
+                },
+            );
         }
     }
 }

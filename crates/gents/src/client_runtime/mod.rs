@@ -238,10 +238,11 @@ pub async fn fetch_hosted_runtime_status(
 
 pub async fn hosted_status_signer(
     desktop: &DesktopPaths,
-    _node_did: Option<&str>,
-    _peers: &[gents_protocol::runtime_connection::RuntimeConnection],
     running: Option<gents_store::config_client::ClientSigningCapability>,
 ) -> Option<gents_store::config_client::ClientSigningCapability> {
+    if let Some(administrator) = load_status_signer(desktop.cli_client()).await {
+        return Some(administrator);
+    }
     if running.is_some() {
         return running;
     }

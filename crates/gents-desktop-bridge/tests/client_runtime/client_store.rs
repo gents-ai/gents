@@ -236,6 +236,13 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         })
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/status"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"node_did":NODE_DID,"client_authentication":{"kind":"local"}}),
+        ))
+        .mount(&server)
+        .await;
     core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
         node_did: (NODE_DID).to_string(),
         label: ("Hosted Amy").to_string(),
@@ -311,6 +318,7 @@ async fn served_core() -> Result<(tempfile::TempDir, ClientRuntime, ServedRuntim
     .await?;
     let runtime =
         ServedRuntimeHome::start_unpublished_for(Arc::new(core.node_identity().clone())).await;
+    runtime.publish_node(serde_json::json!({})).await;
     gents_desktop_bridge::client_test_support::connect_runtime(&runtime, &core).await;
     Ok((tempdir, core, runtime))
 }
@@ -352,7 +360,7 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     let stores = core.stores();
     let mut updates = core.store_updates();
 
-    assert_eq!(stores.snapshot(runtime.node_did()).nodes.len(), 0);
+    assert_eq!(stores.snapshot(runtime.node_did()).nodes.len(), 1);
     let baseline = *updates.borrow_and_update();
 
     runtime
@@ -370,7 +378,11 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     .await
     .context("timed out waiting for store update")??;
     until(&core, "the refreshed snapshot", |core| {
-        core.stores().snapshot(runtime.node_did()).nodes.len() == 1
+        core.stores()
+            .snapshot(runtime.node_did())
+            .nodes
+            .iter()
+            .any(|node| node.display_name.as_deref() == Some("Test Agent"))
     })
     .await?;
 
@@ -484,21 +496,22 @@ async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Resul
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> Result<()> {
     let (_tmp, core, runtime) = served_core().await?;
-    let access = runtime.user_access();
+    let access = runtime.user_graphql_access();
     let response = access
-        .execute(
+        .write(
+            "test.client_store.conflicting_headers",
             r#"mutation {
             first: create_AgentMessage(input: {
                 message_key: "conflict:1", session_id: "conflict", node_did: "did:conflict",
                 publication: {kind: "fork", origin_message_doc_id: "origin-a"},
                 outcome: "complete", sequence: 1, role: "user", native_id: "first",
-                blocks: [], created_at: "2026-05-07T00:00:00Z"
+                blocks: null, created_at: "2026-05-07T00:00:00Z"
             }) { _docID }
             second: create_AgentMessage(input: {
                 message_key: "conflict:1", session_id: "conflict", node_did: "did:conflict",
                 publication: {kind: "fork", origin_message_doc_id: "origin-b"},
                 outcome: "complete", sequence: 2, role: "user", native_id: "second",
-                blocks: [], created_at: "2026-05-07T00:00:01Z"
+                blocks: null, created_at: "2026-05-07T00:00:01Z"
             }) { _docID }
         }"#,
         )

@@ -27,7 +27,7 @@ async fn runtime_location_rejects_an_unknown_node() {
 }
 
 #[tokio::test]
-async fn runtime_location_accepts_a_paired_runtime_without_operator_access() {
+async fn runtime_location_accepts_a_saved_runtime_without_connecting() {
     use crate::client_runtime::ClientRuntime;
     use gents_desktop_core::client::DesktopPaths;
 
@@ -67,7 +67,7 @@ async fn runtime_location_accepts_a_paired_runtime_without_operator_access() {
         .unwrap(),
         false
     );
-    assert!(host.require_configured_runtime("did:paired").await.is_err());
+    assert!(host.require_configured_runtime("did:paired").await.is_ok());
     core.shutdown().await.unwrap();
 }
 
@@ -114,10 +114,7 @@ async fn paired_model_settings_use_the_authenticated_client_endpoint() {
 }
 
 #[tokio::test]
-async fn private_snapshot_keeps_the_current_requesters_questions_without_config_authority() {
-    // The runtime's mailbox policy lets only an item's recipient read it, so
-    // the desktop observes the current requester's questions alone; the
-    // working Agent files each item through the mailbox owner.
+async fn private_snapshot_preserves_admin_readable_questions_without_ui_config_authority() {
     let served = crate::tests::support::served_desktop().await;
     let core = served.core.clone();
     core.stop_observer_for_test().await;
@@ -192,11 +189,14 @@ async fn private_snapshot_keeps_the_current_requesters_questions_without_config_
     let items = deployment["mailboxItems"].as_array().unwrap();
     assert_eq!(
         items.len(),
-        1,
-        "private snapshot must preserve only the current requester's open question: {result}"
+        2,
+        "the Node administrator may read both open questions: {result}"
     );
-    assert_eq!(items[0]["sourceId"], "current");
-    assert!(items[0]["questionHash"]
+    let own = items
+        .iter()
+        .find(|item| item["sourceId"] == "current")
+        .unwrap();
+    assert!(own["questionHash"]
         .as_str()
         .is_some_and(|hash| !hash.is_empty()));
     assert!(result["bootstrap"]["desktopHome"]

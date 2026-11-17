@@ -36,7 +36,7 @@ bytes = { version = "1", features = ["serde"] }
 cipher = { version = "0.4", default-features = false, features = ["block-padding", "std"] }
 clap = { version = "4", features = ["derive", "env"] }
 clap_builder = { version = "4", default-features = false, features = ["color", "env", "help", "std", "suggestions", "usage"] }
-commonware-macros = { version = "2026" }
+commonware-macros = { git = "https://github.com/iverc/commonware-upstream", rev = "eeb074c1198fa509bc79f1b1523556e62072e541" }
 compact_str = { version = "0.9" }
 const-hex = { version = "1", default-features = false, features = ["core-error", "serde", "std"] }
 cranelift-bitset = { version = "0.137", default-features = false, features = ["enable-serde"] }

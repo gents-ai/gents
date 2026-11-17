@@ -82,7 +82,7 @@ impl HistoryUnlockRequired {
     /// The marker reaches `Provider::failed` through the store-open path as an
     /// erased error, so it is asked for there rather than matched.
     pub(crate) fn occurs_in(error: &anyhow::Error) -> bool {
-        error.is::<Self>()
+        gents_protocol::error_chain::find_source::<Self>(error.as_ref()).is_some()
     }
 }
 

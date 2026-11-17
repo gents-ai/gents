@@ -21,6 +21,8 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
         core.node_identity().clone(),
     ))
     .await;
+    runtime.publish_node(serde_json::json!({})).await;
+    runtime.publish_node(serde_json::json!({})).await;
     gents_desktop_bridge::client_test_support::connect_runtime(&runtime, &core).await;
     let node_did = runtime.node_did();
 

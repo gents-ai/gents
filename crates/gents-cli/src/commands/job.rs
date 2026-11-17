@@ -366,8 +366,8 @@ async fn control_job_remote(
     view: &JobView,
     kind: JobControlKind,
 ) -> std::result::Result<JobControlOutcome, ControlSendError> {
-    let actor = access.actor_did().ok_or(ControlSendError::NotAuthorized)?;
-    let signer = gents_store::identity::RegisteredIdentity::from_registered_did(&actor, None)
+    let signer = access
+        .client_signer()
         .map_err(|error| ControlSendError::Unavailable(error.into()))?;
     gents_toolcalls::call::control::client::send::control_job(
         access,

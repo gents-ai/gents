@@ -12,8 +12,6 @@ namespace ClientChatReadiness
 
 deriving instance Lean.ToJson for Cause, NextAction
 
-attribute [conformance_function] nextAction
-
 end ClientChatReadiness
 
 namespace ClientShell.Settings

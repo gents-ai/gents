@@ -41,6 +41,7 @@ mod tests {
             .await;
         let (core, temp) = crate::tests::support::boot_core().await;
         let node = "did:test:runtime";
+        crate::client_test_support::runtime_metadata(&server, node).await;
         core.connect_runtime(gents_protocol::runtime_connection::RuntimeConnection {
             node_did: (node).to_string(),
             label: ("Served runtime").to_string(),

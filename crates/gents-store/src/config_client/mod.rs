@@ -606,6 +606,13 @@ impl ConfigAccess {
         }
     }
 
+    pub fn client_signer(&self) -> Result<ClientSigningCapability> {
+        match self.write_route() {
+            WriteRoute::Http(endpoint) => endpoint.held_client_signing_capability().cloned(),
+            WriteRoute::Local(_) => Err(ConfigClientError::ClientAgentSignerRequired),
+        }
+    }
+
     pub fn with_client_signed_configuration(mut self) -> Self {
         match &mut self {
             Self::Local(local) => local.require_client_signed_writes(),

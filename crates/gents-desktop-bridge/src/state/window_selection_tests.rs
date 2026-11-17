@@ -227,7 +227,10 @@ fn two_windows_on_two_nodes_resolve_through_their_own_selection() {
             ))
             .expect("client core"),
     );
-    state.bridge.lock().unwrap().install_core(Arc::clone(&core));
+    {
+        let _entered = runtime.enter();
+        state.bridge.lock().unwrap().install_core(Arc::clone(&core));
+    }
     let app = tauri::test::mock_builder()
         .manage(state)
         .invoke_handler(tauri::generate_handler![

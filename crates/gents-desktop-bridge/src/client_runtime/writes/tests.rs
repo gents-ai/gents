@@ -2,9 +2,10 @@ use super::*;
 
 #[test]
 fn chat_write_fence_matches_lean() {
-    use gents_lean_vocab::families::chat_readiness_cases_write_fence as contract;
     use gents_protocol::runtime_connection::ConnectionRefusalCause;
-    for case in contract::cases::<ConnectionRefusalCause>() {
+    for case in gents_lean_vocab::families::chat_readiness_cases_write_fence::cases::<
+        ConnectionRefusalCause,
+    >() {
         let connection = case.input.route.as_ref().map(|route| RuntimeConnection {
             node_did: if route.binding_matches {
                 "did:key:runtime"
@@ -23,9 +24,11 @@ fn chat_write_fence_matches_lean() {
             access_request: None,
             access_state: None,
         });
-        case.check(contract::FenceOutput {
-            refusal: chat_route_refusal("did:key:runtime", connection.as_ref())
-                .map(|refusal| refusal.cause()),
-        });
+        case.check(
+            gents_lean_vocab::families::chat_readiness_cases_write_fence::FenceOutput {
+                refusal: chat_route_refusal("did:key:runtime", connection.as_ref())
+                    .map(|refusal| refusal.cause()),
+            },
+        );
     }
 }

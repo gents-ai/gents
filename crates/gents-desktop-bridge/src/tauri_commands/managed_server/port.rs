@@ -32,25 +32,11 @@ pub(super) enum PortReadiness {
     },
 }
 
-pub(super) async fn user_status_signer(
-    state: &DesktopAppState,
-    node_home: &Path,
-) -> Option<ClientSigningCapability> {
+pub(super) async fn user_status_signer(state: &DesktopAppState) -> Option<ClientSigningCapability> {
     use gents_store::identity::NodeIdentity as _;
-    let paths = &state.policy.desktop_paths;
-    let core = crate::state::current_core(state);
-    let peers = match &core {
-        Some(core) => core.runtime_connections(),
-        None => gents_desktop_core::client::runtime_directory::load_runtime_connections(paths.runtime_directory_path())
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(target: "gents_desktop::managed_server", error = %format!("{error:#}"), "reading the peer directory to choose the status reader failed");
-                Vec::new()
-            }),
-    };
-    let running = core.and_then(|core| core.node_identity().client_signing_capability().ok());
-    let node_did = read_initialized_did(node_home).await;
-    gents::client_runtime::hosted_status_signer(paths, node_did.as_deref(), &peers, running).await
+    let running = crate::state::current_core(state)
+        .and_then(|core| core.node_identity().client_signing_capability().ok());
+    gents::client_runtime::hosted_status_signer(&state.policy.desktop_paths, running).await
 }
 
 pub(super) fn status_unreadable_error(cause: &HostedRuntimeStatusError) -> BridgeError {

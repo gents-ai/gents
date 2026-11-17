@@ -59,3 +59,13 @@ impl std::fmt::Display for ConnectionRefusalCause {
         formatter.write_str(self.as_str())
     }
 }
+
+#[cfg(test)]
+mod conformance {
+    #[test]
+    fn refusal_tokens_follow_the_model() {
+        gents_lean_vocab::families::client_chat_readiness_cause_token::replay::<
+            super::ConnectionRefusalCause,
+        >(|input| input.cause.as_str().to_owned());
+    }
+}
