@@ -287,10 +287,7 @@ async fn discovery_replicates_while_request_documents_remain_runtime_local() {
         )
         .await
         .unwrap();
-    fixture
-        .peer
-        .node
-        .p2p()
+    gents_p2p::node_access::operations(&fixture.peer.node)
         .unwrap()
         .sync_documents(
             "PeerRegistry",
@@ -327,10 +324,7 @@ async fn discovery_replicates_while_request_documents_remain_runtime_local() {
         r#"{{ _commits(docID: "{escaped_doc}", filter: {{ fieldName: {{ _eq: "_C" }} }}, order: {{ height: ASC }}, limit: 1) {{ cid }} }}"#,
     )).await.unwrap();
     let cid = commits["data"]["_commits"][0]["cid"].as_str().unwrap();
-    let pull = fixture
-        .peer
-        .node
-        .p2p()
+    let pull = gents_p2p::node_access::operations(&fixture.peer.node)
         .unwrap()
         .sync_documents("AgentRequest", vec![doc], Some(Duration::from_secs(5)))
         .await;
