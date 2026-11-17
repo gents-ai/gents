@@ -746,7 +746,7 @@ class SystemPreflight(unittest.TestCase):
 
     def test_the_build_and_the_test_jobs_check_first(self):
         source = Path(gate.__file__).read_text()
-        for function in ("run_test", "run_build"):
+        for function in ("run_test", "build_and_run"):
             body = source.split(f"def {function}(", 1)[1].split("\ndef ", 1)[0]
             self.assertIn("system_preflight()", body, function)
 
