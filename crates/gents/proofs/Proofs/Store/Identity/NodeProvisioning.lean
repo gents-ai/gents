@@ -151,8 +151,9 @@ inductive NacOwner where
 
 def nacOwner : NacOwner := .initUser
 
-/-- Runtime invariant: the runtime operates only with node ACP (NAC) enabled.
-Every authorization decision in this model assumes it. Native premise: while
+/-- Runtime invariant: the runtime operates only with node ACP (NAC) enabled,
+and only on a node whose own identity does not read past document ACP.
+Every authorization decision in this model assumes both. Native premise: while
 NAC is not `Enabled`, DefraDB bypasses node-permission checks and reports every
 actor as admin (`NodeACP::is_admin`); disabling NAC is an admin-class native
 operation, so an admin can turn it off at runtime, and native persists
@@ -161,15 +162,34 @@ node open enables NAC, but that does not exclude a store reopened disabled. A
 node observed without NAC enabled is therefore refused before the runtime
 admits work (fail closed), never treated as "everyone is admin"; the fix is to
 re-enable NAC as its owner or an admin. Destructive admin decisions refuse it
-again as defence in depth (`Configuration.destructiveAdminDecision`). -/
-def runtimeMayStart (status : NacStatus) : Bool := status == .enabled
+again as defence in depth (`Configuration.destructiveAdminDecision`).
 
-theorem runtime_refuses_without_enabled_nac (status : NacStatus)
-    (notEnabled : status ≠ .enabled) : runtimeMayStart status = false := by
+`nodeReadsPastDac` is native NAC's answer for the Node's own DID and
+`bypass-dac`: true for a store whose Node owns NAC (every store created before
+`nacOwner` was the init User) and for a Node an admin made admin or granted
+`bypass-dac`. Such a node is refused the same way: its Node would read every
+actor's documents. A store whose Node owns NAC cannot be given another owner,
+so it is not converted; it is refused with the instruction to set the home up
+again. -/
+def runtimeMayStart (status : NacStatus) (nodeReadsPastDac : Bool) : Bool :=
+  status == .enabled && !nodeReadsPastDac
+
+theorem runtime_refuses_without_enabled_nac (status : NacStatus) (nodeReadsPastDac : Bool)
+    (notEnabled : status ≠ .enabled) : runtimeMayStart status nodeReadsPastDac = false := by
   cases status <;> simp_all [runtimeMayStart]
 
+theorem runtime_refuses_a_node_reading_past_dac (status : NacStatus) :
+    runtimeMayStart status true = false := by
+  simp [runtimeMayStart]
+
 theorem disabled_nac_is_refused_at_startup :
-    runtimeMayStart .disabledTemporarily = false ∧ runtimeMayStart .notConfigured = false ∧
-      runtimeMayStart .enabled = true := by decide
+    runtimeMayStart .disabledTemporarily false = false ∧
+      runtimeMayStart .notConfigured false = false ∧
+      runtimeMayStart .enabled false = true := by decide
+
+/-- A store set up with `nacOwner` starts: its Node owns nothing and reads
+past no document ACP until an admin grants it that. -/
+theorem init_user_owned_store_may_start :
+    runtimeMayStart .enabled (nacOwner == .node) = true := by decide
 
 end Identity.NodeProvisioning

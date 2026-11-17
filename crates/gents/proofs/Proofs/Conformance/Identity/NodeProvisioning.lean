@@ -100,20 +100,26 @@ deriving instance ToJson for NacStatus
 
 structure NacInput where
   status : NacStatus
+  nodeReadsPastDac : Bool
   deriving ToJson
 
 structure NacOutput where
   mayStart : Bool
   deriving ToJson
 
-private def nacModel (i : NacInput) : NacOutput := { mayStart := runtimeMayStart i.status }
+private def nacModel (i : NacInput) : NacOutput :=
+  { mayStart := runtimeMayStart i.status i.nodeReadsPastDac }
 
-/-- A runtime start opens its node with NAC enabled, and an admin can disable
-it on the running node, which native persists across a restart: these are the
-statuses a production start reaches. -/
+/-- A runtime start opens its node with NAC enabled, an admin can disable it
+on the running node, which native persists across a restart, and an admin can
+make the Node an admin, which native also persists: these are the observations
+a production start reaches. -/
 @[conformance_family]
 def runtimeNac : Family NacInput NacOutput where
-  inputs := [{ status := .enabled }, { status := .disabledTemporarily }]
+  inputs := [{ status := .enabled, nodeReadsPastDac := false },
+    { status := .disabledTemporarily, nodeReadsPastDac := false },
+    { status := .enabled, nodeReadsPastDac := true },
+    { status := .disabledTemporarily, nodeReadsPastDac := true }]
   model := nacModel
 
 structure NodeRuntimeInput where
@@ -131,7 +137,7 @@ def nodeRuntimeGrants : Family NodeRuntimeInput (List String) where
 production path observes a node whose NAC was never configured. -/
 @[conformance_family]
 def runtimeNacUnreached : Family NacInput NacOutput where
-  inputs := [{ status := .notConfigured }]
+  inputs := [{ status := .notConfigured, nodeReadsPastDac := false }]
   model := nacModel
 
 structure CreatorInput where
