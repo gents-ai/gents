@@ -190,7 +190,7 @@ theorem a_refreshed_connection_acts_under_a_current_delegation (holder : Holder)
     (trails : trail ≤ idleTrailSeconds) :
     delegation.currentAt (issued + (age + elapsed) - trail) = true := by
   apply a_minted_delegation_outlives_an_idle_block holder issuer audience issued (age + elapsed)
-    trail none delegation minted _ trails
+    trail delegation minted _ trails
   simp only [refreshDue, refreshAfterSeconds, lifetimeSeconds, decide_eq_false_iff_not,
     Nat.not_le] at fresh prompt ⊢
   omega

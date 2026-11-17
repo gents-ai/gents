@@ -17,12 +17,16 @@ namespace Identity.UserDelegation
 open DocumentAcpChoice (Provider)
 
 /-- What a delegation must name for a node's Vera access control to act under
-it: the node's submitting worker and its deployment. External premise: DefraDB
-reports both in the node's light client status, and only a node whose document
-access control runs on Vera reports them. -/
+it: the node's submitting worker and its deployment, and the deployment's
+genesis identity once the node has proven it. External premise: DefraDB
+reports all three in the node's light client status, only a node whose
+document access control runs on Vera reports them, and the genesis identity is
+absent until its provider has proven the deployment's first block
+(defradb.rs#2987). -/
 structure Audience where
   worker : String
   deployment : Nat
+  genesis : Option String
   deriving DecidableEq, Repr
 
 /-- The claims of a delegation. `policyCommands` is the scope: policy
@@ -56,6 +60,23 @@ def requestBoundLimitSeconds : Nat := 600
 theorem the_lifetime_fits_a_request_bound_delegation :
     lifetimeSeconds ≤ requestBoundLimitSeconds := by decide
 
+/-- Decision (gents#3831): a stored command lives five minutes from its
+signing; the runtime holds it until it is valid on its own clock and answers it
+as expired after that. -/
+def storedCommandLifetimeSeconds : Nat := 300
+
+/-- Decision (gents#3831): a request-bound delegation a stored command carries
+lives 570 seconds, the most a provider that also refuses a delegation reaching
+it outside its validity takes (defradb.rs#3006), and so outlives its command
+by four and a half minutes in which the registration it authorizes is sent. -/
+def requestBoundLifetimeSeconds : Nat := 570
+
+theorem a_request_bound_lifetime_fits_the_provider :
+    requestBoundLifetimeSeconds ≤ requestBoundLimitSeconds := by decide
+
+theorem a_request_bound_delegation_outlives_its_stored_command :
+    storedCommandLifetimeSeconds < requestBoundLifetimeSeconds := by decide
+
 /-- External premise: DefraDB dates a delegation's validity from thirty seconds
 before it is issued. -/
 def backdateSeconds : Nat := 30
@@ -78,13 +99,25 @@ def Holder.signsFor : Holder → String → Bool
 
 /-- The one minting point. A delegation is issued only by the holder of its
 issuer's key, for the audience a node reported, at the holder's clock, either
-general or for the one write `request` names. -/
+general or for the one write `request` names. External premise
+(`vera::vera_rs::request_delegation`, defradb.rs#2987): a request-bound
+delegation names the deployment's genesis identity, so none is minted for an
+audience that names none, and it is valid from the moment it is issued. The
+holder's clock is the one point that changes when a provider reports its own
+time (defradb.rs#3006). -/
 def mint (holder : Holder) (issuer : String) (audience : Audience) (now : Nat)
     (request : Option String) : Option Delegation :=
-  if holder.signsFor issuer then
-    some { issuer, audience, notBefore := now - backdateSeconds, expires := now + lifetimeSeconds,
+  if holder.signsFor issuer ∧ (request.isNone ∨ audience.genesis.isSome) then
+    some { issuer, audience,
+           notBefore := if request.isSome then now else now - backdateSeconds,
+           expires := now + if request.isSome then requestBoundLifetimeSeconds else lifetimeSeconds,
            policyCommands := true, request, signed := true }
   else none
+
+theorem a_request_bound_delegation_needs_the_genesis (holder : Holder) (issuer : String)
+    (audience : Audience) (now : Nat) (write : String) (unknown : audience.genesis = none) :
+    mint holder issuer audience now (some write) = none := by
+  simp [mint, unknown]
 
 theorem the_runtime_never_mints_a_user_delegation (node user : String) (agents : List String)
     (audience : Audience) (now : Nat) (request : Option String) (notNode : node ≠ user)
@@ -100,7 +133,7 @@ theorem a_client_mints_only_as_its_own_user (user issuer : String) (audience : A
   split at h
   · rename_i signs
     cases h
-    simpa [Holder.signsFor] using (Eq.symm (by simpa [Holder.signsFor] using signs))
+    simpa [Holder.signsFor] using (Eq.symm (by simpa [Holder.signsFor] using signs.1))
   · cases h
 
 /-- External premise: Vera and DefraDB accept a delegation from its
@@ -112,16 +145,16 @@ def Delegation.currentAt (delegation : Delegation) (now : Nat) : Bool :=
 `elapsed` seconds later, for any block time that trails the clock by no more
 than an idle node's does and any `elapsed` within the lifetime. -/
 theorem a_minted_delegation_outlives_an_idle_block (holder : Holder) (issuer : String)
-    (audience : Audience) (issued elapsed trail : Nat) (request : Option String)
-    (delegation : Delegation)
-    (minted : mint holder issuer audience issued request = some delegation)
+    (audience : Audience) (issued elapsed trail : Nat) (delegation : Delegation)
+    (minted : mint holder issuer audience issued none = some delegation)
     (withinLifetime : elapsed ≤ lifetimeSeconds) (trails : trail ≤ idleTrailSeconds) :
     delegation.currentAt (issued + elapsed - trail) = true := by
   unfold mint at minted
   split at minted
   · cases minted
     simp only [Delegation.currentAt, backdateSeconds, lifetimeSeconds, idleTrailSeconds,
-      Bool.and_eq_true, decide_eq_true_eq] at *
+      Option.isSome_none, Bool.false_eq_true, ite_false, Bool.and_eq_true,
+      decide_eq_true_eq] at *
     omega
   · cases minted
 
@@ -535,6 +568,47 @@ theorem a_refused_command_is_signed_again (digest : Digest) (node : Audience) (n
     rw [admitCommand_attached _ _ _ _ _ (by simp)]
     simp [scope, Delegation.validFor, Delegation.currentAt]
   · cases minted
+
+/-- A stored create carrying a delegation its client minted when it signed the
+command is admitted whenever the runtime processes the command inside the
+command's own validity. External premise: on a home whose Vera node runs in the
+runtime's process, the runtime and the provider read one clock, and the
+provider judges the delegation in a block proposed after the runtime submitted
+the command. Decision (gents#3831): a registration or relationship change the
+create still owes when its delegation lapses waits for authority, and the
+client settles it in the background under a general delegation
+(`Identity.OwedRegistration.handling`); the stored command is never signed
+again and no one is asked. -/
+theorem a_stored_create_is_admitted_through_its_window (digest : Digest) (node : Audience)
+    (user write : String) (issued elapsed : Nat) (delegation : Delegation)
+    (minted : mint (.client user) user node issued (some write) = some delegation)
+    (within : elapsed ≤ storedCommandLifetimeSeconds) :
+    admitCommand digest .embeddedVera .user node (issued + elapsed)
+      { signer := user, carrier := .stored, kind := .create, write,
+        delegationDigest := some (digest.of delegation) }
+      (some delegation) = .forwarded := by
+  unfold mint at minted
+  split at minted
+  · cases minted
+    rw [admitCommand_attached _ _ _ _ _ (by simp)]
+    simp only [storedCommandLifetimeSeconds] at within
+    simp [scope, Delegation.validFor, Delegation.currentAt, requestBoundLifetimeSeconds]
+    omega
+  · cases minted
+
+/-- The policy commands a stored create sends for its User: the registration
+of the document it creates, then each relationship it writes on it as that
+User. Decision (gents#3831): the command carries one request-bound delegation
+for each, in this order (`covers`). -/
+def storedCreateCommands (registration : String) (relationships : List String) : List String :=
+  registration :: relationships
+
+theorem a_stored_create_carries_one_delegation_per_command (registration : String)
+    (relationships : List String) (delegations : List Delegation)
+    (covered : covers (storedCreateCommands registration relationships) delegations = true) :
+    delegations.length = relationships.length + 1 := by
+  have := a_create_with_relationships_needs_a_delegation_for_each _ _ covered
+  simpa [storedCreateCommands] using this
 
 theorem node_and_agent_writes_are_unchanged (provider : Provider) (author : Author)
     (carrier : Carrier) (write : Write) (carried : Carried) (scope : Scope) (verdict : Verdict)

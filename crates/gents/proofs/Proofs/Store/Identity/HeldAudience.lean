@@ -48,6 +48,19 @@ def change (held : Held) (reported : Reported) (sameAudience : Bool) : Change :=
   | .known, .absent => .forgotten
   | _, _ => .unchanged
 
+/-- Decision (gents#3831): a client holding an audience that names no genesis
+identity reads the status again before it mints a request-bound delegation,
+since none can be minted for that audience
+(`UserDelegation.a_request_bound_delegation_needs_the_genesis`); a provider
+names it once it has proven its deployment's first block. A client holding no
+audience mints no delegation, and one whose audience names it mints at once. -/
+def rereadForGenesis (held : Held) (genesisKnown : Bool) : Bool :=
+  held == .known && !genesisKnown
+
+theorem a_client_whose_audience_names_its_genesis_mints_at_once (held : Held) :
+    rereadForGenesis held true = false := by
+  cases held <;> decide
+
 /-- What a status read reports, with the audience it names. -/
 inductive Status where
   | absent
