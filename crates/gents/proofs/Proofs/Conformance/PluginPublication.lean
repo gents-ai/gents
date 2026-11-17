@@ -21,3 +21,5 @@ def digestAuthorized : Family DigestInput Bool where
     [0, 1, 2].map fun digest => ⟨pins, digest⟩
   model := fun i => ToolPolicy.PluginPublication.digestAuthorized i.pinnedDigests i.runningDigest
 end Conformance.PluginPublication
+attribute [conformance_function] RuntimeReconcile.SurfacePublication.needsPublicationFence
+attribute [conformance_function] RuntimeReconcile.SurfacePublication.recreateSlot

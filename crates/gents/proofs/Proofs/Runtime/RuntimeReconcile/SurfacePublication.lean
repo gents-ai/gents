@@ -33,3 +33,19 @@ theorem expired_never_defers (busy : Bool) : deferAuthority busy false = false :
   simp [deferAuthority]
 
 end RuntimeReconcile.SurfacePublication
+
+namespace RuntimeReconcile.SurfacePublication
+
+/-- Stores cannot block construction of surfaces with no selected plugins. -/
+def needsPublicationFence (hasPlugins : Bool) : Bool := hasPlugins
+
+theorem plugin_free_never_waits : needsPublicationFence false = false := by decide
+
+/-- A parked slot is not a runnable reusable executor, even when its
+configuration fingerprints match a recovered proposal exactly. -/
+def recreateSlot (matches parked : Bool) : Bool := !matches || parked
+
+theorem parked_is_recreated (matches : Bool) : recreateSlot matches true = true := by
+  simp [recreateSlot]
+
+end RuntimeReconcile.SurfacePublication

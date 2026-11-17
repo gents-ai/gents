@@ -5,6 +5,12 @@
 \* Each Tick is one second of the epoch's TOTAL 60s budget; neither config
 \* events nor retries reset it. Revocation is independent of the store lock.
 \* At expiry publish latest pins, demoting plugin slots if still busy.
+\* Abstraction boundary: elapsed starts at an already-open unapplied epoch,
+\* not at Revoke. Tick may run before Revoke; later revocations inherit only
+\* the remaining budget. "running" denotes NEW admissions, not in-flight
+\* turns: clearing it abstracts retirement/dispatcher removal at publication.
+\* Rust permits an already-running retiring turn to finish on its old pin;
+\* this model makes no claim of interrupting or clearing those old turns.
 EXTENDS Naturals, FiniteSets, LeanDecision_RuntimeReconcile_SurfacePublication
 CONSTANT Bound, EnforceBound, EnforcePins
 VARIABLES busy, elapsed, desiredPins, activePins, running, revoked, applied
@@ -14,12 +20,14 @@ Init ==
   /\ activePins = {1} /\ running = {1} /\ revoked = FALSE /\ applied = FALSE
 Revoke ==
   /\ ~revoked /\ revoked' = TRUE /\ desiredPins' = {}
-  /\ elapsed' = 0
-  /\ UNCHANGED <<busy, activePins, running, applied>>
+  /\ IF EnforceBound /\ elapsed = Bound
+       THEN /\ activePins' = {} /\ running' = {} /\ applied' = TRUE
+       ELSE UNCHANGED <<activePins, running, applied>>
+  /\ UNCHANGED <<busy, elapsed>>
 Tick ==
-  /\ revoked /\ ~applied /\ elapsed < Bound
+  /\ ~applied /\ elapsed < Bound
   /\ elapsed' = elapsed + 1
-  /\ IF EnforceBound /\ ~deferAuthority(busy, elapsed' < Bound)
+  /\ IF revoked /\ EnforceBound /\ ~deferAuthority(busy, elapsed' < Bound)
        THEN /\ activePins' = desiredPins /\ running' = {} /\ applied' = TRUE
        ELSE UNCHANGED <<activePins, running, applied>>
   /\ UNCHANGED <<busy, desiredPins, revoked>>
