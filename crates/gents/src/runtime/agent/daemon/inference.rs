@@ -552,6 +552,7 @@ pub(super) mod tests {
         title_calls: Arc<AtomicUsize>,
         title_shape_mismatches: Arc<AtomicUsize>,
         successor: Option<WakeSuccessor>,
+        pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     }
 
     #[derive(Clone)]
@@ -611,6 +612,10 @@ pub(super) mod tests {
                         inputs.len() == 1
                     };
                     if first {
+                        if let Some((entered, release)) = &self.pause {
+                            entered.notify_one();
+                            release.notified().await;
+                        }
                         if let Some(WakeSuccessor {
                             node,
                             request_id,
@@ -673,7 +678,7 @@ pub(super) mod tests {
     ) -> serde_json::Value {
         let response = access
             .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason terminal_output }} }}"#,
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason terminal_output superseded_by_request_doc_id }} }}"#,
                 gents_store::graphql::escape_graphql_string(doc_id)
             ))
             .await
@@ -1339,6 +1344,7 @@ pub(super) mod tests {
                     signer: signer.clone(),
                     runtime: admission.runtime.clone(),
                 }),
+                pause: None,
             }),
             preamble,
             loop_tools: Arc::new(Vec::<Box<dyn ToolDyn>>::new()),

@@ -82,20 +82,24 @@ structure RetrySelectionInput where
   name : String
   parentPublished : Bool
   selected : List Nat
+  arrived : List Nat
   deriving Lean.ToJson
 
 structure RetrySelectionOutput where
   resume : Bool
   answered : List Nat
+  answeredArrival : List Nat
   deriving Lean.ToJson
 
 @[conformance_family]
 def retrySelection : Family RetrySelectionInput RetrySelectionOutput where
   inputs := retrySelectionCases.map fun c =>
-    { name := c.name, parentPublished := c.parentPublished, selected := c.selected }
+    { name := c.name, parentPublished := c.parentPublished, selected := c.selected
+      arrived := c.arrived }
   model := fun i =>
-    let value : RetrySelectionCase := ⟨i.name, i.parentPublished, i.selected⟩
-    { resume := value.resume, answered := value.answered }
+    let value : RetrySelectionCase := ⟨i.name, i.parentPublished, i.selected, i.arrived⟩
+    { resume := value.resume, answered := value.answered
+      answeredArrival := value.answeredArrival }
 
 section Families
 
