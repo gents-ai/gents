@@ -84,7 +84,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
             "max_wait_timeout_secs": 1}]}
     }))
     .unwrap();
-    let remote_name = gents_tools::mcp::meta::flat_tool_name("search", "query");
+    let remote_name = gents_documents::RemoteTools::flat_tool_name("search", "query");
     let config = gents_tools::surface::BackgroundToolConfig {
         allowlist: vec!["bash".into(), remote_name.clone()],
         timeouts: gents_tools::surface::ToolTimeouts::from_document(&tools).background,

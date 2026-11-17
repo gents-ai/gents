@@ -10,8 +10,7 @@ mod describe;
 mod discover;
 mod flat;
 mod shared;
-pub(crate) use flat::presented_tool_names;
-pub use flat::{flat_tool_name, selected_remote_identity};
+pub use flat::selected_remote_identity;
 #[cfg(test)]
 mod native_policy_tests;
 #[cfg(test)]
@@ -80,7 +79,10 @@ pub async fn build_meta_tools(
             if !ctx.is_tool_allowed(&selection.mcp_service_id, tool.name.as_ref()) {
                 continue;
             }
-            let name = flat_tool_name(&selection.mcp_service_id, tool.name.as_ref());
+            let name = gents_documents::RemoteTools::flat_tool_name(
+                &selection.mcp_service_id,
+                tool.name.as_ref(),
+            );
             anyhow::ensure!(
                 !tools.iter().any(|tool| tool.name() == name),
                 "duplicate flat MCP tool {name}"

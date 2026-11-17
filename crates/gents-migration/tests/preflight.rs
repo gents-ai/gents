@@ -180,3 +180,23 @@ async fn startup_refuses_unbound_transport_collections_before_mutation() {
         node.shutdown().await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn hidden_tool_names_schema_change_never_silently_migrates_an_existing_home() {
+    let node = fresh_node().await;
+    let previous = schemas::TOOLS.replace("    hidden_tool_names: [String!]\n", "");
+    assert_ne!(previous, schemas::TOOLS);
+    node.add_collection(&previous).await.unwrap();
+    let before = node.get_all_collection_versions().await.unwrap();
+    assert!(
+        matches!(check_migration_compatibility(&before), Err(Error::UnknownLineage { collection, .. }) if collection == "Tools")
+    );
+    assert!(
+        matches!(ensure_migrations(node.as_ref()).await, Err(Error::UnknownLineage { collection, .. }) if collection == "Tools")
+    );
+    assert_eq!(
+        serde_json::to_value(&before).unwrap(),
+        serde_json::to_value(node.get_all_collection_versions().await.unwrap()).unwrap()
+    );
+    node.shutdown().await.expect("shut down test node");
+}

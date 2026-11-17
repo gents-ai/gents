@@ -910,7 +910,7 @@ async fn pin_default_tools_root(
     let response = graphql_query(
         &graphql,
         &format!(
-            r#"{{ Tools(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ tools_id node_did display_name host remote agents built_ins datastore integrations self_config tags }} }}"#,
+            r#"{{ Tools(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ tools_id node_did display_name host remote agents built_ins datastore integrations self_config tags hidden_tool_names }} }}"#,
             gents_store::graphql::escape_graphql_string(node_did)
         ),
     )

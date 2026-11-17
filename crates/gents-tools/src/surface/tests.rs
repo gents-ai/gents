@@ -229,6 +229,7 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
     let config = AgentToolSurfaceConfig::from_selection(
         "classifier",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::ReadOnly,
@@ -286,6 +287,7 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
     let config = AgentToolSurfaceConfig::from_selection(
         "classifier",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::ReadOnly,
@@ -342,6 +344,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadOnly,
             file_tool_root: Some(stale_root),
             bash: BashMode::ReadOnly,
@@ -392,6 +395,7 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadWrite,
             file_tool_root: None,
             bash: BashMode::Unrestricted,
@@ -446,6 +450,7 @@ fn selection_cli_tools_require_ceiling_entries() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::Off,
@@ -507,6 +512,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::Off,
@@ -567,6 +573,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::Off,
@@ -718,6 +725,7 @@ fn background_tool_allowlist_registers_r6_tools() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadOnly,
             file_tool_root: None,
             bash: BashMode::Unrestricted,
@@ -773,6 +781,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
     let error = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadOnly,
             file_tool_root: None,
             bash: BashMode::ReadOnly,
@@ -833,6 +842,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
     let error = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadWrite,
             file_tool_root: Some(symlink_path.join("workspace")),
             bash: BashMode::Unrestricted,
@@ -2646,7 +2656,7 @@ fn flat_presentation_explanation_matches_selected_names_and_ceiling() {
     .unwrap();
     let explanation =
         config.explain_with_runtime(true, "did:test:test", &rapidhash::RapidHashSet::default());
-    let name = crate::mcp::meta::flat_tool_name("selected", "read");
+    let name = gents_documents::RemoteTools::flat_tool_name("selected", "read");
     assert_eq!(
         explanation.tool_names,
         vec![
@@ -2657,7 +2667,9 @@ fn flat_presentation_explanation_matches_selected_names_and_ceiling() {
     assert_eq!(explanation.included["meta_mcp"], vec![name]);
     assert!(!explanation
         .tool_names
-        .contains(&crate::mcp::meta::flat_tool_name("denied", "write")));
+        .contains(&gents_documents::RemoteTools::flat_tool_name(
+            "denied", "write"
+        )));
     assert!(!explanation.tool_names.contains(&"call_tool".to_string()));
 }
 

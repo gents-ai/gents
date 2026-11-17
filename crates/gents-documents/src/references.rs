@@ -393,6 +393,7 @@ impl ConfigReferences {
                     .map(|(_, value)| decode::<DatastoreToolSurfaceDocument>(value))
                     .collect::<Result<Vec<_>>>()?;
                 let merged = merge_datastore_tool_surfaces(&doc, &surfaces)?;
+                doc.validate_hidden_tools(&merged)?;
                 let cli_names = doc
                     .host
                     .as_ref()

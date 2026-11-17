@@ -112,3 +112,83 @@ fn rc0_eth_tool_ids_are_read_and_dropped_but_other_unknown_keys_still_fail() {
     });
     assert!(serde_json::from_value::<Tools>(unknown).is_err());
 }
+
+#[test]
+fn hidden_tool_names_defaults_roundtrip_and_exact_selection_validation() {
+    use gents_store::collection::Collection;
+    let base = json!({"tools_id":"tools", "node_did":"owner"});
+    for value in [
+        base.clone(),
+        json!({"tools_id":"tools", "node_did":"owner", "hidden_tool_names":null}),
+        json!({"tools_id":"tools", "node_did":"owner", "hidden_tool_names":[]}),
+    ] {
+        let doc: Tools = serde_json::from_value(value).unwrap();
+        assert!(doc.hidden_tool_names.is_empty());
+        assert_eq!(serde_json::to_value(doc).unwrap(), base);
+    }
+    let valid = json!({"tools_id":"tools", "node_did":"owner", "hidden_tool_names":["schema"],
+        "built_ins":{"enable_schema_tool":true},
+        "integrations":{"plugins":[{"plugin":"script/script", "tool_calls":true}]}});
+    let validate = |value: serde_json::Value| {
+        crate::ConfigReferences::from_documents("owner", [(Collection::Tools, value)])
+            .unwrap()
+            .validate()
+    };
+    validate(valid.clone()).unwrap();
+    let doc: Tools = serde_json::from_value(valid.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&doc).unwrap(), valid);
+    for names in [
+        json!(["ungranted"]),
+        json!(["schema*"]),
+        json!(["schema", "schema"]),
+        json!(["schema "]),
+        json!(["script"]),
+        json!(["config"]),
+        json!(["spawn_process"]),
+    ] {
+        let mut invalid = valid.clone();
+        invalid["hidden_tool_names"] = names;
+        assert!(validate(invalid).is_err());
+    }
+    let mut no_script = valid.clone();
+    no_script["integrations"] = serde_json::Value::Null;
+    assert!(validate(no_script).is_err());
+    let mut no_calls = valid.clone();
+    no_calls["integrations"]["plugins"][0]["tool_calls"] = false.into();
+    assert!(validate(no_calls).is_err());
+    let mut no_grant = valid;
+    no_grant["built_ins"] = serde_json::Value::Null;
+    assert!(validate(no_grant).is_err());
+}
+
+#[test]
+fn hidden_remote_names_use_selected_invocations_not_the_service_catalog() {
+    let remote = RemoteTools {
+        services: vec![RemoteServiceTools {
+            mcp_service_id: "research".into(),
+            tool_names: vec!["lookup".into()],
+            style: RemoteToolStyle::Flat,
+            ..Default::default()
+        }],
+    };
+    let name = RemoteTools::flat_tool_name("research", "lookup");
+    let mut tools = document(
+        json!({"remote":remote, "integrations":{"plugins":[{"plugin":"script/script","tool_calls":true}]}, "hidden_tool_names":[name]}),
+    );
+    tools
+        .validate_hidden_tools(&crate::MergedSurfaceTools::default())
+        .unwrap();
+    tools.hidden_tool_names = vec![RemoteTools::flat_tool_name("research", "unselected")];
+    assert!(tools
+        .validate_hidden_tools(&crate::MergedSurfaceTools::default())
+        .is_err());
+    tools.remote.as_mut().unwrap().services[0].style = RemoteToolStyle::Discovery;
+    tools.hidden_tool_names = vec!["call_tool".into()];
+    tools
+        .validate_hidden_tools(&crate::MergedSurfaceTools::default())
+        .unwrap();
+    tools.hidden_tool_names = vec!["lookup".into()];
+    assert!(tools
+        .validate_hidden_tools(&crate::MergedSurfaceTools::default())
+        .is_err());
+}
