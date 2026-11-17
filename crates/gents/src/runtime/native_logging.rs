@@ -161,13 +161,17 @@ mod tests {
 
     impl ServiceMode<'_> {
         fn installed() -> Self {
-            let guard = switch().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let guard = switch()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             SERVICE_RUNTIME.store(true, std::sync::atomic::Ordering::Relaxed);
             Self { _guard: guard }
         }
 
         fn interactive() -> Self {
-            let guard = switch().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let guard = switch()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             SERVICE_RUNTIME.store(false, std::sync::atomic::Ordering::Relaxed);
             Self { _guard: guard }
         }

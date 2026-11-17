@@ -394,7 +394,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     // Before the dispatch, so both spellings of the foreground runtime install
     // the stamped stderr sink through one site: the installed service runs
     // top-level `server`, and a prompt may type `runtime server`.
-    install_service_sink_if_runtime(command.as_ref());
+    install_service_sink_if_runtime(Some(&command));
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
         Command::Server(args) => {
