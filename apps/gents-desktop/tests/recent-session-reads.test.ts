@@ -254,7 +254,7 @@ describe("opening a recently read session in the app", () => {
   it("puts its transcript on screen in the same update as the selection", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const running = {
-      bootstrap: { clientStateExists: true, savedPeers: [] },
+      bootstrap: { clientStateExists: true, savedRuntimes: [] },
       client: {
         deployments: [
           node({

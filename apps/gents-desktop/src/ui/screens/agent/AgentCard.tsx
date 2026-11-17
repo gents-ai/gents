@@ -359,7 +359,6 @@ export function AgentCard({
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">
             {facts.join(" · ")}
-
           </p>
           {edit && edit.tags.length > 0 && (
             <ul aria-label="Tags" className="mt-2 flex flex-wrap gap-1">
@@ -428,18 +427,16 @@ export function AgentCard({
 
 const CONNECTION_PROBLEMS = new Set(["disconnected", "refused", "no_endpoint"]);
 
-function ConnectionSummary({
-  deployment,
-}: {
-  deployment: NodeView;
-  local: boolean;
-}) {
+function ConnectionSummary({ deployment }: { deployment: NodeView; local: boolean }) {
   const connection = useNodeConnection(deployment);
   const problem =
     connection.stopped || CONNECTION_PROBLEMS.has(connection.status.reason);
   const line = "truncate text-xs text-muted-foreground";
   const detail = problem ? (
-    <span className={line} title={deployment.runtime?.lastReconcileError ?? connection.detail}>
+    <span
+      className={line}
+      title={deployment.runtime?.lastReconcileError ?? connection.detail}
+    >
       {deployment.runtime?.lastReconcileError ?? connection.detail}
     </span>
   ) : deployment.graphql ? (

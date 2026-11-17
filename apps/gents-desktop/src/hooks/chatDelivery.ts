@@ -123,7 +123,12 @@ export function createChatDelivery(
       return reply.result;
     }
     if (reply.result.publication === "retained") {
-      saveChatDraft(stores.chat, { ...current, locallyRetained: true, pendingUntil: undefined, failure: undefined });
+      saveChatDraft(stores.chat, {
+        ...current,
+        locallyRetained: true,
+        pendingUntil: undefined,
+        failure: undefined,
+      });
       await applied(reply.result, current);
       return reply.result;
     }

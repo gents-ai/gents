@@ -29,27 +29,31 @@ function renderRow(
 describe("FleetRow", () => {
   it("keeps desktop actions available while the responsive layout hides them", () => {
     renderRow();
-    expect(screen.getByTestId("fleet-chat-peer-1")).toBeInTheDocument();
-    expect(screen.getByTestId("fleet-config-peer-1")).toBeInTheDocument();
-    expect(screen.queryByTestId("fleet-repair-peer-1")).not.toBeInTheDocument();
+    expect(screen.getByTestId(`fleet-chat-${deployment.nodeDid}`)).toBeInTheDocument();
+    expect(
+      screen.getByTestId(`fleet-config-${deployment.nodeDid}`),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId(`fleet-repair-${deployment.nodeDid}`),
+    ).not.toBeInTheDocument();
   });
 
   it("calls onOpenChat with the node DID when the chat button is clicked", () => {
     const props = renderRow();
-    fireEvent.click(screen.getByTestId("fleet-chat-peer-1"));
+    fireEvent.click(screen.getByTestId(`fleet-chat-${deployment.nodeDid}`));
     expect(props.onOpenChat).toHaveBeenCalledWith(deployment.nodeDid);
   });
 
   it("opens node details from the whole card and summarizes its documents", () => {
     const props = renderRow();
 
-    expect(screen.getByTestId("fleet-summary-peer-1")).toHaveTextContent(
+    expect(screen.getByTestId(`fleet-summary-${deployment.nodeDid}`)).toHaveTextContent(
       `${deployment.agents.length} agents`,
     );
-    expect(screen.getByTestId("fleet-summary-peer-1")).toHaveTextContent(
+    expect(screen.getByTestId(`fleet-summary-${deployment.nodeDid}`)).toHaveTextContent(
       `${deployment.sessions.length} sessions`,
     );
-    fireEvent.click(screen.getByTestId("fleet-row-peer-1"));
+    fireEvent.click(screen.getByTestId(`fleet-row-${deployment.nodeDid}`));
 
     expect(props.onOpenChat).toHaveBeenCalledWith(deployment.nodeDid);
   });
@@ -64,27 +68,31 @@ describe("FleetRow", () => {
       },
     );
 
-    expect(screen.getByTestId("fleet-status-peer-1")).toHaveTextContent("Online");
-    expect(screen.getByTestId("fleet-chat-peer-1")).toBeEnabled();
-    fireEvent.click(screen.getByTestId("fleet-chat-peer-1"));
+    expect(screen.getByTestId(`fleet-status-${deployment.nodeDid}`)).toHaveTextContent(
+      "Online",
+    );
+    expect(screen.getByTestId(`fleet-chat-${deployment.nodeDid}`)).toBeEnabled();
+    fireEvent.click(screen.getByTestId(`fleet-chat-${deployment.nodeDid}`));
     expect(props.onOpenChat).toHaveBeenCalledWith(deployment.nodeDid);
   });
 
-  it("keeps chat disabled until the runtime connection is ready", () => {
+  it("opens retained chat while the runtime reconnects", () => {
     const props = renderRow(
       {},
       { ...deployment, local: false, runtimeConnection: "connecting" },
     );
 
-    expect(screen.getByTestId("fleet-status-peer-1")).toHaveTextContent("Connecting");
-    expect(screen.getByTestId("fleet-chat-peer-1")).toBeDisabled();
-    fireEvent.click(screen.getByTestId("fleet-chat-peer-1"));
-    expect(props.onOpenChat).not.toHaveBeenCalled();
+    expect(screen.getByTestId(`fleet-status-${deployment.nodeDid}`)).toHaveTextContent(
+      "Connecting",
+    );
+    expect(screen.getByTestId(`fleet-chat-${deployment.nodeDid}`)).toBeEnabled();
+    fireEvent.click(screen.getByTestId(`fleet-chat-${deployment.nodeDid}`));
+    expect(props.onOpenChat).toHaveBeenCalledWith(deployment.nodeDid);
   });
 
   it("calls onOpenConfig with the node DID when the config button is clicked", () => {
     const props = renderRow();
-    fireEvent.click(screen.getByTestId("fleet-config-peer-1"));
+    fireEvent.click(screen.getByTestId(`fleet-config-${deployment.nodeDid}`));
     expect(props.onOpenConfig).toHaveBeenCalledWith(deployment.nodeDid);
     expect(props.onOpenChat).not.toHaveBeenCalled();
   });
@@ -93,15 +101,15 @@ describe("FleetRow", () => {
     const onRenameRuntime = vi.fn();
     renderRow({ onRenameRuntime });
 
-    const rename = screen.getByTestId("fleet-rename-peer-1");
+    const rename = screen.getByTestId(`fleet-rename-${deployment.nodeDid}`);
     expect(rename).toHaveAccessibleName("Rename Local Agent");
     expect(rename.parentElement).toHaveClass("fleet-agent-cell");
     fireEvent.click(rename);
-    const input = screen.getByTestId("fleet-rename-input-peer-1");
+    const input = screen.getByTestId(`fleet-rename-input-${deployment.nodeDid}`);
     fireEvent.change(input, { target: { value: "Amy" } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(onRenameRuntime).toHaveBeenCalledWith("peer-1", "Amy");
+    expect(onRenameRuntime).toHaveBeenCalledWith(deployment.nodeDid, "Amy");
   });
 
   it("shows the deployment's own runtime heartbeat as Last update", () => {
@@ -141,7 +149,7 @@ describe("FleetRow", () => {
     };
     renderRow({ onSetupInference }, missingInference);
 
-    fireEvent.click(screen.getByTestId("fleet-inference-setup-peer-1"));
+    fireEvent.click(screen.getByTestId(`fleet-inference-setup-${deployment.nodeDid}`));
     expect(onSetupInference).toHaveBeenCalledWith(missingInference);
   });
 
@@ -149,6 +157,7 @@ describe("FleetRow", () => {
     const onSetupInference = vi.fn();
     const hostManagedMissingCredentials: DeploymentView = {
       ...deployment,
+      operatorAccess: false,
       local: false,
       inferenceBackends: [],
       nodeReadiness: {
@@ -165,7 +174,7 @@ describe("FleetRow", () => {
     renderRow({ onSetupInference }, hostManagedMissingCredentials);
 
     expect(
-      screen.queryByTestId("fleet-inference-setup-peer-1"),
+      screen.queryByTestId(`fleet-inference-setup-${deployment.nodeDid}`),
     ).not.toBeInTheDocument();
     expect(screen.getByText("host-managed")).toBeInTheDocument();
   });

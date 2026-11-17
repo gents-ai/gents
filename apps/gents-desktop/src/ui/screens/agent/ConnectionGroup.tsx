@@ -34,7 +34,9 @@ export function ConnectionGroup({ deployment }: { deployment: NodeView }) {
       >
         <Fact>{deployment.operatorAccess ? "Yes" : "No"}</Fact>
       </Row>
-      {deployment.operatorAccess && <ClientAccess key={deployment.nodeDid} nodeDid={deployment.nodeDid} />}
+      {deployment.operatorAccess && (
+        <ClientAccess key={deployment.nodeDid} nodeDid={deployment.nodeDid} />
+      )}
     </Group>
   );
 }

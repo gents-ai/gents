@@ -25,4 +25,3 @@ export function leaseLeft(
         : count(Math.floor(left / DAY_MS), "day");
   return { text: `Access ends in ${text}`, soon: left < LEASE_SOON_MS, ended: false };
 }
-

@@ -9,12 +9,7 @@ import { routeMoves } from "../ui/lib/router";
 import { openOnNode } from "../ui/preferences";
 import { noteActiveNode, rememberedNode, rememberNode } from "./activeNode";
 import type { DraftStore } from "./draftStore";
-import {
-  firstNode,
-  type FleetState,
-  nodeOf,
-  type NodeView,
-} from "./fleetStore";
+import { firstNode, type FleetState, nodeOf, type NodeView } from "./fleetStore";
 import { selection } from "./selectionStore";
 import type { ShellStores } from "./shellProjection";
 
@@ -127,7 +122,6 @@ export function reconcileSelection(
       /* the node in use was one this app joined, and its access ended: move
          off it, since nothing there can be used; the notice says why */
       return;
-
     }
     if (composingFor === node.nodeDid) return;
     selection.settleAgent(store, selectedAgentDidForDeployment(node, agentDid));

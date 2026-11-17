@@ -59,8 +59,10 @@ export function testApp({
   session?: DesktopSessionSnapshot | null;
   selection?: Partial<SelectionState>;
 } = {}): DesktopApp {
+  if (!("listRuntimeAccess" in api))
+    Object.assign(api, { listRuntimeAccess: async () => [] });
   const app = createDesktopApp({
-    api: { listRuntimeAccess: async () => [], ...api } as unknown as DesktopApiAdapter,
+    api: api as DesktopApiAdapter,
     reportFailure,
     supportsManagedServer,
     sharing,

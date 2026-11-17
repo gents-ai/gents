@@ -38,7 +38,9 @@ describe("projectSyncOperationalStatus", () => {
     );
     expect(offline.kind).toBe("waiting");
     expect(offline.reason).toBe("discovery_offline");
-    expect(offline.detail).toBe("probe failed");
+    expect(offline.detail).toBe(
+      "No configured peer can be reached for discovery; retrying.",
+    );
     expect(syncHealthState(null)).toBeNull();
     expect(syncHealthState(health({ state: "future-state" }))).toBeNull();
   });

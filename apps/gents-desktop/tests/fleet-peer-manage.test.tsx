@@ -72,30 +72,34 @@ describe("fleet peer management", () => {
     const onRemoveRuntime = vi.fn().mockResolvedValue(undefined);
     renderRow(makeDeployment(), { onRemoveRuntime });
 
-    fireEvent.click(screen.getByTestId("fleet-remove-peer-1"));
+    fireEvent.click(screen.getByTestId("fleet-remove-did:key:z6MkRemote"));
     expect(onRemoveRuntime).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(onRemoveRuntime).toHaveBeenCalledWith("peer-1"));
+    await waitFor(() =>
+      expect(onRemoveRuntime).toHaveBeenCalledWith("did:key:z6MkRemote"),
+    );
   });
 
   it("offers no remove action for the local runtime", () => {
     renderRow(makeDeployment({ local: true }));
-    expect(screen.queryByTestId("fleet-remove-peer-1")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("fleet-remove-did:key:z6MkRemote"),
+    ).not.toBeInTheDocument();
   });
 
   it("renames via the inline editor and skips no-op commits", () => {
     const onRenameRuntime = vi.fn().mockResolvedValue(undefined);
     renderRow(makeDeployment(), { onRenameRuntime });
 
-    fireEvent.click(screen.getByTestId("fleet-rename-peer-1"));
-    const input = screen.getByTestId("fleet-rename-input-peer-1");
+    fireEvent.click(screen.getByTestId("fleet-rename-did:key:z6MkRemote"));
+    const input = screen.getByTestId("fleet-rename-input-did:key:z6MkRemote");
     fireEvent.change(input, { target: { value: "Edge Rack 2" } });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(onRenameRuntime).toHaveBeenCalledWith("peer-1", "Edge Rack 2");
+    expect(onRenameRuntime).toHaveBeenCalledWith("did:key:z6MkRemote", "Edge Rack 2");
 
-    fireEvent.click(screen.getByTestId("fleet-rename-peer-1"));
-    const again = screen.getByTestId("fleet-rename-input-peer-1");
+    fireEvent.click(screen.getByTestId("fleet-rename-did:key:z6MkRemote"));
+    const again = screen.getByTestId("fleet-rename-input-did:key:z6MkRemote");
     fireEvent.keyDown(again, { key: "Escape" });
     expect(onRenameRuntime).toHaveBeenCalledTimes(1);
   });

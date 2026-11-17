@@ -64,9 +64,7 @@ export function createPeerActions({
     return api.reconnectNode(nodeDid);
   }
 
-  async function requestRuntimeAccess(
-    serverAddress: string,
-  ) {
+  async function requestRuntimeAccess(serverAddress: string) {
     try {
       if (!clientRuns()) {
         await ensureDesktopClientStarted();
@@ -98,7 +96,6 @@ export function createPeerActions({
       throw new Error(formatPeerConnectionError(err, "rename-peer"));
     });
   }
-
 
   return {
     reconnectNode,

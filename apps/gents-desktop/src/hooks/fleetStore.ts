@@ -47,7 +47,6 @@ export const firstNode = (fleet: FleetState) => {
   return first ? (fleet.nodes[first] ?? null) : null;
 };
 
-
 export const nodeOrFirst = (fleet: FleetState, nodeDid: string | null | undefined) =>
   nodeDid ? nodeOf(fleet, nodeDid) : firstNode(fleet);
 

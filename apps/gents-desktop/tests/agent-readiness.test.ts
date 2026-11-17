@@ -219,12 +219,8 @@ describe("selectedNodeReadinessDecision", () => {
     ["stale", { sourceReason: "router_generation_stale" }, "agentUnavailable"],
     ["disabled", {}, "agentUnavailable"],
     ["pairing-pending", { chatSafe: false }, null],
-    ["runtime-connecting", { runtimeConnection: "connecting" }, "runtimeNotConnected"],
-    [
-      "runtime-disconnected",
-      { runtimeConnection: "disconnected" },
-      "runtimeNotConnected",
-    ],
+    ["runtime-connecting", { runtimeConnection: "connecting" }, null],
+    ["runtime-disconnected", { runtimeConnection: "disconnected" }, null],
     ["runtime-refused", { runtimeConnection: "refused" }, "runtimeNotConnected"],
     ["ready", {}, null],
   ] as const)(

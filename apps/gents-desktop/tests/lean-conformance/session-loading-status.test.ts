@@ -120,7 +120,7 @@ const numberOf = (id: string | null | undefined) =>
   id?.startsWith("session-") ? Number(id.slice("session-".length)) : null;
 
 const RUNNING = {
-  bootstrap: { clientStateExists: true, savedPeers: [] },
+  bootstrap: { clientStateExists: true, savedRuntimes: [] },
   client: {
     deployments: [
       node({

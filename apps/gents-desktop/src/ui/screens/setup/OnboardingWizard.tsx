@@ -1,9 +1,7 @@
 import { useEffect, useReducer, useState } from "react";
 import { useStore } from "zustand";
 import { ArrowRight, Server, Wifi } from "lucide-react";
-import {
-  isSavedRemote,
-} from "@source-inc/gents-desktop-client";
+import { isSavedRemote } from "@source-inc/gents-desktop-client";
 import type {
   DesktopClientSnapshot,
   ManagedServerAuthorityInput,
@@ -359,7 +357,10 @@ export function OnboardingWizard({
       (deployment) => deployment.nodeDid === enrollment.nodeDid,
     );
     const ready = target?.runtimeConnection === "connected";
-    const activationError = target?.runtimeConnection === "refused" ? "This device has no access. Ask the administrator to approve a new request." : null;
+    const activationError =
+      target?.runtimeConnection === "refused"
+        ? "This device has no access. Ask the administrator to approve a new request."
+        : null;
     const observed = accessRequests != null;
     const label = target?.label ?? enrollment.nodeDid;
     return (
@@ -428,7 +429,8 @@ export function OnboardingWizard({
             if (
               current?.client?.deployments.some(
                 (deployment) =>
-                  deployment.nodeDid === enrollment.nodeDid && deployment.runtimeConnection === "connected",
+                  deployment.nodeDid === enrollment.nodeDid &&
+                  deployment.runtimeConnection === "connected",
               )
             )
               onDone(current, enrollment.nodeDid);
@@ -509,9 +511,7 @@ export function OnboardingWizard({
                   dispatch({ type: "requested" });
                 }}
               >
-                <span className="truncate">
-                  View request to {request.nodeDid}
-                </span>
+                <span className="truncate">View request to {request.nodeDid}</span>
               </Button>
             ))}
           </div>
@@ -672,8 +672,8 @@ export function OnboardingWizard({
                 </Field>
                 <button type="submit" hidden />
                 <p className="text-xs text-muted-foreground">
-                  Enter the node’s server address. The node’s
-                  administrator must approve this device’s access request.
+                  Enter the node’s server address. The node’s administrator must approve
+                  this device’s access request.
                 </p>
               </form>
             </Option>
