@@ -16,4 +16,4 @@ export type Tools = { tools_id: string, node_did: string, display_name?: string 
 /**
  * Optional UI/discovery labels. References, never tags, determine execution.
  */
-tags?: Array<string> | null, };
+tags?: Array<string> | null, hidden_tool_names?: Array<string> | null, };
