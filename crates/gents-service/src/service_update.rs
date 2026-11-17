@@ -164,8 +164,11 @@ where
             execute::validate_live(&plan).await?;
             let copy = plan.clone();
             tokio::task::spawn_blocking(move || {
-                NativeServiceManager::new(service_config(&copy)?)?
-                    .register_updater(&operation_dir(&copy.home, copy.id), copy.id)
+                let directory = operation_dir(&copy.home, copy.id);
+                register_unless_helper_runs(&directory, Registrant::Submitter, || {
+                    NativeServiceManager::new(service_config(&copy)?)?
+                        .register_updater(&directory, copy.id)
+                })
             })
             .await??;
             wait_for_helper(&plan, Duration::from_secs(20)).await?;
