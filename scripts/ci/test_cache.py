@@ -15,8 +15,9 @@ the model's soundness theorem rests on are enforced here:
   (d) trust: only runs with GATE_TEST_CACHE_TRUSTED=true record.
 
 A record is one file, published by rename; contradictions are never removed
-(crates/gents/proofs/tla/TestCacheStore.tla). The store is a directory on the runner host; the record's
-fields are those a signed result document would carry.
+(crates/gents/proofs/tla/TestCacheStore.tla). Each runner host keeps its own store, a directory a
+build on that host reads and records in; no store is shared (TestCache.lean `skip_sound_on_any_host`).
+The record's fields are those a signed result document would carry.
 """
 
 import hashlib
