@@ -196,6 +196,107 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
         entry["can_interrupt"], true,
         "list denied starter after message: {entry}"
     );
+    // A second signed, claimed session of the same Agent on this node owns a
+    // script effect, but it did not start the target and gains no authority.
+    let other_session = format!("other-{}", uuid::Uuid::new_v4());
+    let other_request = format!("other-request-{}", uuid::Uuid::new_v4());
+    let create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        &other_request,
+        fixture.db.node_identity.did(),
+        fixture.user.did(),
+        fixture.agent.did(),
+        &other_session,
+        "other",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::client(fixture.user.did()),
+    );
+    let mut other_lifecycle =
+        gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &fixture.db.node,
+            &fixture.owner,
+            fixture.db.node_identity.clone(),
+            &fixture.user,
+            fixture.agent.as_ref(),
+            create,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        other_lifecycle.claim_with_identity().await.unwrap(),
+        gents_session::request::lifecycle::ClaimOutcome::Claimed
+    );
+    let other_hook = gents_toolcalls::call::hook::DefraSessionHook::resume_with_actor_policy(
+        fixture.db.node.clone(),
+        &other_session,
+        fixture.db.node_identity.did(),
+        Some(fixture.user.did()),
+        fixture.agent.did().parse().unwrap(),
+        Default::default(),
+    )
+    .await
+    .unwrap()
+    .with_managed_identity(fixture.agent.as_ref())
+    .unwrap();
+    gents_toolcalls::call::hook::fixtures::bind_claimed_hook_request(
+        &other_hook,
+        other_lifecycle,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    gents_toolcalls::call::hook::fixtures::accept_hook_tool_call(
+        &other_hook,
+        "other-script",
+        "plugin",
+        "{}",
+        None,
+    )
+    .await;
+    assert!(matches!(
+        other_hook
+            .on_tool_call("plugin", None, "other-script", "{}")
+            .await,
+        ToolCallHookAction::Continue
+    ));
+    other_hook
+        .admit_tool_effect("other-script", 1, "agent_interrupt", "{}")
+        .await
+        .unwrap();
+    async fn other_control(
+        hook: &gents_toolcalls::call::hook::DefraSessionHook,
+        id: &str,
+        name: &str,
+        args: serde_json::Value,
+    ) -> serde_json::Value {
+        let args = args.to_string();
+        gents_toolcalls::call::hook::fixtures::accept_hook_tool_call(hook, id, name, &args, None)
+            .await;
+        let ToolCallHookAction::Skip { reason } = hook.on_tool_call(name, None, id, &args).await
+        else {
+            panic!("{name} did not return");
+        };
+        serde_json::from_str(&reason).unwrap()
+    }
+    let other_list =
+        other_control(&other_hook, "other-list", "agent_session_list", json!({})).await;
+    let other_entry = other_list["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["session_id"] == target_session)
+        .expect("visible target");
+    assert_eq!(other_entry["can_interrupt"], false, "{other_entry}");
+    for (id, name) in [
+        ("other-interrupt", "agent_interrupt"),
+        ("other-stop", "agent_stop"),
+    ] {
+        let denied =
+            other_control(&other_hook, id, name, json!({"session_id": target_session})).await;
+        assert_eq!(denied["ok"], false, "{denied}");
+        assert_eq!(denied["code"], "interrupt_not_permitted", "{denied}");
+    }
+
     let interrupted = control(
         &fixture,
         "interrupt-worker",
@@ -214,7 +315,7 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     assert_eq!(stop["ok"], true, "stop failed: {stop}");
     let unrelated = gents_protocol::session::SessionScope {
         session_id: "different-session".into(),
-        ..parent
+        ..parent.clone()
     };
     assert!(
         !gents_session::session::origin::verified_agent_new_creation(

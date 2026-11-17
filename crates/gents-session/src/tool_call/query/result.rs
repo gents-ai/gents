@@ -1055,6 +1055,10 @@ struct ToolCallIdentityRow {
     lifecycle_state: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("no AgentToolCall document {0} in the caller scope")]
+struct MissingToolCall(String);
+
 async fn load_tool_call_identity(
     source: ReadSource<'_, '_>,
     tool_call_doc_id: &str,
@@ -1095,12 +1099,10 @@ async fn load_tool_call_identity(
         rows.len() <= 1,
         "ambiguous AgentToolCall document tool_call_doc_id={tool_call_doc_id}"
     );
-    let row = rows.into_iter().next().ok_or_else(|| {
-        anyhow!(
-            "no AgentToolCall document tool_call_doc_id={tool_call_doc_id} within \
-             agent/requester/session scope (session_id={session_id})"
-        )
-    })?;
+    let row = rows
+        .into_iter()
+        .next()
+        .ok_or_else(|| MissingToolCall(tool_call_doc_id.to_owned()))?;
     anyhow::ensure!(
         row.doc_id == tool_call_doc_id
             && row.node_did == node_did
@@ -1158,4 +1160,33 @@ fn verify_exact_call_identity(
         tool_result.call_id
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod missing_parent_test {
+    use gents_store::identity::NodeIdentity;
+
+    #[tokio::test]
+    async fn missing_parent_document_fails_closed() {
+        let (db, user, access, _agent) = gents_inference::test_support::signed_test_node(
+            "missing-effect-parent",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
+        let missing = "bae-00000000-0000-5000-8000-000000000000";
+        let error = super::load_accepted_tool_call(
+            super::ReadSource::Access(&access),
+            missing,
+            db.node_identity.did(),
+            "missing-parent-session",
+            Some(user.did()),
+        )
+        .await
+        .expect_err("a missing effect parent must not be accepted");
+        assert!(
+            error.downcast_ref::<super::MissingToolCall>().is_some(),
+            "{error:#}"
+        );
+        db.node.shutdown().await.unwrap();
+    }
 }
