@@ -265,10 +265,76 @@ class Shards(unittest.TestCase):
     def test_one_slice_runs_in_the_build_job(self):
         selection = sharded(1, everything=True)
         self.assertEqual(selection["shards"], [])
-        self.assertTrue(selection["archives"][0]["run"])
+        self.assertTrue(all(entry["run"] for entry in selection["archives"]))
         self.assertIn("build:portable", selection["jobs"])
         self.assertNotIn("shard:portable", selection["jobs"])
-        self.assertFalse(sharded(3, everything=True)["archives"][0]["run"])
+        [uncached] = sharded(3, everything=True)["archives"]
+        self.assertFalse(uncached["run"])
+        self.assertNotIn("partition", uncached)
+
+    def test_the_build_jobs_slice_splits_into_one_partition_per_host_group(self):
+        groups = ROLES["portable"]["host_groups"]
+        archives = sharded(1, everything=True)["archives"]
+        self.assertEqual([(entry["partition"], entry["partitions"]) for entry in archives],
+                         [(index, len(groups)) for index in range(1, len(groups) + 1)])
+        self.assertEqual([entry["runs_on"] for entry in archives],
+                         [[*ROLES["portable"]["labels"], group] for group in groups])
+        for entry in archives:
+            self.assertEqual(entry["packages"].split(), self.PORTABLE)
+            self.assertEqual(gate.partition_arguments(entry),
+                             ["--partition", f"hash:{entry['partition']}/{len(groups)}"])
+
+    def test_a_partitioned_build_runs_and_lists_only_its_partition(self):
+        selection = sharded(1, everything=True)
+        captured = []
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(os.environ, {"GATE_ARCHIVE_DIR": directory, "RUST_TEST_THREADS": "8"}), \
+                mock.patch.object(gate, "nextest", lambda arguments, **options: captured.append(arguments) or True), \
+                mock.patch.object(gate.LeanContract, "start", classmethod(lambda cls: None)), \
+                mock.patch.object(gate, "listed_tests", lambda archive, source: (
+                    {package: (0 if package in gate.NO_TESTS else 1, 0) for package in self.PORTABLE}, [])):
+            os.environ.pop("GITHUB_ACTIONS", None)  # build in this checkout, not a worktree
+            gate.run(selection, "build:portable:2")
+            self.assertEqual(os.environ.get("GATE_SLICE"), "2")
+        build, run = captured
+        self.assertNotIn("--partition", build)
+        self.assertEqual(run[run.index("--partition") + 1], f"hash:2/{len(ROLES['portable']['host_groups'])}")
+        listing = {"rust-suites": {"b": {"binary-id": "b", "testcases": {
+            "mine": {"ignored": False, "filter-match": {"status": "matches"}},
+            "theirs": {"ignored": False, "filter-match": {"status": "mismatch", "reason": "partition"}},
+            "ignored": {"ignored": True, "filter-match": {"status": "matches"}},
+            "unfiltered": {"ignored": False}}}}}
+        self.assertEqual(gate.runnable(listing), {"b": ["mine", "unfiltered"]})
+        with self.assertRaises(SystemExit):
+            gate.run_build(selection, "portable", 3)
+
+    def test_the_build_waits_for_the_lean_contract_before_its_tests(self):
+        events = []
+
+        class Contract:
+            def wait(self):
+                events.append("wait")
+                return self.built
+
+            def stop(self):
+                events.append("stop")
+
+        selection = sharded(1, everything=True)
+        for built in (True, False):
+            events.clear()
+            contract = Contract()
+            contract.built = built
+            with tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.dict(os.environ, {"GATE_ARCHIVE_DIR": directory}), \
+                    mock.patch.object(gate, "nextest", lambda arguments, **options: events.append(arguments[0]) or True), \
+                    mock.patch.object(gate.LeanContract, "start", classmethod(lambda cls: contract)), \
+                    mock.patch.object(gate, "listed_tests", lambda archive, source: (
+                        {package: (0 if package in gate.NO_TESTS else 1, 0) for package in self.PORTABLE}, [])):
+                os.environ.pop("GITHUB_ACTIONS", None)
+                gate.run(selection, "build:portable:1")
+            self.assertEqual(events, ["archive", "wait", "run", "stop"] if built else ["archive", "wait", "stop"])
+        workflow = workflow_jobs(CI)["build"]
+        self.assertIn("lean-contract: deferred", workflow)
 
     def test_zero_or_unset_keeps_one_job_per_group(self):
         for selection in (select(everything=True), sharded(0, everything=True)):
@@ -280,6 +346,7 @@ class Shards(unittest.TestCase):
         self.assertEqual(archived(selection), ["gents-store"])
         self.assertEqual(selection["shards"], [])
         self.assertTrue(selection["archives"][0]["run"])
+        self.assertNotIn("partition", selection["archives"][0])
         compile_only = sharded(6, "crates/gents-core-packs/src/lib.rs", tier="draft")
         self.assertEqual(archived(compile_only), ["gents-core-packs"])
         self.assertEqual(compile_only["shards"], [])
@@ -420,9 +487,12 @@ class RepositoryVariables(unittest.TestCase):
         self.assertNotIn("shard:portable", outputs["jobs"])
         self.assertFalse(portable & set(outputs["jobs"]))
         self.assertFalse(portable & {entry["job"] for entry in outputs["matrix"]["include"]})
-        [archive] = outputs["archives"]["include"]
-        self.assertTrue(archive["run"])
-        self.assertEqual(archive["test_cache"], mode)
+        archives = outputs["archives"]["include"]
+        self.assertEqual([archive.get("partition") for archive in archives],
+                         list(range(1, len(ROLES["portable"]["host_groups"]) + 1)))
+        for archive in archives:
+            self.assertTrue(archive["run"])
+            self.assertEqual(archive["test_cache"], mode)
         self.assertEqual(outputs["shards"]["include"], [])
 
     def test_the_plan_step_reads_the_repository_variables(self):
@@ -440,6 +510,8 @@ class RepositoryVariables(unittest.TestCase):
         self.assertIn("matrix: ${{ fromJSON(needs.plan.outputs.archives) }}", jobs["build"])
         self.assertIn("contains(fromJSON(needs.plan.outputs.jobs), 'shard:portable')", jobs["shard"])
         self.assertIn("matrix: ${{ fromJSON(needs.plan.outputs.shards) }}", jobs["shard"])
+        partition = "${{ matrix.partition && format(':{0}', matrix.partition) || '' }}"
+        self.assertIn(f'make gate-run JOB="build:${{{{ matrix.archive }}}}{partition}"', jobs["build"])
 
     def test_a_push_to_main_builds_once_and_runs_the_cached_slice_in_full(self):
         outputs = self.planned(GATE_EVENT="push", GATE_EVERYTHING="true", GATE_TIER="full")
@@ -606,16 +678,35 @@ class HostGroups(unittest.TestCase):
         for entry in portable:
             self.assertEqual(entry["runs_on"], [*ROLES["portable"]["labels"], entry["runs_on"][-1]])
 
-    def test_slices_alternate_and_the_cached_slice_keeps_to_its_store(self):
+    def test_slices_alternate_between_the_host_groups(self):
         selection = sharded(4, everything=True)
         self.assertEqual([entry["runs_on"][-1] for entry in selection["shards"]],
                          [self.GROUPS[index % len(self.GROUPS)] for index in range(4)])
+
+    def test_each_cached_partition_keeps_to_its_host_group(self):
+        # Each host keeps its own test-result store (TestCache.lean
+        # `skip_sound_on_any_host`); a partition always runs on one group, so
+        # its tests find the records its earlier runs left there.
+        saved = os.environ.get("GATE_EVENT")
         os.environ["GATE_TEST_CACHE"] = "on"
         try:
-            cached = sharded(1, everything=True)
+            for event, mode in (("pull_request", "on"), ("push", "full")):
+                os.environ["GATE_EVENT"] = event
+                archives = sharded(1, everything=True)["archives"]
+                with self.subTest(event=event):
+                    self.assertEqual([archive["test_cache"] for archive in archives], [mode] * len(self.GROUPS))
+                    self.assertEqual([archive["runs_on"] for archive in archives],
+                                     [[*ROLES["portable"]["labels"], group] for group in self.GROUPS])
+                # Without host groups (a fork, the hosted fallback) one build takes the role's labels.
+                with self.subTest(event=event, fallback=True), mock.patch.dict(os.environ, {"GATE_FALLBACK": "hosted"}):
+                    [archive] = sharded(1, everything=True)["archives"]
+                    self.assertNotIn("partition", archive)
+                    self.assertEqual(archive["test_cache"], mode)
         finally:
             del os.environ["GATE_TEST_CACHE"]
-        self.assertEqual(cached["archives"][0]["runs_on"][-1], self.GROUPS[0])
+            os.environ.pop("GATE_EVENT", None)
+            if saved is not None:
+                os.environ["GATE_EVENT"] = saved
 
     def test_a_runner_takes_its_roles_compile_and_test_parallelism(self):
         jobs = ROLES["portable"]["jobs"]
@@ -638,6 +729,26 @@ class HostGroups(unittest.TestCase):
             for group in entry.get("host_groups", []):
                 self.assertTrue(group.startswith(entry["labels"][-1] + "-"), (role, group))
                 self.assertFalse(any(group in other["labels"] for other in ROLES.values()), group)
+
+
+class SystemPreflight(unittest.TestCase):
+    def test_a_linux_host_missing_a_library_names_its_package(self):
+        saved = list(gate.results)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertFalse(gate.system_preflight("linux", lambda name: name != "alsa"))
+            self.assertIn("libasound2-dev", output.getvalue())
+            self.assertNotIn("libgtk-3-dev", output.getvalue())
+            self.assertTrue(gate.system_preflight("linux", lambda name: True))
+            self.assertTrue(gate.system_preflight("darwin", lambda name: False))
+        finally:
+            gate.results[:] = saved
+
+    def test_the_build_and_the_test_jobs_check_first(self):
+        source = Path(gate.__file__).read_text()
+        for function in ("run_test", "run_build"):
+            body = source.split(f"def {function}(", 1)[1].split("\ndef ", 1)[0]
+            self.assertIn("system_preflight()", body, function)
 
 
 class MacosOnlyTests(unittest.TestCase):
@@ -746,6 +857,7 @@ class Verdict(unittest.TestCase):
             "frontend": select("packages/gents-desktop-ui/src/index.ts"),
             "everything (push, merge queue, dispatch)": select(everything=True),
             "everything, sharded": sharded(4, everything=True),
+            "everything, partitioned": sharded(1, everything=True),
             "draft, sharded": sharded(4, "crates/gents-store/src/graphql.rs", tier="draft"),
             "compile only, sharded": sharded(4, "crates/gents-core-packs/src/lib.rs", tier="draft"),
         }

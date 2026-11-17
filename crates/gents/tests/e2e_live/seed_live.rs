@@ -9,7 +9,8 @@ use gents_store::graphql::escape_graphql_string;
 use crate::support::agent_requests::RequestActors;
 use crate::support::builder_runtime::{seed_session_message, submit_request};
 use crate::support::live_inference::{
-    bind_target, boot_live_agent, live_target, wait_for_assistant_answer, wait_for_request_terminal,
+    bind_target, boot_live_agent, live_target, wait_for_assistant_answer,
+    wait_for_request_terminal, STALL_CEILING,
 };
 use crate::support::test_db;
 
@@ -83,7 +84,7 @@ async fn seeded_profile_completes_requests_and_compacts_retained_history() {
             target.name
         );
 
-        let answer = wait_for_assistant_answer(reader, request_id, Duration::from_secs(30)).await;
+        let answer = wait_for_assistant_answer(reader, request_id, STALL_CEILING).await;
         assert!(
             !answer.trim().is_empty(),
             "seeded request {request_id} must persist a non-empty response"

@@ -1272,10 +1272,11 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
         crate::triggers::engine::deferred_delivery::DeferralWatch::new(Duration::ZERO);
 
     source.reconcile_subscriptions(snapshot.as_ref()).await;
+    // A completed pass, not a wall-clock window, establishes that the source
+    // observed the row: a timeout can cancel `next_fire` before its first
+    // durable pass reaches the arrival.
     assert!(
-        tokio::time::timeout(Duration::from_millis(500), source.next_fire())
-            .await
-            .is_err(),
+        source.conformance_rescan().await.is_none(),
         "a row without its correlation value must not fire"
     );
     assert_eq!(source.deferrals.stuck(), 1);

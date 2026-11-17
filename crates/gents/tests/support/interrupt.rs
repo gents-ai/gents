@@ -12,12 +12,12 @@ use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::live_inference::STALL_CEILING;
 use super::snapshots::{fetch_request_snapshot, SnapshotReader};
 
 const TEST_MUTATION_MAX_RETRIES: u32 = 3;
 const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
 pub const TEST_RUNTIME_READY_TIMEOUT: Duration = Duration::from_secs(120);
-const TEST_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 pub const REQUEST_TERMINAL_PUBLICATION_MARGIN: Duration = Duration::from_secs(60);
 
 pub struct BootedAgent {
@@ -46,10 +46,10 @@ impl BootedAgent {
         let Some(handle) = self.handle.take() else {
             return;
         };
-        tokio::time::timeout(TEST_RUNTIME_SHUTDOWN_TIMEOUT, handle)
+        tokio::time::timeout(STALL_CEILING, handle)
             .await
             .unwrap_or_else(|error| {
-                panic!("agent did not shut down within {TEST_RUNTIME_SHUTDOWN_TIMEOUT:?}: {error}")
+                panic!("agent did not shut down within {STALL_CEILING:?}: {error}")
             })
             .expect("agent task should join")
             .expect("agent run should return ok");

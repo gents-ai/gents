@@ -1412,7 +1412,12 @@ struct RuntimeStatusRow {
     last_reconcile_error: String,
 }
 
-async fn fetch_runtime_status(node: &Arc<defra_node::Node>, node_did: &str) -> RuntimeStatusRow {
+/// The supervisor creates the NodeRuntime row with its first reconcile write, on its
+/// own task after the proposal is received; until then the row is absent.
+async fn fetch_runtime_status(
+    node: &Arc<defra_node::Node>,
+    node_did: &str,
+) -> Option<RuntimeStatusRow> {
     let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(node_did).unwrap(),
@@ -1431,9 +1436,8 @@ async fn fetch_runtime_status(node: &Arc<defra_node::Node>, node_did: &str) -> R
     let value = response["data"]["NodeRuntime"]
         .as_array()
         .and_then(|rows| rows.first())
-        .cloned()
-        .expect("NodeRuntime row");
-    serde_json::from_value(value).expect("decode NodeRuntime row")
+        .cloned()?;
+    Some(serde_json::from_value(value).expect("decode NodeRuntime row"))
 }
 
 async fn await_settled_runtime_status(
@@ -1442,9 +1446,10 @@ async fn await_settled_runtime_status(
 ) -> RuntimeStatusRow {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let row = fetch_runtime_status(node, node_did).await;
-            if row.reconcile_phase == "idle" {
-                return row;
+            if let Some(row) = fetch_runtime_status(node, node_did).await {
+                if row.reconcile_phase == "idle" {
+                    return row;
+                }
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -1678,10 +1683,11 @@ async fn keep_previous_generation_after_failed_apply(input: &ReconcileInput) -> 
     let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
 
     proposal_tx.send(invalid_snapshot).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // The error status is published after the failed apply, so the active
+    // generation has had its only chance to change by the time it settles.
+    let failed_status = await_settled_runtime_status(&node, node_did).await;
     assert!(!active_rx.has_changed().unwrap());
     let failed_generation = active_rx.borrow().generation;
-    let failed_status = await_settled_runtime_status(&node, node_did).await;
     assert_eq!(failed_status.last_reconcile_result, "error");
     assert!(!failed_status.last_reconcile_error.is_empty());
 

@@ -36,7 +36,7 @@ use crate::support::interrupt::{
     wait_for_inference_call_state, wait_for_request_lifecycle_state, wait_for_runtime_ready,
     BootedAgent,
 };
-use crate::support::live_inference::{bind_target, live_target, InferenceTarget};
+use crate::support::live_inference::{bind_target, live_target, InferenceTarget, STALL_CEILING};
 use crate::support::snapshots::SnapshotReader;
 use crate::support::test_db;
 use crate::support::TestDb;
@@ -45,7 +45,6 @@ const LIVE_SAMPLING_ID: &str = "live-interrupt:live-sampling";
 const LIVE_CONTEXT_ID: &str = "live-interrupt:context";
 
 const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(300);
-const TERMINAL_TIMEOUT: Duration = Duration::from_secs(30);
 const MIN_VISIBLE_PREFIX_CHARS: usize = 40;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -391,7 +390,6 @@ async fn wait_for_interrupted_terminal_row(
     reader: &ConfigAccess,
     request_doc_id: &str,
 ) -> Result<AgentRequestRow> {
-    let deadline = tokio::time::Instant::now() + TERMINAL_TIMEOUT;
     let mut changes = reader.subscribe_changes("AgentRequest").await;
     loop {
         let row = fetch_request_row(reader, request_doc_id).await?;
@@ -414,15 +412,15 @@ async fn wait_for_interrupted_terminal_row(
             }
             _ => {}
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for interrupted lifecycle on request {request_doc_id}; \
-             last lifecycle={:?}",
-            row.lifecycle_state
-        );
-        tokio::time::timeout_at(deadline, changes.recv())
+        tokio::time::timeout(STALL_CEILING, changes.recv())
             .await
-            .context("live observation deadline")?;
+            .with_context(|| {
+                format!(
+                    "AgentRequest stalled for {STALL_CEILING:?} before request {request_doc_id} \
+                     was interrupted; last lifecycle={:?}",
+                    row.lifecycle_state
+                )
+            })?;
     }
 }
 
