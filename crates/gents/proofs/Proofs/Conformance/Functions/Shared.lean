@@ -31,3 +31,12 @@ attribute [conformance_function]
   ToolPresentation.directAdmissible
   ToolPresentation.admissible
   ToolPresentation.configurationValid
+
+namespace ToolPresentation
+
+@[conformance_family]
+def gateways : Conformance.Family String Bool where
+  inputs := ["script", "config", "load_skill", "spawn_process", "schema", "workflow", "query", "Script", "spawn_process_extra", ""]
+  model := isGateway
+
+end ToolPresentation

@@ -1,4 +1,4 @@
-import Mathlib.Data.Bool.Basic
+import Mathlib.Data.Nat.Basic
 
 namespace ToolPresentation
 
@@ -16,6 +16,9 @@ def admissible (granted hidden providerOrigin : Bool) : Bool :=
 /-- Nonempty presentation configuration needs an already-selected, visible
 script with tool access, and cannot hide a presentation gateway. Availability
 is checked again when the runtime constructs the effective surface. -/
+def isGateway (name : String) : Bool :=
+  ["script", "config", "load_skill", "spawn_process"].contains name
+
 def configurationValid (hasHidden allSelected scriptReady gatewayHidden : Bool) : Bool :=
   !hasHidden || (allSelected && scriptReady && !gatewayHidden)
 
