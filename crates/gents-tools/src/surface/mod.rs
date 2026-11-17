@@ -740,17 +740,7 @@ impl ToolSurface {
                         .map(|identity| identity.did()),
                 )
             })
-            .await;
-            let tool = match tool {
-                Ok(tool) => tool,
-                Err(error)
-                    if !self.hidden_tool_names.is_empty() && plugin.tool_name() == "script" =>
-                {
-                    tracing::warn!(cause = %format!("{error:#}"), "hidden_tool_names inactive: script could not be constructed; advertising remaining granted tools");
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
+            .await?;
             if !registered_names.insert(tool.name()) {
                 anyhow::bail!(
                     "plugin tool `{}` has the same name as another tool; rename one of them",

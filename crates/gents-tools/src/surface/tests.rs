@@ -3553,7 +3553,15 @@ fn hidden_invocation_selection_matches_tool_surface_names() {
             {"kind":"query", "tool_name":"find_example", "collection":"Example", "description":"Find", "fields":["name"], "filter_fields":[]}
         ]
     })).unwrap()];
+    let targets = vec![
+        serde_json::from_value::<gents_documents::AgentTargetDocument>(serde_json::json!({
+            "target_id":"worker", "node_did":"did:test:test", "target_node_did":"did:test:test",
+            "agent_did":"did:test:worker", "name":"worker"
+        }))
+        .unwrap(),
+    ];
     let fixtures = [
+        serde_json::json!({"agents":{"enabled":true,"target_ids":["worker"]},"integrations":{"lsp":{}}}),
         serde_json::json!({"datastore":{"datastore_tool_surface_ids":["parity-data"]}}),
         serde_json::json!({}),
         serde_json::json!({"built_ins":{"enable_session_history_tool":false,"enable_context_budget":false,"enable_goal_tools":false}}),
@@ -3577,10 +3585,11 @@ fn hidden_invocation_selection_matches_tool_surface_names() {
         document.host.get_or_insert_with(Default::default).root =
             Some(root.path().to_string_lossy().into_owned());
         let merged = gents_documents::merge_datastore_tool_surfaces(&document, &surfaces).unwrap();
-        let config = AgentToolSurfaceConfig::from_tools_document_with_surfaces(
+        let config = AgentToolSurfaceConfig::from_tools_documents(
             "parity",
             &document,
             &surfaces,
+            &targets,
             &ceiling,
             Vec::new(),
         )
@@ -3605,37 +3614,178 @@ fn hidden_invocation_selection_matches_tool_surface_names() {
 #[tokio::test]
 async fn hidden_runtime_script_unresolved_or_ceiling_removed_advertises_repair_tools() {
     let (_db, runtime) = selected_surface_runtime().await;
-    let document = tools_document(serde_json::json!({
-        "built_ins":{"enable_context_budget":true},
-        "hidden_tool_names":["context_budget"],
-        "integrations":{"plugins":[{"plugin":"not_installed/script","tool_calls":true}]}
-    }));
-    for remove_script in [false, true] {
-        let mut policy = ToolCeiling::meta_only().policy().clone();
-        if remove_script {
-            policy.plugin_tools = EndpointScope::none();
+    for hidden in [false, true] {
+        let document = tools_document(serde_json::json!({
+            "built_ins":{"enable_context_budget":true},
+            "hidden_tool_names": if hidden { vec!["context_budget"] } else { Vec::<&str>::new() },
+            "integrations":{"plugins":[{"plugin":"not_installed/script","tool_calls":true}]}
+        }));
+        for remove_script in [false, true] {
+            let mut policy = ToolCeiling::meta_only().policy().clone();
+            if remove_script {
+                policy.plugin_tools = EndpointScope::none();
+            }
+            let config = AgentToolSurfaceConfig::from_tools_document(
+                "recovery",
+                &document,
+                &ToolCeiling::meta_only().with_policy(policy),
+                Vec::new(),
+            )
+            .unwrap();
+            let surface = config
+                .resolve(&runtime.node, &runtime.node_did, runtime.plugins.as_ref())
+                .await
+                .expect("missing plugin records retain ordinary resolution semantics");
+            let result = surface.build_tools(&runtime).await;
+            if !remove_script {
+                let error = result.err().expect(
+                    "missing selected script must fail construction regardless of hidden list",
+                );
+                assert!(format!("{error:#}").contains("no plugin runtime is attached"));
+            } else {
+                let tools = result.expect("ceiling-removed script leaves presentation inactive");
+                assert!(tools.iter().any(|tool| tool.name() == "context_budget"));
+                assert!(tools.iter().all(|tool| !tool.hidden()));
+                assert!(!tools.iter().any(|tool| tool.name() == "script"));
+            }
         }
+    }
+}
+
+/// Record-only fixture: no artifact is executed. Construction still uses the
+/// ordinary failing NoPluginHost to verify hidden lists do not forgive errors.
+struct AdmissionFixturePluginHost {
+    record: InstalledPlugin,
+    busy: std::sync::atomic::AtomicBool,
+}
+
+impl AdmissionFixturePluginHost {
+    fn script(busy: bool) -> Self {
+        Self {
+            busy: std::sync::atomic::AtomicBool::new(busy),
+            record: serde_json::from_value(serde_json::json!({
+                "namespace":"fixture", "name":"script", "version":"1.0.0",
+                "digest":"a".repeat(64), "language":"rust",
+                "declaration":{"name":"script", "description":"fixture", "artifact":"script.afb", "language":"rust", "input_schema":{}, "host_imports":["host_call"]}
+            })).unwrap(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl PluginHost for AdmissionFixturePluginHost {
+    fn home(&self) -> Option<&std::path::Path> {
+        None
+    }
+    fn installed(&self) -> anyhow::Result<Vec<InstalledPlugin>> {
+        PluginHost::installed(&NoPluginHost)
+    }
+    fn installed_record(&self, coordinate: &str) -> anyhow::Result<InstalledPlugin> {
+        PluginHost::installed_record(&NoPluginHost, coordinate)
+    }
+    fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> anyhow::Result<InstalledPlugin> {
+        let _ = pinned;
+        anyhow::ensure!(coordinate == "fixture/script", "unexpected plugin");
+        if self.busy.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err(gents_pack::plugin::store::PublishedPluginReadError::Busy.into());
+        }
+        Ok(self.record.clone())
+    }
+    async fn call_outcome(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+    ) -> anyhow::Result<PluginOutcome> {
+        PluginHost::call_outcome(&NoPluginHost, record, input).await
+    }
+    async fn run_plugin_once(
+        self: std::sync::Arc<Self>,
+        coordinate: &str,
+        selected: &[PluginToolRef],
+        node: std::sync::Arc<defra_node::Node>,
+        node_did: &str,
+        agent_did: Option<&str>,
+        input: serde_json::Value,
+    ) -> anyhow::Result<(serde_json::Value, Option<String>, Option<String>)> {
+        std::sync::Arc::new(NoPluginHost)
+            .run_plugin_once(coordinate, selected, node, node_did, agent_did, input)
+            .await
+    }
+    fn application_write_tool(
+        &self,
+        access: gents_store::config_client::ConfigAccess,
+        collections: std::collections::BTreeSet<String>,
+        actor: Option<Did>,
+    ) -> anyhow::Result<Box<dyn ToolDyn>> {
+        PluginHost::application_write_tool(&NoPluginHost, access, collections, actor)
+    }
+    fn plugin_tool(
+        self: std::sync::Arc<Self>,
+        plugin: &PluginToolRef,
+        read_root: Option<std::path::PathBuf>,
+        node: std::sync::Arc<defra_node::Node>,
+        node_did: &str,
+        agent_did: Option<&str>,
+    ) -> anyhow::Result<Box<dyn ToolDyn>> {
+        std::sync::Arc::new(NoPluginHost).plugin_tool(plugin, read_root, node, node_did, agent_did)
+    }
+}
+
+#[tokio::test]
+async fn hidden_script_only_background_parity_and_busy_resolution_preserve_retry() {
+    let (_db, runtime) = selected_surface_runtime().await;
+    for hidden in [false, true] {
+        let document = tools_document(serde_json::json!({
+            "built_ins":{"enable_context_budget":true},
+            "hidden_tool_names": if hidden { vec!["context_budget"] } else { Vec::<&str>::new() },
+            "integrations":{"plugins":[{"plugin":"fixture/script","tool_calls":true}]}
+        }));
         let config = AgentToolSurfaceConfig::from_tools_document(
-            "recovery",
+            "script-only",
             &document,
-            &ToolCeiling::meta_only().with_policy(policy),
+            &ToolCeiling::meta_only(),
             Vec::new(),
         )
         .unwrap();
+        let plugins = AdmissionFixturePluginHost::script(true);
+        let busy = config
+            .resolve(&runtime.node, &runtime.node_did, &plugins)
+            .await
+            .err()
+            .expect("Busy must propagate so the existing owner can retry");
+        assert!(
+            gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(busy.as_ref())
+        );
         let surface = config
-            .resolve(
-                &runtime.node,
-                runtime.node.node_identity_did().unwrap(),
-                runtime.plugins.as_ref(),
-            )
+            .resolve(&runtime.node, &runtime.node_did, &plugins)
             .await
-            .expect("unresolved script must not prevent surface resolution");
-        let tools = surface
-            .build_tools(&runtime)
+            .unwrap();
+        let names = surface.tool_names();
+        assert!(names.contains(&"spawn_process".into()));
+        assert!(names.contains(&"script".into()));
+        assert!(!names
+            .iter()
+            .any(|name| name == "bash" || name == "bash_unrestricted"));
+        for name in names.iter().map(String::as_str).chain([
+            "unselected",
+            "bash",
+            "bash_unrestricted",
+            "agent_new",
+            "lsp",
+        ]) {
+            assert_eq!(
+                document.selects_invocation(name, &Default::default()),
+                names.iter().any(|selected| selected == name),
+                "{name}"
+            );
+        }
+        let mut construction = runtime.clone();
+        construction.plugins = std::sync::Arc::new(plugins);
+        let error = surface
+            .build_tools(&construction)
             .await
-            .expect("presentation cannot prevent startup");
-        assert!(tools.iter().any(|tool| tool.name() == "context_budget"));
-        assert!(tools.iter().all(|tool| !tool.hidden()));
-        assert!(!tools.iter().any(|tool| tool.name() == "script"));
+            .err()
+            .expect("construction failure must propagate identically for empty/hidden lists");
+        assert!(format!("{error:#}").contains("no plugin runtime is attached"));
     }
 }

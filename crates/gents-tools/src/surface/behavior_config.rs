@@ -147,6 +147,7 @@ impl AgentToolSurfaceConfig {
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
         let merged = gents_documents::merge_datastore_tool_surfaces(tools, surfaces)?;
+        // Failure is reachable only by an unvalidated write; validated configuration already enforces this.
         tools.validate_hidden_tools(&merged)?;
         let mut resolved = ResolvedToolSelection::from_document(tools)?;
         resolved.write_tools = merged.write_tools;
@@ -495,11 +496,7 @@ impl AgentToolSurfaceConfig {
         let availability = RuntimeToolAvailability::from_online_mcp_services(available_service_ids);
         let mut surface =
             self.resolve_with_agent_tools_for_runtime_availability(availability, agent_tools);
-        surface.plugin_resolutions = resolve_plugin_identities(
-            plugins,
-            &surface.plugin_tools,
-            !surface.hidden_tool_names.is_empty(),
-        )?;
+        surface.plugin_resolutions = resolve_plugin_identities(plugins, &surface.plugin_tools)?;
         for (plugin, record) in &surface.plugin_resolutions {
             let name = plugin.tool_name();
             if record
@@ -691,7 +688,6 @@ impl Default for AgentToolSurfaceConfig {
 fn resolve_plugin_identities(
     plugins: &dyn crate::plugin_host::PluginHost,
     plugin_tools: &[gents_documents::PluginToolRef],
-    recover_script_presentation: bool,
 ) -> Result<
     Vec<(
         gents_documents::PluginToolRef,
@@ -703,10 +699,6 @@ fn resolve_plugin_identities(
         .map(|plugin| {
             let record = match plugins.resolve(&plugin.plugin, plugin.digest.as_deref()) {
                 Ok(record) => Some(record),
-                Err(error) if recover_script_presentation && plugin.tool_name() == "script" => {
-                    tracing::warn!(cause = %format!("{error:#}"), "script readiness unresolved; advertising granted tools for repair");
-                    None
-                }
                 Err(error)
                     if gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(
                         error.as_ref(),
