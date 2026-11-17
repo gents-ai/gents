@@ -140,18 +140,9 @@ fn parse_agent_did(value: &str) -> Result<String, String> {
     name = "gents",
     about = "Local-first CLI for bootstrapping, running, and inspecting a gents runtime",
     help_template = ROOT_HELP_TEMPLATE,
-    args_conflicts_with_subcommands = true,
-    // `--version` is printed by the dispatch, not by clap, so `--json` can
-    // shape it; clap still advertises it.
-    disable_version_flag = true
+    args_conflicts_with_subcommands = true
 )]
 pub(crate) struct Cli {
-    /// Print this build's identity and exit.
-    #[arg(long)]
-    pub(crate) version: bool,
-    /// With `--version`, print it as JSON rather than one line.
-    #[arg(long, requires = "version")]
-    pub(crate) json: bool,
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
     /// Node home to set up or open. Defaults to GENTS_HOME, the folder chosen at setup, then ~/.gents.
@@ -291,7 +282,11 @@ pub(crate) enum RuntimeCommand {
         command: DesktopCommand,
     },
     #[command(about = "Print build and release metadata")]
-    Version,
+    Version {
+        /// Print the whole record as JSON, which is what a script compares.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]

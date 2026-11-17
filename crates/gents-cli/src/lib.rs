@@ -346,32 +346,17 @@ pub fn current_build() -> gents_protocol::build_info::BuildInfo {
             },
         )
         .collect();
-    gents_protocol::build_info::BuildInfo::current(core_packs)
-}
-
-/// This build's identity: one line for a person, or the whole record as JSON
-/// (`--version --json`), which is what a script compares against a runtime.
-fn print_build_info(json: bool) -> Result<()> {
-    let build = current_build();
-    if json {
-        println!("{}", serde_json::to_string_pretty(&build)?);
-    } else {
-        println!("{}", build.summary());
-        for pack in &build.core_packs {
-            println!("  {} {}", pack.coordinate, pack.digest);
-        }
-    }
-    Ok(())
+    let build = version::build_version();
+    gents_protocol::build_info::BuildInfo::from_parts(
+        build.version.to_owned(),
+        build.build.git_sha.map(str::to_owned),
+        build.build.git_dirty,
+        core_packs,
+    )
 }
 
 async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let cli = Cli::parse();
-    // `--version` answers before anything opens a node, so a stale build can be
-    // identified without one.
-    if cli.version {
-        print_build_info(cli.json)?;
-        return Ok(());
-    }
     let command = match cli.command {
         None => {
             return commands::start::run(
@@ -506,8 +491,26 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
             RuntimeCommand::Diagnose(args) => commands::diagnose::diagnose(args).await,
             RuntimeCommand::P2p { command } => commands::p2p::dispatch(command).await,
             RuntimeCommand::Desktop { command } => commands::desktop::run(command).await,
-            RuntimeCommand::Version => {
-                print!("{}", version::version_text());
+            RuntimeCommand::Version { json } => {
+                if json {
+                    // The release metadata plus the build identity an install
+                    // handshake compares, so a mismatch can be checked without
+                    // starting anything.
+                    let mut record = serde_json::to_value(version::build_version())?;
+                    if let Some(object) = record.as_object_mut() {
+                        object.insert(
+                            "build_identity".to_owned(),
+                            serde_json::to_value(current_build())?,
+                        );
+                    }
+                    println!("{}", serde_json::to_string_pretty(&record)?);
+                } else {
+                    print!("{}", version::version_text());
+                    println!("{}", current_build().summary());
+                    for pack in &current_build().core_packs {
+                        println!("  {} {}", pack.coordinate, pack.digest);
+                    }
+                }
                 Ok(())
             }
         },

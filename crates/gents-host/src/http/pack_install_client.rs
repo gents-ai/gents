@@ -114,26 +114,64 @@ impl PackInstallSession {
         start.insert("type".into(), "start".into());
         start.insert("request".into(), request);
         send(&mut socket, Value::Object(start)).await?;
-        let ready = receive(&mut socket).await.map_err(|error| {
-            // The ready message is the runtime's first word. If it will not
-            // parse, the likeliest cause is a build predating these fields --
-            // say so, since "older runtime" is the useful answer.
-            anyhow::anyhow!(
-                "the runtime's install handshake was unreadable, which is what an older runtime                  looks like: this client is `{}`; upgrade the runtime, or install from a client                  of the runtime's build ({error:#})",
-                client_build.summary()
-            )
-        })?;
+        let ready = match receive(&mut socket).await {
+            Ok(ready) => ready,
+            // Only the decode error means "unreadable handshake". A closed or
+            // lost connection is its own case and must not be reported as a
+            // build problem.
+            Err(error) => {
+                if error.downcast_ref::<serde_json::Error>().is_some() {
+                    return Err(PackInstallHandshakeError::UnreadableHandshake {
+                        client: client_build.summary(),
+                        detail: format!("{error:#}"),
+                    }
+                    .into());
+                }
+                return Err(PackInstallHandshakeError::ConnectionLost {
+                    detail: format!("{error:#}"),
+                }
+                .into());
+            }
+        };
         let (scope, preparation, runtime_build) = match ready {
             ServerMessage::Ready {
                 scope,
                 preparation,
                 build,
             } => (scope, preparation, build),
-            ServerMessage::Failed { error, outcome } => {
-                bail!("remote pack install failed ({outcome}): {error}")
+            // An older runtime's `InstallRequest` has `deny_unknown_fields`, so
+            // it rejects the client's `client_build` by name. That is the
+            // "older runtime" case, and it has a different next step from a
+            // plain failure.
+            ServerMessage::Failed { error, .. } if error.contains("client_build") => {
+                return Err(PackInstallHandshakeError::OlderRuntime {
+                    client: client_build.summary(),
+                    detail: error,
+                }
+                .into())
             }
-            _ => bail!("remote pack install returned an unexpected initial message"),
+            ServerMessage::Failed { error, outcome } => {
+                return Err(PackInstallHandshakeError::RuntimeFailed {
+                    outcome,
+                    detail: error,
+                }
+                .into())
+            }
+            _ => {
+                return Err(PackInstallHandshakeError::UnexpectedMessage {
+                    detail: "a message type this client does not handle".to_owned(),
+                }
+                .into())
+            }
         };
+        // The handshake is where a build mismatch is refused: a plan prepared by
+        // two different builds is not the same plan, whatever it contains, and
+        // finding that out after planning is too late to say so usefully.
+        if let Some(refusal) =
+            PackInstallHandshakeError::build_mismatch(client_build, &runtime_build)
+        {
+            return Err(refusal.into());
+        }
         ensure!(
             scope.node_did == node_did
                 && scope.pack_digests == pack_digests
@@ -553,6 +591,91 @@ pub async fn install_remote(
     replay.result().await
 }
 
+/// Why an install could not agree with the runtime before planning anything.
+/// Each variant names the next step, because the difference between them is
+/// exactly what an operator has to do about it.
+#[derive(Debug, thiserror::Error)]
+pub enum PackInstallHandshakeError {
+    #[error(
+        "the runtime's install handshake was unreadable, which is what an older runtime looks like: \
+         this client is `{client}`; run `gents runtime service update` to bring the runtime to this \
+         build, or install from a client of the runtime's build ({detail})"
+    )]
+    UnreadableHandshake { client: String, detail: String },
+
+    #[error(
+        "the connection to the runtime was lost during the install handshake: {detail}; \
+         the install did not happen, so retry it when the runtime is reachable"
+    )]
+    ConnectionLost { detail: String },
+
+    #[error(
+        "the runtime predates this client's build fields ({detail}): this client is `{client}`; \
+         run `gents runtime service update` to update the runtime, or install from a client of \
+         the runtime's build"
+    )]
+    OlderRuntime { client: String, detail: String },
+
+    #[error(
+        "this client and the runtime are different builds, so they cannot agree on an install: \
+         {differences}; run `gents runtime service update`, or install from a client of the \
+         runtime's build"
+    )]
+    BuildMismatch { differences: String },
+
+    #[error(
+        "this client cannot verify its own build identity because it records no commit, so a \
+         mismatch with the runtime could go unnoticed: build from a git checkout \
+         (`cargo build`, not a vendored tree) and retry ({client})"
+    )]
+    BuildUnverifiable { client: String },
+
+    #[error("the runtime refused the install ({outcome}): {detail}")]
+    RuntimeFailed { outcome: String, detail: String },
+
+    #[error("the runtime's first install message was not one this client understands: {detail}")]
+    UnexpectedMessage { detail: String },
+}
+
+impl PackInstallHandshakeError {
+    /// The refusal when the two builds differ, or `None` when they agree.
+    pub fn build_mismatch(
+        client: &gents_protocol::build_info::BuildInfo,
+        runtime: &gents_protocol::build_info::BuildInfo,
+    ) -> Option<Self> {
+        // A build that records no commit cannot be compared: `None == None`
+        // must never count as a match, so an unverifiable client is refused by
+        // name instead of silently agreeing.
+        if !client.is_verifiable() {
+            return Some(Self::BuildUnverifiable {
+                client: client.summary(),
+            });
+        }
+        if !runtime.is_verifiable() {
+            return Some(Self::BuildMismatch {
+                differences: format!(
+                    "this client is `{}` and the runtime is `{}`, which records no commit",
+                    client.summary(),
+                    runtime.summary()
+                ),
+            });
+        }
+        let differences = client.differences(runtime);
+        if differences.is_empty() {
+            None
+        } else {
+            Some(Self::BuildMismatch {
+                differences: format!(
+                    "this client is `{}` and the runtime is `{}`; {}",
+                    client.summary(),
+                    runtime.summary(),
+                    differences.join("; ")
+                ),
+            })
+        }
+    }
+}
+
 fn describe_mutation_disagreement(
     constructed: &gents_store::config_client::PackMutation,
     proposed: &gents_store::config_client::PackMutation,
@@ -635,7 +758,7 @@ mod tests {
                 "scope": {"node_did": "did:key:node", "pack_digests": ["sha256:root"], "nonce": "test"},
                 "preparation": {"agent_bindings": {}, "plugin_digests": {}, "operator_ux_digests": {}},
                 // Required: a runtime without it is an older build, refused.
-                "build": {"version": "1.0.0-rc2", "commit": "aaaaaaa", "core_packs": []}
+                "build": {"version": "1.0.0-rc2", "git_sha": "aaaaaaa", "git_dirty": false, "core_packs": []}
             }).to_string().into())).await?;
             socket.send(Message::Text(json!({
                 "type": "approve_graph", "id": 1,
@@ -662,7 +785,12 @@ mod tests {
             json!({}),
             "did:key:node",
             &["sha256:root".to_owned()],
-            &gents_protocol::build_info::BuildInfo::current(Vec::new()),
+            &gents_protocol::build_info::BuildInfo::from_parts(
+                "1.0.0-rc2".to_owned(),
+                Some("aaaaaaa".to_owned()),
+                Some(false),
+                Vec::new(),
+            ),
         )
         .await?;
         let expected = PackMutation::Create {
@@ -687,7 +815,7 @@ mod tests {
                 "scope": {"node_did": "did:key:node", "pack_digests": ["sha256:root"], "nonce": "test"},
                 "preparation": {"agent_bindings": {}, "plugin_digests": {}, "operator_ux_digests": {}},
                 // Required: a runtime without it is an older build, refused.
-                "build": {"version": "1.0.0-rc2", "commit": "aaaaaaa", "core_packs": []}
+                "build": {"version": "1.0.0-rc2", "git_sha": "aaaaaaa", "git_dirty": false, "core_packs": []}
             }).to_string().into())).await?;
             socket
                 .send(Message::Text(
@@ -735,7 +863,12 @@ mod tests {
             json!({}),
             "did:key:node",
             &["sha256:root".to_owned()],
-            &gents_protocol::build_info::BuildInfo::current(Vec::new()),
+            &gents_protocol::build_info::BuildInfo::from_parts(
+                "1.0.0-rc2".to_owned(),
+                Some("aaaaaaa".to_owned()),
+                Some(false),
+                Vec::new(),
+            ),
         )
         .await?;
         assert_eq!(
@@ -745,5 +878,106 @@ mod tests {
         let _ = session.timestamp("document").await?;
         server.await??;
         Ok(())
+    }
+
+    /// The handshake is where a build mismatch is refused, before any planning:
+    /// two builds cannot agree on a plan, so finding out later is too late to
+    /// say so usefully.
+    #[test]
+    fn an_install_whose_builds_differ_is_refused_at_the_handshake() {
+        let client = gents_protocol::build_info::BuildInfo::from_parts(
+            "1.0.0-rc2".to_owned(),
+            Some("aaaaaaa".to_owned()),
+            Some(false),
+            Vec::new(),
+        );
+        let runtime = gents_protocol::build_info::BuildInfo::from_parts(
+            "1.0.0-rc2".to_owned(),
+            Some("bbbbbbb".to_owned()),
+            Some(false),
+            Vec::new(),
+        );
+        // The plans would agree -- neither carries a pack -- so only the build
+        // check can refuse this.
+        let refusal = PackInstallHandshakeError::build_mismatch(&client, &runtime)
+            .expect("two different builds are refused");
+        let text = refusal.to_string();
+        assert!(
+            text.contains("aaaaaaa") && text.contains("bbbbbbb"),
+            "{text}"
+        );
+        assert!(text.contains("gents runtime service update"), "{text}");
+        assert!(
+            PackInstallHandshakeError::build_mismatch(&client, &client).is_none(),
+            "the same build is not refused"
+        );
+    }
+
+    /// A build with no commit cannot be verified, and `None == None` must never
+    /// count as a match -- the failure that let a stale CLI agree with a
+    /// differing runtime.
+    #[test]
+    fn a_build_without_a_commit_is_refused_rather_than_matched() {
+        let unverifiable = gents_protocol::build_info::BuildInfo::from_parts(
+            "1.0.0-rc2".to_owned(),
+            None,
+            None,
+            Vec::new(),
+        );
+        let two_of_them = PackInstallHandshakeError::build_mismatch(&unverifiable, &unverifiable)
+            .expect("two unverifiable builds are not the same build");
+        let text = two_of_them.to_string();
+        assert!(text.contains("records no commit"), "{text}");
+        assert!(
+            text.contains("git checkout"),
+            "the next step names how to fix it: {text}"
+        );
+        // And a verifiable client against an unverifiable runtime is refused too.
+        let verifiable = gents_protocol::build_info::BuildInfo::from_parts(
+            "1.0.0-rc2".to_owned(),
+            Some("aaaaaaa".to_owned()),
+            Some(false),
+            Vec::new(),
+        );
+        assert!(
+            PackInstallHandshakeError::build_mismatch(&verifiable, &unverifiable).is_some(),
+            "an unverifiable runtime is not silently accepted"
+        );
+    }
+
+    /// The older-runtime case is its own error with its own next step, and the
+    /// connection and decode failures are not confused with each other.
+    #[test]
+    fn the_handshake_failures_are_distinguished_and_each_names_a_step() {
+        let older = PackInstallHandshakeError::OlderRuntime {
+            client: "gents 1.0.0-rc2 (aaaaaaa)".to_owned(),
+            detail: "unknown field `client_build`".to_owned(),
+        }
+        .to_string();
+        assert!(older.contains("gents runtime service update"), "{older}");
+        assert!(older.contains("client_build"), "{older}");
+
+        let lost = PackInstallHandshakeError::ConnectionLost {
+            detail: "connection reset".to_owned(),
+        }
+        .to_string();
+        assert!(lost.contains("lost"), "{lost}");
+        assert!(lost.contains("retry"), "{lost}");
+        assert!(
+            !lost.contains("older runtime"),
+            "a lost connection is not a build problem: {lost}"
+        );
+
+        let unreadable = PackInstallHandshakeError::UnreadableHandshake {
+            client: "gents 1.0.0-rc2 (aaaaaaa)".to_owned(),
+            detail: "expected value".to_owned(),
+        }
+        .to_string();
+        assert!(unreadable.contains("unreadable"), "{unreadable}");
+        // The message must not carry a run of spaces where a continuation broke.
+        assert!(
+            !unreadable.contains("  "),
+            "no collapsed continuation: {unreadable}"
+        );
     }
 }

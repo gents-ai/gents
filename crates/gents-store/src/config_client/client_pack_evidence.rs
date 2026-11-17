@@ -68,6 +68,12 @@ pub enum PackMutationDifference {
 
 impl PackMutationDifference {
     /// One line a person can read, naming both sides.
+    ///
+    /// A value under `/variables/*` is **redacted**: an install value can be a
+    /// token read from the installer's environment, and this text reaches the
+    /// operator, `runtime-errors.log` and models. Every other printed value is
+    /// truncated to [`RENDERED_VALUE_LIMIT`] characters with its real length, so
+    /// a bundled archive or a long prompt cannot flood the line.
     pub fn describe(&self) -> String {
         match self {
             Self::Operation {
@@ -96,27 +102,80 @@ impl PackMutationDifference {
                 path,
                 constructed,
                 proposed,
-            } => format!(
-                "`{path}` is {constructed} in the client's plan and {proposed} in the runtime's"
-            ),
+            } => {
+                if is_install_variable_path(path) {
+                    format!(
+                        "`{path}` differs between the plans (value redacted: an install variable can be a secret)"
+                    )
+                } else {
+                    format!(
+                        "`{path}` is {} in the client's plan and {} in the runtime's",
+                        render_value(constructed),
+                        render_value(proposed)
+                    )
+                }
+            }
             Self::OnlyInOnePlan {
                 path,
                 constructed,
                 proposed,
-            } => match (constructed, proposed) {
-                (Some(value), None) => {
-                    format!("only the client's plan carries `{path}` ({value})")
+            } => {
+                let redacted = is_install_variable_path(path);
+                let rendered = |value: &Value| {
+                    if redacted {
+                        "a redacted install variable".to_owned()
+                    } else {
+                        render_value(value)
+                    }
+                };
+                match (constructed, proposed) {
+                    (Some(value), None) => {
+                        format!("only the client's plan carries `{path}` ({})", rendered(value))
+                    }
+                    (None, Some(value)) => format!(
+                        "only the runtime's plan carries `{path}` ({})",
+                        rendered(value)
+                    ),
+                    (Some(constructed), Some(proposed)) => format!(
+                        "`{path}` is {} in the client's plan and {} in the runtime's",
+                        rendered(constructed),
+                        rendered(proposed)
+                    ),
+                    (None, None) => format!("`{path}` is in neither plan"),
                 }
-                (None, Some(value)) => {
-                    format!("only the runtime's plan carries `{path}` ({value})")
-                }
-                (Some(constructed), Some(proposed)) => format!(
-                    "`{path}` is {constructed} in the client's plan and {proposed} in the runtime's"
-                ),
-                (None, None) => format!("`{path}` is in neither plan"),
-            },
+            }
         }
     }
+}
+
+/// How many differences a comparison reports. The first is the one that
+/// matters; the rest are context, and a long list stops being readable.
+pub const MAX_REPORTED_DIFFERENCES: usize = 5;
+
+/// How much of one value a difference prints. Long values are truncated, since
+/// a plan input can hold a bundled archive or a whole prompt.
+pub const RENDERED_VALUE_LIMIT: usize = 120;
+
+/// Whether a difference's path names an install value. Anything under
+/// `/variables/` is redacted, because `${VAR}` is exactly where a token comes
+/// from.
+fn is_install_variable_path(path: &str) -> bool {
+    path.starts_with("/variables/") || path.contains("/variables/")
+}
+
+/// One value as a line states it: truncated with its real length, so a reader
+/// knows they are seeing a prefix.
+fn render_value(value: &Value) -> String {
+    let rendered = value.to_string();
+    let length = rendered.chars().count();
+    if length <= RENDERED_VALUE_LIMIT {
+        return rendered;
+    }
+    let prefix = rendered
+        .chars()
+        .take(RENDERED_VALUE_LIMIT)
+        .collect::<String>();
+    format!("{prefix}… ({length} chars)")
 }
 
 /// The operation a mutation performs, without its payload.
@@ -207,6 +266,9 @@ pub trait PackMutationDiff {
         if let (Some(constructed), Some(proposed)) = (self.input(), proposed.input()) {
             collect_field_differences("", constructed, proposed, &mut differences);
         }
+        // Bounded, as the trait's doc says: a plan that diverges early can
+        // differ in hundreds of leaves, and a refusal only needs the first few.
+        differences.truncate(MAX_REPORTED_DIFFERENCES);
         differences
     }
 }
@@ -1342,5 +1404,87 @@ mod tests {
             "{described}"
         );
         assert!(described.contains("runtime"), "{described}");
+    }
+
+    /// An install value can be a token from the installer's environment, and
+    /// this text reaches the operator, the log and models. Anything under
+    /// `/variables/` is redacted, on both the field and the one-sided cases.
+    #[test]
+    fn an_install_variable_is_redacted_so_a_secret_never_prints() {
+        let secret = "sk-live-0123456789abcdef";
+        let constructed = create(
+            "PackInstallation",
+            serde_json::json!({"variables": {"API_TOKEN": secret}}),
+        );
+        let proposed = create(
+            "PackInstallation",
+            serde_json::json!({"variables": {"API_TOKEN": "other"}}),
+        );
+        let differences = constructed.differences(&proposed);
+        let described = differences[0].describe();
+        assert!(
+            !described.contains(secret),
+            "the secret must not print: {described}"
+        );
+        assert!(!described.contains("other"), "{described}");
+        assert!(described.contains("redacted"), "{described}");
+        assert!(described.contains("/variables/API_TOKEN"), "{described}");
+
+        // The one-sided case redacts too: a key only one plan carries still
+        // holds a value.
+        let absent = create("PackInstallation", serde_json::json!({"variables": {}}));
+        let only_runtime = proposed.differences(&absent)[0].describe();
+        assert!(!only_runtime.contains(secret), "{only_runtime}");
+        assert!(only_runtime.contains("redacted"), "{only_runtime}");
+    }
+
+    /// A value outside the install variables is truncated with its real length,
+    /// so a bundled archive or a long prompt cannot flood the refusal.
+    #[test]
+    fn a_long_value_is_truncated_with_its_length() {
+        let long = "x".repeat(400);
+        let constructed = create("Agent", serde_json::json!({"prompt": long}));
+        let proposed = create("Agent", serde_json::json!({"prompt": "short"}));
+        let described = constructed.differences(&proposed)[0].describe();
+        assert!(
+            described.contains("chars)"),
+            "the real length is stated: {described}"
+        );
+        assert!(
+            described.chars().count() < 400,
+            "the value itself is cut: {} chars",
+            described.chars().count()
+        );
+        assert!(described.contains("/prompt"), "{described}");
+    }
+
+    /// The list is bounded, so a plan that diverges in hundreds of leaves
+    /// reports the first few rather than all of them.
+    #[test]
+    fn the_reported_differences_are_bounded() {
+        let mut constructed_input = serde_json::Map::new();
+        let mut proposed_input = serde_json::Map::new();
+        for index in 0..40 {
+            constructed_input.insert(format!("field_{index}"), serde_json::json!(index));
+            proposed_input.insert(format!("field_{index}"), serde_json::json!("other"));
+        }
+        let differences = create("Agent", serde_json::Value::Object(constructed_input))
+            .differences(&create("Agent", serde_json::Value::Object(proposed_input)));
+        assert_eq!(
+            differences.len(),
+            super::MAX_REPORTED_DIFFERENCES,
+            "at most {} differences are reported",
+            super::MAX_REPORTED_DIFFERENCES
+        );
+    }
+
+    /// A path that merely mentions `variables` elsewhere is not redacted by
+    /// accident, and one that is under it always is.
+    #[test]
+    fn the_redaction_applies_to_install_variable_paths_only() {
+        assert!(super::is_install_variable_path("/variables/TOKEN"));
+        assert!(super::is_install_variable_path("/input/variables/TOKEN"));
+        assert!(!super::is_install_variable_path("/display_name"));
+        assert!(!super::is_install_variable_path("/variables_count"));
     }
 }

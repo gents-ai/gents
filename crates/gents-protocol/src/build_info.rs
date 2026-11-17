@@ -12,8 +12,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuildInfo {
     pub version: String,
-    /// The commit this binary was built from, when the build recorded one.
-    pub commit: Option<String>,
+    /// The commit this binary was built from, from the build script that
+    /// recorded it. `None` only for a build made outside a git checkout.
+    pub git_sha: Option<String>,
+    /// Whether the checkout was dirty at build time. A dirty build has no
+    /// stable identity -- the same sha can mean different code -- so two dirty
+    /// builds are not the same build.
+    pub git_dirty: Option<bool>,
     /// The core packs compiled in, which decide what a pack install plans.
     pub core_packs: Vec<CorePackBuild>,
 }
@@ -30,51 +35,106 @@ pub struct CorePackBuild {
 }
 
 impl BuildInfo {
-    /// This process's build, from the crate version, the commit the build
-    /// recorded when it knew one, and the core packs it was given.
+    /// This process's build, from the crate version, the git facts the build
+    /// script recorded, and the core packs it was given.
     ///
     /// The packs are passed in rather than read here, so this type stays the
-    /// wire's: a caller supplies what its own build carries.
+    /// wire's: a caller supplies what its own build carries. The git facts come
+    /// from `gents-cli/build.rs` (`GENTS_BUILD_GIT_SHA`/`_DIRTY`), which is the
+    /// build script that exists; this crate has none, so reading an env var
+    /// here would always be empty.
     pub fn current(core_packs: Vec<CorePackBuild>) -> Self {
+        Self::from_parts(
+            env!("CARGO_PKG_VERSION").to_owned(),
+            option_env!("GENTS_BUILD_GIT_SHA").map(str::to_owned),
+            option_env!("GENTS_BUILD_GIT_DIRTY").and_then(|value| match value {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            }),
+            core_packs,
+        )
+    }
+
+    /// [`Self::current`] with the facts stated, so a test can build the pairs a
+    /// comparison is about without a build script.
+    pub fn from_parts(
+        version: String,
+        git_sha: Option<String>,
+        git_dirty: Option<bool>,
+        core_packs: Vec<CorePackBuild>,
+    ) -> Self {
         Self {
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-            commit: option_env!("GENTS_BUILD_COMMIT").map(str::to_owned),
+            version,
+            git_sha,
+            git_dirty,
             core_packs,
         }
     }
 
+    /// Whether this build's identity can be compared at all. A build made
+    /// outside a git checkout has no sha, and two of those must never be taken
+    /// for the same build: `None == None` is not a match.
+    pub fn is_verifiable(&self) -> bool {
+        self.git_sha.is_some()
+    }
+
     /// One line for a prompt, or for a handshake's log.
     pub fn summary(&self) -> String {
-        format!(
-            "gents {} ({})",
-            self.version,
-            self.commit.as_deref().unwrap_or("unknown commit")
-        )
+        let mut revision = self
+            .git_sha
+            .clone()
+            .unwrap_or_else(|| "unrecorded commit".to_owned());
+        if self.git_dirty == Some(true) {
+            revision.push_str("-dirty");
+        }
+        format!("gents {} ({revision})", self.version)
     }
 
-    /// Whether two builds plan the same pack install: the same core packs decide
-    /// what an install contains, so a differing set is a differing plan before
-    /// anything is read.
+    /// Whether two builds plan the same pack install. A build with no commit,
+    /// and a dirty build whose commit does not identify its code, are never
+    /// "the same build" as another.
     pub fn plans_the_same_installs(&self, other: &Self) -> bool {
-        self.core_packs == other.core_packs
+        self.is_verifiable() && other.is_verifiable() && self.differences(other).is_empty()
     }
 
-    /// What differs between two builds, in one line each. Empty when they
-    /// agree, so a caller can use it as the answer to "are we the same build?".
+    /// What differs between two builds, in one line each: version, then commit,
+    /// then whether the tree was dirty, then the core packs. Empty only when
+    /// both are verifiable and agree.
     pub fn differences(&self, other: &Self) -> Vec<String> {
         let mut differences = Vec::new();
+        if !self.is_verifiable() && !other.is_verifiable() {
+            differences.push(
+                "neither build records a commit, so the two cannot be verified as the same build"
+                    .to_owned(),
+            );
+            return differences;
+        }
         if self.version != other.version {
             differences.push(format!(
                 "version: this is {}, the other is {}",
                 self.version, other.version
             ));
         }
-        if self.commit != other.commit {
+        if self.git_sha != other.git_sha {
             differences.push(format!(
                 "commit: this is {}, the other is {}",
-                self.commit.as_deref().unwrap_or("unknown"),
-                other.commit.as_deref().unwrap_or("unknown")
+                self.git_sha.as_deref().unwrap_or("unrecorded"),
+                other.git_sha.as_deref().unwrap_or("unrecorded")
             ));
+        }
+        if self.git_dirty != other.git_dirty {
+            differences.push(format!(
+                "working tree: this was built {}, the other {}",
+                describe_dirty(self.git_dirty),
+                describe_dirty(other.git_dirty)
+            ));
+        }
+        if self.git_dirty == Some(true) && self.git_sha == other.git_sha {
+            differences.push(
+                "working tree: this build is dirty, so one commit can mean different code"
+                    .to_owned(),
+            );
         }
         if self.core_packs != other.core_packs {
             differences.push(format!(
@@ -84,6 +144,15 @@ impl BuildInfo {
             ));
         }
         differences
+    }
+}
+
+/// `clean`, `dirty`, or `with an unrecorded tree state`, for a comparison's text.
+fn describe_dirty(dirty: Option<bool>) -> &'static str {
+    match dirty {
+        Some(true) => "dirty",
+        Some(false) => "clean",
+        None => "with an unrecorded tree state",
     }
 }
 
@@ -117,12 +186,14 @@ mod tests {
     fn a_mismatched_build_names_both_builds_and_what_differs() {
         let client = BuildInfo {
             version: "1.0.0-rc2".to_owned(),
-            commit: Some("aaaaaaa".to_owned()),
+            git_sha: Some("aaaaaaa".to_owned()),
+            git_dirty: Some(false),
             core_packs: vec![pack("gents/web", "sha256:1111")],
         };
         let runtime = BuildInfo {
             version: "1.0.0-rc2".to_owned(),
-            commit: Some("bbbbbbb".to_owned()),
+            git_sha: Some("bbbbbbb".to_owned()),
+            git_dirty: Some(false),
             core_packs: vec![pack("gents/web", "sha256:2222")],
         };
         let differences = client.differences(&runtime);
@@ -154,7 +225,8 @@ mod tests {
     fn the_same_build_reports_no_difference() {
         let build = BuildInfo {
             version: "1.0.0-rc2".to_owned(),
-            commit: Some("aaaaaaa".to_owned()),
+            git_sha: Some("aaaaaaa".to_owned()),
+            git_dirty: Some(false),
             core_packs: vec![pack("gents/web", "sha256:1111")],
         };
         assert!(build.differences(&build.clone()).is_empty());
@@ -167,11 +239,12 @@ mod tests {
     fn an_unknown_commit_is_said_not_guessed() {
         let unknown = BuildInfo {
             version: "1.0.0-rc2".to_owned(),
-            commit: None,
+            git_sha: None,
+            git_dirty: Some(false),
             core_packs: Vec::new(),
         };
         assert!(
-            unknown.summary().contains("unknown commit"),
+            unknown.summary().contains("unrecorded commit"),
             "{}",
             unknown.summary()
         );
@@ -179,7 +252,8 @@ mod tests {
         // on both sides including the unknown one.
         let recorded = BuildInfo {
             version: "1.0.0-rc2".to_owned(),
-            commit: Some("aaaaaaa".to_owned()),
+            git_sha: Some("aaaaaaa".to_owned()),
+            git_dirty: Some(false),
             core_packs: Vec::new(),
         };
         let differences = unknown.differences(&recorded);
@@ -187,7 +261,7 @@ mod tests {
             differences
                 .iter()
                 .any(|difference| difference.contains("commit")
-                    && difference.contains("unknown")
+                    && difference.contains("unrecorded")
                     && difference.contains("aaaaaaa")),
             "a commit difference from a build that recorded none is still named: {differences:?}"
         );
