@@ -1073,7 +1073,7 @@ mod tests {
                 .unwrap()
                 .accounting
                 .history_stubbing,
-            Some(figures.clone())
+            figures.clone()
         );
         assert_eq!(snapshot.compaction_count, 0);
         assert_eq!(snapshot.session_compaction_count, 0);
