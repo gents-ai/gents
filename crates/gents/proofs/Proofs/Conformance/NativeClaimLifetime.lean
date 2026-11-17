@@ -136,13 +136,14 @@ structure ExclusionView where
   deriving ToJson
 
 /-- The desktop bridge's lifecycle exclusion with a cancelled waiter; it
-observes the store lock and the lifecycle guard. -/
+observes the store lock (`exclusionStoreHeld`: the claim or the owner's node)
+and the lifecycle guard. -/
 @[conformance_family]
 def clientExclusionScenario : Family TraceInput (List ExclusionView) where
   inputs := [traceOf "client_shutdown_cancel_retains_claim_until_return" [1, 3, 4]]
   model := fun i => i.checkpoints.map fun index =>
     let s := observedAt i.lane i.events index
-    { claimHeld := claimHeld s, lifecycleGuardHeld := s.lifecycleGuardHeld }
+    { claimHeld := exclusionStoreHeld s, lifecycleGuardHeld := s.lifecycleGuardHeld }
 
 private def boolJson (value : Bool) : String := if value then "true" else "false"
 
