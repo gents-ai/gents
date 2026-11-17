@@ -177,6 +177,7 @@ pub(super) async fn persist_terminal_call(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn persist_existing_call_terminal(
     node: Arc<EmbeddedNode>,
     call: &InferenceCallRecord,
