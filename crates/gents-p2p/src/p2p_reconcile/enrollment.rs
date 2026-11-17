@@ -612,7 +612,7 @@ impl EnrollmentState {
         self.admin_pin_present(offer) && !self.admin_pin_conflict(offer)
     }
 
-    fn network_admin_pair_pinned(&self, network_id: &str, admin_did: &str) -> bool {
+    pub(crate) fn network_admin_pair_pinned(&self, network_id: &str, admin_did: &str) -> bool {
         self.admin_pins.contains(&NetworkAdminPin {
             network_id: network_id.to_string(),
             admin_did: admin_did.to_string(),
