@@ -25,7 +25,9 @@ pub(super) fn is_degraded_startup_unavailable_reason(
     )
 }
 
-pub(super) fn preserve_generation_for_surface_error(error: &anyhow::Error) -> bool {
+pub(in crate::runtime::agent::runtime) fn preserve_generation_for_surface_error(
+    error: &anyhow::Error,
+) -> bool {
     gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(error.as_ref())
 }
 

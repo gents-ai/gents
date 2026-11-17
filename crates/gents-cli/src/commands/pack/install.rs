@@ -424,7 +424,8 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                             &gents_pack::pack::pin_moves::replacement_digests([pack.archive()])?,
                         )
                         .await?,
-                    )?;
+                    )
+                    .map_err(anyhow::Error::from)?;
                 }
                 return Ok(crate::print_json(&preview)?);
             }
@@ -471,10 +472,12 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                     .await?
                 }
                 None => {
-                    anyhow::ensure!(
-                        args.move_pin_tools.is_empty(),
-                        "--move-pin-tools requires a node configuration store"
-                    );
+                    if !args.move_pin_tools.is_empty() {
+                        return Err(anyhow::anyhow!(
+                            "--move-pin-tools requires a node configuration store"
+                        )
+                        .into());
+                    }
                     Vec::new()
                 }
             };
