@@ -81,8 +81,7 @@ fn absent_or_io(error: std::io::Error) -> PublishedPluginReadError {
             lock_present: false,
             contended: false,
         })
-        .err()
-        .expect("missing read is absent")
+        .expect_err("missing read is absent")
     } else {
         PublishedPluginReadError::Read(error.into())
     }
