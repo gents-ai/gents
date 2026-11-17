@@ -31,12 +31,12 @@ pub use documents::{
     plugin_data_unique_keys, prepare_document_pack_archive,
     prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
     prepare_hosted_document_pack_archive, tools_taking_installer_root, DependencyVariableOverrides,
-    HostedDocumentGraph, HostedPackPreparation, InstallerRootAgent, PreparedDependency,
-    PreparedDocumentPackInstall,
+    HostedDocumentGraph, HostedPackPreparation, InstallerRootAgent, PluginReferenceUnresolved,
+    PreparedDependency, PreparedDocumentPackInstall,
 };
 pub use hosted::{
     stage_hosted_pack, HostedHomePublication, HostedPackApproval, HostedPackStage,
-    HostedPackStageError,
+    HostedPackStageError, HostedRejection,
 };
 pub use removal::{
     ensure_plugins_unreferenced, plugin_pin_conflicts, visible_plugin_selections,
@@ -1173,6 +1173,11 @@ pub enum PackChangeError {
     Grant(#[from] GrantError),
     #[error(transparent)]
     Slots(#[from] super::SlotBindingError),
+    /// A Tools document names a plugin this node does not hold, or pins one to
+    /// another digest. Its own variant so a hosted install can show it as
+    /// written: it names identifiers only.
+    #[error(transparent)]
+    PluginReference(#[from] PluginReferenceUnresolved),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -1215,7 +1220,8 @@ impl gents_store::config_client::TransactionFailure for PackChangeError {
             Self::Edited { .. }
             | Self::Differing { .. }
             | Self::Grant(GrantError::Ungranted { .. })
-            | Self::Slots(super::SlotBindingError::Unbound { .. }) => None,
+            | Self::Slots(super::SlotBindingError::Unbound { .. })
+            | Self::PluginReference(_) => None,
             Self::Other(error)
             | Self::Grant(GrantError::Other(error))
             | Self::Slots(super::SlotBindingError::Other(error)) => {

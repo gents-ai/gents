@@ -1459,7 +1459,9 @@ async fn prepare_document_pack_install_inner(
             }
         }
     }
-    ensure_plugin_references_resolve_with_inventory(
+    // The unresolved reference keeps its type through `PackChangeError`, so a
+    // hosted install hands it to the client as written.
+    plugin_references_resolve(
         &std::iter::once((manifest, &config))
             .chain(
                 prepared_dependencies
@@ -1470,7 +1472,8 @@ async fn prepare_document_pack_install_inner(
         plugin_home,
         &shipped_digests,
         hosted.map(|facts| &facts.plugin_digests),
-    )?;
+    )?
+    .map_err(PackChangeError::PluginReference)?;
     Ok(PreparedDocumentPackInstall {
         pin_moves: Vec::new(),
         installation_doc_id,
@@ -1499,12 +1502,54 @@ pub(super) fn ensure_plugin_references_resolve(
     ensure_plugin_references_resolve_with_inventory(packs, plugin_home, shipped_digests, None)
 }
 
+/// A Tools document's plugin reference that does not resolve on the installing
+/// node. Typed so a hosted install can show it to the client as written: it
+/// names identifiers only (the pack, the Tools id, the plugin coordinate and
+/// digests), never a field value or an install variable.
+#[derive(Debug, thiserror::Error)]
+pub enum PluginReferenceUnresolved {
+    #[error(
+        "pack {pack} Tools {tools:?} names plugin {plugin}, which neither the pack nor its \
+         dependencies ship and this node has not installed; install the pack that ships {plugin} \
+         first (`gents config pack install <namespace>/<pack>`), or declare that pack as a \
+         dependency of {root}"
+    )]
+    NotInstalled {
+        pack: String,
+        tools: String,
+        plugin: String,
+        root: String,
+    },
+    #[error(
+        "pack {pack} Tools {tools:?} pins plugin {plugin} to {pin}, but the installed artifact is \
+         {installed}; install the matching plugin or update the pin"
+    )]
+    PinMismatch {
+        pack: String,
+        tools: String,
+        plugin: String,
+        pin: String,
+        installed: String,
+    },
+}
+
 fn ensure_plugin_references_resolve_with_inventory(
     packs: &[(&super::super::PackManifest, &PackConfig)],
     plugin_home: Option<&Path>,
     shipped_digests: &BTreeMap<String, String>,
     inventory: Option<&BTreeMap<String, String>>,
 ) -> Result<()> {
+    plugin_references_resolve(packs, plugin_home, shipped_digests, inventory)?.map_err(Into::into)
+}
+
+/// The plugin reference check, with an unresolved reference as its own typed
+/// result beside any other failure, so a caller can hand it on by type.
+fn plugin_references_resolve(
+    packs: &[(&super::super::PackManifest, &PackConfig)],
+    plugin_home: Option<&Path>,
+    shipped_digests: &BTreeMap<String, String>,
+    inventory: Option<&BTreeMap<String, String>>,
+) -> Result<std::result::Result<(), PluginReferenceUnresolved>> {
     let root = format!("{}/{}", packs[0].0.metadata.namespace, packs[0].0.name);
     let shipped = packs
         .iter()
@@ -1557,19 +1602,25 @@ fn ensure_plugin_references_resolve_with_inventory(
                 match installed_plugin_record(home, namespace, name) {
                     Ok(record) => {
                         if let Some(pin) = &reference.digest {
-                            anyhow::ensure!(pin == &record.digest,
-                                "pack {} Tools {:?} pins plugin {} to {}, but the installed artifact is {}; install the matching plugin or update the pin",
-                                manifest.name, tools.tools_id, reference.plugin, pin, record.digest);
+                            if pin != &record.digest {
+                                return Ok(Err(PluginReferenceUnresolved::PinMismatch {
+                                    pack: manifest.name.clone(),
+                                    tools: tools.tools_id.clone(),
+                                    plugin: reference.plugin.clone(),
+                                    pin: pin.clone(),
+                                    installed: record.digest.clone(),
+                                }));
+                            }
                         }
                     }
-                    Err(error) if crate::plugin::store::is_not_found(&error) => anyhow::bail!(
-                        "pack {} Tools {:?} names plugin {}, which neither the pack nor its dependencies ship and this node has not installed; install the pack that ships {} first (`gents config pack install <namespace>/<pack>`), or declare that pack as a dependency of {}",
-                        manifest.name,
-                        tools.tools_id,
-                        reference.plugin,
-                        reference.plugin,
-                        root
-                    ),
+                    Err(error) if crate::plugin::store::is_not_found(&error) => {
+                        return Ok(Err(PluginReferenceUnresolved::NotInstalled {
+                            pack: manifest.name.clone(),
+                            tools: tools.tools_id.clone(),
+                            plugin: reference.plugin.clone(),
+                            root: root.clone(),
+                        }))
+                    }
                     Err(error) => {
                         return Err(error).with_context(|| {
                             format!("reading installed plugin {}", reference.plugin)
@@ -1586,7 +1637,7 @@ fn ensure_plugin_references_resolve_with_inventory(
             );
         }
     }
-    Ok(())
+    Ok(Ok(()))
 }
 
 #[expect(
@@ -2042,7 +2093,10 @@ pub async fn apply_hosted_document_graph(
     graph: &HostedDocumentGraph,
     policy: DriftPolicy,
     profile_policy: &'static dyn gents_documents::inference_backend::AdvertisedProfilePolicy,
-) -> Result<Vec<InstallReport>> {
+) -> std::result::Result<Vec<InstallReport>, PackChangeError> {
+    // Typed, not erased: a hosted install hands documents that differ or were
+    // edited to the client by variant (`HostedRejection`), so the operator
+    // sees which documents before choosing --overwrite or --keep.
     super::super::pin_moves::apply(txn, owner, &graph.pin_moves, profile_policy).await?;
     if !graph.plugin_root {
         return apply_document_graph_in_txn(
@@ -2057,8 +2111,7 @@ pub async fn apply_hosted_document_graph(
             },
             graph.node_binding.as_ref(),
         )
-        .await
-        .map_err(PackChangeError::into_anyhow);
+        .await;
     }
     let (root, dependencies) = graph
         .identities
@@ -2072,10 +2125,9 @@ pub async fn apply_hosted_document_graph(
         .records
         .split_last()
         .context("hosted plugin graph missing")?;
-    anyhow::ensure!(
-        root_documents.is_empty(),
-        "plugin root cannot replace pack documents"
-    );
+    if !root_documents.is_empty() {
+        return Err(anyhow::anyhow!("plugin root cannot replace pack documents").into());
+    }
     let mut reports = apply_document_graph_in_txn(
         txn,
         owner,
@@ -2088,8 +2140,7 @@ pub async fn apply_hosted_document_graph(
         },
         graph.node_binding.as_ref(),
     )
-    .await
-    .map_err(PackChangeError::into_anyhow)?;
+    .await?;
     super::validate_plugin_replacements_in_txn(txn, owner, std::slice::from_ref(root)).await?;
     super::write_installed_plugin_identity(
         txn,

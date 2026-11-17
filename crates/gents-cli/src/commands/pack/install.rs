@@ -32,16 +32,25 @@ pub(crate) fn install_request(args: &PackInstallArgs) -> DocumentsInstallRequest
     }
 }
 
+/// What an install handshake accepted on a weaker guarantee; empty for an
+/// install that did not go through the runtime's session.
+pub(crate) type InstallWarnings = Vec<gents_host::http::pack_install_client::PackInstallWarning>;
+
 /// The documents pack install: the CLI's single site that writes a documents
 /// pack and its dependencies. `explicit` is false only when the pack is
 /// installed as another pack's dependency.
+///
+/// Returns the install's outcome exactly as the install produced it (the
+/// runtime's, for an install through the runtime's session) and, beside it,
+/// what the handshake accepted on a weaker guarantee. The caller prints the
+/// warnings, once.
 pub(crate) async fn install_documents_pack(
     access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     pack: &ResolvedPack,
     args: &PackInstallArgs,
     explicit: bool,
-) -> Result<serde_json::Value, PackChangeError> {
+) -> Result<(serde_json::Value, InstallWarnings), PackChangeError> {
     let dependencies = resolve_dependencies(pack, args).await?;
     install_documents_pack_inner(
         access,
@@ -84,7 +93,7 @@ async fn install_documents_pack_inner(
     dependencies: Vec<ResolvedPack>,
     local: Option<&LocalPackAccess>,
     refuse_unapproved_root: bool,
-) -> Result<serde_json::Value, PackChangeError> {
+) -> Result<(serde_json::Value, InstallWarnings), PackChangeError> {
     let request = install_request(args);
     if let gents_store::config_client::ConfigAccess::Graphql(endpoint) = access {
         let mut needs_runtime_store = false;
@@ -111,8 +120,11 @@ async fn install_documents_pack_inner(
                 break;
             }
         }
+        // A preview goes through the same session as the install, so the
+        // runtime compares builds and refuses a mismatch before it opens the
+        // archives, let alone writes.
         if needs_runtime_store && args.preview {
-            return gents_host::http::pack_install::install_remote(
+            return gents_host::http::pack_install_client::preview_remote(
                 endpoint,
                 owner,
                 pack,
@@ -124,6 +136,9 @@ async fn install_documents_pack_inner(
             .await
             .map_err(Into::into);
         }
+        // The runtime's outcome is this install's outcome, returned as it
+        // came: the caller takes the planned root agents off it, adds the tool
+        // root grants and prints it, and `promote` reads its digest.
         if needs_runtime_store {
             return gents_host::http::pack_install_client::install_remote(
                 endpoint,
@@ -150,6 +165,7 @@ async fn install_documents_pack_inner(
         refuse_unapproved_root,
     )
     .await
+    .map(|result| (result, Vec::new()))
 }
 
 /// A plugins pack's slots as the review binds them, from the node its model
@@ -191,8 +207,9 @@ pub(super) async fn install_documents_command_with_local(
     args: &PackInstallArgs,
     local_endpoint: Option<gents_store::config_client::GraphqlEndpoint>,
 ) -> Result<(), PackChangeError> {
-    let (receipt, failed_step) =
+    let (receipt, failed_step, warnings) =
         install_documents_report(access, pack, args, local_endpoint).await?;
+    print_install_warnings(&warnings);
     crate::print_json(&receipt)?;
     match failed_step {
         Some(failed) => Err(anyhow::anyhow!(
@@ -203,15 +220,16 @@ pub(super) async fn install_documents_command_with_local(
     }
 }
 
-/// The install's receipt, and the step that failed after the install
-/// committed: the pack is on the node by then, so its receipt is returned
-/// with the failed step named rather than lost with the error.
+/// The install's receipt, the step that failed after the install committed
+/// (the pack is on the node by then, so its receipt is returned with the
+/// failed step named rather than lost with the error), and what the install
+/// handshake accepted on a weaker guarantee.
 pub(super) async fn install_documents_report(
     access: gents_store::config_client::ConfigAccess,
     pack: &ResolvedPack,
     args: &PackInstallArgs,
     local_endpoint: Option<gents_store::config_client::GraphqlEndpoint>,
-) -> Result<(serde_json::Value, Option<String>), PackChangeError> {
+) -> Result<(serde_json::Value, Option<String>, InstallWarnings), PackChangeError> {
     let result = async {
         let mut failed_step = None;
         let (home, owner, local) = async {
@@ -279,7 +297,7 @@ pub(super) async fn install_documents_report(
                 )
             })
             .collect();
-        let mut output = install_documents_pack_inner(
+        let (mut output, warnings) = install_documents_pack_inner(
             &access,
             &owner,
             pack,
@@ -343,7 +361,7 @@ pub(super) async fn install_documents_report(
             .await?
             .into();
         }
-        Ok::<_, PackChangeError>((output, failed_step))
+        Ok::<_, PackChangeError>((output, failed_step, warnings))
     }
     .await;
     if let Some(node) = access.local_node() {
@@ -352,6 +370,17 @@ pub(super) async fn install_documents_report(
         }
     }
     result
+}
+
+/// Print what the install handshake accepted on a weaker guarantee. The warning
+/// is typed in `gents-host`, so the desktop and library callers receive it too;
+/// this is the CLI's way of showing it.
+pub(crate) fn print_install_warnings(
+    warnings: &[gents_host::http::pack_install_client::PackInstallWarning],
+) {
+    for warning in warnings {
+        eprintln!("warning: {}", warning.describe());
+    }
 }
 
 pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError> {
@@ -452,7 +481,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                         .await
                         .into_iter()
                         .collect::<Result<Vec<_>>>()?;
-                let result = gents_host::http::pack_install_client::install_remote(
+                let (result, warnings) = gents_host::http::pack_install_client::install_remote(
                     endpoint,
                     owner,
                     &pack,
@@ -462,6 +491,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                     crate::current_build(),
                 )
                 .await?;
+                print_install_warnings(&warnings);
                 return Ok(crate::print_json(&result)?);
             }
             let pin_moves = match &notification_scope {

@@ -1,3 +1,6 @@
+#[path = "write_owner_structure/classifier_registry.rs"]
+mod classifier_registry;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use syn::spanned::Spanned;
@@ -2607,7 +2610,7 @@ fn downcast_classifiers_only_shrink() {
     let actual = parse_production(&root, production_sources(&root))
         .into_iter()
         .filter_map(|(relative, syntax)| {
-            let sites = downcast_sites(&syntax);
+            let sites = classifier_registry::downcasts(&relative, &syntax);
             (sites > 0).then_some((relative, sites))
         })
         .collect::<BTreeMap<_, _>>();
@@ -2963,7 +2966,7 @@ fn error_text_classification_only_shrinks() {
     let actual = parse_production(&root, production_sources(&root))
         .into_iter()
         .filter_map(|(relative, syntax)| {
-            let sites = error_text_sites(&syntax);
+            let sites = classifier_registry::text_sites(&relative, &syntax);
             (!sites.is_empty()).then_some((relative, sites))
         })
         .collect::<BTreeMap<_, _>>();

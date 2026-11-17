@@ -630,3 +630,13 @@ fn repair_live_update_propagates_missing_and_foreign_key_errors() {
     );
     assert!(!error.to_string().contains("approve"));
 }
+
+#[test]
+fn owned_preflight_refusal_survives_context_without_matching_foreign_errors() {
+    let error = anyhow::Error::from(PreflightError::Incompatible).context("outer context");
+    assert!(matches!(
+        preflight_refusal(error.as_ref()),
+        Some(PreflightError::Incompatible)
+    ));
+    assert!(preflight_refusal(anyhow::anyhow!("foreign error").as_ref()).is_none());
+}
