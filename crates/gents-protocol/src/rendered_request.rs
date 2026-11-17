@@ -439,6 +439,16 @@ pub struct ContextAccounting {
     pub compaction_reason: ContextCompactionReason,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pre_compaction_input_tokens: Option<usize>,
+    /// Stubbed tool results present in this dispatch, not compaction events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stubbed_results: Option<StubbedResults>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StubbedResults {
+    pub count: usize,
+    pub original_bytes: usize,
+    pub stub_bytes: usize,
 }
 
 impl ContextAccounting {
@@ -757,6 +767,7 @@ mod calibrated_components_tests {
             effective_max_output_tokens: None,
             compaction_reason: ContextCompactionReason::BelowThreshold,
             pre_compaction_input_tokens: None,
+            stubbed_results: None,
         }
     }
 

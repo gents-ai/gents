@@ -581,8 +581,8 @@ const STUB_TRUNCATED: &str = ", truncated";
 
 const TRUNCATION_MARKERS: [&str; 4] = crate::truncation::TRUNCATION_NOTICE_PREFIXES;
 
-struct StubFacts {
-    byte_count: usize,
+pub(crate) struct StubFacts {
+    pub(crate) byte_count: usize,
     truncated: bool,
 }
 
@@ -590,8 +590,11 @@ fn parse_stub(tool_result: &ToolResult) -> Option<StubFacts> {
     let [ToolResultContent::Text(text)] = tool_result.content.as_slice() else {
         return None;
     };
+    parse_stub_text(&text.text)
+}
+
+pub(crate) fn parse_stub_text(text: &str) -> Option<StubFacts> {
     let (body, _recovery) = text
-        .text
         .strip_prefix(STUB_HEAD)?
         .strip_suffix(STUB_TAIL)?
         .rsplit_once(&format!("{STUB_JOIN}{STUB_RECOVERY}"))?;

@@ -1213,6 +1213,7 @@ mod paging_coverage_tests {
                     compaction_reason:
                         gents_protocol::rendered_request::ContextCompactionReason::Compacted,
                     pre_compaction_input_tokens: Some(900),
+                    stubbed_results: None,
                 },
             })
             .collect();

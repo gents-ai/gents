@@ -419,6 +419,7 @@ async fn capture_and_context_accounting_commit_together() {
             effective_max_output_tokens: Some(10),
             compaction_reason: ContextCompactionReason::BelowThreshold,
             pre_compaction_input_tokens: None,
+            stubbed_results: None,
         });
         rendered.provenance_payload_json = serde_json::to_value(&rendered.assembly_trace).unwrap();
         rendered.provenance_json = serde_json::to_value(ProvenanceManifest::captured_only(

@@ -127,7 +127,37 @@ pub(in crate::loop_stream) fn context_accounting_for_request(
         effective_max_output_tokens: request.max_tokens,
         compaction_reason,
         pre_compaction_input_tokens,
+        stubbed_results: Some(stubbed_results_for_request(request)),
     }
+}
+
+fn stubbed_results_for_request(
+    request: &CompletionRequest,
+) -> gents_protocol::rendered_request::StubbedResults {
+    use rig::completion::Message;
+    use rig::message::{ToolResultContent, UserContent};
+    let mut total = gents_protocol::rendered_request::StubbedResults::default();
+    for message in request.chat_history.iter() {
+        if let Message::User { content } = message {
+            for part in content.iter() {
+                if let UserContent::ToolResult(result) = part {
+                    let mut parts = result.content.iter();
+                    if let (Some(ToolResultContent::Text(text)), None) =
+                        (parts.next(), parts.next())
+                    {
+                        if let Some(facts) = crate::compaction::history::parse_stub_text(&text.text)
+                        {
+                            total.count += 1;
+                            total.original_bytes =
+                                total.original_bytes.saturating_add(facts.byte_count);
+                            total.stub_bytes = total.stub_bytes.saturating_add(text.text.len());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    total
 }
 
 pub fn clamp_request_output_budget(

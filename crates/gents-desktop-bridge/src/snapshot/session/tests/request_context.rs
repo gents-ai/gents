@@ -28,6 +28,7 @@ fn accounting_json(estimated_input_tokens: usize) -> String {
         effective_max_output_tokens: None,
         compaction_reason: ContextCompactionReason::BelowThreshold,
         pre_compaction_input_tokens: None,
+        stubbed_results: None,
     })
     .expect("accounting json")
 }

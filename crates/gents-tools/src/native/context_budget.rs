@@ -27,6 +27,8 @@ pub struct ContextBudgetSnapshot {
     pub last_compacted_at: Option<String>,
     pub session_compaction_count: i64,
     pub request_reduction_count: i64,
+    /// Stubs in the latest provider dispatch; None for pre-accounting rows.
+    pub latest_dispatch_stubbed_results: Option<gents_protocol::rendered_request::StubbedResults>,
     pub recent_session_compactions: Vec<ContextReductionEvidence>,
     pub recent_request_reductions: Vec<ContextReductionEvidence>,
     pub last_request: Option<LastRequestContextSnapshot>,
@@ -499,6 +501,9 @@ fn build_snapshot(
         last_compacted_at: latest.cloned(),
         session_compaction_count,
         request_reduction_count,
+        latest_dispatch_stubbed_results: last_request
+            .as_ref()
+            .and_then(|r| r.accounting.stubbed_results.clone()),
         recent_session_compactions: session_compactions
             .iter()
             .take(RECENT_REDUCTION_LIMIT)
@@ -734,6 +739,7 @@ mod tests {
             compaction_reason:
                 gents_protocol::rendered_request::ContextCompactionReason::BelowThreshold,
             pre_compaction_input_tokens: None,
+            stubbed_results: None,
         };
         let accounting = escape_graphql_string(&serde_json::to_string(&accounting).unwrap());
         let agent_context = escape_graphql_string(&agent_context_did());
@@ -858,6 +864,7 @@ mod tests {
                 compaction_reason:
                     gents_protocol::rendered_request::ContextCompactionReason::BelowThreshold,
                 pre_compaction_input_tokens: None,
+                stubbed_results: None,
             };
             let accounting = escape_graphql_string(&serde_json::to_string(&accounting).unwrap());
             seed_as(
@@ -881,6 +888,61 @@ mod tests {
             )
             .await;
         }
+    }
+
+    #[test]
+    fn stub_only_dispatch_is_reported_separately() {
+        let accounting = gents_protocol::rendered_request::ContextAccounting {
+            accounting_version: 3,
+            turn_index: 0,
+            attempt: 0,
+            estimator: "test".into(),
+            components: gents_protocol::rendered_request::ContextInputComponents {
+                messages: 0,
+                documents: 0,
+                tool_schemas: 0,
+                additional_parameters: 0,
+                output_schema: 0,
+            },
+            estimated_input_tokens: 0,
+            raw_estimated_input_tokens: None,
+            input_calibration_basis_points: None,
+            anchored_input_tokens: None,
+            context_window: 100,
+            compaction_threshold_basis_points: 8000,
+            compaction_threshold_tokens: 80,
+            configured_max_output_tokens: None,
+            effective_max_output_tokens: None,
+            compaction_reason:
+                gents_protocol::rendered_request::ContextCompactionReason::BelowThreshold,
+            pre_compaction_input_tokens: None,
+            stubbed_results: Some(gents_protocol::rendered_request::StubbedResults {
+                count: 2,
+                original_bytes: 1000,
+                stub_bytes: 200,
+            }),
+        };
+        let last = LastRequestContextSnapshot {
+            request_id: "r".into(),
+            call_id: "c".into(),
+            call_sequence: 0,
+            queued_at: None,
+            accounting,
+        };
+        let snapshot = build_snapshot(
+            ContextBudgetScope {
+                node_did: "n".into(),
+                agent_did: "a".into(),
+                session_id: "s".into(),
+            },
+            Some(100),
+            vec![],
+            vec![],
+            Some(last),
+        );
+        assert_eq!(snapshot.compaction_count, 0);
+        assert_eq!(snapshot.request_reduction_count, 0);
+        assert_eq!(snapshot.latest_dispatch_stubbed_results.unwrap().count, 2);
     }
 
     #[tokio::test]

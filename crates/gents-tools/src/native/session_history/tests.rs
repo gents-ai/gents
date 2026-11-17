@@ -441,6 +441,7 @@ async fn seeded_node() -> gents_inference::test_support::TestDb {
         compaction_reason:
             gents_protocol::rendered_request::ContextCompactionReason::BelowThreshold,
         pre_compaction_input_tokens: None,
+        stubbed_results: None,
     };
     let accounting = escape_graphql_string(&serde_json::to_string(&accounting).unwrap());
     let mutation = format!(
