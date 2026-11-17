@@ -3,6 +3,7 @@ use super::files::{
     write_json,
 };
 use super::*;
+use crate::native_service::ProcessCommandRunner;
 use std::fs::{self, File};
 
 pub(super) fn prepare(
@@ -10,6 +11,25 @@ pub(super) fn prepare(
     id: uuid::Uuid,
     args: ServiceUpdateArgs,
     helper: Option<PathBuf>,
+) -> Result<(Plan, Receipt, File)> {
+    prepare_with_probe(
+        home,
+        id,
+        args,
+        helper,
+        |candidate, home, keychain, original| {
+            preflight::probe(&ProcessCommandRunner, candidate, home, keychain, original)
+                .map_err(Into::into)
+        },
+    )
+}
+
+pub(super) fn prepare_with_probe(
+    home: PathBuf,
+    id: uuid::Uuid,
+    args: ServiceUpdateArgs,
+    helper: Option<PathBuf>,
+    mut probe: impl FnMut(&Path, &Path, bool, &Path) -> Result<Phase>,
 ) -> Result<(Plan, Receipt, File)> {
     let root = home.join(gents_store::local::home::SERVICE_UPDATES_DIR_NAME);
     private_dir(&root)?;
@@ -47,6 +67,24 @@ pub(super) fn prepare(
             submission_lock,
         ));
     }
+    let init = read_init_config(&home)?.context("home is not initialized")?;
+    let keychain = preflight::keychain_custody(init.store_encryption.as_ref());
+    let supplied_candidate = if let Some(candidate) = args.executable.as_deref() {
+        let expected = digest(candidate)?;
+        let supplied = args
+            .sha256
+            .as_deref()
+            .context("--executable requires --sha256 from a trusted source")?;
+        anyhow::ensure!(
+            supplied.eq_ignore_ascii_case(&expected),
+            "candidate SHA-256 mismatch; runtime unchanged"
+        );
+        let (temp, phase) =
+            prepare_with_preflight(&root, candidate, &expected, &home, keychain, &mut probe)?;
+        Some((expected, temp, phase))
+    } else {
+        None
+    };
     let current = helper.unwrap_or(std::env::current_exe()?);
     let config = NativeServiceConfig::new(home.clone(), current.clone())?;
     let manager = NativeServiceManager::new(config.clone())?;
@@ -60,18 +98,21 @@ pub(super) fn prepare(
         .as_deref()
         .map(crate::native_service::read_environment_file)
         .transpose()?;
-    let candidate = args.executable.as_deref().unwrap_or(&old_executable);
-    let expected = digest(candidate)?;
-    if args.executable.is_some() {
-        let supplied = args
-            .sha256
-            .as_deref()
-            .context("--executable requires --sha256 from a trusted source")?;
-        anyhow::ensure!(
-            supplied.eq_ignore_ascii_case(&expected),
-            "candidate SHA-256 mismatch; runtime unchanged"
-        );
-    }
+    let (expected, temp, admitted_phase) = match supplied_candidate {
+        Some(candidate) => candidate,
+        None => {
+            let expected = digest(&old_executable)?;
+            let (temp, phase) = prepare_with_preflight(
+                &root,
+                &old_executable,
+                &expected,
+                &home,
+                keychain,
+                &mut probe,
+            )?;
+            (expected, temp, phase)
+        }
+    };
     super::files::check_backup_capacity(&home, &root)?;
     let intent = Intent {
         digest: expected.clone(),
@@ -81,7 +122,6 @@ pub(super) fn prepare(
         drain_timeout_secs: args.drain_timeout_secs,
     };
     reject_pending(&root)?;
-    let init = read_init_config(&home)?.context("home is not initialized")?;
     let state = read_runtime_state(&home)?.context("runtime has no endpoint")?;
     anyhow::ensure!(
         init.node_did == state.node_did
@@ -92,20 +132,8 @@ pub(super) fn prepare(
     // No hostname resolution or redirects: the signed control response binds
     // identity/build; the persisted listener binds the endpoint to this home.
     execute::endpoint(&state.graphql, &prior_network)?;
-    let temp = tempfile::Builder::new()
-        .prefix("stage-")
-        .tempdir_in(&root)?;
-    private_dir(temp.path())?;
-    copy_executable(candidate, &temp.path().join("gents"))?;
-    anyhow::ensure!(
-        digest(&temp.path().join("gents"))? == expected,
-        "artifact changed during staging"
-    );
     copy_executable(&current, &temp.path().join("helper"))?;
     copy_executable(&old_executable, &temp.path().join("prior-gents"))?;
-    validate_native_executable(&temp.path().join("gents"))?;
-    // The digest is checked before executing the candidate. Candidate-owned
-    // preflight inspects format markers without opening or modifying the store.
     use crate::native_service::{CommandRunner as _, ProcessCommandRunner};
     let helper_probe = ProcessCommandRunner.run(
         temp.path().join("helper").as_os_str(),
@@ -120,28 +148,6 @@ pub(super) fn prepare(
     anyhow::ensure!(
         helper_metadata["handoff_version"] == 1,
         "staged updater protocol changed; runtime unchanged"
-    );
-    let probe = ProcessCommandRunner.run(
-        temp.path().join("gents").as_os_str(),
-        &[
-            "service".into(),
-            "update-check".into(),
-            "--home".into(),
-            home.as_os_str().to_owned(),
-        ],
-    )?;
-    anyhow::ensure!(
-        probe.success,
-        "candidate preflight refused; runtime unchanged: {}",
-        gents_protocol::failure_text::bounded_text(&probe.stderr)
-    );
-    let probe: serde_json::Value = serde_json::from_str(&probe.stdout)?;
-    anyhow::ensure!(
-        probe["handoff_version"] == 1
-            && probe["schema_checked"] == true
-            && probe["os"] == std::env::consts::OS
-            && probe["arch"] == std::env::consts::ARCH,
-        "candidate platform or handoff protocol mismatch"
     );
     let target = if intent.executable_update {
         directory.join("gents")
@@ -183,7 +189,7 @@ pub(super) fn prepare(
         node_did: plan.node_did.clone(),
         session_id: plan.session_id.clone(),
         request_id: plan.request_id.clone(),
-        phase: Phase::Staged,
+        phase: admitted_phase,
         message: "Verified candidate staged; runtime unchanged".into(),
         updated_at: chrono::Utc::now().to_rfc3339(),
         directory: directory.clone(),
@@ -193,6 +199,37 @@ pub(super) fn prepare(
     fs::rename(temp.keep(), &directory)?;
     File::open(&root)?.sync_all()?;
     Ok((plan, receipt, submission_lock))
+}
+
+/// The shared admission boundary for both supplied and installed candidates.
+/// Only the observed phase returned here can initialize the durable receipt.
+pub(super) fn prepare_with_preflight(
+    root: &Path,
+    candidate: &Path,
+    expected: &str,
+    home: &Path,
+    keychain: bool,
+    probe: &mut impl FnMut(&Path, &Path, bool, &Path) -> Result<Phase>,
+) -> Result<(tempfile::TempDir, Phase)> {
+    let temp = verified_candidate(root, candidate, expected)?;
+    let phase = probe(&temp.path().join("gents"), home, keychain, candidate)?;
+    Ok((temp, phase))
+}
+
+/// Candidate execution uses only a private digest-verified copy, never the
+/// mutable caller path. The directory is unpublished and removed on refusal;
+/// no staged receipt, service definition or retirement exists at preflight.
+fn verified_candidate(root: &Path, candidate: &Path, expected: &str) -> Result<tempfile::TempDir> {
+    let temp = tempfile::Builder::new().prefix("stage-").tempdir_in(root)?;
+    private_dir(temp.path())?;
+    let executable = temp.path().join("gents");
+    copy_executable(candidate, &executable)?;
+    anyhow::ensure!(
+        digest(&executable)? == expected,
+        "artifact changed during staging"
+    );
+    validate_native_executable(&executable)?;
+    Ok(temp)
 }
 
 /// Unpublished staging directories cannot own an operation. An abandoned

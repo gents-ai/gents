@@ -29,6 +29,35 @@ def step (phase : Phase) : Action → Option Phase
   | .verify ready => if phase = .installed ∧ ready then some .healthy else none
   | .fail => if phase ≠ .healthy ∧ phase ≠ .failed then some .failed else none
 
+/-- The candidate process must demonstrate noninteractive readability of a
+recorded Keychain store key before a staged operation can exist. Other custody
+keeps its existing preflight. No store opening, key creation or runtime action
+is permitted by this observation. A missing candidate attestation is false. -/
+def preflight (verified keychainCustody keyReadableWithoutInteraction : Bool) : Option Phase :=
+  if verified && (!keychainCustody || keyReadableWithoutInteraction) then some .staged else none
+
+theorem unreadable_keychain_never_staged (verified : Bool) :
+    preflight verified true false = none := by
+  simp [preflight]
+
+theorem other_custody_unchanged (verified readable : Bool) :
+    preflight verified false readable = (if verified then some .staged else none) := by
+  simp [preflight]
+
+/-- Registration is downstream of the candidate observation: without its
+admitted phase there is no initial receipt and no registration transition. -/
+def registerAfterPreflight (verified keychain readable : Bool) : Option Phase :=
+  (preflight verified keychain readable).bind fun phase => step phase (.register true)
+
+theorem rejected_preflight_cannot_register (verified keychain readable : Bool)
+    (h : preflight verified keychain readable = none) :
+    registerAfterPreflight verified keychain readable = none := by
+  simp [registerAfterPreflight, h]
+
+theorem unreadable_keychain_cannot_register (verified : Bool) :
+    registerAfterPreflight verified true false = none := by
+  simp [registerAfterPreflight, preflight]
+
 /-- A different executable may migrate before readiness; it is never rolled
 back after a startup attempt or publication of its service definition: a
 reboot/external start can open that definition after helper death. Reconfiguration of the identical digest may be
