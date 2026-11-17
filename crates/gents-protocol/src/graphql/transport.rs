@@ -61,7 +61,13 @@ pub async fn graphql_endpoint_available(graphql: &str, options: GraphqlRequestOp
         .send()
         .await
     {
-        Ok(response) => response.status().is_success(),
+        Ok(response) => {
+            response.status().is_success()
+                || matches!(
+                    response.status(),
+                    reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+                )
+        }
         Err(_) => false,
     }
 }

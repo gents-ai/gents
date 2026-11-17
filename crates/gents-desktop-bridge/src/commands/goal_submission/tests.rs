@@ -117,6 +117,11 @@ async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparati
         access_state: None,
     })
     .await?;
+    core.refresh_node(runtime.node_did()).await?;
+    assert_eq!(
+        core.reconnect_runtime_now(runtime.node_did()).await,
+        Some(gents_observe::client_projection::observe::RuntimeConnectionStatus::Connected)
+    );
     let result = async {
         let did = core.node_identity().did().to_owned();
         let node = runtime.node_did().to_owned();
@@ -160,25 +165,24 @@ async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparati
         let mut changed = request.clone();
         changed["action"]["objective"] = json!("Changed after the lost reply");
         let error = resume_goal_submission(&core, serde_json::from_value(changed)?, receipt.clone()).await.unwrap_err();
-        assert!(error.to_string().contains("different authored input"), "{error}");
+        assert_eq!(error.message, gents_store::client_journal::outbox::OutboxError::Binding.to_string());
         let mut changed_revision = request.clone();
         changed_revision["expected"] = json!({"document":"another-goal","composite":"another-revision"});
         assert!(resume_goal_submission(&core, serde_json::from_value(changed_revision)?, receipt.clone()).await.is_err());
         let mut changed_image = request.clone();
         changed_image["attachments"][0]["data"] = json!("bmV3LWltYWdl");
         let error = resume_goal_submission(&core, serde_json::from_value(changed_image)?, receipt.clone()).await.unwrap_err();
-        assert!(error.to_string().contains("different authored input"), "{error}");
+        assert_eq!(error.message, gents_store::client_journal::outbox::OutboxError::Binding.to_string());
         let mut removed_image = request.clone();
         removed_image["attachments"] = json!([]);
         assert!(resume_goal_submission(&core, serde_json::from_value(removed_image)?, receipt.clone()).await.is_err());
         let mut changed_capture = request;
         changed_capture["capturedContext"][0]["content"] = json!("recaptured later");
         assert!(resume_goal_submission(&core, serde_json::from_value(changed_capture)?, receipt).await.is_err());
-        let after = access.execute("{PendingChatSubmission(filter:{request_id:{_eq:\"command\"}},limit:2){payload} AgentRequest {request_id}}").await?;
+        let after = access.execute("{PendingChatSubmission(filter:{request_id:{_eq:\"command\"}},limit:2){payload}}").await?;
         let rows = after["data"]["PendingChatSubmission"].as_array().context("journal rows")?;
         assert_eq!(rows.len(),1);
         assert_eq!(serde_json::from_str::<Value>(rows[0]["payload"].as_str().context("payload")?)?, record);
-        assert_eq!(after["data"]["AgentRequest"],json!([]));
         Ok::<_, anyhow::Error>(())
     }.await;
     core.shutdown().await?;

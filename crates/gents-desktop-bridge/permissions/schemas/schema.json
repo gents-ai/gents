@@ -2143,10 +2143,10 @@
           "markdownDescription": "Request retry\n#### This permission set includes:\n\n- `allow-desktop-request-retry`"
         },
         {
-          "description": "Node addresses, routes and enrollment requests in the client snapshot",
+          "description": "Node addresses, routes and runtime access requests\n#### This permission set includes:\n\n- `allow-desktop-runtime-access-list`",
           "type": "string",
           "const": "fleet-read",
-          "markdownDescription": "Node addresses, routes and enrollment requests in the client snapshot"
+          "markdownDescription": "Node addresses, routes and runtime access requests\n#### This permission set includes:\n\n- `allow-desktop-runtime-access-list`"
         },
         {
           "description": "Workspace browser\n#### This permission set includes:\n\n- `allow-desktop-workspace-list`",
@@ -2197,10 +2197,10 @@
           "markdownDescription": "Allow, change and remove plugin folders, and answer a plugin question\n#### This permission set includes:\n\n- `allow-desktop-allowed-dirs-add`\n- `allow-desktop-allowed-dirs-remove`\n- `allow-desktop-plugin-approval-decide`\n- `allow-desktop-plugin-approval-subscribe`\n- `allow-desktop-plugin-approval-unsubscribe`"
         },
         {
-          "description": "Runtime client access requests, decisions, removal and rename\n#### This permission set includes:\n\n- `allow-desktop-runtime-access-request`\n- `allow-desktop-runtime-access-list`\n- `allow-desktop-runtime-access-decide`\n- `allow-desktop-runtime-remove`\n- `allow-desktop-runtime-rename`",
+          "description": "Runtime client access requests, decisions, removal and rename\n#### This permission set includes:\n\n- `allow-desktop-runtime-access-request`\n- `allow-desktop-runtime-access-decide`\n- `allow-desktop-runtime-remove`\n- `allow-desktop-runtime-rename`",
           "type": "string",
           "const": "fleet-admin",
-          "markdownDescription": "Runtime client access requests, decisions, removal and rename\n#### This permission set includes:\n\n- `allow-desktop-runtime-access-request`\n- `allow-desktop-runtime-access-list`\n- `allow-desktop-runtime-access-decide`\n- `allow-desktop-runtime-remove`\n- `allow-desktop-runtime-rename`"
+          "markdownDescription": "Runtime client access requests, decisions, removal and rename\n#### This permission set includes:\n\n- `allow-desktop-runtime-access-request`\n- `allow-desktop-runtime-access-decide`\n- `allow-desktop-runtime-remove`\n- `allow-desktop-runtime-rename`"
         },
         {
           "description": "Operations snapshot, health, session provenance, MCP probe, workflow runs\n#### This permission set includes:\n\n- `allow-desktop-operations-snapshot`\n- `allow-desktop-session-provenance`\n- `allow-desktop-jobs-list`\n- `allow-desktop-job-view`\n- `allow-desktop-list-backends-with-health`\n- `allow-desktop-list-mcp-services-with-health`\n- `allow-desktop-probe-mcp-service`",

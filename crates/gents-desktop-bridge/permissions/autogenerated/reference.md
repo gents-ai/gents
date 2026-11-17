@@ -4020,7 +4020,7 @@ Request retry
 </td>
 <td>
 
-Node addresses, routes and enrollment requests in the client snapshot
+Node addresses, routes and runtime access requests
 
 </td>
 </tr>

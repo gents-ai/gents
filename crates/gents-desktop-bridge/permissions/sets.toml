@@ -85,8 +85,8 @@ permissions = [
 
 [[set]]
 identifier = "fleet-read"
-description = "Node addresses, routes and enrollment requests in the client snapshot"
-permissions = []
+description = "Node addresses, routes and runtime access requests"
+permissions = ["allow-desktop-runtime-access-list"]
 
 [[set]]
 identifier = "workspace-read"
@@ -139,7 +139,6 @@ identifier = "fleet-admin"
 description = "Runtime client access requests, decisions, removal and rename"
 permissions = [
   "allow-desktop-runtime-access-request",
-  "allow-desktop-runtime-access-list",
   "allow-desktop-runtime-access-decide",
   "allow-desktop-runtime-remove",
   "allow-desktop-runtime-rename",

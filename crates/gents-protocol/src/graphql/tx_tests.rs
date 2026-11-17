@@ -203,3 +203,43 @@ fn retryable_graphql_conflicts_are_the_responses_defradb_reports() {
         "conflict wording without DefraDB's code is not a retryable conflict"
     );
 }
+
+#[tokio::test]
+async fn http_authentication_refusals_preserve_endpoint_availability() {
+    for (status, available) in [
+        (axum::http::StatusCode::OK, true),
+        (axum::http::StatusCode::UNAUTHORIZED, true),
+        (axum::http::StatusCode::FORBIDDEN, true),
+        (axum::http::StatusCode::NOT_FOUND, false),
+        (axum::http::StatusCode::SERVICE_UNAVAILABLE, false),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        let router = axum::Router::new().route(
+            "/api/v0/graphql",
+            axum::routing::post(move || async move { status }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let options = super::GraphqlRequestOptions {
+            max_attempts: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            super::graphql_endpoint_available(&endpoint, options).await,
+            available,
+            "{status}"
+        );
+        if matches!(
+            status,
+            axum::http::StatusCode::UNAUTHORIZED | axum::http::StatusCode::FORBIDDEN
+        ) {
+            assert!(
+                super::execute_graphql_async(&endpoint, None, "{ __typename }", options)
+                    .await
+                    .is_err()
+            );
+        }
+        server.abort();
+        server.await.unwrap_err();
+    }
+}

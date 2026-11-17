@@ -31,11 +31,18 @@ pub(crate) async fn managed_pairing_ready(
     let Some(access) = core.operator_access(node_did).ok() else {
         return Ok(false);
     };
-    access
+    match access
         .read_view(&gents_documents::views::config::NodeList::new(node_did))
         .await
-        .map(|rows| !rows.is_empty())
-        .map_err(|error| PairingFailure::Transient(error.to_string()))
+    {
+        Ok(rows) => Ok(!rows.is_empty()),
+        Err(error) if gents_store::config_client::TransactionFailure::permission_denied(&error) => {
+            Ok(false)
+        }
+        Err(error) => Err(PairingFailure::Transient(
+            gents_protocol::error_chain::ErrorChain(&error).to_string(),
+        )),
+    }
 }
 
 pub(crate) async fn ensure_managed_runtime_pairing(
