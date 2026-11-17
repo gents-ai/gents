@@ -1,42 +1,99 @@
 use std::fs::{File, OpenOptions, TryLockError};
+use std::io::ErrorKind;
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 use anyhow::{bail, Context, Result};
 
 const FIRST_TEST_PORT: u16 = 20_000;
-const LAST_TEST_PORT: u16 = 45_000;
+/// Below 32768, where Linux's default `ip_local_port_range` starts (macOS
+/// starts at 49152): an outbound connection is never given a port in this
+/// range, so it cannot take one between the probe and the server's bind.
+/// `last_test_port` lowers it further on a host configured below that.
+const LAST_TEST_PORT: u16 = 32_767;
 
 static NEXT_TEST_PORT: OnceLock<Mutex<u16>> = OnceLock::new();
 static PORT_RESERVATIONS: OnceLock<Mutex<Vec<(u16, File)>>> = OnceLock::new();
 
+/// The reservation locks must be shared by every test process that shares
+/// the host's port space. `std::env::temp_dir()` follows TMPDIR, which each
+/// CI runner sets to its own work directory, so two jobs on one machine
+/// would lock in two directories and reserve the same port
+/// (`TestPortReservation.tla`, `PerRunner`).
+#[cfg(unix)]
+fn reservation_directory() -> Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = PathBuf::from("/tmp/gents-cli-test-port-reservations");
+    match std::fs::create_dir(&directory) {
+        Ok(()) => std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o1777))
+            .context("opening the test port reservation directory to every user")?,
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error).context("creating test port reservation directory"),
+    }
+    Ok(directory)
+}
+
+#[cfg(not(unix))]
+fn reservation_directory() -> Result<PathBuf> {
+    let directory = std::env::temp_dir().join("gents-cli-test-port-reservations");
+    std::fs::create_dir_all(&directory).context("creating test port reservation directory")?;
+    Ok(directory)
+}
+
+#[cfg(target_os = "linux")]
+fn last_test_port() -> Result<u16> {
+    let range = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        .context("reading the ephemeral port range")?;
+    let first_ephemeral: u16 = range
+        .split_whitespace()
+        .next()
+        .context("empty ephemeral port range")?
+        .parse()
+        .context("parsing the ephemeral port range")?;
+    let last = LAST_TEST_PORT.min(first_ephemeral.saturating_sub(1));
+    if last < FIRST_TEST_PORT {
+        bail!("the ephemeral port range starts at {first_ephemeral}, inside the test range from {FIRST_TEST_PORT}");
+    }
+    Ok(last)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn last_test_port() -> Result<u16> {
+    Ok(LAST_TEST_PORT)
+}
+
 pub fn allocate_port() -> Result<u16> {
     // Allocate monotonically from a fixed range instead of probing port 0:
     // dropping the probe lets an outbound test connection claim the port
-    // before the server child binds it. The range still overlaps Linux's
-    // ephemeral range, so this only narrows the collision window. Reservation
-    // files must not be unlinked: replacing an inode defeats their lock.
-    let reservations = std::env::temp_dir().join("gents-cli-test-port-reservations");
-    std::fs::create_dir_all(&reservations).context("creating test port reservation directory")?;
+    // before the server child binds it. Reservation files must not be
+    // unlinked: replacing an inode defeats their lock.
+    let reservations = reservation_directory()?;
+    let last_port = last_test_port()?;
     let next_port = NEXT_TEST_PORT.get_or_init(|| Mutex::new(FIRST_TEST_PORT));
-    for _ in FIRST_TEST_PORT..=LAST_TEST_PORT {
+    for _ in FIRST_TEST_PORT..=last_port {
         let port = {
             let mut next_port = next_port.lock().expect("test port cursor poisoned");
             let port = *next_port;
-            *next_port = if port == LAST_TEST_PORT {
+            *next_port = if port >= last_port {
                 FIRST_TEST_PORT
             } else {
                 port + 1
             };
             port
         };
-        let reservation = OpenOptions::new()
+        let reservation = match OpenOptions::new()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
             .open(reservations.join(port.to_string()))
-            .context("opening test port reservation")?;
+        {
+            Ok(reservation) => reservation,
+            // Another user's process created this reservation; it is theirs.
+            Err(error) if error.kind() == ErrorKind::PermissionDenied => continue,
+            Err(error) => return Err(error).context("opening test port reservation"),
+        };
         match reservation.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => continue,
@@ -55,7 +112,7 @@ pub fn allocate_port() -> Result<u16> {
         }
     }
 
-    bail!("no free test port in {FIRST_TEST_PORT}..={LAST_TEST_PORT}")
+    bail!("no free test port in {FIRST_TEST_PORT}..={last_port}")
 }
 
 /// True while this process still holds `allocate_port`'s advisory reservation

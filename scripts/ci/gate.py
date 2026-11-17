@@ -117,6 +117,27 @@ JOURNEY = {"gents-cli", "gents-client-host", "gents-media-host"}
 # Portable crates whose tests need the Afterburner compilers (Go, Javy, Binaryen).
 AFTERBURNER = {"gents-cli"}
 
+# The system libraries a Linux build of the portable crates links, by the
+# pkg-config module that finds each (module -> Ubuntu package): Tauri's GTK and
+# WebKitGTK (gents-client-host, fixture-domain-plugin), ALSA (gents-media-host)
+# and the rest of the portable hosts' provisioning list (amygdala
+# infra/services/github-runners/provision-ghrunner-root.sh). `system_preflight`
+# names any that is missing before a build, instead of a -sys crate's build
+# script failing deep inside it.
+LINUX_SYSTEM_LIBRARIES = {
+    "gtk+-3.0": "libgtk-3-dev",
+    "webkit2gtk-4.1": "libwebkit2gtk-4.1-dev",
+    "javascriptcoregtk-4.1": "libjavascriptcoregtk-4.1-dev",
+    "libsoup-3.0": "libsoup-3.0-dev",
+    "librsvg-2.0": "librsvg2-dev",
+    "ayatana-appindicator3-0.1": "libayatana-appindicator3-dev",
+    "alsa": "libasound2-dev",
+    "libudev": "libudev-dev",
+    "libxml-2.0": "libxml2-dev",
+    "zlib": "zlib1g-dev",
+    "ncurses": "libncurses-dev",
+}
+
 PACKAGE_FEATURES = {
     "gents-claude": "gents-claude/transport",
     "gents-protocol": "gents-protocol/typescript",
@@ -141,6 +162,13 @@ NO_TESTS = {
 # NEXTEST_WORKSPACE_ROOT and CARGO_BIN_EXE_<name>: the build checkout is gone.
 ARCHIVE = "portable"
 ARCHIVE_SOURCE = "gents-archive-src"
+# The archive's Cargo profile unless PROFILE names another: workspace crates at
+# opt-level 0, dependencies at 1. Against `test` (opt-level 1 throughout) a cold
+# build of gents, gents-cli and gents-desktop-core spent 629 rather than 1,165
+# unit-seconds on workspace crates and compiled the gents lib test target in 51
+# rather than 140 s, while gents-desktop-core's 363 tests took 122.9 s against
+# 122.4 s (M-series laptop, 10 jobs, 2026-11-17).
+ARCHIVE_PROFILE = "ci-native"
 NEXTEST = "cargo-nextest"
 
 # A change here can alter any build or the gate itself, so it selects everything.
@@ -653,20 +681,33 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
         matrix = [entry for entry in matrix if entry["job"] in jobs]
         if archived:
             # At most one slice per crate with tests, so every slice runs some.
-            count = min(count, len([package for package in archived if package not in NO_TESTS]))
+            tested_crates = len([package for package in archived if package not in NO_TESTS])
+            count = min(count, tested_crates)
             # One slice runs in the build job itself: no archive transfer, which
             # from the minisforums costs more than the tests (1.24 GB: 3.5 min
             # up, 14 min down in dispatch 43775099812).
             single = count == 1
             mode = test_cache_mode(single)
             groups = host_groups("portable")
-            # The test-result store is a directory on the host that runs the
-            # cached slice, so that slice keeps to the first host group.
-            build_group = groups[0] if groups and mode != "off" else None
             go = bool(AFTERBURNER & set(archived))
-            archives.append({"archive": ARCHIVE, **placement("portable", host_group=build_group), "run": single,
-                             "packages": " ".join(archived), "timeout": 150 if single else 90,
-                             "test_cache": mode, "go": go})
+            entry = {"archive": ARCHIVE, "run": single, "packages": " ".join(archived),
+                     "timeout": 150 if single else 90, "test_cache": mode, "go": go}
+            # The slice that runs in the build job splits into one hash
+            # partition per host group: each partition's job builds the
+            # archive from its own host's compiler cache and kept target tree
+            # and runs its tests against that host's test-result store
+            # (TestCache.lean `skip_sound_on_any_host`). A test's partition is
+            # a hash of its name, so it lands on the same host group, and in
+            # the same store, run after run. Without host groups the build
+            # takes the role's labels alone and any free portable runner
+            # picks it up.
+            partitions = min(len(groups), tested_crates) if single else 0
+            if partitions > 1:
+                archives += [{**entry, **placement("portable", host_group=groups[index - 1]),
+                              "partition": index, "partitions": partitions}
+                             for index in range(1, partitions + 1)]
+            else:
+                archives.append({**entry, **placement("portable")})
             # Slices alternate between host groups, so one run's slices split across hosts.
             shards = [] if single else [
                 {"archive": ARCHIVE, "index": index, "count": count, "timeout": 90, "go": go,
@@ -940,6 +981,30 @@ def feature_flags(package):
     return []
 
 
+def system_preflight(platform=None, exists=None):
+    """False, with the missing packages named, when this Linux host lacks a
+    system library the portable crates link."""
+    if (platform or sys.platform) != "linux":
+        return True
+    started = time.time()
+
+    def found(name):
+        try:
+            return subprocess.run(["pkg-config", "--exists", name]).returncode == 0
+        except FileNotFoundError:
+            return False
+
+    missing = [package for name, package in LINUX_SYSTEM_LIBRARIES.items() if not (exists or found)(name)]
+    if not missing:
+        return True
+    problem = (f"this runner lacks the system packages {' '.join(missing)}, which the portable crates link "
+               "on Linux; install them on every host of the runner's role "
+               "(amygdala infra/services/github-runners/provision-ghrunner-root.sh)")
+    print(f"::error::{problem}", flush=True)
+    results.append(("system library preflight", problem, "", time.time() - started))
+    return False
+
+
 def run_test(selection, name):
     entry = next((entry for entry in selection["matrix"] if entry["job"] == f"test:{name}"), None)
     group = next((group for group in GROUPS if entry and group.name == entry["group"]), None)
@@ -948,6 +1013,8 @@ def run_test(selection, name):
     packages = entry["packages"].split()
     if group.name == NATIVE:
         run_native(entry, packages)
+        return
+    if not system_preflight():
         return
     options = group_options(group)
     # One crate per build: a crate that compiles only through the features
@@ -1144,9 +1211,14 @@ def nextest(arguments, cwd=ROOT, label=None, expect=None, prefix=(), path_prefix
     return verdict == "ok"
 
 
-def archive_listing(archive, workspace, extract=None):
+def partition_arguments(entry):
+    """The nextest partition of a partitioned build's own slice, else none."""
+    return ["--partition", f"hash:{entry['partition']}/{entry['partitions']}"] if entry.get("partition") else []
+
+
+def archive_listing(archive, workspace, extract=None, partition=()):
     arguments = ["cargo", "nextest", "list", "--archive-file", str(archive), "--workspace-remap",
-                 str(workspace), "--message-format", "json", "--run-ignored", "all"]
+                 str(workspace), "--message-format", "json", "--run-ignored", "all", *partition]
     if extract:
         arguments += ["--extract-to", str(extract), "--extract-overwrite"]
     raw = subprocess.run(arguments, cwd=workspace, check=True, stdout=subprocess.PIPE).stdout
@@ -1167,8 +1239,11 @@ def listed_tests(archive, workspace, listing=None):
 
 
 def runnable(listing):
-    """Binary id -> the names of its tests a slice runs (ignored ones are not)."""
-    return {suite["binary-id"]: sorted(name for name, case in suite["testcases"].items() if not case.get("ignored"))
+    """Binary id -> the names of its tests a slice runs: not ignored, and in the
+    listing's partition (nextest lists the others as a `partition` mismatch)."""
+    def runs(case):
+        return not case.get("ignored") and case.get("filter-match", {}).get("status", "matches") == "matches"
+    return {suite["binary-id"]: sorted(name for name, case in suite["testcases"].items() if runs(case))
             for suite in listing["rust-suites"].values()}
 
 
@@ -1190,7 +1265,7 @@ def plan_test_cache(entry, archive, source, output, name):
     """Decide which tests the slices run and write the decisions beside the archive."""
     started = time.time()
     extract = extract_dir("plan")
-    listing = archive_listing(archive, source, extract)
+    listing = archive_listing(archive, source, extract, partition_arguments(entry))
     tests = runnable(listing)
     binaries = {"nextest": nextest_version(), "binaries": {
         suite["binary-id"]: {"relative": os.path.relpath(os.path.realpath(suite["binary-path"]),
@@ -1246,15 +1321,89 @@ def doctests(packages):
     return found
 
 
-def run_build(selection, name):
+def run_build(selection, name, partition=None):
     """Build every selected crate's tests once, in one Cargo invocation, into a nextest archive.
 
     In CI the build runs from a worktree under RUNNER_TEMP that the runner removes
     after the job, so a test binary can only reach source files through the
-    runtime paths a shard remaps to its own checkout.
+    runtime paths a shard remaps to its own checkout. `build:<name>:<partition>`
+    runs only that partition of the tests; `build:<name>` (`make gate`) runs them all.
     """
-    entry = next(entry for entry in selection["archives"] if entry["archive"] == name)
+    entries = [entry for entry in selection["archives"] if entry["archive"] == name]
+    if partition is None:
+        entry = {key: value for key, value in entries[0].items() if key not in ("partition", "partitions")}
+    else:
+        entry = next((entry for entry in entries if entry.get("partition") == partition), None)
+        if entry is None:
+            fail(f"build {name}:{partition} is not selected by this plan")
+    lean = LeanContract.start() if entry.get("run") else None
+    try:
+        build_and_run(entry, name, lean)
+    finally:
+        if lean:
+            lean.stop()
+
+
+def show_timings(report, count=15):
+    """The compile's slowest units from Cargo's --timings report, so a job's
+    log says where its compile went."""
+    try:
+        text = report.read_text()
+        units = json.loads(re.search(r"const UNIT_DATA = (\[.*?\]);\n", text, re.S).group(1))
+    except (OSError, AttributeError, ValueError):
+        return
+    end = max((unit["start"] + unit["duration"] for unit in units), default=0)
+    print(f"\nCompile: {len(units)} units in {end:.0f} s; the slowest:", flush=True)
+    for unit in sorted(units, key=lambda unit: -unit["duration"])[:count]:
+        print(f"  {unit['duration']:7.1f} s  from {unit['start']:6.1f} s  {unit['name']} {unit['target'].strip()}",
+              flush=True)
+
+
+class LeanContract:
+    """The Lean conformance contract the Lean-backed tests load, built beside
+    the Rust compile rather than before it (rust-runner `lean-contract: deferred`):
+    it took 2.5 to 10 minutes ahead of the compile in PR #3926's runs. Tests
+    must not start before it is built: they would each build it on first use
+    under a shared lock, with their output captured."""
+
+    TARGET = "Proofs.Conformance.Contracts:olean"
+
+    def __init__(self, process, log):
+        self.process, self.log, self.started = process, log, time.time()
+
+    @classmethod
+    def start(cls):
+        if not shutil.which("lake"):
+            return None
+        log = tempfile.NamedTemporaryFile(prefix="gate-lean-contract-", suffix=".log", delete=False)
+        print(f"\n$ lake build {cls.TARGET} (beside the Rust compile; output in {log.name})", flush=True)
+        process = subprocess.Popen(["lake", "build", cls.TARGET], cwd=ROOT / PROOFS, stdout=log,
+                                   stderr=subprocess.STDOUT, start_new_session=True)
+        return cls(process, log)
+
+    def wait(self):
+        """True once the contract is built; on failure, its output and the gate's error."""
+        code = self.process.wait()
+        self.log.close()
+        verdict = "ok" if code == 0 else f"exit {code}"
+        results.append((f"lake build {self.TARGET}", verdict, "", time.time() - self.started))
+        if code != 0:
+            sys.stdout.write(Path(self.log.name).read_text(errors="replace")[-20000:])
+            print(f"::error::lake build {self.TARGET}: {verdict}", flush=True)
+        return code == 0
+
+    def stop(self):
+        if self.process.poll() is None:
+            os.killpg(self.process.pid, signal.SIGTERM)
+            self.process.wait()
+        self.log.close()
+        Path(self.log.name).unlink(missing_ok=True)
+
+
+def build_and_run(entry, name, lean):
     packages = entry["packages"].split()
+    if not system_preflight():
+        return
     source = ROOT
     if os.environ.get("GITHUB_ACTIONS") and os.environ.get("RUNNER_TEMP"):
         source = Path(os.environ["RUNNER_TEMP"]) / ARCHIVE_SOURCE
@@ -1271,12 +1420,12 @@ def run_build(selection, name):
     arguments = ["archive", *[flag for package in packages for flag in ("-p", package)]]
     if features:
         arguments += ["--features", ",".join(features)]
-    profile = os.environ.get("PROFILE", "")
-    if profile:
-        arguments += ["--cargo-profile", profile]
-    arguments += ["--archive-file", str(archive)]
-    if not nextest(arguments, cwd=source, label=f"build {name}: {len(packages)} crates",
-                   extra_env=reproducible_paths(source) if entry.get("test_cache", "off") != "off" else None):
+    arguments += ["--cargo-profile", os.environ.get("PROFILE") or ARCHIVE_PROFILE]
+    arguments += ["--archive-file", str(archive), "--timings"]
+    built = nextest(arguments, cwd=source, label=f"build {name}: {len(packages)} crates",
+                    extra_env=reproducible_paths(source) if entry.get("test_cache", "off") != "off" else None)
+    show_timings(Path(os.environ.get("CARGO_TARGET_DIR") or source / "target") / "cargo-timings" / "cargo-timing.html")
+    if not built:
         return
     started = time.time()
     try:
@@ -1304,10 +1453,14 @@ def run_build(selection, name):
         print(f"::error::{problem}", flush=True)
     results.append((f"check {name} archive", "ok" if not problems else "; ".join(problems),
                     f"{total} tests listed, {ignored} ignored", time.time() - started))
-    if not problems and entry.get("run"):
+    if not problems and entry.get("run") and (lean is None or lean.wait()):
         # The whole archive, on this runner, from this job's own checkout.
         os.environ["GENTS_TEST_BINARIES_PREBUILT"] = "1"
-        arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci"]
+        arguments = ["run", "--archive-file", str(archive), "--workspace-remap", str(ROOT), "--profile", "ci",
+                     *partition_arguments(entry)]
+        if entry.get("partition"):
+            # Names this partition's records apart from its sibling's (test_cache.record_run).
+            os.environ["GATE_SLICE"] = str(entry["partition"])
         if os.environ.get("RUST_TEST_THREADS"):
             arguments += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
         if entry.get("test_cache", "off") == "off":
@@ -1432,12 +1585,12 @@ def kept_target():
 
 
 def run(selection, job):
-    if job.startswith("shard:") and job.count(":") == 2:
-        _, name, index = job.split(":")
-        if f"shard:{name}" not in selection["jobs"]:
-            print(f"gate: shard:{name} is not selected by this plan; nothing to do")
+    if job.startswith(("shard:", "build:")) and job.count(":") == 2:
+        prefix, name, index = job.split(":")
+        if f"{prefix}:{name}" not in selection["jobs"]:
+            print(f"gate: {prefix}:{name} is not selected by this plan; nothing to do")
             return
-        run_shard(selection, name, int(index))
+        (run_shard if prefix == "shard" else run_build)(selection, name, int(index))
         return
     if job not in selection["jobs"]:
         print(f"gate: {job} is not selected by this plan; nothing to do")
@@ -1533,6 +1686,11 @@ def emit(selection):
                 extra += "; the native client journey" if entry.get("journey") else ""
                 handle.write(f"- `{entry['job']}`: {entry['packages'] or 'no crates of its own'}{extra}\n")
             for entry in selection["archives"]:
+                if entry.get("partition"):
+                    handle.write(f"- `build:{entry['archive']}:{entry['partition']}`, running partition "
+                                 f"{entry['partition']} of {entry['partitions']} on {entry['runs_on'][-1]}: "
+                                 f"{entry['packages']}\n")
+                    continue
                 handle.write(f"- `build:{entry['archive']}`, then {len(selection['shards'])} "
                              f"`shard:{entry['archive']}` slices: {entry['packages']}\n")
 

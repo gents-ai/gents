@@ -1,6 +1,3 @@
-use std::time::Duration;
-use tokio::time::Instant;
-
 use gents::runtime::agent::session_commands::run_session_command_reconciler;
 use gents_lean_vocab::families::fold_queue_contracts_input_edit_endpoint as endpoint;
 use gents_protocol::request_admission::{
@@ -19,6 +16,7 @@ use gents_store::identity::NodeIdentity as _;
 use rapidhash::RapidHashMap;
 use tokio_util::sync::CancellationToken;
 
+use crate::support::live_inference::STALL_CEILING;
 use crate::support::snapshots::SnapshotReader;
 use crate::support::{self, TestDb};
 
@@ -54,7 +52,6 @@ async fn wait_row_as(
     fields: &str,
     required: &str,
 ) -> serde_json::Value {
-    let deadline = Instant::now() + Duration::from_secs(30);
     let mut changes = access.subscribe_changes(collection).await;
     loop {
         let found = rows_as(
@@ -73,10 +70,10 @@ async fn wait_row_as(
         {
             return row;
         }
-        tokio::time::timeout_at(deadline, changes.recv())
+        tokio::time::timeout(STALL_CEILING, changes.recv())
             .await
             .unwrap_or_else(|_| {
-                panic!("{collection}.{field}={value} did not appear with {required}")
+                panic!("{collection}.{field}={value} did not appear with {required}; {collection} stalled for {STALL_CEILING:?}")
             });
     }
 }

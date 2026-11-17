@@ -27,5 +27,14 @@ final-status-level = "fail"
 failure-output = "immediate-final"
 success-output = "never"
 
+[[profile.ci.overrides]]
+# Twenty sequential requests: about 60 s alone and 500-2750 s on a loaded host,
+# every request still progressing. Its waits fail a stalled request after
+# STALL_CEILING (600 s) with the request's rows; this ceiling is only the
+# backstop for a hang outside those waits, so it must exceed both that and the
+# loaded run, or a slow pass becomes a bare TIMEOUT.
+filter = 'binary_id(=gents::integration) & test(=e2e_runtime::storage_budget::per_request_store_growth_follows_new_content_not_history)'
+slow-timeout = { period = "60s", terminate-after = 60 }
+
 [profile.ci.junit]
 path = "junit.xml"

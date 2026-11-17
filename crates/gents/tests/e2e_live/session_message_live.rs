@@ -26,7 +26,7 @@ use crate::support::fixtures::{agent_target, configure_agent_tools};
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{
     live_target, terminal_assistant_answer, wait_for_assistant_answer, wait_for_request_terminal,
-    InferenceTarget, LiveAgentSpec, LiveUser,
+    InferenceTarget, LiveAgentSpec, LiveUser, STALL_CEILING,
 };
 use crate::support::{
     first_optional_row,
@@ -162,8 +162,7 @@ async fn live_local_create_session() -> Result<()> {
     let caused_terminal =
         wait_for_request_terminal(&live, &caused.request_id, Duration::from_secs(180)).await;
     assert_eq!(caused_terminal, "completed");
-    let caused_answer =
-        wait_for_assistant_answer(&live, &caused.request_id, Duration::from_secs(30)).await;
+    let caused_answer = wait_for_assistant_answer(&live, &caused.request_id, STALL_CEILING).await;
     tracing::info!("[live-local] started session answer = {caused_answer:?}");
     assert!(
         !caused_answer.trim().is_empty(),
@@ -339,8 +338,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     let parent_state =
         wait_for_request_terminal(&live, agent_request_id, Duration::from_secs(180)).await;
     assert_eq!(parent_state, "completed");
-    let parent_answer =
-        wait_for_assistant_answer(&live, agent_request_id, Duration::from_secs(30)).await;
+    let parent_answer = wait_for_assistant_answer(&live, agent_request_id, STALL_CEILING).await;
     assert!(
         !parent_answer.trim().is_empty(),
         "parent did not persist a reply after the agent_new receipt: {parent_answer:?}"
@@ -435,8 +433,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     let tool_parent_state =
         wait_for_request_terminal(&live, tool_request_id, Duration::from_secs(180)).await;
     assert_eq!(tool_parent_state, "completed");
-    let tool_parent_answer =
-        wait_for_assistant_answer(&live, tool_request_id, Duration::from_secs(30)).await;
+    let tool_parent_answer = wait_for_assistant_answer(&live, tool_request_id, STALL_CEILING).await;
     assert!(
         !tool_parent_answer.trim().is_empty(),
         "parent did not persist a reply after the background process receipt: {tool_parent_answer:?}"
@@ -811,12 +808,9 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     assert_eq!(managed_tool_state, "completed");
-    let managed_tool_answer = wait_for_assistant_answer(
-        &live,
-        managed_tool_terminal_read_request_id,
-        Duration::from_secs(30),
-    )
-    .await;
+    let managed_tool_answer =
+        wait_for_assistant_answer(&live, managed_tool_terminal_read_request_id, STALL_CEILING)
+            .await;
     assert!(
         !managed_tool_answer.trim().is_empty(),
         "the inspection request did not persist a reply: {managed_tool_answer:?}"
@@ -1415,7 +1409,7 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
         &first.request_id,
         &first.session_id,
         |value| value["tool_name"] == AGENT_NEW_TOOL_NAME,
-        Duration::from_secs(30),
+        STALL_CEILING,
     )
     .await;
     assert_eq!(refused["ok"], false);
@@ -1467,7 +1461,7 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
         &first.request_id,
         &first.session_id,
         |value| value.get("sessions").is_some(),
-        Duration::from_secs(30),
+        STALL_CEILING,
     )
     .await;
     let started_by = listed["sessions"]
@@ -3421,7 +3415,7 @@ async fn load_timeline(
 ) -> gents_observe::observe::run_timeline::RunTimelineRows {
     // A published header can name a closing segment whose parent link the
     // writer has not committed yet; that dependency is incomplete, not denied.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + STALL_CEILING;
     let mut changes = node.subscribe_changes("AgentOutputSegment").await;
     let mut messages = node.subscribe_changes("AgentMessage").await;
     loop {
@@ -3798,7 +3792,7 @@ async fn assert_wake_observed(node: &LiveUser, session_id: &str, parent_request_
     let state = wait_for_request_terminal(node, &wake.request_id, Duration::from_secs(180)).await;
     assert_eq!(state, "completed");
 
-    let answer = wait_for_assistant_answer(node, &wake.request_id, Duration::from_secs(30)).await;
+    let answer = wait_for_assistant_answer(node, &wake.request_id, STALL_CEILING).await;
     assert!(
         !answer.trim().is_empty(),
         "the completion wake did not persist a reply: {answer:?}"
