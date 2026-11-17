@@ -195,7 +195,7 @@ impl ClientRouteManager {
             }
         };
         let endpoint = if let Some(graphql) = management_endpoint(saved) {
-            match self.remote_admin(saved, graphql) {
+            match self.remote_admin(saved, graphql, Some(sync_state)) {
                 Ok(admin) => admin
                     .peer_info()
                     .await
@@ -263,7 +263,7 @@ impl ClientRouteManager {
             enrollment_remote_route_state(enrollment_remote_applied)
         } else {
             match management_endpoint(record) {
-                Some(graphql) => match self.remote_admin(record, graphql) {
+                Some(graphql) => match self.remote_admin(record, graphql, Some(sync_state)) {
                     Ok(admin) => {
                         self.reconcile_route(
                             &admin.with_local_resolver(Arc::clone(&self.node)),
@@ -548,10 +548,13 @@ impl ClientRouteManager {
         .await
     }
 
+    /// The remote admin of a saved home; with `saved`, an audience its
+    /// status reports after a refusal is kept with the record.
     fn remote_admin(
         &self,
         record: &PeerRecord,
         graphql: &str,
+        saved: Option<&ClientSyncStateOwner>,
     ) -> gents_p2p::p2p_reconcile::RemoteP2pAdminResult<HttpRemoteP2pAdmin> {
         let admin = HttpRemoteP2pAdmin::new_with_actor(graphql, Arc::clone(&self.actor))?;
         let endpoint = match self
@@ -568,11 +571,18 @@ impl ClientRouteManager {
                     .map_err(|error| {
                         gents_p2p::p2p_reconcile::RemoteP2pAdminError::LocalError(error.to_string())
                     })?;
-                crate::client::home_endpoint::user_on(graphql, &capability, record).map_err(
-                    |error| {
-                        gents_p2p::p2p_reconcile::RemoteP2pAdminError::LocalError(error.to_string())
-                    },
-                )?
+                match saved {
+                    Some(saved) => crate::client::home_endpoint::user_saved(
+                        graphql,
+                        &capability,
+                        record,
+                        saved,
+                    ),
+                    None => crate::client::home_endpoint::user_on(graphql, &capability, record),
+                }
+                .map_err(|error| {
+                    gents_p2p::p2p_reconcile::RemoteP2pAdminError::LocalError(error.to_string())
+                })?
             }
         };
         Ok(admin.with_node_identity(endpoint))
@@ -601,7 +611,7 @@ impl ClientRouteManager {
             .graphql
             .as_deref()
             .context("remote GraphQL endpoint is required to teardown the return route")?;
-        let admin = self.remote_admin(record, graphql)?;
+        let admin = self.remote_admin(record, graphql, None)?;
         for address in &addresses {
             teardown_owned_replicators_at_endpoint(&admin, address).await?;
         }

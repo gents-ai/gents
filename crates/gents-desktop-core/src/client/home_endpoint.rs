@@ -106,25 +106,48 @@ impl ResolveAudience for HomeStatus {
 }
 
 /// The User's endpoint at `url` of a home with no saved record, for the
-/// audience its public status reports now.
+/// audience its public status reports now; a request refused for its
+/// credential reads the status again (`Identity.HeldAudience.resend`).
 pub async fn user_resolving(
     client: &reqwest::Client,
     url: &str,
     capability: &ClientSigningCapability,
 ) -> anyhow::Result<GraphqlEndpoint> {
-    let status_url = crate::local_runtime::runtime_status_url(url)?;
-    let reported = match client.get(&status_url).send().await {
-        Ok(response) if response.status().is_success() => response
-            .json::<serde_json::Value>()
-            .await
-            .map_or(ReportedDelegationAudience::Absent, |status| {
-                ReportedDelegationAudience::observe(&status)
-            }),
-        _ => ReportedDelegationAudience::Absent,
-    };
+    let status = Arc::new(PublicStatus {
+        client: client.clone(),
+        url: crate::local_runtime::runtime_status_url(url)?,
+    });
+    let reported = status
+        .read()
+        .await
+        .unwrap_or(ReportedDelegationAudience::Absent);
     Ok(GraphqlEndpoint::as_principal(url, capability.did())
         .with_client_signing_capability(capability.clone())?
-        .with_reported_delegation_audience(reported)?)
+        .with_reported_delegation_audience(reported)?
+        .with_audience_resolver(status))
+}
+
+/// A home's public status, read with no credential.
+struct PublicStatus {
+    client: reqwest::Client,
+    url: String,
+}
+
+impl PublicStatus {
+    async fn read(&self) -> Option<ReportedDelegationAudience> {
+        let response = self.client.get(&self.url).send().await.ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let status = response.json::<serde_json::Value>().await.ok()?;
+        Some(ReportedDelegationAudience::observe(&status))
+    }
+}
+
+impl ResolveAudience for PublicStatus {
+    fn resolve(&self) -> BoxFuture<'_, Option<ReportedDelegationAudience>> {
+        Box::pin(self.read())
+    }
 }
 
 /// The co-hosted runtime's own Node endpoint. The edge of a Vera home admits
@@ -259,5 +282,50 @@ mod tests {
             Some(audience()),
             "the record keeps what the status reported"
         );
+    }
+
+    /// An endpoint built while its home's status named no audience learns
+    /// one from a refusal and presents a delegation from then on.
+    #[tokio::test]
+    async fn an_unsaved_home_endpoint_learns_its_audience_on_a_refusal() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/status"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/status"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "delegation_audience": audience() })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let user = gents_store::test_support::test_identity("unsaved-home-user");
+        let capability =
+            gents_store::identity::NodeIdentity::client_signing_capability(&user).unwrap();
+        let endpoint = super::user_resolving(
+            &reqwest::Client::new(),
+            &format!("{}/api/v0/graphql", server.uri()),
+            &capability,
+        )
+        .await
+        .unwrap();
+        assert!(!endpoint.mints_delegations());
+        assert!(
+            gents_store::config_client::post_graphql(&endpoint, "query { Node { _docID } }")
+                .await
+                .is_err()
+        );
+        assert!(endpoint.mints_delegations(), "it keeps what it learned");
     }
 }
