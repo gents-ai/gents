@@ -489,10 +489,12 @@ pub fn set_runtime_build(build: gents_protocol::build_info::BuildInfo) {
     let _ = RUNTIME_BUILD.set(build);
 }
 
-/// This process's build as the handshake reports it.
+/// This process's build as the handshake reports it. A process that recorded
+/// none states that plainly, so the refusal says "unverifiable" instead of
+/// reporting a build whose commit was never captured.
 pub fn runtime_build() -> gents_protocol::build_info::BuildInfo {
     RUNTIME_BUILD
         .get()
         .cloned()
-        .unwrap_or_else(|| gents_protocol::build_info::BuildInfo::current(Vec::new()))
+        .unwrap_or(gents_protocol::build_info::BuildInfo::UNVERIFIABLE)
 }

@@ -35,26 +35,24 @@ pub struct CorePackBuild {
 }
 
 impl BuildInfo {
-    /// This process's build, from the crate version, the git facts the build
-    /// script recorded, and the core packs it was given.
-    ///
-    /// The packs are passed in rather than read here, so this type stays the
-    /// wire's: a caller supplies what its own build carries. The git facts come
-    /// from `gents-cli/build.rs` (`GENTS_BUILD_GIT_SHA`/`_DIRTY`), which is the
-    /// build script that exists; this crate has none, so reading an env var
-    /// here would always be empty.
+    /// This process's build from the crate version and the core packs a caller
+    /// supplies. The git facts are left unset, because `gents-protocol` has no
+    /// build script -- a caller with one states them through
+    /// [`Self::from_parts`]. A build from here is therefore unverifiable, which
+    /// is what [`Self::UNVERIFIABLE`] states explicitly.
     pub fn current(core_packs: Vec<CorePackBuild>) -> Self {
-        Self::from_parts(
-            env!("CARGO_PKG_VERSION").to_owned(),
-            option_env!("GENTS_BUILD_GIT_SHA").map(str::to_owned),
-            option_env!("GENTS_BUILD_GIT_DIRTY").and_then(|value| match value {
-                "true" => Some(true),
-                "false" => Some(false),
-                _ => None,
-            }),
-            core_packs,
-        )
+        Self::from_parts(env!("CARGO_PKG_VERSION").to_owned(), None, None, core_packs)
     }
+
+    /// A build whose facts are unknown. `current` needs a build script, and
+    /// `gents-protocol` has none, so this is what a caller that never recorded
+    /// its build gets -- never a quiet guess from an always-empty env var.
+    pub const UNVERIFIABLE: Self = Self {
+        version: String::new(),
+        git_sha: None,
+        git_dirty: None,
+        core_packs: Vec::new(),
+    };
 
     /// [`Self::current`] with the facts stated, so a test can build the pairs a
     /// comparison is about without a build script.
@@ -69,6 +67,22 @@ impl BuildInfo {
             git_sha,
             git_dirty,
             core_packs,
+        }
+    }
+
+    /// One line to print when two builds agree only because both are dirty, so
+    /// an operator knows the install was accepted on a weaker guarantee.
+    pub fn dirty_warning(&self, other: &Self) -> Option<String> {
+        let both_dirty = self.git_dirty == Some(true) && other.git_dirty == Some(true);
+        if both_dirty && self.git_sha.is_some() && self.git_sha == other.git_sha {
+            Some(format!(
+                "both this client and the runtime are dirty builds of {}, so they were accepted as \
+                 the same build on the same commit and core packs; a clean install of each is the \
+                 stronger check",
+                self.git_sha.as_deref().unwrap_or("an unrecorded commit")
+            ))
+        } else {
+            None
         }
     }
 
@@ -91,16 +105,22 @@ impl BuildInfo {
         format!("gents {} ({revision})", self.version)
     }
 
-    /// Whether two builds plan the same pack install. A build with no commit,
-    /// and a dirty build whose commit does not identify its code, are never
-    /// "the same build" as another.
+    /// Whether two builds plan the same pack install. A build with no commit is
+    /// never "the same build" as another.
     pub fn plans_the_same_installs(&self, other: &Self) -> bool {
         self.is_verifiable() && other.is_verifiable() && self.differences(other).is_empty()
     }
 
     /// What differs between two builds, in one line each: version, then commit,
-    /// then whether the tree was dirty, then the core packs. Empty only when
-    /// both are verifiable and agree.
+    /// then the core packs. Empty only when both are verifiable and agree.
+    ///
+    /// Two **dirty** builds of the same commit with the same core packs agree,
+    /// and [`Self::dirty_warning`] says so out loud: a developer must be able to
+    /// install from their own binary into the runtime they just built, and
+    /// `build.rs` counts only tracked modifications (`--untracked-files=no`), so
+    /// two dirty builds of one commit are usually the same code. A dirty build
+    /// against a *clean* one of the same commit differs, because one of them
+    /// certainly carries changes the other does not.
     pub fn differences(&self, other: &Self) -> Vec<String> {
         let mut differences = Vec::new();
         if !self.is_verifiable() && !other.is_verifiable() {
@@ -123,18 +143,15 @@ impl BuildInfo {
                 other.git_sha.as_deref().unwrap_or("unrecorded")
             ));
         }
-        if self.git_dirty != other.git_dirty {
+        // Dirty beyond the sha and the packs: a dirty build against a clean one
+        // of the same commit means one carries changes the other does not.
+        let both_dirty = self.git_dirty == Some(true) && other.git_dirty == Some(true);
+        if self.git_dirty != other.git_dirty && !both_dirty {
             differences.push(format!(
                 "working tree: this was built {}, the other {}",
                 describe_dirty(self.git_dirty),
                 describe_dirty(other.git_dirty)
             ));
-        }
-        if self.git_dirty == Some(true) && self.git_sha == other.git_sha {
-            differences.push(
-                "working tree: this build is dirty, so one commit can mean different code"
-                    .to_owned(),
-            );
         }
         if self.core_packs != other.core_packs {
             differences.push(format!(
@@ -217,6 +234,54 @@ mod tests {
         assert!(runtime.summary().contains("1.0.0-rc2"));
         // And they do not plan the same installs.
         assert!(!client.plans_the_same_installs(&runtime));
+    }
+
+    /// A developer must be able to install from their own (dirty) binary into
+    /// the (dirty) runtime they just built: same commit and same core packs is
+    /// accepted, and said out loud.
+    #[test]
+    fn two_dirty_builds_of_one_commit_agree_and_say_so() {
+        let web = pack("gents/web", "sha256:1111");
+        let client = BuildInfo::from_parts(
+            "1.0.0-rc2".to_owned(),
+            Some("aaaaaaa".to_owned()),
+            Some(true),
+            vec![web.clone()],
+        );
+        let runtime = client.clone();
+        assert!(
+            client.differences(&runtime).is_empty(),
+            "two dirty builds of one commit agree: {:?}",
+            client.differences(&runtime)
+        );
+        assert!(client.plans_the_same_installs(&runtime));
+        let warning = client
+            .dirty_warning(&runtime)
+            .expect("the weaker guarantee is stated");
+        assert!(warning.contains("dirty"), "{warning}");
+        assert!(warning.contains("aaaaaaa"), "{warning}");
+
+        // Same commit, but one is clean: that is a real difference.
+        let clean = BuildInfo::from_parts(
+            "1.0.0-rc2".to_owned(),
+            Some("aaaaaaa".to_owned()),
+            Some(false),
+            vec![web.clone()],
+        );
+        assert!(!client.differences(&clean).is_empty());
+        assert!(clean.dirty_warning(&client).is_none());
+
+        // Dirty but different core packs: still a difference.
+        let other_packs = BuildInfo::from_parts(
+            "1.0.0-rc2".to_owned(),
+            Some("aaaaaaa".to_owned()),
+            Some(true),
+            vec![pack("gents/web", "sha256:2222")],
+        );
+        assert!(!client.differences(&other_packs).is_empty());
+
+        // Two clean builds of one commit say nothing extra.
+        assert!(clean.dirty_warning(&clean).is_none());
     }
 
     /// The same build says nothing, so a plain plan difference is not buried

@@ -62,12 +62,6 @@ pub struct PackInstallSession {
     preparation: gents_pack::pack::HostedPackPreparation,
     pending: Option<ServerMessage>,
     next_id: u64,
-    /// The runtime's build, from `Ready`, which requires it: a runtime that
-    /// sends none is an older build and is refused at the handshake.
-    runtime_build: gents_protocol::build_info::BuildInfo,
-    /// This client's core packs, so a build difference is named with what each
-    /// side actually carries.
-    core_packs: Vec<gents_protocol::build_info::CorePackBuild>,
 }
 
 impl PackInstallSession {
@@ -172,6 +166,12 @@ impl PackInstallSession {
         {
             return Err(refusal.into());
         }
+        // Two dirty builds of one commit agree, and the acceptance is said out
+        // loud: the install went ahead on a weaker guarantee than two clean
+        // builds of that commit would give.
+        if let Some(warning) = client_build.dirty_warning(&runtime_build) {
+            eprintln!("{warning}");
+        }
         ensure!(
             scope.node_did == node_did
                 && scope.pack_digests == pack_digests
@@ -185,8 +185,6 @@ impl PackInstallSession {
             preparation,
             pending: None,
             next_id: 1,
-            runtime_build,
-            core_packs: client_build.core_packs.clone(),
         })
     }
 
@@ -244,13 +242,11 @@ impl PackInstallSession {
                 bail!("remote pack install failed ({outcome}): {error}")
             }
             ServerMessage::ApproveGraph { mutation, .. } => {
-                // Name both builds: a differing build plans a different install
-                // before anything is read, so an operator can tell a stale
-                // `gents` on PATH from a real disagreement.
+                // A differing build is refused at the handshake, so both sides
+                // here are the same build and the difference is in the plan.
                 bail!(
-                    "runtime pack graph differs from the client's installation plan: {}{}",
-                    describe_mutation_disagreement(expected, &mutation),
-                    self.describe_build_skew()
+                    "runtime pack graph differs from the client's installation plan: {}",
+                    describe_mutation_disagreement(expected, &mutation)
                 )
             }
             _ => bail!("runtime pack graph differs from the client's installation plan"),
@@ -718,26 +714,6 @@ fn describe_relationship_disagreement(
     ))
 }
 
-impl PackInstallSession {
-    /// What the two builds are, when they are not the same one. Empty when the
-    /// runtime did not report a build or the builds agree, so a plain
-    /// disagreement is not buried under build detail.
-    fn describe_build_skew(&self) -> String {
-        let runtime = &self.runtime_build;
-        let client = gents_protocol::build_info::BuildInfo::current(self.core_packs.clone());
-        let differences = client.differences(runtime);
-        if differences.is_empty() {
-            return String::new();
-        }
-        format!(
-            " (this client is `{}` and the runtime is `{}`; {})",
-            client.summary(),
-            runtime.summary(),
-            differences.join("; ")
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -878,6 +854,88 @@ mod tests {
         let _ = session.timestamp("document").await?;
         server.await??;
         Ok(())
+    }
+
+    /// Over the real socket: a runtime whose `ready` reports a different build
+    /// is refused at the handshake, before it is asked for anything.
+    #[tokio::test]
+    async fn a_ready_from_a_different_build_is_refused_over_the_socket() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            let mut socket = accept_async(stream).await?;
+            let _ = socket.next().await.context("missing start")??;
+            socket
+                .send(Message::Text(
+                    json!({
+                        "type": "ready",
+                        "scope": {"node_did": "did:key:node", "pack_digests": ["sha256:root"], "nonce": "test"},
+                        "preparation": {"agent_bindings": {}, "plugin_digests": {}, "operator_ux_digests": {}},
+                        // A different commit from the client's below.
+                        "build": {"version": "1.0.0-rc2", "git_sha": "bbbbbbb", "git_dirty": false, "core_packs": []}
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await?;
+            // The client must close without sending anything: refused before
+            // planning.
+            let next = socket.next().await;
+            anyhow::ensure!(
+                !matches!(next, Some(Ok(Message::Text(_)))),
+                "the client planned against a runtime of a different build"
+            );
+            Ok::<_, anyhow::Error>(())
+        });
+        let key_home = tempfile::tempdir()?;
+        let key = KeyIdentity::load_or_create(key_home.path().join("user.key"), None)?
+            .client_signing_capability()?;
+        let endpoint = GraphqlEndpoint::as_principal(
+            format!("http://{address}/api/v0/graphql"),
+            key.did().to_owned(),
+        )
+        .with_client_signing_capability(key)?;
+        let error = PackInstallSession::start(
+            &endpoint,
+            json!({}),
+            "did:key:node",
+            &["sha256:root".to_owned()],
+            &gents_protocol::build_info::BuildInfo::from_parts(
+                "1.0.0-rc2".to_owned(),
+                Some("aaaaaaa".to_owned()),
+                Some(false),
+                Vec::new(),
+            ),
+        )
+        .await
+        .err()
+        .expect("a different build is refused at the handshake");
+        let text = error.to_string();
+        assert!(
+            text.contains("aaaaaaa") && text.contains("bbbbbbb"),
+            "{text}"
+        );
+        assert!(text.contains("gents runtime service update"), "{text}");
+        server.await??;
+        Ok(())
+    }
+
+    /// The wiring the blocker was about: the process records its build, and a
+    /// process that recorded none reports `UNVERIFIABLE` rather than a guess.
+    #[test]
+    fn the_recorded_runtime_build_is_what_the_handshake_reports() {
+        let recorded = crate::http::pack_install::runtime_build();
+        // Either a real record or the explicit unverifiable value -- never a
+        // build whose commit was silently dropped.
+        assert!(
+            recorded.is_verifiable()
+                || recorded == gents_protocol::build_info::BuildInfo::UNVERIFIABLE,
+            "an unrecorded build says so: {recorded:?}"
+        );
+        if recorded == gents_protocol::build_info::BuildInfo::UNVERIFIABLE {
+            assert!(!recorded.is_verifiable());
+        }
     }
 
     /// The handshake is where a build mismatch is refused, before any planning:

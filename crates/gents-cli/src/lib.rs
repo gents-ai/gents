@@ -423,11 +423,11 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Some(&command),
         std::env::var("GENTS_SYSTEM_LOG").ok().as_deref(),
     );
-    if starts_foreground_runtime(Some(&command)) {
-        // The process serving installs is this one, so its build is the one an
-        // install handshake reports. Recorded before any request is served.
-        gents_host::http::pack_install::set_runtime_build(current_build());
-    }
+    // Unconditionally, before the dispatch: more than the foreground runtime
+    // serves installs -- `PrepareRuntime` and the desktop bridge do too -- and
+    // each must report this binary's real identity rather than an unverifiable
+    // fallback.
+    gents_host::http::pack_install::set_runtime_build(current_build());
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
         Command::Server(args) => {
@@ -492,22 +492,20 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
             RuntimeCommand::P2p { command } => commands::p2p::dispatch(command).await,
             RuntimeCommand::Desktop { command } => commands::desktop::run(command).await,
             RuntimeCommand::Version { json } => {
+                let build = current_build();
                 if json {
                     // The release metadata plus the build identity an install
                     // handshake compares, so a mismatch can be checked without
                     // starting anything.
                     let mut record = serde_json::to_value(version::build_version())?;
                     if let Some(object) = record.as_object_mut() {
-                        object.insert(
-                            "build_identity".to_owned(),
-                            serde_json::to_value(current_build())?,
-                        );
+                        object.insert("build_identity".to_owned(), serde_json::to_value(&build)?);
                     }
                     println!("{}", serde_json::to_string_pretty(&record)?);
                 } else {
                     print!("{}", version::version_text());
-                    println!("{}", current_build().summary());
-                    for pack in &current_build().core_packs {
+                    println!("{}", build.summary());
+                    for pack in &build.core_packs {
                         println!("  {} {}", pack.coordinate, pack.digest);
                     }
                 }

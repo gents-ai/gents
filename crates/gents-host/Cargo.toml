@@ -16,7 +16,6 @@ gents-documents = { workspace = true }
 gents-inference = { workspace = true }
 gents-p2p = { workspace = true }
 gents-pack = { workspace = true }
-thiserror.workspace = true
 gents-session = { workspace = true }
 gents-tools = { workspace = true }
 gents-toolcalls = { workspace = true }
@@ -59,6 +58,7 @@ serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 tempfile = "3"
+thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tokio-tungstenite = { version = "0.26.2", features = ["rustls-tls-native-roots"] }

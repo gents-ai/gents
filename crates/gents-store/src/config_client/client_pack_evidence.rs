@@ -69,11 +69,13 @@ pub enum PackMutationDifference {
 impl PackMutationDifference {
     /// One line a person can read, naming both sides.
     ///
-    /// A value under `/variables/*` is **redacted**: an install value can be a
-    /// token read from the installer's environment, and this text reaches the
-    /// operator, `runtime-errors.log` and models. Every other printed value is
-    /// truncated to [`RENDERED_VALUE_LIMIT`] characters with its real length, so
-    /// a bundled archive or a long prompt cannot flood the line.
+    /// **No value is ever printed.** An install value can be a token from the
+    /// installer's environment, and `${VAR}` is resolved into documents, so a
+    /// secret can sit at any path — not only under `/variables`. This text
+    /// reaches the operator, `runtime-errors.log` and models, so each side is
+    /// stated by its kind and size: a JSON path (key names only, which is safe)
+    /// and `string(32)`-style descriptors. A reader sees *where* and *what kind*
+    /// the plans differ without seeing either value.
     pub fn describe(&self) -> String {
         match self {
             Self::Operation {
@@ -94,56 +96,39 @@ impl PackMutationDifference {
                 constructed,
                 proposed,
             } => format!(
-                "the plans name different documents (client `{}`, runtime `{}`)",
-                constructed.as_deref().unwrap_or("a new one"),
-                proposed.as_deref().unwrap_or("a new one")
+                "the plans name different documents (client {}, runtime {})",
+                describe_doc_id(constructed.as_deref()),
+                describe_doc_id(proposed.as_deref())
             ),
             Self::Field {
                 path,
                 constructed,
                 proposed,
-            } => {
-                if is_install_variable_path(path) {
-                    format!(
-                        "`{path}` differs between the plans (value redacted: an install variable can be a secret)"
-                    )
-                } else {
-                    format!(
-                        "`{path}` is {} in the client's plan and {} in the runtime's",
-                        render_value(constructed),
-                        render_value(proposed)
-                    )
-                }
-            }
+            } => format!(
+                "`{path}` is {} in the client's plan and {} in the runtime's",
+                describe_value(constructed),
+                describe_value(proposed)
+            ),
             Self::OnlyInOnePlan {
                 path,
                 constructed,
                 proposed,
-            } => {
-                let redacted = is_install_variable_path(path);
-                let rendered = |value: &Value| {
-                    if redacted {
-                        "a redacted install variable".to_owned()
-                    } else {
-                        render_value(value)
-                    }
-                };
-                match (constructed, proposed) {
-                    (Some(value), None) => {
-                        format!("only the client's plan carries `{path}` ({})", rendered(value))
-                    }
-                    (None, Some(value)) => format!(
-                        "only the runtime's plan carries `{path}` ({})",
-                        rendered(value)
-                    ),
-                    (Some(constructed), Some(proposed)) => format!(
-                        "`{path}` is {} in the client's plan and {} in the runtime's",
-                        rendered(constructed),
-                        rendered(proposed)
-                    ),
-                    (None, None) => format!("`{path}` is in neither plan"),
-                }
-            }
+            } => match (constructed, proposed) {
+                (Some(value), None) => format!(
+                    "only the client's plan carries `{path}` ({})",
+                    describe_value(value)
+                ),
+                (None, Some(value)) => format!(
+                    "only the runtime's plan carries `{path}` ({})",
+                    describe_value(value)
+                ),
+                (Some(constructed), Some(proposed)) => format!(
+                    "`{path}` is {} in the client's plan and {} in the runtime's",
+                    describe_value(constructed),
+                    describe_value(proposed)
+                ),
+                (None, None) => format!("`{path}` is in neither plan"),
+            },
         }
     }
 }
@@ -152,30 +137,24 @@ impl PackMutationDifference {
 /// matters; the rest are context, and a long list stops being readable.
 pub const MAX_REPORTED_DIFFERENCES: usize = 5;
 
-/// How much of one value a difference prints. Long values are truncated, since
-/// a plan input can hold a bundled archive or a whole prompt.
-pub const RENDERED_VALUE_LIMIT: usize = 120;
-
-/// Whether a difference's path names an install value. Anything under
-/// `/variables/` is redacted, because `${VAR}` is exactly where a token comes
-/// from.
-fn is_install_variable_path(path: &str) -> bool {
-    path.starts_with("/variables/") || path.contains("/variables/")
+/// A document id is an identifier, not a value, so it may be named; a plan
+/// that allocates one has none to name.
+fn describe_doc_id(doc_id: Option<&str>) -> &str {
+    doc_id.unwrap_or("a new one")
 }
 
-/// One value as a line states it: truncated with its real length, so a reader
-/// knows they are seeing a prefix.
-fn render_value(value: &Value) -> String {
-    let rendered = value.to_string();
-    let length = rendered.chars().count();
-    if length <= RENDERED_VALUE_LIMIT {
-        return rendered;
+/// One side of a difference stated by kind and size, never by value. `null`
+/// and "absent" are different kinds, which is what makes the null-against-
+/// absent case readable without the map it sits in.
+fn describe_value(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_owned(),
+        Value::Bool(_) => "a boolean".to_owned(),
+        Value::Number(_) => "a number".to_owned(),
+        Value::String(text) => format!("a string ({} chars)", text.chars().count()),
+        Value::Array(items) => format!("an array ({} items)", items.len()),
+        Value::Object(fields) => format!("an object ({} fields)", fields.len()),
     }
-    let prefix = rendered
-        .chars()
-        .take(RENDERED_VALUE_LIMIT)
-        .collect::<String>();
-    format!("{prefix}… ({length} chars)")
 }
 
 /// The operation a mutation performs, without its payload.
@@ -1270,8 +1249,10 @@ mod tests {
         );
         let described = differences[0].describe();
         assert!(described.contains("/agent_did"), "{described}");
-        assert!(described.contains("did:key:client"), "{described}");
-        assert!(described.contains("did:key:runtime"), "{described}");
+        // The value never prints -- only its kind and size.
+        assert!(!described.contains("did:key:client"), "{described}");
+        assert!(!described.contains("did:key:runtime"), "{described}");
+        assert!(described.contains("chars)"), "{described}");
     }
 
     /// A field only one plan carries is a difference a value comparison alone
@@ -1370,7 +1351,9 @@ mod tests {
             &serde_json::json!({"relation": "reader", "subject": "did:key:b"}),
         );
         assert!(described.contains("/subject"), "{described}");
-        assert!(described.contains("did:key:a"), "{described}");
+        // No value prints, here either: only where and what kind.
+        assert!(!described.contains("did:key:a"), "{described}");
+        assert!(!described.contains("did:key:b"), "{described}");
         assert!(
             describe_json_disagreement(&serde_json::json!({"a": 1}), &serde_json::json!({"a": 1}))
                 .contains("agree"),
@@ -1406,11 +1389,11 @@ mod tests {
         assert!(described.contains("runtime"), "{described}");
     }
 
-    /// An install value can be a token from the installer's environment, and
-    /// this text reaches the operator, the log and models. Anything under
-    /// `/variables/` is redacted, on both the field and the one-sided cases.
+    /// No value ever prints: an install value can be a token from the
+    /// installer's environment, and this text reaches the operator, the log and
+    /// models. The kind and size are enough to act on.
     #[test]
-    fn an_install_variable_is_redacted_so_a_secret_never_prints() {
+    fn an_install_value_prints_as_kind_and_size_never_as_text() {
         let secret = "sk-live-0123456789abcdef";
         let constructed = create(
             "PackInstallation",
@@ -1420,42 +1403,72 @@ mod tests {
             "PackInstallation",
             serde_json::json!({"variables": {"API_TOKEN": "other"}}),
         );
-        let differences = constructed.differences(&proposed);
-        let described = differences[0].describe();
-        assert!(
-            !described.contains(secret),
-            "the secret must not print: {described}"
-        );
-        assert!(!described.contains("other"), "{described}");
-        assert!(described.contains("redacted"), "{described}");
-        assert!(described.contains("/variables/API_TOKEN"), "{described}");
-
-        // The one-sided case redacts too: a key only one plan carries still
-        // holds a value.
-        let absent = create("PackInstallation", serde_json::json!({"variables": {}}));
-        let only_runtime = proposed.differences(&absent)[0].describe();
-        assert!(!only_runtime.contains(secret), "{only_runtime}");
-        assert!(only_runtime.contains("redacted"), "{only_runtime}");
-    }
-
-    /// A value outside the install variables is truncated with its real length,
-    /// so a bundled archive or a long prompt cannot flood the refusal.
-    #[test]
-    fn a_long_value_is_truncated_with_its_length() {
-        let long = "x".repeat(400);
-        let constructed = create("Agent", serde_json::json!({"prompt": long}));
-        let proposed = create("Agent", serde_json::json!({"prompt": "short"}));
         let described = constructed.differences(&proposed)[0].describe();
         assert!(
-            described.contains("chars)"),
-            "the real length is stated: {described}"
+            !described.contains(secret),
+            "the value must not print: {described}"
         );
+        assert!(!described.contains("other"), "{described}");
+        assert!(described.contains("/variables/API_TOKEN"), "{described}");
         assert!(
-            described.chars().count() < 400,
-            "the value itself is cut: {} chars",
-            described.chars().count()
+            described.contains("chars)"),
+            "the kind and size are stated instead: {described}"
         );
-        assert!(described.contains("/prompt"), "{described}");
+    }
+
+    /// A difference at exactly `/variables` -- null against a map, or the whole
+    /// map missing -- must not print the map, which is where every value sits.
+    #[test]
+    fn a_difference_at_the_variables_object_prints_no_value() {
+        let secret = "sk-live-0123456789abcdef";
+        let with_map = create(
+            "PackInstallation",
+            serde_json::json!({"variables": {"API_TOKEN": secret}}),
+        );
+        let with_null = create("PackInstallation", serde_json::json!({"variables": null}));
+        let described = with_map.differences(&with_null)[0].describe();
+        assert!(!described.contains(secret), "{described}");
+        assert!(described.contains("/variables"), "{described}");
+        assert!(
+            described.contains("null") && described.contains("fields"),
+            "null against an object, by kind: {described}"
+        );
+
+        // And the whole key absent in one plan.
+        let without = create("PackInstallation", serde_json::json!({"a": 1}));
+        let has = create(
+            "PackInstallation",
+            serde_json::json!({"a": 1, "variables": {"API_TOKEN": secret}}),
+        );
+        let described = without.differences(&has)[0].describe();
+        assert!(!described.contains(secret), "{described}");
+        assert!(described.contains("/variables"), "{described}");
+    }
+
+    /// `${VAR}` is resolved into documents, so a token can sit at any path --
+    /// an MCP header or an env value, say -- not only under `/variables`.
+    #[test]
+    fn a_rendered_field_holding_a_token_prints_no_value() {
+        let token = "ghp_0123456789abcdefghij";
+        let constructed = create(
+            "McpService",
+            serde_json::json!({"headers": {"Authorization": format!("Bearer {token}")}}),
+        );
+        let proposed = create(
+            "McpService",
+            serde_json::json!({"headers": {"Authorization": "Bearer other"}}),
+        );
+        let described = constructed.differences(&proposed)[0].describe();
+        assert!(
+            !described.contains(token),
+            "the rendered token must not print: {described}"
+        );
+        assert!(!described.contains("Bearer"), "{described}");
+        assert!(
+            described.contains("/headers/Authorization"),
+            "the path names where: {described}"
+        );
+        assert!(described.contains("chars)"), "{described}");
     }
 
     /// The list is bounded, so a plan that diverges in hundreds of leaves
@@ -1476,15 +1489,5 @@ mod tests {
             "at most {} differences are reported",
             super::MAX_REPORTED_DIFFERENCES
         );
-    }
-
-    /// A path that merely mentions `variables` elsewhere is not redacted by
-    /// accident, and one that is under it always is.
-    #[test]
-    fn the_redaction_applies_to_install_variable_paths_only() {
-        assert!(super::is_install_variable_path("/variables/TOKEN"));
-        assert!(super::is_install_variable_path("/input/variables/TOKEN"));
-        assert!(!super::is_install_variable_path("/display_name"));
-        assert!(!super::is_install_variable_path("/variables_count"));
     }
 }
