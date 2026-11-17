@@ -125,7 +125,10 @@ def stripFigures (sizes : ResultSizes) : List MessageRow → StubbingFigures
 theorem stripFigures_floor (sizes : ResultSizes) (row : MessageRow) (rest : List MessageRow)
     (h : ∀ call key, row.kind = .toolResult call key → stubs sizes key = false) :
     stripFigures sizes (row :: rest) = stripFigures sizes rest := by
-  cases hk : row.kind <;> simp [stripFigures, hk, h _ _ hk]
+  cases hk : row.kind with
+  | ordinary => simp [stripFigures, hk]
+  | assistantToolCalls ids => simp [stripFigures, hk]
+  | toolResult call key => simp [stripFigures, hk, h call key hk]
 
 theorem stripFigures_no_expansion (sizes : ResultSizes) (rows : List MessageRow) :
     (stripFigures sizes rows).stubBytes ≤ (stripFigures sizes rows).originalBytes := by
