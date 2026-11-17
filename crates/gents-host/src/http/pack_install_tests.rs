@@ -298,8 +298,7 @@ async fn hosted_fresh_install_preview_plans_wiring_without_publication() {
         "check"
     );
     assert_eq!(home.access.execute(query).await.unwrap(), before);
-    // Reading plugin records acquires the store lock. That coordination file
-    // is not a published plugin; nothing else may appear in the test home.
+    // Read-only preview must leave a pristine plugin home pristine.
     fn relative_files(root: &std::path::Path, at: &std::path::Path) -> Vec<std::path::PathBuf> {
         let mut files = Vec::new();
         for entry in std::fs::read_dir(at).unwrap() {
@@ -315,7 +314,7 @@ async fn hosted_fresh_install_preview_plans_wiring_without_publication() {
     }
     assert_eq!(
         relative_files(plugin_home.path(), plugin_home.path()),
-        vec![std::path::PathBuf::from("plugins/.store.lock")],
+        Vec::<std::path::PathBuf>::new(),
         "preview must not provision identities or publish plugins"
     );
     // A fresh authored slot is an explicit skip, not failure of the install
@@ -357,7 +356,7 @@ async fn hosted_fresh_install_preview_plans_wiring_without_publication() {
     assert_eq!(home.access.execute(query).await.unwrap(), before);
     assert_eq!(
         relative_files(plugin_home.path(), plugin_home.path()),
-        vec![std::path::PathBuf::from("plugins/.store.lock")]
+        Vec::<std::path::PathBuf>::new()
     );
     request["preview"] = false.into();
     let received = decode_request(&serde_json::to_vec(&request).unwrap(), &owner).unwrap();

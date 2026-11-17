@@ -309,13 +309,16 @@ pub async fn enable_pack_dynamic(
             scope: scope.clone(),
         });
         access
-            .transact_write_verified_pack_with_finality(
+            .transact_verified_pack_with_approver(
                 "operator.enable_dynamic_workflows",
                 scope,
                 approver,
                 |txn| {
                     let jobs = &jobs;
-                    Box::pin(enable_dynamic_in_txn(txn, owner, engineer, jobs))
+                    Box::pin(async move {
+                        enable_dynamic_in_txn(txn.approved_interpreter()?, owner, engineer, jobs)
+                            .await
+                    })
                 },
             )
             .await
@@ -443,9 +446,20 @@ pub async fn wire_pack_batch(
     }
     let namespace = &pack.manifest().metadata.namespace;
     let lock_home = home.to_owned();
-    let _guard =
-        tokio::task::spawn_blocking(move || crate::plugin::store::try_lock_store(&lock_home))
-            .await??;
+    let _guard = tokio::task::spawn_blocking(move || {
+        if preview {
+            match crate::plugin::store::try_lock_store_shared(&lock_home) {
+                Ok(guard) => Ok(Some(guard)),
+                // A fresh install preview uses the archive, not published
+                // plugin state. Absence is valid and must remain read-only.
+                Err(crate::plugin::store::PublishedPluginReadError::StoreAbsent(_)) => Ok(None),
+                Err(error) => Err(anyhow::Error::from(error)),
+            }
+        } else {
+            crate::plugin::store::try_lock_store(&lock_home).map(Some)
+        }
+    })
+    .await??;
     let preview_config = if preview && pack.manifest().config.is_some() {
         Some(
             crate::pack::load_pack_recorded_config(
