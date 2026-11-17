@@ -681,11 +681,12 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
             single = count == 1
             mode = test_cache_mode(single)
             groups = host_groups("portable")
-            # The test-result store is a directory on the host that runs the
-            # cached slice, so that slice keeps to the first host group.
-            build_group = groups[0] if groups and mode != "off" else None
+            # The build takes the role's labels alone, so any free portable
+            # runner picks it up. Each host keeps its own test-result store
+            # and the cached slice reads and records only there
+            # (TestCache.lean `skip_sound_on_any_host`).
             go = bool(AFTERBURNER & set(archived))
-            archives.append({"archive": ARCHIVE, **placement("portable", host_group=build_group), "run": single,
+            archives.append({"archive": ARCHIVE, **placement("portable"), "run": single,
                              "packages": " ".join(archived), "timeout": 150 if single else 90,
                              "test_cache": mode, "go": go})
             # Slices alternate between host groups, so one run's slices split across hosts.

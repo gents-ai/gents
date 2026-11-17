@@ -298,6 +298,22 @@ theorem skip_passes (world : World) (policy : Policy) (store : Store) (test : Te
     ((world test key).run fs).1 = true := by
   rw [skip_sound world policy store test key fs record reachable h]
 
+/-- **Per-host stores.** Each runner host keeps its own store, and a cached
+build reads and records only in the store of the host it lands on, so it may
+land on any host of its role. Soundness needs nothing shared between stores:
+each is reachable from its own host's faithful executions, and a skip decided
+from whichever store the build read is sound. A contradiction stays in the
+store of the host that found it (`tla/TestCacheStore.tla`
+`FleetContradictionHonoured`); it refutes the premises
+(`contradiction_refutes_premises`) and its remedy, an exclusion, applies on
+every host. -/
+theorem skip_sound_on_any_host {Host : Type} (world : World) (policy : Policy)
+    (stores : Host → Store) (reachable : ∀ host, Reachable world policy (stores host))
+    (host : Host) (test : TestId) (key : StaticKey) (fs : FileSystem) (record : Record)
+    (h : decide policy (stores host) test key fs = .skip record) :
+    (world test key).run fs = (true, record.trace) :=
+  skip_sound world policy (stores host) test key fs record (reachable host) h
+
 /-- A full run executes every test. -/
 theorem full_never_skips (policy : Policy) (store : Store) (test : TestId)
     (key : StaticKey) (fs : FileSystem) (full : policy.full = true) :
