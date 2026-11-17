@@ -274,8 +274,8 @@ pub(super) async fn run_control_watcher_inner(
                     }
                 }
                 if resolve_failed {
-                    if retry_proposal(publication_busy, settle_deadline
-                        .is_some_and(|deadline| tokio::time::Instant::now() < deadline))
+                    if retry_recovery_failure(retry_proposal(publication_busy, settle_deadline
+                        .is_some_and(|deadline| tokio::time::Instant::now() < deadline)), recovery_pending)
                     {
                         dirty = true;
                         publication_deadline.get_or_insert_with(|| tokio::time::Instant::now() + timing.publication_wait);
@@ -587,4 +587,14 @@ impl WatcherTestProbe {
         }
         Ok(())
     }
+}
+
+fn retry_recovery_failure(retryable: bool, recovery_pending: bool) -> bool {
+    retryable || recovery_pending
+}
+
+#[cfg(test)]
+#[test]
+fn pending_wake_keeps_nonbusy_failure_retrying() {
+    gents_lean_vocab::families::runtime_reconcile_surface_publication_retry_recovery_failure::replay(|i| retry_recovery_failure(i.retryable, i.recovery_pending));
 }

@@ -24,3 +24,5 @@ end Conformance.PluginPublication
 attribute [conformance_function] RuntimeReconcile.SurfacePublication.needsPublicationFence
 attribute [conformance_function] RuntimeReconcile.SurfacePublication.recreateSlot
 attribute [conformance_function] RuntimeReconcile.SurfacePublication.sendRecoveredProposal
+attribute [conformance_function] RuntimeReconcile.SurfacePublication.degradedPublicationFailure
+attribute [conformance_function] RuntimeReconcile.SurfacePublication.retryRecoveryFailure

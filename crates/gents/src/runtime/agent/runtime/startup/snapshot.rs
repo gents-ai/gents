@@ -127,7 +127,11 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot_until(
 
         let blocking = unavailable
             .iter()
-            .filter(|(_, reason)| !is_degraded_startup_unavailable_reason(reason.public_reason))
+            .filter(|(_, reason)| !is_degraded_startup_unavailable_reason(reason.public_reason)
+                && !degraded_publication_failure(
+                    reason.public_reason == gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+                    reason.public_cause == Some(gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::PluginPublicationBusy),
+                ))
             .collect::<Vec<_>>();
         if !blocking.is_empty() {
             // Only the presentation-safe reason leaves this boundary.
@@ -286,4 +290,14 @@ mod publication_tests {
             },
         );
     }
+}
+
+fn degraded_publication_failure(surface_unavailable: bool, busy_cause: bool) -> bool {
+    surface_unavailable && busy_cause
+}
+
+#[cfg(test)]
+#[test]
+fn busy_only_all_unavailable_startup_replays_the_lean_owner() {
+    gents_lean_vocab::families::runtime_reconcile_surface_publication_degraded_publication_failure::replay(|i| degraded_publication_failure(i.surface_unavailable, i.busy_cause));
 }

@@ -1180,20 +1180,29 @@ async fn plugin_free_startup_and_slots_remain_ready_while_store_is_exclusively_h
 
 #[tokio::test]
 async fn real_busy_park_wakes_idle_watcher_and_forces_unchanged_recovery() {
-    real_policy_publication_recovery(false, false).await;
+    real_policy_publication_recovery(false, false, false).await;
 }
 
 #[tokio::test]
 async fn real_busy_park_recovers_after_holding_past_the_watcher_budget() {
-    real_policy_publication_recovery(false, true).await;
+    real_policy_publication_recovery(false, true, false).await;
 }
 
 #[tokio::test]
 async fn mixed_startup_exhaustion_starts_plugin_free_agents_and_recovers_plugins() {
-    real_policy_publication_recovery(true, true).await;
+    real_policy_publication_recovery(true, true, false).await;
 }
 
-async fn real_policy_publication_recovery(mixed_startup: bool, hold_past_budget: bool) {
+#[tokio::test]
+async fn all_plugin_startup_exhaustion_starts_degraded_and_recovers_after_release() {
+    real_policy_publication_recovery(true, true, true).await;
+}
+
+async fn real_policy_publication_recovery(
+    mixed_startup: bool,
+    hold_past_budget: bool,
+    all_plugins: bool,
+) {
     use super::super::startup::slot_failure_policy::StartupSlotFailurePolicy;
     use crate::runtime::agent::reconcile::GenerationSupervisor;
     let endpoint = MockModelEndpoint::start("default").unwrap();
@@ -1209,6 +1218,45 @@ async fn real_policy_publication_recovery(mixed_startup: bool, hold_past_budget:
     let plugin = agent.default_agent_did().to_owned();
     let free = choose_spare_default(&fixture, &plugin).await;
     let owner = fixture.runtime.did().to_owned();
+    if all_plugins {
+        // The spare default also selects the original plugin Tools through
+        // a canonical signed Context. There is deliberately no plugin-free
+        // runnable fallback in the snapshot under test.
+        let context_id = format!("{free}:all-plugin-context");
+        let value = serde_json::json!({"node_did":owner,"context_id":context_id,"tools_id":format!("{plugin}:tools")});
+        let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+            gents_documents::DesiredStateApplyDocument {
+                collection: gents_store::collection::Collection::AgentContext,
+                add: value.clone(),
+                update: value,
+            },
+        ])
+        .unwrap();
+        fixture
+            .user_access
+            .transact_write("test.all_plugin.context_create", |txn| {
+                let plan = &plan;
+                Box::pin(async move {
+                    gents_documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents_inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
+            })
+            .await
+            .unwrap();
+        merge_fixture_document(
+            &fixture.user_access,
+            "test.all_plugin.context",
+            gents_store::collection::Collection::Agent,
+            &owner,
+            &free,
+            serde_json::json!({"context_id":context_id}),
+        )
+        .await;
+    }
     let resolve = agent.document_runtime_context().cloned().unwrap();
     let runtime = gents_tools::surface::ToolRuntimeContext::new_with_node_did(
         fixture.node.clone(),
@@ -1235,7 +1283,18 @@ async fn real_policy_publication_recovery(mixed_startup: bool, hold_past_budget:
     )
     .await
     .expect("publication contention must not abort a mixed startup");
-    assert!(initial.agents.contains_key(&free));
+    if all_plugins {
+        assert!(
+            initial.agents.is_empty(),
+            "every plugin must be unavailable before publication"
+        );
+        assert_eq!(initial.unavailable_agents.len(), 2);
+        assert!(initial.unavailable_agents.values().all(|reason|
+            reason.public_reason == AgentReadinessUnavailableReason::ToolSurfaceUnavailable &&
+            reason.public_cause == Some(gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::PluginPublicationBusy)));
+    } else {
+        assert!(initial.agents.contains_key(&free));
+    }
     if mixed_startup {
         assert!(!initial.agents.contains_key(&plugin));
         assert_eq!(initial.unavailable_agents[&plugin].public_cause,
@@ -1367,19 +1426,25 @@ async fn real_policy_publication_recovery(mixed_startup: bool, hold_past_budget:
         .await
         .unwrap();
     start_tx.send(true).unwrap();
-    let unrelated = supervisor.current_snapshot().dispatchers[&free].clone();
+    let unrelated = supervisor
+        .current_snapshot()
+        .dispatchers
+        .get(&free)
+        .cloned();
     let (active_tx, mut active_rx) = watch::channel(supervisor.current_snapshot());
     let (forward_tx, forward_rx) = mpsc::channel(8);
     let supervising = tokio::spawn(supervisor.run(active_tx, forward_rx, shutdown_rx));
-    let first = tokio::time::timeout(STALL_CEILING, started_rx.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        first,
-        (free.clone(), 1),
-        "plugin-free startup must not wait for publication"
-    );
+    if !all_plugins {
+        let first = tokio::time::timeout(STALL_CEILING, started_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            first,
+            (free.clone(), 1),
+            "plugin-free startup must not wait for publication"
+        );
+    }
     if !mixed_startup {
         tokio::time::timeout(STALL_CEILING, recovery.changed())
             .await
@@ -1401,14 +1466,18 @@ async fn real_policy_publication_recovery(mixed_startup: bool, hold_past_budget:
             // identical busy proposal is correctly a supervisor no-op, so
             // no watch generation change is required or expected here.
             assert!(!active_rx.borrow().dispatchers.contains_key(&plugin));
-            assert!(active_rx.borrow().dispatchers[&free].same_channel(&unrelated));
+            if let Some(unrelated) = &unrelated {
+                assert!(active_rx.borrow().dispatchers[&free].same_channel(unrelated));
+            }
         } else {
             tokio::time::timeout(STALL_CEILING, async {
                 loop {
                     active_rx.changed().await.unwrap();
                     let active = active_rx.borrow_and_update();
                     if !active.dispatchers.contains_key(&plugin) {
-                        assert!(active.dispatchers[&free].same_channel(&unrelated));
+                        if let Some(unrelated) = &unrelated {
+                            assert!(active.dispatchers[&free].same_channel(unrelated));
+                        }
                         break;
                     }
                 }
@@ -1430,18 +1499,24 @@ async fn real_policy_publication_recovery(mixed_startup: bool, hold_past_budget:
     .expect("busy-park wake was fingerprint-deduplicated or startup retry was lost");
     forward_tx.send(recovered).await.unwrap();
     tokio::time::timeout(STALL_CEILING, async {
+        let mut recovered_agents = std::collections::BTreeSet::new();
         loop {
             let (did, generation) = started_rx.recv().await.unwrap();
-            if did == plugin {
+            if did == plugin || (all_plugins && did == free) {
                 assert!(generation > 1);
+                recovered_agents.insert(did);
+            }
+            if recovered_agents.len() == if all_plugins { 2 } else { 1 } {
                 break;
             }
         }
     })
     .await
-    .expect("real-policy parked agent never restarted");
+    .expect("real-policy unavailable agents never restarted after release");
     assert!(fatal_rx.try_recv().is_err());
-    assert!(active_rx.borrow().dispatchers[&free].same_channel(&unrelated));
+    if let Some(unrelated) = &unrelated {
+        assert!(active_rx.borrow().dispatchers[&free].same_channel(unrelated));
+    }
     shutdown_tx.send(true).unwrap();
     tokio::time::timeout(STALL_CEILING, watcher)
         .await

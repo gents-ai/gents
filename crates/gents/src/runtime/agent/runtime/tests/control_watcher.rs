@@ -1195,10 +1195,24 @@ async fn control_watcher_wake_follows_the_lean_tool_admission_model() {
 
 #[tokio::test]
 async fn failed_reload_and_resolve_call_sites_reset_the_next_event_epoch() {
+    failed_watcher_epoch_cases(false).await;
+}
+
+#[tokio::test]
+async fn pending_recovery_wake_survives_nonbusy_resolve_failure_without_a_new_event() {
+    failed_watcher_epoch_cases(true).await;
+}
+
+async fn failed_watcher_epoch_cases(recovery_pending: bool) {
     use crate::runtime::agent::runtime::control_watcher::{
         run_control_watcher_inner, WatcherFailure, WatcherTestEvent, WatcherTestProbe,
     };
-    for stage in [WatcherFailure::Reload, WatcherFailure::Resolve] {
+    let stages: &[WatcherFailure] = if recovery_pending {
+        &[WatcherFailure::Resolve]
+    } else {
+        &[WatcherFailure::Reload, WatcherFailure::Resolve]
+    };
+    for &stage in stages {
         let endpoint = MockModelEndpoint::start("default").unwrap();
         let fixture = plugin_runtime_fixture(
             "failed-watcher-epoch",
@@ -1225,6 +1239,9 @@ async fn failed_reload_and_resolve_call_sites_reset_the_next_event_epoch() {
             .initialize_startup(agent.default_agent_did())
             .await
             .unwrap();
+        if recovery_pending {
+            status.request_publication_recovery();
+        }
         let runtime = gents_tools::surface::ToolRuntimeContext::new_with_node_did(
             fixture.node.clone(),
             Default::default(),
@@ -1266,6 +1283,35 @@ async fn failed_reload_and_resolve_call_sites_reset_the_next_event_epoch() {
                 events,
             }),
         ));
+        if recovery_pending {
+            // The startup recovery wake is the ONLY event. Resolve fails once
+            // with no busy cause and outside the settle window, then retries.
+            let proposal = tokio::time::timeout(
+                crate::support::live_inference::STALL_CEILING,
+                proposals_rx.recv(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(proposal.agents.contains_key(agent.default_agent_did()));
+            let mut attempts = 0;
+            while let Ok(event) = observed.try_recv() {
+                match event {
+                    WatcherTestEvent::FailedIdle(_) => {
+                        panic!("pending wake went idle after a non-busy resolve failure")
+                    }
+                    WatcherTestEvent::Attempt(_, _) => attempts += 1,
+                }
+            }
+            assert!(attempts >= 2, "failed resolve was never retried");
+            shutdown_tx.send(true).unwrap();
+            tokio::time::timeout(crate::support::live_inference::STALL_CEILING, watcher)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            continue;
+        }
         match stage {
             WatcherFailure::Reload => merge_fixture_document(
                 &fixture.user_access,

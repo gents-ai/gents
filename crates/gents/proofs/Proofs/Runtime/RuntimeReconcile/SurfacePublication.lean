@@ -60,3 +60,23 @@ theorem parked_recovery_not_deduplicated (changed : Bool) :
     sendRecoveredProposal changed true = true := by simp [sendRecoveredProposal]
 
 end RuntimeReconcile.SurfacePublication
+
+namespace RuntimeReconcile.SurfacePublication
+
+/-- Transient plugin publication is a degraded-startup cause even when no
+agent is runnable. Permanent invalid surfaces still block all-agent startup. -/
+def degradedPublicationFailure (surfaceUnavailable busyCause : Bool) : Bool :=
+  surfaceUnavailable && busyCause
+
+theorem all_busy_surfaces_allow_degraded_startup : degradedPublicationFailure true true = true := by decide
+
+theorem permanent_surface_still_blocks : degradedPublicationFailure true false = false := by decide
+
+/-- A non-busy resolve failure must not strand an already-pending recovery
+wake after the visibility settle window expires. -/
+def retryRecoveryFailure (retryable recoveryPending : Bool) : Bool := retryable || recoveryPending
+
+theorem recovery_wake_survives_resolve_failure (retryable : Bool) :
+  retryRecoveryFailure retryable true = true := by simp [retryRecoveryFailure]
+
+end RuntimeReconcile.SurfacePublication
