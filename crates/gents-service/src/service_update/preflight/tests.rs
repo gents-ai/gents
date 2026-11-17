@@ -576,3 +576,54 @@ fn non_access_key_errors_keep_their_text_without_envelope_or_approval_advice() {
         assert!(!parent.to_string().contains("approve"));
     }
 }
+
+#[test]
+fn repair_live_update_propagates_missing_and_foreign_key_errors() {
+    if !in_child(concat!(
+        module_path!(),
+        "::repair_live_update_propagates_missing_and_foreign_key_errors"
+    )) {
+        return;
+    }
+    use gents_protocol::operations::install_repair::{IncompatibleStore, IncompatibleStoreKind};
+    let home = tempfile::tempdir().unwrap();
+    write_fixture(home.path());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let missing = StoreKeyError::Incompatible(IncompatibleStore {
+        kind: IncompatibleStoreKind::MissingStoreKey,
+        data_path: gents_store::local::home::default_data_dir(home.path()),
+    });
+    let expected = missing.to_string();
+    let error = runtime
+        .block_on(super::super::can_update_live_with_reader(
+            home.path(),
+            move |home, record| {
+                check_store_key_with(home, record, |_, _, _| {
+                    assert_no_keychain_interaction();
+                    Err(missing)
+                })
+            },
+        ))
+        .expect_err("repair must stop, not silently skip a missing key");
+    assert!(matches!(
+        error.downcast_ref::<PreflightError>(),
+        Some(PreflightError::StoreKeyRead(_))
+    ));
+    assert_eq!(error.to_string(), expected);
+
+    // Exercise the public repair entry with the real loader: a foreign version
+    // fails before accessing any custody backend, so no Keychain read occurs.
+    let mut config = crate::home_state::read_init_config(home.path())
+        .unwrap()
+        .unwrap();
+    config.store_encryption.as_mut().unwrap().version = STORE_ENCRYPTION_VERSION + 1;
+    crate::home_state::write_init_config(home.path(), &config).unwrap();
+    let error = runtime
+        .block_on(super::super::can_update_live(home.path()))
+        .expect_err("repair must stop, not silently skip a foreign key format");
+    assert!(
+        matches!(error.downcast_ref::<PreflightError>(), Some(PreflightError::StoreKeyRead(source))
+        if matches!(source.as_ref(), StoreKeyError::ForeignEncryptionVersion { .. }))
+    );
+    assert!(!error.to_string().contains("approve"));
+}

@@ -342,10 +342,6 @@ async fn check_to<W: tokio::io::AsyncWrite + Unpin>(
     }
 }
 
-async fn check_metadata(home: Option<PathBuf>) -> Result<serde_json::Value> {
-    check_metadata_with_reader(home, preflight::check_store_key).await
-}
-
 async fn check_metadata_with_reader(
     home: Option<PathBuf>,
     reader: impl FnOnce(
