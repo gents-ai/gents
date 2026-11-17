@@ -103,6 +103,8 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         ],
     )?;
 
+    let override_root = std::path::Path::new(&tool_root).join("b4-clone-subdir");
+    std::fs::create_dir_all(&override_root)?;
     let node_home =
         crate::support::graphql::served_home(&graphql).context("missing served home")?;
     let cloned = run_cli_json(
@@ -119,7 +121,7 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
             "--display-name",
             "Cloned Assistant",
             "--root",
-            home_dir.to_str().unwrap(),
+            override_root.to_str().unwrap(),
             "--profile-id",
             &profile_id,
         ],
