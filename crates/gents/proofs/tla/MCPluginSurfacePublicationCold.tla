@@ -1,0 +1,3 @@
+---- MODULE MCPluginSurfacePublicationCold ----
+EXTENDS PluginSurfacePublication
+====

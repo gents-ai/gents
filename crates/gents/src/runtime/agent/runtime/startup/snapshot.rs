@@ -25,10 +25,12 @@ pub(super) fn is_degraded_startup_unavailable_reason(
     )
 }
 
-/// Demotes each agent whose tool surface fails to build to
-/// `tool_surface_unavailable`. Startup and the control watcher both run it
-/// on every resolved snapshot, so a reconcile cannot bring such an agent back
-/// runnable while its tools still fail to build.
+pub(super) fn preserve_generation_for_surface_error(error: &anyhow::Error) -> bool {
+    gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(error.as_ref())
+}
+
+/// Permanent surface failures demote; transient publication failures refuse
+/// the proposal, keeping the active generation instead of publishing demotions.
 pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
     tool_runtime: &ToolRuntimeContext,
     snapshot: &mut ResolvedRuntimeSnapshot,
@@ -47,6 +49,10 @@ pub(in crate::runtime::agent::runtime) async fn demote_unbuildable_agents(
             .ok_or_else(|| anyhow!("missing resolved agent {agent_did} during tool admission"))?;
         let tool_runtime = tool_runtime.for_agent(agent);
         if let Err(error) = tool_surface.build_tools(&tool_runtime).await {
+            if preserve_generation_for_surface_error(&error) {
+                return Err(error)
+                    .context("plugin publication deferred; keeping the active runtime generation");
+            }
             let reason = UnavailableAgent::new(
                 gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
                 format!("building tool surface: {error:#}"),
@@ -237,4 +243,24 @@ async fn resolve_document_snapshot_with_tools(
     resolve_context: &DocumentResolveContext,
 ) -> Result<ResolvedRuntimeSnapshot> {
     crate::runtime::agent::resolve_document_runtime_snapshot(node, resolve_context).await
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+
+    #[test]
+    fn surface_failure_disposition_replays_the_lean_owner() {
+        gents_lean_vocab::families::runtime_reconcile_surface_publication_keep_previous::replay(
+            |i| {
+                let error = if i.busy {
+                    anyhow::Error::new(gents_pack::plugin::store::PublishedPluginReadError::Busy)
+                } else {
+                    anyhow::anyhow!("plugin is missing")
+                }
+                .context("constructing surface");
+                preserve_generation_for_surface_error(&error)
+            },
+        );
+    }
 }

@@ -7,6 +7,7 @@ mod output_budget;
 mod pack_readers;
 mod policy;
 pub mod presets;
+mod publication;
 mod root_admission;
 mod root_publication;
 pub mod root_selection;
@@ -672,19 +673,23 @@ impl ToolSurface {
             }
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
+        let publication_deadline = tokio::time::Instant::now() + publication::PUBLICATION_WAIT;
         for plugin in &self.plugin_tools {
-            let tool = runtime.plugins.clone().plugin_tool(
-                plugin,
-                self.host_tools
-                    .read_root()
-                    .map(std::path::Path::to_path_buf),
-                runtime.node.clone(),
-                &runtime.node_did,
-                runtime
-                    .agent_identity
-                    .as_ref()
-                    .map(|identity| identity.did()),
-            )?;
+            let tool = publication::wait(publication_deadline, || {
+                runtime.plugins.clone().plugin_tool(
+                    plugin,
+                    self.host_tools
+                        .read_root()
+                        .map(std::path::Path::to_path_buf),
+                    runtime.node.clone(),
+                    &runtime.node_did,
+                    runtime
+                        .agent_identity
+                        .as_ref()
+                        .map(|identity| identity.did()),
+                )
+            })
+            .await?;
             if !registered_names.insert(tool.name()) {
                 anyhow::bail!(
                     "plugin tool `{}` has the same name as another tool; rename one of them",

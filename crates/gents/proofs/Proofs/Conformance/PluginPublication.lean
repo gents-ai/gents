@@ -1,0 +1,6 @@
+import Proofs.Tools.ToolPolicy.PluginPublication
+import Proofs.Runtime.RuntimeReconcile.SurfacePublication
+import Proofs.Conformance.Family
+
+attribute [conformance_function] ToolPolicy.PluginPublication.retry
+attribute [conformance_function] RuntimeReconcile.SurfacePublication.keepPrevious
