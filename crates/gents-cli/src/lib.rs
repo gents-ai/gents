@@ -960,6 +960,9 @@ mod tests {
     /// A home as `gents init` leaves it: its config, store key and a fresh
     /// protected store whose provenance names the runtime.
     async fn initialized_home_with_store(temp: &Path) -> PathBuf {
+        gents_service::home_state::client_identity_for_new_node()
+            .await
+            .unwrap();
         let home = initialized_home(temp);
         let config = read_init_config(&home).unwrap().unwrap();
         let identity = load_initialized_home_identity(&home, &config).unwrap();
