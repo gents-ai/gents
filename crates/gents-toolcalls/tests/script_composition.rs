@@ -95,6 +95,53 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
         verified,
         "effect receipt resolves, but signed starter verification failed: receipt={receipt}"
     );
+    let mut lifecycle = fixture
+        .access
+        .transact_readonly("test.effect.load", |txn| {
+            let node = fixture.db.node.clone();
+            let row_id = row["_docID"].as_str().unwrap().to_owned();
+            let node_did = fixture.db.node_identity.did().to_owned();
+            let session = fixture.session_id.clone();
+            let requester = fixture.user.did().to_owned();
+            Box::pin(async move {
+                let mut lifecycle =
+                    gents_toolcalls::call::lifecycle::ToolCallLifecycle::load_by_doc_id_in_txn(
+                        txn,
+                        node,
+                        &row_id,
+                        &node_did,
+                        &session,
+                        Some(&requester),
+                    )
+                    .await?
+                    .unwrap();
+                lifecycle.bind_agent_signer(txn.managed_agent_signer())?;
+                Ok::<_, anyhow::Error>(lifecycle)
+            })
+        })
+        .await
+        .unwrap();
+    lifecycle
+        .cancel_during_run(gents_session::session::tool_call_state::CancelCause::Interrupted)
+        .await
+        .unwrap();
+    let cancelled = gents_toolcalls::test_support::background_hook::tool_row(
+        &fixture.access,
+        &fixture.session_id,
+        &child,
+    )
+    .await;
+    assert_eq!(cancelled["lifecycle_state"], "cancelled");
+    assert!(
+        gents_session::session::origin::verified_agent_new_creation(
+            &fixture.access,
+            &target,
+            &parent
+        )
+        .await
+        .unwrap(),
+        "starter authorization lost after effect cancellation"
+    );
     let listed = control(
         &fixture,
         "list-before-message",
