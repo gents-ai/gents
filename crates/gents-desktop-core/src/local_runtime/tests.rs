@@ -820,3 +820,43 @@ async fn runtime_status_uses_the_caller_and_rejects_another_node() {
         );
     }
 }
+
+/// A home whose edge requires a delegation this client cannot learn to
+/// present is told as an update of Gents, never as a raw refusal.
+#[tokio::test]
+async fn a_status_read_refused_at_a_vera_edge_asks_for_an_update() {
+    use wiremock::matchers::{header_exists, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/status"))
+        .and(header_exists("authorization"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({
+            "code": gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE,
+            "error": "refused",
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/status"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "node_did": "did:key:home",
+            "delegation_audience": { "worker": "w", "deployment": 1, "version": 2 },
+        })))
+        .mount(&server)
+        .await;
+    let user = gents_store::test_support::test_identity("update-required-user");
+    let capability = gents_store::identity::NodeIdentity::client_signing_capability(&user).unwrap();
+    let mut record = crate::client::PeerRecord::new("Home", "iroh://peer", "did:key:home");
+    record.graphql = Some(format!("{}/api/v0/graphql", server.uri()));
+    let error = super::fetch_hosted_runtime_status(&record, Some(&capability))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, super::HostedRuntimeStatusError::Failed(failed)
+            if failed.downcast_ref::<crate::error::BridgeError>().map(|bridge| bridge.code)
+                == Some(crate::error::BridgeErrorCode::UpdateRequired)),
+        "{error:#}"
+    );
+    assert!(format!("{error:#}").contains("update Gents"));
+}

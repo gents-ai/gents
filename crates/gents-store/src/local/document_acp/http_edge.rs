@@ -64,7 +64,7 @@ async fn refuse_user_identity_tokens(
                 (header::CACHE_CONTROL, "no-store"),
             ],
             axum::Json(serde_json::json!({
-                "code": "delegationRequired",
+                "code": gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE,
                 "error": refusal.to_string(),
             })),
         )

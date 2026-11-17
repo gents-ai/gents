@@ -558,6 +558,17 @@ async fn read_inference_setup_state_from(
                 "reading runtime model settings".to_owned(),
             )
         })?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        let status = response.status();
+        let body = response.bytes().await.unwrap_or_default();
+        if let Some(update) = crate::error::BridgeError::home_refusal(status, &body) {
+            return Err(update.into());
+        }
+        anyhow::bail!(
+            "runtime model settings are unavailable (HTTP {}); reconnect the runtime and try again",
+            status.as_u16()
+        );
+    }
     anyhow::ensure!(
         response.status().is_success(),
         "runtime model settings are unavailable (HTTP {}); reconnect the runtime and try again",

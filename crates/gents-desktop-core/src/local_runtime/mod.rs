@@ -521,7 +521,12 @@ async fn read_runtime_status(
         response.status(),
         reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
     ) {
-        return Ok(RuntimeStatusRead::Refused(response.status()));
+        let status = response.status();
+        let body = response.bytes().await.unwrap_or_default();
+        if let Some(update) = crate::error::BridgeError::home_refusal(status, &body) {
+            return Err(update.into());
+        }
+        return Ok(RuntimeStatusRead::Refused(status));
     }
     let response = response.error_for_status()?;
     anyhow::ensure!(

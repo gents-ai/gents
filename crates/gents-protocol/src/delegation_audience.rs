@@ -3,6 +3,10 @@ use serde_json::Value;
 
 pub const STATUS_DELEGATION_AUDIENCE_FIELD: &str = "delegation_audience";
 
+/// The code the edge of a Vera home answers a User's identity token with
+/// (`Identity.UserDelegation.edge`).
+pub const DELEGATION_REQUIRED_CODE: &str = "delegationRequired";
+
 /// The worker and deployment a Vera delegation must name for a node to act
 /// under it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

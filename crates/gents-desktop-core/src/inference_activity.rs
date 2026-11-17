@@ -75,6 +75,11 @@ impl crate::client::ClientCore {
             response.status(),
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
         ) {
+            let status = response.status();
+            let body = response.bytes().await.unwrap_or_default();
+            if let Some(update) = crate::error::BridgeError::home_refusal(status, &body) {
+                return Err(update.into());
+            }
             return Err(crate::error::BridgeError::new(
                 crate::error::BridgeErrorCode::PermissionDenied,
                 "Access was denied. Check this client's permissions with the runtime owner.",
