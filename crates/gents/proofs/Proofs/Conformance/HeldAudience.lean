@@ -4,8 +4,8 @@ import Proofs.Conformance.UserDelegation
 
 namespace Identity.HeldAudience
 
-deriving instance Lean.ToJson for Held, Change, Refusal
+deriving instance Lean.ToJson for Held, Change, Refusal, Answer
 
-attribute [conformance_function] change resend
+attribute [conformance_function] change resend refusalOf
 
 end Identity.HeldAudience

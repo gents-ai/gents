@@ -114,6 +114,27 @@ inductive Refusal where
   | other
   deriving DecidableEq, Repr
 
+/-- What a node answered a request with, as far as its credential goes. -/
+inductive Answer where
+  | unauthorized
+  | forbidden
+  | other
+  deriving DecidableEq, Repr
+
+/-- External premise: the edge of a Vera home answers a User's identity token
+with 401 (`UserDelegation.edge`), and DefraDB answers a delegation it does not
+take, for another worker or deployment or no longer current, with 403.
+Decision (gents#3831): a client reads a 401 or 403 to a credential it
+presented as a refusal of that credential. Whether the request is sent again is
+the status's to decide (`resend`), so an ordinary 401 or 403 on a home whose
+status changes nothing is told as it was before. -/
+def refusalOf (answer : Answer) (presented : Credential) : Refusal :=
+  match answer, presented with
+  | .other, _ => .other
+  | _, .identityToken => .delegationRequired
+  | _, .delegation => .delegationRefused
+  | _, _ => .other
+
 /-- Decision (gents#3831): a request refused for its credential reads the
 status again and is sent again once, silently, when that changed the record to
 name an audience; otherwise the refusal is what the person is told. A request
@@ -121,6 +142,12 @@ already sent again is never sent a third time, so a client does not loop
 against a runtime that keeps refusing it. -/
 def resend (resent : Bool) (refusal : Refusal) (record : Change) : Bool :=
   !resent && decide (refusal ≠ .other) && (record == .learned || record == .changed)
+
+theorem a_request_presenting_no_credential_is_never_sent_again (answer : Answer)
+    (presented : Credential) (resent : Bool) (record : Change)
+    (none : presented ≠ .identityToken ∧ presented ≠ .delegation) :
+    resend resent (refusalOf answer presented) record = false := by
+  cases answer <;> cases presented <;> simp_all [refusalOf] <;> cases resent <;> rfl
 
 theorem a_request_is_sent_again_at_most_once (refusal : Refusal) (record : Change) :
     resend true refusal record = false := rfl
