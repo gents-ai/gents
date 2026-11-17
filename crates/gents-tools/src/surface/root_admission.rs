@@ -85,7 +85,7 @@ pub enum ToolRootRefusal {
     /// Agent holds no `reader` relationship on it — the one cause a User grants
     /// away. Whether that is the cause is not decided here: the variant carries
     /// the facts, and [`tool_surface_reason`] answers.
-    #[error("{}", ReaderMissingText::of(self))]
+    #[error("{}", ReaderMissingText::new(agent_did, root.as_deref(), home.as_deref()))]
     ReaderMissing {
         agent_did: String,
         /// The published root the grant names, as stored: what
@@ -209,22 +209,11 @@ pub struct ReaderMissingText<'a> {
 }
 
 impl<'a> ReaderMissingText<'a> {
-    /// The reader cause's text from the facts it is made of, so a value that is
-    /// not [`ToolRootRefusal::ReaderMissing`] cannot reach it.
-    fn of(refusal: &'a ToolRootRefusal) -> Self {
-        let ToolRootRefusal::ReaderMissing {
+    fn new(agent_did: &'a str, root: Option<&'a Path>, home: Option<&'a Path>) -> Self {
+        Self {
             agent_did,
             root,
             home,
-            ..
-        } = refusal
-        else {
-            unreachable!("constructed for a ReaderMissing refusal");
-        };
-        Self {
-            agent_did,
-            root: root.as_deref(),
-            home: home.as_deref(),
         }
     }
 }
@@ -745,23 +734,27 @@ pub(crate) fn reader_grant_step(
                 format!("{agent_did} uses host tools only if a User granted it reader on the published WorkspaceRoot {root}; without that grant the runtime cannot load its tools and the agent is unavailable (agent_new to it is not offered).")
             },
             format!(
-                "gents config workspace-root grant-reader --path {root} --agent-did {agent_did} (add --home with this node's home when it runs against a node other than your default one)"
+                "gents config workspace-root grant-reader --path {root} --agent-did {agent_did}"
             ),
         ),
         (None, home) => (
             format!("{agent_did} uses host tools read through a WorkspaceRoot this node has not published. Until a User publishes one and grants {agent_did} reader on it, the runtime cannot load its tools and the agent is unavailable."),
             match home {
                 Some(home) => gents_protocol::node_readiness::workspace_root_list_call(home),
-                None => "gents config workspace-root list (add --home with this node's home when it runs against a node other than your default one)".to_owned(),
+                None => "gents config workspace-root list".to_owned(),
             },
         ),
     };
+    let target_guidance = home.is_none().then_some(
+        "Add --home with this node's home when running against a node other than your default one.",
+    );
     serde_json::json!({
+        "target_guidance": target_guidance,
         "state": if known_missing { "waiting_for_user" } else { "requires_user_grant" },
         "published_root": published_root,
         "answer": answer,
         "user_command": user_command,
-        "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
+        "how_to_proceed": "Keep these Tools and give the User user_command and target_guidance to run it from their own client; no config or policy call, and no change to your own Tools, can grant it.",
     })
 }
 
@@ -924,6 +917,26 @@ pub fn canonicalize_tools_root(
 mod tests {
     use super::*;
     use gents_session::workspace::root_resolution::RootDenialReason;
+
+    #[test]
+    fn reader_step_keeps_commands_runnable_and_home_guidance_separate() {
+        for root in [None, Some("/workspace")] {
+            for home in [None, Some(Path::new("/node/home"))] {
+                let step = reader_grant_step("did:key:helper", root, home, true);
+                let command = step["user_command"].as_str().unwrap();
+                assert!(!command.contains('('));
+                assert!(!command.contains("Add --home"));
+                assert_eq!(step["target_guidance"].is_null(), home.is_some());
+                assert!(step["how_to_proceed"]
+                    .as_str()
+                    .unwrap()
+                    .contains("target_guidance"));
+                if home.is_some() {
+                    assert!(command.contains("--home /node/home"));
+                }
+            }
+        }
+    }
 
     #[test]
     fn workspace_root_fallback_requires_complete_visibility() {
