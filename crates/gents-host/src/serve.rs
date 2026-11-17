@@ -516,7 +516,12 @@ async fn serve_foreground(
         .transpose()?;
     let home_dir = resolve_home_dir(args.home.as_deref());
     if !tokio::fs::try_exists(&home_dir).await? {
-        eprintln!("Error: {} does not exist", home_dir.display());
+        // A server-only startup outage: stamped into the service manager's log
+        // when this process is the service runtime, bare in a terminal.
+        gents::runtime::native_logging::service_stderr(&format!(
+            "Error: {} does not exist",
+            home_dir.display()
+        ));
         std::process::exit(gents_service::native_service::HOME_GONE_EXIT_CODE);
     }
     // A home whose identity can never own the node is refused from its
