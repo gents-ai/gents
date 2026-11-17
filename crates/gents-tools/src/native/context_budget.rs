@@ -1043,10 +1043,22 @@ mod tests {
                 .history_stubbing,
             None
         );
-        use gents_protocol::message::{Message, ToolResultContent};
+        use gents_protocol::message::{Message, ToolResult, ToolResultContent, UserContent};
         let (_, _, receipts) = gents_loop::compaction::history::strip_tool_results_accounted(vec![
-            Message::tool_result("first", vec![ToolResultContent::text("x".repeat(4_000))]),
-            Message::tool_result("second", vec![ToolResultContent::text("y".repeat(4_000))]),
+            Message::User {
+                content: vec![UserContent::ToolResult(ToolResult {
+                    id: "first".into(),
+                    call_id: Some("first".into()),
+                    content: vec![ToolResultContent::text("x".repeat(4_000))],
+                })],
+            },
+            Message::User {
+                content: vec![UserContent::ToolResult(ToolResult {
+                    id: "second".into(),
+                    call_id: Some("second".into()),
+                    content: vec![ToolResultContent::text("y".repeat(4_000))],
+                })],
+            },
         ]);
         let figures = gents_loop::compaction::history::replacement_figures(&receipts);
         assert_eq!(figures.stubbed_results, 2);
