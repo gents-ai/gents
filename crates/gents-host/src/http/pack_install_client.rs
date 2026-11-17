@@ -227,7 +227,7 @@ impl PackInstallSession {
     async fn proposal(&mut self) -> Result<ServerMessage> {
         match self.pending.take() {
             Some(proposal) => Ok(proposal),
-            None => receive(&mut self.socket).await,
+            None => Ok(receive(&mut self.socket).await?),
         }
     }
 
