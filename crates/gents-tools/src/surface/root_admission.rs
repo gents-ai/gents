@@ -239,7 +239,7 @@ impl RootExecutionGuard {
                 reason: denial,
                 resolved_candidate,
             } => Err(self
-                .refusal_for_denial(node, resolved_candidate, denial)
+                .refusal_for_denial(node, resolved_candidate, denial, policy.configured)
                 .await),
         }
     }
@@ -256,6 +256,7 @@ impl RootExecutionGuard {
         node: &std::sync::Arc<defra_node::Node>,
         denied: PathBuf,
         denial: RootDenialReason,
+        policy_configured: bool,
     ) -> anyhow::Error {
         let covering = self.published_roots_covering(node, &denied).await;
         // The facts the refusal carries, so Lean `toolSurfaceReason` decides the
@@ -271,14 +272,19 @@ impl RootExecutionGuard {
                 denial: RootDenialKind::of(denial),
             }
             .into(),
-            // Nothing enabled covers the tools, so the denial is about the path:
-            // the facts say published-disabled, and the model keeps the generic
-            // surface whatever the denial.
+            // No enabled root covers the tools, so the denial is about the path.
+            // The facts say which of the two ways: a policy with nothing enabled
+            // over them, or no policy at all. The model keeps the generic surface
+            // for both, whatever the denial.
             None => ToolRootRefusal::Denied {
                 agent_did: self.agent_did.clone(),
                 root: denied,
                 denial,
-                publishing: RootPublishing::PublishedDisabled,
+                publishing: if policy_configured {
+                    RootPublishing::PublishedDisabled
+                } else {
+                    RootPublishing::NoPolicy
+                },
                 denial_kind: RootDenialKind::of(denial),
             }
             .into(),
