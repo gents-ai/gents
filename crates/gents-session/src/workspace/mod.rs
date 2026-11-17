@@ -49,7 +49,7 @@ pub use executor::{
 pub use instructions::{
     instruction_body_for_request, instruction_body_for_request_with_origin,
     instruction_context_section, live_instruction_context_section, InstructionFile,
-    InstructionManifest, DEFAULT_INSTRUCTION_PATHS,
+    InstructionManifest, DEFAULT_INSTRUCTION_PATHS, WORKFLOW_RESULT_RETURN_INSTRUCTION,
 };
 pub use journal::{
     action_journal_prefix_legal, recover_running, retry_allowed, ActionJournalEntry,

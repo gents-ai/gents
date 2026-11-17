@@ -1339,6 +1339,32 @@ mod tests {
         harness.close().await;
     }
 
+    /// C2: the staged spawn really is a workflow child. Its request carries the
+    /// `PluginJob` creation intent, which is what the runtime reads -- and
+    /// verifies -- to decide whether to tell the child where its answer
+    /// returns. A spawn without it would get an ordinary session's context.
+    #[tokio::test]
+    async fn a_staged_child_request_is_a_plugin_job_creation() {
+        let harness = harness("job-stage-plugin-job-intent").await;
+        let kept = spawn("kept", 0, "guest prompt", "Spawn Title", None);
+        let effects = job_effects(vec![kept.clone()], Vec::new());
+        stage(&harness, &[kept], &effects, &harness.row)
+            .await
+            .unwrap();
+        let rows = by_key(
+            &harness.access,
+            &job_spawn_key(&harness.row.root, "kept", 0),
+        )
+        .await;
+        assert_eq!(rows.len(), 1);
+        let input = input_of(&rows[0]);
+        assert_eq!(
+            input["session_creation"], "plugin_job",
+            "the staged child carries the intent the runtime verifies"
+        );
+        harness.close().await;
+    }
+
     #[tokio::test]
     async fn child_of_a_relative_cwd_gets_the_path_admission_checked() {
         let harness = harness("job-stage-relative-cwd").await;
