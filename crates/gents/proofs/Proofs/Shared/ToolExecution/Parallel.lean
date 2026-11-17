@@ -23,6 +23,27 @@ def takeReads (limit : Nat) (seen : List Nat) : List Call → List Call
     if limit = 0 ∨ c.footprint = .barrier ∨ c.key ∈ seen then []
     else c :: takeReads (limit - 1) (c.key :: seen) rest
 
+/-- Script effects refine the same read-prefix schedule. A barrier or duplicate
+runs alone; no later effect can overtake it. Empty input starts nothing. -/
+def effectWidth (limit : Nat) (calls : List Call) : Nat :=
+  if calls.isEmpty then 0 else max 1 (takeReads limit [] calls).length
+
+theorem effect_width_empty (limit : Nat) : effectWidth limit [] = 0 := by
+  simp [effectWidth]
+
+theorem effect_width_barrier (limit key : Nat) (rest : List Call) :
+    effectWidth limit (⟨key, .barrier⟩ :: rest) = 1 := by
+  simp [effectWidth, takeReads]
+
+theorem effect_width_refines_reads (limit : Nat) (calls : List Call)
+    (h : 0 < (takeReads limit [] calls).length) :
+    effectWidth limit calls = (takeReads limit [] calls).length := by
+  cases calls with
+  | nil => simp [takeReads] at h
+  | cons c rest =>
+    simp only [effectWidth, List.isEmpty_cons, Bool.false_eq_true, ↓reduceIte]
+    exact Nat.max_eq_right (by omega)
+
 inductive Admission where
   | run | skip | terminate
   deriving Repr, BEq, DecidableEq

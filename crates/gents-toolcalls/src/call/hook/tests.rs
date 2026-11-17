@@ -32,6 +32,9 @@ mod retained_record_warnings;
 #[path = "tests/session_message_commit.rs"]
 mod session_message_commit;
 
+#[path = "tests/script_batch_timing.rs"]
+mod script_batch_timing;
+
 #[path = "tests/plugin_job_dispatch.rs"]
 mod plugin_job_dispatch;
 

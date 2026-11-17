@@ -1346,14 +1346,12 @@ where
                 let candidates: Vec<_> = pending_calls.iter().take(invalid_tool_progress.remaining().min(4)).map(|(call, _)| {
                     let name = call.function.name.as_str();
                     let args = value_to_json_string(&call.function.arguments);
-                    let read = tools.iter().find(|tool| tool.name() == name)
-                        .is_some_and(|tool| tool.footprint(&args) == crate::tool::ToolFootprint::Read)
-                        && admit_tool(tools.as_slice(), name, &args).is_none();
+                    let read = crate::tool_effects::parallel::is_read(tools.as_slice(), name, &args);
                     (name, args, read)
                 }).collect();
                 let batch_len = if first_decision == repeated_tool_failure::RepeatDecision::Dispatch
                     && !repeated_tool_failure.success_may_stop(&first_call.function.name, &first_args) {
-                    parallel::read_prefix(candidates.iter().map(|(name, args, read)| (*name, args.as_str(), *read)), invalid_tool_progress.remaining().min(4))
+                    crate::tool_effects::parallel::read_prefix(candidates.iter().map(|(name, args, read)| (*name, args.as_str(), *read)), invalid_tool_progress.remaining().min(4))
                 } else { 0 };
                 if batch_len > 1 {
                     let batch = (0..batch_len).map(|_| pending_calls.pop_front().expect("batch prefix exists")).collect();

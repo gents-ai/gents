@@ -179,6 +179,19 @@ async fn perform(
     }
 }
 
+async fn perform_tools(
+    requests: Vec<(String, Map<String, Value>)>,
+    tools: &mut Option<tool_calls::Session>,
+) -> Result<Vec<Value>, String> {
+    match tools {
+        Some(tools) => tools.call_batch(requests).await,
+        None => Ok(requests
+            .into_iter()
+            .map(|_| tool_access_disabled())
+            .collect()),
+    }
+}
+
 async fn describe(name: Value, tools: &mut Option<tool_calls::Session>) -> Value {
     match (tools, name) {
         (None, _) => tool_access_disabled(),
@@ -188,8 +201,7 @@ async fn describe(name: Value, tools: &mut Option<tool_calls::Session>) -> Value
     }
 }
 
-/// A batch is its members in request order: each is performed, and reserves,
-/// exactly as it would alone, and its answer takes its member's position.
+/// Trusted read effects share the loop's schedule; sleeps and invalid members remain barriers.
 async fn serve(
     bytes: &[u8],
     tools: &mut Option<tool_calls::Session>,
@@ -200,12 +212,24 @@ async fn serve(
         Ok(Request::Describe(request)) => Ok(describe(request.describe, tools).await),
         Ok(Request::Batch(request)) => {
             let mut results = Vec::with_capacity(request.batch.len());
+            let mut pending = Vec::new();
             for member in request.batch {
-                results.push(match serde_json::from_value::<Effect>(member) {
-                    Ok(effect) => perform(effect, tools, deadline).await?,
-                    Err(error) => json!({"error": format!("expected {EFFECT_SHAPES}: {error}")}),
-                });
+                match serde_json::from_value::<Effect>(member) {
+                    Ok(Effect::Tool(request)) => {
+                        pending.push((request.tool_name, request.arguments))
+                    }
+                    other => {
+                        results.extend(perform_tools(std::mem::take(&mut pending), tools).await?);
+                        results.push(match other {
+                            Ok(effect) => perform(effect, tools, deadline).await?,
+                            Err(error) => {
+                                json!({"error": format!("expected {EFFECT_SHAPES}: {error}")})
+                            }
+                        });
+                    }
+                }
             }
+            results.extend(perform_tools(pending, tools).await?);
             Ok(json!({ "results": results }))
         }
         Err(error) => Ok(
@@ -262,7 +286,9 @@ pub async fn run(
             result = &mut worker => return Ok(result??),
             _ = tokio::time::sleep_until(deadline) => return Ok(failure(PluginVerdict::Timeout, "the plugin exceeded its wall-clock budget".into())),
             Some(call) = receiver.recv() => {
+                let host_started = std::time::Instant::now();
                 let response = tokio::time::timeout_at(deadline, serve(&call.bytes, &mut tools, deadline)).await;
+                tracing::info!(request_bytes = call.bytes.len(), elapsed_us = host_started.elapsed().as_micros() as u64, "script host round");
                 match response {
                     Ok(Ok(value)) => { let _ = call.reply.send(serde_json::to_vec(&value).map_err(anyhow::Error::from)?); }
                     Ok(Err(reason)) => return Ok(failure(PluginVerdict::Failed, reason)),
@@ -584,5 +610,56 @@ mod tests {
                 sleep: sleep_admissible(i.milliseconds, Duration::from_millis(i.remaining)),
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod batch_handoff_tests {
+    use super::*;
+    use gents_loop::tool::{BoxFuture, ToolDefinition};
+    use gents_loop::tool_effects::{EffectResult, ToolEffectCall, ToolEffectDispatcher};
+    struct BatchOnly;
+    impl ToolEffectDispatcher for BatchOnly {
+        fn definitions<'a>(&'a self) -> BoxFuture<'a, Vec<ToolDefinition>> {
+            Box::pin(async { vec![] })
+        }
+        fn call<'a>(&'a self, _: u32, _: &'a str, _: &'a str) -> BoxFuture<'a, EffectResult> {
+            Box::pin(async { panic!("host batch split into serial calls") })
+        }
+        fn batch<'a>(&'a self, calls: Vec<ToolEffectCall>) -> BoxFuture<'a, Vec<EffectResult>> {
+            Box::pin(async move {
+                assert_eq!(
+                    calls.iter().map(|c| c.ordinal).collect::<Vec<_>>(),
+                    [1, 2, 3, 4]
+                );
+                calls
+                    .into_iter()
+                    .map(|c| {
+                        Ok(gents_loop::tool_call_lifecycle::ToolOutcome::Completed(
+                            json!({"ordinal":c.ordinal}).to_string(),
+                        ))
+                    })
+                    .collect()
+            })
+        }
+    }
+    #[tokio::test]
+    async fn host_delivers_one_batch_with_request_order_ordinals() {
+        let mut tools = gents_loop::tool_effects::scope(Some(Arc::new(BatchOnly)), async {
+            tool_calls::Session::for_call(true)
+        })
+        .await;
+        let request = json!({"batch": (1..=4).map(|id| json!({"tool_name":"read","arguments":{"id":id}})).collect::<Vec<_>>()});
+        let answer = serve(
+            &serde_json::to_vec(&request).unwrap(),
+            &mut tools,
+            tokio::time::Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            answer,
+            json!({"results":[{"result":{"ordinal":1}},{"result":{"ordinal":2}},{"result":{"ordinal":3}},{"result":{"ordinal":4}}]})
+        );
     }
 }

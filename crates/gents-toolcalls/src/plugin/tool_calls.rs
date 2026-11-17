@@ -19,7 +19,7 @@ pub fn supported(_name: &str, _job_tools: &BTreeSet<String>) -> bool {
 
 pub fn composition_note() -> String {
     format!(
-        "\nThis plugin may call up to {MAX_EFFECTS} of this request's tools in sequence, with their existing permissions and lifecycle behavior."
+        "\nThis plugin may call up to {MAX_EFFECTS} of this request's tools, with trusted reads batched up to four and all other calls in order, with their existing permissions and lifecycle behavior."
     )
 }
 
@@ -141,13 +141,13 @@ impl Session {
         }
     }
 
-    pub async fn call(
+    async fn prepare_call(
         &mut self,
-        name: &str,
+        name: String,
         mut arguments: Map<String, Value>,
-    ) -> Result<Value, String> {
+    ) -> Result<gents_loop::tool_effects::ToolEffectCall, Value> {
         let Some(next) = reserve(self.used) else {
-            return Ok(json!({"error": format!("the plugin used its {MAX_EFFECTS} tool calls")}));
+            return Err(json!({"error": format!("the plugin used its {MAX_EFFECTS} tool calls")}));
         };
         self.used = next;
         let offered = self
@@ -159,11 +159,61 @@ impl Session {
         if structured_by_default(offered, arguments.contains_key(STRUCTURED_RESULT)) {
             arguments.insert(STRUCTURED_RESULT.into(), Value::Bool(true));
         }
-        let arguments = Value::Object(arguments).to_string();
+        Ok(gents_loop::tool_effects::ToolEffectCall {
+            ordinal: next,
+            name,
+            arguments: Value::Object(arguments).to_string(),
+        })
+    }
+
+    pub async fn call(
+        &mut self,
+        name: &str,
+        arguments: Map<String, Value>,
+    ) -> Result<Value, String> {
+        let call = match self.prepare_call(name.to_owned(), arguments).await {
+            Ok(call) => call,
+            Err(result) => return Ok(result),
+        };
         settle(
-            gents_loop::tool_effects::scope(None, self.dispatcher.call(next, name, &arguments))
-                .await,
+            gents_loop::tool_effects::scope(
+                None,
+                self.dispatcher
+                    .call(call.ordinal, &call.name, &call.arguments),
+            )
+            .await,
         )
+    }
+
+    pub async fn call_batch(
+        &mut self,
+        requests: Vec<(String, Map<String, Value>)>,
+    ) -> Result<Vec<Value>, String> {
+        let mut calls = Vec::new();
+        let mut ready = Vec::new();
+        for (name, arguments) in requests {
+            match self.prepare_call(name, arguments).await {
+                Ok(call) => {
+                    calls.push(call);
+                    ready.push(None);
+                }
+                Err(result) => ready.push(Some(result)),
+            }
+        }
+        let mut results = gents_loop::tool_effects::scope(None, self.dispatcher.batch(calls))
+            .await
+            .into_iter();
+        ready
+            .into_iter()
+            .map(|ready| match ready {
+                Some(result) => Ok(result),
+                None => settle(
+                    results
+                        .next()
+                        .ok_or("tool batch did not settle every member")?,
+                ),
+            })
+            .collect()
     }
 
     pub fn for_call(granted: bool) -> Option<Self> {
