@@ -118,6 +118,8 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
             node_home.to_str().unwrap(),
             "--display-name",
             "Cloned Assistant",
+            "--root",
+            home_dir.to_str().unwrap(),
             "--profile-id",
             &profile_id,
         ],
@@ -126,7 +128,13 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
     let omissions = cloned["not_copied"]
         .as_array()
         .context("missing omission list")?;
-    assert_eq!(omissions.len(), 1);
+    assert_eq!(omissions.len(), 2);
+    assert!(omissions
+        .iter()
+        .any(|entry| entry["capability"] == "host root"));
+    let warning = cloned["prompt_warning"].as_str().unwrap();
+    assert_eq!(warning.lines().count(), 1);
+    assert!(!warning.contains("host root"));
     assert!(cloned["prompt_warning"]
         .as_str()
         .unwrap()

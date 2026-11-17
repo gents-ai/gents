@@ -967,6 +967,7 @@ async fn agent_apply_in_txn(
                     ..Default::default()
                 });
             }
+            let source_tools = tools.clone();
             if args.root.is_present() {
                 tools
                     .get_or_insert_with(Tools::default)
@@ -977,7 +978,6 @@ async fn agent_apply_in_txn(
             if args.enable_lsp.is_some() || args.network_mode.is_some() {
                 tools.get_or_insert_with(Tools::default);
             }
-            let source_tools = tools.clone();
             if let Some(mut tools) = tools {
                 tools.tools_id = format!("{id}:tools");
                 admit(
