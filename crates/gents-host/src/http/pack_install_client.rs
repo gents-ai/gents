@@ -353,7 +353,7 @@ enum ReceiveError {
     #[error("remote pack install connection closed; inspect the runtime before retrying")]
     Closed,
     #[error("remote pack install connection lost; inspect the runtime before retrying: {0}")]
-    Transport(#[from] tokio_tungstenite::tungstenite::Error),
+    Transport(#[source] Box<tokio_tungstenite::tungstenite::Error>),
 }
 
 pub(super) enum LegacyHandshakeRefusal {
@@ -382,7 +382,7 @@ async fn receive(
             | Some(Ok(Message::Pong(_)))
             | Some(Ok(Message::Frame(_))) => {}
             Some(Ok(_)) | None => return Err(ReceiveError::Closed),
-            Some(Err(error)) => return Err(error.into()),
+            Some(Err(error)) => return Err(ReceiveError::Transport(Box::new(error))),
         }
     }
 }
