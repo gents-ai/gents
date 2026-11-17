@@ -1364,7 +1364,7 @@ async fn stubbing_budgeted_reduction_counts_only_the_actual_dispatched_rows() {
             Ok(TurnCompactionOutcome::Reduced {
                 messages: vec![request.messages.last().unwrap().clone()],
                 reduction_key: "drop-stub".into(),
-                commit: TurnCompactionCommit::new(|| async { Ok(()) }),
+                commit: TurnReductionCommit::new(|| async { Ok(()) }),
             })
         })
     }));

@@ -135,7 +135,7 @@ pub(in crate::loop_stream) fn history_stubbing_for_dispatch<'a>(
             for part in content.iter() {
                 if let rig::message::UserContent::ToolResult(result) = part {
                     *retained
-                        .entry(serde_json::to_string(result).expect("tool result serializes"))
+                        .entry(serde_json::to_string(&result).expect("tool result serializes"))
                         .or_default() += 1;
                 }
             }
@@ -168,7 +168,7 @@ pub(in crate::loop_stream) fn history_stubbing_for_dispatch<'a>(
             let rig::message::UserContent::ToolResult(result) = content.first() else {
                 unreachable!()
             };
-            let key = serde_json::to_string(result).expect("tool result serializes");
+            let key = serde_json::to_string(&result).expect("tool result serializes");
             if let Some(count) = retained.get_mut(&key).filter(|count| **count > 0) {
                 *count -= 1;
                 figures.stubbed_results += 1;
