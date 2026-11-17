@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use gents_loop::tool::{Tool, ToolDefinition, ToolError};
-use gents_loop::tool_call_lifecycle::ToolOutcome;
+use gents_loop::tool_call_lifecycle::{runtime::scope_request_tool_execution, ToolOutcome};
 use gents_loop::tool_effects::{self, ToolEffectDispatcher};
 use gents_loop::{HookAction, SessionHook, ToolCallHookAction};
 use gents_protocol::message::Message;
@@ -126,9 +126,13 @@ async fn guest(request: Value) -> Value {
     record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
     gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
     let executor = super::executor::PluginExecutor::new(Some(home.path().to_owned()));
-    let result = tool_effects::scope(
-        Some(dispatcher()),
-        executor.call_data_bound_for(&record, json!({}), None, true, None),
+    let result = scope_request_tool_execution(
+        None,
+        Default::default(),
+        tool_effects::scope(
+            Some(dispatcher()),
+            executor.call_data_bound_for(&record, json!({}), None, true, None),
+        ),
     )
     .await
     .unwrap();
@@ -188,7 +192,7 @@ async fn script_discovers_hidden_tools_with_object_keys_and_calls_their_contract
     record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
     gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
     let executor = super::executor::PluginExecutor::new(Some(home.path().to_owned()));
-    let result = tool_effects::scope(Some(dispatcher()), executor.call_data_bound_for(&record, json!({"script":"return { names: Object.keys(tools), description: tools.query.description, parameters: tools.query.parameters, result: await tools.query({}) };"}), None, true, None)).await.unwrap();
+    let result = scope_request_tool_execution(None, Default::default(), tool_effects::scope(Some(dispatcher()), executor.call_data_bound_for(&record, json!({"script":"return { names: Object.keys(tools), description: tools.query.description, parameters: tools.query.parameters, result: await tools.query({}) };"}), None, true, None))).await.unwrap();
     assert_eq!(
         result.outcome.verdict,
         gents_pack::plugin::PluginVerdict::Success,
