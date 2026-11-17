@@ -3622,7 +3622,14 @@ async fn hidden_runtime_script_unresolved_or_ceiling_removed_advertises_repair_t
             Vec::new(),
         )
         .unwrap();
-        let surface = config.resolve_with_agent_tools_for_mcp_presence(false, Default::default());
+        let surface = config
+            .resolve(
+                &runtime.node,
+                runtime.node.node_identity_did().unwrap(),
+                runtime.plugins.as_ref(),
+            )
+            .await
+            .expect("unresolved script must not prevent surface resolution");
         let tools = surface
             .build_tools(&runtime)
             .await
