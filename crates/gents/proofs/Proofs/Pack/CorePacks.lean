@@ -72,9 +72,9 @@ structure Wiring where
   wired : Bool
   /-- Its plugins may call the Engineer's own tools. -/
   toolCalls : Bool
-  /-- The node owner's consent to model-written dynamic scripts, which raises
-  the shipped `check` block to `run` (`PluginJob.consentedDynamic`, applied by
-  `Pack.PluginWiring.consentDynamic`). -/
+  /-- Effective dynamic run authority left on the Engineer. Enabling a shipped
+  check-only pack does not raise it. Per-plugin fresh incoming run consent is
+  modeled separately in `Pack.PluginWiring.consentDynamic`. -/
   consentDynamic : Bool
   /-- The agents it ships read the Engineer's tool root. -/
   rootReaders : Bool
@@ -101,11 +101,12 @@ def initWiring : CorePack → Wiring
   | .script => ⟨true, true, false, true, true⟩
   | _ => ⟨true, false, false, true, true⟩
 
-/-- What the user's explicit enable operation leaves: dynamic workflows wired
-with the dynamic consent, its agents granted their reader and enabled
-together; any other core pack as init leaves it. -/
+/-- What explicit enable leaves for the shipped check-only workflow defaults:
+wired, readers granted and agents enabled, but no implicit dynamic elevation.
+Existing policy remains authoritative; only a fresh incoming run block may use
+consent (B2 TPM ruling 2026-11-17). -/
 def enabledWiring : CorePack → Wiring
-  | .dynamicWorkflows => ⟨true, false, true, true, true⟩
+  | .dynamicWorkflows => ⟨true, false, false, true, true⟩
   | pack => initWiring pack
 
 theorem init_never_consents_dynamic (pack : CorePack) :
@@ -139,8 +140,8 @@ theorem only_script_calls_tools (pack : CorePack) :
     (initWiring pack).toolCalls = true ↔ pack = .script := by
   cases pack <;> simp [initWiring]
 
-theorem enabling_consents_dynamic :
-    (enabledWiring .dynamicWorkflows).consentDynamic = true := rfl
+theorem enabling_keeps_shipped_check :
+    (enabledWiring .dynamicWorkflows).consentDynamic = false := rfl
 
 /-- What the install reads of the profile a pack's inference slot is bound to:
 the profile with an enabled backend, with a disabled one, or with none. -/
