@@ -909,6 +909,55 @@ async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() 
     fixture.stop().await;
 }
 
+/// `ObserverResync.startCollections` against a served runtime: a collection
+/// reload reads each self-contained root exactly as the full snapshot does,
+/// so replacing those roots in the full snapshot changes nothing, and like
+/// the full snapshot it refuses a client that cannot observe the Node.
+#[tokio::test]
+async fn collection_reload_reads_the_rows_a_full_load_shows() {
+    use crate::client_projection::query::{
+        load_collection_roots_on, replace_collection_roots, OBSERVED_COLLECTIONS,
+    };
+    use gents_store::config_client::runtime_endpoints::RuntimeEndpoints;
+
+    let fixture = ObservedRuntime::start().await;
+    let peer = fixture.peers.records().into_iter().next().unwrap();
+    let read_as = |identity: &KeyIdentity| {
+        ConfigAccess::Graphql(
+            RuntimeEndpoints::new(identity.client_signing_capability().unwrap())
+                .endpoint(&peer.node_did, &peer.graphql)
+                .unwrap(),
+        )
+    };
+    let access = read_as(&fixture.client);
+    let roots: BTreeSet<_> = OBSERVED_COLLECTIONS
+        .iter()
+        .filter_map(|collection| CollectionRoot::of(collection))
+        .collect();
+    let full = load_node_snapshot_on(&access, &fixture.runtime_did)
+        .await
+        .unwrap();
+    let reloaded = load_collection_roots_on(&access, &fixture.runtime_did, &roots)
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(replace_collection_roots(&full, &roots, reloaded).to_rows()).unwrap(),
+        serde_json::to_value(full.to_rows()).unwrap(),
+    );
+
+    let directory = tempfile::tempdir().unwrap();
+    let key = directory.path().join("ungranted.key");
+    let ungranted =
+        tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(key, None).unwrap())
+            .await
+            .unwrap();
+    let refused = load_collection_roots_on(&read_as(&ungranted), &fixture.runtime_did, &roots)
+        .await
+        .unwrap_err();
+    assert!(refused.refused(), "{refused}");
+    fixture.stop().await;
+}
+
 /// Lean `failed_snapshot_reconnects_iff_refused`: a snapshot read the runtime
 /// refuses while every subscription stays armed names the refusal and ends
 /// the source, which reconnects on the backoff instead of retrying the read.
@@ -1339,7 +1388,9 @@ async fn reconcile_keeps_an_ended_source_until_its_notice_schedules_the_reconnec
 #[tokio::test]
 async fn generated_observer_resync_traces_match_the_lean_owner() {
     use crate::client_projection::store::ClientStoreRows;
-    use gents_protocol::schemas::{AGENT_MESSAGE_NAME, AGENT_TOOL_CALL_NAME};
+    use gents_protocol::schemas::{
+        AGENT_MESSAGE_NAME, AGENT_TOOL_CALL_NAME, INFERENCE_BACKEND_OBSERVATION_NAME,
+    };
 
     const NODES: usize = 2;
     let did = |node: usize| format!("did:resync:{node}");
@@ -1354,6 +1405,17 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
     let snapshot = |node: usize| {
         ClientStore::from_rows(ClientStoreRows {
             sessions: vec![session(node)],
+            ..Default::default()
+        })
+    };
+    // `Conformance.ObserverResync.observationRows`.
+    let observations = |node: usize| {
+        ClientStore::from_rows(ClientStoreRows {
+            backend_observations: vec![serde_json::from_value(serde_json::json!({
+                "backend_id": format!("observation-{node}"),
+                "probe_status": null, "last_probe": null,
+            }))
+            .unwrap()],
             ..Default::default()
         })
     };
@@ -1377,6 +1439,11 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         op("finish", 0, "transport_failed"),
         op("finish", 0, "refused"),
         op("finish", 1, "rows"),
+        op("deliver_collection", 0, ""),
+        op("start_collections", 0, ""),
+        op("finish_collections", 0, "rows"),
+        op("finish_collections", 0, "transport_failed"),
+        op("finish_collections", 0, "refused"),
     ];
     let prefix = [
         op("armed", 0, ""),
@@ -1384,18 +1451,39 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
         op("start", 0, ""),
         op("start", 1, ""),
     ];
+    // Node 0 reloading its collections, node 1 loading.
+    let collection_prefix = [
+        op("armed", 0, ""),
+        op("armed", 1, ""),
+        op("start", 0, ""),
+        op("start", 1, ""),
+        op("finish", 0, "rows"),
+        op("deliver_collection", 0, ""),
+        op("start_collections", 0, ""),
+    ];
     let suffix = [
         op("finish", 0, "rows"),
+        op("finish_collections", 0, "rows"),
         op("timer", 0, ""),
         op("armed", 0, ""),
         op("start", 0, ""),
         op("finish", 0, "rows"),
         op("finish", 1, "rows"),
+        op("deliver_collection", 0, ""),
+        op("start_collections", 0, ""),
+        op("finish_collections", 0, "rows"),
     ];
     let mut traces = Vec::new();
     for a in &alphabet {
         for b in &alphabet {
             let ops: Vec<_> = [a, b].into_iter().chain(suffix.iter()).cloned().collect();
+            traces.push(serde_json::json!({"nodes": NODES, "ops": ops}));
+            let ops: Vec<_> = collection_prefix
+                .iter()
+                .chain([a, b])
+                .chain(suffix.iter())
+                .cloned()
+                .collect();
             traces.push(serde_json::json!({"nodes": NODES, "ops": ops}));
             for c in &alphabet {
                 let ops: Vec<_> = prefix
@@ -1425,13 +1513,20 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
 
     let metrics = ObserverMetrics::default();
     let mut settlements = BTreeSet::new();
+    let mut collection_settlements = BTreeSet::new();
     let mut retries = BTreeSet::new();
     for (trace, expected) in traces.iter().zip(&modeled) {
         let stores = ObservedStores::new();
         let mut queue = Queue::default();
         let mut sources = remote::Sources::default();
         let mut generation = [0_u64; NODES];
-        let mut in_flight = BTreeMap::<String, projection_store::StoreReadFence>::new();
+        // A node's read in flight: its capture, and the roots of a collection
+        // reload (`None` for a full load).
+        type Reading = (
+            projection_store::StoreReadFence,
+            Option<BTreeSet<CollectionRoot>>,
+        );
+        let mut in_flight = BTreeMap::<String, Reading>::new();
         let now = Instant::now();
         for (node, generation) in generation.iter_mut().enumerate() {
             *generation = sources.start_inert(&did(node));
@@ -1452,7 +1547,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
             // shown status.
             let notice = |queue: &mut Queue,
                           sources: &mut remote::Sources,
-                          in_flight: &mut BTreeMap<String, projection_store::StoreReadFence>,
+                          in_flight: &mut BTreeMap<String, Reading>,
                           generation: &mut u64,
                           event: RuntimeConnectionEvent| {
                 if sources.entries[&node_did].ended() {
@@ -1512,14 +1607,53 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                         generation[node],
                         in_flight.contains_key(&node_did),
                     ) {
-                        queue.pending.remove(&node_did);
-                        in_flight.insert(node_did.clone(), store.capture_read());
+                        queue.start(&node_did);
+                        in_flight.insert(node_did.clone(), (store.capture_read(), None));
                     }
                 }
-                "deliver" | "tool_call_event" | "transcript_event" => {
+                "start_collections" => {
+                    if queue.collections_startable(
+                        &node_did,
+                        generation[node],
+                        in_flight.contains_key(&node_did),
+                    ) {
+                        let roots = queue.start_collections(&node_did);
+                        in_flight.insert(node_did.clone(), (store.capture_read(), Some(roots)));
+                    }
+                }
+                "finish_collections" => match in_flight.remove(&node_did) {
+                    Some((captured, Some(roots))) => {
+                        let read = match result {
+                            "rows" => Ok(observations(node)),
+                            "refused" => Err(SnapshotReadError::NodeUnavailable),
+                            _ => Err(SnapshotReadError::from(anyhow::anyhow!("unreachable"))),
+                        };
+                        let settlement = settle_collection_reload(
+                            &store,
+                            &captured,
+                            roots.clone(),
+                            read,
+                            &metrics,
+                        );
+                        queue.settle_collections(&node_did, settlement, roots);
+                        let name = match settlement {
+                            CollectionSettlement::Published => "published",
+                            CollectionSettlement::Superseded => "superseded",
+                            CollectionSettlement::Failed => "failed",
+                        };
+                        collection_settlements.insert(name);
+                        finished = serde_json::json!({"collection_settlement": name});
+                    }
+                    Some(load) => {
+                        in_flight.insert(node_did.clone(), load);
+                    }
+                    None => {}
+                },
+                "deliver" | "tool_call_event" | "transcript_event" | "deliver_collection" => {
                     let collection = match step["op"].as_str().unwrap() {
                         "deliver" => "AgentRequest",
                         "tool_call_event" => AGENT_TOOL_CALL_NAME,
+                        "deliver_collection" => INFERENCE_BACKEND_OBSERVATION_NAME,
                         _ => AGENT_MESSAGE_NAME,
                     };
                     delivery::deliver(
@@ -1529,7 +1663,7 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                         &serde_json::json!({"data": {collection: [{"_docID": "changed"}]}}),
                     )
                     .unwrap();
-                    queue.pending.extend(stores.take_resync_requests());
+                    queue.take_requests(&stores);
                 }
                 "publish" => {
                     assert!(store
@@ -1547,7 +1681,10 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                     retries.insert(restarted);
                 }
                 "finish" => {
-                    if let Some(captured) = in_flight.remove(&node_did) {
+                    let loading = matches!(in_flight.get(&node_did), Some((_, None)));
+                    if let Some((captured, _)) =
+                        loading.then(|| in_flight.remove(&node_did)).flatten()
+                    {
                         let patch_accepted = store.accepts_chat_patch_read(&captured);
                         let settlement = match result {
                             "transport_failed" => Settlement::TransportFailed,
@@ -1593,7 +1730,9 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
             let observed = serde_json::json!({
                 "pending": queue.pending.contains(&node_did),
                 "waiting": queue.retry_at.contains_key(&node_did),
-                "loading": in_flight.contains_key(&node_did),
+                "loading": matches!(in_flight.get(&node_did), Some((_, None))),
+                "collections": queue.collections.get(&node_did).is_some_and(|roots| !roots.is_empty()),
+                "reloading_collections": matches!(in_flight.get(&node_did), Some((_, Some(_)))),
                 "armed": queue.armed.get(&node_did) == Some(&generation[node])
                     && !sources.entries[&node_did].ended(),
                 "status": stores.runtime_connection(&node_did).unwrap().as_str(),
@@ -1611,8 +1750,27 @@ async fn generated_observer_resync_traces_match_the_lean_owner() {
                 .collect();
             assert_eq!(&serde_json::Value::Array(stored), modeled, "{trace}");
         }
+        for (node, modeled) in expected["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            let stored: Vec<_> = stores
+                .snapshot(&did(node))
+                .backend_observations
+                .iter()
+                .map(|row| serde_json::json!(row.backend_id))
+                .collect();
+            assert_eq!(&serde_json::Value::Array(stored), modeled, "{trace}");
+        }
     }
     assert_eq!(settlements.len(), 4, "every settlement is exercised");
+    assert_eq!(
+        collection_settlements.len(),
+        3,
+        "every collection settlement is exercised"
+    );
     assert_eq!(
         retries.len(),
         2,

@@ -21,6 +21,7 @@ use serde_json::Value;
 
 use crate::client_projection::store::{ClientStore, ClientStoreRows};
 
+mod collection_roots;
 mod document_patches;
 mod request_closure;
 mod session_tip;
@@ -31,6 +32,7 @@ pub use session_tip::{
     RequestPromptOwnership,
 };
 mod snapshot_loaders;
+pub use collection_roots::{load_collection_roots_on, replace_collection_roots, CollectionRoot};
 pub use snapshot_loaders::{
     load_inference_configuration, load_node_scoped_snapshot_with_connections,
     load_node_snapshot_on, SnapshotReadError,

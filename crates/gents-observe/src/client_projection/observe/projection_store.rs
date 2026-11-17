@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex as StdMutex, RwLock};
 
 use tokio::sync::watch;
 
+use crate::client_projection::query::{replace_collection_roots, CollectionRoot};
 use crate::client_projection::store::{ClientStore, SharedClientStore};
 
 #[derive(Debug, Default)]
@@ -115,6 +116,8 @@ impl StoreReadFence {
 enum StoreMutation {
     /// A reload of the node, replacing every row its store holds.
     Replace(ClientStore),
+    /// A reload of some collections, replacing their rows alone.
+    Collections(BTreeSet<CollectionRoot>, ClientStore),
     Chat(ClientStore),
 }
 
@@ -124,7 +127,7 @@ impl StoreMutation {
     /// the request-event epoch.
     fn accepts(&self, fences: &StoreReadFence, captured: &StoreReadFence) -> bool {
         match self {
-            Self::Replace(_) => fences.accepts_reload(captured),
+            Self::Replace(_) | Self::Collections(..) => fences.accepts_reload(captured),
             Self::Chat(_) => fences.accepts(captured),
         }
     }
@@ -132,6 +135,7 @@ impl StoreMutation {
     fn provenance(&self) -> Option<ProvenanceUpdate> {
         match self {
             Self::Replace(_) => Some(ProvenanceUpdate::Invalidate),
+            Self::Collections(..) => None,
             Self::Chat(incoming) => provenance_update(incoming),
         }
     }
@@ -139,6 +143,9 @@ impl StoreMutation {
     fn apply(self, current: &ClientStore) -> ClientStore {
         match self {
             Self::Replace(incoming) => incoming,
+            Self::Collections(roots, incoming) => {
+                replace_collection_roots(current, &roots, incoming)
+            }
             Self::Chat(incoming) => current.merge_chat_patch(incoming),
         }
     }
@@ -207,11 +214,13 @@ struct ObservedState {
 }
 
 /// What every node's store shares: the fleet notice that any store, status or
-/// membership changed, and the observer's queue of nodes to read again.
+/// membership changed, and the observer's queues of nodes and collections to
+/// read again.
 struct Fleet {
     version_tx: watch::Sender<u64>,
     resync_tx: watch::Sender<u64>,
     pending_resync: StdMutex<BTreeSet<String>>,
+    pending_collections: StdMutex<BTreeMap<String, BTreeSet<CollectionRoot>>>,
 }
 
 impl Fleet {
@@ -243,6 +252,7 @@ impl ObservedStores {
                 version_tx,
                 resync_tx,
                 pending_resync: StdMutex::new(BTreeSet::new()),
+                pending_collections: StdMutex::new(BTreeMap::new()),
             }),
         })
     }
@@ -406,6 +416,17 @@ impl ObservedStores {
         self.fleet.resync_tx.subscribe()
     }
 
+    /// The collections each node's store asked to reload alone.
+    pub(crate) fn take_collection_requests(&self) -> BTreeMap<String, BTreeSet<CollectionRoot>> {
+        std::mem::take(
+            &mut *self
+                .fleet
+                .pending_collections
+                .lock()
+                .expect("pending collections lock poisoned"),
+        )
+    }
+
     /// The nodes whose stores asked to be read again, each once.
     pub(crate) fn take_resync_requests(&self) -> Vec<String> {
         std::mem::take(
@@ -510,6 +531,21 @@ impl ObservedStore {
         });
     }
 
+    /// Queues `root` of this node for the observer's collection reload
+    /// (`ObserverResync.queueCollection`); requests coalesce into one read.
+    pub(crate) fn request_collection_reload(&self, root: CollectionRoot) {
+        self.fleet
+            .pending_collections
+            .lock()
+            .expect("pending collections lock poisoned")
+            .entry(self.node_did.clone())
+            .or_default()
+            .insert(root);
+        self.fleet.resync_tx.send_modify(|generation| {
+            *generation = generation.saturating_add(1);
+        });
+    }
+
     pub(crate) fn enqueue_resync_request(&self) {
         self.fleet
             .pending_resync
@@ -566,6 +602,19 @@ impl ObservedStore {
             StoreMutation::Replace(incoming.into_observer_projection()),
         )
         .is_some()
+    }
+
+    /// Replaces the rows of `roots` with `incoming`'s through the reload fence
+    /// (`ObserverResync.collectionSettlement`); false when a publication since
+    /// `captured` rejected it.
+    pub fn replace_collections_at_read(
+        &self,
+        captured: &StoreReadFence,
+        roots: BTreeSet<CollectionRoot>,
+        incoming: ClientStore,
+    ) -> bool {
+        self.update_if(Some(captured), StoreMutation::Collections(roots, incoming))
+            .is_some()
     }
 
     /// Publish a structural database change without retaining its transcript

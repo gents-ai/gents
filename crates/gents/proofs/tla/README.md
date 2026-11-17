@@ -255,6 +255,25 @@ See `../README.md` for how this fits the broader formal-verification model.
   the fix without renewals as a regression guard for arm-then-snapshot.
   `NodeScopeOnly`, `NoPublicationFence`, `NoEventQueue` and
   `SnapshotBeforeArm` each break one remaining guard.
+- `ObserverCollectionReload` — the observer's collection reloads beside its
+  full node reloads (Lean `ObserverResync.deliver`, `collectionStartable`,
+  `startCollections`, `settleCollections`). A change to a collection whose
+  snapshot root is self-contained queues that collection's own reload; any
+  other change queues the node's full reload. One read per node is in flight,
+  full reloads first, and a full reload takes the queued collections with it.
+  A collection reload publishes only its collection through the reload fence
+  (the generated table of `ClientDataPublication.reloadAcceptedSince`); a
+  rejected one queues its collections again and a failed one queues the full
+  reload. `NoLostWrite`, `NoStaleCommit`, `EventualPublication` and
+  `Convergence` hold with a touch (the per-minute observation rewrite) and a
+  lease renewal during every full load, a stream drop, a direct refresh and a
+  failed collection read (GREEN `MCObserverCollectionReload`). RED:
+  `IgnoreFence` (a collection reload publishes through a moved fence) breaks
+  `NoStaleCommit`; `DropRejected` (a rejected collection reload drops its
+  collections) and `DropFailure` (a failed collection read queues nothing)
+  break `NoLostWrite`; `ConcurrentReads` (a collection reload may run beside a
+  full reload) breaks `EventualPublication`: every touch rejects the full
+  reload in flight.
 - `DesktopUpdateListener` — the last leg of the desktop's event path: the
   bridge emitter (`spawn_client_update_task`: coalesced watch wakes, one
   `desktop://client-updated` event each), Tauri delivery (an event with no
@@ -645,6 +664,23 @@ and `NodeScopeOnly` violate `EventualPublication` and `Convergence`;
 ./scripts/run-tlc.sh MCObserverResyncNoEventQueue
 ./scripts/run-tlc.sh MCObserverResyncSnapshotBeforeArm
 ./scripts/run-tlc.sh MCObserverResyncStaleCommit
+```
+
+For ObserverCollectionReload — the green model (a write per collection, a
+touch and a renewal during every full load, a drop, a direct refresh and a
+failed collection read) checks clean:
+```bash
+./scripts/run-tlc.sh MCObserverCollectionReload
+```
+
+Its four diagnostics are EXPECTED to report violations: `IgnoreFence`
+violates `NoStaleCommit`; `DropRejected` and `DropFailure` violate
+`NoLostWrite`; `ConcurrentReads` violates `EventualPublication`:
+```bash
+./scripts/run-tlc.sh MCObserverCollectionReloadIgnoreFence
+./scripts/run-tlc.sh MCObserverCollectionReloadDropRejected
+./scripts/run-tlc.sh MCObserverCollectionReloadDropFailure
+./scripts/run-tlc.sh MCObserverCollectionReloadConcurrentReads
 ```
 
 For DesktopUpdateListener — the green model (every guard on, one rejected
