@@ -62,6 +62,10 @@ pub struct PackInstallSession {
     preparation: gents_pack::pack::HostedPackPreparation,
     pending: Option<ServerMessage>,
     next_id: u64,
+    /// What the handshake accepted on a weaker guarantee. Read by the caller
+    /// after the install, so the desktop and library callers see it as well as
+    /// the CLI.
+    warnings: Vec<PackInstallWarning>,
 }
 
 impl PackInstallSession {
@@ -117,12 +121,12 @@ impl PackInstallSession {
                 if error.downcast_ref::<serde_json::Error>().is_some() {
                     return Err(PackInstallHandshakeError::UnreadableHandshake {
                         client: client_build.summary(),
-                        detail: format!("{error:#}"),
+                        detail_bytes: format!("{error:#}").len(),
                     }
                     .into());
                 }
                 return Err(PackInstallHandshakeError::ConnectionLost {
-                    detail: format!("{error:#}"),
+                    detail_bytes: format!("{error:#}").len(),
                 }
                 .into());
             }
@@ -140,22 +144,19 @@ impl PackInstallSession {
             ServerMessage::Failed { error, .. } if error.contains("client_build") => {
                 return Err(PackInstallHandshakeError::OlderRuntime {
                     client: client_build.summary(),
-                    detail: error,
+                    detail_bytes: error.len(),
                 }
                 .into())
             }
             ServerMessage::Failed { error, outcome } => {
                 return Err(PackInstallHandshakeError::RuntimeFailed {
                     outcome,
-                    detail: error,
+                    detail_bytes: error.len(),
                 }
                 .into())
             }
             _ => {
-                return Err(PackInstallHandshakeError::UnexpectedMessage {
-                    detail: "a message type this client does not handle".to_owned(),
-                }
-                .into())
+                return Err(PackInstallHandshakeError::UnexpectedMessage { detail_bytes: 0 }.into())
             }
         };
         // The handshake is where a build mismatch is refused: a plan prepared by
@@ -166,11 +167,17 @@ impl PackInstallSession {
         {
             return Err(refusal.into());
         }
-        // Two dirty builds of one commit agree, and the acceptance is said out
-        // loud: the install went ahead on a weaker guarantee than two clean
-        // builds of that commit would give.
-        if let Some(warning) = client_build.dirty_warning(&runtime_build) {
-            eprintln!("{warning}");
+        // Two dirty builds of one commit agree, and the acceptance is recorded
+        // as a typed warning rather than printed here: the desktop and library
+        // callers see it, and the CLI is what prints it.
+        let mut warnings = Vec::new();
+        if client_build.dirty_warning(&runtime_build).is_some() {
+            warnings.push(PackInstallWarning::DirtyBuildPair {
+                commit: client_build
+                    .git_sha
+                    .clone()
+                    .unwrap_or_else(|| "an unrecorded commit".to_owned()),
+            });
         }
         ensure!(
             scope.node_did == node_did
@@ -185,7 +192,14 @@ impl PackInstallSession {
             preparation,
             pending: None,
             next_id: 1,
+            warnings,
         })
+    }
+
+    /// What the handshake accepted on a weaker guarantee, for the caller to show
+    /// or log. Empty on an ordinary install.
+    pub fn warnings(&self) -> &[PackInstallWarning] {
+        &self.warnings
     }
 
     pub fn preparation(&self) -> &gents_pack::pack::HostedPackPreparation {
@@ -371,6 +385,9 @@ async fn receive(socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>) -> Res
 /// Serializes interpreter requests on the same authenticated session.
 pub struct PackReplaySession {
     inner: tokio::sync::Mutex<PackReplayState>,
+    /// The handshake's warnings, kept outside the session because the session is
+    /// consumed while the install runs.
+    warnings: Vec<PackInstallWarning>,
 }
 
 struct PackReplayState {
@@ -380,12 +397,21 @@ struct PackReplayState {
 
 impl PackReplaySession {
     pub fn new(session: PackInstallSession) -> Self {
+        // Taken before the session is consumed, so the caller can read them once
+        // the install has finished.
+        let warnings = session.warnings().to_vec();
         Self {
             inner: tokio::sync::Mutex::new(PackReplayState {
                 session: Some(session),
                 result: None,
             }),
+            warnings,
         }
+    }
+
+    /// What the handshake accepted on a weaker guarantee, if anything.
+    pub fn warnings(&self) -> &[PackInstallWarning] {
+        &self.warnings
     }
 
     pub async fn result(&self) -> Result<Value> {
@@ -499,7 +525,7 @@ pub async fn install_remote(
     args: &gents_pack::pack::install_flow::DocumentsInstallRequest,
     explicit: bool,
     client_build: gents_protocol::build_info::BuildInfo,
-) -> Result<Value> {
+) -> Result<(Value, Vec<PackInstallWarning>)> {
     ensure!(args.wire.is_empty(), "remote pack install does not yet support --wire with client-held signing; install the pack and wire it separately on the owning node");
     let request = super::pack_install::encode_install_request(
         pack,
@@ -584,33 +610,66 @@ pub async fn install_remote(
             })
         })
         .await?;
-    replay.result().await
+    let result = replay.result().await?;
+    Ok((result, replay.warnings().to_vec()))
 }
 
 /// Why an install could not agree with the runtime before planning anything.
 /// Each variant names the next step, because the difference between them is
 /// exactly what an operator has to do about it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackInstallWarning {
+    /// Both builds are dirty builds of one commit, so they were accepted as the
+    /// same build on that commit and its core packs. The install is sound; the
+    /// guarantee is weaker than two clean builds of the commit would give.
+    ///
+    /// Typed rather than printed inside the install, so the desktop and library
+    /// callers see it too. The CLI prints it.
+    DirtyBuildPair { commit: String },
+}
+
+impl PackInstallWarning {
+    /// One line for a person, which the CLI prints and a UI can show.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::DirtyBuildPair { commit } => format!(
+                "both this client and the runtime are dirty builds of {commit}, so they were \
+                 accepted as the same build on the same commit and core packs; a clean install of \
+                 each is the stronger check"
+            ),
+        }
+    }
+}
+
+/// The handshake's own refusal, before any planning: a typed error whose
+/// variants state what an operator has to do about it.
 #[derive(Debug, thiserror::Error)]
 pub enum PackInstallHandshakeError {
+    /// The class is known, the text is not shown: a decode error can quote the
+    /// bytes it choked on, which on a runtime-side message means runtime
+    /// values. The length is enough to tell "empty" from "long".
     #[error(
         "the runtime's install handshake was unreadable, which is what an older runtime looks like: \
          this client is `{client}`; run `gents runtime service update` to bring the runtime to this \
-         build, or install from a client of the runtime's build ({detail})"
+         build, or install from a client of the runtime's build ({detail_bytes} bytes of detail not \
+         shown, since a decode error can quote runtime-side values)"
     )]
-    UnreadableHandshake { client: String, detail: String },
+    UnreadableHandshake { client: String, detail_bytes: usize },
 
     #[error(
-        "the connection to the runtime was lost during the install handshake: {detail}; \
-         the install did not happen, so retry it when the runtime is reachable"
+        "the connection to the runtime was lost during the install handshake ({detail_bytes} bytes \
+         of detail not shown); the install did not happen, so retry it when the runtime is reachable"
     )]
-    ConnectionLost { detail: String },
+    ConnectionLost { detail_bytes: usize },
 
     #[error(
-        "the runtime predates this client's build fields ({detail}): this client is `{client}`; \
+        "the runtime predates this client's build fields ({detail_bytes} bytes of detail not shown, \
+         since the runtime's message can quote values): this client is `{client}`; \
          run `gents runtime service update` to update the runtime, or install from a client of \
          the runtime's build"
     )]
-    OlderRuntime { client: String, detail: String },
+    OlderRuntime { client: String, detail_bytes: usize },
 
     #[error(
         "this client and the runtime are different builds, so they cannot agree on an install: \
@@ -626,11 +685,19 @@ pub enum PackInstallHandshakeError {
     )]
     BuildUnverifiable { client: String },
 
-    #[error("the runtime refused the install ({outcome}): {detail}")]
-    RuntimeFailed { outcome: String, detail: String },
+    /// The runtime's own failure: its message can quote the plan it refused,
+    /// which holds install values, so only the class and the length are shown.
+    #[error(
+        "the runtime refused the install ({outcome}; {detail_bytes} bytes of detail not shown, \
+         since the runtime's message can quote install values)"
+    )]
+    RuntimeFailed {
+        outcome: String,
+        detail_bytes: usize,
+    },
 
-    #[error("the runtime's first install message was not one this client understands: {detail}")]
-    UnexpectedMessage { detail: String },
+    #[error("the runtime's first install message was not one this client understands")]
+    UnexpectedMessage { detail_bytes: usize },
 }
 
 impl PackInstallHandshakeError {
@@ -1009,16 +1076,13 @@ mod tests {
     fn the_handshake_failures_are_distinguished_and_each_names_a_step() {
         let older = PackInstallHandshakeError::OlderRuntime {
             client: "gents 1.0.0-rc2 (aaaaaaa)".to_owned(),
-            detail: "unknown field `client_build`".to_owned(),
+            detail_bytes: 30,
         }
         .to_string();
         assert!(older.contains("gents runtime service update"), "{older}");
-        assert!(older.contains("client_build"), "{older}");
+        assert!(older.contains("30 bytes"), "the length is stated: {older}");
 
-        let lost = PackInstallHandshakeError::ConnectionLost {
-            detail: "connection reset".to_owned(),
-        }
-        .to_string();
+        let lost = PackInstallHandshakeError::ConnectionLost { detail_bytes: 17 }.to_string();
         assert!(lost.contains("lost"), "{lost}");
         assert!(lost.contains("retry"), "{lost}");
         assert!(
@@ -1028,10 +1092,15 @@ mod tests {
 
         let unreadable = PackInstallHandshakeError::UnreadableHandshake {
             client: "gents 1.0.0-rc2 (aaaaaaa)".to_owned(),
-            detail: "expected value".to_owned(),
+            detail_bytes: 14,
         }
         .to_string();
         assert!(unreadable.contains("unreadable"), "{unreadable}");
+        assert!(unreadable.contains("14 bytes"), "{unreadable}");
+        assert!(
+            !unreadable.contains("expected value"),
+            "no verbatim runtime text leaks: {unreadable}"
+        );
         // The message must not carry a run of spaces where a continuation broke.
         assert!(
             !unreadable.contains("  "),

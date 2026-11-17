@@ -62,7 +62,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             grant_authority: args.grant_authority,
             wire: Vec::new(),
         };
-        let result = gents_host::http::pack_install_client::install_remote(
+        let (result, warnings) = gents_host::http::pack_install_client::install_remote(
             endpoint,
             owner,
             &source,
@@ -72,6 +72,9 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             crate::current_build(),
         )
         .await?;
+        for warning in &warnings {
+            eprintln!("warning: {}", warning.describe());
+        }
         return crate::print_json(&result);
     }
     let notify_scope = notification_scope.clone();

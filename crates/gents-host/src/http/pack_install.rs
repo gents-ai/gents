@@ -127,6 +127,12 @@ fn encode_request(
     Ok(serde_json::to_vec(&fields(root, dependencies))?)
 }
 
+/// Install over the runtime's own install session, returning the runtime's
+/// outcome **and** what the handshake accepted on a weaker guarantee.
+///
+/// The warnings are returned rather than printed here, so every caller sees
+/// them: the CLI prints them, and the desktop and library callers can show or
+/// log them without the install having decided for them.
 pub async fn install_remote(
     endpoint: &gents_store::config_client::GraphqlEndpoint,
     owner: &str,

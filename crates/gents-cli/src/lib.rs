@@ -330,29 +330,54 @@ pub fn run_cli() -> Result<()> {
     runtime.block_on(async_main(runtime.handle().clone()))
 }
 
-/// This binary's build identity. The core pack archives are compiled into this
-/// crate, so the list is assembled here and passed to whoever needs it (the
-/// install handshake), rather than every crate taking a dependency on them.
-pub fn current_build() -> gents_protocol::build_info::BuildInfo {
-    let core_packs = gents_core_packs::archives()
-        .iter()
-        .map(
-            |(coordinate, bytes)| gents_protocol::build_info::CorePackBuild {
-                coordinate: (*coordinate).to_owned(),
-                digest: format!(
-                    "sha256:{}",
-                    gents_pack::plugin::store::content_digest_hex(bytes)
-                ),
-            },
-        )
-        .collect();
+/// This binary's build identity from the version facts alone: no core-pack
+/// digests, so a command that never installs pays nothing for them.
+///
+/// The digests hash every embedded archive, so they are computed on first use by
+/// [`current_build`] and then kept. Ask for this one when only the version
+/// matters.
+pub fn current_build_without_packs() -> gents_protocol::build_info::BuildInfo {
     let build = version::build_version();
     gents_protocol::build_info::BuildInfo::from_parts(
         build.version.to_owned(),
         build.build.git_sha.map(str::to_owned),
         build.build.git_dirty,
-        core_packs,
+        Vec::new(),
     )
+}
+
+/// The core packs compiled into this binary, with the digest of each archive.
+///
+/// Hashed once and kept: an install handshake needs them, and every other
+/// command does not, so computing them here keeps a plain `gents status` from
+/// hashing every embedded archive.
+pub fn core_pack_digests() -> &'static [gents_protocol::build_info::CorePackBuild] {
+    static DIGESTS: std::sync::OnceLock<Vec<gents_protocol::build_info::CorePackBuild>> =
+        std::sync::OnceLock::new();
+    DIGESTS.get_or_init(|| {
+        gents_core_packs::archives()
+            .iter()
+            .map(
+                |(coordinate, bytes)| gents_protocol::build_info::CorePackBuild {
+                    coordinate: (*coordinate).to_owned(),
+                    digest: format!(
+                        "sha256:{}",
+                        gents_pack::plugin::store::content_digest_hex(bytes)
+                    ),
+                },
+            )
+            .collect()
+    })
+}
+
+/// This binary's build identity **with** the core-pack digests, for an install
+/// handshake. The archives are compiled into this crate, so the list is
+/// assembled here and passed to whoever needs it, rather than every crate taking
+/// a dependency on them.
+pub fn current_build() -> gents_protocol::build_info::BuildInfo {
+    let mut build = current_build_without_packs();
+    build.core_packs = core_pack_digests().to_vec();
+    build
 }
 
 async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {

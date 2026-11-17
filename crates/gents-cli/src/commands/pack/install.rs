@@ -124,7 +124,7 @@ async fn install_documents_pack_inner(
             .map_err(Into::into);
         }
         if needs_runtime_store {
-            return gents_host::http::pack_install_client::install_remote(
+            let (result, warnings) = gents_host::http::pack_install_client::install_remote(
                 endpoint,
                 owner,
                 pack,
@@ -134,7 +134,10 @@ async fn install_documents_pack_inner(
                 crate::current_build(),
             )
             .await
-            .map_err(Into::into);
+            .map_err(PackChangeError::from)?;
+            print_install_warnings(&warnings);
+            crate::print_json(&result).map_err(PackChangeError::from)?;
+            return Ok(serde_json::Value::Null);
         }
     }
     install_documents_pack_resolved_inner(
@@ -353,6 +356,17 @@ pub(super) async fn install_documents_report(
     result
 }
 
+/// Print what the install handshake accepted on a weaker guarantee. The warning
+/// is typed in `gents-host`, so the desktop and library callers receive it too;
+/// this is the CLI's way of showing it.
+pub(crate) fn print_install_warnings(
+    warnings: &[gents_host::http::pack_install_client::PackInstallWarning],
+) {
+    for warning in warnings {
+        eprintln!("warning: {}", warning.describe());
+    }
+}
+
 pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError> {
     let home = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
     let pack = resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
@@ -438,7 +452,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                         .await
                         .into_iter()
                         .collect::<Result<Vec<_>>>()?;
-                let result = gents_host::http::pack_install_client::install_remote(
+                let (result, warnings) = gents_host::http::pack_install_client::install_remote(
                     endpoint,
                     owner,
                     &pack,
@@ -448,6 +462,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                     crate::current_build(),
                 )
                 .await?;
+                print_install_warnings(&warnings);
                 return Ok(crate::print_json(&result)?);
             }
             let notify_scope = notification_scope.clone();
