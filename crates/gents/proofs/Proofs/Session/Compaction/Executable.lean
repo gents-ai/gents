@@ -17,15 +17,15 @@ tool and path, the call id and that byte count. The replay asserts the real
 measurements equal these inputs, so they are inputs, not expectations. -/
 
 /-- A large output: its stub is smaller. -/
-def largeOutput : StubSizes := ⟨4096, 126⟩
+def largeOutput : StubSizes := ⟨4096, 126, false⟩
 /-- A tiny output: its stub would be larger. -/
-def tinyOutput : StubSizes := ⟨2, 123⟩
+def tinyOutput : StubSizes := ⟨2, 123, false⟩
 /-- An output exactly the size of its stub. -/
-def stubSizedOutput : StubSizes := ⟨125, 125⟩
+def stubSizedOutput : StubSizes := ⟨125, 125, false⟩
 /-- An output one byte larger than its stub. -/
-def oneOverStubOutput : StubSizes := ⟨126, 125⟩
+def oneOverStubOutput : StubSizes := ⟨126, 125, false⟩
 /-- A large output whose call is unknown (an orphaned result). -/
-def largeOrphanOutput : StubSizes := ⟨4096, 99⟩
+def largeOrphanOutput : StubSizes := ⟨4096, 99, false⟩
 
 def resultKeys (msgs : List MessageRow) : List Transcript.ToolResultKey :=
   msgs.filterMap fun row => row.kind.toolResultKey?
@@ -189,6 +189,9 @@ structure CompactionReducerCase where
   reducerIsIdempotent : Bool
   /-- Tool results the reducer replaced with a stub. -/
   stubbedResults      : Nat
+  stubbedOriginalBytes : Nat
+  stubbedBytes : Nat
+  stubbedBytesRemoved : Nat
 
   splitIndex          : Nat
 
@@ -404,12 +407,6 @@ theorem distinct_native_keys_have_distinct_symbols :
 
 
 
-/-- Tool result rows carrying a stub's identity. Fixture inputs never do. -/
-def stubbedResultCount (msgs : List MessageRow) : Nat :=
-  (msgs.filter fun row => match row.kind with
-    | .toolResult _ key => key.payloadHash == 0
-    | _ => false).length
-
 def reducerCase (name group : String) (reducer : Reducer)
     (count splitIndex : Nat) (publicationReady : Bool := true)
     (inputOverride : Option (List MessageRow) := none)
@@ -431,6 +428,10 @@ def reducerCase (name group : String) (reducer : Reducer)
     | .providerView => { input with messages := providerViewTurn sizes input.messages }
   let reduced := reduce view
   let reapplied := reduce reduced
+  let figures := match reducer with
+    | .strip => stripFigures sizes source
+    | .providerView => stripFigures sizes (PromptAssembly.sanitizeTurn source)
+    | .identity | .summarize => ({} : StubbingFigures)
   { name, group, reducer := reducer.name, legal := true
   , inputRows := source
   , inputSizes := table
@@ -453,7 +454,10 @@ def reducerCase (name group : String) (reducer : Reducer)
   , reducerIsIdentity := decide (reduced.messages = source ∧ reduced.summary = view.summary)
   , reducerIsIdempotent := decide
       (reapplied.messages = reduced.messages ∧ reapplied.summary = reduced.summary)
-  , stubbedResults := stubbedResultCount reduced.messages
+  , stubbedResults := figures.count
+  , stubbedOriginalBytes := figures.originalBytes
+  , stubbedBytes := figures.stubBytes
+  , stubbedBytesRemoved := figures.removedBytes
   , splitIndex
   , safeBoundary := pairSafeBoundary source splitIndex
   , retainedCount := reduced.messages.length }

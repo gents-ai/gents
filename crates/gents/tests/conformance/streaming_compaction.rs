@@ -95,7 +95,8 @@ pub(super) fn compaction_reducers_follow_the_lean_model() {
             _,
             Vec<gents_lean_vocab::families::contracts_compaction_reducer_gate::CompactionRowWire>,
         >(&case.input.input_rows));
-        let reduced = apply_compaction_reducer(&case.input.reducer, input.clone());
+        let (reduced, figures) =
+            apply_compaction_reducer_accounted(&case.input.reducer, input.clone());
         let reapplied = apply_compaction_reducer(&case.input.reducer, reduced.clone());
         if case.input.name == "reapply_preserves_view_coherent" {
             assert!(
@@ -119,7 +120,10 @@ pub(super) fn compaction_reducers_follow_the_lean_model() {
                 ),
                 reducer_is_identity: reduced == input,
                 reducer_is_idempotent: reapplied == reduced,
-                stubbed_results: stubbed_results(&input, &reduced),
+                stubbed_results: figures.stubbed_results as u64,
+                stubbed_original_bytes: figures.original_bytes as u64,
+                stubbed_bytes: figures.stub_bytes as u64,
+                stubbed_bytes_removed: figures.bytes_removed() as u64,
             },
         );
     }
@@ -185,6 +189,32 @@ fn apply_compaction_reducer(reducer: &str, input: Vec<Message>) -> Vec<Message> 
     }
 }
 
+fn apply_compaction_reducer_accounted(
+    reducer: &str,
+    input: Vec<Message>,
+) -> (
+    Vec<Message>,
+    gents_protocol::rendered_request::HistoryStubbing,
+) {
+    let (messages, receipts) = match reducer {
+        "strip" => {
+            let (messages, _, receipts) =
+                gents_loop::compaction::history::strip_tool_results_accounted(input);
+            (messages, receipts)
+        }
+        "provider_view" => {
+            let (messages, _, receipts) =
+                gents_loop::compaction::provider_view_accounted(GROUPED_PROFILE, input);
+            (messages, receipts)
+        }
+        other => panic!("unsupported compaction reducer {other:?}"),
+    };
+    (
+        messages,
+        gents_loop::compaction::history::replacement_figures(&receipts),
+    )
+}
+
 fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
     let mut cursor = haystack.iter();
     needle
@@ -238,37 +268,6 @@ fn compaction_messages_for_rows(
         "fixture sizes are the reducer's real measurements: {rows:?}"
     );
     messages
-}
-
-/// Tool results the reducer replaced: those whose content differs from the
-/// input result with the same call id.
-fn stubbed_results(input: &[Message], reduced: &[Message]) -> u64 {
-    let results = |messages: &[Message]| {
-        messages
-            .iter()
-            .flat_map(|message| match message {
-                Message::User { content } => content
-                    .iter()
-                    .filter_map(|item| match item {
-                        UserContent::ToolResult(result) => Some(result.clone()),
-                        _ => None,
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            })
-            .collect::<Vec<_>>()
-    };
-    let before = results(input);
-    results(reduced)
-        .iter()
-        .filter(|after| {
-            let original = before
-                .iter()
-                .find(|result| tool_result_id(result) == tool_result_id(after))
-                .expect("a reduced result comes from the input");
-            original.content != after.content
-        })
-        .count() as u64
 }
 
 fn with_leading_reasoning(messages: &[Message]) -> Vec<Message> {

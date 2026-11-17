@@ -397,6 +397,7 @@ async fn capture_and_context_accounting_commit_together() {
             json!({"model": "m", "messages": [{"role": "user", "content": "body"}]}),
         );
         rendered.assembly_trace.context_accounting = Some(ContextAccounting {
+            history_stubbing: Default::default(),
             accounting_version: CONTEXT_ACCOUNTING_VERSION,
             turn_index: turn,
             attempt: 0,
@@ -1012,7 +1013,7 @@ const RETAINED_FROM: usize = 40;
 
 /// The most RenderedRequestBlock rows one appended tool round of
 /// `agent_loop_turn` may add, and their most bytes: the measured peaks over
-/// the checked turns, 18 rows and 23,984 bytes, identical on every run. A
+/// the checked turns, 18 rows and 24,059 bytes with required stubbing figures. A
 /// round adds 4-8 content blocks (its tool result and the rewritten tail
 /// blocks of both payloads) and the rewritten tail nodes of each payload's
 /// manifest levels: 2-6 nodes of 1.6-4.9 KB before the trace retains native
@@ -1027,7 +1028,12 @@ const RETAINED_FROM: usize = 40;
 /// rows, up to 25,277 bytes in 7 of 8 runs) until boundary keys followed
 /// content only (#3605).
 const APPENDED_TURN_MAX_NEW_BLOCKS: usize = 18;
-const APPENDED_TURN_MAX_NEW_BYTES: usize = 23_984;
+// C1b's required numeric accounting adds exactly this 75-byte JSON member
+// (including its separating comma) to the rewritten per-dispatch trace. Keep
+// the pre-C1b storage-growth bound and account only for that measured overhead.
+const STUBBING_ACCOUNTING_MEMBER_BYTES: usize =
+    r#","history_stubbing":{"stubbed_results":0,"original_bytes":0,"stub_bytes":0}"#.len();
+const APPENDED_TURN_MAX_NEW_BYTES: usize = 23_984 + STUBBING_ACCOUNTING_MEMBER_BYTES;
 
 fn agent_loop_turn(fixture: &CaptureFixture, turn: usize) -> RenderedCompletionRequest {
     let mut messages = vec![json!({"role": "user", "content": capture_text(1, 8 * 1024)})];
@@ -1055,7 +1061,8 @@ fn agent_loop_turn(fixture: &CaptureFixture, turn: usize) -> RenderedCompletionR
     );
     rendered.provenance_payload_json = json!({
         "build_path": "budgeted",
-        "context_accounting": {"accounting_version": 2, "attempt": 0, "compaction_reason": "below_threshold",
+        "context_accounting": {"history_stubbing": {"stubbed_results":0,"original_bytes":0,"stub_bytes":0},
+            "accounting_version": gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION, "attempt": 0, "compaction_reason": "below_threshold",
             "compaction_threshold_tokens": 786_432, "context_window": 1_048_576,
             "configured_max_output_tokens": 32_768, "estimated_input_tokens": 6000 + 900 * turn,
             "components": {"additional_parameters": 82, "documents": 0, "messages": 5000 + 900 * turn,
@@ -1073,6 +1080,7 @@ fn agent_loop_turn(fixture: &CaptureFixture, turn: usize) -> RenderedCompletionR
 
 #[tokio::test]
 async fn a_repeated_agent_loop_request_stores_only_its_appended_turn() {
+    assert_eq!(STUBBING_ACCOUNTING_MEMBER_BYTES, 75);
     let fixture = CaptureFixture::new().await;
     let node = fixture.db.node.clone();
     let access = fixture.access();

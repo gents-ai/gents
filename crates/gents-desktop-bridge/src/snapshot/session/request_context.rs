@@ -425,7 +425,8 @@ mod tests {
             .unwrap(),
         );
         let accounting = serde_json::json!({
-            "accounting_version":gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
+            "history_stubbing": {"stubbed_results":0,"original_bytes":0,"stub_bytes":0},
+            "accounting_version": gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
             "turn_index":0, "attempt":0, "estimator":"openai_chat_wire_json_bytes_div_4_v1",
             "components":{"messages":1,"documents":0,"tool_schemas":0,"additional_parameters":0,"output_schema":0},
             "estimated_input_tokens":1, "context_window":10000,
@@ -593,7 +594,8 @@ mod tests {
                 "call_seq": call_seq,
                 "queued_at": format!("2026-10-29T21:14:5{call_seq}Z"),
                 "context_accounting_json": serde_json::json!({
-                    "accounting_version": 2, "attempt": 0, "compaction_reason": reason,
+                    "history_stubbing": {"stubbed_results":0,"original_bytes":0,"stub_bytes":0},
+            "accounting_version": gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION, "attempt": 0, "compaction_reason": reason,
                     "compaction_threshold_basis_points": 250,
                     "compaction_threshold_tokens": 25000,
                     "components": {"additional_parameters": 35, "documents": 0,

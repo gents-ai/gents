@@ -34,7 +34,8 @@ pub use reduction::{
     ReductionDecision, ReductionMode, ReductionOptions, ReductionOutcome, ReductionResult,
 };
 pub use view::{
-    association_view_with_sources, compacted_through_sequence, pair_safe_boundary, provider_view,
+    association_view_with_sources, association_view_with_sources_accounted,
+    compacted_through_sequence, pair_safe_boundary, provider_view, provider_view_accounted,
     provider_view_with_sources, safe_to_reduce, sanitize_association_with_sources,
     sanitize_history_for_provider, session_cursor_for_reduction, session_prefix_is_stable,
     split_for_summary, strip_tool_results,

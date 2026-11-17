@@ -35,6 +35,56 @@ pub fn provider_view_with_sources(
     (sanitized, activity)
 }
 
+/// Preserve the existing strip-then-pair order byte-for-byte; filter reducer
+/// receipts by the retained source/result identities so orphans count nothing.
+pub fn association_view_with_sources_accounted(
+    messages: Vec<Message>,
+) -> (
+    Vec<history::SourcedMessage>,
+    FileActivity,
+    Vec<history::StubReplacement>,
+) {
+    let (stripped, activity, replacements) =
+        history::strip_tool_results_sourced_accounted(history::source_messages(messages));
+    let paired = pair_sourced(stripped);
+    let retained: rapidhash::RapidHashSet<_> = paired
+        .iter()
+        .flat_map(|row| {
+            let keys: Vec<_> = match &row.message {
+                Message::User { content } => content
+                    .iter()
+                    .filter_map(|part| match part {
+                        gents_protocol::message::UserContent::ToolResult(result) => {
+                            Some((row.source_index, history::tool_result_key(result)))
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            keys
+        })
+        .collect();
+    let replacements = replacements
+        .into_iter()
+        .filter(|receipt| retained.contains(&(receipt.source_index, receipt.result_key.clone())))
+        .collect();
+    (paired, activity, replacements)
+}
+
+pub fn provider_view_accounted(
+    profile: ProviderInputProfile,
+    messages: Vec<Message>,
+) -> (Vec<Message>, FileActivity, Vec<history::StubReplacement>) {
+    let (stripped, activity, replacements) = association_view_with_sources_accounted(messages);
+    let normalized = history::normalize_assistant_content_order_sourced(profile, stripped);
+    (
+        normalized.into_iter().map(|row| row.message).collect(),
+        activity,
+        replacements,
+    )
+}
+
 pub fn association_view_with_sources(
     messages: Vec<Message>,
 ) -> (Vec<history::SourcedMessage>, FileActivity) {

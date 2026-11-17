@@ -949,7 +949,7 @@ def compactionSizesToModel (rows : List CompactionRowWire) :
   ((List.range rows.length).zip rows).filterMap fun (index, row) =>
     match row.kind, row.originalBytes, row.stubBytes with
     | "tool_result", some originalBytes, some stubBytes =>
-        some (⟨0, index, 37⟩, ⟨originalBytes, stubBytes⟩)
+        some (⟨0, index, 37⟩, ⟨originalBytes, stubBytes, false⟩)
     | _, _, _ => none
 
 def compactionCaseWire (c : Compaction.CompactionReducerCase) : List CompactionRowWire :=
@@ -1030,6 +1030,9 @@ structure CompactionReducerApplyOutput where
   reducerIsIdentity : Bool
   reducerIsIdempotent : Bool
   stubbedResults : Nat
+  stubbedOriginalBytes : Nat
+  stubbedBytes : Nat
+  stubbedBytesRemoved : Nat
   deriving Lean.ToJson
 
 def compactionReducerApplyOutput (i : CompactionReducerInput) : CompactionReducerApplyOutput :=
@@ -1037,7 +1040,10 @@ def compactionReducerApplyOutput (i : CompactionReducerInput) : CompactionReduce
   { postMessageCount := c.postMessageCount, retainedCount := c.retainedCount
     preservesPairs := c.preservesPairs, preservesOrder := c.preservesOrder
     reducerIsIdentity := c.reducerIsIdentity, reducerIsIdempotent := c.reducerIsIdempotent
-    stubbedResults := c.stubbedResults }
+    stubbedResults := c.stubbedResults
+    stubbedOriginalBytes := c.stubbedOriginalBytes
+    stubbedBytes := c.stubbedBytes
+    stubbedBytesRemoved := c.stubbedBytesRemoved }
 
 @[conformance_family]
 def compactionReducerApply : Family CompactionReducerInput CompactionReducerApplyOutput where
@@ -1123,3 +1129,5 @@ def agentFoldedBinding : Family QueuedSteering.FoldedBindingCase Bool where
       ⟨1, 2, some c.headRequester, c.headAgent⟩ c.namedHead c.actualHead
 
 end Conformance.Contracts
+
+attribute [conformance_function] Compaction.receiptEligible

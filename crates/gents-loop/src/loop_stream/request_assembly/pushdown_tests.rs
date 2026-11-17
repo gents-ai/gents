@@ -43,6 +43,7 @@ fn tagged_provider_view_uses_emitted_source_index_for_equal_assistant_rows() {
     let identical = Message::assistant("same native bytes");
     let projected = super::tagged_history::provider_view_tagged(vec![
         TaggedMessage {
+            history_stubs: Vec::new(),
             message: identical.clone(),
             source: Some(first.clone()),
             physical_header: None,
@@ -50,6 +51,7 @@ fn tagged_provider_view_uses_emitted_source_index_for_equal_assistant_rows() {
         },
         TaggedMessage::unassociated(Message::user("between")),
         TaggedMessage {
+            history_stubs: Vec::new(),
             message: identical,
             source: Some(second.clone()),
             physical_header: None,

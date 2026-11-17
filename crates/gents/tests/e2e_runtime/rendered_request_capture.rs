@@ -1049,6 +1049,22 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
             Some(actual_tokens as u64),
             "turn {index} pre-dispatch estimate must describe its actual HTTP request"
         );
+        let stubbed = &accounting["history_stubbing"];
+        assert_eq!(
+            stubbed["stubbed_results"].as_u64(),
+            Some(u64::from(index > 0)),
+            "each dispatch reports its retained set, not a cumulative replacement count"
+        );
+        if index > 0 {
+            assert_eq!(
+                stubbed["original_bytes"].as_u64(),
+                Some((BIG_MARKER.len() + BIG_OUTPUT_CHARS) as u64)
+            );
+            assert!(
+                stubbed["stub_bytes"].as_u64().unwrap()
+                    < stubbed["original_bytes"].as_u64().unwrap()
+            );
+        }
         assert!(
             actual_tokens <= input_budget,
             "turn {index} dispatched {actual_tokens} input tokens above budget {input_budget}"
@@ -1101,6 +1117,47 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
             .is_empty(),
         "reducing a closed tool pair must not advance the session-prefix cursor"
     );
+
+    // Actual stub-only runtime -> persisted InferenceCall -> context_budget tool.
+    // No synthetic figure or reduction entry is seeded by this assertion.
+    let budget_tool = gents_tools::native::build_context_budget_tool(
+        fixture.node.clone(),
+        fixture.node_did.clone(),
+    );
+    let budget_json = gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
+        None,
+        Some(fixture.node_did.clone()),
+        Some(fixture.agent_did.clone()),
+        Some("req-capture-compaction".into()),
+        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
+            None,
+            Default::default(),
+            None,
+            None,
+            Some("session-capture-compaction".into()),
+            budget_tool.call("{}".into()),
+        ),
+    )
+    .await
+    .unwrap();
+    let budget: Value = serde_json::from_str(&budget_json).unwrap();
+    let last_accounting = parse_json(&rows.last().unwrap()["provenance_json"])["assembly_trace"]
+        ["context_accounting"]
+        .clone();
+    let measured = &last_accounting["history_stubbing"];
+    assert_eq!(
+        budget["history_tool_outputs_stubbed_this_dispatch"]["count"],
+        measured["stubbed_results"]
+    );
+    assert_eq!(
+        budget["history_tool_outputs_stubbed_this_dispatch"]["bytes_removed"].as_u64(),
+        Some(
+            measured["original_bytes"].as_u64().unwrap() - measured["stub_bytes"].as_u64().unwrap()
+        )
+    );
+    assert_eq!(budget["compaction_count"], 0);
+    assert_eq!(budget["session_compaction_count"], 0);
+    assert_eq!(budget["request_reduction_count"], 0);
 
     fixture.runtime.shutdown().await;
 }

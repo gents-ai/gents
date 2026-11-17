@@ -24,6 +24,7 @@ pub struct ReplayRowAssociation {
     pub source: Option<ReplayTag>,
     pub physical_header: Option<String>,
     pub block_indices: Vec<usize>,
+    pub history_stubs: Vec<gents_loop::compaction::history::StubReplacement>,
 }
 
 impl ReplayRowAssociation {
@@ -32,11 +33,13 @@ impl ReplayRowAssociation {
             source: row.source.clone(),
             physical_header: row.physical_header.clone(),
             block_indices: row.block_indices.clone(),
+            history_stubs: row.history_stubs.clone(),
         }
     }
 
     fn attach(self, message: Message) -> TaggedMessage {
         TaggedMessage {
+            history_stubs: self.history_stubs,
             message,
             source: self.source,
             physical_header: self.physical_header,
@@ -1202,6 +1205,7 @@ mod tests {
             source: None,
             physical_header: None,
             block_indices: Vec::new(),
+            history_stubs: Vec::new(),
         }
     }
 
@@ -1210,7 +1214,38 @@ mod tests {
             source: Some(source),
             physical_header: Some("fixture-header".into()),
             block_indices: vec![0],
+            history_stubs: Vec::new(),
         }
+    }
+
+    #[test]
+    fn replay_association_attach_preserves_reducer_receipts_without_recounting() {
+        use gents_protocol::message::{ToolResult, ToolResultContent, UserContent};
+        let message = Message::User {
+            content: vec![UserContent::ToolResult(ToolResult {
+                id: "result".into(),
+                call_id: Some("call".into()),
+                content: vec![ToolResultContent::text("x".repeat(4_000))],
+            })],
+        };
+        let (projected, _, receipts) =
+            gents_loop::compaction::history::strip_tool_results_accounted(vec![message]);
+        let mut row = TaggedMessage::unassociated(projected[0].clone());
+        row.history_stubs = receipts;
+        let association = ReplayRowAssociation::from_tagged(&row);
+        let restored: ReplayRowAssociation =
+            serde_json::from_str(&serde_json::to_string(&association).unwrap()).unwrap();
+        let attached = restored.attach(row.message.clone());
+        assert_eq!(attached, row);
+        let figures = gents_loop::compaction::history::replacement_figures(&attached.history_stubs);
+        assert_eq!(figures.stubbed_results, 1);
+        assert!(figures.bytes_removed() > 0);
+        let (_, _, new_receipts) =
+            gents_loop::compaction::history::strip_tool_results_accounted(vec![attached.message]);
+        assert!(
+            new_receipts.is_empty(),
+            "attach carries provenance, not string-derived replacement credit"
+        );
     }
 
     #[test]
