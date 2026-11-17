@@ -286,7 +286,12 @@ def unwire (surface : Surface) (plugin : Plugin) (skills : List String) (sources
 
 /-- The node owner's consent to dynamic scripts raises the plugin's block from
 `check` to `run` and nothing else: `off` stays off. -/
-def consentDynamic (coordinate : String) (outcome : Outcome) : Outcome :=
+def consentDynamic (before : Surface) (plugin : Plugin) (reviewed : Option Job)
+    (sources : List Source) (outcome : Outcome) : Outcome :=
+  if (priorJob before plugin).isSome ||
+      !(incomingJob plugin reviewed sources).any (·.policy.dynamic == .run) then outcome
+  else
+  let coordinate := plugin.coordinate
   match (outcome.surface.plugins.find? (·.plugin = coordinate)).bind (·.job) with
   | some job =>
     if job.policy.dynamic = .check then
@@ -374,12 +379,63 @@ theorem incoming_off_never_warns_targets (existing incoming : Job)
     Warning.dynamicTargetsKept ∉ policyWarnings existing incoming := by
   simp [policyWarnings, h]
 
-/-- Consent never enables dynamic scripts on a block that is `off`. -/
-theorem consent_keeps_off (coordinate : String) (outcome : Outcome) (job : Job)
-    (h : (outcome.surface.plugins.find? (·.plugin = coordinate)).bind (·.job) = some job)
-    (hoff : job.policy.dynamic = .off) :
-    consentDynamic coordinate outcome = outcome := by
-  simp [consentDynamic, h, hoff]
+/-- Consent is never permission to replace an operator's existing block. -/
+theorem consent_keeps_existing (before : Surface) (plugin : Plugin) (reviewed : Option Job)
+    (sources : List Source) (outcome : Outcome) (existing : Job)
+    (h : priorJob before plugin = some existing) :
+    consentDynamic before plugin reviewed sources outcome = outcome := by
+  simp [consentDynamic, h]
+
+/-- The source fold changes trust/agent targets, never dynamic authority. -/
+theorem sources_keep_policy (sources : List Source) (state : Job × List String) :
+    (sources.foldl wireSource state).1.policy.dynamic = state.1.policy.dynamic ∧
+    (sources.foldl wireSource state).1.policy.dynamicTargets = state.1.policy.dynamicTargets := by
+  induction sources generalizing state with
+  | nil => exact ⟨rfl, rfl⟩
+  | cons head tail ih => exact ih (wireSource state head)
+
+/-- Reinitialization must carry selected plugins into the next wire. Otherwise
+an operator block would be misclassified as fresh and eligible for consent. -/
+def retainSelections (existing defaults : Surface) : Surface :=
+  { defaults with plugins := existing.plugins, targets := addMissing defaults.targets existing.targets }
+
+theorem reinit_retains_prior_job (existing defaults : Surface) (plugin : Plugin) :
+    priorJob (retainSelections existing defaults) plugin = priorJob existing plugin := rfl
+
+/-- The actual wire result retains an existing operator policy. -/
+theorem wire_keeps_existing_policy (surface : Surface) (plugin : Plugin) (reviewed : Option Job)
+    (skills : List String) (sources : List Source) (existing : Job) (outcome : Outcome)
+    (hprior : priorJob surface plugin = some existing)
+    (hwire : wire surface plugin reviewed skills sources = some outcome) :
+    ∃ kept, outcome.job = some kept ∧ kept.policy.dynamic = existing.policy.dynamic ∧
+      kept.policy.dynamicTargets = existing.policy.dynamicTargets := by
+  simp only [wire, Option.map_eq_some'] at hwire
+  obtain ⟨wired, hwired, rfl⟩ := hwire
+  unfold wiredJob at hwired
+  split at hwired
+  · simp [hprior] at hwired
+    subst wired
+    exact ⟨existing, rfl, rfl, rfl⟩
+  · rename_i incoming hincoming
+    simp only [hprior] at hwired
+    split at hwired
+    · simp only [Option.some.injEq] at hwired
+      subst wired
+      exact ⟨_, rfl, (sources_keep_policy sources (merge existing incoming, surface.targets)).1,
+        (sources_keep_policy sources (merge existing incoming, surface.targets)).2⟩
+    · contradiction
+
+/-- Even a consented wire cannot override a prior operator block. -/
+theorem consented_wire_keeps_existing_policy (surface : Surface) (plugin : Plugin)
+    (reviewed : Option Job) (skills : List String) (sources : List Source)
+    (existing : Job) (outcome : Outcome)
+    (hprior : priorJob surface plugin = some existing)
+    (hwire : wire surface plugin reviewed skills sources = some outcome) :
+    ∃ kept, (consentDynamic surface plugin reviewed sources outcome).job = some kept ∧
+      kept.policy.dynamic = existing.policy.dynamic ∧
+      kept.policy.dynamicTargets = existing.policy.dynamicTargets := by
+  rw [consent_keeps_existing surface plugin reviewed sources outcome existing hprior]
+  exact wire_keeps_existing_policy surface plugin reviewed skills sources existing outcome hprior hwire
 
 /-! ## What unwiring takes back -/
 

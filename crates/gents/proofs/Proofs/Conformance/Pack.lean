@@ -86,7 +86,7 @@ def runWiring (surface : Surface) : List WiringStep → List (Option Outcome)
         (wire surface step.plugin step.reviewed step.skills step.sources).map fun wired =>
           let wired :=
             if step.consentToolCalls then consentToolCalls step.plugin.coordinate wired else wired
-          if step.consentDynamic then consentDynamic step.plugin.coordinate wired else wired
+          if step.consentDynamic then consentDynamic surface step.plugin step.reviewed step.sources wired else wired
       | .unwire => unwire surface step.plugin step.skills step.sources
     outcome :: runWiring ((outcome.map (·.surface)).getD surface) rest
 
@@ -146,6 +146,28 @@ private def policyWiringScripts : List WiringScript :=
         ⟨s!"keep and warn {repr existingMode}/{repr incomingMode}/{repr incomingTargets}",
           wiredWith (some existing) ["a", "b"],
           [step, step, wireStep runner (reviewed := some existing)]⟩
+
+/-- Exhaustive small input grid: two plugins, every mode pair, every presence
+combination, and consent on/off. Exercises consent isolation and repeated wiring. -/
+private def twoPluginPolicyScripts : List WiringScript :=
+  [.off, .check, .run].flatMap fun existingMode =>
+    [.off, .check, .run].flatMap fun incomingMode =>
+      [false, true].flatMap fun firstExists =>
+        [false, true].flatMap fun secondExists =>
+          [false, true].map fun consent =>
+            let existing := block ["a", "b"] existingMode ["b", "a"]
+            let incoming := block ["a", "b"] incomingMode ["a"]
+            let start : Surface := { fresh with
+              plugins :=
+                [{ plugin := runner.coordinate, digest := runner.digest, toolCalls := false,
+                   job := if firstExists then some existing else none },
+                 { plugin := other.coordinate, digest := other.digest, toolCalls := false,
+                   job := if secondExists then some existing else none }]
+              targets := ["a", "b"] }
+            let first := wireStep runner (reviewed := some incoming) (consentDynamic := consent)
+            let second := wireStep other (reviewed := some incoming) (consentDynamic := consent)
+            ⟨s!"two plugin grid {repr existingMode}/{repr incomingMode}/{firstExists}/{secondExists}/{consent}",
+              start, [first, second, first, second]⟩
 
 @[conformance_family]
 def pluginWiring : Family WiringScript (List (Option Outcome)) where
@@ -254,7 +276,7 @@ def pluginWiring : Family WiringScript (List (Option Outcome)) where
     , ⟨"a target the Agent held before the wiring leaves with the block",
         { fresh with targets := ["reviewer"] },
         [wireStep runner (reviewed := some (block ["reviewer"])), unwireStep runner]⟩ ]
-    ++ policyWiringScripts
+    ++ policyWiringScripts ++ twoPluginPolicyScripts
   model := fun script => runWiring script.start script.steps
 
 end Wiring
