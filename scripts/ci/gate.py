@@ -141,6 +141,13 @@ NO_TESTS = {
 # NEXTEST_WORKSPACE_ROOT and CARGO_BIN_EXE_<name>: the build checkout is gone.
 ARCHIVE = "portable"
 ARCHIVE_SOURCE = "gents-archive-src"
+# The archive's Cargo profile unless PROFILE names another: workspace crates at
+# opt-level 0, dependencies at 1. Against `test` (opt-level 1 throughout) a cold
+# build of gents, gents-cli and gents-desktop-core spent 629 rather than 1,165
+# unit-seconds on workspace crates and compiled the gents lib test target in 51
+# rather than 140 s, while gents-desktop-core's 363 tests took 122.9 s against
+# 122.4 s (M-series laptop, 10 jobs, 2026-11-17).
+ARCHIVE_PROFILE = "ci-native"
 NEXTEST = "cargo-nextest"
 
 # A change here can alter any build or the gate itself, so it selects everything.
@@ -1290,6 +1297,21 @@ def run_build(selection, name, partition=None):
             lean.stop()
 
 
+def show_timings(report, count=15):
+    """The compile's slowest units from Cargo's --timings report, so a job's
+    log says where its compile went."""
+    try:
+        text = report.read_text()
+        units = json.loads(re.search(r"const UNIT_DATA = (\[.*?\]);\n", text, re.S).group(1))
+    except (OSError, AttributeError, ValueError):
+        return
+    end = max((unit["start"] + unit["duration"] for unit in units), default=0)
+    print(f"\nCompile: {len(units)} units in {end:.0f} s; the slowest:", flush=True)
+    for unit in sorted(units, key=lambda unit: -unit["duration"])[:count]:
+        print(f"  {unit['duration']:7.1f} s  from {unit['start']:6.1f} s  {unit['name']} {unit['target'].strip()}",
+              flush=True)
+
+
 class LeanContract:
     """The Lean conformance contract the Lean-backed tests load, built beside
     the Rust compile rather than before it (rust-runner `lean-contract: deferred`):
@@ -1349,12 +1371,12 @@ def build_and_run(entry, name, lean):
     arguments = ["archive", *[flag for package in packages for flag in ("-p", package)]]
     if features:
         arguments += ["--features", ",".join(features)]
-    profile = os.environ.get("PROFILE", "")
-    if profile:
-        arguments += ["--cargo-profile", profile]
-    arguments += ["--archive-file", str(archive)]
-    if not nextest(arguments, cwd=source, label=f"build {name}: {len(packages)} crates",
-                   extra_env=reproducible_paths(source) if entry.get("test_cache", "off") != "off" else None):
+    arguments += ["--cargo-profile", os.environ.get("PROFILE") or ARCHIVE_PROFILE]
+    arguments += ["--archive-file", str(archive), "--timings"]
+    built = nextest(arguments, cwd=source, label=f"build {name}: {len(packages)} crates",
+                    extra_env=reproducible_paths(source) if entry.get("test_cache", "off") != "off" else None)
+    show_timings(Path(os.environ.get("CARGO_TARGET_DIR") or source / "target") / "cargo-timings" / "cargo-timing.html")
+    if not built:
         return
     started = time.time()
     try:
