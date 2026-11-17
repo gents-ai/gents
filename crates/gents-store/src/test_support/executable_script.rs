@@ -44,14 +44,14 @@ mod tests {
     /// process had open at the fork.
     struct HeldSibling {
         release: std::io::PipeWriter,
-        spawned: std::thread::JoinHandle<std::io::Result<Child>>,
+        spawned: Option<std::thread::JoinHandle<std::io::Result<Child>>>,
     }
 
     fn hold_sibling() -> HeldSibling {
         let (mut forked_reader, forked_writer) = std::io::pipe().unwrap();
         let (release_reader, release) = std::io::pipe().unwrap();
         let (forked, released) = (forked_writer.as_raw_fd(), release_reader.as_raw_fd());
-        let mut command = Command::new("/bin/true");
+        let mut command = Command::new("true");
         // SAFETY: the hook runs in the forked child before exec and calls only
         // the async-signal-safe `write` and `read` on descriptors this
         // closure's spawning thread keeps open until the spawn returns.
@@ -66,15 +66,30 @@ mod tests {
             let _open = (forked_writer, release_reader);
             command.spawn()
         });
+        let held = HeldSibling {
+            release,
+            spawned: Some(spawned),
+        };
         forked_reader.read_exact(&mut [0u8]).unwrap();
-        HeldSibling { release, spawned }
+        held
     }
 
     impl HeldSibling {
         fn release(mut self) {
             self.release.write_all(&[1]).unwrap();
-            let mut child = self.spawned.join().unwrap().unwrap();
+            let mut child = self.spawned.take().unwrap().join().unwrap().unwrap();
             assert!(child.wait().unwrap().success());
+        }
+    }
+
+    impl Drop for HeldSibling {
+        fn drop(&mut self) {
+            if let Some(spawned) = self.spawned.take() {
+                let _ = self.release.write_all(&[1]);
+                if let Ok(Ok(mut child)) = spawned.join() {
+                    let _ = child.wait();
+                }
+            }
         }
     }
 
