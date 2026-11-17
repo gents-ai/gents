@@ -797,6 +797,8 @@ class PipeDrain(unittest.TestCase):
                 "os._exit(0) if p else time.sleep(10)")
         real_popen = subprocess.Popen
         def spawn(*args, **kwargs):
+            if args[0][0] == "ps":
+                return real_popen(*args, **kwargs)
             return real_popen([sys.executable, "-c", code], **kwargs)
         gate.results.clear()
         with mock.patch.object(gate.subprocess, "Popen", side_effect=spawn), \
@@ -804,6 +806,20 @@ class PipeDrain(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertFalse(gate.cargo_test("pipe-holder", [], expect_tests=False))
         self.assertIn("output pipe still held by a descendant", gate.results[-1][1])
+
+    def test_delayed_descendant_output_is_preserved(self):
+        code = ("import os,time; p=os.fork(); "
+                "os._exit(0) if p else (time.sleep(1), os.write(1,b'last line\\n'))")
+        real_popen = subprocess.Popen
+        def spawn(*args, **kwargs):
+            return real_popen([sys.executable, "-c", code], **kwargs)
+        gate.results.clear()
+        output = io.StringIO()
+        with mock.patch.object(gate.subprocess, "Popen", side_effect=spawn), \
+                contextlib.redirect_stdout(output):
+            self.assertTrue(gate.cargo_test("delayed", [], expect_tests=False))
+        self.assertIn("last line", output.getvalue())
+        self.assertEqual(gate.results[-1][1], "ok")
 
     def test_normal_eof_preserves_partial_line(self):
         process = subprocess.Popen([sys.executable, "-c", "print('tail', end='')"], stdout=subprocess.PIPE)

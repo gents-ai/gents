@@ -51,7 +51,7 @@ mod tests {
         let (mut forked_reader, forked_writer) = std::io::pipe().unwrap();
         let (release_reader, release) = std::io::pipe().unwrap();
         let (forked, released) = (forked_writer.as_raw_fd(), release_reader.as_raw_fd());
-        let mut command = Command::new("/usr/bin/true");
+        let mut command = Command::new("true");
         // SAFETY: the hook runs in the forked child before exec and calls only
         // the async-signal-safe `write` and `read` on descriptors this
         // closure's spawning thread keeps open until the spawn returns.
