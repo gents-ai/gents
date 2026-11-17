@@ -201,6 +201,27 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
         .as_str()
         .context("created Agent DID")?
         .to_owned();
+    // Root admission precedes plugin construction. Without this User grant,
+    // main already rejects the clone's inherited host root (generic reason),
+    // while B5 correctly names the missing reader. Isolate the plugin failure.
+    let published_root = created
+        .pointer("/host_root_access/published_root")
+        .and_then(Value::as_str)
+        .context("clone receipt's published root")?;
+    run_cli_json(
+        &home,
+        &[
+            "config",
+            "workspace-root",
+            "grant-reader",
+            "--path",
+            published_root,
+            "--agent-did",
+            &broken_agent,
+            "--graphql",
+            &graphql,
+        ],
+    )?;
     let selection = graphql_query(
         &graphql,
         &format!(

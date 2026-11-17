@@ -161,8 +161,10 @@ pub fn is_behavior_unavailable_rejection(failure_reason: &str) -> bool {
         || unavailable_rejection_reason(failure_reason).is_some()
 }
 
-/// The readiness reason a rejection's `failure_reason` states, on the external
-/// premise of [`is_behavior_unavailable_rejection`].
+/// The readiness reason a rejection's `failure_reason` states.
+/// External premise: replicated AgentRequest.failure_reason contains only
+/// persisted rejection text, not a typed rejection-kind field. Match the
+/// runtime-owned readiness messages/prefix to recover their public reason.
 pub fn unavailable_rejection_reason(
     failure_reason: &str,
 ) -> Option<AgentReadinessUnavailableReason> {

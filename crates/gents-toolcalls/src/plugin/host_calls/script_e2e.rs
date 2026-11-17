@@ -18,7 +18,7 @@ impl ToolEffectDispatcher for Files {
 
     fn call<'a>(
         &'a self,
-        _parent: &'a gents_loop::tool::ToolCallEnvelope,
+        parent: &'a gents_loop::tool::ToolCallEnvelope,
         ordinal: u32,
         name: &'a str,
         arguments: &'a str,
@@ -32,7 +32,7 @@ impl ToolEffectDispatcher for Files {
             let args: Value = serde_json::from_str(arguments).unwrap();
             assert_eq!(args["raw_json"], true);
             self.0
-                .call(serde_json::from_value(args).unwrap())
+                .call(serde_json::from_value(args).unwrap(), parent)
                 .await
                 .map(ToolOutcome::Completed)
                 .map_err(|error| ToolEffectError::Unavailable(error.to_string()))

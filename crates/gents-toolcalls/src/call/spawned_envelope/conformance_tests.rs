@@ -47,6 +47,16 @@ enum Cancel {
 struct Captures(Mutex<Option<ToolCallEnvelope>>);
 
 impl ToolEffectDispatcher for Captures {
+    fn definitions<'a>(&'a self) -> BoxFuture<'a, Vec<gents_loop::tool::ToolDefinition>> {
+        Box::pin(async {
+            vec![gents_loop::tool::ToolDefinition {
+                name: "read_file".into(),
+                description: String::new(),
+                parameters: serde_json::json!({"type":"object"}),
+            }]
+        })
+    }
+
     fn call<'a>(
         &'a self,
         parent: &'a ToolCallEnvelope,
