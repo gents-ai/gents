@@ -31,6 +31,8 @@ attribute [conformance_function]
   ToolPresentation.directAdmissible
   ToolPresentation.admissible
   ToolPresentation.configurationValid
+  ToolPresentation.presentationRefused
+  ToolPresentation.effectiveHidden
 
 namespace ToolPresentation
 
