@@ -98,6 +98,7 @@ pub(crate) fn tag_canonical_history(
 ) -> Vec<TaggedMessage> {
     rows.iter()
         .map(|row| TaggedMessage {
+            history_stubs: Vec::new(),
             message: row.message.clone(),
             source: row.provider_source.clone(),
             physical_header: row.canonical_header_doc_id.clone(),

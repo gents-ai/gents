@@ -39,9 +39,34 @@ pub fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity
     (messages_only(messages), file_activity)
 }
 
+pub fn strip_tool_results_accounted(
+    messages: Vec<Message>,
+) -> (Vec<Message>, FileActivity, Vec<StubReplacement>) {
+    let (messages, activity, receipts) =
+        strip_tool_results_sourced_accounted(source_messages(messages));
+    (messages_only(messages), activity, receipts)
+}
+
 pub fn strip_tool_results_sourced(
     messages: Vec<SourcedMessage>,
 ) -> (Vec<SourcedMessage>, FileActivity) {
+    let (messages, activity, _) = strip_tool_results_sourced_accounted(messages);
+    (messages, activity)
+}
+
+/// Internal receipts from actual replacements, never from inspecting stub-shaped
+/// text. Source position and result key bind receipts to retained history rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StubReplacement {
+    pub source_index: usize,
+    pub result_key: String,
+    pub sizes: StubSizes,
+}
+
+pub fn strip_tool_results_sourced_accounted(
+    messages: Vec<SourcedMessage>,
+) -> (Vec<SourcedMessage>, FileActivity, Vec<StubReplacement>) {
+    let mut replacements = Vec::new();
     let file_activity = extract_file_activity_iter(messages.iter().map(|item| &item.message));
     let mut stripped_messages = Vec::with_capacity(messages.len());
     let mut tool_calls = RapidHashMap::new();
@@ -74,7 +99,16 @@ pub fn strip_tool_results_sourced(
                     .into_iter()
                     .map(|item| match item {
                         UserContent::ToolResult(tool_result) => {
-                            UserContent::ToolResult(strip_tool_result(tool_result, &tool_calls))
+                            let result_key = tool_result_key(&tool_result);
+                            let (result, replaced) = strip_tool_result(tool_result, &tool_calls);
+                            if let Some(sizes) = replaced {
+                                replacements.push(StubReplacement {
+                                    source_index,
+                                    result_key,
+                                    sizes,
+                                });
+                            }
+                            UserContent::ToolResult(result)
                         }
                         other => other,
                     })
@@ -96,7 +130,20 @@ pub fn strip_tool_results_sourced(
         }
     }
 
-    (stripped_messages, file_activity)
+    (stripped_messages, file_activity, replacements)
+}
+
+pub fn replacement_figures(
+    replacements: &[StubReplacement],
+) -> gents_protocol::rendered_request::HistoryStubbing {
+    replacements
+        .iter()
+        .fold(Default::default(), |mut figures, replacement| {
+            figures.stubbed_results += 1;
+            figures.original_bytes += replacement.sizes.original_bytes;
+            figures.stub_bytes += replacement.sizes.stub_bytes;
+            figures
+        })
 }
 
 /// The calls a tool result's stub may name: those of the latest assistant
@@ -680,13 +727,13 @@ fn parse_stub(tool_result: &ToolResult) -> Option<StubFacts> {
 fn strip_tool_result(
     mut tool_result: ToolResult,
     tool_calls: &RapidHashMap<String, ToolCallInfo>,
-) -> ToolResult {
+) -> (ToolResult, Option<StubSizes>) {
     let (sizes, stub) = measure_tool_result(&tool_result, tool_calls);
     if !sizes.stub_saves_bytes() {
-        return tool_result;
+        return (tool_result, None);
     }
     tool_result.content = vec![ToolResultContent::Text(Text { text: stub })];
-    tool_result
+    (tool_result, Some(sizes))
 }
 
 /// The stub that would replace `tool_result`. A result that already is a
@@ -756,7 +803,7 @@ fn tool_call_key(tool_call: &ToolCall) -> String {
         .unwrap_or_else(|| tool_call.id.clone())
 }
 
-fn tool_result_key(tool_result: &ToolResult) -> String {
+pub(crate) fn tool_result_key(tool_result: &ToolResult) -> String {
     tool_result
         .call_id
         .clone()

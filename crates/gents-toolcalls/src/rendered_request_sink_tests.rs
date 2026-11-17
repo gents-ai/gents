@@ -397,6 +397,7 @@ async fn capture_and_context_accounting_commit_together() {
             json!({"model": "m", "messages": [{"role": "user", "content": "body"}]}),
         );
         rendered.assembly_trace.context_accounting = Some(ContextAccounting {
+            history_stubbing: None,
             accounting_version: CONTEXT_ACCOUNTING_VERSION,
             turn_index: turn,
             attempt: 0,

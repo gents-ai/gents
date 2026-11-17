@@ -19,6 +19,7 @@ fn provider_tag(turn_index: u32) -> ReplayTag {
 fn replay_prefix_bound_rejects_tagged_non_assistant() {
     let required = provider_tag(0);
     let rows = vec![TaggedMessage {
+        history_stubs: Vec::new(),
         message: Message::user("input"),
         source: Some(required.clone()),
         physical_header: None,
@@ -34,6 +35,7 @@ fn replay_prefix_bound_rejects_tagged_non_assistant() {
 fn provider_projection_composes_original_physical_block_indices() {
     let tag = provider_tag(0);
     let originals = vec![TaggedMessage {
+        history_stubs: Vec::new(),
         message: Message::Assistant {
             request_id: None,
             id: None,
@@ -73,6 +75,7 @@ fn provider_projection_composes_original_physical_block_indices() {
 #[test]
 fn association_rejects_a_provider_order_applied_before_it() {
     let original = TaggedMessage {
+        history_stubs: Vec::new(),
         message: Message::Assistant {
             request_id: None,
             id: None,
@@ -113,6 +116,7 @@ fn grouped_projection_of_a_projected_row_keeps_persisted_block_identity() {
     let persisted = vec![
         TaggedMessage::unassociated(Message::user("start")),
         TaggedMessage {
+            history_stubs: Vec::new(),
             message: Message::Assistant {
                 request_id: None,
                 id: None,
@@ -696,6 +700,7 @@ fn replay_assembly_history(tag: &ReplayTag) -> Vec<TaggedMessage> {
     vec![
         TaggedMessage::unassociated(Message::user("prompt")),
         TaggedMessage {
+            history_stubs: Vec::new(),
             message: Message::Assistant {
                 request_id: None,
                 id: None,
@@ -904,6 +909,7 @@ fn stripping_all_reasoning_keeps_ordinary_blocks_and_their_indices() {
     };
     let mut rows = vec![
         TaggedMessage {
+            history_stubs: Vec::new(),
             message: Message::Assistant {
                 request_id: None,
                 id: None,

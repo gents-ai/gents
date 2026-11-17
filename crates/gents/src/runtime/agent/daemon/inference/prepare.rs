@@ -232,6 +232,29 @@ fn compact_turn(
             exact,
         )
         .and_then(|staged| staged.into_turn_outcome(node, signer))
+        .and_then(|mut outcome| {
+            // Staging persists message/replay data, not request-local accounting.
+            // Restore only receipts for the exact retained suffix, never summary text.
+            if let crate::runtime::agent::loop_stream::TurnCompactionOutcome::Reduced {
+                messages,
+                ..
+            } = &mut outcome
+            {
+                let suffix = &provider_view[split..];
+                let start = messages
+                    .len()
+                    .checked_sub(suffix.len())
+                    .ok_or_else(|| anyhow::anyhow!("checkpoint lost retained suffix"))?;
+                for (row, source) in messages[start..].iter_mut().zip(suffix) {
+                    anyhow::ensure!(
+                        row.message == source.message,
+                        "checkpoint changed retained association message"
+                    );
+                    row.history_stubs = source.history_stubs.clone();
+                }
+            }
+            Ok(outcome)
+        })
         .map_err(compactor_failure)
     })
 }

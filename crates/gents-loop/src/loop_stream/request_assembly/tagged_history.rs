@@ -31,6 +31,7 @@ pub fn select_tagged_assistant_blocks(
         .map(|(index, block)| (index, block.clone()))
         .unzip();
     Ok(TaggedMessage {
+        history_stubs: source.history_stubs.clone(),
         message: Message::Assistant {
             request_id: request_id.clone(),
             id: id.clone(),
@@ -81,7 +82,7 @@ pub(super) fn tagged_from_sourced(
                 let mut selected = if original.physical_header.is_none()
                     && original.block_indices.is_empty()
                 {
-                    TaggedMessage {
+                    TaggedMessage { history_stubs: Vec::new(),
                         message: original.message.clone(),
                         source: original.source.clone(),
                         physical_header: None,
@@ -105,7 +106,7 @@ pub(super) fn tagged_from_sourced(
                 selected.message = item.message;
                 Ok(selected)
             } else {
-                Ok(TaggedMessage {
+                Ok(TaggedMessage { history_stubs: retained_stub_receipts(original, &item.message),
                     message: item.message,
                     source: original.source.clone(),
                     physical_header: original.physical_header.clone(),
@@ -114,6 +115,30 @@ pub(super) fn tagged_from_sourced(
             }
         })
         .collect()
+}
+
+fn retained_stub_receipts(
+    original: &TaggedMessage,
+    projected: &Message,
+) -> Vec<crate::compaction::history::StubReplacement> {
+    let Message::User { content } = projected else {
+        return Vec::new();
+    };
+    original.history_stubs.iter().filter(|receipt| content.iter().any(|part| {
+        matches!(part, UserContent::ToolResult(result) if crate::compaction::history::tool_result_key(result) == receipt.result_key)
+    })).cloned().collect()
+}
+
+pub(in crate::loop_stream) fn history_stubbing_for_dispatch<'a>(
+    rows: impl Iterator<Item = &'a TaggedMessage>,
+) -> gents_protocol::rendered_request::HistoryStubbing {
+    rows.flat_map(|row| &row.history_stubs)
+        .fold(Default::default(), |mut figures, receipt| {
+            figures.stubbed_results += 1;
+            figures.original_bytes += receipt.sizes.original_bytes;
+            figures.stub_bytes += receipt.sizes.stub_bytes;
+            figures
+        })
 }
 
 pub fn sanitize_tagged_history(
@@ -130,8 +155,15 @@ pub fn provider_view_tagged(
     rows: Vec<TaggedMessage>,
 ) -> Result<Vec<TaggedMessage>, StreamingError> {
     let messages = rows.iter().map(|row| row.message.clone()).collect();
-    let (sourced, _) = crate::compaction::association_view_with_sources(messages);
-    tagged_from_sourced(&rows, sourced)
+    let (sourced, _, replacements) =
+        crate::compaction::association_view_with_sources_accounted(messages);
+    let mut originals = rows;
+    for replacement in replacements {
+        originals[replacement.source_index]
+            .history_stubs
+            .push(replacement);
+    }
+    tagged_from_sourced(&originals, sourced)
 }
 
 pub fn provider_messages(profile: ProviderInputProfile, rows: &[TaggedMessage]) -> Vec<Message> {

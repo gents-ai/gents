@@ -37,6 +37,7 @@ impl ReplayRowAssociation {
 
     fn attach(self, message: Message) -> TaggedMessage {
         TaggedMessage {
+            history_stubs: Vec::new(),
             message,
             source: self.source,
             physical_header: self.physical_header,

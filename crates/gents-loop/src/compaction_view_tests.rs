@@ -90,3 +90,96 @@ fn provider_view_call_keys_match_the_lean_turn_model() {
         },
     );
 }
+
+#[test]
+fn stubbing_receipts_count_only_replacements_and_preserve_projection_bytes() {
+    let mut large = scoped_result(1);
+    if let Message::User { content } = &mut large {
+        let UserContent::ToolResult(result) = &mut content[0] else {
+            unreachable!()
+        };
+        result.content = vec![ToolResultContent::text("é".repeat(2_000))];
+    }
+    let input = vec![
+        Message::Assistant {
+            request_id: None,
+            id: None,
+            content: vec![scoped_call(1), scoped_call(2)],
+        },
+        large,
+        scoped_result(2),
+    ];
+    let legacy = super::provider_view(ProviderInputProfile::OpenAiChatCompletions, input.clone()).0;
+    let (projected, _, receipts) =
+        super::provider_view_accounted(ProviderInputProfile::OpenAiChatCompletions, input);
+    assert_eq!(
+        projected, legacy,
+        "accounting cannot change stubbing policy or provider bytes"
+    );
+    let figures = super::history::replacement_figures(&receipts);
+    assert_eq!(figures.stubbed_results, 1);
+    assert_eq!(figures.original_bytes, 4_000, "UTF-8 bytes, not characters");
+    assert!(figures.bytes_removed() > 0);
+    let (_, _, reapplied) = super::provider_view_accounted(
+        ProviderInputProfile::OpenAiChatCompletions,
+        projected.clone(),
+    );
+    assert!(
+        reapplied.is_empty(),
+        "pre-existing or spoofed literal stubs have no replacement receipt"
+    );
+    let tagged = projected
+        .into_iter()
+        .map(crate::loop_stream::TaggedMessage::unassociated)
+        .collect();
+    let spoofed = crate::loop_stream::provider_view_tagged(tagged).unwrap();
+    assert!(spoofed.iter().all(|row| row.history_stubs.is_empty()));
+}
+
+#[test]
+fn stubbing_receipts_drop_orphans_and_survive_reprojection_without_accumulating() {
+    let mut result = scoped_result(1);
+    if let Message::User { content } = &mut result {
+        let UserContent::ToolResult(result) = &mut content[0] else {
+            unreachable!()
+        };
+        result.content = vec![ToolResultContent::text("x".repeat(2_000))];
+    }
+    let (_, _, orphan_receipts) = super::provider_view_accounted(
+        ProviderInputProfile::OpenAiChatCompletions,
+        vec![result.clone()],
+    );
+    assert!(orphan_receipts.is_empty());
+    let input = vec![
+        Message::Assistant {
+            request_id: None,
+            id: None,
+            content: vec![scoped_call(1)],
+        },
+        result,
+    ];
+    let once = crate::loop_stream::provider_view_tagged(
+        input
+            .into_iter()
+            .map(crate::loop_stream::TaggedMessage::unassociated)
+            .collect(),
+    )
+    .unwrap();
+    let twice = crate::loop_stream::provider_view_tagged(once.clone()).unwrap();
+    assert_eq!(once, twice);
+    assert_eq!(
+        twice
+            .iter()
+            .map(|row| row.history_stubs.len())
+            .sum::<usize>(),
+        1
+    );
+    let sanitized = crate::loop_stream::sanitize_tagged_history(twice).unwrap();
+    assert_eq!(
+        sanitized
+            .iter()
+            .map(|row| row.history_stubs.len())
+            .sum::<usize>(),
+        1
+    );
+}

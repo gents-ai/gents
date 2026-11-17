@@ -35,6 +35,34 @@ pub fn provider_view_with_sources(
     (sanitized, activity)
 }
 
+/// Pair before stripping so only retained results contribute receipts. The
+/// existing strip/sanitize commute law preserves identical provider content.
+pub fn association_view_with_sources_accounted(
+    messages: Vec<Message>,
+) -> (
+    Vec<history::SourcedMessage>,
+    FileActivity,
+    Vec<history::StubReplacement>,
+) {
+    let activity = history::extract_file_activity(&messages);
+    let paired = pair_sourced(history::source_messages(messages));
+    let (stripped, _, replacements) = history::strip_tool_results_sourced_accounted(paired);
+    (stripped, activity, replacements)
+}
+
+pub fn provider_view_accounted(
+    profile: ProviderInputProfile,
+    messages: Vec<Message>,
+) -> (Vec<Message>, FileActivity, Vec<history::StubReplacement>) {
+    let (stripped, activity, replacements) = association_view_with_sources_accounted(messages);
+    let normalized = history::normalize_assistant_content_order_sourced(profile, stripped);
+    (
+        normalized.into_iter().map(|row| row.message).collect(),
+        activity,
+        replacements,
+    )
+}
+
 pub fn association_view_with_sources(
     messages: Vec<Message>,
 ) -> (Vec<history::SourcedMessage>, FileActivity) {

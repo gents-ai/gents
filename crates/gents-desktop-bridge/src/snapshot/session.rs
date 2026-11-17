@@ -1189,6 +1189,7 @@ mod paging_coverage_tests {
                     index % 60
                 )),
                 accounting: gents_protocol::rendered_request::ContextAccounting {
+                    history_stubbing: None,
                     accounting_version:
                         gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
                     turn_index: index as usize,

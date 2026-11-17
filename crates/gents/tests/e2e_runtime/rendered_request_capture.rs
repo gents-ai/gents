@@ -1049,6 +1049,22 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
             Some(actual_tokens as u64),
             "turn {index} pre-dispatch estimate must describe its actual HTTP request"
         );
+        let stubbed = &accounting["history_stubbing"];
+        assert_eq!(
+            stubbed["stubbed_results"].as_u64(),
+            Some(u64::from(index > 0)),
+            "each dispatch reports its retained set, not a cumulative replacement count"
+        );
+        if index > 0 {
+            assert_eq!(
+                stubbed["original_bytes"].as_u64(),
+                Some((BIG_MARKER.len() + BIG_OUTPUT_CHARS) as u64)
+            );
+            assert!(
+                stubbed["stub_bytes"].as_u64().unwrap()
+                    < stubbed["original_bytes"].as_u64().unwrap()
+            );
+        }
         assert!(
             actual_tokens <= input_budget,
             "turn {index} dispatched {actual_tokens} input tokens above budget {input_budget}"

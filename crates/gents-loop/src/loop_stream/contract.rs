@@ -11,6 +11,8 @@ pub struct TaggedMessage {
     pub source: Option<ReplayTag>,
     pub physical_header: Option<String>,
     pub block_indices: Vec<usize>,
+    /// Trusted reducer receipts carried with this row, never reconstructed from text.
+    pub history_stubs: Vec<crate::compaction::history::StubReplacement>,
 }
 
 impl TaggedMessage {
@@ -20,6 +22,7 @@ impl TaggedMessage {
             source: None,
             physical_header: None,
             block_indices: Vec::new(),
+            history_stubs: Vec::new(),
         }
     }
 }

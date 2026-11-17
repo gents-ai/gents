@@ -30,6 +30,14 @@ pub struct ContextBudgetSnapshot {
     pub recent_session_compactions: Vec<ContextReductionEvidence>,
     pub recent_request_reductions: Vec<ContextReductionEvidence>,
     pub last_request: Option<LastRequestContextSnapshot>,
+    /// Latest persisted dispatch's stub set; null means old/unmeasured accounting.
+    pub history_tool_outputs_stubbed_this_dispatch: Option<HistoryStubbingSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryStubbingSnapshot {
+    pub count: usize,
+    pub bytes_removed: usize,
 }
 
 const RECENT_REDUCTION_LIMIT: usize = 5;
@@ -234,7 +242,10 @@ impl Tool for ContextBudgetTool {
                 accounting: component token estimates, context window, compaction threshold, \
                 decision/reason, utilization, and this node/agent/session scope. Session-prefix \
                 compactions and request-local provider reductions are reported separately, with \
-                exact counts and up to five recent evidence records of each kind."
+                exact counts and up to five recent evidence records of each kind. History tool \
+                outputs stubbed are reported separately as count and bytes removed for this \
+                dispatch's retained stub set, never as cumulative compactions/reductions; null \
+                means unmeasured older accounting."
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -253,6 +264,7 @@ impl Tool for ContextBudgetTool {
                 "max_tokens",
                 "utilization_percent",
                 "last_request",
+                "history_tool_outputs_stubbed_this_dispatch",
                 "compaction_count",
                 "last_compacted_at",
                 "scope",
@@ -490,7 +502,15 @@ fn build_snapshot(
         _ => None,
     };
 
+    let history_tool_outputs_stubbed_this_dispatch = last_request
+        .as_ref()
+        .and_then(|request| request.accounting.history_stubbing.as_ref())
+        .map(|figures| HistoryStubbingSnapshot {
+            count: figures.stubbed_results,
+            bytes_removed: figures.bytes_removed(),
+        });
     ContextBudgetSnapshot {
+        history_tool_outputs_stubbed_this_dispatch,
         scope,
         max_tokens,
         current_estimate,
@@ -628,6 +648,10 @@ mod tests {
     }
 
     async fn seeded_node() -> Arc<EmbeddedNode> {
+        seeded_node_with_reductions(true).await
+    }
+
+    async fn seeded_node_with_reductions(with_reductions: bool) -> Arc<EmbeddedNode> {
         // The runtime holds the root its fixture Agents derive from.
         let root = crate::test_support::test_root_identity();
         let node = Arc::new(
@@ -706,11 +730,18 @@ mod tests {
                 }) { _docID }
             }"#,
         ] {
+            if !with_reductions
+                && (mutation.contains("create_CompactionEntry")
+                    || mutation.contains("create_ProviderContextReduction"))
+            {
+                continue;
+            }
             let mutation = mutation.replace("agent-context", &agent_context_did());
             seed_as(&node, &agent_context_did(), &mutation).await;
         }
 
         let accounting = gents_protocol::rendered_request::ContextAccounting {
+            history_stubbing: None,
             accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
             turn_index: 2,
             attempt: 0,
@@ -835,6 +866,7 @@ mod tests {
             )
             .await;
             let accounting = gents_protocol::rendered_request::ContextAccounting {
+                history_stubbing: None,
                 accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
                 turn_index: 0,
                 attempt: 0,
@@ -992,5 +1024,72 @@ mod tests {
         assert_eq!(last.request_id, "request-context");
         assert_eq!(last.accounting.components.tool_schemas, 100);
         assert_eq!(last.accounting.compaction_threshold_tokens, 800);
+    }
+    #[tokio::test]
+    async fn stub_only_dispatch_reports_numbers_without_compaction_or_reduction() {
+        let node = seeded_node_with_reductions(false).await;
+        let scope = ContextBudgetScope {
+            node_did: "did:key:z-context".into(),
+            agent_did: agent_context_did(),
+            session_id: "session-context".into(),
+        };
+        let loaded = load_context_budget_snapshot(&node, &scope).await.unwrap();
+        let mut last = loaded.last_request.unwrap();
+        let old = serde_json::to_value(&last.accounting).unwrap();
+        assert!(old.get("history_stubbing").is_none());
+        assert_eq!(
+            serde_json::from_value::<gents_protocol::rendered_request::ContextAccounting>(old)
+                .unwrap()
+                .history_stubbing,
+            None
+        );
+        use gents_protocol::message::{Message, ToolResultContent};
+        let (_, _, receipts) = gents_loop::compaction::history::strip_tool_results_accounted(vec![
+            Message::tool_result("first", vec![ToolResultContent::text("x".repeat(4_000))]),
+            Message::tool_result("second", vec![ToolResultContent::text("y".repeat(4_000))]),
+        ]);
+        let figures = gents_loop::compaction::history::replacement_figures(&receipts);
+        assert_eq!(figures.stubbed_results, 2);
+        assert!(figures.bytes_removed() > 0);
+        last.accounting.history_stubbing = Some(figures.clone());
+        let encoded = escape_graphql_string(&serde_json::to_string(&last.accounting).unwrap());
+        seed_as(&node, &scope.agent_did, &format!(r#"mutation {{ update_InferenceCall(filter: {{call_id: {{_eq: "context-call"}}}}, input: {{context_accounting_json: "{encoded}"}}) {{_docID}} }}"#)).await;
+        let snapshot = load_context_budget_snapshot(&node, &scope).await.unwrap();
+        assert_eq!(
+            snapshot
+                .last_request
+                .as_ref()
+                .unwrap()
+                .accounting
+                .history_stubbing,
+            Some(figures.clone())
+        );
+        assert_eq!(snapshot.compaction_count, 0);
+        assert_eq!(snapshot.session_compaction_count, 0);
+        assert_eq!(snapshot.request_reduction_count, 0);
+        let numbers =
+            serde_json::to_value(&snapshot.history_tool_outputs_stubbed_this_dispatch).unwrap();
+        assert_eq!(
+            numbers,
+            json!({"count":2, "bytes_removed":figures.bytes_removed()})
+        );
+        assert!(numbers.as_object().unwrap().values().all(Value::is_number));
+        let repeated = build_snapshot(
+            scope.clone(),
+            Some(1_000),
+            Vec::new(),
+            Vec::new(),
+            Some(last.clone()),
+        );
+        assert_eq!(
+            repeated.history_tool_outputs_stubbed_this_dispatch,
+            snapshot.history_tool_outputs_stubbed_this_dispatch
+        );
+        last.accounting.history_stubbing = None;
+        let old = build_snapshot(scope, Some(1_000), Vec::new(), Vec::new(), Some(last));
+        assert_eq!(
+            old.history_tool_outputs_stubbed_this_dispatch, None,
+            "old/unmeasured is not zero"
+        );
     }
 }

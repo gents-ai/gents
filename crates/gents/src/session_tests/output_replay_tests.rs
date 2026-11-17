@@ -83,6 +83,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
         &[],
     );
     let projected = [gents_loop::loop_stream::TaggedMessage {
+        history_stubs: Vec::new(),
         message: Message::Assistant {
             request_id: None,
             id: selected[0].id.clone(),
