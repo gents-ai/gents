@@ -283,8 +283,11 @@ pub(super) async fn resolve_startup_until(
     let requires_publication = resolved_snapshot.tool_surfaces.values().any(|surface| surface.has_plugin_tools())
         || resolved_snapshot.unavailable_agents.values().any(|unavailable| unavailable.public_cause == Some(gents_automation::triggers::runtime_snapshot::PublicUnavailableCause::PluginPublicationBusy));
     let publication = if super::context::needs_publication_fence(requires_publication) {
-        match gents_tools::surface::publication_guard_until(tool_runtime.plugin_home(), deadline)
-            .await
+        match gents_tools::surface::pinned_publication_guard_until(
+            tool_runtime.plugin_store_pin(),
+            deadline,
+        )
+        .await
         {
             Ok(guard) => {
                 resolved_snapshot = match resolve_startup_snapshot(agent).await {

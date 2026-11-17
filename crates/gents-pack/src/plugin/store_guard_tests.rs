@@ -26,6 +26,7 @@ fn lock_is_free(home: &Path) -> bool {
 fn for_home_accepts_only_the_home_the_guard_was_taken_for() {
     let home = tempfile::tempdir().unwrap();
     let other = tempfile::tempdir().unwrap();
+    drop(bootstrap_store(home.path()).unwrap());
     let guard = lock_store(home.path(), false).unwrap();
 
     guard.for_home(home.path()).expect("the guard's own home");
@@ -47,6 +48,7 @@ fn for_home_accepts_only_the_home_the_guard_was_taken_for() {
 fn a_guard_holds_the_lock_until_dropped_then_releases_it() {
     let home = tempfile::tempdir().unwrap();
 
+    drop(bootstrap_store(home.path()).unwrap());
     let shared = lock_store(home.path(), false).unwrap();
     assert!(!lock_is_free(home.path()), "shared guard holds the lock");
     drop(shared);
@@ -73,6 +75,7 @@ fn try_lock_store_reports_contention_without_waiting() {
 #[tokio::test]
 async fn installer_waits_for_a_reconcile_read_lease_and_is_cancellation_safe() {
     let home = tempfile::tempdir().unwrap();
+    drop(bootstrap_store(home.path()).unwrap());
     let reconcile = try_lock_store_shared(home.path()).unwrap();
     let mut waiting = Box::pin(lock_store_until(
         home.path(),
@@ -85,6 +88,7 @@ async fn installer_waits_for_a_reconcile_read_lease_and_is_cancellation_safe() {
     drop(installed);
     assert!(lock_is_free(home.path()));
 
+    drop(bootstrap_store(home.path()).unwrap());
     let reconcile = try_lock_store_shared(home.path()).unwrap();
     let mut cancelled = Box::pin(lock_store_until(
         home.path(),
@@ -102,6 +106,7 @@ async fn installer_waits_for_a_reconcile_read_lease_and_is_cancellation_safe() {
 #[tokio::test]
 async fn installer_wait_timeout_preserves_typed_busy() {
     let home = tempfile::tempdir().unwrap();
+    drop(bootstrap_store(home.path()).unwrap());
     let reconcile = try_lock_store_shared(home.path()).unwrap();
     let error = lock_store_until(home.path(), tokio::time::Instant::now())
         .await

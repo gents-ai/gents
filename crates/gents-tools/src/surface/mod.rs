@@ -36,7 +36,8 @@ pub use policy::{
     TOOL_POLICY_V1,
 };
 pub use publication::{
-    publication_guard, publication_guard_until, PLUGIN_PUBLICATION_WAIT_EVENT_TARGET,
+    pinned_publication_guard_until, publication_guard, publication_guard_until,
+    PLUGIN_PUBLICATION_WAIT_EVENT_TARGET,
 };
 
 pub(crate) fn configured_node_operation_sources(

@@ -208,13 +208,19 @@ pub(super) async fn run_control_watcher_inner(
                 let mut proposed_update = false;
                 let mut resolve_failed = false;
                 let mut publication_busy = false;
+                let mut store_absent = false;
                 let deadline = *publication_deadline.get_or_insert_with(|| tokio::time::Instant::now() + timing.publication_wait);
                 #[cfg(test)] if let Some(probe) = &probe { let _ = probe.events.send(WatcherTestEvent::Attempt(deadline, tokio::time::Instant::now())); }
 
                 let resolution = async {
                     #[cfg(test)] if let Some(probe) = &probe { probe.fail_once(WatcherFailure::Resolve)?; }
-                    let publication = match gents_tools::surface::publication_guard_until(tool_runtime.plugin_home(), deadline).await {
+                    let publication = match gents_tools::surface::pinned_publication_guard_until(tool_runtime.plugin_store_pin(), deadline).await {
                         Ok(guard) => guard,
+                        Err(error) if gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_absent(error.as_ref()) => {
+                            tracing::info!(node_did = %node_did, "stopping control watcher: original plugin store is absent or replaced");
+                            store_absent = true;
+                            return Err(error);
+                        }
                         Err(error) if super::startup::snapshot::preserve_generation_for_surface_error(&error) => {
                             publication_busy = true;
                             if defer_authority(true, tokio::time::Instant::now() < deadline) {
@@ -245,6 +251,7 @@ pub(super) async fn run_control_watcher_inner(
                     _ = shutdown.changed() => return Ok(()),
                     resolved = resolution => resolved,
                 };
+                if store_absent { return Ok(()); }
                 match resolved {
                     Ok(snapshot) => {
                         let fingerprint = snapshot.configuration_fingerprint();

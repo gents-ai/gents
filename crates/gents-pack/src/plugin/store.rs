@@ -1,3 +1,6 @@
+mod read;
+pub use read::{StoreAbsent, StoreReadIdentity, StoreReadPin};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -9,6 +12,10 @@ use gents_documents::plugin_coordinate::checked_component;
 
 fn plugins_root(home: &Path) -> PathBuf {
     home.join(gents_store::local::home::PLUGINS_DIR_NAME)
+}
+
+fn lock_path(home: &Path) -> PathBuf {
+    plugins_root(home).join(".store.lock")
 }
 
 fn store_dir(home: &Path) -> PathBuf {
@@ -301,6 +308,9 @@ impl StoreGuard {
 /// The shared install lock and exclusive release lock prevent deleting bytes
 /// after a concurrent install writes them but before its record is visible.
 pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
+    if !exclusive {
+        return lock_store_shared_existing(home);
+    }
     let path = plugins_root(home).join(".store.lock");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -325,15 +335,46 @@ pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
     })
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "synchronous caller waits for an existing advisory read lease"
+)]
+fn lock_store_shared_existing(home: &Path) -> Result<StoreGuard> {
+    let identity = StoreReadIdentity::capture(home)?;
+    loop {
+        match identity.try_shared() {
+            Ok(guard) => return Ok(guard),
+            Err(PublishedPluginReadError::Busy) => {
+                std::thread::sleep(std::time::Duration::from_millis(20))
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+/// Explicit cold-start acquisition. It creates the store just as a writer
+/// does, before a runtime pins a noncreating read identity.
+pub fn bootstrap_store(home: &Path) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
+    try_lock_store_mode(home, true)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PublishedPluginReadError {
     #[error("plugin store is busy; retry this pack operation")]
     Busy,
+    #[error(transparent)]
+    StoreAbsent(#[from] StoreAbsent),
     #[error("reading the published plugin store")]
     Read(#[source] anyhow::Error),
+    #[error("capturing the runtime's plugin store identity")]
+    Pinned(#[source] std::sync::Arc<PublishedPluginReadError>),
 }
 
 impl PublishedPluginReadError {
+    pub fn error_chain_is_absent(error: &(dyn std::error::Error + 'static)) -> bool {
+        any_error::<Self>(error, |error| matches!(error, Self::StoreAbsent(_)))
+    }
+
     pub fn is_busy(&self) -> bool {
         matches!(self, Self::Busy)
     }
@@ -396,7 +437,7 @@ pub fn try_lock_store(home: &Path) -> Result<StoreGuard> {
 pub fn try_lock_store_shared(
     home: &Path,
 ) -> std::result::Result<StoreGuard, PublishedPluginReadError> {
-    try_lock_store_mode(home, false)
+    StoreReadIdentity::capture(home)?.try_shared()
 }
 
 fn try_lock_store_mode(
