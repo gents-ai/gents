@@ -75,6 +75,13 @@ async fn scratch_persisted_script_batch_timing() {
         ..Default::default()
     });
     record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
+    record.granted = gents_pack::plugin::store::grant_on_install(
+        home.path(),
+        &record.namespace,
+        &record.declaration,
+        true,
+    )
+    .unwrap();
     gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
     let executor = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
     for (label, script) in [
@@ -86,6 +93,10 @@ async fn scratch_persisted_script_batch_timing() {
             "parallel",
             "return await Promise.all([1,2,3,4].map(id => tools.query({id})));",
         ),
+        (
+            "bash_barrier",
+            "return await Promise.all([1,2,3,4].map(id => tools.bash_unrestricted({command: 'sleep 1', args: [], cwd: '.'})));",
+        ),
     ] {
         // Distinct parents keep effect ordinals unique between samples.
         let parent = format!("script-{label}");
@@ -94,8 +105,12 @@ async fn scratch_persisted_script_batch_timing() {
             hook.on_tool_call("plugin", None, &parent, "{}").await,
             ToolCallHookAction::Continue
         ));
+        let tools: Vec<Box<dyn ToolDyn>> = if label == "bash_barrier" {
+            gents_tools::native::ToolSet::builder().read_root(home.path())
+                .bash_unrestricted(home.path()).build().build_native_tools().unwrap()
+        } else { vec![Box::new(SleepingRead)] };
         let effects = gents_loop::loop_stream::tool_effect_dispatcher(
-            Arc::new(vec![Box::new(SleepingRead)]),
+            Arc::new(tools),
             hook.clone(),
             parent.clone(),
         );
@@ -127,10 +142,12 @@ async fn scratch_persisted_script_batch_timing() {
             "{}",
             result.outcome.diagnostics
         );
-        assert_eq!(
-            result.outcome.output,
-            json!([{"id":1},{"id":2},{"id":3},{"id":4}])
-        );
+        if label == "bash_barrier" {
+            assert_eq!(result.outcome.output.as_array().unwrap().len(), 4);
+            assert!(result.outcome.output.as_array().unwrap().iter().all(|output| output["ok"] == true), "{}", result.outcome.output);
+        } else {
+            assert_eq!(result.outcome.output, json!([{"id":1},{"id":2},{"id":3},{"id":4}]));
+        }
     }
     db.node.shutdown().await.unwrap();
 }
