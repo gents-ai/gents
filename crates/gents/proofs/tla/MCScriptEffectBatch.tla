@@ -1,0 +1,3 @@
+---- MODULE MCScriptEffectBatch ----
+EXTENDS ScriptEffectBatch
+====

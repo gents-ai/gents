@@ -1,3 +1,5 @@
+pub mod parallel;
+
 use std::sync::Arc;
 
 use crate::tool::{BoxFuture, ToolDefinition};
@@ -11,6 +13,15 @@ pub enum ToolEffectError {
     Fatal(String),
 }
 
+#[derive(Debug, Clone)]
+pub struct ToolEffectCall {
+    pub ordinal: u32,
+    pub name: String,
+    pub arguments: String,
+}
+
+pub type EffectResult = Result<ToolOutcome, ToolEffectError>;
+
 /// Implemented by the loop, which retains the selected tools and persistence
 /// hook. The guest never receives either object or a way to replace them.
 /// Each child runs under the parent tool call's own deadline and cancellation
@@ -22,6 +33,22 @@ pub trait ToolEffectDispatcher: Send + Sync {
         name: &'a str,
         arguments: &'a str,
     ) -> BoxFuture<'a, Result<ToolOutcome, ToolEffectError>>;
+
+    /// Dispatchers without a trusted footprint owner retain serial execution.
+    fn batch<'a>(&'a self, calls: Vec<ToolEffectCall>) -> BoxFuture<'a, Vec<EffectResult>> {
+        Box::pin(async move {
+            let mut results = Vec::with_capacity(calls.len());
+            for call in calls {
+                let result = self.call(call.ordinal, &call.name, &call.arguments).await;
+                let fatal = matches!(result, Err(ToolEffectError::Fatal(_)));
+                results.push(result);
+                if fatal {
+                    break;
+                }
+            }
+            results
+        })
+    }
 
     /// The definitions of the tools `call` reaches: the request's selected
     /// surface, in its order.
