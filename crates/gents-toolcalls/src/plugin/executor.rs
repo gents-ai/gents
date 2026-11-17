@@ -99,7 +99,7 @@ pub struct PluginCall {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("{source:#}")]
+#[error("executing plugin {}", .receipt.coordinate)]
 struct PluginAttemptError {
     source: anyhow::Error,
     receipt: PluginExecutionReceipt,
@@ -119,7 +119,7 @@ pub enum PluginResolutionError {
     },
     #[error("plugin {coordinate} is not installed: this runtime has no plugin directory")]
     NoHome { coordinate: String },
-    #[error("resolving plugin {coordinate}: {source}")]
+    #[error("resolving plugin {coordinate}")]
     Published {
         coordinate: String,
         #[source]
