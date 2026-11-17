@@ -1001,6 +1001,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     let node = fixture.node.clone();
     let identity = fixture.runtime.clone();
     let plugin_home = tempfile::tempdir().unwrap();
+    drop(gents_pack::plugin::store::bootstrap_store(plugin_home.path()).unwrap());
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
@@ -1114,6 +1115,7 @@ async fn control_watcher_wake_follows_the_lean_tool_admission_model() {
         let node = fixture.node.clone();
         let identity = fixture.runtime.clone();
         let plugin_home = tempfile::tempdir().unwrap();
+        drop(gents_pack::plugin::store::bootstrap_store(plugin_home.path()).unwrap());
         let agent = crate::Gents::from_default_agent_documents(
             node.clone(),
             identity,
@@ -1367,4 +1369,67 @@ async fn failed_watcher_epoch_cases(recovery_pending: bool) {
             .unwrap()
             .unwrap();
     }
+}
+
+#[tokio::test]
+async fn control_watcher_stops_without_proposing_into_a_replaced_plugin_home() {
+    let fixture = plugin_runtime_fixture(
+        "control-watcher-retired-home",
+        "backend-retired-home",
+        "http://127.0.0.1:8117/v1",
+    )
+    .await
+    .unwrap();
+    let node = fixture.node.clone();
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    drop(gents_pack::plugin::store::bootstrap_store(&home).unwrap());
+    let agent = crate::Gents::from_default_agent_documents(
+        node.clone(),
+        fixture.runtime.clone(),
+        crate::runtime::agent::DocumentRuntimeOptions {
+            backend_admission: Some(fixture.admission()),
+            tool_ceiling: ToolCeiling::meta_only(),
+            plugin_home: Some(home.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let resolve_context = agent.document_runtime_context().cloned().unwrap();
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_owned());
+    runtime_status
+        .initialize_startup(agent.default_agent_did())
+        .await
+        .unwrap();
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
+    let inputs = ControlWatcherInputs {
+        node: node.clone(),
+        backend_admission: agent.backend_admission.clone(),
+        subscription: subscribe_control_changes(&node).unwrap(),
+        node_did: agent.node_did().to_owned(),
+        tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
+        resolve_context,
+        proposals_tx: proposal_tx,
+        runtime_status,
+        health_events_rx: mpsc::channel::<()>(1).1,
+        shutdown: shutdown_rx,
+    };
+    // Capture inputs before replacement; a later runtime must not be adopted.
+    std::fs::rename(&home, root.path().join("retired")).unwrap();
+    std::fs::create_dir(&home).unwrap();
+    let watcher = tokio::spawn(run_test_control_watcher(inputs));
+    update_node_enabled(&fixture.user_access, agent.node_did(), true).await;
+    tokio::time::timeout(PROPOSAL_TIMEOUT, watcher)
+        .await
+        .expect("retired-store watcher must stop")
+        .unwrap()
+        .unwrap();
+    assert!(
+        proposal_rx.recv().await.is_none(),
+        "no new-generation proposal"
+    );
+    assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
 }
