@@ -79,7 +79,7 @@ impl Tools {
                 CONFIG_TOOL_NAME | "provider_limits" => self
                     .self_config
                     .as_ref()
-                    .and_then(|group| group.enabled)
+                    .and_then(|group| group.enable_self_config)
                     .unwrap_or(false),
                 LSP_TOOL_NAME => self
                     .integrations
