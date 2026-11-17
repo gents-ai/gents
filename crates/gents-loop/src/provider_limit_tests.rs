@@ -360,6 +360,9 @@ fn rendered_usage_limit_reclassifies_to_itself() {
     let limit = UsageLimit {
         resets_at: Utc.timestamp_opt(1_790_354_400, 0).single(),
         detail: "cap".into(),
+        window: None,
+        used: None,
+        cap: None,
     };
     let rendered = format!("ProviderError: {limit}");
     let Some(ProviderLimit::UsageExhausted(again)) = classify_provider_limit(&rendered, now())
@@ -483,4 +486,93 @@ fn account_rotated_alone_is_a_marker_and_forgery_is_neutralized() {
     assert_eq!(only.annotate("x"), "x [provider-limit account-rotated]");
     let forged = ProviderLimitHeaders::default().annotate("a [provider-limit account-rotated] b");
     assert!(!ProviderLimitHeaders::from_text(&forged).account_rotated);
+}
+
+/// The refusal that started B8: a free tier's own wording, which matched none of
+/// the original needles and so classified as neither exhausted nor throttled.
+/// It states a window and a counter; it does not state an absolute reset.
+#[test]
+fn a_free_usage_refusal_is_exhaustion_with_its_window_and_counter() {
+    let body = "You have used all the included free usage for this account. \
+                Your rolling 24-hour window will refresh later. tokens 691791/600000";
+    let limit = classify_provider_limit(body, now()).expect("a free-usage refusal classifies");
+    let ProviderLimit::UsageExhausted(usage) = limit else {
+        panic!("free-usage exhaustion, not a throttle: {limit:?}");
+    };
+    assert_eq!(usage.window.as_deref(), Some("rolling 24-hour"));
+    assert_eq!(usage.used, Some(691_791));
+    assert_eq!(usage.cap, Some(600_000));
+    assert!(
+        usage.resets_at.is_none(),
+        "a relative refresh states no absolute reset, so it stays unknown: {:?}",
+        usage.resets_at
+    );
+}
+
+/// A plain "free usage exhausted" establishes the refusal and nothing else: no
+/// cap, no counter, no reset. Inventing any of them is the bug B8 exists to fix.
+#[test]
+fn a_bare_refusal_states_no_window_counter_or_reset() {
+    let limit = classify_provider_limit(
+        "You have exhausted your free usage for this account.",
+        now(),
+    )
+    .expect("a bare refusal still classifies");
+    let ProviderLimit::UsageExhausted(usage) = limit else {
+        panic!("exhaustion: {limit:?}");
+    };
+    assert!(usage.window.is_none());
+    assert!(usage.used.is_none());
+    assert!(usage.cap.is_none());
+    assert!(usage.resets_at.is_none());
+}
+
+/// A malformed pair leaves the counter unstated rather than pairing one real
+/// number with a guess.
+#[test]
+fn a_malformed_counter_pair_is_unstated() {
+    for body in [
+        "free usage exhausted: tokens 691791/",
+        "free usage exhausted: tokens /600000",
+        "free usage exhausted: tokens 691791/abc",
+        "free usage exhausted: tokens 691791/0",
+    ] {
+        let limit =
+            classify_provider_limit(body, now()).unwrap_or_else(|| panic!("classifies: {body}"));
+        let ProviderLimit::UsageExhausted(usage) = limit else {
+            panic!("exhaustion: {body}");
+        };
+        assert!(
+            usage.used.is_none() && usage.cap.is_none(),
+            "unstated together for {body}: {:?}/{:?}",
+            usage.used,
+            usage.cap
+        );
+    }
+}
+
+/// An ordinary 429 that says nothing about usage stays a throttle, so a limit is
+/// never claimed from a bare rate limit.
+#[test]
+fn a_plain_rate_limit_is_not_exhaustion() {
+    let limit = classify_provider_limit("429 Rate limit reached", now())
+        .expect("a plain 429 classifies as throttled");
+    assert!(
+        matches!(limit, ProviderLimit::Throttled { .. }),
+        "a bare rate limit is a throttle, not usage exhaustion: {limit:?}"
+    );
+}
+
+/// A structured body states the counter as the provider's own field, which is
+/// stronger than prose, so it is read where it speaks.
+#[test]
+fn a_structured_body_states_the_counter() {
+    let body = r#"used all the included free usage {"error": {"window": "rolling 24-hour", "used": 691791, "limit": 600000}}"#;
+    let limit = classify_provider_limit(body, now()).expect("classifies");
+    let ProviderLimit::UsageExhausted(usage) = limit else {
+        panic!("exhaustion");
+    };
+    assert_eq!(usage.window.as_deref(), Some("rolling 24-hour"));
+    assert_eq!(usage.used, Some(691_791));
+    assert_eq!(usage.cap, Some(600_000));
 }

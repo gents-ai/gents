@@ -98,6 +98,69 @@ theorem storage_is_valid (usage : Observation) : valid (forStorage usage) = true
     simp only [bounded] at hi ho ht
     simp [valid, subset, bounded, hi, ho, ht]
 
+/-- Where a limit statement came from. A provider's own words are evidence; a
+local sum is an estimate; silence is explicitly unknown. Never inferred from
+the other. -/
+inductive Provenance where
+  | providerReported
+  | locallyEstimated
+  | unknown
+  deriving DecidableEq, Repr
+
+/-- A provider's refusal, as the fields it stated. Every field is optional
+because a refusal establishes only what it says: plain "free usage exhausted"
+establishes the refusal and the local consumption, and no cap, no remaining
+balance and no reset. -/
+structure Refusal where
+  /-- When the provider stated it. `at` is a Lean keyword, hence the longer name. -/
+  observedAt : Int
+  window : Option String := none
+  used : Option Nat := none
+  cap : Option Nat := none
+  /-- Absolute only. A relative "in 24 hours" leaves this none, rather than
+  becoming a time the provider never stated. -/
+  resetAt : Option Int := none
+  deriving DecidableEq, Repr
+
+/-- What a refusal establishes, and nothing more. A cap below what was used is
+consistent with a provider whose counter and cap are on different scales, so it
+is not a contradiction. -/
+def Refusal.establishes (refusal : Refusal) : Bool :=
+  refusal.observedAt ≥ 0 &&
+    match refusal.used, refusal.cap with
+    | some used, some cap => used ≤ counterLimit && cap ≤ counterLimit && cap > 0
+    | _, _ => true
+
+/-- A refusal stands until its stated reset, or until a later successful call on
+the same account. A newer refusal replaces an older one; an older success does
+not clear a newer refusal. -/
+def Refusal.standsAt (refusal : Refusal) (now : Int) : Bool :=
+  match refusal.resetAt with
+  | some reset => now < reset
+  | none => true
+
+/-- An account's standing limit state: the latest refusal and how much the node
+has itself observed. Exhaustion is the refusal, never a percentage. -/
+structure LimitState where
+  refusal : Option Refusal := none
+  consumed : Option Nat := none
+  provenance : Provenance := .unknown
+  deriving DecidableEq, Repr
+
+/-- Exhausted exactly when a refusal stands. A locally estimated consumption may
+annotate it but cannot establish it: reaching 100% of a guessed cap is still a
+guess. -/
+def LimitState.exhausted (state : LimitState) (now : Int) : Bool :=
+  match state.refusal with
+  | some refusal => refusal.standsAt now
+  | none => false
+
+/-- A later successful call clears the refusal it follows, and only that one. -/
+def LimitState.clearedBySuccessAt (state : LimitState) (successAt : Int) : LimitState :=
+  match state.refusal with
+  | some refusal => if successAt > refusal.observedAt then { state with refusal := none } else state
+  | none => state
+
 structure Column where
   known : Nat := 0
   reported : Nat := 0
@@ -183,5 +246,47 @@ theorem provider_total_does_not_choose_the_charge (usage : Observation)
 theorem aggregation_preserves_missing_evidence (summary : Summary) :
     (summary.add {}).incompleteCalls = summary.incompleteCalls + 1 := by
   simp [Summary.add, completeness, hasCounters]
+
+/-- The three rules B8 rests on, stated so the Rust owner replays them. -/
+
+theorem a_standing_refusal_is_exhaustion (state : LimitState) (refusal : Refusal) (now : Int)
+    (standing : refusal.standsAt now = true) :
+    (LimitState.exhausted { state with refusal := some refusal } now) = true := by
+  simp [LimitState.exhausted, standing]
+
+theorem no_refusal_is_never_exhaustion (state : LimitState) (now : Int) :
+    LimitState.exhausted { state with refusal := none } now = false := rfl
+
+theorem a_local_estimate_alone_is_never_exhaustion (consumed : Option Nat) (now : Int) :
+    LimitState.exhausted { refusal := none, consumed, provenance := .locallyEstimated } now
+      = false := rfl
+
+theorem a_reset_clears_the_refusal (refusal : Refusal) (reset now : Int)
+    (stated : refusal.resetAt = some reset) (passed : now ≥ reset) :
+    refusal.standsAt now = false := by
+  simp [Refusal.standsAt, stated, passed]
+
+theorem a_later_success_clears_the_refusal (refusal : Refusal) (successAt : Int)
+    (later : successAt > refusal.observedAt) :
+    (LimitState.clearedBySuccessAt
+      { refusal := some refusal, consumed := none, provenance := .providerReported }
+      successAt).refusal = none := by
+  simp only [LimitState.clearedBySuccessAt]
+  rw [if_pos later]
+
+/-- An earlier success does not clear a refusal that came after it. -/
+theorem an_earlier_success_leaves_a_newer_refusal (refusal : Refusal) (successAt : Int)
+    (earlier : successAt ≤ refusal.observedAt) :
+    (LimitState.clearedBySuccessAt
+      { refusal := some refusal, consumed := none, provenance := .providerReported }
+      successAt).refusal = some refusal := by
+  simp only [LimitState.clearedBySuccessAt]
+  rw [if_neg (by omega : ¬ successAt > refusal.observedAt)]
+
+/-- A refusal establishing no reset stands indefinitely: only a later success
+clears it, which is why an unstated window is not replaced by a guessed one. -/
+theorem an_unstated_reset_stands (refusal : Refusal) (now : Int) (unstated : refusal.resetAt = none) :
+    refusal.standsAt now = true := by
+  simp [Refusal.standsAt, unstated]
 
 end InferenceCall.Usage

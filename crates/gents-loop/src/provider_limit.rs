@@ -24,6 +24,13 @@ const USAGE_NEEDLES: &[&str] = &[
     "free-usage-exhausted",
     "billing hard limit",
     "credit balance",
+    // A free tier's own wording. xAI/Grok says "used all the included free
+    // usage", which matched none of the needles above, so that refusal used to
+    // classify as neither exhausted nor throttled and no read path could see it.
+    "included free usage",
+    "free usage",
+    "used all the included",
+    "exhausted your free",
 ];
 
 const THROTTLE_NEEDLES: &[&str] = &["rate_limit", "rate limit", "too many requests"];
@@ -197,6 +204,14 @@ pub fn persisted_failure_reason(text: &str, now: DateTime<Utc>) -> String {
 pub struct UsageLimit {
     pub resets_at: Option<DateTime<Utc>>,
     pub detail: String,
+    /// The window the provider named, when it named one: "rolling 24-hour".
+    /// `None` means the provider did not state it, not that it is 24 hours.
+    pub window: Option<String>,
+    /// The counter the provider reported, e.g. 691791 of 600000.
+    pub used: Option<u64>,
+    /// The cap the provider named. `None` means unstated — never inferred from
+    /// `used`, which would invent a limit.
+    pub cap: Option<u64>,
 }
 
 impl fmt::Display for UsageLimit {
@@ -244,9 +259,13 @@ pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<Provide
             })
             .or(headers.reset_at)
             .or(headers.retry_at);
+        let statement = UsageStatement::parse(&lower, body_json.as_ref());
         return Some(ProviderLimit::UsageExhausted(UsageLimit {
             resets_at,
             detail: provider_detail(body, body_json.as_ref()),
+            window: statement.window,
+            used: statement.used,
+            cap: statement.cap,
         }));
     }
 
@@ -255,14 +274,130 @@ pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<Provide
         .or_else(|| try_again_in(&lower).and_then(|wait| delay_after(now, wait.as_secs_f64())));
     let retry_after = retry_at.map(|at| (at - now).to_std().unwrap_or(Duration::ZERO));
     if retry_after.is_some_and(|wait| wait > LONG_RATE_LIMIT_WAIT) {
+        let statement = UsageStatement::parse(&lower, body_json.as_ref());
         return Some(ProviderLimit::UsageExhausted(UsageLimit {
             resets_at: retry_at,
             detail: provider_detail(body, body_json.as_ref()),
+            window: statement.window,
+            used: statement.used,
+            cap: statement.cap,
         }));
     }
     Some(ProviderLimit::Throttled { retry_after })
 }
 
+/// What a refusal states beyond "no": the window it names and the counter it
+/// reports. Every field is optional, because a refusal establishes only what it
+/// says — plain "free usage exhausted" gives no cap and no reset, and inventing
+/// either would be worse than saying unknown.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct UsageStatement {
+    window: Option<String>,
+    used: Option<u64>,
+    cap: Option<u64>,
+}
+
+impl UsageStatement {
+    /// Parse the statement out of a lowercased body and, when there is one, a
+    /// structured JSON body. The JSON wins where it speaks, since it is the
+    /// provider's own field rather than prose.
+    fn parse(lower: &str, body_json: Option<&serde_json::Value>) -> Self {
+        let mut statement = Self::default();
+        if let Some(window) = named_window(lower) {
+            statement.window = Some(window);
+        }
+        if let Some(json) = body_json {
+            statement.window = statement
+                .window
+                .or_else(|| json_str(json, &["window", "period", "quota_window"]));
+            statement.used = json_u64(json, &["used", "usage", "tokens_used", "consumed"]);
+            statement.cap = json_u64(json, &["cap", "limit", "tokens_limit", "quota"]);
+        }
+        // `tokens 691791/600000` — the pair is only read when both sides parse,
+        // so a malformed pair leaves used and cap unstated together rather than
+        // pairing one real number with a guess.
+        if statement.used.is_none() || statement.cap.is_none() {
+            if let Some((used, cap)) = token_pair(lower) {
+                statement.used.get_or_insert(used);
+                statement.cap.get_or_insert(cap);
+            }
+        }
+        statement
+    }
+}
+
+/// A window named in prose: "rolling 24-hour window", "24h window", "daily".
+fn named_window(lower: &str) -> Option<String> {
+    for (needle, label) in [
+        ("rolling 24-hour", "rolling 24-hour"),
+        ("rolling 24 hour", "rolling 24-hour"),
+        ("24-hour window", "24-hour"),
+        ("24 hour window", "24-hour"),
+        ("daily", "daily"),
+        ("weekly", "weekly"),
+        ("monthly", "monthly"),
+    ] {
+        if lower.contains(needle) {
+            return Some(label.to_owned());
+        }
+    }
+    None
+}
+
+/// `tokens 691791/600000`, or `691791 / 600000`. Both sides must parse and the
+/// cap must be non-zero; anything else is unstated.
+fn token_pair(lower: &str) -> Option<(u64, u64)> {
+    let bytes = lower.as_bytes();
+    let mut start = None;
+    for (index, byte) in bytes.iter().enumerate() {
+        if byte.is_ascii_digit() {
+            start.get_or_insert(index);
+        } else if *byte == b'/' && start.is_some() {
+            let left = &lower[start.take().expect("a digit was seen")..index];
+            let rest = &lower[index + 1..];
+            let right = rest
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>();
+            if right.is_empty() {
+                return None;
+            }
+            let (used, cap) = (left.trim().parse::<u64>().ok()?, right.parse::<u64>().ok()?);
+            if cap == 0 {
+                return None;
+            }
+            return Some((used, cap));
+        } else if !byte.is_ascii_whitespace() && *byte != b',' && *byte != b':' {
+            start = None;
+        }
+    }
+    None
+}
+
+/// The first of `keys` present as a string anywhere the JSON reaches.
+fn json_str(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    find_json(value, keys).and_then(|found| found.as_str().map(str::to_owned))
+}
+
+/// The first of `keys` present as an unsigned integer.
+fn json_u64(value: &serde_json::Value, keys: &[&str]) -> Option<u64> {
+    find_json(value, keys).and_then(|found| found.as_u64())
+}
+
+fn find_json<'a>(value: &'a serde_json::Value, keys: &[&str]) -> Option<&'a serde_json::Value> {
+    match value {
+        serde_json::Value::Object(map) => {
+            for key in keys {
+                if let Some(found) = map.get(*key) {
+                    return Some(found);
+                }
+            }
+            map.values().find_map(|nested| find_json(nested, keys))
+        }
+        serde_json::Value::Array(items) => items.iter().find_map(|item| find_json(item, keys)),
+        _ => None,
+    }
+}
 #[derive(PartialEq)]
 enum PaymentRequired {
     Exhausted,

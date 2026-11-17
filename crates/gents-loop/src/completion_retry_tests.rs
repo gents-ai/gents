@@ -214,6 +214,9 @@ fn usage_limit_fails_immediately_with_its_reset_time() {
             .ok()
             .map(|at| at.with_timezone(&Utc)),
         detail: "seat capped".into(),
+        window: None,
+        used: None,
+        cap: None,
     };
     let error = InferenceError::UsageLimited(limit);
     assert_eq!(class_of(&error, "seat capped"), FailureClass::Permanent);
@@ -330,6 +333,9 @@ fn account_limit_with_no_hops_fails_with_the_usage_limit_reason() {
     let limit = crate::provider_limit::UsageLimit {
         resets_at: None,
         detail: "cap".into(),
+        window: None,
+        used: None,
+        cap: None,
     };
     let error = InferenceError::UsageLimited(limit.clone());
     match state.on_pre_stream_failure(&account_limited(&error, "cap"), Utc::now(), None) {
