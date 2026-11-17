@@ -3612,7 +3612,7 @@ fn hidden_invocation_selection_matches_tool_surface_names() {
 }
 
 #[tokio::test]
-async fn hidden_runtime_script_unresolved_or_ceiling_removed_advertises_repair_tools() {
+async fn hidden_unresolved_script_fails_construction_but_ceiling_removed_script_advertises_all() {
     let (_db, runtime) = selected_surface_runtime().await;
     for hidden in [false, true] {
         let document = tools_document(serde_json::json!({
@@ -3657,12 +3657,18 @@ async fn hidden_runtime_script_unresolved_or_ceiling_removed_advertises_repair_t
 struct AdmissionFixturePluginHost {
     record: InstalledPlugin,
     busy: std::sync::atomic::AtomicBool,
+    resolves: std::sync::atomic::AtomicUsize,
+    busy_after_resolution: bool,
+    construct_script: bool,
 }
 
 impl AdmissionFixturePluginHost {
     fn script(busy: bool) -> Self {
         Self {
             busy: std::sync::atomic::AtomicBool::new(busy),
+            resolves: std::sync::atomic::AtomicUsize::new(0),
+            busy_after_resolution: false,
+            construct_script: false,
             record: serde_json::from_value(serde_json::json!({
                 "namespace":"fixture", "name":"script", "version":"1.0.0",
                 "digest":"a".repeat(64), "language":"rust",
@@ -3686,7 +3692,12 @@ impl PluginHost for AdmissionFixturePluginHost {
     fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> anyhow::Result<InstalledPlugin> {
         let _ = pinned;
         anyhow::ensure!(coordinate == "fixture/script", "unexpected plugin");
-        if self.busy.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        let previous = self
+            .resolves
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if (self.busy_after_resolution && previous > 0)
+            || self.busy.swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
             return Err(gents_pack::plugin::store::PublishedPluginReadError::Busy.into());
         }
         Ok(self.record.clone())
@@ -3727,6 +3738,10 @@ impl PluginHost for AdmissionFixturePluginHost {
         node_did: &str,
         agent_did: Option<&str>,
     ) -> anyhow::Result<Box<dyn ToolDyn>> {
+        if self.construct_script {
+            assert_eq!(plugin.tool_name(), "script");
+            return Ok(Box::new(ReadinessScript));
+        }
         std::sync::Arc::new(NoPluginHost).plugin_tool(plugin, read_root, node, node_did, agent_did)
     }
 }
@@ -3787,4 +3802,86 @@ async fn hidden_script_only_background_parity_and_busy_resolution_preserve_retry
             .expect("construction failure must propagate identically for empty/hidden lists");
         assert!(format!("{error:#}").contains("no plugin runtime is attached"));
     }
+}
+
+/// Construction-only gateway; the readiness test never executes a plugin.
+struct ReadinessScript;
+impl ToolDyn for ReadinessScript {
+    fn hidden(&self) -> bool {
+        false
+    }
+    fn name(&self) -> String {
+        "script".into()
+    }
+    fn definition<'a>(
+        &'a self,
+        _: String,
+    ) -> gents_loop::tool::BoxFuture<'a, gents_loop::tool::ToolDefinition> {
+        Box::pin(async {
+            gents_loop::tool::ToolDefinition {
+                name: "script".into(),
+                description: "readiness fixture".into(),
+                parameters: serde_json::json!({"type":"object"}),
+            }
+        })
+    }
+    fn call<'a>(
+        &'a self,
+        _: String,
+    ) -> gents_loop::tool::BoxFuture<'a, Result<String, gents_loop::tool::ToolError>> {
+        Box::pin(async { panic!("readiness must not execute the script") })
+    }
+}
+
+#[tokio::test]
+async fn hidden_script_readiness_reuses_resolved_record_despite_later_busy() {
+    let (_db, mut runtime) = selected_surface_runtime().await;
+    let document = tools_document(serde_json::json!({
+        "built_ins":{"enable_context_budget":true},
+        "hidden_tool_names":["context_budget"],
+        "integrations":{"plugins":[{"plugin":"fixture/script","tool_calls":true}]}
+    }));
+    let config = AgentToolSurfaceConfig::from_tools_document(
+        "cached-readiness",
+        &document,
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap();
+    let mut plugins = AdmissionFixturePluginHost::script(false);
+    plugins.busy_after_resolution = true;
+    plugins.construct_script = true;
+    let plugins = std::sync::Arc::new(plugins);
+    let surface = config
+        .resolve(&runtime.node, &runtime.node_did, plugins.as_ref())
+        .await
+        .unwrap();
+    assert_eq!(surface.plugin_resolutions().len(), 1);
+    assert!(surface.plugin_resolutions()[0]
+        .1
+        .as_ref()
+        .unwrap()
+        .declaration
+        .imports_host_call());
+    runtime.plugins = plugins.clone();
+    let tools = surface.build_tools(&runtime).await.unwrap();
+    assert!(tools
+        .iter()
+        .find(|tool| tool.name() == "context_budget")
+        .unwrap()
+        .hidden());
+    assert!(!tools
+        .iter()
+        .find(|tool| tool.name() == "script")
+        .unwrap()
+        .hidden());
+    assert_eq!(
+        plugins.resolves.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "readiness must not perform another plugin lookup"
+    );
+    let later = plugins.resolve("fixture/script", None).unwrap_err();
+    assert!(
+        gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(later.as_ref())
+    );
 }

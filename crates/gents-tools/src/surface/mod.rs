@@ -752,24 +752,13 @@ impl ToolSurface {
         if self.hidden_tool_names.is_empty() {
             return Ok(tools);
         }
-        let script = self
-            .plugin_tools
-            .iter()
-            .find(|plugin| plugin.tool_name() == "script" && plugin.tool_calls);
-        let script_ready = script
-            .map(|plugin| {
-                runtime
-                    .plugins
-                    .resolve(&plugin.plugin, plugin.digest.as_deref())
-            })
-            .and_then(|result| match result {
-                Ok(record) => Some(record),
-                Err(error) => {
-                    tracing::warn!(cause = %format!("{error:#}"), "script readiness could not be resolved; hidden presentation disabled");
-                    None
-                }
-            })
-            .is_some_and(|record| record.declaration.imports_host_call());
+        let script_ready = self.plugin_resolutions.iter().any(|(plugin, record)| {
+            plugin.tool_name() == "script"
+                && plugin.tool_calls
+                && record
+                    .as_ref()
+                    .is_some_and(|record| record.declaration.imports_host_call())
+        });
         Ok(gents_loop::tool_policy::presentation::present_tools(
             tools,
             &self.hidden_tool_names,
