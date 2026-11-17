@@ -540,7 +540,7 @@ async fn a_runtime_session_install_returns_the_runtimes_outcome_to_the_cli() -> 
     let root_arg = root.to_str().context("pack path")?;
 
     // Previewed through the same session first: it writes nothing.
-    let preview = run_cli_json(
+    let (preview, stderr) = run_cli_json_and_stderr(
         &home,
         &[
             "config",
@@ -553,6 +553,14 @@ async fn a_runtime_session_install_returns_the_runtimes_outcome_to_the_cli() -> 
         ],
     )?;
     assert_eq!(preview["coordinate"], "fixture/sessioned", "{preview}");
+    assert_eq!(
+        preview["notes"],
+        json!([gents_pack::pack::install_review::EXISTING_DOCUMENTS_NOTE])
+    );
+    assert!(
+        stderr.contains(gents_pack::pack::install_review::EXISTING_DOCUMENTS_NOTE),
+        "{stderr}"
+    );
     let installed = "{ PackInstallation { coordinate digest } }";
     assert_eq!(
         graphql_query(&graphql, installed).await?["data"]["PackInstallation"],

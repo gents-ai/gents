@@ -34,7 +34,7 @@ mod views;
 pub struct RuntimeHttpState {
     /// Router-local handshake identity for tests; never overrides process identity in production.
     #[cfg(test)]
-    pub(crate) runtime_build_override: Option<gents_protocol::build_info::BuildInfo>,
+    pub(crate) runtime_build_override: Option<Arc<crate::http::pack_install::RuntimeBuildSource>>,
     /// Address-only endpoint for public connection metadata.
     pub graphql: GraphqlEndpoint,
     /// Served principal; the node's P2P access control admits only it.
@@ -61,12 +61,14 @@ pub struct RuntimeHttpState {
 }
 
 impl RuntimeHttpState {
-    pub(crate) fn pack_install_build(&self) -> gents_protocol::build_info::BuildInfo {
+    pub(crate) async fn pack_install_build(
+        &self,
+    ) -> anyhow::Result<gents_protocol::build_info::BuildInfo> {
         #[cfg(test)]
         if let Some(build) = &self.runtime_build_override {
-            return build.clone();
+            return Arc::clone(build).build_async().await;
         }
-        crate::http::pack_install::runtime_build()
+        crate::http::pack_install::runtime_build_async().await
     }
 
     pub(crate) fn storage_observation(

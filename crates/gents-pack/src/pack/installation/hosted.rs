@@ -117,7 +117,9 @@ impl HostedRejection {
 impl std::fmt::Display for HostedRejection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match (self, self.as_change()) {
-            (_, Some(change)) => std::fmt::Display::fmt(&change, f),
+            (_, Some(change)) => {
+                f.write_str(&change.message_for_surface(super::PackChangeSurface::Hosted))
+            }
             (Self::Other(error), None) if f.alternate() => write!(f, "{error:#}"),
             (Self::Other(error), None) => write!(f, "{error}"),
             (_, None) => Ok(()),

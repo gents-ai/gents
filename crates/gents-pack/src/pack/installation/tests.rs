@@ -219,6 +219,34 @@ fn edited_pack_error_names_the_decision_on_both_surfaces() {
 }
 
 #[test]
+fn document_refusal_remedies_follow_the_surface() {
+    for error in [
+        PackChangeError::Edited {
+            coordinate: "acme/demo".into(),
+            edited: vec!["Tools/t1".into()],
+        },
+        PackChangeError::Differing {
+            coordinate: "acme/demo".into(),
+            differing: vec!["Tools/t1".into()],
+        },
+    ] {
+        let local = error.to_string();
+        let hosted = error.message_for_surface(PackChangeSurface::Hosted);
+        for text in [&local, &hosted] {
+            assert!(text.contains("acme/demo"), "{text}");
+            assert!(text.contains("Tools/t1"), "{text}");
+            assert!(text.contains("--overwrite or --keep"), "{text}");
+        }
+        assert!(local.contains("gents config pack install"), "{local}");
+        assert!(hosted.contains("same install"), "{hosted}");
+        for unavailable in ["pack update", "pack remove", "--home"] {
+            assert!(!hosted.contains(unavailable), "{hosted}");
+        }
+        assert_eq!(HostedRejection::of(error).to_string(), hosted);
+    }
+}
+
+#[test]
 fn pack_change_errors_keep_conflict_retry() {
     use gents_store::config_client::{
         classified_conflict_for_test, is_classified_transaction_conflict, TransactionFailure,

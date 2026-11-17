@@ -1062,6 +1062,24 @@ async fn hosted_install_server(
     plugin_home: &std::path::Path,
     agent: &str,
 ) -> HostedInstallServer {
+    hosted_install_server_with_build(
+        home,
+        plugin_home,
+        agent,
+        std::sync::Arc::new(crate::http::pack_install::RuntimeBuildSource::new(
+            crate::test_support::test_runtime_build(),
+            Vec::new,
+        )),
+    )
+    .await
+}
+
+async fn hosted_install_server_with_build(
+    home: &crate::test_support::ClientHome,
+    plugin_home: &std::path::Path,
+    agent: &str,
+    build: std::sync::Arc<crate::http::pack_install::RuntimeBuildSource>,
+) -> HostedInstallServer {
     use gents_store::identity::NodeIdentity as _;
     let owner = home.node_did().to_owned();
     let binding = home.agent(agent).await;
@@ -1106,7 +1124,7 @@ async fn hosted_install_server(
     )
     .contract
     // Router-local, never the process-global record.
-    .layer(axum::Extension(crate::test_support::test_runtime_build()))
+    .layer(axum::Extension(build))
     .merge(crate::test_support::ForwardingProxy::router(
         home.graphql(),
         std::sync::Arc::new(|_, _| Box::pin(async { crate::test_support::ProxyDecision::Forward })),
@@ -1152,6 +1170,66 @@ fn preview_request(
         grant_authority: false,
         wire: Vec::new(),
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_hosted_handler_yields_while_hashing_core_packs() {
+    let executor = std::thread::current().id();
+    let (started, hashing) = tokio::sync::oneshot::channel();
+    let started = std::sync::Mutex::new(Some(started));
+    let (release, released) = std::sync::mpsc::channel();
+    let released = std::sync::Mutex::new(released);
+    let build = std::sync::Arc::new(crate::http::pack_install::RuntimeBuildSource::new(
+        crate::test_support::test_runtime_build(),
+        move || {
+            assert_ne!(
+                std::thread::current().id(),
+                executor,
+                "hashing ran on the handler executor"
+            );
+            started
+                .lock()
+                .unwrap()
+                .take()
+                .expect("digests computed once")
+                .send(())
+                .unwrap();
+            released.lock().unwrap().recv().unwrap();
+            Vec::new()
+        },
+    ));
+    let home = crate::test_support::ClientHome::new().await;
+    let plugin_home = tempfile::tempdir().unwrap();
+    let server =
+        hosted_install_server_with_build(&home, plugin_home.path(), "hosted-lazy", build.clone())
+            .await;
+    assert!(!build.digests_computed());
+    let pack = documents_fixture();
+    let request = preview_request(plugin_home.path());
+    let preview = crate::http::pack_install_client::preview_remote(
+        &server.endpoint,
+        home.node_did(),
+        &pack,
+        &[],
+        &request,
+        true,
+        crate::test_support::test_runtime_build(),
+    );
+    let progress = async {
+        hashing.await.unwrap();
+        assert!(
+            !build.digests_computed(),
+            "handler yielded before hashing finished"
+        );
+        release.send(()).unwrap();
+    };
+    let (result, ()) = tokio::join!(preview, progress);
+    result.unwrap();
+    assert!(build.digests_computed());
+    assert_eq!(
+        build.clone().build_async().await.unwrap(),
+        crate::test_support::test_runtime_build()
+    );
 }
 
 /// A preview goes through the build-comparing session: a client of another
@@ -1249,6 +1327,15 @@ fn tools_pack(
     tempfile::TempDir,
     gents_pack::pack::resolved_pack::ResolvedPack,
 ) {
+    tools_pack_config(json!({"tools_id": "differ-tools", "display_name": display_name}))
+}
+
+fn tools_pack_config(
+    tools: serde_json::Value,
+) -> (
+    tempfile::TempDir,
+    gents_pack::pack::resolved_pack::ResolvedPack,
+) {
     let root = tempfile::tempdir().unwrap();
     let write = |name: &str, value: serde_json::Value| {
         std::fs::write(root.path().join(name), serde_json::to_vec(&value).unwrap()).unwrap()
@@ -1267,7 +1354,7 @@ fn tools_pack(
         "pack_config.json",
         json!({
             "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
-            "tools": [{"tools_id": "differ-tools", "display_name": display_name}],
+            "tools": [tools],
         }),
     );
     let (bytes, _) = gents_pack::pack::archive::pack_dir(root.path()).unwrap();
@@ -1344,6 +1431,10 @@ async fn a_hosted_install_over_differing_documents_names_them_and_no_values() {
     .await
     .expect("a preview plans the pack without comparing it to the Node");
     assert_eq!(
+        preview.0["notes"],
+        json!([gents_pack::pack::install_review::EXISTING_DOCUMENTS_NOTE])
+    );
+    assert_eq!(
         preview.0["documents"][0]["id"], "differ-tools",
         "{}",
         preview.0
@@ -1381,6 +1472,296 @@ async fn a_hosted_install_over_differing_documents_names_them_and_no_values() {
     assert!(
         kept.to_string().contains(existing),
         "the existing document is untouched: {kept}"
+    );
+}
+
+#[tokio::test]
+async fn hosted_refusals_hide_variable_derived_tools_and_plugin_identifiers() {
+    let home = crate::test_support::ClientHome::new().await;
+    let owner = home.node_did().to_owned();
+    let plugin_home = tempfile::tempdir().unwrap();
+    let server = hosted_install_server(&home, plugin_home.path(), "hosted-private-ids").await;
+    let secret_id = "sk-live-b13c-tools";
+    let secret_plugin = "fixture/sk-live-b13c-plugin";
+    let existing = serde_json::from_value(json!({
+        "tools_id": secret_id, "node_did": owner, "display_name": "existing",
+    }))
+    .unwrap();
+    gents_documents::write_tools_document(
+        &home.access,
+        &existing,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
+    let query = "{ Tools { tools_id display_name } PackInstallation { coordinate } }";
+    let before = home.access.execute(query).await.unwrap();
+    for (tools, class) in [
+        (
+            json!({"tools_id": "${B13C_TOOLS_ID}", "integrations": {"plugins": [{"plugin": "${B13C_PLUGIN}"}]}}),
+            "plugin_unresolved",
+        ),
+        (
+            json!({"tools_id": "${B13C_TOOLS_ID}", "display_name": "replacement"}),
+            "documents_differ",
+        ),
+    ] {
+        let (_root, pack) = tools_pack_config(tools);
+        let mut args = preview_request(plugin_home.path());
+        args.preview = false;
+        args.dependency_variables = vec![
+            format!("B13C_TOOLS_ID={secret_id}"),
+            format!("B13C_PLUGIN={secret_plugin}"),
+        ];
+        let error = crate::http::pack_install_client::install_remote(
+            &server.endpoint,
+            &owner,
+            &pack,
+            &[],
+            &args,
+            true,
+            crate::test_support::test_runtime_build(),
+        )
+        .await
+        .expect_err("the runtime refuses without disclosing rendered identifiers");
+        let text = format!("{error:#}");
+        assert!(text.contains(class), "{text}");
+        for unsafe_text in [
+            secret_id,
+            secret_plugin,
+            "B13C_TOOLS_ID",
+            "B13C_PLUGIN",
+            "${",
+        ] {
+            assert!(!text.contains(unsafe_text), "{text}");
+        }
+        assert_eq!(home.access.execute(query).await.unwrap(), before);
+    }
+}
+
+/// `POST /packs/install` against `server`, signed as its user unless
+/// `signed` is false: the status and the JSON body.
+async fn post_install(server: &HostedInstallServer, body: &Value, signed: bool) -> (u16, Value) {
+    let url = server
+        .endpoint
+        .url()
+        .replace("/api/v0/graphql", "/packs/install");
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let mut request = client.post(url).json(body);
+    if signed {
+        request = server.endpoint.authorize(request).unwrap();
+    }
+    let response = request.send().await.unwrap();
+    let status = response.status().as_u16();
+    (status, response.json().await.unwrap())
+}
+
+/// A `POST /packs/install` failure body: exactly a known class, its outcome,
+/// and the class's description unless the class shows a typed refusal.
+fn post_failure(body: &Value) -> crate::http::pack_install::failure::PackSessionFailureClass {
+    use crate::http::pack_install::failure::PackSessionFailureClass;
+    let keys = body
+        .as_object()
+        .unwrap_or_else(|| panic!("{body}"))
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        keys,
+        ["class", "error", "outcome"]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+        "{body}"
+    );
+    let class = PackSessionFailureClass::from_wire(body["class"].as_str().unwrap())
+        .unwrap_or_else(|| panic!("unknown class: {body}"));
+    if !class.shows_runtime_text() {
+        assert_eq!(body["error"], class.description(), "{body}");
+    }
+    class
+}
+
+/// The legacy `POST /packs/install` answers as the session does: a class, its
+/// description or a typed refusal's own text, and the route's own status and
+/// outcome, never an error chain that quotes a field name, an install
+/// variable or a value rendered from one.
+#[tokio::test]
+async fn post_install_failures_send_a_class_and_no_chain() {
+    use crate::http::pack_install::failure::PackSessionFailureClass as Class;
+    let home = crate::test_support::ClientHome::new().await;
+    let owner = home.node_did().to_owned();
+    let plugin_home = tempfile::tempdir().unwrap();
+    let server = hosted_install_server(&home, plugin_home.path(), "post-private").await;
+    let secret_id = "sk-live-b13c-post-tools";
+    let secret_field = "sk-live-b13c-post-field";
+    let existing = serde_json::from_value(json!({
+        "tools_id": secret_id, "node_did": owner, "display_name": "existing",
+    }))
+    .unwrap();
+    gents_documents::write_tools_document(
+        &home.access,
+        &existing,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
+    let query = "{ Tools { tools_id display_name } PackInstallation { coordinate } }";
+    let before = home.access.execute(query).await.unwrap();
+    let (_root, pack) = tools_pack_config(
+        json!({"tools_id": "${B13C_POST_TOOLS_ID}", "display_name": "replacement"}),
+    );
+    let mut args = preview_request(plugin_home.path());
+    args.preview = false;
+    args.dependency_variables = vec![format!("B13C_POST_TOOLS_ID={secret_id}")];
+    let encode = |build| {
+        crate::http::pack_install::encode_install_request(&pack, &[], &args, &owner, true, build)
+    };
+    let request = encode(crate::test_support::test_runtime_build())
+        .await
+        .unwrap();
+    let mut unknown_field = request.clone();
+    unknown_field[secret_field] = json!(true);
+    let mut other_build = crate::test_support::test_runtime_build();
+    other_build.git_sha = Some("f00dfacef00d".into());
+    let other_build = encode(other_build).await.unwrap();
+
+    for (body, signed, status, outcome, class) in [
+        (&request, false, 401, "not_installed", Class::NotAuthorized),
+        // A decoding error quotes the unknown field's name.
+        (
+            &unknown_field,
+            true,
+            400,
+            "not_installed",
+            Class::InvalidRequest,
+        ),
+        (
+            &other_build,
+            true,
+            409,
+            "not_installed",
+            Class::BuildMismatch,
+        ),
+        // The rendered id is a Node document's: never named.
+        (&request, true, 422, "unconfirmed", Class::DocumentsDiffer),
+    ] {
+        let (code, failure) = post_install(&server, body, signed).await;
+        assert_eq!(code, status, "{failure}");
+        assert_eq!(post_failure(&failure), class, "{failure}");
+        assert_eq!(failure["outcome"], outcome, "{failure}");
+        for unsafe_text in [
+            secret_id,
+            secret_field,
+            "sk-live",
+            "B13C_POST_TOOLS_ID",
+            "${",
+        ] {
+            assert!(!failure.to_string().contains(unsafe_text), "{failure}");
+        }
+        if class == Class::BuildMismatch {
+            let error = failure["error"].as_str().unwrap();
+            assert!(error.contains("f00dfacef00d"), "{error}");
+        }
+        if class == Class::DocumentsDiffer {
+            assert_eq!(failure["error"], class.description(), "{failure}");
+        }
+    }
+    assert_eq!(home.access.execute(query).await.unwrap(), before);
+}
+
+/// An edited document can be one the previous installation wrote under an id
+/// rendered from an install variable. A later install from a literal archive
+/// cannot vouch for that id, so neither the session nor `POST /packs/install`
+/// names it: each sends the class's description, which still names the
+/// overwrite or keep choice.
+#[tokio::test]
+async fn an_edited_refusal_never_names_a_prior_document_rendered_from_a_variable() {
+    use crate::http::pack_install::failure::PackSessionFailureClass as Class;
+    let home = crate::test_support::ClientHome::new().await;
+    let owner = home.node_did().to_owned();
+    let plugin_home = tempfile::tempdir().unwrap();
+    let server = hosted_install_server(&home, plugin_home.path(), "hosted-edited-prior").await;
+    let prior = "sk-live-b13c-prior-tools";
+
+    let (_first_root, first) =
+        tools_pack_config(json!({"tools_id": "${B13C_PRIOR}", "display_name": "first"}));
+    let mut first_args = preview_request(plugin_home.path());
+    first_args.preview = false;
+    first_args.dependency_variables = vec![format!("B13C_PRIOR={prior}")];
+    crate::http::pack_install_client::install_remote(
+        &server.endpoint,
+        &owner,
+        &first,
+        &[],
+        &first_args,
+        true,
+        crate::test_support::test_runtime_build(),
+    )
+    .await
+    .unwrap();
+    let edited = serde_json::from_value(json!({
+        "tools_id": prior, "node_did": owner, "display_name": "operator edit",
+    }))
+    .unwrap();
+    gents_documents::write_tools_document(
+        &home.access,
+        &edited,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
+    let query = "{ Tools { tools_id display_name } PackInstallation { coordinate } }";
+    let before = home.access.execute(query).await.unwrap();
+    assert!(before.to_string().contains("operator edit"), "{before}");
+
+    // The next version is literal and no longer ships the prior document.
+    let (_second_root, second) =
+        tools_pack_config(json!({"tools_id": "literal-tools", "display_name": "second"}));
+    let mut args = preview_request(plugin_home.path());
+    args.preview = false;
+    let unsafe_texts = [prior, "sk-live", "B13C_PRIOR", "${"];
+
+    let error = crate::http::pack_install_client::install_remote(
+        &server.endpoint,
+        &owner,
+        &second,
+        &[],
+        &args,
+        true,
+        crate::test_support::test_runtime_build(),
+    )
+    .await
+    .expect_err("the session refuses the edited document");
+    let text = format!("{error:#}");
+    assert!(text.contains("documents_edited"), "{text}");
+    assert!(text.contains("--overwrite or --keep"), "{text}");
+    for unsafe_text in unsafe_texts {
+        assert!(!text.contains(unsafe_text), "{text}");
+    }
+
+    let body = crate::http::pack_install::encode_install_request(
+        &second,
+        &[],
+        &args,
+        &owner,
+        true,
+        crate::test_support::test_runtime_build(),
+    )
+    .await
+    .unwrap();
+    let (status, failure) = post_install(&server, &body, true).await;
+    assert_eq!(status, 422, "{failure}");
+    assert_eq!(post_failure(&failure), Class::DocumentsEdited, "{failure}");
+    assert_eq!(failure["outcome"], "unconfirmed", "{failure}");
+    assert_eq!(failure["error"], Class::DocumentsEdited.description());
+    for unsafe_text in unsafe_texts {
+        assert!(!failure.to_string().contains(unsafe_text), "{failure}");
+    }
+
+    assert_eq!(
+        home.access.execute(query).await.unwrap(),
+        before,
+        "nothing installed, the edit kept"
     );
 }
 
@@ -1459,7 +1840,9 @@ async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
         Default::default(),
     )
     .contract
-    .layer(axum::Extension(build.clone()))
+    .layer(axum::Extension(std::sync::Arc::new(
+        crate::http::pack_install::RuntimeBuildSource::new(build.clone(), Vec::new),
+    )))
     .merge(crate::test_support::ForwardingProxy::router(
         home.graphql(),
         std::sync::Arc::new(|_, _| Box::pin(async { crate::test_support::ProxyDecision::Forward })),

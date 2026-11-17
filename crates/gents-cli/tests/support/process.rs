@@ -477,6 +477,13 @@ pub fn run_cli_json_with_env(
         .with_context(|| format!("parsing JSON from gents {}", args.join(" ")))
 }
 
+pub fn run_cli_json_and_stderr(home_dir: &Path, args: &[&str]) -> Result<(Value, String)> {
+    let output = run_bounded(cli_command(home_dir, args, &[]), args)?;
+    let stderr = String::from_utf8(output.stderr.clone())?;
+    let stdout = succeeded(output, args)?;
+    Ok((serde_json::from_slice(&stdout)?, stderr))
+}
+
 pub fn run_cli_text(home_dir: &Path, args: &[&str]) -> Result<String> {
     let stdout = succeeded(run_bounded(cli_command(home_dir, args, &[]), args)?, args)?;
     String::from_utf8(stdout)

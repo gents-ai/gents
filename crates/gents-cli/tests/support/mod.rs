@@ -28,10 +28,10 @@ pub use pack_preview::{assert_preview_hides_the_secret, documents_fixture_with_s
 pub use ports::{allocate_port, graphql_url};
 pub use process::{
     cli_bin, desktop_bin, run_cli_failure_stderr, run_cli_failure_stderr_with_env,
-    run_cli_failure_stdout_json, run_cli_json, run_cli_json_with_env, run_cli_text,
-    run_desktop_init_json, run_init_json, spawn_cli, spawn_server, spawn_server_with_env,
-    spawn_server_with_ready_json, spawn_server_with_ready_json_recovering, wait_for_port,
-    ServeProcess,
+    run_cli_failure_stdout_json, run_cli_json, run_cli_json_and_stderr, run_cli_json_with_env,
+    run_cli_text, run_desktop_init_json, run_init_json, spawn_cli, spawn_server,
+    spawn_server_with_env, spawn_server_with_ready_json, spawn_server_with_ready_json_recovering,
+    wait_for_port, ServeProcess,
 };
 pub use waits::{
     canonical_tool_result_text, wait_for_completed_inference_agents, wait_for_completed_tool_calls,

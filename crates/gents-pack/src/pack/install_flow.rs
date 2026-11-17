@@ -346,6 +346,7 @@ pub async fn install_documents_pack_resolved_inner(
             "shared_collections": shared_collections,
             "inference_needs": needs,
             "would_write": false,
+            "notes": [install_review::EXISTING_DOCUMENTS_NOTE],
         });
         if !args.bind_agents.is_empty() {
             preview["bind_agents"] = agent_binding_preview(&args.bind_agents).into();

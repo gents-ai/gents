@@ -55,7 +55,7 @@ pub async fn install_session(
     identity: defra_http::ExtractIdentity,
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
-    #[cfg(test)] build: Option<axum::Extension<gents_protocol::build_info::BuildInfo>>,
+    #[cfg(test)] build: Option<axum::Extension<Arc<super::RuntimeBuildSource>>>,
 ) -> Response {
     #[cfg(test)]
     let state = {
@@ -393,7 +393,10 @@ async fn run_inner(
     // preview proceeds, and nothing is written.
     // Every build this session reports or compares is the router's, so a test
     // router's build stays its own.
-    let runtime_build = state.pack_install_build();
+    let runtime_build = state
+        .pack_install_build()
+        .await
+        .map_err(SessionFailure::not_installed(Class::PreparationFailed))?;
     if let Some(refusal) = super::refuse_client_build(&request.client_build, &runtime_build) {
         return Err(SessionFailure::shown(
             Class::BuildMismatch,
@@ -426,6 +429,7 @@ async fn run_inner(
     }
     .await
     .map_err(SessionFailure::not_installed(Class::InvalidRequest))?;
+    let identifiers = received.identifiers;
     let preparation_failed = SessionFailure::not_installed(Class::PreparationFailed);
     let prepare = async {
         let requested =
@@ -459,11 +463,11 @@ async fn run_inner(
         .await
         {
             Ok(prepared) => prepared,
-            // A refusal that names identifiers only (a plugin that does not
-            // resolve, documents that differ or were edited) is shown as
-            // written; any other is classed by this step.
+            // Typed refusals use provenance-checked identifiers; Edited names
+            // can come from an earlier install and are always class-only.
+            // Any other preparation error is classed by this step.
             Err(error) => {
-                return match SessionFailure::change_refusal(&error) {
+                return match SessionFailure::change_refusal(&error, identifiers) {
                     Some(shown) => Ok(Err(shown)),
                     None => Err(error.into_anyhow()),
                 }
@@ -566,7 +570,7 @@ async fn run_inner(
             // The other half of the handshake: which build proposed this plan.
             // The build this runtime is, supplied by the binary that has the
             // core packs (this crate carries none).
-            "build": state.pack_install_build(),
+            "build": runtime_build,
         }),
     )
     .await
@@ -679,7 +683,7 @@ async fn run_inner(
         .await
         .map_err(|error| match error {
             gents_pack::pack::HostedPackStageError::Rejected(rejection) => {
-                SessionFailure::rejection(rejection)
+                SessionFailure::rejection(rejection, identifiers)
             }
             gents_pack::pack::HostedPackStageError::Unconfirmed(error) => {
                 SessionFailure::unconfirmed(Class::ApplyUnconfirmed)(error)
@@ -722,10 +726,11 @@ async fn preview(
             anyhow::anyhow!("a hosted preview takes a documents pack"),
         ));
     }
+    let identifiers = received.identifiers;
     super::install_owned(state.clone(), home, received, access)
         .await
         .map_err(|error| {
-            SessionFailure::change_refusal(&error).unwrap_or_else(|| {
+            SessionFailure::change_refusal(&error, identifiers).unwrap_or_else(|| {
                 SessionFailure::not_installed(Class::PreviewFailed)(error.into_anyhow())
             })
         })

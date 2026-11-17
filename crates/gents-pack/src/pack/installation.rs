@@ -1143,27 +1143,55 @@ impl gents_store::config_client::TransactionFailure for PluginStoreChangeError {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum PackChangeSurface {
+    Local,
+    Hosted,
+}
+
+fn document_change_message(
+    coordinate: &str,
+    documents: &[String],
+    edited: bool,
+    surface: PackChangeSurface,
+) -> String {
+    let state = if edited {
+        "were edited since it was installed"
+    } else {
+        "already exist on this node with different content"
+    };
+    let mut message = format!(
+        "{} of {coordinate}'s documents {state}: {}. ",
+        documents.len(),
+        documents.join(", "),
+    );
+    if !edited {
+        message.push_str("The pack adopts an existing document only when it matches. Rename or remove them, or decide: ");
+    }
+    message.push_str(
+        "overwrite replaces them with the pack's versions; keep leaves them as they are. ",
+    );
+    message.push_str(match surface {
+        PackChangeSurface::Local if edited => "Decide with --overwrite or --keep on `gents config pack install`, `gents config pack update` or `gents config pack remove`, or options.edited on the agent pack command (a removal deletes overwritten documents)",
+        PackChangeSurface::Local => "Decide with --overwrite or --keep on `gents config pack install`, or options.edited on the agent pack command",
+        PackChangeSurface::Hosted => "Retry the same install with --overwrite or --keep; in the desktop choose overwrite or keep in the install review",
+    });
+    message
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PackChangeError {
     #[error(
-        "{} of {coordinate}'s documents were edited since it was installed: {}. Overwrite replaces \
-         them with the pack's versions (a removal deletes them); keep leaves them as edited. \
-         Decide with --overwrite or --keep on `gents config pack install`, `gents config pack update` or \
-         `gents config pack remove`, or options.edited on the agent pack command",
-        .edited.len(),
-        .edited.join(", ")
+        "{}",
+        document_change_message(coordinate, edited, true, PackChangeSurface::Local)
     )]
     Edited {
         coordinate: String,
         edited: Vec<String>,
     },
     #[error(
-        "{} of {coordinate}'s documents already exist on this node with different content: {}; \
-         the pack adopts an existing document only when it matches. Rename or remove them, or \
-         decide: overwrite replaces them with the pack's versions, keep leaves them as they are \
-         (--overwrite or --keep on `gents config pack install`, options.edited on the agent pack command)",
-        .differing.len(),
-        .differing.join(", ")
+        "{}",
+        document_change_message(coordinate, differing, false, PackChangeSurface::Local)
     )]
     Differing {
         coordinate: String,
@@ -1183,6 +1211,19 @@ pub enum PackChangeError {
 }
 
 impl PackChangeError {
+    pub fn message_for_surface(&self, surface: PackChangeSurface) -> String {
+        match self {
+            Self::Edited { coordinate, edited } => {
+                document_change_message(coordinate, edited, true, surface)
+            }
+            Self::Differing {
+                coordinate,
+                differing,
+            } => document_change_message(coordinate, differing, false, surface),
+            _ => self.to_string(),
+        }
+    }
+
     /// Erasing through `anyhow::Error::from` would hide an access error at the
     /// top of `Other`: a transparent variant's `source()` skips its own inner
     /// error, so a transaction owner or classifier searching the chain could

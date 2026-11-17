@@ -189,6 +189,7 @@ pub async fn encode_install_request(
     .context("packing remote document archives")?
 }
 
+/// A refusal of the session's HTTP upgrade.
 fn refused(status: StatusCode, error: impl std::fmt::Display) -> Response {
     (
         status,
@@ -197,82 +198,101 @@ fn refused(status: StatusCode, error: impl std::fmt::Display) -> Response {
         .into_response()
 }
 
+/// A failed `POST /packs/install`, answered as the session answers: a class
+/// from the fixed vocabulary, with its description or a typed refusal's own
+/// text (`failure::SessionFailure`). No error chain is sent or logged: it can
+/// quote install values and rendered fields.
+fn failed(status: StatusCode, failure: failure::SessionFailure) -> Response {
+    tracing::warn!(
+        class = ?failure.class,
+        outcome = failure.outcome,
+        "pack install request failed"
+    );
+    (status, Json(failure.body())).into_response()
+}
+
 pub async fn install_handler(
     State(state): State<RuntimeHttpState>,
     identity: defra_http::ExtractIdentity,
     headers: HeaderMap,
+    #[cfg(test)] build: Option<axum::Extension<Arc<RuntimeBuildSource>>>,
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
+    use failure::{PackSessionFailureClass as Class, SessionFailure};
+    // Router-local in tests, as for the session, never the process-global record.
+    #[cfg(test)]
+    let state = {
+        let mut state = state;
+        state.runtime_build_override = build.map(|axum::Extension(build)| build);
+        state
+    };
+    let not_installed = |status, class| {
+        failed(
+            status,
+            SessionFailure::not_installed(class)(anyhow::anyhow!("refused")),
+        )
+    };
     let Some(actor) = identity.did().cloned() else {
-        return refused(
-            StatusCode::UNAUTHORIZED,
-            "Client authentication is required.",
-        );
+        return not_installed(StatusCode::UNAUTHORIZED, Class::NotAuthorized);
     };
     let Some(home) = state.home.clone() else {
-        return refused(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "runtime plugin store unavailable",
-        );
+        return not_installed(StatusCode::SERVICE_UNAVAILABLE, Class::PreparationFailed);
     };
     let access = match delegated_install_access(&state, &headers, actor) {
         Ok(access) => access,
-        Err(error) => return refused(StatusCode::UNAUTHORIZED, error),
+        Err(_) => return not_installed(StatusCode::UNAUTHORIZED, Class::NotAuthorized),
     };
     let body = match body {
         Ok(body) => body,
-        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
-            return refused(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                format!(
-                    "remote pack install request exceeds the {MAX_BODY} byte bound \
-                     ({MAX_ARCHIVE_BYTES} compressed archive bytes)"
-                ),
-            )
-        }
-        Err(rejection) => return refused(rejection.status(), rejection.body_text()),
+        Err(rejection) => return not_installed(rejection.status(), Class::InvalidRequest),
     };
     let node_did = state.node_did.clone();
     let received = match tokio::task::spawn_blocking(move || decode_request(&body, &node_did)).await
     {
         Ok(Ok(received)) => received,
-        Ok(Err(error)) => return refused(StatusCode::BAD_REQUEST, error),
-        Err(error) => return refused(StatusCode::INTERNAL_SERVER_ERROR, error),
+        Ok(Err(_)) => return not_installed(StatusCode::BAD_REQUEST, Class::InvalidRequest),
+        Err(_) => return not_installed(StatusCode::INTERNAL_SERVER_ERROR, Class::InvalidRequest),
     };
     if received.root.manifest().metadata.kind != PackKind::Documents {
-        return refused(
-            StatusCode::BAD_REQUEST,
-            "plugin packs require the reviewed install session",
-        );
+        return not_installed(StatusCode::BAD_REQUEST, Class::InvalidRequest);
     }
     // Before anything is planned: a plan prepared by two builds is not one plan.
-    if let Some(refusal) =
-        refuse_client_build(&received.request.client_build, &state.pack_install_build())
-    {
-        return refused(StatusCode::CONFLICT, refusal);
+    let runtime_build = match state.pack_install_build().await {
+        Ok(build) => build,
+        Err(_) => {
+            return not_installed(StatusCode::INTERNAL_SERVER_ERROR, Class::PreparationFailed)
+        }
+    };
+    if let Some(refusal) = refuse_client_build(&received.request.client_build, &runtime_build) {
+        return failed(
+            StatusCode::CONFLICT,
+            SessionFailure::shown(Class::BuildMismatch, refusal.to_string(), "not_installed"),
+        );
     }
+    let identifiers = received.identifiers;
+    let preview = received.request.preview;
     // Detached so a dropped client cannot cancel an install mid-commit.
-    let result = tokio::spawn(async move {
-        install_owned(state, PathBuf::from(home), received, access)
-            .await
-            .map_err(gents_pack::pack::PackChangeError::into_anyhow)
-    })
-    .await;
+    let result = tokio::spawn(install_owned(state, PathBuf::from(home), received, access)).await;
     match result {
         Ok(Ok(value)) => Json(value).into_response(),
-        Ok(Err(error)) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({"error": format!("{error:#}"), "outcome": "unconfirmed"})),
-        )
-            .into_response(),
-        Err(error) => (
+        // This route has always answered a failed install as unconfirmed, and
+        // still does; a refused change is sent by its class and checked text.
+        Ok(Err(error)) => {
+            let mut failure =
+                SessionFailure::change_refusal(&error, identifiers).unwrap_or_else(|| {
+                    SessionFailure::unconfirmed(if preview {
+                        Class::PreviewFailed
+                    } else {
+                        Class::ApplyUnconfirmed
+                    })(error.into_anyhow())
+                });
+            failure.outcome = "unconfirmed";
+            failed(StatusCode::UNPROCESSABLE_ENTITY, failure)
+        }
+        Err(_) => failed(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": format!("pack install outcome unconfirmed: {error}"),
-                "outcome": "unconfirmed",
-            })),
-        )
-            .into_response(),
+            SessionFailure::unconfirmed(Class::ApplyUnconfirmed)(anyhow::anyhow!("join")),
+        ),
     }
 }
 
@@ -290,6 +310,7 @@ struct Received {
     root: ResolvedPack,
     dependencies: Vec<ResolvedPack>,
     request: InstallRequest,
+    identifiers: failure::RefusalIdentifiers,
 }
 
 fn decode_request(body: &[u8], node_did: &str) -> Result<Received> {
@@ -339,7 +360,13 @@ fn decode_install_request(mut request: InstallRequest, node_did: &str) -> Result
         "unsupported remote pack root"
     );
     ensure_exact_closure(&root, &dependencies)?;
+    let identifiers = failure::RefusalIdentifiers::from_packs(
+        &std::iter::once(&root)
+            .chain(dependencies.iter())
+            .collect::<Vec<_>>(),
+    );
     Ok(Received {
+        identifiers,
         root,
         dependencies,
         request,
@@ -387,6 +414,7 @@ async fn install_owned(
         root,
         dependencies,
         request,
+        ..
     } = received;
     let explicit = request.explicit;
     let args = DocumentsInstallRequest {
@@ -442,19 +470,19 @@ mod tests;
 /// command that never serves an install hashes no archive.
 pub struct RuntimeBuildSource {
     facts: gents_protocol::build_info::BuildInfo,
-    core_packs: fn() -> Vec<gents_protocol::build_info::CorePackBuild>,
+    core_packs: Box<dyn Fn() -> Vec<gents_protocol::build_info::CorePackBuild> + Send + Sync>,
     resolved: std::sync::OnceLock<gents_protocol::build_info::BuildInfo>,
 }
 
 impl RuntimeBuildSource {
     /// The version facts now, the core-pack digests on first use.
-    pub fn new(
-        facts: gents_protocol::build_info::BuildInfo,
-        core_packs: fn() -> Vec<gents_protocol::build_info::CorePackBuild>,
-    ) -> Self {
+    pub fn new<F>(facts: gents_protocol::build_info::BuildInfo, core_packs: F) -> Self
+    where
+        F: Fn() -> Vec<gents_protocol::build_info::CorePackBuild> + Send + Sync + 'static,
+    {
         Self {
             facts,
-            core_packs,
+            core_packs: Box::new(core_packs),
             resolved: std::sync::OnceLock::new(),
         }
     }
@@ -468,25 +496,31 @@ impl RuntimeBuildSource {
         })
     }
 
+    pub async fn build_async(self: Arc<Self>) -> Result<gents_protocol::build_info::BuildInfo> {
+        tokio::task::spawn_blocking(move || self.build().clone())
+            .await
+            .context("runtime build computation failed")
+    }
+
     /// Whether the core-pack digests have been computed yet.
     pub fn digests_computed(&self) -> bool {
         self.resolved.get().is_some()
     }
 }
 
-static RUNTIME_BUILD: std::sync::OnceLock<RuntimeBuildSource> = std::sync::OnceLock::new();
+static RUNTIME_BUILD: std::sync::OnceLock<Arc<RuntimeBuildSource>> = std::sync::OnceLock::new();
 
 /// Record this process's build: its version facts, and how to digest its core
 /// packs when an install first needs them. Called once by the binary before
 /// any command runs; a later call keeps the first. For the binary only: a
 /// test gives its router a build instead (`RuntimeHttpState::pack_install_build`).
 pub fn record_runtime_build(source: RuntimeBuildSource) {
-    let _ = RUNTIME_BUILD.set(source);
+    let _ = RUNTIME_BUILD.set(Arc::new(source));
 }
 
 /// The registered source, if the binary registered one.
 pub fn runtime_build_source() -> Option<&'static RuntimeBuildSource> {
-    RUNTIME_BUILD.get()
+    RUNTIME_BUILD.get().map(Arc::as_ref)
 }
 
 /// This process's build as the handshake reports it. A process that recorded
@@ -497,6 +531,13 @@ pub fn runtime_build() -> gents_protocol::build_info::BuildInfo {
         .get()
         .map(|source| source.build().clone())
         .unwrap_or(gents_protocol::build_info::BuildInfo::UNVERIFIABLE)
+}
+
+pub async fn runtime_build_async() -> Result<gents_protocol::build_info::BuildInfo> {
+    match RUNTIME_BUILD.get() {
+        Some(source) => Arc::clone(source).build_async().await,
+        None => Ok(gents_protocol::build_info::BuildInfo::UNVERIFIABLE),
+    }
 }
 
 /// The runtime's half of the build check: the client's build against the

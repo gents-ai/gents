@@ -6,6 +6,16 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Hosted pack previews now state, in human output and the JSON `notes` list,
+  that they do not compare existing document bodies. Hosted conflict refusals
+  offer retry decisions on the same install rather than local update/remove
+  commands, and omit identifier text when its literal provenance is not known.
+  Core-pack build digests stay lazy; runtime install handshakes compute them
+  off the asynchronous executor.
+  Legacy `POST /packs/install` failure bodies gain `class` and use class or
+  checked typed text instead of raw error chains; statuses and outcomes stay
+  unchanged.
+
 - An application pairing no longer reinstalls its collections on authority
   read before its author lost the P2P mutation grant: each install re-reads
   the author's authority after the operations before it, and a change to the

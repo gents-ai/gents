@@ -210,6 +210,12 @@ pub(super) async fn install_documents_command_with_local(
     let (receipt, failed_step, warnings) =
         install_documents_report(access, pack, args, local_endpoint).await?;
     print_install_warnings(&warnings);
+    if args.preview {
+        eprintln!(
+            "note: {}",
+            gents_pack::pack::install_review::EXISTING_DOCUMENTS_NOTE
+        );
+    }
     crate::print_json(&receipt)?;
     match failed_step {
         Some(failed) => Err(anyhow::anyhow!(
