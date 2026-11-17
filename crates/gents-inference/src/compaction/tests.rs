@@ -1698,7 +1698,7 @@ fn strip_marks_already_truncated_output_without_sniffing_the_word() {
     ] {
         let messages = vec![
             tool_call_msg("bash", r#"{"command": "echo hi"}"#),
-            tool_result_msg("call-1", notice),
+            tool_result_msg("call-1", &format!("{}{notice}", "x".repeat(300))),
         ];
         let (stripped, _) = strip_tool_results(messages);
         assert!(
