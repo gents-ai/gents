@@ -11,6 +11,10 @@ pub enum RuntimeAccessError {
     Configuration(#[from] ConfigClientError),
     #[error("the selected runtime refused this client access operation")]
     Refused,
+    #[error(
+        "the client access request expired before the runtime retained it; request access again"
+    )]
+    ExpiredUnretained,
     #[error("the runtime returned HTTP {0} for the client access operation")]
     Status(reqwest::StatusCode),
     #[error("sending the client access operation")]
@@ -94,6 +98,9 @@ impl GraphqlEndpoint {
         match response.status() {
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
                 Err(RuntimeAccessError::Refused)
+            }
+            reqwest::StatusCode::GONE if path == REQUEST_PATH => {
+                Err(RuntimeAccessError::ExpiredUnretained)
             }
             status if status.is_success() => Ok(response.json().await?),
             status => Err(RuntimeAccessError::Status(status)),

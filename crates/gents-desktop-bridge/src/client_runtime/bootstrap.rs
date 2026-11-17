@@ -74,6 +74,7 @@ impl ClientRuntime {
             delivery_started: Default::default(),
             delivery_cancel: Default::default(),
             delivery_lock: Default::default(),
+            access_requests: Default::default(),
             node: journal.node().clone(),
             journal,
             paths,

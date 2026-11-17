@@ -118,10 +118,33 @@ inductive AccessDecision where
   | approve | reject | revoke
   deriving BEq, DecidableEq, Repr
 
-/-- A request authenticates its exact client, runtime and immutable intent.
-Replaying a retained request observes it; it never resets a withdrawn grant. -/
-def acceptsRequest (callerMatches nodeMatches signatureVerified retainedExists retainedSame fresh : Bool) : Bool :=
-  callerMatches && nodeMatches && signatureVerified && (!retainedExists || retainedSame) && (retainedSame || fresh)
+inductive RequestAdmission where
+  | accepted | refused | expired
+  deriving BEq, DecidableEq, Repr
+
+/-- A signed request authenticates its exact caller, runtime and immutable
+intent. A retained request remains observable after its signing window ends.
+Only a verified, unretained request whose valid window has expired permits a
+new signed request; neither that response nor renewal grants access. -/
+def admitRequest (callerMatches nodeMatches signatureVerified retainedExists retainedSame fresh expired : Bool) : RequestAdmission :=
+  if !callerMatches || !nodeMatches || !signatureVerified then .refused
+  else if retainedExists then if retainedSame then .accepted else .refused
+  else if fresh then .accepted
+  else if expired then .expired
+  else .refused
+
+theorem expired_unretained_request_can_be_renewed :
+    admitRequest true true true false false false true = .expired := rfl
+
+theorem retained_request_is_observed_after_expiry :
+    admitRequest true true true true true false true = .accepted := rfl
+
+theorem another_caller_cannot_renew (node signature retained same fresh expired : Bool) :
+    admitRequest false node signature retained same fresh expired = .refused := by
+  simp [admitRequest]
+
+theorem changed_retained_intent_cannot_renew (fresh expired : Bool) :
+    admitRequest true true true true false fresh expired = .refused := rfl
 
 /-- The native grant owner records provenance before granting OperatorUser
 and Node administration. A decision reports success only after those owners

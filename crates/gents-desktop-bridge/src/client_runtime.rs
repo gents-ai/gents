@@ -69,6 +69,7 @@ pub struct ClientRuntime {
     delivery_started: std::sync::atomic::AtomicBool,
     delivery_cancel: tokio_util::sync::CancellationToken,
     delivery_lock: Mutex<()>,
+    access_requests: Mutex<()>,
     runtime_endpoints: Arc<gents_store::config_client::runtime_endpoints::RuntimeEndpoints>,
     journal: Arc<ClientJournal>,
     paths: DesktopPaths,

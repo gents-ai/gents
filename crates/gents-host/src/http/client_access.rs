@@ -27,6 +27,7 @@ fn respond(
     match result {
         Ok(receipt) => Json(receipt).into_response(),
         Err(ClientAccessError::Refused) => StatusCode::FORBIDDEN.into_response(),
+        Err(ClientAccessError::ExpiredUnretained) => StatusCode::GONE.into_response(),
         Err(error)
             if error
                 .config_client_error()

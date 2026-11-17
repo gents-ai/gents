@@ -45,3 +45,11 @@ attribute [conformance_function] Action.disrupts Action.contendsWithUpdate admis
 end ServiceLifecycle
 
 attribute [conformance_function] ClientAuthoredOutbox.acknowledge
+
+namespace ClientRuntimeAccess
+
+deriving instance Lean.ToJson for RequestAdmission
+
+attribute [conformance_function] admitRequest
+
+end ClientRuntimeAccess

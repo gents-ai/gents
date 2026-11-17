@@ -29,19 +29,38 @@ impl ClientAccessRequest {
     }
 }
 
-pub fn accepts_request(
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestAdmission {
+    Accepted,
+    Refused,
+    Expired,
+}
+
+pub fn admit_request(
     caller_matches: bool,
     node_matches: bool,
     signature_verified: bool,
     retained_exists: bool,
     retained_same: bool,
     fresh: bool,
-) -> bool {
-    caller_matches
-        && node_matches
-        && signature_verified
-        && (!retained_exists || retained_same)
-        && (retained_same || fresh)
+    expired: bool,
+) -> RequestAdmission {
+    if !caller_matches || !node_matches || !signature_verified {
+        RequestAdmission::Refused
+    } else if retained_exists {
+        if retained_same {
+            RequestAdmission::Accepted
+        } else {
+            RequestAdmission::Refused
+        }
+    } else if fresh {
+        RequestAdmission::Accepted
+    } else if expired {
+        RequestAdmission::Expired
+    } else {
+        RequestAdmission::Refused
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

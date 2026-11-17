@@ -54,6 +54,14 @@ impl ClientRuntime {
 
     pub async fn request_runtime_access(
         &self,
+        connection: RuntimeConnection,
+    ) -> Result<ClientAccessReceipt> {
+        let _access = self.access_requests.lock().await;
+        self.request_runtime_access_locked(connection).await
+    }
+
+    async fn request_runtime_access_locked(
+        &self,
         mut connection: RuntimeConnection,
     ) -> Result<ClientAccessReceipt> {
         let endpoint = self
@@ -67,6 +75,7 @@ impl ClientRuntime {
             )
             .await?;
         connection.access_request = Some(request.clone());
+        connection.access_state = None;
         self.connect_runtime(connection.clone()).await?;
         let receipt = endpoint.request_runtime_access(&request).await?;
         connection.access_state = Some(receipt.state);
@@ -77,6 +86,7 @@ impl ClientRuntime {
     }
 
     pub async fn runtime_access_status(&self, node_did: &str) -> Result<ClientAccessReceipt> {
+        let _access = self.access_requests.lock().await;
         let mut connection = self
             .directory
             .records()
@@ -87,11 +97,20 @@ impl ClientRuntime {
             .access_request
             .as_ref()
             .context("this connection has no retained access request")?;
-        let receipt = self
+        let receipt = match self
             .runtime_endpoints
             .endpoint(node_did, &connection.graphql)?
             .request_runtime_access(request)
-            .await?;
+            .await
+        {
+            Ok(receipt) => receipt,
+            Err(
+                gents_store::config_client::runtime_access::RuntimeAccessError::ExpiredUnretained,
+            ) => {
+                return self.request_runtime_access_locked(connection).await;
+            }
+            Err(error) => return Err(error.into()),
+        };
         if connection.access_state != Some(receipt.state) {
             connection.access_state = Some(receipt.state);
             self.directory.upsert(connection).await?;

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use gents_protocol::{
     client_access::{
-        accepts_request, ClientAccessDecision, ClientAccessReceipt, ClientAccessRequest,
-        ClientAccessState, DecideClientAccess,
+        admit_request, ClientAccessDecision, ClientAccessReceipt, ClientAccessRequest,
+        ClientAccessState, DecideClientAccess, RequestAdmission,
     },
     document_query::{
         fields::{client_runtime_access_request as fields, node as node_fields},
@@ -28,6 +28,8 @@ use crate::{
 pub enum ClientAccessError {
     #[error("this client access request is not authorized")]
     Refused,
+    #[error("the client access request expired before this runtime retained it")]
+    ExpiredUnretained,
     #[error("the client access request has an invalid retained record")]
     Record,
     #[error(fmt = gents_protocol::error_chain::held)]
@@ -162,30 +164,38 @@ impl ClientAccessOwner {
             .as_ref()
             == Some(&request);
         let now = Utc::now();
-        let fresh = DateTime::parse_from_rfc3339(&request.issued_at)
+        let (fresh, expired) = DateTime::parse_from_rfc3339(&request.issued_at)
             .ok()
             .zip(DateTime::parse_from_rfc3339(&request.expires_at).ok())
-            .is_some_and(|(issued, expires)| {
-                issued <= now && now < expires && expires - issued <= chrono::Duration::minutes(5)
-            });
+            .map(|(issued, expires)| {
+                let valid = issued < expires && expires - issued <= chrono::Duration::minutes(5);
+                (
+                    valid && issued <= now && now < expires,
+                    valid && expires <= now,
+                )
+            })
+            .unwrap_or((false, false));
         let signature = crate::identity::verify_did_signature(
             &request.client_did,
             &request.signing_payload()?,
             &request.signature,
         )
         .unwrap_or(false);
-        if request.request_id.is_empty()
-            || request.label.trim().is_empty()
-            || !accepts_request(
-                caller.actor().as_str() == request.client_did,
-                request.node_did == self.identity.did(),
-                signature,
-                existing.is_some(),
-                same,
-                fresh,
-            )
-        {
+        if request.request_id.is_empty() || request.label.trim().is_empty() {
             return Err(ClientAccessError::Refused);
+        }
+        match admit_request(
+            caller.actor().as_str() == request.client_did,
+            request.node_did == self.identity.did(),
+            signature,
+            existing.is_some(),
+            same,
+            fresh,
+            expired,
+        ) {
+            RequestAdmission::Accepted => {}
+            RequestAdmission::Refused => return Err(ClientAccessError::Refused),
+            RequestAdmission::Expired => return Err(ClientAccessError::ExpiredUnretained),
         }
         let node_doc_id = self.node_document(&runtime).await?;
         if let Some(existing) = existing {

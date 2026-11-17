@@ -43,27 +43,6 @@ def clientGraph : Family GraphInput Bool where
       [false, true].map fun actorMatches => { remote, presented, actorMatches }
   model := fun i => clientGraphReady i.remote i.presented i.actorMatches
 
-structure AccessRequestInput where
-  callerMatches : Bool
-  nodeMatches : Bool
-  signatureVerified : Bool
-  retainedExists : Bool
-  retainedSame : Bool
-  fresh : Bool
-  deriving ToJson
-
-@[conformance_family]
-def accessRequest : Family AccessRequestInput Bool where
-  inputs := [false, true].flatMap fun callerMatches =>
-    [false, true].flatMap fun nodeMatches =>
-      [false, true].flatMap fun signatureVerified =>
-        [false, true].flatMap fun retainedExists =>
-        [false, true].flatMap fun retainedSame =>
-          [false, true].map fun fresh =>
-            { callerMatches, nodeMatches, signatureVerified, retainedExists, retainedSame, fresh }
-  model := fun i => ClientRuntimeAccess.acceptsRequest i.callerMatches i.nodeMatches
-    i.signatureVerified i.retainedExists i.retainedSame i.fresh
-
 structure AccessDecisionInput where
   before : String
   decision : String
