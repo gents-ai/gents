@@ -536,8 +536,8 @@ mod tests {
     use serde_json::json;
 
     use super::{accounts_json, claude_auth_gate, reason_next_step};
-    use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
     use gents_inference::auth::credential::AccountSummary;
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
     /// Every reason a diagnose entry states has a step an operator can take; the
     /// reader cause names the grant, against this node's home.

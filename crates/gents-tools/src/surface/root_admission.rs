@@ -207,7 +207,8 @@ impl std::fmt::Display for ReaderMissingText<'_> {
             ..
         } = self.0
         else {
-            return formatter.write_str("agent has host tools under a workspace root it is not a reader of");
+            return formatter
+                .write_str("agent has host tools under a workspace root it is not a reader of");
         };
         match (root, home) {
             (Some(root), Some(home)) => formatter.write_str(
