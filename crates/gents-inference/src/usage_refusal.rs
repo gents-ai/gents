@@ -99,6 +99,55 @@ pub fn standing_refusal(
     })
 }
 
+/// The standing refusal for one backend, read from the durable evidence of the
+/// calls made through it.
+///
+/// Diagnostics only, and **partial by construction**: `InferenceCall` carries no
+/// account identity, so this asks for the calls this backend made in the
+/// evidence window and reports them as this node's evidence, not the provider's
+/// whole account view. A read that fails says `None` — a limitation of the
+/// diagnostics must not look like a refusal.
+pub async fn refusal_for_backend(
+    access: &gents_store::config_client::ConfigAccess,
+    backend: &gents_documents::inference_backend::InferenceBackend,
+    now: DateTime<Utc>,
+) -> Option<UsageRefusalView> {
+    let since = evidence_since(now);
+    let backend_id = gents_store::graphql::escape_graphql_string(&backend.backend_id);
+    let since = gents_store::graphql::escape_graphql_string(&since.to_rfc3339());
+    let query = format!(
+        r#"{{ InferenceCall(filter: {{backend_id: {{_eq: "{backend_id}"}}, created_at: {{_gt: "{since}"}}}}, order: {{created_at: DESC}}, limit: 200) {{ call_state failure_reason created_at provider_total_tokens }} }}"#
+    );
+    let response = access.execute(&query).await.ok()?;
+    let rows = response["data"]["InferenceCall"].as_array()?;
+    let mut calls = Vec::with_capacity(rows.len());
+    let mut consumed: u64 = 0;
+    let mut saw_usage = false;
+    for row in rows {
+        let Some(created_at) = row["created_at"]
+            .as_str()
+            .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+            .map(|at| at.with_timezone(&Utc))
+        else {
+            continue;
+        };
+        // The node's own consumption: unique calls only, and the provider's
+        // total when it reported one rather than a sum of subcomponents.
+        if let Some(total) = row["provider_total_tokens"].as_u64() {
+            consumed = consumed.saturating_add(total);
+            saw_usage = true;
+        }
+        calls.push(CallEvidence {
+            at: created_at,
+            call_state: row["call_state"].as_str().unwrap_or_default().to_owned(),
+            failure_reason: row["failure_reason"].as_str().map(str::to_owned),
+        });
+    }
+    // The classifier's detail is already bounded (DETAIL_MAX_CHARS), so the view
+    // takes it as it is rather than truncating a second time.
+    standing_refusal(&calls, now, saw_usage.then_some(consumed), usize::MAX)
+}
+
 /// The refusal text an operator sees: bounded, never the whole body.
 fn bounded_detail(detail: &str, limit: usize) -> String {
     if detail.chars().count() <= limit {

@@ -761,9 +761,13 @@ pub async fn read_node_usage(
                 .await
                 .ok()
                 .flatten();
+            // A standing refusal, from the durable evidence of this account's
+            // calls. Diagnostics only: it never changes the outcome or a route.
+            let refusal = crate::usage_refusal::refusal_for_backend(&access, &backend, now).await;
             AccountUsageRead {
                 outcome,
                 usage: Some(usage_view(stored.as_ref(), backend.provider_kind, now)),
+                refusal,
                 ..entry
             }
         }
