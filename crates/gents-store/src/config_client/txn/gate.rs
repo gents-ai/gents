@@ -46,6 +46,7 @@ pub struct LocalConfigAccess {
     /// The runtime key's derivation proof, held only by an access its host
     /// built with that key; staging as an Agent requires it.
     pub(super) agent_proof: Option<crate::identity::RuntimeAgentProof>,
+    pub(super) presented_delegation: Option<crate::config_client::user_write::PresentedDelegation>,
 }
 
 impl LocalConfigAccess {
@@ -59,6 +60,7 @@ impl LocalConfigAccess {
             client_signed_writes: false,
             client_endpoint: None,
             agent_proof: None,
+            presented_delegation: None,
         }
     }
 
@@ -69,6 +71,20 @@ impl LocalConfigAccess {
         }
         self.agent_proof = Some(proof);
         true
+    }
+
+    pub(crate) fn with_presented_delegation(
+        mut self,
+        presented: crate::config_client::user_write::PresentedDelegation,
+    ) -> Self {
+        self.presented_delegation = Some(presented);
+        self
+    }
+
+    pub(crate) fn presented_delegation(
+        &self,
+    ) -> Option<crate::config_client::user_write::PresentedDelegation> {
+        self.presented_delegation.clone()
     }
 
     pub(crate) fn with_identity(mut self, identity: identity::Did) -> Self {
@@ -151,6 +167,7 @@ impl LocalConfigAccess {
             client_signed_writes: false,
             client_endpoint: None,
             agent_proof: None,
+            presented_delegation: None,
         })
     }
 

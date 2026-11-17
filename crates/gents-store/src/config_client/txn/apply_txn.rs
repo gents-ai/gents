@@ -54,6 +54,9 @@ pub struct ConfigApplyTxn<'a> {
     /// The node whose own loopback endpoint carries this HTTP transaction,
     /// when an embedded access routed its client-signed writes through it.
     pub(super) loopback_node: Option<Arc<EmbeddedNode>>,
+    /// The Vera delegation of the direct request this embedded transaction
+    /// serves for its User actor.
+    pub(super) presented_delegation: Option<crate::config_client::user_write::PresentedDelegation>,
 }
 
 pub(super) enum EmbeddedTransactionPurpose {
@@ -257,6 +260,7 @@ impl<'a> ConfigApplyTxn<'a> {
             publication_observer: None,
             pack_approval: None,
             loopback_node: None,
+            presented_delegation: None,
             operation: Some(operation.as_str()),
         })
     }
@@ -383,6 +387,7 @@ impl<'a> ConfigApplyTxn<'a> {
                 publication_observer: None,
                 pack_approval: None,
                 loopback_node: None,
+                presented_delegation: None,
                 operation: None,
             });
         }
@@ -412,6 +417,7 @@ impl<'a> ConfigApplyTxn<'a> {
             publication_observer: None,
             pack_approval: None,
             loopback_node: None,
+            presented_delegation: None,
             operation: None,
         };
         Ok(txn)

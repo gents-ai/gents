@@ -4,12 +4,16 @@ use std::sync::Arc;
 use gents_protocol::delegation_audience::{DelegationAudience, ReportedDelegationAudience};
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
+use gents_store::config_client::user_write::{PresentedDelegation, UserWriteRefusal};
+use gents_store::config_client::{
+    prepare_pack_evidence_from_history, ConfigClientError, PackApprovalScope, PackMutation,
+};
 use gents_store::config_client::{ClientSigningCapability, ConfigAccess, GraphqlEndpoint};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use gents_store::local::backend_protection::{
     BackendProtectionError, FreshBackendStore, ProtectedBackendStore,
 };
-use gents_store::local::document_acp::{DocumentAcp, DocumentAcpError};
+use gents_store::local::document_acp::{DocumentAcp, DocumentAcpError, HttpEdge};
 use gents_store::local::home::{self, StoreLock};
 use gents_store::local::store_key::StoreKey;
 
@@ -336,7 +340,12 @@ async fn serve(
         .start_node_with_projection(
             &home.key,
             home.node.clone(),
-            Some(defra_node::HttpConfig::with_listener(listener)?),
+            Some(
+                defra_node::HttpConfig::with_listener(listener)?.with_router_transform(Arc::new({
+                    let edge = HttpEdge::new(document_acp, home.node.did());
+                    move |router| edge.wrap(router)
+                })),
+            ),
             None,
             Arc::new(crate::surface::ToolCeiling::meta_only()),
             Vec::new(),
@@ -501,12 +510,16 @@ async fn a_user_writes_over_http_under_a_delegation_its_client_minted() -> anyho
     assert_eq!(owner_on_vera(&node, &by_node).await?, Some(node_did));
     assert!(!reads_task(&node, &stranger_did, &by_node).await?);
 
-    let unregistered = create_task(
+    let refused = create_task(
         &as_user(&url, &user, ReportedDelegationAudience::Absent)?,
         "identity-token",
     )
-    .await?;
-    assert_eq!(owner_on_vera(&node, &unregistered).await?, None);
+    .await;
+    assert!(
+        refused.is_err(),
+        "an identity token is refused on a Vera home"
+    );
+    assert_eq!(tasks(&node).await?, ["delegated", "by-node"]);
 
     node.shutdown().await?;
     Ok(())
@@ -538,6 +551,187 @@ async fn a_user_writes_over_http_on_the_node_store_as_before() -> anyhow::Result
     assert!(reads_task(&node, &user_did, &created).await?);
     assert!(!reads_task(&node, &identity::Did::new(stranger.did())?, &created).await?);
 
+    node.shutdown().await?;
+    Ok(())
+}
+
+fn presented(
+    node: &defra_node::Node,
+    user: &ClientSigningCapability,
+    token: String,
+) -> Option<PresentedDelegation> {
+    let context = defra_core::RequestContext::default()
+        .with_identity(Some(user.did().to_owned()))
+        .with_bearer(Some(user.did().to_owned()), Some(token));
+    PresentedDelegation::of_request(node, &context, user.did())
+}
+
+/// A User's create the runtime makes in its own process from the graph that
+/// User's client signed, as a hosted pack install does.
+async fn create_task_in_process(
+    node: &Arc<defra_node::Node>,
+    home: &Home,
+    user: &ClientSigningCapability,
+    presented: Option<PresentedDelegation>,
+    task: &str,
+) -> Result<String, ConfigClientError> {
+    let scope = PackApprovalScope {
+        node_did: home.node.did().to_owned(),
+        pack_digests: vec!["sha256:fixture".into()],
+        nonce: "embedded-vera".into(),
+    };
+    let mutation = PackMutation::Create {
+        collection: "Task".into(),
+        input: serde_json::json!({ "task_id": task }),
+    };
+    let evidence = prepare_pack_evidence_from_history(user, &scope, &mutation, None)
+        .await
+        .map_err(|error| ConfigClientError::PackEvidence(Box::new(error)))?;
+    let user_did =
+        identity::Did::new(user.did()).map_err(ConfigClientError::RelationshipTargetIdentity)?;
+    let access =
+        ConfigAccess::local_as(node.clone(), user_did).with_presented_delegation(presented);
+    let created = access
+        .transact_verified_pack("test.embedded_vera.in_process_create", |txn| {
+            let (scope, mutation, evidence) = (scope.clone(), mutation.clone(), evidence.clone());
+            Box::pin(async move {
+                txn.apply(&scope, &mutation, evidence)
+                    .await
+                    .map_err(|error| ConfigClientError::PackEvidence(Box::new(error)))
+            })
+        })
+        .await
+        .map_err(|failed| failed.error)?;
+    Ok(gents_store::graphql::created_doc_id(&created, "Task")?)
+}
+
+fn refusal(error: &ConfigClientError) -> Option<UserWriteRefusal> {
+    match error {
+        ConfigClientError::UserWrite(refusal) => Some(*refusal),
+        ConfigClientError::PackEvidence(evidence) => match evidence.as_ref() {
+            gents_store::config_client::PackEvidenceError::Config(inner) => refusal(inner),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[tokio::test]
+async fn a_client_signed_create_in_the_runtime_process_is_owned_by_its_user_on_vera(
+) -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let home = home(directory.path(), "in-process").await?;
+    FreshBackendStore::observe(&home.data, &home.lock)
+        .await?
+        .initialize(&home.key, &home.node, DocumentAcp::Vera)
+        .await?;
+    let node = start(&home, DocumentAcp::Vera).await?;
+    let user = client_key(directory.path(), "user.key").await?;
+    let stranger = client_key(directory.path(), "stranger.key").await?;
+    let user_did = identity::Did::new(user.did())?;
+    ConfigAccess::local_as(node.clone(), identity::Did::new(home.node.did())?)
+        .grant_node_admin(&user_did)
+        .await?;
+    let audience = gents_store::local::document_acp::node_delegation_audience(&node)
+        .expect("a Vera node names its delegation audience");
+    let lifetime = gents_store::config_client::VERA_DELEGATION_LIFETIME;
+
+    let unsigned = create_task_in_process(&node, &home, &user, None, "no-delegation")
+        .await
+        .expect_err("a User's write without a delegation is refused");
+    assert_eq!(
+        refusal(&unsigned),
+        Some(UserWriteRefusal::DelegationRequired)
+    );
+
+    let elsewhere = DelegationAudience {
+        worker: stranger.did().to_owned(),
+        deployment: audience.deployment,
+    };
+    let foreign =
+        gents_store::config_client::mint_with_lifetime_for_test(&user, &elsewhere, lifetime)?;
+    let refused = create_task_in_process(
+        &node,
+        &home,
+        &user,
+        presented(&node, &user, foreign),
+        "other-worker",
+    )
+    .await
+    .expect_err("a delegation for another worker writes nothing");
+    assert_eq!(refusal(&refused), Some(UserWriteRefusal::DelegationRefused));
+
+    let short = std::time::Duration::from_secs(1);
+    let expiring =
+        gents_store::config_client::mint_with_lifetime_for_test(&user, &audience, short)?;
+    let expired = std::time::SystemTime::now() + short + std::time::Duration::from_secs(1);
+    while std::time::SystemTime::now() <= expired {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    let stale = create_task_in_process(
+        &node,
+        &home,
+        &user,
+        presented(&node, &user, expiring),
+        "expired",
+    )
+    .await
+    .expect_err("an expired delegation writes nothing");
+    assert_eq!(refusal(&stale), Some(UserWriteRefusal::DelegationRefused));
+
+    let strangers =
+        gents_store::config_client::mint_with_lifetime_for_test(&stranger, &audience, lifetime)?;
+    let context = defra_core::RequestContext::default()
+        .with_identity(Some(stranger.did().to_owned()))
+        .with_bearer(Some(stranger.did().to_owned()), Some(strangers));
+    let lifted = PresentedDelegation::of_request(&node, &context, stranger.did());
+    let lifted = create_task_in_process(&node, &home, &user, lifted, "lifted")
+        .await
+        .expect_err("another identity's delegation does not carry this User's write");
+    assert_eq!(refusal(&lifted), Some(UserWriteRefusal::DelegationRequired));
+    assert_eq!(tasks(&node).await?, Vec::<String>::new());
+
+    let token =
+        gents_store::config_client::mint_with_lifetime_for_test(&user, &audience, lifetime)?;
+    let created = create_task_in_process(
+        &node,
+        &home,
+        &user,
+        presented(&node, &user, token),
+        "in-process",
+    )
+    .await?;
+    assert!(defra_core::signing::get_identity(user.did()).is_none());
+    assert_eq!(tasks(&node).await?, ["in-process"]);
+    assert_eq!(
+        owner_on_vera(&node, &created).await?,
+        Some(user_did.clone())
+    );
+    assert!(reads_task(&node, &user_did, &created).await?);
+    assert!(!reads_task(&node, &identity::Did::new(stranger.did())?, &created).await?);
+
+    node.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_client_signed_create_in_the_runtime_process_on_the_node_store_is_unchanged(
+) -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let home = home(directory.path(), "in-process-local").await?;
+    FreshBackendStore::observe(&home.data, &home.lock)
+        .await?
+        .initialize(&home.key, &home.node, DocumentAcp::Local)
+        .await?;
+    let node = start(&home, DocumentAcp::Local).await?;
+    let user = client_key(directory.path(), "user.key").await?;
+    let user_did = identity::Did::new(user.did())?;
+    ConfigAccess::local_as(node.clone(), identity::Did::new(home.node.did())?)
+        .grant_node_admin(&user_did)
+        .await?;
+    let created = create_task_in_process(&node, &home, &user, None, "no-delegation").await?;
+    assert_eq!(tasks(&node).await?, ["no-delegation"]);
+    assert!(reads_task(&node, &user_did, &created).await?);
     node.shutdown().await?;
     Ok(())
 }

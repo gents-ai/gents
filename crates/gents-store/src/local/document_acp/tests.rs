@@ -202,3 +202,51 @@ fn signing_with_a_held_user_key_matches_the_lean_model() {
         },
     );
 }
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Author {
+    User,
+    Node,
+    Agent,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Presented {
+    IdentityToken,
+    Delegation,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Edge {
+    Unchanged,
+    DelegationRequired,
+}
+
+#[test]
+fn the_http_edge_matches_the_lean_model() {
+    use crate::config_client::user_write::Author as Caller;
+    gents_lean_vocab::families::identity_user_delegation_edge::replay::<
+        Author,
+        Edge,
+        Presented,
+        Provider,
+    >(|input| {
+        let caller = match input.author {
+            Author::User => Caller::User,
+            Author::Node => Caller::Node,
+            Author::Agent => Caller::Agent,
+        };
+        let presented = match input.presented {
+            Presented::IdentityToken => super::Presented::IdentityToken,
+            Presented::Delegation => super::Presented::Delegation,
+        };
+        match super::edge(document_acp(input.provider), caller, presented) {
+            Ok(()) => Edge::Unchanged,
+            Err(DocumentAcpError::DelegationRequired) => Edge::DelegationRequired,
+            Err(error) => panic!("{error}"),
+        }
+    });
+}

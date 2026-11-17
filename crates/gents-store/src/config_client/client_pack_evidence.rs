@@ -537,6 +537,7 @@ pub(super) async fn apply_pack_evidence(
                 &document,
                 &serde_json::json!({"input": input}),
                 graph,
+                crate::config_client::user_write::WriteKind::Update,
             )
             .await?
         }

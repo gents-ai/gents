@@ -714,6 +714,7 @@ async fn http_relationships_and_ownership_use_the_transaction_actor() {
         publication_observer: None,
         pack_approval: None,
         loopback_node: None,
+        presented_delegation: None,
     };
     txn.add_resource_relationship("Agent", "owned", "parent", "nodes", "node")
         .await

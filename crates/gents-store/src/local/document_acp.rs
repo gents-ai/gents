@@ -11,8 +11,11 @@ use crate::local::store_key::StoreKey;
 
 #[cfg(feature = "vera")]
 mod embedded_vera;
+mod http_edge;
 #[cfg(test)]
 mod tests;
+
+pub use http_edge::HttpEdge;
 
 const VERA_DIR_NAME: &str = "vera";
 const NODE_DIR_NAME: &str = "node";
@@ -79,6 +82,12 @@ pub enum DocumentAcpError {
     )]
     HeldUserKey,
     #[error(
+        "this home decides document access through Vera, where a User's request presents a Vera \
+         delegation its client minted, not an identity token; read the runtime's public status \
+         and mint a delegation for the audience it reports"
+    )]
+    DelegationRequired,
+    #[error(
         "this home's embedded Vera deployment was created under a different {what} than this \
          Gents build and node identity give it; open the home with the Gents version that \
          created it"
@@ -124,6 +133,7 @@ impl DocumentAcpError {
             | Self::NodeKeyCannotSign { .. }
             | Self::NotYetUsable
             | Self::HeldUserKey
+            | Self::DelegationRequired
             | Self::Inspect { .. } => None,
         }
     }
@@ -164,6 +174,40 @@ pub fn node_delegation_audience(node: &defra_node::Node) -> Option<DelegationAud
     {
         let _ = node;
         None
+    }
+}
+
+/// Where `node` decides document access.
+pub fn provider_of(node: &defra_node::Node) -> DocumentAcp {
+    #[cfg(feature = "vera")]
+    {
+        if node.vera_acp().is_some() {
+            return DocumentAcp::Vera;
+        }
+    }
+    let _ = node;
+    DocumentAcp::Local
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presented {
+    IdentityToken,
+    Delegation,
+}
+
+/// What the runtime does with an authenticated request at its HTTP edge
+/// (`Identity.UserDelegation.edge`): `Err` refuses it.
+pub fn edge(
+    provider: DocumentAcp,
+    caller: crate::config_client::user_write::Author,
+    presented: Presented,
+) -> Result<()> {
+    use crate::config_client::user_write::Author;
+    match (provider, caller, presented) {
+        (DocumentAcp::Vera, Author::User, Presented::IdentityToken) => {
+            Err(DocumentAcpError::DelegationRequired)
+        }
+        _ => Ok(()),
     }
 }
 

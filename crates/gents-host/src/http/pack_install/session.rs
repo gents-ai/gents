@@ -86,7 +86,13 @@ pub async fn install_session(
         );
     }
     let runtime_access = ConfigAccess::local_as(node.clone(), runtime_did);
-    let user_access = ConfigAccess::local_as(node, actor.clone());
+    let presented = gents_store::config_client::user_write::PresentedDelegation::of_request(
+        &node,
+        &identity.context(),
+        actor.as_str(),
+    );
+    let user_access =
+        ConfigAccess::local_as(node, actor.clone()).with_presented_delegation(presented);
     upgrade
         .max_message_size(MAX_BODY.saturating_add(128))
         .max_frame_size(MAX_BODY.saturating_add(128))

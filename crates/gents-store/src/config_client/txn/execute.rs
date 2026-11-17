@@ -29,7 +29,12 @@ impl ConfigApplyTxn<'_> {
             crate::graphql::escape_graphql_string(doc_id),
         );
         let response = self
-            .execute_verified_client_mutation(&mutation, &json!({}), graph)
+            .execute_verified_client_mutation(
+                &mutation,
+                &json!({}),
+                graph,
+                crate::config_client::user_write::WriteKind::Delete,
+            )
             .await?;
         super::delete_confirmation::confirm_configuration_delete(&response, collection, doc_id)
     }
@@ -567,8 +572,33 @@ impl ConfigApplyTxn<'_> {
                 let actor = identity
                     .as_ref()
                     .ok_or(ConfigClientError::RelationshipActorRequired)?;
-                let context =
-                    defra_core::RequestContext::default().with_identity(Some(actor.to_string()));
+                let credential = crate::config_client::user_write::signer_credential(
+                    node,
+                    crate::config_client::user_write::author_of(
+                        node,
+                        actor.as_str(),
+                        self.managed_agent_signer().is_some(),
+                    ),
+                    crate::config_client::user_write::Carrier::Direct,
+                    if delete {
+                        crate::config_client::user_write::WriteKind::Delete
+                    } else {
+                        crate::config_client::user_write::WriteKind::Update
+                    },
+                    actor.as_str(),
+                    self.presented_delegation.as_ref(),
+                )?;
+                let context = match credential {
+                    defra_node::SignerCredential::Delegation(token) => {
+                        defra_core::RequestContext::default()
+                            .with_identity(Some(actor.to_string()))
+                            .with_bearer(Some(actor.to_string()), Some(token))
+                    }
+                    defra_node::SignerCredential::None
+                    | defra_node::SignerCredential::RequestBound(_) => {
+                        defra_core::RequestContext::default().with_identity(Some(actor.to_string()))
+                    }
+                };
                 let node = Arc::clone(node);
                 let handle = handle.clone();
                 let (collection, doc_id, relation, target) = (

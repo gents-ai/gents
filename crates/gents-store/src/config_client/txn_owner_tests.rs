@@ -721,6 +721,7 @@ async fn cancelled_after_begin_trace(steps: usize) -> Vec<NativeObservation> {
                     publication_observer: None,
                     pack_approval: None,
                     loopback_node: None,
+                    presented_delegation: None,
                     owed_deliveries: std::sync::Mutex::new(Vec::new()),
                     rerun_notes: Vec::new(),
                 })

@@ -74,6 +74,9 @@ pub mod session_children;
 mod subscription;
 pub mod transport_publication;
 mod txn;
+pub mod user_write;
+#[cfg(test)]
+mod user_write_conformance;
 pub use acp::nac::NodePermission;
 pub use pack_effect::{PackApprovalError, PackEffectApprover, PackReplayTransport};
 pub use subscription::{GraphqlSubscription, SubscriptionEnd, SUBSCRIPTION_RENEWAL_PERIOD};
@@ -518,6 +521,22 @@ impl ConfigAccess {
         Self::Local(Box::new(
             LocalConfigAccess::new(node).with_identity(identity),
         ))
+    }
+
+    /// Carry the Vera delegation the direct request this access serves
+    /// presented, for the writes it makes in this process as its User
+    /// (`Identity.UserDelegation.admitPresented`); a non-local access is
+    /// unchanged.
+    pub fn with_presented_delegation(
+        self,
+        presented: Option<user_write::PresentedDelegation>,
+    ) -> Self {
+        match (self, presented) {
+            (Self::Local(local), Some(presented)) => {
+                Self::Local(Box::new(local.with_presented_delegation(presented)))
+            }
+            (access, _) => access,
+        }
     }
 
     /// The runtime host's own access as its node: it holds the runtime key,

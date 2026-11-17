@@ -10,18 +10,26 @@ use super::apply_txn::TxnBackend;
 use super::fault_injection::after_successful_mutation_for_test;
 use super::native::execute_owned_native;
 use super::{graphql, retry, ConfigApplyTxn, ConfigClientError, Result};
+use crate::config_client::user_write::{self, Carrier, WriteKind};
 use crate::config_client::write_telemetry::{record_slow_native_phase, ConflictSource};
 
 enum VerifiedGraph {
     Create(Arc<db::block::builder::VerifiedClientCreate>),
-    Mutation(Arc<db::block::builder::VerifiedClientMutation>),
+    Mutation(Arc<db::block::builder::VerifiedClientMutation>, WriteKind),
 }
 
 impl VerifiedGraph {
     fn signer_did(&self) -> &str {
         match self {
             Self::Create(graph) => graph.signer_did(),
-            Self::Mutation(graph) => graph.signer_did(),
+            Self::Mutation(graph, _) => graph.signer_did(),
+        }
+    }
+
+    fn write(&self) -> WriteKind {
+        match self {
+            Self::Create(_) => WriteKind::Create,
+            Self::Mutation(_, write) => *write,
         }
     }
 }
@@ -46,9 +54,14 @@ impl ConfigApplyTxn<'_> {
         document: &str,
         variables: &Value,
         graph: Arc<db::block::builder::VerifiedClientMutation>,
+        write: WriteKind,
     ) -> Result<Value> {
-        self.execute_verified_client_graph(document, variables, VerifiedGraph::Mutation(graph))
-            .await
+        self.execute_verified_client_graph(
+            document,
+            variables,
+            VerifiedGraph::Mutation(graph, write),
+        )
+        .await
     }
 
     async fn execute_verified_client_graph(
@@ -69,9 +82,22 @@ impl ConfigApplyTxn<'_> {
         };
         let actor = identity::Did::new(graph.signer_did())
             .map_err(ConfigClientError::RelationshipTargetIdentity)?;
-        if identity.as_ref() != Some(&actor) && self.managed_agent_signer().is_none() {
+        let stored = self.managed_agent_signer().is_some();
+        if identity.as_ref() != Some(&actor) && !stored {
             return Err(ConfigClientError::TransactionActorMismatch);
         }
+        let credential = user_write::signer_credential(
+            node,
+            user_write::author_of(node, actor.as_str(), false),
+            if stored {
+                Carrier::Stored
+            } else {
+                Carrier::Direct
+            },
+            graph.write(),
+            actor.as_str(),
+            self.presented_delegation.as_ref(),
+        )?;
         let node = Arc::clone(node);
         let handle = handle.clone();
         let request = QueryRequest::new(document)
@@ -84,22 +110,12 @@ impl ConfigApplyTxn<'_> {
             async move {
                 match graph {
                     VerifiedGraph::Create(graph) => {
-                        node.execute_verified_create_in_txn(
-                            request,
-                            &handle,
-                            &graph,
-                            defra_node::SignerCredential::None,
-                        )
-                        .await
+                        node.execute_verified_create_in_txn(request, &handle, &graph, credential)
+                            .await
                     }
-                    VerifiedGraph::Mutation(graph) => {
-                        node.execute_verified_mutation_in_txn(
-                            request,
-                            &handle,
-                            &graph,
-                            defra_node::SignerCredential::None,
-                        )
-                        .await
+                    VerifiedGraph::Mutation(graph, _) => {
+                        node.execute_verified_mutation_in_txn(request, &handle, &graph, credential)
+                            .await
                     }
                 }
             },
