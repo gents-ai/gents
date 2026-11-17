@@ -12,6 +12,9 @@ use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 struct PanickingTool;
 
 impl ToolDyn for PanickingTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "panicking_tool".into()
     }

@@ -61,6 +61,7 @@ struct Admitted {
     internal_id: String,
     args: String,
     skipped: Option<String>,
+    rejected: Option<ToolOutcome>,
 }
 
 pub(super) async fn run_batch<H>(
@@ -77,46 +78,75 @@ where
     let mut admitted = Vec::new();
     for (call, internal_id) in calls {
         let args = super::value_to_json_string(&call.function.arguments);
-        let action = match hook.as_ref() {
-            Some(hook) => match handoff.as_ref() {
-                Some(handoff) => {
-                    let (work, reply) = super::admission_work(
-                        Arc::clone(hook),
-                        call.function.name.clone(),
-                        call.call_id.clone(),
-                        internal_id.clone(),
-                        args.clone(),
-                    );
-                    if handoff.send(work).is_err() {
-                        ToolCallHookAction::Terminate {
-                            reason: "tool admission handoff closed".into(),
-                        }
-                    } else {
-                        reply
-                            .await
-                            .unwrap_or_else(|_| ToolCallHookAction::Terminate {
+        // Only presentation-hidden provider names are refused before the hook.
+        // All other names keep the pre-A3 hook-first parallel ordering.
+        let rejected = crate::tool_policy::presentation::admit(
+            tools.as_slice(),
+            &call.function.name,
+            crate::tool_policy::presentation::InvocationOrigin::Provider,
+        )
+        .err()
+        .map(|refusal| ToolOutcome::from_dispatch(&call.function.name, Err(refusal.into())));
+        let rejection_action = match (hook.as_ref(), rejected.as_ref()) {
+            (Some(hook), Some(outcome)) => Some(
+                hook.on_tool_admission_rejected(
+                    &call.function.name,
+                    call.call_id.clone(),
+                    &internal_id,
+                    &args,
+                    outcome,
+                )
+                .await,
+            ),
+            _ => None,
+        };
+        let action = if rejected.is_some() {
+            match rejection_action {
+                Some(HookAction::Terminate { reason }) => ToolCallHookAction::Terminate { reason },
+                _ => ToolCallHookAction::Continue,
+            }
+        } else {
+            match hook.as_ref() {
+                Some(hook) => match handoff.as_ref() {
+                    Some(handoff) => {
+                        let (work, reply) = super::admission_work(
+                            Arc::clone(hook),
+                            call.function.name.clone(),
+                            call.call_id.clone(),
+                            internal_id.clone(),
+                            args.clone(),
+                        );
+                        if handoff.send(work).is_err() {
+                            ToolCallHookAction::Terminate {
                                 reason: "tool admission handoff closed".into(),
-                            })
+                            }
+                        } else {
+                            reply
+                                .await
+                                .unwrap_or_else(|_| ToolCallHookAction::Terminate {
+                                    reason: "tool admission handoff closed".into(),
+                                })
+                        }
                     }
-                }
-                None => {
-                    hook.on_tool_call(
-                        &call.function.name,
-                        call.call_id.clone(),
-                        &internal_id,
-                        &args,
-                    )
-                    .await
-                }
-            },
-            None => ToolCallHookAction::Continue,
+                    None => {
+                        hook.on_tool_call(
+                            &call.function.name,
+                            call.call_id.clone(),
+                            &internal_id,
+                            &args,
+                        )
+                        .await
+                    }
+                },
+                None => ToolCallHookAction::Continue,
+            }
         };
         match action {
             ToolCallHookAction::Terminate { reason } => {
                 if let Some(hook) = hook.as_ref() {
                     for prior in &admitted {
                         let prior: &Admitted = prior;
-                        if prior.skipped.is_none() {
+                        if prior.skipped.is_none() && prior.rejected.is_none() {
                             let _ = hook
                                 .on_tool_result(
                                     &prior.call.function.name,
@@ -136,12 +166,14 @@ where
                 internal_id,
                 args,
                 skipped: Some(reason),
+                rejected,
             }),
             ToolCallHookAction::Continue => admitted.push(Admitted {
                 call,
                 internal_id,
                 args,
                 skipped: None,
+                rejected,
             }),
         }
     }
@@ -151,7 +183,7 @@ where
         .collect();
     let accepted: Vec<_> = admitted
         .iter()
-        .filter(|item| item.skipped.is_none())
+        .filter(|item| item.skipped.is_none() && item.rejected.is_none())
         .map(|item| item.internal_id.clone())
         .collect();
     let batch_token = tokio_util::sync::CancellationToken::new();
@@ -168,7 +200,18 @@ where
                 internal_id,
                 args,
                 skipped,
+                rejected,
             } = item;
+            if let Some(outcome) = rejected {
+                return BatchResult {
+                    call,
+                    internal_id,
+                    args,
+                    outcome: Some(outcome),
+                    skipped: None,
+                    termination: None,
+                };
+            }
             if skipped.is_some() {
                 return BatchResult {
                     call,
@@ -259,7 +302,7 @@ where
     }
     let settled: Vec<_> = results
         .iter()
-        .filter(|result| result.outcome.is_some())
+        .filter(|result| result.outcome.is_some() && accepted.contains(&result.internal_id))
         .map(|result| result.internal_id.clone())
         .collect();
     if !fully_settled(&accepted, &settled) {
@@ -386,6 +429,9 @@ mod control_tests {
         pending_second: bool,
     }
     impl ToolDyn for Probe {
+        fn hidden(&self) -> bool {
+            false
+        }
         fn name(&self) -> String {
             "probe".into()
         }
@@ -649,6 +695,9 @@ mod control_tests {
     }
 
     impl ToolDyn for HeldFirst {
+        fn hidden(&self) -> bool {
+            false
+        }
         fn name(&self) -> String {
             "probe".into()
         }
@@ -791,6 +840,156 @@ mod control_tests {
                     .collect(),
                 terminated: termination.is_some(),
             });
+        }
+    }
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+    use crate::tool::{BoxFuture, ToolDefinition, ToolError};
+    use crate::tool_call_lifecycle::FailureClass;
+    use crate::tool_policy::presentation::{present_tools, PresentedTool};
+    use std::sync::Mutex;
+
+    struct ArgumentGate;
+    impl ToolDyn for ArgumentGate {
+        fn hidden(&self) -> bool {
+            false
+        }
+        fn name(&self) -> String {
+            "argument_gate".into()
+        }
+        fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
+            Box::pin(async {
+                ToolDefinition {
+                    name: "argument_gate".into(),
+                    description: String::new(),
+                    parameters: serde_json::json!({"type":"object"}),
+                }
+            })
+        }
+        fn admit(&self, _: &str) -> Result<(), ToolError> {
+            panic!("parallel pre-hook checks must not perform argument admission")
+        }
+        fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+            Box::pin(async { panic!("the hook skips visible/unknown calls") })
+        }
+    }
+
+    #[derive(Default)]
+    struct OrderHook(Mutex<Vec<String>>);
+    #[async_trait::async_trait]
+    impl SessionHook for OrderHook {
+        type Error = std::convert::Infallible;
+        async fn on_completion_call_with_context(
+            &self,
+            _: &gents_protocol::message::Message,
+            _: &[gents_protocol::message::Message],
+            _: Option<&gents_protocol::message::Message>,
+        ) -> HookAction {
+            HookAction::Continue
+        }
+        async fn on_tool_call(
+            &self,
+            name: &str,
+            _: Option<String>,
+            _: &str,
+            _: &str,
+        ) -> ToolCallHookAction {
+            self.0.lock().unwrap().push(format!("hook:{name}"));
+            ToolCallHookAction::Skip {
+                reason: "existing owner skipped".into(),
+            }
+        }
+        async fn on_tool_admission_rejected(
+            &self,
+            name: &str,
+            _: Option<String>,
+            _: &str,
+            _: &str,
+            outcome: &ToolOutcome,
+        ) -> HookAction {
+            assert!(
+                matches!(outcome, ToolOutcome::Failed { class: FailureClass::PolicyDenied, text, .. } if text.contains("`script`"))
+            );
+            self.0.lock().unwrap().push(format!("hidden:{name}"));
+            HookAction::Continue
+        }
+        async fn on_tool_result(
+            &self,
+            _: &str,
+            _: Option<String>,
+            _: &str,
+            _: &str,
+            _: &ToolOutcome,
+        ) -> HookAction {
+            panic!("skipped and admission-refused calls are not accepted settlements")
+        }
+        async fn foreground_live_output_writer(
+            &self,
+            _: &str,
+        ) -> crate::live_output::LiveToolOutputWriter {
+            panic!("nothing executes")
+        }
+        async fn session_id(&self) -> Option<String> {
+            None
+        }
+        async fn register_stream_tool_call_identity(&self, _: &str, _: &str, _: Option<&str>) {}
+    }
+
+    #[tokio::test]
+    async fn hidden_parallel_only_presentation_refusal_precedes_hook() {
+        for hidden in [false, true] {
+            // Gate fixture is deliberately argument-invalid: a visible call must
+            // reach a skipping hook before its argument admission could run.
+            let tools: Vec<Box<dyn ToolDyn>> =
+                vec![PresentedTool::wrap(Box::new(ArgumentGate), hidden, false)];
+            let tools = if hidden {
+                tools
+            } else {
+                present_tools(tools, &[], false).unwrap()
+            };
+            let hook = Arc::new(OrderHook::default());
+            let calls = ["argument_gate", "outside_surface"]
+                .into_iter()
+                .enumerate()
+                .map(|(id, name)| {
+                    (
+                        ToolCall {
+                            id: id.to_string(),
+                            call_id: Some(id.to_string()),
+                            function: super::super::RigToolFunction {
+                                name: name.into(),
+                                arguments: serde_json::json!({"invalid":true}),
+                            },
+                            signature: None,
+                            additional_params: None,
+                        },
+                        id.to_string(),
+                    )
+                })
+                .collect();
+            let (results, termination) = run_batch(
+                calls,
+                Arc::new(tools),
+                Some(hook.clone()),
+                None,
+                false,
+                None,
+            )
+            .await;
+            assert!(termination.is_none());
+            assert_eq!(results.len(), 2);
+            let expected = if hidden {
+                vec!["hidden:argument_gate", "hook:outside_surface"]
+            } else {
+                vec!["hook:argument_gate", "hook:outside_surface"]
+            };
+            assert_eq!(*hook.0.lock().unwrap(), expected);
+            assert_eq!(results[0].outcome.is_some(), hidden);
+            assert_eq!(results[0].skipped.is_some(), !hidden);
+            assert!(results[1].skipped.is_some());
         }
     }
 }

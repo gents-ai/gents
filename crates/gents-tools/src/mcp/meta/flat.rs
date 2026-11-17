@@ -2,15 +2,6 @@ use super::{CallToolArgs, CallToolTool, MetaToolContext};
 use gents_documents::{RemoteToolStyle, RemoteTools};
 use gents_loop::tool::{BoxFuture, Tool, ToolDefinition, ToolDyn, ToolError};
 
-pub fn flat_tool_name(service: &str, tool: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hash = Sha256::new();
-    hash.update((service.len() as u64).to_be_bytes());
-    hash.update(service.as_bytes());
-    hash.update(tool.as_bytes());
-    format!("mcp_{:x}", hash.finalize())[..64].to_string()
-}
-
 pub fn selected_remote_identity(
     name: &str,
     args: &str,
@@ -24,39 +15,14 @@ pub fn selected_remote_identity(
         .iter()
         .filter(|service| service.style == RemoteToolStyle::Flat)
         .flat_map(|service| service.tool_names.iter().map(move |tool| (service, tool)))
-        .filter(|(service, tool)| flat_tool_name(&service.mcp_service_id, tool) == name);
+        .filter(|(service, tool)| {
+            RemoteTools::flat_tool_name(&service.mcp_service_id, tool) == name
+        });
     let (service, tool) = matches.next()?;
     matches
         .next()
         .is_none()
         .then(|| (service.mcp_service_id.clone(), tool.clone()))
-}
-
-pub(crate) fn presented_tool_names(remote: &RemoteTools, allowed: &[String]) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut discovery = false;
-    for service in &remote.services {
-        let Some(service) = remote.selected_service(&service.mcp_service_id, allowed) else {
-            continue;
-        };
-        match service.style {
-            RemoteToolStyle::Discovery => discovery = true,
-            RemoteToolStyle::Flat => names.extend(
-                service
-                    .tool_names
-                    .iter()
-                    .map(|tool| flat_tool_name(&service.mcp_service_id, tool)),
-            ),
-        }
-    }
-    if discovery {
-        names.extend(
-            gents_protocol::tool_names::META_TOOL_NAMES
-                .iter()
-                .map(|name| name.to_string()),
-        );
-    }
-    names
 }
 
 pub(super) struct FlatRemoteTool {
@@ -67,6 +33,9 @@ pub(super) struct FlatRemoteTool {
 }
 
 impl ToolDyn for FlatRemoteTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.definition.name.clone()
     }

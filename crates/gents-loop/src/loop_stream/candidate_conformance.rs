@@ -164,6 +164,9 @@ impl CompletionModel for Model {
 
 struct Echo;
 impl ToolDyn for Echo {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "echo".into()
     }

@@ -8,6 +8,9 @@ struct SuccessfulProbe {
 }
 
 impl ToolDyn for SuccessfulProbe {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.name.into()
     }

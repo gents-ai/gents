@@ -1,5 +1,6 @@
 pub mod access_review;
 pub mod operator_paths;
+pub mod presentation;
 pub mod workspace_permissions;
 
 use serde::{Deserialize, Serialize};

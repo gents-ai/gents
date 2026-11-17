@@ -6,6 +6,9 @@ pub struct RepeatProbe {
 }
 
 impl ToolDyn for RepeatProbe {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "repeat_probe".into()
     }
@@ -85,6 +88,9 @@ pub struct EnvelopeShapedTool {
 }
 
 impl ToolDyn for EnvelopeShapedTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "envelope_shaped".into()
     }

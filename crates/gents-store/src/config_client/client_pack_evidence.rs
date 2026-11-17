@@ -52,18 +52,77 @@ pub enum PackMutationDifference {
         proposed: Option<String>,
     },
     /// The same field holds different values. `path` is a JSON pointer into the
-    /// mutation input, so a reader can find the field in both plans.
+    /// mutation input, so a reader can find the field in both plans. Both sides
+    /// are [`ValueShape`]s, never values: this type is `Serialize` and `Debug`,
+    /// so a `Value` here could reach a log or a model through either.
     Field {
         path: String,
-        constructed: Value,
-        proposed: Value,
+        constructed: ValueShape,
+        proposed: ValueShape,
     },
     /// A field only one of the plans carries.
     OnlyInOnePlan {
         path: String,
-        constructed: Option<Value>,
-        proposed: Option<Value>,
+        constructed: Option<ValueShape>,
+        proposed: Option<ValueShape>,
     },
+}
+
+/// A JSON value stated by kind and size, never by content.
+///
+/// Part of [`PackMutationDifference`] so the difference type holds no `Value` at
+/// all: an install value can be a token from the installer's environment, and a
+/// derived `Debug` or a `Serialize` of the difference would print it. A shape is
+/// enough to see *where* and *what kind* two plans differ.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValueShape {
+    Null,
+    Boolean,
+    Number,
+    /// A string of this many characters.
+    Text {
+        chars: usize,
+    },
+    /// An array of this many items.
+    List {
+        items: usize,
+    },
+    /// An object of this many fields.
+    Map {
+        fields: usize,
+    },
+}
+
+impl ValueShape {
+    /// The shape of `value`, recording only its kind and size.
+    pub fn of(value: &Value) -> Self {
+        match value {
+            Value::Null => Self::Null,
+            Value::Bool(_) => Self::Boolean,
+            Value::Number(_) => Self::Number,
+            Value::String(text) => Self::Text {
+                chars: text.chars().count(),
+            },
+            Value::Array(items) => Self::List { items: items.len() },
+            Value::Object(fields) => Self::Map {
+                fields: fields.len(),
+            },
+        }
+    }
+
+    /// How a line states it: `null`, `a string (32 chars)`, `an object (3
+    /// fields)`.
+    pub fn describe(self) -> String {
+        match self {
+            Self::Null => "null".to_owned(),
+            Self::Boolean => "a boolean".to_owned(),
+            Self::Number => "a number".to_owned(),
+            Self::Text { chars } => format!("a string ({chars} chars)"),
+            Self::List { items } => format!("an array ({items} items)"),
+            Self::Map { fields } => format!("an object ({fields} fields)"),
+        }
+    }
 }
 
 impl PackMutationDifference {
@@ -106,8 +165,8 @@ impl PackMutationDifference {
                 proposed,
             } => format!(
                 "`{path}` is {} in the client's plan and {} in the runtime's",
-                describe_value(constructed),
-                describe_value(proposed)
+                constructed.describe(),
+                proposed.describe()
             ),
             Self::OnlyInOnePlan {
                 path,
@@ -116,16 +175,16 @@ impl PackMutationDifference {
             } => match (constructed, proposed) {
                 (Some(value), None) => format!(
                     "only the client's plan carries `{path}` ({})",
-                    describe_value(value)
+                    value.describe()
                 ),
                 (None, Some(value)) => format!(
                     "only the runtime's plan carries `{path}` ({})",
-                    describe_value(value)
+                    value.describe()
                 ),
                 (Some(constructed), Some(proposed)) => format!(
                     "`{path}` is {} in the client's plan and {} in the runtime's",
-                    describe_value(constructed),
-                    describe_value(proposed)
+                    constructed.describe(),
+                    proposed.describe()
                 ),
                 (None, None) => format!("`{path}` is in neither plan"),
             },
@@ -143,17 +202,49 @@ fn describe_doc_id(doc_id: Option<&str>) -> &str {
     doc_id.unwrap_or("a new one")
 }
 
-/// One side of a difference stated by kind and size, never by value. `null`
-/// and "absent" are different kinds, which is what makes the null-against-
-/// absent case readable without the map it sits in.
-fn describe_value(value: &Value) -> String {
-    match value {
-        Value::Null => "null".to_owned(),
-        Value::Bool(_) => "a boolean".to_owned(),
-        Value::Number(_) => "a number".to_owned(),
-        Value::String(text) => format!("a string ({} chars)", text.chars().count()),
-        Value::Array(items) => format!("an array ({} items)", items.len()),
-        Value::Object(fields) => format!("an object ({} fields)", fields.len()),
+/// A JSON pointer token, escaped as RFC 6901 requires, so a path is unambiguous.
+fn escape_pointer_token(token: &str) -> String {
+    token.replace('~', "~0").replace('/', "~1")
+}
+
+/// What a plan comparison needs of a mutation, so the same diff reads a
+/// document graph and a relationship graph.
+pub trait PackMutationDiff {
+    fn operation(&self) -> PackMutationKind;
+    fn collection(&self) -> &str;
+    fn doc_id(&self) -> Option<&str>;
+    fn input(&self) -> Option<&Value>;
+
+    /// Every way `self` (the client's plan) and `proposed` (the runtime's)
+    /// disagree, in a stable order: operation, collection, document, then the
+    /// input's fields in the order the client's plan states them. Bounded, so a
+    /// large graph reports readably; the first entry is the first difference.
+    fn differences(&self, proposed: &Self) -> Vec<PackMutationDifference> {
+        let mut differences = Vec::new();
+        if self.operation() != proposed.operation() {
+            differences.push(PackMutationDifference::Operation {
+                constructed: self.operation(),
+                proposed: proposed.operation(),
+            });
+            return differences;
+        }
+        if self.collection() != proposed.collection() {
+            differences.push(PackMutationDifference::Collection {
+                constructed: self.collection().to_owned(),
+                proposed: proposed.collection().to_owned(),
+            });
+        }
+        if self.doc_id() != proposed.doc_id() {
+            differences.push(PackMutationDifference::DocId {
+                constructed: self.doc_id().map(str::to_owned),
+                proposed: proposed.doc_id().map(str::to_owned),
+            });
+        }
+        if let (Some(constructed), Some(proposed)) = (self.input(), proposed.input()) {
+            collect_field_differences("", constructed, proposed, &mut differences);
+        }
+        differences.truncate(MAX_REPORTED_DIFFERENCES);
+        differences
     }
 }
 
@@ -173,6 +264,25 @@ impl PackMutationKind {
             Self::Update => "updates",
             Self::Delete => "deletes",
         }
+    }
+}
+
+/// The first way two JSON documents differ, in one line, for a comparison whose
+/// values are not a [`PackMutation`] (a relationship, say). Values are stated by
+/// shape, never by content, as everywhere in this comparison.
+pub fn describe_json_disagreement(constructed: &Value, proposed: &Value) -> String {
+    let mut differences = Vec::new();
+    collect_field_differences("", constructed, proposed, &mut differences);
+    let total = differences.len();
+    match differences.first() {
+        Some(first) if total == 1 => first.describe(),
+        Some(first) => format!(
+            "{} (and {} more difference{})",
+            first.describe(),
+            total - 1,
+            if total == 2 { "" } else { "s" }
+        ),
+        None => "the two agree field by field, so the difference is outside them".to_owned(),
     }
 }
 
@@ -208,53 +318,10 @@ impl PackMutationDiff for PackMutation {
     }
 }
 
-/// What a plan comparison needs of a mutation, so the same diff reads a
-/// document graph and a relationship graph.
-pub trait PackMutationDiff {
-    fn operation(&self) -> PackMutationKind;
-    fn collection(&self) -> &str;
-    fn doc_id(&self) -> Option<&str>;
-    fn input(&self) -> Option<&Value>;
-
-    /// Every way `self` (the client's plan) and `proposed` (the runtime's)
-    /// disagree, in a stable order: operation, collection, document, then the
-    /// input's fields in the order the client's plan states them. A bounded
-    /// number is returned so a large graph reports readably; the first entry is
-    /// the first difference.
-    fn differences(&self, proposed: &Self) -> Vec<PackMutationDifference> {
-        let mut differences = Vec::new();
-        if self.operation() != proposed.operation() {
-            differences.push(PackMutationDifference::Operation {
-                constructed: self.operation(),
-                proposed: proposed.operation(),
-            });
-            return differences;
-        }
-        if self.collection() != proposed.collection() {
-            differences.push(PackMutationDifference::Collection {
-                constructed: self.collection().to_owned(),
-                proposed: proposed.collection().to_owned(),
-            });
-        }
-        if self.doc_id() != proposed.doc_id() {
-            differences.push(PackMutationDifference::DocId {
-                constructed: self.doc_id().map(str::to_owned),
-                proposed: proposed.doc_id().map(str::to_owned),
-            });
-        }
-        if let (Some(constructed), Some(proposed)) = (self.input(), proposed.input()) {
-            collect_field_differences("", constructed, proposed, &mut differences);
-        }
-        // Bounded, as the trait's doc says: a plan that diverges early can
-        // differ in hundreds of leaves, and a refusal only needs the first few.
-        differences.truncate(MAX_REPORTED_DIFFERENCES);
-        differences
-    }
-}
-
 /// Recurses into the two JSON values, recording the first leaf under each path
-/// that differs. Objects are walked in the client's key order, then any key only
-/// the runtime carries.
+/// that differs -- as a [`ValueShape`], never the value, so no `Debug` or
+/// `Serialize` of the difference can print a token. Objects are walked in the
+/// client's key order, then any key only the runtime carries.
 fn collect_field_differences(
     path: &str,
     constructed: &Value,
@@ -269,7 +336,7 @@ fn collect_field_differences(
                     Some(other) => collect_field_differences(&child, value, other, differences),
                     None => differences.push(PackMutationDifference::OnlyInOnePlan {
                         path: child,
-                        constructed: Some(value.clone()),
+                        constructed: Some(ValueShape::of(value)),
                         proposed: None,
                     }),
                 }
@@ -279,7 +346,7 @@ fn collect_field_differences(
                     differences.push(PackMutationDifference::OnlyInOnePlan {
                         path: format!("{path}/{}", escape_pointer_token(key)),
                         constructed: None,
-                        proposed: Some(value.clone()),
+                        proposed: Some(ValueShape::of(value)),
                     });
                 }
             }
@@ -291,7 +358,7 @@ fn collect_field_differences(
                     Some(other) => collect_field_differences(&child, value, other, differences),
                     None => differences.push(PackMutationDifference::OnlyInOnePlan {
                         path: child,
-                        constructed: Some(value.clone()),
+                        constructed: Some(ValueShape::of(value)),
                         proposed: None,
                     }),
                 }
@@ -300,42 +367,19 @@ fn collect_field_differences(
                 differences.push(PackMutationDifference::OnlyInOnePlan {
                     path: format!("{path}/{index}"),
                     constructed: None,
-                    proposed: Some(value.clone()),
+                    proposed: Some(ValueShape::of(value)),
                 });
             }
         }
         (constructed, proposed) if constructed != proposed => {
             differences.push(PackMutationDifference::Field {
                 path: path.to_owned(),
-                constructed: constructed.clone(),
-                proposed: proposed.clone(),
+                constructed: ValueShape::of(constructed),
+                proposed: ValueShape::of(proposed),
             });
         }
         _ => {}
     }
-}
-
-/// The first way two JSON documents differ, in one line, for a comparison whose
-/// values are not a [`PackMutation`] (a relationship, say).
-pub fn describe_json_disagreement(constructed: &Value, proposed: &Value) -> String {
-    let mut differences = Vec::new();
-    collect_field_differences("", constructed, proposed, &mut differences);
-    let total = differences.len();
-    match differences.first() {
-        Some(first) if total == 1 => first.describe(),
-        Some(first) => format!(
-            "{} (and {} more difference{})",
-            first.describe(),
-            total - 1,
-            if total == 2 { "" } else { "s" }
-        ),
-        None => "the two agree field by field, so the difference is outside them".to_owned(),
-    }
-}
-
-/// A JSON pointer token, escaped as RFC 6901 requires, so a path is unambiguous.
-fn escape_pointer_token(token: &str) -> String {
-    token.replace('~', "~0").replace('/', "~1")
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -1242,8 +1286,8 @@ mod tests {
             differences,
             vec![PackMutationDifference::Field {
                 path: "/agent_did".to_owned(),
-                constructed: serde_json::json!("did:key:client"),
-                proposed: serde_json::json!("did:key:runtime"),
+                constructed: ValueShape::Text { chars: 14 },
+                proposed: ValueShape::Text { chars: 15 },
             }],
             "the one differing leaf is named, and the agreeing field is not"
         );
@@ -1266,7 +1310,7 @@ mod tests {
             vec![PackMutationDifference::OnlyInOnePlan {
                 path: "/b".to_owned(),
                 constructed: None,
-                proposed: Some(serde_json::json!(2)),
+                proposed: Some(ValueShape::Number),
             }]
         );
         assert!(constructed.differences(&proposed)[0]
@@ -1311,8 +1355,8 @@ mod tests {
             constructed.differences(&proposed),
             vec![PackMutationDifference::Field {
                 path: "/tags/1".to_owned(),
-                constructed: serde_json::json!("b"),
-                proposed: serde_json::json!("c"),
+                constructed: ValueShape::Text { chars: 1 },
+                proposed: ValueShape::Text { chars: 1 },
             }]
         );
     }
@@ -1377,7 +1421,7 @@ mod tests {
             vec![PackMutationDifference::OnlyInOnePlan {
                 path: "/variables/GENTS_PACK_BIND_AGENT_WEB_RESEARCHER".to_owned(),
                 constructed: None,
-                proposed: Some(serde_json::Value::Null),
+                proposed: Some(ValueShape::Null),
             }],
             "absent against null is named at its own path, not as a whole-object difference"
         );
@@ -1489,5 +1533,59 @@ mod tests {
             "at most {} differences are reported",
             super::MAX_REPORTED_DIFFERENCES
         );
+    }
+
+    /// B13b: the difference type holds **no** `Value` at all, so neither a
+    /// derived `Debug` nor a `Serialize` can print a token -- not only the
+    /// `describe` line, which a caller might not use.
+    #[test]
+    fn the_difference_type_prints_no_value_through_debug_or_serialize() {
+        let secret = "sk-live-0123456789abcdef";
+        let constructed = create(
+            "PackInstallation",
+            serde_json::json!({"variables": {"API_TOKEN": secret}}),
+        );
+        let proposed = create(
+            "PackInstallation",
+            serde_json::json!({"variables": {"API_TOKEN": "other"}}),
+        );
+        let differences = constructed.differences(&proposed);
+        // Debug is what an `unwrap` or a `{:?}` prints.
+        let debugged = format!("{differences:?}");
+        assert!(!debugged.contains(secret), "Debug leaks: {debugged}");
+        assert!(!debugged.contains("other"), "Debug leaks: {debugged}");
+        // Serialize is what a log field or a JSON error body would carry.
+        let serialized = serde_json::to_string(&differences).expect("differences serialize");
+        assert!(
+            !serialized.contains(secret),
+            "Serialize leaks: {serialized}"
+        );
+        assert!(
+            !serialized.contains("other"),
+            "Serialize leaks: {serialized}"
+        );
+        // And the shape is still there to act on.
+        assert!(serialized.contains("text"), "{serialized}");
+        assert!(serialized.contains("chars"), "{serialized}");
+    }
+
+    /// `ValueShape` states kind and size for every JSON kind, so a difference
+    /// never has to fall back to printing a value.
+    #[test]
+    fn every_json_kind_has_a_shape() {
+        for (value, expected) in [
+            (serde_json::json!(null), "null"),
+            (serde_json::json!(true), "a boolean"),
+            (serde_json::json!(7), "a number"),
+            (serde_json::json!("abc"), "a string (3 chars)"),
+            (serde_json::json!([1, 2]), "an array (2 items)"),
+            (serde_json::json!({"a": 1}), "an object (1 fields)"),
+        ] {
+            assert_eq!(
+                super::ValueShape::of(&value).describe(),
+                expected,
+                "shape of {value}"
+            );
+        }
     }
 }

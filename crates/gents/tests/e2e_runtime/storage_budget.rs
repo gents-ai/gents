@@ -272,6 +272,9 @@ fn dir_bytes(path: &Path) -> std::io::Result<u64> {
 struct AuditProbe;
 
 impl ToolDyn for AuditProbe {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         TOOL.to_string()
     }

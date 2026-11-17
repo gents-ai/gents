@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
+use super::failure::{PackSessionFailureClass as Class, SessionFailure};
 use super::{decode_install_request, delegated_install_access, refused, InstallRequest, MAX_BODY};
 use crate::http::router::RuntimeHttpState;
 
@@ -344,12 +345,15 @@ async fn run(
         actor,
     )
     .await;
-    if let Err((error, outcome)) = result {
-        let _ = send(
-            &mut *socket.lock().await,
-            json!({"type":"failed", "error":format!("{error:#}"), "outcome":outcome}),
-        )
-        .await;
+    if let Err(failure) = result {
+        // The class and outcome only: the chain can quote install values, so
+        // it is neither sent nor logged (see `failure`).
+        tracing::warn!(
+            class = ?failure.class,
+            outcome = failure.outcome,
+            "hosted pack install failed"
+        );
+        let _ = send(&mut *socket.lock().await, failure.message()).await;
     }
 }
 
@@ -361,9 +365,9 @@ async fn run_inner(
     user_access: ConfigAccess,
     runtime_access: ConfigAccess,
     actor: identity::Did,
-) -> std::result::Result<(), (anyhow::Error, &'static str)> {
+) -> std::result::Result<(), SessionFailure> {
     let runtime_did = identity::Did::new(&state.node_did)
-        .map_err(|error| (anyhow::Error::new(error), "not_installed"))?;
+        .map_err(|error| SessionFailure::not_installed(Class::NotAuthorized)(error.into()))?;
     runtime_access
         .transact_readonly("pack.hosted_schema.authorize", |txn| {
             let runtime_did = &runtime_did;
@@ -375,19 +379,55 @@ async fn run_inner(
             })
         })
         .await
-        .map_err(|error| (error, "not_installed"))?;
-    let prepare = async {
+        .map_err(SessionFailure::not_installed(Class::NotAuthorized))?;
+    let request = async {
         let ClientMessage::Start { request } = receive(&mut *socket.lock().await).await? else {
             anyhow::bail!("pack session requires a start request");
         };
+        Ok(request)
+    }
+    .await
+    .map_err(SessionFailure::not_installed(Class::InvalidRequest))?;
+    // The build check comes first, before the archives are even opened: a plan
+    // prepared by two builds is not one plan, so neither an install nor a
+    // preview proceeds, and nothing is written.
+    // Every build this session reports or compares is the router's, so a test
+    // router's build stays its own.
+    let runtime_build = state.pack_install_build();
+    if let Some(refusal) = super::refuse_client_build(&request.client_build, &runtime_build) {
+        return Err(SessionFailure::shown(
+            Class::BuildMismatch,
+            refusal.to_string(),
+            "not_installed",
+        ));
+    }
+    if request.preview {
+        let result = preview(state, home, access, request).await?;
+        send(
+            &mut *socket.lock().await,
+            json!({
+                "type": "previewed",
+                "result": result,
+                // So the client checks the build too, as it does at `ready`.
+                "build": runtime_build,
+            }),
+        )
+        .await
+        .map_err(SessionFailure::not_installed(Class::PreviewFailed))?;
+        return Ok(());
+    }
+    let received = async {
         anyhow::ensure!(
-            !request.preview && request.wire.is_empty(),
-            "hosted pack session cannot preview or wire plugins"
+            request.wire.is_empty(),
+            "hosted pack session cannot wire plugins"
         );
         let node_did = state.node_did.clone();
-        let received =
-            tokio::task::spawn_blocking(move || decode_install_request(request, &node_did))
-                .await??;
+        tokio::task::spawn_blocking(move || decode_install_request(request, &node_did)).await?
+    }
+    .await
+    .map_err(SessionFailure::not_installed(Class::InvalidRequest))?;
+    let preparation_failed = SessionFailure::not_installed(Class::PreparationFailed);
+    let prepare = async {
         let requested =
             gents_pack::operations::pack::parse_inference_slots(&received.request.inference_slots)?;
         let supplied = gents_pack::pack::install_flow::supplied_variables(
@@ -395,7 +435,7 @@ async fn run_inner(
             &received.request.bind_agents,
         )?;
         let overrides = gents_pack::operations::pack::dependency_overrides(&supplied);
-        let mut prepared = gents_pack::pack::prepare_document_pack_archive(
+        let mut prepared = match gents_pack::pack::prepare_document_pack_archive(
             &access,
             &state.node_did,
             received.root.archive(),
@@ -416,7 +456,19 @@ async fn run_inner(
             },
             &overrides,
         )
-        .await?;
+        .await
+        {
+            Ok(prepared) => prepared,
+            // A refusal that names identifiers only (a plugin that does not
+            // resolve, documents that differ or were edited) is shown as
+            // written; any other is classed by this step.
+            Err(error) => {
+                return match SessionFailure::change_refusal(&error) {
+                    Some(shown) => Ok(Err(shown)),
+                    None => Err(error.into_anyhow()),
+                }
+            }
+        };
         prepared
             .prepare_pin_moves(
                 &access,
@@ -450,10 +502,10 @@ async fn run_inner(
             received.request.explicit,
         )
         .await?;
-        Ok::<_, anyhow::Error>((received, prepared, stage, planned))
+        Ok::<_, anyhow::Error>(Ok((received, prepared, stage, planned)))
     }
     .await;
-    let (received, prepared, stage, planned) = prepare.map_err(|error| (error, "not_installed"))?;
+    let (received, prepared, stage, planned) = prepare.map_err(preparation_failed)??;
     let installed_plugins = stage.installed_plugins().to_vec();
     let materialized = if received.request.explicit {
         let cache_home = home.clone();
@@ -492,8 +544,8 @@ async fn run_inner(
             Ok::<_, anyhow::Error>((assets, dependency_assets, leases))
         })
         .await
-        .map_err(|error| (anyhow::Error::new(error), "not_installed"))?
-        .map_err(|error| (error, "not_installed"))?
+        .map_err(|error| SessionFailure::not_installed(Class::PreparationFailed)(error.into()))?
+        .map_err(SessionFailure::not_installed(Class::PreparationFailed))?
     } else {
         (String::new(), Vec::new(), Vec::new())
     };
@@ -518,39 +570,37 @@ async fn run_inner(
         }),
     )
     .await
-    .map_err(|error| (error, "not_installed"))?;
+    .map_err(SessionFailure::not_installed(Class::SchemaPreparation))?;
     let evidence = match tokio::time::timeout(
         std::time::Duration::from_secs(300),
         receive(&mut *socket.lock().await),
     )
     .await
     .map_err(|error| {
-        (
+        SessionFailure::not_installed(Class::SchemaPreparation)(
             anyhow::Error::new(error).context("client schema preparation timed out"),
-            "not_installed",
         )
     })?
-    .map_err(|error| (error, "not_installed"))?
+    .map_err(SessionFailure::not_installed(Class::SchemaPreparation))?
     {
         ClientMessage::SchemasReady { evidence } => evidence,
         _ => {
-            return Err((
+            return Err(SessionFailure::not_installed(Class::SchemaPreparation)(
                 anyhow::anyhow!("client did not finish schema preparation"),
-                "not_installed",
             ))
         }
     };
     gents_store::config_client::verify_pack_schema_approval(actor.as_str(), &scope, evidence)
-        .map_err(|error| (anyhow::Error::new(error), "not_installed"))?;
+        .map_err(|error| SessionFailure::not_installed(Class::SchemaPreparation)(error.into()))?;
     // Read before any schema is applied: the collections this install
     // brings, which `pack remove --with-collections` later drops.
     let created_collections =
         gents_pack::pack::collections_install_creates(&runtime_access, received.root.archive())
             .await
-            .map_err(|error| (error, "not_installed"))?;
+            .map_err(SessionFailure::not_installed(Class::SchemaApplyFailed))?;
     gents_pack::pack::apply_prepared_dependency_schemas(&runtime_access, &prepared)
         .await
-        .map_err(|error| (error, "not_installed"))?;
+        .map_err(SessionFailure::not_installed(Class::SchemaApplyFailed))?;
     let schemas = if received.root.manifest().metadata.kind == gents_pack::pack::PackKind::Documents
     {
         let root = received.root.shared_archive();
@@ -560,11 +610,11 @@ async fn run_inner(
             Ok::<_, anyhow::Error>(temp)
         })
         .await
-        .map_err(|error| (anyhow::Error::new(error), "not_installed"))?
-        .map_err(|error| (error, "not_installed"))?;
+        .map_err(|error| SessionFailure::not_installed(Class::SchemaApplyFailed)(error.into()))?
+        .map_err(SessionFailure::not_installed(Class::SchemaApplyFailed))?;
         gents_pack::pack::schema_apply::apply_pack_schemas_if_present(&runtime_access, temp.path())
             .await
-            .map_err(|error| (error, "not_installed"))?
+            .map_err(SessionFailure::not_installed(Class::SchemaApplyFailed))?
     } else {
         None
     };
@@ -627,21 +677,22 @@ async fn run_inner(
             &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
-        .map_err(|error| {
-            let outcome = match &error {
-                gents_pack::pack::HostedPackStageError::Rejected(_) => "not_installed",
-                gents_pack::pack::HostedPackStageError::Unconfirmed(_) => "unconfirmed",
-            };
-            (anyhow::Error::new(error), outcome)
+        .map_err(|error| match error {
+            gents_pack::pack::HostedPackStageError::Rejected(rejection) => {
+                SessionFailure::rejection(rejection)
+            }
+            gents_pack::pack::HostedPackStageError::Unconfirmed(error) => {
+                SessionFailure::unconfirmed(Class::ApplyUnconfirmed)(error)
+            }
         })?;
     let report = gents_pack::pack::assemble_document_graph_report(&prepared, reports)
-        .map_err(|error| (error, "unconfirmed"))?;
+        .map_err(SessionFailure::unconfirmed(Class::ReceiptFailed))?;
     let manifest = received.root.manifest();
     let origin_tag = gents_pack::pack::pack_origin_tag(&format!(
         "{}/{}",
         manifest.metadata.namespace, manifest.name
     ))
-    .map_err(|error| (error, "unconfirmed"))?;
+    .map_err(SessionFailure::unconfirmed(Class::ReceiptFailed))?;
     let mut result = json!({"pack":received.root.manifest().name, "source":received.root.label(), "digest":received.root.digest(), "owner":state.node_did, "inference":prepared.inference, "dependency_inference":prepared.dependency_inference, "origin_tag":origin_tag, "dependencies":received.root.manifest().metadata.dependencies, "schemas":schemas, "apply":report});
     gents_pack::pack::installation_roots::attach_planned_root_agents(&mut result, &planned);
     send(
@@ -649,6 +700,33 @@ async fn run_inner(
         json!({"type":"finished", "result":result}),
     )
     .await
-    .map_err(|error| (error, "unconfirmed"))?;
+    .map_err(SessionFailure::unconfirmed(Class::ReceiptFailed))?;
     Ok(())
+}
+
+/// A preview over the session: the same plan the one-shot route previews,
+/// computed only after the build check has passed. A preview writes nothing.
+async fn preview(
+    state: &RuntimeHttpState,
+    home: PathBuf,
+    access: ConfigAccess,
+    request: InstallRequest,
+) -> std::result::Result<Value, SessionFailure> {
+    let node_did = state.node_did.clone();
+    let received = tokio::task::spawn_blocking(move || decode_install_request(request, &node_did))
+        .await
+        .map_err(|error| SessionFailure::not_installed(Class::InvalidRequest)(error.into()))?
+        .map_err(SessionFailure::not_installed(Class::InvalidRequest))?;
+    if received.root.manifest().metadata.kind != gents_pack::pack::PackKind::Documents {
+        return Err(SessionFailure::not_installed(Class::InvalidRequest)(
+            anyhow::anyhow!("a hosted preview takes a documents pack"),
+        ));
+    }
+    super::install_owned(state.clone(), home, received, access)
+        .await
+        .map_err(|error| {
+            SessionFailure::change_refusal(&error).unwrap_or_else(|| {
+                SessionFailure::not_installed(Class::PreviewFailed)(error.into_anyhow())
+            })
+        })
 }

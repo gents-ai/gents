@@ -16,6 +16,9 @@ struct StaticTool {
 }
 
 impl ToolDyn for StaticTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         self.name.to_string()
     }
@@ -38,6 +41,9 @@ impl ToolDyn for StaticTool {
 struct PendingTool;
 
 impl ToolDyn for PendingTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "slow_tool".to_string()
     }

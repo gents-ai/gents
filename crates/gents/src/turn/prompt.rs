@@ -64,12 +64,36 @@ pub struct LayeredPromptBuilder {
 }
 
 impl LayeredPromptBuilder {
+    /// Runtime prompt display must agree with the actually constructed projection,
+    /// including fail-open script recovery. Skill authority remains the full surface.
     pub fn new(
         agent: &ResolvedAgent,
         tool_surface: &ToolSurface,
         allowed_targets: &[(String, String)],
+        tools: &[Box<dyn gents_loop::tool::ToolDyn>],
     ) -> Self {
-        let tool_names = tool_surface.tool_names();
+        Self::with_advertised_names(
+            agent,
+            tool_surface,
+            allowed_targets,
+            tool_surface
+                .tool_names()
+                .into_iter()
+                .filter(|name| {
+                    !tools
+                        .iter()
+                        .any(|tool| tool.name() == *name && tool.hidden())
+                })
+                .collect(),
+        )
+    }
+
+    fn with_advertised_names(
+        agent: &ResolvedAgent,
+        tool_surface: &ToolSurface,
+        allowed_targets: &[(String, String)],
+        tool_names: Vec<String>,
+    ) -> Self {
         let tool_refs = tool_names.iter().map(String::as_str).collect::<Vec<_>>();
         let mut builder = Self::for_agent(
             &agent.system_prompt,
@@ -84,7 +108,7 @@ impl LayeredPromptBuilder {
         }
         builder.skills = agent.skills.clone();
         builder.skill_ceiling = gents_documents::skills::skill_tool_ceiling(
-            tool_names.iter().cloned(),
+            tool_surface.tool_names(),
             tool_surface.allowed_mcp_service_ids(),
             tool_surface.includes_meta_tools(),
         );

@@ -381,7 +381,10 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
             }
             RemoteToolStyle::Flat => {
                 assert_eq!(built.len(), 1);
-                assert_eq!(built[0].name(), super::flat_tool_name("shared", "selected"));
+                assert_eq!(
+                    built[0].name(),
+                    gents_documents::RemoteTools::flat_tool_name("shared", "selected")
+                );
                 assert_eq!(
                     built[0].definition(String::new()).await.parameters["required"],
                     serde_json::json!(["value"])

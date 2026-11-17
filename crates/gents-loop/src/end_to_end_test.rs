@@ -134,6 +134,7 @@ enum RecordedCall {
 
 #[derive(Clone, Default)]
 struct RecordingHook {
+    outcomes: Arc<Mutex<Vec<ToolOutcome>>>,
     log: Arc<Mutex<Vec<RecordedCall>>>,
     deny_dispatch: bool,
     admission_gate: Option<Arc<AdmissionGate>>,
@@ -216,6 +217,7 @@ impl SessionHook for RecordingHook {
         _args: &str,
         outcome: &ToolOutcome,
     ) -> HookAction {
+        self.outcomes.lock().unwrap().push(outcome.clone());
         self.log(RecordedCall::AdmissionRejected {
             tool_name: tool_name.to_string(),
             outcome: outcome.model_facing_text().to_string(),
@@ -247,6 +249,7 @@ impl SessionHook for RecordingHook {
             gate.entered.notify_one();
             std::future::pending::<()>().await;
         }
+        self.outcomes.lock().unwrap().push(outcome.clone());
         self.log(RecordedCall::ToolResult {
             tool_name: tool_name.to_string(),
             outcome: outcome.model_facing_text().to_string(),
@@ -498,6 +501,9 @@ async fn cancelling_a_foreground_tool_preserves_scope_and_drops_execution() {
         observed: Arc<Mutex<Option<String>>>,
     }
     impl ToolDyn for PendingTool {
+        fn hidden(&self) -> bool {
+            false
+        }
         fn name(&self) -> String {
             "echo".into()
         }
@@ -1036,6 +1042,9 @@ async fn serial_and_parallel_admission_follow_the_accepted_turn_and_stop_without
 
     struct ReadTool(Arc<std::sync::atomic::AtomicUsize>);
     impl ToolDyn for ReadTool {
+        fn hidden(&self) -> bool {
+            false
+        }
         fn name(&self) -> String {
             "echo".into()
         }
@@ -1234,4 +1243,165 @@ async fn exhausted_backend_failure_retains_its_typed_availability_verdict() {
         }
     }
     panic!("unavailable provider must produce a typed failure");
+}
+
+#[tokio::test]
+async fn hidden_serial_provider_calls_preserve_unknown_owner_and_refuse_only_hidden() {
+    use crate::rendered_request::scope::{
+        ambient_arming_sink, scope_request, test_scope, CaptureScopeKind,
+    };
+    use crate::tool_call_lifecycle::FailureClass;
+    use crate::tool_policy::presentation::present_tools;
+    use futures::StreamExt;
+    struct Script;
+    impl ToolDyn for Script {
+        fn hidden(&self) -> bool {
+            false
+        }
+        fn name(&self) -> String {
+            "script".into()
+        }
+        fn definition<'a>(&'a self, _: String) -> crate::tool::BoxFuture<'a, ToolDefinition> {
+            Box::pin(async {
+                ToolDefinition {
+                    name: "script".into(),
+                    description: "script".into(),
+                    parameters: serde_json::json!({"type":"object"}),
+                }
+            })
+        }
+        fn call<'a>(
+            &'a self,
+            _: String,
+        ) -> crate::tool::BoxFuture<'a, Result<String, crate::tool::ToolError>> {
+            Box::pin(async { panic!("gateway must not run") })
+        }
+    }
+    // Both the empty-list default and nonempty hiding retain unknown-tool behaviour.
+    for hidden in [false, true] {
+        for name in ["echo", "outside_surface"] {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(EchoTool {
+                calls: calls.clone(),
+                policy_allows: true,
+            })];
+            // A real script gateway is selected; it need not execute in this test.
+            let mut tools = tools;
+            tools.push(Box::new(Script));
+            let hidden_names = if hidden {
+                vec!["echo".into()]
+            } else {
+                Vec::new()
+            };
+            let tools = crate::tool::bind_request_tools(
+                Arc::new(present_tools(tools, &hidden_names, true).unwrap()),
+                crate::tool::ToolRequestContext {
+                    request_id: "hidden-request".into(),
+                    request_doc_id: "hidden-doc".into(),
+                    node_did: "node".into(),
+                    agent_did: "agent".into(),
+                    session_id: "hidden-session".into(),
+                    caused_by_source_doc_id: None,
+                    admitted_client: None,
+                },
+            );
+            let RawStreamingChoice::ToolCall(mut call) = scripted_tool_call() else {
+                unreachable!()
+            };
+            call.name = name.into();
+            let model = ScriptedModel::new(vec![
+                vec![
+                    RawStreamingChoice::ToolCall(call),
+                    RawStreamingChoice::FinalResponse(()),
+                ],
+                vec![
+                    RawStreamingChoice::Message("done".into()),
+                    RawStreamingChoice::FinalResponse(()),
+                ],
+            ]);
+            let hook = RecordingHook::default();
+            let observed = hook.clone();
+            let scope = test_scope(
+                crate::rendered_request::RenderedRequestContext {
+                    request_doc_id: "hidden-doc".into(),
+                    request_commit_cid: "cid".into(),
+                    request_id: "hidden-request".into(),
+                    node_did: "node".into(),
+                    requester_did: "user".into(),
+                    agent_did: "agent".into(),
+                    session_id: "hidden-session".into(),
+                    model_name: "scripted".into(),
+                    provider_family: None,
+                },
+                Arc::new(|_| Box::pin(async { Ok(()) })),
+            );
+            let mut config = test_loop_config();
+            config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
+            scope_request(scope, async {
+                let stream = crate::loop_stream::run_loop_stream(
+                    model,
+                    Some(hook),
+                    TaggedMessage::unassociated(Message::user("go")),
+                    Vec::new(),
+                    tools,
+                    config,
+                );
+                futures::pin_mut!(stream);
+                while let Some(item) = stream.next().await {
+                    match item.expect("serial loop should recover") {
+                        crate::loop_stream::LoopStreamItem::AuthoredInputReady {
+                            reply, ..
+                        }
+                        | crate::loop_stream::LoopStreamItem::SteeringBoundary { reply } => {
+                            reply.send(Ok(Vec::new())).unwrap();
+                        }
+                        crate::loop_stream::LoopStreamItem::FinishOrIntake { reply, .. } => {
+                            reply
+                                .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
+                                .ok();
+                        }
+                        _ => {}
+                    }
+                }
+            })
+            .await;
+            let recorded = observed.calls();
+            let refused = hidden && name == "echo";
+            assert_eq!(
+                recorded
+                    .iter()
+                    .filter(|call| matches!(call, RecordedCall::ToolCall { .. }))
+                    .count(),
+                usize::from(!refused)
+            );
+            assert_eq!(
+                recorded
+                    .iter()
+                    .filter(|call| matches!(call, RecordedCall::AdmissionRejected { .. }))
+                    .count(),
+                usize::from(refused)
+            );
+            assert_eq!(
+                calls.lock().unwrap().len(),
+                usize::from(!hidden && name == "echo")
+            );
+            let outcomes = observed.outcomes.lock().unwrap();
+            assert_eq!(outcomes.len(), 1);
+            match &outcomes[0] {
+                ToolOutcome::Failed { class, text, .. } if refused => {
+                    assert_eq!(*class, FailureClass::PolicyDenied);
+                    assert!(text.contains("`script`"), "{text}");
+                }
+                ToolOutcome::Failed { class, text, .. } => {
+                    assert_eq!(*class, FailureClass::ArgumentInvalid);
+                    assert_eq!(text, "error: unknown tool 'outside_surface'");
+                }
+                ToolOutcome::Completed(text) => {
+                    assert!(!hidden && name == "echo");
+                    assert_eq!(text, "HI");
+                }
+                other => panic!("unexpected outcome {other:?}"),
+            }
+        }
+    }
 }

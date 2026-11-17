@@ -1047,6 +1047,342 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
     assert_eq!(status, StatusCode::FORBIDDEN, "replay: {body}");
 }
 
+/// A runtime serving the hosted install session over a real socket, for the
+/// signing user of `home`. The router serves installs as
+/// `test_support::test_runtime_build()`, given to it router-locally, so a
+/// client that passes that build agrees with it.
+struct HostedInstallServer {
+    endpoint: GraphqlEndpoint,
+    _server: tokio_util::task::AbortOnDropHandle<()>,
+}
+
+async fn hosted_install_server(
+    home: &crate::test_support::ClientHome,
+    plugin_home: &std::path::Path,
+    agent: &str,
+) -> HostedInstallServer {
+    use gents_store::identity::NodeIdentity as _;
+    let owner = home.node_did().to_owned();
+    let binding = home.agent(agent).await;
+    home.mark_backend_healthy(&binding).await;
+    let runtime = gents::Gents::builder()
+        .node(home.node().clone())
+        .backend_admission(home.home.backend_admission())
+        .identity(home.home.identity.clone())
+        .plugin_home(plugin_home)
+        .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
+        .agent(agent)
+        .identity_binding(binding.clone())
+        .backend_id(format!("{}:backend", binding.agent_did))
+        .model_name("test-model")
+        .done()
+        .build()
+        .await
+        .unwrap();
+    let (activation, observation) = empty_activation_state();
+    assert!(activation.set(runtime).is_ok());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = runtime_contract_router(
+        home.graphql().to_owned(),
+        GraphqlEndpoint::anonymous(home.graphql()),
+        agent.into(),
+        owner,
+        "readwrite".into(),
+        Ok(None),
+        Vec::new(),
+        Some(plugin_home.display().to_string()),
+        None,
+        None,
+        None,
+        None,
+        crate::http::enrollment::empty_issuer_handle(),
+        crate::http::enrollment::empty_decision_service_handle(),
+        activation,
+        observation,
+        Default::default(),
+        Default::default(),
+    )
+    .contract
+    // Router-local, never the process-global record.
+    .layer(axum::Extension(crate::test_support::test_runtime_build()))
+    .merge(crate::test_support::ForwardingProxy::router(
+        home.graphql(),
+        std::sync::Arc::new(|_, _| Box::pin(async { crate::test_support::ProxyDecision::Forward })),
+    ));
+    let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    }));
+    let endpoint =
+        GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), home.user.did())
+            .with_client_signing_capability(home.user.client_signing_capability().unwrap())
+            .unwrap();
+    HostedInstallServer {
+        endpoint,
+        _server: server,
+    }
+}
+
+fn documents_fixture() -> gents_pack::pack::resolved_pack::ResolvedPack {
+    let (bytes, _) = gents_pack::pack::archive::pack_dir(&crate::test_support::pack_fixture_dir(
+        "documents_fixture",
+    ))
+    .unwrap();
+    gents_pack::pack::resolved_pack::ResolvedPack::received(
+        gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap(),
+        gents_pack::pack::PackSource::Local { file_name: None },
+    )
+    .unwrap()
+}
+
+fn preview_request(
+    home: &std::path::Path,
+) -> gents_pack::pack::install_flow::DocumentsInstallRequest {
+    gents_pack::pack::install_flow::DocumentsInstallRequest {
+        move_pin_tools: Vec::new(),
+        home: home.to_owned(),
+        remote: true,
+        inference_slots: Vec::new(),
+        dependency_variables: Vec::new(),
+        bind_agents: Vec::new(),
+        preview: true,
+        force_rebind_concrete_did: false,
+        edited: gents_protocol::operations::pack::EditedDocuments::Refuse,
+        grant_authority: false,
+        wire: Vec::new(),
+    }
+}
+
+/// A preview goes through the build-comparing session: a client of another
+/// build is refused by the runtime before it opens the archives, with the
+/// runtime's build-fact text and nothing written.
+#[tokio::test]
+async fn a_hosted_preview_from_another_build_is_refused_before_anything_is_written() {
+    let home = crate::test_support::ClientHome::new().await;
+    let plugin_home = tempfile::tempdir().unwrap();
+    let server = hosted_install_server(&home, plugin_home.path(), "hosted-preview").await;
+    let runtime = crate::test_support::test_runtime_build();
+    let mut other = runtime.clone();
+    other.git_sha = Some("f00dfacef00d".into());
+    let pack = documents_fixture();
+    let query = "{ Tools { tools_id } PackInstallation { coordinate } }";
+    let before = home.access.execute(query).await.unwrap();
+
+    let error = crate::http::pack_install_client::preview_remote(
+        &server.endpoint,
+        home.node_did(),
+        &pack,
+        &[],
+        &preview_request(plugin_home.path()),
+        true,
+        other,
+    )
+    .await
+    .expect_err("another build is refused");
+    let refusal = error
+        .downcast_ref::<crate::http::pack_install_client::PackInstallHandshakeError>()
+        .expect("a typed refusal");
+    let text = refusal.to_string();
+    assert!(
+        matches!(
+            refusal,
+            crate::http::pack_install_client::PackInstallHandshakeError::RuntimeFailed { class, .. }
+                if class == "build_mismatch"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("f00dfacef00d"),
+        "names the client's build: {text}"
+    );
+    assert!(
+        text.contains(runtime.git_sha.as_deref().unwrap()),
+        "names the runtime's build: {text}"
+    );
+    assert_eq!(home.access.execute(query).await.unwrap(), before);
+    assert_eq!(
+        std::fs::read_dir(plugin_home.path()).unwrap().count(),
+        0,
+        "nothing staged in the plugin home"
+    );
+}
+
+/// The same preview from a client of the runtime's build is answered over the
+/// session, with the runtime's build for the client to check.
+#[tokio::test]
+async fn a_hosted_preview_from_the_same_build_is_answered_over_the_session() {
+    let home = crate::test_support::ClientHome::new().await;
+    let plugin_home = tempfile::tempdir().unwrap();
+    let server = hosted_install_server(&home, plugin_home.path(), "hosted-preview").await;
+    let pack = documents_fixture();
+    let query = "{ Tools { tools_id } PackInstallation { coordinate } }";
+    let before = home.access.execute(query).await.unwrap();
+    let (preview, warnings) = crate::http::pack_install_client::preview_remote(
+        &server.endpoint,
+        home.node_did(),
+        &pack,
+        &[],
+        &preview_request(plugin_home.path()),
+        true,
+        crate::test_support::test_runtime_build(),
+    )
+    .await
+    .unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        preview["coordinate"], "fixture/documents_fixture",
+        "{preview}"
+    );
+    assert_eq!(
+        home.access.execute(query).await.unwrap(),
+        before,
+        "a preview writes nothing"
+    );
+}
+
+/// A documents pack whose one Tools document `differ-tools` reads
+/// `display_name` as written.
+fn tools_pack(
+    display_name: &str,
+) -> (
+    tempfile::TempDir,
+    gents_pack::pack::resolved_pack::ResolvedPack,
+) {
+    let root = tempfile::tempdir().unwrap();
+    let write = |name: &str, value: serde_json::Value| {
+        std::fs::write(root.path().join(name), serde_json::to_vec(&value).unwrap()).unwrap()
+    };
+    std::fs::write(root.path().join("README.md"), "# fixture").unwrap();
+    write(
+        "manifest.json",
+        json!({
+            "manifest_version": 1, "name": "differ", "namespace": "fixture", "version": "1.0.0",
+            "description": "One Tools document", "authors": ["tests"], "tags": [],
+            "kind": "documents", "config": "pack_config.json",
+            "assets": ["README.md", "pack_config.json"], "dependencies": [],
+        }),
+    );
+    write(
+        "pack_config.json",
+        json!({
+            "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
+            "tools": [{"tools_id": "differ-tools", "display_name": display_name}],
+        }),
+    );
+    let (bytes, _) = gents_pack::pack::archive::pack_dir(root.path()).unwrap();
+    let pack = gents_pack::pack::resolved_pack::ResolvedPack::received(
+        gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap(),
+        gents_pack::pack::PackSource::Local { file_name: None },
+    )
+    .unwrap();
+    (root, pack)
+}
+
+/// A hosted install over a Tools document that already exists with other
+/// content is refused before anything is written, and the operator is shown,
+/// through the socket, which document (collection and id) and the overwrite
+/// or keep choice, and no field value of either side. (A preview plans the
+/// pack without comparing it to the Node, so it is answered and writes
+/// nothing.)
+#[tokio::test]
+async fn a_hosted_install_over_differing_documents_names_them_and_no_values() {
+    let home = crate::test_support::ClientHome::new().await;
+    let owner = home.node_did().to_owned();
+    let plugin_home = tempfile::tempdir().unwrap();
+    let server = hosted_install_server(&home, plugin_home.path(), "hosted-differ").await;
+    let existing = "Operator copy sk-live-existing-0123";
+    let shipped = "Pack copy sk-live-shipped-4567";
+    let tools = serde_json::from_value(json!({
+        "tools_id": "differ-tools", "node_did": owner, "display_name": existing,
+    }))
+    .unwrap();
+    gents_documents::write_tools_document(
+        &home.access,
+        &tools,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
+    let (_root, pack) = tools_pack(shipped);
+    let query = "{ PackInstallation { coordinate } }";
+    let before = home.access.execute(query).await.unwrap();
+    let mut args = preview_request(plugin_home.path());
+
+    // What the operator reads: after the handshake the runtime's refusal
+    // reaches the client through the replayed transaction, as text.
+    let check = |error: anyhow::Error, step: &str| {
+        let text = format!("{error:#}");
+        assert!(
+            text.contains("the runtime refused the install (not_installed, documents_differ)"),
+            "{step}: {text}"
+        );
+        assert!(
+            text.contains("Tools/differ-tools"),
+            "{step}: names the document: {text}"
+        );
+        assert!(
+            text.contains("--overwrite or --keep"),
+            "{step}: the choice: {text}"
+        );
+        assert!(
+            !text.contains("sk-live"),
+            "{step}: no value of either side: {text}"
+        );
+        assert!(!text.contains("--home"), "{step}: {text}");
+    };
+
+    let preview = crate::http::pack_install_client::preview_remote(
+        &server.endpoint,
+        &owner,
+        &pack,
+        &[],
+        &args,
+        true,
+        crate::test_support::test_runtime_build(),
+    )
+    .await
+    .expect("a preview plans the pack without comparing it to the Node");
+    assert_eq!(
+        preview.0["documents"][0]["id"], "differ-tools",
+        "{}",
+        preview.0
+    );
+    assert_eq!(
+        home.access.execute(query).await.unwrap(),
+        before,
+        "a preview writes nothing"
+    );
+
+    args.preview = false;
+    let install = crate::http::pack_install_client::install_remote(
+        &server.endpoint,
+        &owner,
+        &pack,
+        &[],
+        &args,
+        true,
+        crate::test_support::test_runtime_build(),
+    )
+    .await
+    .expect_err("the install refuses the differing document");
+    check(install, "install");
+
+    assert_eq!(
+        home.access.execute(query).await.unwrap(),
+        before,
+        "nothing installed"
+    );
+    let kept = home
+        .access
+        .execute(r#"{ Tools(filter: {tools_id: {_eq: "differ-tools"}}) { display_name } }"#)
+        .await
+        .unwrap();
+    assert!(
+        kept.to_string().contains(existing),
+        "the existing document is untouched: {kept}"
+    );
+}
+
 #[tokio::test]
 async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
     use gents_store::identity::NodeIdentity as _;

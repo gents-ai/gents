@@ -201,6 +201,28 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
         .as_str()
         .context("created Agent DID")?
         .to_owned();
+    // Root admission precedes plugin construction; grant the clone reader on
+    // its inherited root so the plugin failure is the one diagnosed.
+    let published_root = created
+        .pointer("/host_root_access/published_root")
+        .and_then(Value::as_str)
+        .context("clone receipt's published root")?;
+    run_cli_json(
+        &home,
+        &[
+            "config",
+            "workspace-root",
+            "grant-reader",
+            "--path",
+            published_root,
+            "--agent-did",
+            &broken_agent,
+            "--graphql",
+            &graphql,
+        ],
+    )?;
+    let after_grant_generation =
+        wait_for_runtime_quiescence(&graphql, &owner, 2, Duration::from_millis(200)).await?;
     let selection = graphql_query(
         &graphql,
         &format!(
@@ -248,8 +270,35 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
             &graphql,
         ],
     )?;
-    wait_for_runtime_quiescence(&graphql, &owner, 2, Duration::from_millis(200)).await?;
-    let diagnosed = run_cli_json(&home, &["runtime", "diagnose", "--graphql", &graphql])?;
+    wait_for_runtime_quiescence(
+        &graphql,
+        &owner,
+        after_grant_generation + 1,
+        Duration::from_millis(200),
+    )
+    .await?;
+    // A stable earlier generation may still precede the Tools edit. Observe
+    // this agent's demotion rather than assuming quiescence means it reloaded.
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let diagnosed = loop {
+        let snapshot = run_cli_json(&home, &["runtime", "diagnose", "--graphql", &graphql])?;
+        let demoted = snapshot
+            .pointer("/checks/runtime_node_readiness/unavailable_agents")
+            .and_then(Value::as_array)
+            .is_some_and(|agents| {
+                agents
+                    .iter()
+                    .any(|agent| agent["agent_did"] == broken_agent.as_str())
+            });
+        if demoted {
+            break snapshot;
+        }
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "edited Tools never demoted the agent; last diagnose: {snapshot}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
     let unavailable = diagnosed
         .pointer("/checks/runtime_node_readiness/unavailable_agents")
         .and_then(Value::as_array)
@@ -421,4 +470,118 @@ async fn hosted_pack_install_preview_names_variables_without_their_values() -> R
         ],
     )?;
     assert_preview_hides_the_secret(&preview, secret)
+}
+
+/// A documents pack with a schema, so the install goes through the runtime's
+/// own install session.
+///
+/// It ships no agent: an agent slot, bound or not, still hits upstream #3890
+/// over the session (the runtime records the slot's binding variable, the
+/// client does not), so a pack whose planned root agents are non-empty cannot
+/// be installed this way until that lands.
+fn schema_pack(root: &Path) -> Result<()> {
+    std::fs::create_dir_all(root.join("schemas"))?;
+    std::fs::write(root.join("README.md"), "# fixture")?;
+    std::fs::write(
+        root.join("schemas/session_note.graphql"),
+        "type SessionNote {\n  title: String\n}\n",
+    )?;
+    std::fs::write(
+        root.join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "manifest_version": 1, "name": "sessioned", "namespace": "fixture",
+            "version": "1.0.0", "description": "A schema and a Tools document",
+            "authors": ["tests"], "tags": [], "kind": "documents", "config": "pack_config.json",
+            "assets": ["README.md", "pack_config.json", "schemas/session_note.graphql"],
+            "schemas": ["schemas/session_note.graphql"], "dependencies": [],
+        }))?,
+    )?;
+    std::fs::write(
+        root.join("pack_config.json"),
+        serde_json::to_vec(&json!({
+            "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
+            "tools": [{"tools_id": "sessioned-tools", "display_name": "No tools"}],
+        }))?,
+    )?;
+    Ok(())
+}
+
+/// An install through the runtime's session returns the runtime's outcome to
+/// the CLI unchanged: one receipt, carrying the pack's digest (what `promote`
+/// reads) and the apply report, with the planned root agents taken off it to
+/// make the tool-root grant. Before, the CLI printed the outcome itself and
+/// went on with `null`: the receipt was printed twice and its second copy,
+/// the one the grant and `promote` used, held none of this.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_runtime_session_install_returns_the_runtimes_outcome_to_the_cli() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("home");
+    std::fs::create_dir_all(&home)?;
+    let endpoint = MockModelEndpoint::start("pack-outcome")?;
+    let init = run_init_json(
+        &home,
+        &[
+            "--node-name",
+            "pack-outcome",
+            "--model-name",
+            "pack-outcome",
+            "--inference-url",
+            endpoint.endpoint(),
+        ],
+    )?;
+    let owner = node_did_from_init(&init)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut server = spawn_server_with_env(&home, port, &[], &[])?;
+    wait_for_port(port, &mut server)?;
+    wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
+    let root = temp.path().join("sessioned");
+    schema_pack(&root)?;
+    let root_arg = root.to_str().context("pack path")?;
+
+    // Previewed through the same session first: it writes nothing.
+    let preview = run_cli_json(
+        &home,
+        &[
+            "config",
+            "pack",
+            "install",
+            root_arg,
+            "--graphql",
+            &graphql,
+            "--preview",
+        ],
+    )?;
+    assert_eq!(preview["coordinate"], "fixture/sessioned", "{preview}");
+    let installed = "{ PackInstallation { coordinate digest } }";
+    assert_eq!(
+        graphql_query(&graphql, installed).await?["data"]["PackInstallation"],
+        json!([]),
+        "a preview installs nothing"
+    );
+
+    // `run_cli_json` parses stdout as one JSON document: a receipt printed
+    // twice fails here.
+    let receipt = run_cli_json(
+        &home,
+        &["config", "pack", "install", root_arg, "--graphql", &graphql],
+    )?;
+    assert_eq!(receipt["pack"], "sessioned", "{receipt}");
+    let digest = receipt["digest"]
+        .as_str()
+        .with_context(|| format!("the receipt carries the digest promote reads: {receipt}"))?;
+    let rows = graphql_query(&graphql, installed).await?;
+    assert_eq!(
+        rows["data"]["PackInstallation"][0]["digest"], digest,
+        "{rows}"
+    );
+    assert!(
+        receipt["apply"].is_object(),
+        "the runtime's report: {receipt}"
+    );
+    assert!(
+        receipt.get("installer_root_agents").is_none(),
+        "the planned rows are taken off the outcome to make the grant: {receipt}"
+    );
+    Ok(())
 }

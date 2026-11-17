@@ -1810,7 +1810,10 @@ where
 {
     let rag_text = current_rag_text(&prompt, history, prior);
     let mut tool_defs = Vec::with_capacity(tools.len());
-    for tool in tools {
+    for tool in tools
+        .iter()
+        .filter(|tool| crate::tool_policy::presentation::advertised(true, tool.hidden()))
+    {
         let native = tool.definition(rag_text.clone()).await;
         tool_defs.push(crate::rig_compat::to_rig_tool_definition(&native));
     }

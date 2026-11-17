@@ -32,8 +32,11 @@ impl CompletionModel for RecoveringProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "backend-recovery")
-            .await?;
+        gents_inference::test_support::capture_scripted_provider_request(
+            &request,
+            "backend-recovery",
+        )
+        .await?;
         if !self.available.load(Ordering::SeqCst) {
             let error = CompletionError::ProviderError("HTTP status 503: unavailable".into());
             if self.fails_on_first_read {
@@ -239,8 +242,11 @@ impl CompletionModel for BufferedReasoningShutdownProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "shutdown-reasoning")
-            .await?;
+        gents_inference::test_support::capture_scripted_provider_request(
+            &request,
+            "shutdown-reasoning",
+        )
+        .await?;
         let processed_two = self.processed_two.clone();
         let events: rig::streaming::StreamingResult<()> =
             Box::pin(stream::unfold(0usize, move |index| {
@@ -618,7 +624,8 @@ impl CompletionModel for LeaseLossProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "lease-loss").await?;
+        gents_inference::test_support::capture_scripted_provider_request(&request, "lease-loss")
+            .await?;
         let events = vec![
             Ok(RawStreamingChoice::ToolCall(
                 rig::streaming::RawStreamingToolCall::new(
@@ -641,14 +648,16 @@ struct LeaseBlockingTool {
 }
 
 impl gents_loop::tool::ToolDyn for LeaseBlockingTool {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "lease_block".into()
     }
     fn definition<'a>(
         &'a self,
         _: String,
-    ) -> gents_loop::tool::BoxFuture<'a, gents_loop::tool::ToolDefinition>
-    {
+    ) -> gents_loop::tool::BoxFuture<'a, gents_loop::tool::ToolDefinition> {
         Box::pin(async {
             gents_loop::tool::ToolDefinition {
                 name: "lease_block".into(),
@@ -660,10 +669,7 @@ impl gents_loop::tool::ToolDyn for LeaseBlockingTool {
     fn call<'a>(
         &'a self,
         _: String,
-    ) -> gents_loop::tool::BoxFuture<
-        'a,
-        Result<String, gents_loop::tool::ToolError>,
-    > {
+    ) -> gents_loop::tool::BoxFuture<'a, Result<String, gents_loop::tool::ToolError>> {
         let entered = self.entered.clone();
         Box::pin(async move {
             if let Some(entered) = entered {
@@ -695,8 +701,9 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         provider_family: None,
         model: Arc::new(LeaseLossProvider),
         preamble: prompt.preamble().to_owned(),
-        loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool { entered: None })
-            as Box<dyn gents_loop::tool::ToolDyn>]),
+        loop_tools: Arc::new(vec![
+            Box::new(LeaseBlockingTool { entered: None }) as Box<dyn gents_loop::tool::ToolDyn>
+        ]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
@@ -784,7 +791,8 @@ impl CompletionModel for NonTerminalProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
+            .await?;
 
         self.stream_calls.fetch_add(1, Ordering::SeqCst);
         if self.reasoning_prefix {
@@ -1115,8 +1123,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool {
             entered: Some(tool_entered.clone()),
-        })
-            as Box<dyn gents_loop::tool::ToolDyn>]),
+        }) as Box<dyn gents_loop::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
