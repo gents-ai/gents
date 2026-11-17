@@ -34,10 +34,9 @@ pub enum PackSessionFailureClass {
     /// collection and id, and the overwrite or keep choice.
     DocumentsDiffer,
     /// Documents of the pack were edited since it was installed. Its text is
-    /// never shown, only this class's description: an edited document can be
-    /// one the pack's previous installation wrote, named by an identifier that
-    /// may have been rendered from an install variable, and the received
-    /// archives cannot prove it literal.
+    /// shown: it names an edited document only where the received archives
+    /// ship it under a literal identifier, and counts the rest, which can be
+    /// documents of the previous installation.
     DocumentsEdited,
     /// The runtime could not prepare the plan from the received packs.
     PreparationFailed,
@@ -61,12 +60,14 @@ impl PackSessionFailureClass {
     /// that text is a typed error the runtime writes from identifiers and build
     /// facts, never from a field value or an install variable, and every
     /// identifier it can name comes from the received archives (so
-    /// `RefusalIdentifiers` can check it). `DocumentsEdited` is not one: it
-    /// can name documents of the previous installation.
+    /// `RefusalIdentifiers` can check it).
     pub fn shows_runtime_text(self) -> bool {
         matches!(
             self,
-            Self::BuildMismatch | Self::PluginUnresolved | Self::DocumentsDiffer
+            Self::BuildMismatch
+                | Self::PluginUnresolved
+                | Self::DocumentsDiffer
+                | Self::DocumentsEdited
         )
     }
 
@@ -155,14 +156,19 @@ impl PackSessionFailureClass {
 
 // Identifiers can themselves be rendered from install variables. Keep the
 // refusal class and remedy, but not its identifier text, for such archives.
-#[derive(Clone, Copy)]
+// An edited document is named only where the received archives ship it, by
+// the key its prepared plan renders; the rest can be documents of the previous
+// installation and are counted.
+#[derive(Clone)]
 pub(crate) struct RefusalIdentifiers {
     literal: bool,
+    shipped: std::collections::BTreeSet<String>,
 }
 
 impl RefusalIdentifiers {
     pub fn from_packs(packs: &[&gents_pack::pack::resolved_pack::ResolvedPack]) -> Self {
         Self {
+            shipped: std::collections::BTreeSet::new(),
             literal: packs.iter().all(|pack| {
                 pack.manifest().config.as_deref().is_none_or(|path| {
                     pack.archive()
@@ -203,11 +209,70 @@ impl RefusalIdentifiers {
         })
     }
 
-    fn protect(self, mut failure: SessionFailure) -> SessionFailure {
+    /// Records the documents the prepared plan ships, root and rendered
+    /// dependencies, as `Collection/id` with the ids the loader rendered.
+    pub fn ship(
+        &mut self,
+        prepared: &gents_pack::pack::PreparedDocumentPackInstall,
+    ) -> serde_json::Result<()> {
+        std::iter::once(&prepared.config)
+            .chain(
+                prepared
+                    .dependencies
+                    .iter()
+                    .map(|dependency| &dependency.config),
+            )
+            .try_for_each(|config| self.ship_config(config))
+    }
+
+    fn ship_config(&mut self, config: &gents_documents::PackConfig) -> serde_json::Result<()> {
+        use gents_store::collection::Collection;
+        let config = serde_json::to_value(config)?;
+        for collection in Collection::ALL {
+            let rows = collection
+                .dir_name()
+                .and_then(|dir| config.get(dir))
+                .and_then(serde_json::Value::as_array);
+            for row in rows.into_iter().flatten() {
+                if let Some(id) = row[collection.unique_field()].as_str() {
+                    self.shipped
+                        .insert(format!("{}/{id}", collection.graphql_type()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn protect(&self, mut failure: SessionFailure) -> SessionFailure {
         if !self.literal {
             failure.shown = None;
         }
         failure
+    }
+
+    /// An edited refusal: the documents this check can name first, then a
+    /// count of the rest.
+    fn edited(&self, coordinate: &str, edited: &[String]) -> SessionFailure {
+        let named: Vec<&str> = edited
+            .iter()
+            .map(String::as_str)
+            .filter(|name| self.literal && self.shipped.contains(*name))
+            .collect();
+        let listed = match (named.join(", "), edited.len() - named.len()) {
+            (named, _) if named.is_empty() => String::new(),
+            (named, 0) => format!(": {named}"),
+            (named, 1) => format!(": {named} and 1 other"),
+            (named, rest) => format!(": {named} and {rest} others"),
+        };
+        SessionFailure::shown(
+            PackSessionFailureClass::DocumentsEdited,
+            format!(
+                "{} of {coordinate}'s documents were edited since it was installed{listed}; \
+                 decide with --overwrite or --keep on the same command",
+                edited.len()
+            ),
+            "not_installed",
+        )
     }
 }
 
@@ -255,16 +320,19 @@ impl SessionFailure {
     /// unresolved plugin reference are shown as written: each names
     /// identifiers of the received archives (the pack, documents by collection
     /// and id, plugin coordinates and digests), and variable-derived ones use
-    /// the class description instead. Edited documents always use the class
-    /// description. `None` for any other refusal.
+    /// the class description instead. Edited documents are named where the
+    /// received archives ship them literally and counted otherwise. `None` for
+    /// any other refusal.
     pub fn change_refusal(
         error: &gents_pack::pack::PackChangeError,
-        identifiers: RefusalIdentifiers,
+        identifiers: &RefusalIdentifiers,
     ) -> Option<Self> {
         use gents_pack::pack::PackChangeError;
         let class = match error {
+            PackChangeError::Edited { coordinate, edited } => {
+                return Some(identifiers.edited(coordinate, edited))
+            }
             PackChangeError::Differing { .. } => PackSessionFailureClass::DocumentsDiffer,
-            PackChangeError::Edited { .. } => PackSessionFailureClass::DocumentsEdited,
             PackChangeError::PluginReference(_) => PackSessionFailureClass::PluginUnresolved,
             _ => return None,
         };
@@ -276,25 +344,29 @@ impl SessionFailure {
     }
 
     /// A rejected hosted transaction: documents that differ are shown as
-    /// written, edited documents and any other rejection by the class's
-    /// description.
+    /// written, edited documents as `change_refusal` shows them, any other
+    /// rejection by the class's description.
     pub fn rejection(
         rejection: gents_pack::pack::HostedRejection,
-        identifiers: RefusalIdentifiers,
+        identifiers: &RefusalIdentifiers,
     ) -> Self {
         use gents_pack::pack::HostedRejection;
-        let class = match rejection {
-            HostedRejection::Differing { .. } => PackSessionFailureClass::DocumentsDiffer,
-            HostedRejection::Edited { .. } => PackSessionFailureClass::DocumentsEdited,
-            HostedRejection::Other(error) => {
-                return Self::not_installed(PackSessionFailureClass::ApplyRejected)(error)
+        match rejection {
+            HostedRejection::Edited { coordinate, edited } => {
+                identifiers.edited(&coordinate, &edited)
             }
-        };
-        identifiers.protect(Self::shown(class, rejection.to_string(), "not_installed"))
+            differing @ HostedRejection::Differing { .. } => identifiers.protect(Self::shown(
+                PackSessionFailureClass::DocumentsDiffer,
+                differing.to_string(),
+                "not_installed",
+            )),
+            HostedRejection::Other(error) => {
+                Self::not_installed(PackSessionFailureClass::ApplyRejected)(error)
+            }
+        }
     }
 
-    /// The failure as a body: the shown text or the class's description, the
-    /// outcome and the class. `POST /packs/install` answers with it as is.
+    /// The shown text or class description, with the outcome and class.
     pub fn body(&self) -> serde_json::Value {
         serde_json::json!({
             "error": self
@@ -317,6 +389,25 @@ impl SessionFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn decode(authored: serde_json::Value, value: &str) -> gents_documents::PackConfig {
+        gents_pack::pack::decode_pack_config(
+            authored,
+            Some(&gents_pack::pack::PackInstallOptions {
+                node_did: "did:key:test".into(),
+            }),
+            &|_| Some(value.into()),
+            &|_, _, _| unreachable!(),
+        )
+        .unwrap()
+    }
+
+    fn literal_identifiers() -> RefusalIdentifiers {
+        RefusalIdentifiers {
+            literal: true,
+            shipped: Default::default(),
+        }
+    }
 
     /// No class sends an error chain: a failure sends its class's description
     /// unless the runtime handed it a typed refusal to show, so a value quoted
@@ -362,20 +453,17 @@ mod tests {
             });
             assert!(RefusalIdentifiers::in_config(&authored));
             *authored.pointer_mut(pointer).unwrap() = json!("${B13C_IDENTIFIER}");
-            let identifiers = RefusalIdentifiers {
+            let mut identifiers = RefusalIdentifiers {
                 literal: RefusalIdentifiers::in_config(&authored),
+                shipped: Default::default(),
             };
             assert!(!identifiers.literal, "{pointer}");
-            let config = gents_pack::pack::decode_pack_config(
-                authored,
-                Some(&gents_pack::pack::PackInstallOptions {
-                    node_did: "did:key:test".into(),
-                }),
-                &|_| Some(secret.into()),
-                &|_, _, _| unreachable!(),
-            )
-            .unwrap();
+            let config = decode(authored, secret);
+            identifiers.ship_config(&config).unwrap();
             let tools = &config.tools[0];
+            assert!(identifiers
+                .shipped
+                .contains(&format!("Tools/{}", tools.tools_id)));
             let reference = &tools
                 .integrations
                 .as_ref()
@@ -430,15 +518,33 @@ mod tests {
                         );
                     }
                 }
-                let failure = SessionFailure::change_refusal(&refusal, identifiers).unwrap();
-                assert_eq!(failure.message()["error"], failure.class.description());
+                let mut failures =
+                    vec![SessionFailure::change_refusal(&refusal, &identifiers).unwrap()];
                 if matches!(
                     refusal,
                     PackChangeError::Differing { .. } | PackChangeError::Edited { .. }
                 ) {
-                    let failure =
-                        SessionFailure::rejection(HostedRejection::of(refusal), identifiers);
-                    assert_eq!(failure.message()["error"], failure.class.description());
+                    failures.push(SessionFailure::rejection(
+                        HostedRejection::of(refusal),
+                        &identifiers,
+                    ));
+                }
+                for failure in failures {
+                    let message = failure.message();
+                    let expected = match failure.class {
+                        PackSessionFailureClass::DocumentsEdited => {
+                            "1 of fixture/root's documents were edited since it was installed; \
+                             decide with --overwrite or --keep on the same command"
+                        }
+                        class => class.description(),
+                    };
+                    assert_eq!(message["error"], expected, "{pointer}: {message}");
+                    for unsafe_text in [secret, "B13C_IDENTIFIER", "${"] {
+                        assert!(
+                            !message.to_string().contains(unsafe_text),
+                            "{pointer}: {message}"
+                        );
+                    }
                 }
             }
         }
@@ -500,9 +606,6 @@ mod tests {
                     class.shows_runtime_text(),
                     "{class:?}: {text}"
                 );
-                for unsafe_text in [secret, variable, "INSTALL_TOKEN", "${"] {
-                    assert!(!text.contains(unsafe_text), "{class:?}: {text}");
-                }
             }
         }
         for (error, named) in [
@@ -521,26 +624,19 @@ mod tests {
                 true,
             ),
         ] {
-            let failure =
-                SessionFailure::change_refusal(&error, RefusalIdentifiers { literal: true })
-                    .unwrap();
+            let failure = SessionFailure::change_refusal(&error, &literal_identifiers()).unwrap();
             let text = failure.message().to_string();
             assert_eq!(text.contains(tools_id), named, "{text}");
-            for unsafe_text in [secret, variable, "INSTALL_TOKEN", "${"] {
-                assert!(!text.contains(unsafe_text), "{text}");
-            }
         }
     }
 
     /// Documents that differ reach the client as written: the pack, each
     /// document by collection and id, and the overwrite or keep choice, with
-    /// nothing from the chain of any other rejection. Edited documents reach
-    /// it by the class's description only, which still names the choice.
+    /// nothing from the chain of any other rejection.
     #[test]
-    fn documents_that_differ_are_shown_by_name_and_edited_ones_by_class() {
+    fn documents_that_differ_are_shown_by_name_and_other_rejections_by_class() {
         use gents_pack::pack::{HostedRejection, PackChangeError};
-        let rejection =
-            |value| SessionFailure::rejection(value, RefusalIdentifiers { literal: true });
+        let rejection = |value| SessionFailure::rejection(value, &literal_identifiers());
         let differing = rejection(HostedRejection::of(PackChangeError::Differing {
             coordinate: "fixture/rooted".into(),
             differing: vec!["Tools/rooted-tools".into()],
@@ -553,21 +649,6 @@ mod tests {
         for unavailable in ["pack update", "pack remove", "--home"] {
             assert!(!error.contains(unavailable), "{error}");
         }
-        let edited = rejection(HostedRejection::of(PackChangeError::Edited {
-            coordinate: "fixture/rooted".into(),
-            edited: vec!["Agent/did:key:zAgent".into()],
-        }));
-        assert_eq!(edited.class, PackSessionFailureClass::DocumentsEdited);
-        assert_eq!(
-            edited.message()["error"],
-            PackSessionFailureClass::DocumentsEdited.description()
-        );
-        let error = edited.message()["error"].as_str().unwrap().to_owned();
-        // The desktop finds the decision by this choice.
-        assert!(error.contains("--overwrite or --keep"), "{error}");
-        for named in ["Agent/did:key:zAgent", "fixture/rooted"] {
-            assert!(!error.contains(named), "{error}");
-        }
         // Any other rejection, even one quoting a value, sends the description.
         let other = rejection(HostedRejection::of(PackChangeError::Other(
             anyhow::anyhow!("field resolved to sk-live-0123456789"),
@@ -576,46 +657,99 @@ mod tests {
         assert!(!other.message().to_string().contains("sk-live"));
     }
 
-    /// An edited document can be one the previous installation wrote under an
-    /// identifier rendered from an install variable, which the new, literal
-    /// archives cannot vouch for. Its refusal never names it, by either path.
+    /// An edited refusal names the documents the received, literal archives
+    /// ship, by the ids the loader rendered, and only counts the rest: one the
+    /// previous installation wrote can carry an identifier rendered from an
+    /// install variable, which the new archives cannot vouch for.
     #[test]
-    fn an_edited_refusal_never_names_a_prior_document_from_a_literal_archive() {
+    fn an_edited_refusal_names_shipped_literal_documents_and_counts_the_rest() {
         use gents_pack::pack::{HostedRejection, PackChangeError};
         let prior = "sk-live-b13c-prior-tools";
-        let literal = RefusalIdentifiers::in_config(&serde_json::json!({
-            "tools": [{"tools_id": "literal-tools"}]
-        }));
-        assert!(literal);
-        let identifiers = RefusalIdentifiers { literal };
+        let authored = serde_json::json!({
+            "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
+            "tools": [{"tools_id": "literal-tools"}, {"tools_id": "second-tools"}]
+        });
+        let mut identifiers = RefusalIdentifiers {
+            literal: RefusalIdentifiers::in_config(&authored),
+            shipped: Default::default(),
+        };
+        assert!(identifiers.literal);
+        identifiers
+            .ship_config(&decode(authored, "unused"))
+            .unwrap();
         let edited = || PackChangeError::Edited {
-            coordinate: "fixture/differ".into(),
-            edited: vec![format!("Tools/{prior}")],
+            coordinate: "fixture/root".into(),
+            edited: vec![
+                format!("Tools/{prior}"),
+                "Tools/literal-tools".into(),
+                "Tools/stale-tools".into(),
+                "Tools/second-tools".into(),
+            ],
         };
         assert!(edited().to_string().contains(prior));
         for failure in [
-            SessionFailure::change_refusal(&edited(), identifiers).unwrap(),
-            SessionFailure::rejection(HostedRejection::of(edited()), identifiers),
+            SessionFailure::change_refusal(&edited(), &identifiers).unwrap(),
+            SessionFailure::rejection(HostedRejection::of(edited()), &identifiers),
         ] {
             assert_eq!(failure.class, PackSessionFailureClass::DocumentsEdited);
             assert_eq!(failure.outcome, "not_installed");
             for body in [failure.message(), failure.body()] {
                 assert_eq!(
                     body["error"],
-                    PackSessionFailureClass::DocumentsEdited.description(),
+                    "4 of fixture/root's documents were edited since it was installed: \
+                     Tools/literal-tools, Tools/second-tools and 2 others; decide with \
+                     --overwrite or --keep on the same command",
                     "{body}"
                 );
                 assert_eq!(body["class"], "documents_edited", "{body}");
-                assert!(!body.to_string().contains(prior), "{body}");
+                for withheld in [prior, "stale-tools"] {
+                    assert!(!body.to_string().contains(withheld), "{body}");
+                }
             }
         }
-        // Even handed its text, the class shows only its description.
-        let shown = SessionFailure::shown(
-            PackSessionFailureClass::DocumentsEdited,
-            edited().to_string(),
-            "not_installed",
-        );
-        assert!(!shown.message().to_string().contains(prior));
+    }
+
+    #[test]
+    fn edited_names_require_both_received_membership_and_literal_provenance() {
+        use gents_pack::pack::PackChangeError;
+        let mut identifiers = literal_identifiers();
+        identifiers
+            .ship_config(&decode(
+                serde_json::json!({
+                    "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
+                    "tools": [{"tools_id": "received"}]
+                }),
+                "unused",
+            ))
+            .unwrap();
+        for (edited, literal, expected) in [
+            (vec!["Tools/received"], true, ": Tools/received; decide"),
+            (
+                vec!["Tools/received", "Tools/old"],
+                true,
+                ": Tools/received and 1 other; decide",
+            ),
+            (vec!["Tools/old"], true, "installed; decide"),
+            (vec!["Tools/received"], false, "installed; decide"),
+        ] {
+            identifiers.literal = literal;
+            let failure = SessionFailure::change_refusal(
+                &PackChangeError::Edited {
+                    coordinate: "fixture/root".into(),
+                    edited: edited.iter().map(|id| (*id).into()).collect(),
+                },
+                &identifiers,
+            )
+            .unwrap();
+            let message = failure.message();
+            let text = message["error"].as_str().unwrap();
+            assert!(text.starts_with(&format!("{} of ", edited.len())), "{text}");
+            assert!(text.contains(expected), "{text}");
+            assert!(!text.contains("Tools/old"), "{text}");
+            if !literal {
+                assert!(!text.contains("Tools/received"), "{text}");
+            }
+        }
     }
 
     /// A remote operator cannot use the runtime's home, so no description

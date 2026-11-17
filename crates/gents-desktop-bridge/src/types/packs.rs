@@ -154,6 +154,11 @@ pub struct PackInstallView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub host_tool_roots: Option<PackHostToolRootsView>,
+    /// What a preview could not check, in words: it does not compare the
+    /// documents already on the node, so the install may still refuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub notes: Option<Vec<String>>,
     #[serde(flatten)]
     details: super::json::WireObject,
 }

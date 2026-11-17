@@ -275,6 +275,40 @@ describe("the install review", () => {
     expect(installs(installPack)).toEqual([]);
   });
 
+  it("says what its preview doesn't check, as the preview words it", async () => {
+    const note =
+      "Existing documents are not compared by this preview; the install may still refuse documents that differ or were edited.";
+    const secondNote = "A second limitation supplied by the preview.";
+    show(bridge(() => preview({ notes: [note, secondNote] })));
+    const { review } = await openRegistryReview();
+    const notes = await within(review).findByRole("list", {
+      name: "What the review doesn't check",
+    });
+    expect(
+      within(notes)
+        .getAllByRole("listitem")
+        .map((n) => n.textContent),
+    ).toEqual([note, secondNote]);
+  });
+
+  it("says nothing about checks when its preview has no notes", async () => {
+    show(bridge());
+    const { review } = await openRegistryReview();
+    await within(review).findByRole("heading", { name: "Install docs?" });
+    expect(
+      within(review).queryByRole("list", { name: "What the review doesn't check" }),
+    ).toBeNull();
+  });
+
+  it("shows no limitations list for an explicitly empty notes array", async () => {
+    show(bridge(() => preview({ notes: [] })));
+    const { review } = await openRegistryReview();
+    await within(review).findByRole("heading", { name: "Install docs?" });
+    expect(
+      within(review).queryByRole("list", { name: "What the review doesn't check" }),
+    ).toBeNull();
+  });
+
   it("installs only once the person allows the access its plugins ask for", async () => {
     const installPack = bridge(() =>
       preview({ authority: [{ plugin: "fetch", asks: "HTTP to any host" }] }),

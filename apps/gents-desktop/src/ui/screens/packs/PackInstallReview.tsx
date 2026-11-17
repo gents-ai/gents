@@ -242,6 +242,7 @@ export function PackInstallReview({
   const others = overlaps.filter((overlap) => overlap.owner !== null);
   /* a pack already installed shares its own collections */
   const shared = already ? [] : (report?.shared_collections ?? []);
+  const notes = report?.notes ?? [];
   const registry = info[pack];
   const size =
     request?.source !== "file" && registry && registry !== "unread"
@@ -631,6 +632,17 @@ export function PackInstallReview({
                   </p>
                 )}
               </Section>
+
+              {notes.length > 0 && (
+                <ul
+                  aria-label="What the review doesn't check"
+                  className="grid gap-1 text-sm text-muted-foreground"
+                >
+                  {notes.map((note) => (
+                    <li key={note}>{note}</li>
+                  ))}
+                </ul>
+              )}
 
               <Collapsible className="group/details">
                 <CollapsibleTrigger className="inline-flex cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground">

@@ -20,4 +20,9 @@ collections?: Array<string> | null | null,
  * shares rather than creates; null when that can't be known before it
  * installs.
  */
-shared_collections?: Array<string> | null | null, authority?: Array<PackAuthorityAskView>, inference_needs?: PackInferenceNeedsView, host_tool_roots?: PackHostToolRootsView, [key: string]: JsonValue | undefined };
+shared_collections?: Array<string> | null | null, authority?: Array<PackAuthorityAskView>, inference_needs?: PackInferenceNeedsView, host_tool_roots?: PackHostToolRootsView,
+/**
+ * What a preview could not check, in words: it does not compare the
+ * documents already on the node, so the install may still refuse.
+ */
+notes?: Array<string>, [key: string]: JsonValue | undefined };

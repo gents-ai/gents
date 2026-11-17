@@ -440,6 +440,32 @@ mod tests {
         let view: PackInstallView = serde_json::from_value(report.clone()).unwrap();
         assert_eq!(view.collections, Some(None));
         assert_eq!(view.authority.as_ref().map(Vec::len), Some(1));
+        assert_eq!(view.notes, None);
+        assert_eq!(serde_json::to_value(view).unwrap(), report);
+    }
+
+    /// The preview's notes reach the review typed and as written, so the
+    /// desktop can say what the preview did not check.
+    #[test]
+    fn preview_reports_carry_their_notes() {
+        let note = gents_pack::pack::install_review::EXISTING_DOCUMENTS_NOTE;
+        let report = serde_json::json!({
+            "pack":"demo", "digest":"sha256:digest", "source":"local", "would_write": false,
+            "documents":[{"collection":"Agent", "id":"a", "name":null}],
+            "notes": [note],
+        });
+        let view: PackInstallView = serde_json::from_value(report.clone()).unwrap();
+        assert_eq!(view.notes.as_deref(), Some([note.to_owned()].as_slice()));
+        assert_eq!(serde_json::to_value(view).unwrap(), report);
+    }
+
+    #[test]
+    fn preview_reports_preserve_an_explicitly_empty_notes_list() {
+        let report = serde_json::json!({
+            "pack": "demo", "digest": "sha256:digest", "source": "local", "notes": []
+        });
+        let view: PackInstallView = serde_json::from_value(report.clone()).unwrap();
+        assert_eq!(view.notes, Some(Vec::new()));
         assert_eq!(serde_json::to_value(view).unwrap(), report);
     }
 

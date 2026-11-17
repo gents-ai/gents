@@ -419,7 +419,7 @@ async fn run_inner(
         .map_err(SessionFailure::not_installed(Class::PreviewFailed))?;
         return Ok(());
     }
-    let received = async {
+    let mut received = async {
         anyhow::ensure!(
             request.wire.is_empty(),
             "hosted pack session cannot wire plugins"
@@ -429,7 +429,6 @@ async fn run_inner(
     }
     .await
     .map_err(SessionFailure::not_installed(Class::InvalidRequest))?;
-    let identifiers = received.identifiers;
     let preparation_failed = SessionFailure::not_installed(Class::PreparationFailed);
     let prepare = async {
         let requested =
@@ -463,11 +462,10 @@ async fn run_inner(
         .await
         {
             Ok(prepared) => prepared,
-            // Typed refusals use provenance-checked identifiers; Edited names
-            // can come from an earlier install and are always class-only.
-            // Any other preparation error is classed by this step.
+            // Typed refusals use provenance-checked identifiers. Any other
+            // preparation error is classed by this step.
             Err(error) => {
-                return match SessionFailure::change_refusal(&error, identifiers) {
+                return match SessionFailure::change_refusal(&error, &received.identifiers) {
                     Some(shown) => Ok(Err(shown)),
                     None => Err(error.into_anyhow()),
                 }
@@ -488,6 +486,7 @@ async fn run_inner(
             &received.root,
             &received.dependencies,
         );
+        received.identifiers.ship(&prepared)?;
         // The client grants after this install, from the rows of its plan.
         let planned = gents_tools::surface::planned_root_agents(
             &access,
@@ -683,7 +682,7 @@ async fn run_inner(
         .await
         .map_err(|error| match error {
             gents_pack::pack::HostedPackStageError::Rejected(rejection) => {
-                SessionFailure::rejection(rejection, identifiers)
+                SessionFailure::rejection(rejection, &received.identifiers)
             }
             gents_pack::pack::HostedPackStageError::Unconfirmed(error) => {
                 SessionFailure::unconfirmed(Class::ApplyUnconfirmed)(error)
@@ -726,11 +725,11 @@ async fn preview(
             anyhow::anyhow!("a hosted preview takes a documents pack"),
         ));
     }
-    let identifiers = received.identifiers;
+    let identifiers = received.identifiers.clone();
     super::install_owned(state.clone(), home, received, access)
         .await
         .map_err(|error| {
-            SessionFailure::change_refusal(&error, identifiers).unwrap_or_else(|| {
+            SessionFailure::change_refusal(&error, &identifiers).unwrap_or_else(|| {
                 SessionFailure::not_installed(Class::PreviewFailed)(error.into_anyhow())
             })
         })

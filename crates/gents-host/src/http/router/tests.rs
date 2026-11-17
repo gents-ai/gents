@@ -1223,8 +1223,18 @@ async fn a_hosted_handler_yields_while_hashing_core_packs() {
         );
         release.send(()).unwrap();
     };
-    let (result, ()) = tokio::join!(preview, progress);
-    result.unwrap();
+    tokio::pin!(preview);
+    tokio::select! {
+        () = progress => {},
+        result = &mut preview => panic!("preview completed before the handler yielded: {result:?}"),
+        () = tokio::time::sleep(std::time::Duration::from_secs(600)) => {
+            panic!("no hashing progress or preview result before the stall ceiling");
+        }
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(600), preview)
+        .await
+        .expect("preview stalled after hashing was released")
+        .unwrap();
     assert!(build.digests_computed());
     assert_eq!(
         build.clone().build_async().await.unwrap(),
@@ -1539,144 +1549,11 @@ async fn hosted_refusals_hide_variable_derived_tools_and_plugin_identifiers() {
     }
 }
 
-/// `POST /packs/install` against `server`, signed as its user unless
-/// `signed` is false: the status and the JSON body.
-async fn post_install(server: &HostedInstallServer, body: &Value, signed: bool) -> (u16, Value) {
-    let url = server
-        .endpoint
-        .url()
-        .replace("/api/v0/graphql", "/packs/install");
-    let client = reqwest::Client::builder().no_proxy().build().unwrap();
-    let mut request = client.post(url).json(body);
-    if signed {
-        request = server.endpoint.authorize(request).unwrap();
-    }
-    let response = request.send().await.unwrap();
-    let status = response.status().as_u16();
-    (status, response.json().await.unwrap())
-}
-
-/// A `POST /packs/install` failure body: exactly a known class, its outcome,
-/// and the class's description unless the class shows a typed refusal.
-fn post_failure(body: &Value) -> crate::http::pack_install::failure::PackSessionFailureClass {
-    use crate::http::pack_install::failure::PackSessionFailureClass;
-    let keys = body
-        .as_object()
-        .unwrap_or_else(|| panic!("{body}"))
-        .keys()
-        .map(String::as_str)
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        keys,
-        ["class", "error", "outcome"]
-            .into_iter()
-            .collect::<std::collections::BTreeSet<_>>(),
-        "{body}"
-    );
-    let class = PackSessionFailureClass::from_wire(body["class"].as_str().unwrap())
-        .unwrap_or_else(|| panic!("unknown class: {body}"));
-    if !class.shows_runtime_text() {
-        assert_eq!(body["error"], class.description(), "{body}");
-    }
-    class
-}
-
-/// The legacy `POST /packs/install` answers as the session does: a class, its
-/// description or a typed refusal's own text, and the route's own status and
-/// outcome, never an error chain that quotes a field name, an install
-/// variable or a value rendered from one.
-#[tokio::test]
-async fn post_install_failures_send_a_class_and_no_chain() {
-    use crate::http::pack_install::failure::PackSessionFailureClass as Class;
-    let home = crate::test_support::ClientHome::new().await;
-    let owner = home.node_did().to_owned();
-    let plugin_home = tempfile::tempdir().unwrap();
-    let server = hosted_install_server(&home, plugin_home.path(), "post-private").await;
-    let secret_id = "sk-live-b13c-post-tools";
-    let secret_field = "sk-live-b13c-post-field";
-    let existing = serde_json::from_value(json!({
-        "tools_id": secret_id, "node_did": owner, "display_name": "existing",
-    }))
-    .unwrap();
-    gents_documents::write_tools_document(
-        &home.access,
-        &existing,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    let query = "{ Tools { tools_id display_name } PackInstallation { coordinate } }";
-    let before = home.access.execute(query).await.unwrap();
-    let (_root, pack) = tools_pack_config(
-        json!({"tools_id": "${B13C_POST_TOOLS_ID}", "display_name": "replacement"}),
-    );
-    let mut args = preview_request(plugin_home.path());
-    args.preview = false;
-    args.dependency_variables = vec![format!("B13C_POST_TOOLS_ID={secret_id}")];
-    let encode = |build| {
-        crate::http::pack_install::encode_install_request(&pack, &[], &args, &owner, true, build)
-    };
-    let request = encode(crate::test_support::test_runtime_build())
-        .await
-        .unwrap();
-    let mut unknown_field = request.clone();
-    unknown_field[secret_field] = json!(true);
-    let mut other_build = crate::test_support::test_runtime_build();
-    other_build.git_sha = Some("f00dfacef00d".into());
-    let other_build = encode(other_build).await.unwrap();
-
-    for (body, signed, status, outcome, class) in [
-        (&request, false, 401, "not_installed", Class::NotAuthorized),
-        // A decoding error quotes the unknown field's name.
-        (
-            &unknown_field,
-            true,
-            400,
-            "not_installed",
-            Class::InvalidRequest,
-        ),
-        (
-            &other_build,
-            true,
-            409,
-            "not_installed",
-            Class::BuildMismatch,
-        ),
-        // The rendered id is a Node document's: never named.
-        (&request, true, 422, "unconfirmed", Class::DocumentsDiffer),
-    ] {
-        let (code, failure) = post_install(&server, body, signed).await;
-        assert_eq!(code, status, "{failure}");
-        assert_eq!(post_failure(&failure), class, "{failure}");
-        assert_eq!(failure["outcome"], outcome, "{failure}");
-        for unsafe_text in [
-            secret_id,
-            secret_field,
-            "sk-live",
-            "B13C_POST_TOOLS_ID",
-            "${",
-        ] {
-            assert!(!failure.to_string().contains(unsafe_text), "{failure}");
-        }
-        if class == Class::BuildMismatch {
-            let error = failure["error"].as_str().unwrap();
-            assert!(error.contains("f00dfacef00d"), "{error}");
-        }
-        if class == Class::DocumentsDiffer {
-            assert_eq!(failure["error"], class.description(), "{failure}");
-        }
-    }
-    assert_eq!(home.access.execute(query).await.unwrap(), before);
-}
-
 /// An edited document can be one the previous installation wrote under an id
 /// rendered from an install variable. A later install from a literal archive
-/// cannot vouch for that id, so neither the session nor `POST /packs/install`
-/// names it: each sends the class's description, which still names the
-/// overwrite or keep choice.
+/// cannot vouch for that id, so the session counts it without naming it.
 #[tokio::test]
 async fn an_edited_refusal_never_names_a_prior_document_rendered_from_a_variable() {
-    use crate::http::pack_install::failure::PackSessionFailureClass as Class;
     let home = crate::test_support::ClientHome::new().await;
     let owner = home.node_did().to_owned();
     let plugin_home = tempfile::tempdir().unwrap();
@@ -1737,25 +1614,6 @@ async fn an_edited_refusal_never_names_a_prior_document_rendered_from_a_variable
     assert!(text.contains("--overwrite or --keep"), "{text}");
     for unsafe_text in unsafe_texts {
         assert!(!text.contains(unsafe_text), "{text}");
-    }
-
-    let body = crate::http::pack_install::encode_install_request(
-        &second,
-        &[],
-        &args,
-        &owner,
-        true,
-        crate::test_support::test_runtime_build(),
-    )
-    .await
-    .unwrap();
-    let (status, failure) = post_install(&server, &body, true).await;
-    assert_eq!(status, 422, "{failure}");
-    assert_eq!(post_failure(&failure), Class::DocumentsEdited, "{failure}");
-    assert_eq!(failure["outcome"], "unconfirmed", "{failure}");
-    assert_eq!(failure["error"], Class::DocumentsEdited.description());
-    for unsafe_text in unsafe_texts {
-        assert!(!failure.to_string().contains(unsafe_text), "{failure}");
     }
 
     assert_eq!(

@@ -12,9 +12,6 @@ source consistency checks, not a separate runtime compatibility version.
   commands, and omit identifier text when its literal provenance is not known.
   Core-pack build digests stay lazy; runtime install handshakes compute them
   off the asynchronous executor.
-  Legacy `POST /packs/install` failure bodies gain `class` and use class or
-  checked typed text instead of raw error chains; statuses and outcomes stay
-  unchanged.
 
 - An application pairing no longer reinstalls its collections on authority
   read before its author lost the P2P mutation grant: each install re-reads

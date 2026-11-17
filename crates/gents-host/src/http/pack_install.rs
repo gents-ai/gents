@@ -198,101 +198,84 @@ fn refused(status: StatusCode, error: impl std::fmt::Display) -> Response {
         .into_response()
 }
 
-/// A failed `POST /packs/install`, answered as the session answers: a class
-/// from the fixed vocabulary, with its description or a typed refusal's own
-/// text (`failure::SessionFailure`). No error chain is sent or logged: it can
-/// quote install values and rendered fields.
-fn failed(status: StatusCode, failure: failure::SessionFailure) -> Response {
-    tracing::warn!(
-        class = ?failure.class,
-        outcome = failure.outcome,
-        "pack install request failed"
-    );
-    (status, Json(failure.body())).into_response()
-}
-
 pub async fn install_handler(
     State(state): State<RuntimeHttpState>,
     identity: defra_http::ExtractIdentity,
     headers: HeaderMap,
-    #[cfg(test)] build: Option<axum::Extension<Arc<RuntimeBuildSource>>>,
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
-    use failure::{PackSessionFailureClass as Class, SessionFailure};
-    // Router-local in tests, as for the session, never the process-global record.
-    #[cfg(test)]
-    let state = {
-        let mut state = state;
-        state.runtime_build_override = build.map(|axum::Extension(build)| build);
-        state
-    };
-    let not_installed = |status, class| {
-        failed(
-            status,
-            SessionFailure::not_installed(class)(anyhow::anyhow!("refused")),
-        )
-    };
     let Some(actor) = identity.did().cloned() else {
-        return not_installed(StatusCode::UNAUTHORIZED, Class::NotAuthorized);
+        return refused(
+            StatusCode::UNAUTHORIZED,
+            "Client authentication is required.",
+        );
     };
     let Some(home) = state.home.clone() else {
-        return not_installed(StatusCode::SERVICE_UNAVAILABLE, Class::PreparationFailed);
+        return refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "runtime plugin store unavailable",
+        );
     };
     let access = match delegated_install_access(&state, &headers, actor) {
         Ok(access) => access,
-        Err(_) => return not_installed(StatusCode::UNAUTHORIZED, Class::NotAuthorized),
+        Err(error) => return refused(StatusCode::UNAUTHORIZED, error),
     };
     let body = match body {
         Ok(body) => body,
-        Err(rejection) => return not_installed(rejection.status(), Class::InvalidRequest),
+        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            return refused(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                format!(
+                    "remote pack install request exceeds the {MAX_BODY} byte bound \
+                     ({MAX_ARCHIVE_BYTES} compressed archive bytes)"
+                ),
+            )
+        }
+        Err(rejection) => return refused(rejection.status(), rejection.body_text()),
     };
     let node_did = state.node_did.clone();
     let received = match tokio::task::spawn_blocking(move || decode_request(&body, &node_did)).await
     {
         Ok(Ok(received)) => received,
-        Ok(Err(_)) => return not_installed(StatusCode::BAD_REQUEST, Class::InvalidRequest),
-        Err(_) => return not_installed(StatusCode::INTERNAL_SERVER_ERROR, Class::InvalidRequest),
+        Ok(Err(error)) => return refused(StatusCode::BAD_REQUEST, error),
+        Err(error) => return refused(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
     if received.root.manifest().metadata.kind != PackKind::Documents {
-        return not_installed(StatusCode::BAD_REQUEST, Class::InvalidRequest);
+        return refused(
+            StatusCode::BAD_REQUEST,
+            "plugin packs require the reviewed install session",
+        );
     }
     // Before anything is planned: a plan prepared by two builds is not one plan.
     let runtime_build = match state.pack_install_build().await {
         Ok(build) => build,
-        Err(_) => {
-            return not_installed(StatusCode::INTERNAL_SERVER_ERROR, Class::PreparationFailed)
-        }
+        Err(error) => return refused(StatusCode::INTERNAL_SERVER_ERROR, error),
     };
     if let Some(refusal) = refuse_client_build(&received.request.client_build, &runtime_build) {
-        return failed(
-            StatusCode::CONFLICT,
-            SessionFailure::shown(Class::BuildMismatch, refusal.to_string(), "not_installed"),
-        );
+        return refused(StatusCode::CONFLICT, refusal);
     }
-    let identifiers = received.identifiers;
-    let preview = received.request.preview;
     // Detached so a dropped client cannot cancel an install mid-commit.
-    let result = tokio::spawn(install_owned(state, PathBuf::from(home), received, access)).await;
+    let result = tokio::spawn(async move {
+        install_owned(state, PathBuf::from(home), received, access)
+            .await
+            .map_err(gents_pack::pack::PackChangeError::into_anyhow)
+    })
+    .await;
     match result {
         Ok(Ok(value)) => Json(value).into_response(),
-        // This route has always answered a failed install as unconfirmed, and
-        // still does; a refused change is sent by its class and checked text.
-        Ok(Err(error)) => {
-            let mut failure =
-                SessionFailure::change_refusal(&error, identifiers).unwrap_or_else(|| {
-                    SessionFailure::unconfirmed(if preview {
-                        Class::PreviewFailed
-                    } else {
-                        Class::ApplyUnconfirmed
-                    })(error.into_anyhow())
-                });
-            failure.outcome = "unconfirmed";
-            failed(StatusCode::UNPROCESSABLE_ENTITY, failure)
-        }
-        Err(_) => failed(
+        Ok(Err(error)) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error": format!("{error:#}"), "outcome": "unconfirmed"})),
+        )
+            .into_response(),
+        Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            SessionFailure::unconfirmed(Class::ApplyUnconfirmed)(anyhow::anyhow!("join")),
-        ),
+            Json(serde_json::json!({
+                "error": format!("pack install outcome unconfirmed: {error}"),
+                "outcome": "unconfirmed",
+            })),
+        )
+            .into_response(),
     }
 }
 
