@@ -6,29 +6,32 @@ use tokio::time::Instant;
 
 pub const PLUGIN_PUBLICATION_WAIT_EVENT_TARGET: &str = "gents_tool_surface_publication";
 
-pub(super) const PUBLICATION_WAIT: Duration = Duration::from_secs(60);
+pub const PUBLICATION_WAIT: Duration = Duration::from_secs(60);
 const PUBLICATION_POLL: Duration = Duration::from_millis(100);
 
-/// A runtime rebuild takes its configuration snapshot and plugin reads on
-/// the same side of an install's publication fence.
-pub async fn publication_guard(
-    home: Option<&std::path::Path>,
-) -> Result<Option<gents_pack::plugin::store::StoreGuard>> {
-    publication_guard_until(home, Instant::now() + PUBLICATION_WAIT).await
-}
-
-pub async fn publication_guard_until(
-    home: Option<&std::path::Path>,
+/// Runtime acquisition uses only its once-captured identity, never adopts a
+/// replacement at the same pathname. StoreAbsent is not retried as Busy.
+pub async fn pinned_publication_guard_until(
+    pin: Option<&gents_pack::plugin::store::StoreReadPin>,
     deadline: Instant,
-) -> Result<Option<gents_pack::plugin::store::StoreGuard>> {
-    let Some(home) = home else {
+) -> std::result::Result<Option<gents_pack::plugin::store::StoreGuard>, PublishedPluginReadError> {
+    let Some(pin) = pin else {
         return Ok(None);
     };
-    wait(deadline, || {
-        gents_pack::plugin::store::try_lock_store_shared(home).map_err(Into::into)
-    })
-    .await
-    .map(Some)
+    let mut waiting = false;
+    loop {
+        match pin.try_shared() {
+            Ok(guard) => return Ok(Some(guard)),
+            Err(PublishedPluginReadError::Busy) if Instant::now() < deadline => {
+                if !waiting {
+                    tracing::warn!(target: PLUGIN_PUBLICATION_WAIT_EVENT_TARGET, cause = %PublishedPluginReadError::Busy, "waiting for plugin publication before constructing tool surface");
+                    waiting = true;
+                }
+                tokio::time::sleep_until(deadline.min(Instant::now() + PUBLICATION_POLL)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 fn may_retry(busy: bool, budget_available: bool) -> bool {
@@ -70,6 +73,26 @@ pub(super) async fn wait<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn pinned_publication_does_not_adopt_or_write_replacement_home() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        gents_pack::plugin::store::bootstrap_store(&home).unwrap();
+        let pin = gents_pack::plugin::store::StoreReadPin::capture(&home);
+        assert!(pinned_publication_guard_until(Some(&pin), Instant::now())
+            .await
+            .is_ok());
+        std::fs::rename(&home, root.path().join("retired")).unwrap();
+        std::fs::create_dir(&home).unwrap();
+        let error = pinned_publication_guard_until(Some(&pin), Instant::now() + PUBLICATION_WAIT)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(error, PublishedPluginReadError::StoreAbsent(_)));
+        assert_eq!(std::fs::read_dir(&home).unwrap().count(), 0);
+    }
 
     #[test]
     fn publication_retry_replays_the_lean_owner() {
