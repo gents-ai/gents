@@ -36,8 +36,20 @@ pub fn service_logging_enabled() -> bool {
 /// presentation-safe bail.
 pub fn mirror_service_diagnostic(diagnostic: &str) {
     if service_logging_enabled() {
-        eprintln!("{diagnostic}");
+        eprintln!("{}", timestamped_line(diagnostic, chrono::Utc::now()));
     }
+}
+
+/// One line as the error log carries it: an RFC 3339 UTC timestamp, then the
+/// diagnostic. The service manager captures this process's stderr into
+/// `runtime-errors.log` (launchd's `StandardErrorPath`, systemd's
+/// `StandardError`), so the sink here is the only place a line can be stamped;
+/// stamping it there also covers a line that itself spans several lines.
+pub fn timestamped_line(diagnostic: &str, at: chrono::DateTime<chrono::Utc>) -> String {
+    format!(
+        "{} {diagnostic}",
+        at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    )
 }
 
 /// The macOS command is spelled by absolute path: zsh, the default shell,
@@ -54,5 +66,65 @@ pub fn diagnostics_hint() -> &'static str {
     #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
     {
         "Launch from a terminal to view diagnostic output on stderr."
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An outage has to be placeable from the log itself, not from the file's
+    /// modification time: every line starts with an RFC 3339 UTC instant.
+    #[test]
+    fn a_mirrored_diagnostic_starts_with_an_rfc3339_utc_timestamp() {
+        let at = chrono::DateTime::parse_from_rfc3339("2026-11-17T01:30:00.250Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let line = timestamped_line("gents runtime: agent_config did:key:a unavailable: x", at);
+        assert_eq!(
+            line,
+            "2026-11-17T01:30:00.250Z gents runtime: agent_config did:key:a unavailable: x"
+        );
+        // The stamp is UTC, since a local offset would move an outage across a
+        // day boundary for whoever reads it later.
+        assert!(line.starts_with("2026-11-17T01:30:00.250Z "));
+        assert!(!line.contains("+00:00"), "UTC is spelled Z: {line}");
+        // A reader can parse the opening back into an instant.
+        let stamp = line.split(' ').next().unwrap();
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(stamp).unwrap(),
+            at.fixed_offset()
+        );
+    }
+
+    /// The diagnostic itself is untouched: only the leading stamp is added, and
+    /// the message keeps the shape every reader of the log matches on.
+    #[test]
+    fn the_stamp_is_prefixed_without_altering_the_diagnostic() {
+        let at = chrono::Utc::now();
+        let diagnostic = "gents runtime: service exited with code 1";
+        let line = timestamped_line(diagnostic, at);
+        assert!(line.ends_with(diagnostic), "{line}");
+        assert_eq!(
+            line.strip_prefix(line.split(' ').next().unwrap())
+                .and_then(|rest| rest.strip_prefix(' ')),
+            Some(diagnostic),
+            "one space, then the diagnostic unchanged"
+        );
+        // A multi-line diagnostic keeps its own lines after the stamp, so the
+        // first line is never lost when grepping for `gents runtime:`.
+        let multi = "gents runtime: first\n  caused by: second";
+        let stamped = timestamped_line(multi, at);
+        assert!(stamped.contains("gents runtime: first"));
+        assert!(stamped.contains("  caused by: second"));
+        assert_eq!(
+            stamped.matches("2026-").count(),
+            if at.format("%Y").to_string() == "2026" {
+                1
+            } else {
+                0
+            },
+            "exactly one stamp, the leading one: {stamped}"
+        );
     }
 }
