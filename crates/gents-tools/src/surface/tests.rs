@@ -3751,8 +3751,7 @@ async fn hidden_script_only_background_parity_and_busy_resolution_preserve_retry
         let busy = config
             .resolve(&runtime.node, &runtime.node_did, &plugins)
             .await
-            .err()
-            .expect("Busy must propagate so the existing owner can retry");
+            .expect_err("Busy must propagate so the existing owner can retry");
         assert!(
             gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(busy.as_ref())
         );
