@@ -55,7 +55,14 @@ pub async fn install_session(
     identity: defra_http::ExtractIdentity,
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
+    #[cfg(test)] build: Option<axum::Extension<gents_protocol::build_info::BuildInfo>>,
 ) -> Response {
+    #[cfg(test)]
+    let state = {
+        let mut state = state;
+        state.runtime_build_override = build.map(|axum::Extension(build)| build);
+        state
+    };
     let Some(actor) = identity.did().cloned() else {
         return refused(
             StatusCode::UNAUTHORIZED,
@@ -384,7 +391,10 @@ async fn run_inner(
     // The build check comes first, before the archives are even opened: a plan
     // prepared by two builds is not one plan, so neither an install nor a
     // preview proceeds, and nothing is written.
-    if let Some(refusal) = super::refuse_client_build(&request.client_build) {
+    // Every build this session reports or compares is the router's, so a test
+    // router's build stays its own.
+    let runtime_build = state.pack_install_build();
+    if let Some(refusal) = super::refuse_client_build(&request.client_build, &runtime_build) {
         return Err(SessionFailure::shown(
             Class::BuildMismatch,
             refusal.to_string(),
@@ -399,7 +409,7 @@ async fn run_inner(
                 "type": "previewed",
                 "result": result,
                 // So the client checks the build too, as it does at `ready`.
-                "build": super::runtime_build(),
+                "build": runtime_build,
             }),
         )
         .await
@@ -556,7 +566,7 @@ async fn run_inner(
             // The other half of the handshake: which build proposed this plan.
             // The build this runtime is, supplied by the binary that has the
             // core packs (this crate carries none).
-            "build": crate::http::pack_install::runtime_build(),
+            "build": state.pack_install_build(),
         }),
     )
     .await

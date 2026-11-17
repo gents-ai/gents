@@ -35,6 +35,7 @@ fn desktop_endpoint(
 fn state() -> RuntimeHttpState {
     let (activation_runtime, activation_observation) = empty_activation_state();
     RuntimeHttpState {
+        runtime_build_override: None,
         graphql: gents_store::config_client::GraphqlEndpoint::anonymous(
             "http://127.0.0.1:9181/api/v0/graphql",
         ),
@@ -1048,8 +1049,9 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
 }
 
 /// A runtime serving the hosted install session over a real socket, for the
-/// signing user of `home`. The runtime's build is the test build, so a client
-/// that passes `test_support::test_runtime_build()` agrees with it.
+/// signing user of `home`. The router serves installs as
+/// `test_support::test_runtime_build()`, given to it router-locally, so a
+/// client that passes that build agrees with it.
 struct HostedInstallServer {
     endpoint: GraphqlEndpoint,
     _server: tokio_util::task::AbortOnDropHandle<()>,
@@ -1061,7 +1063,6 @@ async fn hosted_install_server(
     agent: &str,
 ) -> HostedInstallServer {
     use gents_store::identity::NodeIdentity as _;
-    crate::test_support::test_runtime_build();
     let owner = home.node_did().to_owned();
     let binding = home.agent(agent).await;
     home.mark_backend_healthy(&binding).await;
@@ -1104,6 +1105,8 @@ async fn hosted_install_server(
         Default::default(),
     )
     .contract
+    // Router-local, never the process-global record.
+    .layer(axum::Extension(crate::test_support::test_runtime_build()))
     .merge(crate::test_support::ForwardingProxy::router(
         home.graphql(),
         std::sync::Arc::new(|_, _| Box::pin(async { crate::test_support::ProxyDecision::Forward })),
@@ -1384,7 +1387,6 @@ async fn a_hosted_install_over_differing_documents_names_them_and_no_values() {
 #[tokio::test]
 async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
     use gents_store::identity::NodeIdentity as _;
-    crate::test_support::test_runtime_build();
     let home = crate::test_support::ClientHome::new().await;
     let owner = home.node_did().to_owned();
     let binding = home.agent("hosted-pin-update").await;
@@ -1428,6 +1430,14 @@ async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
     assert!(activation.set(runtime).is_ok());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    // Match builds per router, never through the process-global OnceLock:
+    // this test must also work alongside other handshake tests in any order.
+    let build = gents_protocol::build_info::BuildInfo::from_parts(
+        "1.0.0-rc2".into(),
+        Some("b12b13-test-sha".into()),
+        Some(false),
+        Vec::new(),
+    );
     let app = runtime_contract_router(
         home.graphql().to_owned(),
         GraphqlEndpoint::anonymous(home.graphql()),
@@ -1449,6 +1459,7 @@ async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
         Default::default(),
     )
     .contract
+    .layer(axum::Extension(build.clone()))
     .merge(crate::test_support::ForwardingProxy::router(
         home.graphql(),
         std::sync::Arc::new(|_, _| Box::pin(async { crate::test_support::ProxyDecision::Forward })),
@@ -1517,7 +1528,7 @@ async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
         &[],
         &args,
         true,
-        crate::test_support::test_runtime_build(),
+        build,
     )
     .await
     .unwrap();

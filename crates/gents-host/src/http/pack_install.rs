@@ -246,7 +246,9 @@ pub async fn install_handler(
         );
     }
     // Before anything is planned: a plan prepared by two builds is not one plan.
-    if let Some(refusal) = refuse_client_build(&received.request.client_build) {
+    if let Some(refusal) =
+        refuse_client_build(&received.request.client_build, &state.pack_install_build())
+    {
         return refused(StatusCode::CONFLICT, refusal);
     }
     // Detached so a dropped client cannot cancel an install mid-commit.
@@ -476,12 +478,10 @@ static RUNTIME_BUILD: std::sync::OnceLock<RuntimeBuildSource> = std::sync::OnceL
 
 /// Record this process's build: its version facts, and how to digest its core
 /// packs when an install first needs them. Called once by the binary before
-/// any command runs; a later call keeps the first.
-pub fn set_runtime_build(
-    facts: gents_protocol::build_info::BuildInfo,
-    core_packs: fn() -> Vec<gents_protocol::build_info::CorePackBuild>,
-) {
-    let _ = RUNTIME_BUILD.set(RuntimeBuildSource::new(facts, core_packs));
+/// any command runs; a later call keeps the first. For the binary only: a
+/// test gives its router a build instead (`RuntimeHttpState::pack_install_build`).
+pub fn record_runtime_build(source: RuntimeBuildSource) {
+    let _ = RUNTIME_BUILD.set(source);
 }
 
 /// The registered source, if the binary registered one.
@@ -499,14 +499,16 @@ pub fn runtime_build() -> gents_protocol::build_info::BuildInfo {
         .unwrap_or(gents_protocol::build_info::BuildInfo::UNVERIFIABLE)
 }
 
-/// The runtime's half of the build check: the client's build against this
-/// process's, refused before anything is prepared or written. The refusal's
-/// text holds build facts only.
+/// The runtime's half of the build check: the client's build against the
+/// build this router serves installs as (`RuntimeHttpState::pack_install_build`),
+/// refused before anything is prepared or written. The refusal's text holds
+/// build facts only.
 pub(crate) fn refuse_client_build(
     client_build: &gents_protocol::build_info::BuildInfo,
+    runtime_build: &gents_protocol::build_info::BuildInfo,
 ) -> Option<crate::http::pack_install_client::PackInstallHandshakeError> {
     crate::http::pack_install_client::PackInstallHandshakeError::build_mismatch(
         client_build,
-        &runtime_build(),
+        runtime_build,
     )
 }

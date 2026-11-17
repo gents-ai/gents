@@ -383,9 +383,15 @@ thread_local! {
 /// the version facts now, the core-pack digests on the first handshake that
 /// asks. Cheap, so it runs before every command.
 pub fn register_runtime_build() {
-    gents_host::http::pack_install::set_runtime_build(current_build_without_packs(), || {
+    gents_host::http::pack_install::record_runtime_build(runtime_build_source());
+}
+
+/// This binary's build as the source an install handshake reads: the version
+/// facts, and the core-pack digests computed on first use.
+fn runtime_build_source() -> gents_host::http::pack_install::RuntimeBuildSource {
+    gents_host::http::pack_install::RuntimeBuildSource::new(current_build_without_packs(), || {
         core_pack_digests().to_vec()
-    });
+    })
 }
 
 /// This binary's build identity **with** the core-pack digests, for an install
@@ -1342,23 +1348,21 @@ mod tests {
     /// Registering the runtime build runs before every command, so it must not
     /// hash the core packs: only an install handshake asks for them. The
     /// counter is this thread's, so other tests computing them do not count.
+    /// The test builds the source `register_runtime_build` records but does not
+    /// record it: tests never write the process-global build.
     #[test]
     fn a_command_that_does_not_install_computes_no_core_pack_digest() {
         let calls = || CORE_PACK_DIGEST_CALLS.with(std::cell::Cell::get);
         CORE_PACK_DIGEST_CALLS.with(|calls| calls.set(0));
         // What every command does before its dispatch, then what a plain
         // `version` prints.
-        register_runtime_build();
+        let source = runtime_build_source();
         let _ = version::version_text();
-        let facts = current_build_without_packs();
         assert_eq!(calls(), 0, "no digest before an install asks");
-        assert!(facts.core_packs.is_empty());
+        assert!(current_build_without_packs().core_packs.is_empty());
 
         // The handshake's ask computes them, once, and laziness changes
         // nothing about the build it reports.
-        let source = gents_host::http::pack_install::RuntimeBuildSource::new(facts, || {
-            core_pack_digests().to_vec()
-        });
         assert!(!source.digests_computed());
         let reported = source.build().clone();
         let _ = source.build();
