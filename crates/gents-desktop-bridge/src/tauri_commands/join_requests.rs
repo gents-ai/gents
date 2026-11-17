@@ -126,12 +126,12 @@ fn query_error(error: anyhow::Error) -> BridgeError {
 }
 
 fn decision_error(error: anyhow::Error) -> BridgeError {
-    if gents_protocol::error_chain::find_source::<
-        gents_service::enrollment_admin::EnrollmentDecisionRejected,
-    >(error.as_ref())
-    .is_some_and(|rejected| {
-        rejected.code == Some(gents_protocol::enrollment::EnrollmentDecisionRefusalCode::NotPending)
-    }) {
+    if gents_service::enrollment_admin::EnrollmentDecisionRejected::in_chain(error.as_ref())
+        .is_some_and(|rejected| {
+            rejected.code
+                == Some(gents_protocol::enrollment::EnrollmentDecisionRefusalCode::NotPending)
+        })
+    {
         BridgeError::new(BridgeErrorCode::NotFound, NOT_PENDING)
     } else {
         BridgeError::untyped(format!("{error:#}"))

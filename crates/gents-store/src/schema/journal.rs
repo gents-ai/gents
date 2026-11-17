@@ -37,7 +37,7 @@ pub enum JournalSchemaError {
     Read(#[source] defra_node::Error),
     #[error("initializing the client journal schema")]
     Initialize(#[source] gents_migration::Error),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] ConfigClientError),
 }
 

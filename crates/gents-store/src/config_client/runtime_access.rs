@@ -7,7 +7,7 @@ use super::{ConfigClientError, GraphqlEndpoint};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeAccessError {
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Configuration(#[from] ConfigClientError),
     #[error("the selected runtime refused this client access operation")]
     Refused,

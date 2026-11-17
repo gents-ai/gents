@@ -235,3 +235,6 @@ impl ClientRuntime {
             .expect("mutation error lock poisoned") = Some(message);
     }
 }
+
+#[cfg(test)]
+mod access_classification;

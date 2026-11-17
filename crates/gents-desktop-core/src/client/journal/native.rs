@@ -22,6 +22,8 @@ async fn journal_reopens_with_the_same_user_and_only_journal_collections() -> an
         .is_some_and(|policy| policy.resource_name
             == gents_protocol::schemas::CLIENT_JOURNAL_POLICY_RESOURCE)));
     journal.shutdown().await?;
+    let released = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir())?;
+    drop(released);
     drop(journal);
     let reopened = ClientJournal::open(paths, options).await?;
     assert_eq!(reopened.identity().did(), client);

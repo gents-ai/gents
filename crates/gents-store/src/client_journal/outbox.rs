@@ -15,11 +15,11 @@ use crate::config_client::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum OutboxError {
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] ConfigClientError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Response(#[from] crate::graphql::GraphqlResponseError),
     #[error(transparent)]
     Identity(#[from] identity::Error),

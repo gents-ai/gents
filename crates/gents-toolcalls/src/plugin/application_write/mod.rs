@@ -58,18 +58,18 @@ pub struct WriteError(String);
 
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
-struct WriteRecovery {
+pub(crate) struct WriteRecovery {
     message: String,
     recovery: Value,
 }
 
 #[derive(Debug, thiserror::Error)]
-enum WriteFailure {
+pub(crate) enum WriteFailure {
     #[error(transparent)]
     Recovery(#[from] WriteRecovery),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] gents_store::config_client::ConfigClientError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Other(#[from] anyhow::Error),
 }
 

@@ -57,7 +57,7 @@ pub async fn delete_scoped_document(
     {
         Ok(receipt) => Ok(receipt.targets.len()),
         Err(DocumentDeleteError::TargetMissing { .. }) => Ok(0),
-        Err(DocumentDeleteError::Passthrough(error)) => Err(anyhow::Error::from_boxed(error)),
+        Err(DocumentDeleteError::Passthrough(error)) => Err(anyhow::Error::new(error)),
         Err(error) => Err(error.into()),
     }
 }

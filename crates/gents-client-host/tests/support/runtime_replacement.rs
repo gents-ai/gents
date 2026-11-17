@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -86,7 +86,7 @@ impl Fixture<'_> {
         client: &mut Attachment,
         updates: &mut Attachment,
         id: &mut u32,
-    ) -> Result<()> {
+    ) -> Result<Replaced> {
         let init = tokio::fs::read(self.home.join("init.json")).await?;
         let config: Value = serde_json::from_slice(&init)?;
         let key_path = Path::new(config["key_path"].as_str().context("runtime key path")?);
@@ -286,21 +286,17 @@ impl Fixture<'_> {
             ),
             "{reused:?}"
         );
-        self.retire_replacement(&graphql, &build).await?;
-        let status = tokio::time::timeout(Duration::from_secs(60), replacement.wait())
-            .await
-            .context(
-                "replacement did not finish native shutdown after successful retained follow-up",
-            )??;
-        ensure!(
-            status.success(),
-            "replacement did not exit cleanly: {status}"
-        );
         tokio::fs::write(self.root.join("runtime-replacement.json"), serde_json::to_vec_pretty(&json!({
             "sameEnrolledRequester":true,"originalRequestPreserved":true,"normalRequestCount":requests.len(),
             "followupRequestId":followup,"matchingBuildReused":true,"build":build,
         }))?).await?;
-        Ok(())
+        Ok(Replaced {
+            child: replacement,
+            home: self.home.to_owned(),
+            node_did: self.node_did.to_owned(),
+            graphql,
+            build,
+        })
     }
 
     async fn start_replacement(
@@ -343,8 +339,37 @@ impl Fixture<'_> {
         );
         Ok((child, report.result))
     }
+}
 
-    async fn retire_replacement(&self, graphql: &str, build: &str) -> Result<()> {
+/// The serving replacement. The journey keeps reading the session through it
+/// after replacement, so it is retired only once the journey is done.
+pub struct Replaced {
+    child: PreparationChild,
+    home: PathBuf,
+    node_did: String,
+    graphql: String,
+    build: String,
+}
+
+impl Replaced {
+    pub async fn retire(mut self) -> Result<()> {
+        let retired = self.request_retirement().await;
+        if retired.is_err() {
+            let _ = self.child.start_kill();
+        }
+        let status = tokio::time::timeout(Duration::from_secs(60), self.child.wait())
+            .await
+            .context("replacement did not finish native shutdown")??;
+        retired?;
+        ensure!(
+            status.success(),
+            "replacement did not exit cleanly: {status}"
+        );
+        Ok(())
+    }
+
+    async fn request_retirement(&self) -> Result<()> {
+        let (graphql, build) = (self.graphql.as_str(), self.build.as_str());
         let config: Value =
             serde_json::from_slice(&tokio::fs::read(self.home.join("init.json")).await?)?;
         let key_path = config["key_path"]
@@ -355,7 +380,7 @@ impl Fixture<'_> {
             gents_store::identity::KeyIdentity::load_or_create(key_path, None)
         })
         .await??;
-        let endpoint = GraphqlEndpoint::as_principal(graphql, self.node_did)
+        let endpoint = GraphqlEndpoint::as_principal(graphql, &self.node_did)
             .with_client_signing_capability(identity.client_signing_capability()?)?;
         let mut url = reqwest::Url::parse(graphql)?;
         url.set_path(RUNTIME_CONTROL_PATH);

@@ -18,7 +18,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-fn main() -> anyhow::Result<()> {
+fn main() {
     let result = gents_server::run_cli();
     if let Err(error) = &result {
         tracing::error!(error = %format!("{error:#}"), "gents exited with an error");
@@ -36,5 +36,17 @@ fn main() -> anyhow::Result<()> {
             std::process::exit(gents_service::native_service::STORE_KEY_UNAVAILABLE_EXIT_CODE);
         }
     }
-    result
+    if let Err(error) = result {
+        // The layout and exit status of returning the error from `main`, with
+        // a passed-through message printed once.
+        eprintln!(
+            "Error: {}",
+            gents_protocol::error_chain::ErrorReport(error.as_ref())
+        );
+        let backtrace = error.backtrace();
+        if backtrace.status() == std::backtrace::BacktraceStatus::Captured {
+            eprintln!("\nStack backtrace:\n{backtrace}");
+        }
+        std::process::exit(1);
+    }
 }

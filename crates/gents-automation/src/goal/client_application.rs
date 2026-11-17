@@ -17,9 +17,9 @@ use gents_store::{
 pub enum GoalApplicationError {
     #[error("this client cannot apply the selected Goal command")]
     Refused,
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] ConfigClientError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     View(#[from] gents_store::views::ViewError),
     #[error("applying the signed Goal command")]
     Application(#[source] anyhow::Error),
@@ -116,3 +116,6 @@ pub async fn apply_http(
         }
     }
 }
+
+#[cfg(test)]
+mod access_classification;

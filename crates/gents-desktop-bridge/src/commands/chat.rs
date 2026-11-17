@@ -140,7 +140,7 @@ pub async fn send_chat_message(
     match core.send_message_with(route, message).await {
         Ok(submitted) => Ok(submitted.into()),
         Err(error) => {
-            if let Some(saved) = error.downcast_ref::<crate::client_runtime::SavedForDelivery>() {
+            if let Some(saved) = crate::client_runtime::SavedForDelivery::in_error(error.as_ref()) {
                 Ok(ChatSendResult {
                     publication: crate::types::ChatPublication::Retained,
                     node_did: saved.node_did.clone(),

@@ -237,6 +237,7 @@ import Proofs.Conformance.ClientWindowScopeBound
 import Proofs.Conformance.SubscriptionStream
 import Proofs.Conformance.ReceiptRecovery
 import Proofs.Conformance.HomeRetirement
+import Proofs.Conformance.StoreHandoff
 import Proofs.Conformance.StoreKeyCustody
 import Proofs.Conformance.BackgroundExecutionRegistry
 import Proofs.Conformance.BackgroundWaitChange

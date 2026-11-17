@@ -12,3 +12,6 @@ mod self_config_tests;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
 pub mod views;
+
+#[cfg(test)]
+mod access_classification_tests;

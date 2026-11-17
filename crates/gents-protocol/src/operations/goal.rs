@@ -241,7 +241,7 @@ pub enum GoalOperationError {
     },
     /// Another owner's failure (request staging, the store), unchanged.
     #[error(transparent)]
-    Passthrough(Box<dyn std::error::Error + Send + Sync>),
+    Passthrough(crate::error_chain::PassedThrough),
 }
 
 /// How a Goal in `status` runs again, as the text a person or model reads.
@@ -300,7 +300,7 @@ impl GoalOperationError {
 
     pub fn passthrough(&self) -> Option<&(dyn std::error::Error + Send + Sync + 'static)> {
         match self {
-            Self::Passthrough(error) => Some(error.as_ref()),
+            Self::Passthrough(error) => Some(error.get()),
             _ => None,
         }
     }

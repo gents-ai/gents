@@ -30,7 +30,7 @@ pub enum ClientAccessError {
     Refused,
     #[error("the client access request has an invalid retained record")]
     Record,
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] ConfigClientError),
     #[error(transparent)]
     Identity(#[from] IdentityError),

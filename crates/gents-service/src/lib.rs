@@ -11,3 +11,6 @@ pub mod server_host;
 pub mod service_update;
 pub mod state;
 pub mod telemetry;
+
+#[cfg(test)]
+mod access_classification_tests;

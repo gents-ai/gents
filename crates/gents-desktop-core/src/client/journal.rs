@@ -8,6 +8,8 @@ use super::{DesktopPaths, PrincipalIdentity};
 
 pub mod keys;
 
+pub const CLIENT_START_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 #[derive(Clone, Debug, Default)]
 pub struct JournalOptions {
     pub store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice,
@@ -43,9 +45,9 @@ pub enum JournalError {
     Prepare(#[source] anyhow::Error),
     #[error("opening the client journal store")]
     Open(#[from] defra_node::Error),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Schemas(#[from] gents_store::schema::journal::JournalSchemaError),
-    #[error(transparent)]
+    #[error(fmt = gents_protocol::error_chain::held)]
     Access(#[from] gents_store::config_client::ConfigClientError),
 }
 
@@ -64,14 +66,16 @@ impl ClientJournal {
         let prepared: Result<_> = async {
             paths.ensure_root_dirs().await?;
             let owned = paths.clone();
-            let lease = tokio::task::spawn_blocking(move || {
-                gents_store::local::storage_backend::reject_legacy_store(owned.node_data_dir())?;
-                Ok::<_, anyhow::Error>(gents_store::local::home::lock_store(
-                    owned.root(),
-                    owned.node_data_dir(),
-                )?)
+            tokio::task::spawn_blocking(move || {
+                gents_store::local::storage_backend::reject_legacy_store(owned.node_data_dir())
             })
             .await??;
+            let lease = gents_store::local::home::acquire_store(
+                paths.root(),
+                paths.node_data_dir(),
+                CLIENT_START_STALL_TIMEOUT,
+            )
+            .await?;
             let key = keys::open_or_create_client_store_key(&paths, &options).await?;
             let identity = PrincipalIdentity::load_or_create(&paths).await?;
             let data = paths.node_data_dir().to_owned();
@@ -130,8 +134,18 @@ impl ClientJournal {
     }
 
     pub async fn shutdown(&self) -> std::result::Result<(), JournalError> {
-        self.node.shutdown().await?;
+        let release = self
+            .access
+            .lock()
+            .await
+            .as_ref()
+            .and_then(ConfigAccess::begin_store_release);
+        let stopped = self.node.shutdown().await;
         self.access.lock().await.take();
+        if let Some(release) = release {
+            release.released().await;
+        }
+        stopped?;
         Ok(())
     }
 }

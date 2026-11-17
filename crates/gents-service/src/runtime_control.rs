@@ -17,8 +17,8 @@ pub enum ControlFailure {
         reason: RuntimePreparationRefusal,
         message: String,
     },
-    #[error(transparent)]
-    Authorization(Box<gents_store::config_client::ConfigClientError>),
+    #[error(fmt = gents_protocol::error_chain::held)]
+    Authorization(#[source] Box<gents_store::config_client::ConfigClientError>),
     #[error(transparent)]
     Transport(#[from] reqwest::Error),
     #[error(transparent)]

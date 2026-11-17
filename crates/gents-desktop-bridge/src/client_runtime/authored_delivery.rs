@@ -17,6 +17,12 @@ pub struct SavedForDelivery {
     pub agent_did: Option<String>,
 }
 
+impl SavedForDelivery {
+    pub fn in_error<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        gents_protocol::error_chain::find_source::<Self>(error)
+    }
+}
+
 impl ClientRuntime {
     pub fn start_authored_delivery(self: &Arc<Self>) {
         if self.delivery_started.swap(true, Ordering::AcqRel) {

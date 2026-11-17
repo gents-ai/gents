@@ -19,13 +19,7 @@ async fn fixture(
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
     let request = format!("native-transcript-{name}");
-    bind_interruptible_request(
-        &hook,
-        &request,
-        &session,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
+    bind_interruptible_request(&hook, &request, &session).await;
     (db, hook, session, request)
 }
 

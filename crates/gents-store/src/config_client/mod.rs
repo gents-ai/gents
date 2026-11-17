@@ -161,6 +161,7 @@ pub use txn::{
 pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
 pub use error::{ConfigClientError, RerunNote, RerunRequest, TransactionConflict};
 pub use relationships::ConfigRelationshipGrant;
+pub(crate) use retry::access_owner;
 pub use retry::TransactionFailure;
 pub use self_config_permission::{AgentSelfConfigPermission, AgentSelfConfigPermissionError};
 pub use write_telemetry::WriteTelemetryError;
@@ -616,6 +617,14 @@ impl ConfigAccess {
     pub fn managed_agent_signer(&self) -> Option<crate::identity::ManagedAgentSigner> {
         match self {
             Self::Local(local) => local.agent_signer(),
+            Self::Graphql(_) => None,
+        }
+    }
+
+    /// See [`LocalConfigAccess::begin_store_release`].
+    pub fn begin_store_release(&self) -> Option<crate::local::home::StoreRelease> {
+        match self {
+            Self::Local(local) => local.begin_store_release(),
             Self::Graphql(_) => None,
         }
     }
