@@ -198,6 +198,7 @@ mod tests {
         let (activation_runtime, activation_observation) =
             crate::http::router::empty_activation_state();
         RuntimeHttpState {
+            runtime_build_override: None,
             graphql: gents_store::config_client::GraphqlEndpoint::anonymous(
                 "http://localhost:9181/api/v0/graphql",
             ),

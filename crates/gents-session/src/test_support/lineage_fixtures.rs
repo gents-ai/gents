@@ -30,19 +30,45 @@ pub fn fixture_signer() -> gents_store::identity::KeyIdentity {
 /// the created physical document, binding `source`, `parent` and `opening`.
 pub async fn create_started_session(
     node: &defra_node::Node,
-    mut session: gents_protocol::session::AgentSession,
+    session: gents_protocol::session::AgentSession,
     source: gents_protocol::session::SessionReference,
     parent: &str,
     opening: &str,
 ) -> String {
+    create_started_session_as(
+        node,
+        session,
+        source,
+        parent,
+        opening,
+        gents_protocol::session::SessionCreationCause::AgentNew,
+    )
+    .await
+}
+
+/// [`create_started_session`] with the cause stated, so a caller can build a
+/// **verified plugin-job** child rather than relabelling an `AgentNew` one.
+/// The receipt is signed exactly as production signs it, so
+/// `verified_creation_origin` accepts it on the signature.
+pub async fn create_started_session_as(
+    node: &defra_node::Node,
+    mut session: gents_protocol::session::AgentSession,
+    source: gents_protocol::session::SessionReference,
+    parent: &str,
+    opening: &str,
+    cause: gents_protocol::session::SessionCreationCause,
+) -> String {
     use gents_protocol::session::{
-        SessionCreationCause, SessionCreationReceipt, SessionCreationStarter, SessionProvenance,
+        SessionCreationReceipt, SessionCreationStarter, SessionProvenance,
     };
     use gents_store::identity::NodeIdentity as _;
-    assert_eq!(
-        session.node_did, FIXTURE_DID,
-        "the fixture key signs receipts"
-    );
+    let signer = if session.node_did == FIXTURE_DID {
+        fixture_signer()
+    } else {
+        // A node with its own identity: its key is what signs, so the
+        // receipt verifies against the node it names.
+        gents_store::test_support::held_runtime_identity(&session.node_did)
+    };
     let mut provenance = session.provenance.take().unwrap_or_default();
     provenance.parent_request_doc_id = Some(parent.to_owned());
     provenance.opening_request_doc_id = Some(opening.to_owned());
@@ -65,7 +91,7 @@ pub async fn create_started_session(
         requester_did: session.requester_did.clone(),
         agent_did: session.agent_did.clone(),
         opening_request_doc_id: opening.to_owned(),
-        cause: SessionCreationCause::AgentNew,
+        cause,
         cause_binding: "fixture-call".to_owned(),
         starter: Some(SessionCreationStarter {
             source,
@@ -73,10 +99,7 @@ pub async fn create_started_session(
         }),
         signature: Vec::new(),
     };
-    receipt.signature = fixture_signer()
-        .sign(&receipt.signing_payload())
-        .await
-        .unwrap();
+    receipt.signature = signer.sign(&receipt.signing_payload()).await.unwrap();
     let provenance = SessionProvenance {
         creation_receipt: Some(receipt),
         ..session.provenance.unwrap()

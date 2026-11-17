@@ -32,6 +32,9 @@ mod views;
 
 #[derive(Clone)]
 pub struct RuntimeHttpState {
+    /// Router-local handshake identity for tests; never overrides process identity in production.
+    #[cfg(test)]
+    pub(crate) runtime_build_override: Option<gents_protocol::build_info::BuildInfo>,
     /// Address-only endpoint for public connection metadata.
     pub graphql: GraphqlEndpoint,
     /// Served principal; the node's P2P access control admits only it.
@@ -58,6 +61,14 @@ pub struct RuntimeHttpState {
 }
 
 impl RuntimeHttpState {
+    pub(crate) fn pack_install_build(&self) -> gents_protocol::build_info::BuildInfo {
+        #[cfg(test)]
+        if let Some(build) = &self.runtime_build_override {
+            return build.clone();
+        }
+        crate::http::pack_install::runtime_build()
+    }
+
     pub(crate) fn storage_observation(
         &self,
     ) -> gents_protocol::node_readiness::RuntimeStorageObservation {
@@ -148,6 +159,8 @@ pub fn runtime_contract_router(
     let operator_did = node_did.clone();
     let graphql_for_mcp = graphql.clone();
     let state = RuntimeHttpState {
+        #[cfg(test)]
+        runtime_build_override: None,
         p2p_graphql,
         graphql: GraphqlEndpoint::anonymous(graphql),
         node_name,

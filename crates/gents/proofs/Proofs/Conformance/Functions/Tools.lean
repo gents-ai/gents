@@ -4,6 +4,7 @@ import Proofs.Tools.Lsp.ServerStart
 import Proofs.Tools.MCPHealth.Coupling
 import Proofs.Tools.ToolPolicy.OperatorPaths
 import Proofs.Tools.ToolPolicy.PluginCalls
+import Proofs.Tools.SelfConfig.AgentDecision
 import Proofs.Tools.SelfConfig.ToolsSave
 import Proofs.Tools.WorkspaceRootOperations
 import Proofs.Conformance.Family
@@ -42,6 +43,10 @@ attribute [conformance_function] fieldAfter writeOutcome ownerResolution importO
   endpointStorage defaultsPath enabledAfterRegister sendNodeDidAfterRegister
 
 end DocumentOperations
+
+namespace SelfConfig.AgentDecision
+attribute [conformance_function] cloneOmittedSelfConfig
+end SelfConfig.AgentDecision
 
 namespace SelfConfig.ToolsSave
 

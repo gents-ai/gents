@@ -118,6 +118,40 @@ pub fn instruction_body_for_request(
     }
 }
 
+/// What a workflow child is told about how its answer returns.
+///
+/// A workflow collects a child's final reply automatically, but a child model
+/// that does not know that tends to message its caller instead -- which the
+/// caller then has to read as well. This is one sentence, and it is added only
+/// for a **verified** plugin-job child, so an ordinary session's context is
+/// unchanged.
+///
+/// It says nothing about what the child may reach: `agent_message` and its
+/// authorization are untouched.
+pub const WORKFLOW_RESULT_RETURN_INSTRUCTION: &str = "Return your answer in your final reply. The workflow collects it automatically; you do not need to message its caller. Use agent_message only for another reachable session when the task requires it.";
+
+/// [`instruction_body_for_request`] plus, for a verified workflow child, the
+/// sentence telling it how its answer returns.
+///
+/// `plugin_job_child` is the caller's verified answer -- it must come from the
+/// session's creation receipt, not from anything user-authored -- so this
+/// function only decides the wording, never the provenance.
+pub fn instruction_body_for_request_with_origin(
+    frozen_instruction_manifest: Option<&str>,
+    live_cwd: Option<&Path>,
+    live_tool_root: Option<&Path>,
+    plugin_job_child: bool,
+) -> Option<String> {
+    let body = instruction_body_for_request(frozen_instruction_manifest, live_cwd, live_tool_root);
+    match (body, plugin_job_child) {
+        (Some(body), true) => Some(format!("{body}\n\n{WORKFLOW_RESULT_RETURN_INSTRUCTION}")),
+        // A workflow child with no workspace instructions still needs the
+        // sentence: it is the only thing that tells it where its answer goes.
+        (None, true) => Some(WORKFLOW_RESULT_RETURN_INSTRUCTION.to_owned()),
+        (body, false) => body,
+    }
+}
+
 fn format_instruction_section(header: &str, files: &[InstructionFile]) -> String {
     let mut body = String::from(header);
     body.push('\n');
@@ -260,4 +294,86 @@ fn bound_instruction_text_to(bytes: &[u8], budget: usize) -> (String, String) {
         lossy[..end].to_string(),
         format!("truncated to {end} bytes"),
     )
+}
+
+#[cfg(test)]
+mod workflow_child_tests {
+    use super::*;
+
+    /// A workflow child is told where its answer goes; an ordinary session's
+    /// context is byte-identical to what it was before this existed.
+    #[test]
+    fn only_a_workflow_child_carries_the_return_instruction() {
+        let root = tempfile::tempdir().expect("a temporary tool root");
+        std::fs::write(
+            root.path().join("AGENTS.md"),
+            "# project rules\n\nBe brief.",
+        )
+        .expect("an AGENTS.md");
+
+        let plain = instruction_body_for_request_with_origin(
+            None,
+            Some(root.path()),
+            Some(root.path()),
+            false,
+        )
+        .expect("a live AGENTS.md makes a body");
+        let child = instruction_body_for_request_with_origin(
+            None,
+            Some(root.path()),
+            Some(root.path()),
+            true,
+        )
+        .expect("a live AGENTS.md makes a body");
+
+        // Unchanged for the ordinary session: byte for byte what the older
+        // function returns.
+        assert_eq!(
+            plain,
+            instruction_body_for_request(None, Some(root.path()), Some(root.path()))
+                .expect("the older call")
+        );
+        assert!(!plain.contains(WORKFLOW_RESULT_RETURN_INSTRUCTION));
+
+        // Added for the child, after the workspace instructions it already had.
+        assert!(
+            child.starts_with(&plain),
+            "the child keeps its instructions"
+        );
+        assert!(child.ends_with(WORKFLOW_RESULT_RETURN_INSTRUCTION));
+        assert!(child.contains("Return your answer in your final reply"));
+        assert!(child.contains("agent_message"));
+        assert!(
+            child.contains("only for another reachable session"),
+            "the instruction narrows agent_message rather than forbidding it: {child}"
+        );
+    }
+
+    /// A child with no workspace instructions still gets the sentence: it is the
+    /// only thing that tells it where its answer goes.
+    #[test]
+    fn a_workflow_child_without_instructions_still_carries_it() {
+        assert_eq!(
+            instruction_body_for_request_with_origin(None, None, None, true).as_deref(),
+            Some(WORKFLOW_RESULT_RETURN_INSTRUCTION)
+        );
+        // And an ordinary session with nothing stays nothing, not an empty body.
+        assert_eq!(
+            instruction_body_for_request_with_origin(None, None, None, false),
+            None
+        );
+    }
+
+    /// The sentence is written once and states the three facts a child needs:
+    /// where the answer goes, that no message is needed, and when
+    /// `agent_message` is still right.
+    #[test]
+    fn the_instruction_states_where_no_message_and_when() {
+        assert!(WORKFLOW_RESULT_RETURN_INSTRUCTION.contains("final reply"));
+        assert!(WORKFLOW_RESULT_RETURN_INSTRUCTION.contains("collects it automatically"));
+        assert!(WORKFLOW_RESULT_RETURN_INSTRUCTION.contains("do not need to message"));
+        assert!(WORKFLOW_RESULT_RETURN_INSTRUCTION.contains("another reachable session"));
+        // One paragraph, not a block: it sits inside an existing context message.
+        assert!(!WORKFLOW_RESULT_RETURN_INSTRUCTION.contains('\n'));
+    }
 }
