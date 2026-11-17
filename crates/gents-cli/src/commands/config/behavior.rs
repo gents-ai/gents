@@ -184,7 +184,7 @@ async fn submit_create(
     if let Some(entries) = receipt.get_mut("not_copied").and_then(Value::as_array_mut) {
         for entry in entries {
             if let Some(command) = entry
-                .get_mut("grant_command")
+                .get("grant_command")
                 .and_then(Value::as_str)
                 .map(str::to_owned)
             {
@@ -642,6 +642,7 @@ mod tests {
         };
         let clone_outcome = create_agent(&access, owner, provision().await?, &clone_doc).await?;
         assert_eq!(clone_outcome["committed"], true);
+        assert!(clone_outcome.get("not_copied").is_none());
         let cloned_id = clone_outcome["agent_did"]
             .as_str()
             .context("cloned agent ID")?;

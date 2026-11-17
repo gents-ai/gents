@@ -1101,16 +1101,20 @@ fn generated_reasoning_capabilities_override_untrusted_provider_parameters() {
 
 #[test]
 fn profile_model_line_tracks_admitted_model_and_omits_unknown() {
-    assert_eq!(
-        super::preamble_with_profile_model("base".into(), "model-a"),
-        "base\nYour profile's model: model-a."
-    );
-    assert_eq!(
-        super::preamble_with_profile_model("base".into(), "model-b"),
-        "base\nYour profile's model: model-b."
-    );
-    assert_eq!(
-        super::preamble_with_profile_model("base".into(), "  "),
-        "base"
-    );
+    let mut agent = agent_with_retry(CompletionRetryProfileFields::default());
+    for (model, expected) in [
+        ("model-a", Some("model-a")),
+        ("model-b", Some("model-b")),
+        ("", None),
+    ] {
+        agent.model_name = model.to_owned();
+        let config =
+            loop_config_for_request(&agent, "base".into(), &request(), None, 0, 0).unwrap();
+        let preamble = config.preamble.unwrap();
+        if let Some(expected) = expected {
+            assert!(preamble.contains(&format!("Your profile's model: {expected}.")));
+        } else {
+            assert!(!preamble.contains("Your profile's model:"));
+        }
+    }
 }

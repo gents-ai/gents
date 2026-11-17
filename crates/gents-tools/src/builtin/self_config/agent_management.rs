@@ -925,7 +925,12 @@ async fn agent_apply_in_txn(
                 )?)?),
                 None => None,
             };
-            let dropped_self_config = if operation == "clone" {
+            let dropped_self_config = if clone_omitted_self_config(
+                operation == "clone",
+                tools
+                    .as_ref()
+                    .is_some_and(|tools| tools.self_config.is_some()),
+            ) {
                 tools.as_mut().and_then(|tools| tools.self_config.take())
             } else {
                 None
@@ -1260,4 +1265,18 @@ pub async fn grant_own_self_configuration(
             })
         })
         .await
+}
+
+fn clone_omitted_self_config(is_clone: bool, source_has_self_config: bool) -> bool {
+    is_clone && source_has_self_config
+}
+
+#[cfg(test)]
+mod clone_omission_conformance {
+    #[test]
+    fn matches_lean() {
+        gents_lean_vocab::families::self_config_clone_omitted_self_config::replay(|i| {
+            super::clone_omitted_self_config(i.is_clone, i.source_has_self_config)
+        });
+    }
 }

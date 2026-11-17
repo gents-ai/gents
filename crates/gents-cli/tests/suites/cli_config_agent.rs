@@ -82,6 +82,29 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         "agent create mints the Agent its own DID: {agent_did}"
     );
 
+    let source_show = run_cli_json(
+        &home_dir,
+        &["config", "agent", "show", &agent_did, "--graphql", &graphql],
+    )?;
+    let mut source_tools = source_show["resolved"]["tools"].clone();
+    source_tools["self_config"] = serde_json::json!({"enable_self_config": true});
+    let tools_file = home_dir.join("source-self-config.json");
+    write_json_file(&tools_file, &source_tools)?;
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "tools",
+            "set",
+            "--graphql",
+            &graphql,
+            "--file",
+            tools_file.to_str().unwrap(),
+        ],
+    )?;
+
+    let node_home =
+        crate::support::graphql::served_home(&graphql).context("missing served home")?;
     let cloned = run_cli_json(
         &home_dir,
         &[
@@ -91,6 +114,8 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
             &agent_did,
             "--graphql",
             &graphql,
+            "--home",
+            node_home.to_str().unwrap(),
             "--display-name",
             "Cloned Assistant",
             "--profile-id",
@@ -98,6 +123,44 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         ],
     )?;
     assert_eq!(cloned.get("committed").and_then(Value::as_bool), Some(true));
+    let omissions = cloned["not_copied"]
+        .as_array()
+        .context("missing omission list")?;
+    assert_eq!(omissions.len(), 1);
+    assert!(cloned["prompt_warning"]
+        .as_str()
+        .unwrap()
+        .contains("self_config"));
+    assert!(omissions[0]["capability"]
+        .as_str()
+        .unwrap()
+        .contains("self_config"));
+    assert!(omissions[0]["grant_command"]
+        .as_str()
+        .unwrap()
+        .contains("--home"));
+
+    let grant_command = omissions[0]["grant_command"].as_str().unwrap();
+    assert!(!grant_command.contains("<HOME>"), "{grant_command}");
+    let binary_dir = std::path::Path::new(cli_bin()).parent().unwrap();
+    let path = format!(
+        "{}:{}",
+        binary_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(grant_command)
+        .current_dir(&home_dir)
+        .env("PATH", path)
+        .env("HOME", &home_dir)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "grant failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
     let cloned_id = cloned
         .get("agent_did")
         .and_then(Value::as_str)
@@ -107,6 +170,16 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         cloned_id.starts_with("did:key:") && cloned_id != agent_did && cloned_id != node_did,
         "agent clone mints the clone its own DID: {cloned_id}"
     );
+
+    let restored = run_cli_json(
+        &home_dir,
+        &["config", "agent", "show", &cloned_id, "--graphql", &graphql],
+    )?;
+    assert_eq!(
+        restored["resolved"]["tools"]["self_config"]["enable_self_config"],
+        true
+    );
+    assert!(restored["resolved"]["tools"]["host"].is_object());
 
     let disabled = run_cli_json(
         &home_dir,
@@ -146,7 +219,7 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
             .get("resolved")
             .and_then(|resolved| resolved.get("preset_name"))
             .and_then(Value::as_str),
-        Some("write")
+        Some("custom")
     );
     assert_eq!(
         write_show
