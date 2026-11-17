@@ -221,7 +221,8 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
             &graphql,
         ],
     )?;
-    wait_for_agent_lifecycle_state(&home, &args, &broken_agent, "ready")?;
+    let after_grant_generation =
+        wait_for_runtime_quiescence(&graphql, &owner, 2, Duration::from_millis(200)).await?;
     let selection = graphql_query(
         &graphql,
         &format!(
@@ -269,6 +270,13 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
             &graphql,
         ],
     )?;
+    wait_for_runtime_quiescence(
+        &graphql,
+        &owner,
+        after_grant_generation + 1,
+        Duration::from_millis(200),
+    )
+    .await?;
     // A stable earlier generation may still precede the Tools edit. Observe
     // this agent's demotion rather than assuming quiescence means it reloaded.
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
