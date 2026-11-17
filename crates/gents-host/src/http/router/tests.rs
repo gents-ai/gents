@@ -35,6 +35,7 @@ fn desktop_endpoint(
 fn state() -> RuntimeHttpState {
     let (activation_runtime, activation_observation) = empty_activation_state();
     RuntimeHttpState {
+        runtime_build_override: None,
         graphql: gents_store::config_client::GraphqlEndpoint::anonymous(
             "http://127.0.0.1:9181/api/v0/graphql",
         ),
@@ -1093,6 +1094,14 @@ async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
     assert!(activation.set(runtime).is_ok());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    // Match builds per router, never through the process-global OnceLock:
+    // this test must also work alongside other handshake tests in any order.
+    let build = gents_protocol::build_info::BuildInfo::from_parts(
+        "1.0.0-rc2".into(),
+        Some("b12b13-test-sha".into()),
+        Some(false),
+        Vec::new(),
+    );
     let app = runtime_contract_router(
         home.graphql().to_owned(),
         GraphqlEndpoint::anonymous(home.graphql()),
@@ -1114,6 +1123,7 @@ async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
         Default::default(),
     )
     .contract
+    .layer(axum::Extension(build.clone()))
     .merge(crate::test_support::ForwardingProxy::router(
         home.graphql(),
         std::sync::Arc::new(|_, _| Box::pin(async { crate::test_support::ProxyDecision::Forward })),
@@ -1175,9 +1185,17 @@ async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
         grant_authority: false,
         wire: Vec::new(),
     };
-    crate::http::pack_install_client::install_remote(&endpoint, &owner, &pack, &[], &args, true)
-        .await
-        .unwrap();
+    crate::http::pack_install_client::install_remote(
+        &endpoint,
+        &owner,
+        &pack,
+        &[],
+        &args,
+        true,
+        build,
+    )
+    .await
+    .unwrap();
     let rows = home
         .access
         .execute("{ Tools {tools_id integrations _version {cid}} }")
