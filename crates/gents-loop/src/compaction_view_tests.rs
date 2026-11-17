@@ -183,3 +183,63 @@ fn stubbing_receipts_drop_orphans_and_survive_reprojection_without_accumulating(
         1
     );
 }
+
+#[test]
+fn stubbing_receipts_obey_floor_and_measure_multiblock_images_in_serialized_bytes() {
+    use super::history::{replacement_figures, strip_tool_results_accounted};
+    use gents_protocol::message::{DocumentSourceKind, Image};
+    // Exercise both sides of the exact candidate-size floor; don't bake in a
+    // stub length, which depends on its byte-count digits and result metadata.
+    let mut saw_zero = false;
+    let mut saw_replaced = false;
+    for size in 0..512 {
+        let original = Message::User {
+            content: vec![UserContent::ToolResult(ToolResult {
+                id: "floor".into(),
+                call_id: Some("floor".into()),
+                content: vec![ToolResultContent::text("x".repeat(size))],
+            })],
+        };
+        let (stripped, _, receipts) = strip_tool_results_accounted(vec![original.clone()]);
+        let figures = replacement_figures(&receipts);
+        if receipts.is_empty() {
+            saw_zero = true;
+            assert_eq!(stripped, vec![original]);
+            assert_eq!(figures, Default::default());
+        } else {
+            saw_replaced = true;
+            assert_eq!(figures.stubbed_results, 1);
+            assert_eq!(figures.original_bytes, size);
+            assert!(figures.stub_bytes < size);
+            assert_eq!(figures.bytes_removed(), size - figures.stub_bytes);
+        }
+    }
+    assert!(saw_zero && saw_replaced);
+    let image = ToolResultContent::Image(Image {
+        data: DocumentSourceKind::Base64("a".repeat(2_000)),
+        ..Default::default()
+    });
+    let image_bytes = serde_json::to_vec(&image).unwrap().len();
+    let result = Message::User {
+        content: vec![UserContent::ToolResult(ToolResult {
+            id: "blocks".into(),
+            call_id: Some("blocks".into()),
+            content: vec![
+                ToolResultContent::text("é".repeat(1_000)),
+                image,
+                ToolResultContent::text("tail"),
+            ],
+        })],
+    };
+    let (_, _, receipts) = strip_tool_results_accounted(vec![result]);
+    let figures = replacement_figures(&receipts);
+    assert_eq!(
+        figures.stubbed_results, 1,
+        "one result, not one per content block"
+    );
+    assert_eq!(figures.original_bytes, 2_000 + image_bytes + 4);
+    assert_eq!(
+        figures.bytes_removed(),
+        figures.original_bytes - figures.stub_bytes
+    );
+}
