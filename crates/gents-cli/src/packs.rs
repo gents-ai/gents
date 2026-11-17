@@ -175,7 +175,7 @@ pub async fn wire(
     .await?;
     gents_pack::pack::render_wire_receipt(
         &mut receipt,
-        gents_pack::pack::PolicyWarningSurface::ConfigTool,
+        gents_pack::pack::PolicyWarningSurface::Desktop,
     )?;
     Ok(receipt)
 }

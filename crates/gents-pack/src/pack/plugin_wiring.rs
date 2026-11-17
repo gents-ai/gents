@@ -36,6 +36,7 @@ pub enum PolicyWarningSurface {
     #[default]
     Cli,
     ConfigTool,
+    Desktop,
 }
 
 /// Structured policy advisory carried by wire, preview and install receipts.
@@ -89,7 +90,7 @@ impl PolicyWarning {
             "Operator policy retained. No widening is needed. Review retained run authority when a plugin digest changes.".to_owned()
         } else {
             match surface {
-                PolicyWarningSurface::Cli => format!(
+                PolicyWarningSurface::Cli | PolicyWarningSurface::Desktop => format!(
                     "Operator policy retained; no policy change is required to wire. To explicitly widen, \
                      run `gents config tools show '{}' --home <node-home> > tools.json`, \
                      remove read-only _docID (retain tools_id, node_did and every settings group), \

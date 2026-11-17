@@ -280,7 +280,7 @@ async fn hosted_fresh_install_preview_plans_wiring_without_publication() {
     request["wire"] = json!([binding.agent_did]);
     let received = decode_request(&serde_json::to_vec(&request).unwrap(), &owner).unwrap();
     let plugin_home = tempfile::tempdir().unwrap();
-    let query = "{ Tools { tools_id integrations _version {cid} } AgentContext {context_id skills _version {cid}} AgentTarget {target_id} PackInstallation {_docID} }";
+    let query = "{ Tools { tools_id integrations _version {cid} } AgentContext {context_id skills _version {cid}} AgentTarget {target_id} Agent {agent_did _version {cid}} PackInstallation {_docID} }";
     let before = home.access.execute(query).await.unwrap();
     assert!(before.get("errors").is_none(), "{before}");
     let preview = install_owned(
@@ -317,6 +317,43 @@ async fn hosted_fresh_install_preview_plans_wiring_without_publication() {
         relative_files(plugin_home.path(), plugin_home.path()),
         vec![std::path::PathBuf::from("plugins/.store.lock")],
         "preview must not provision identities or publish plugins"
+    );
+    // A fresh authored slot is an explicit skip, not failure of the install
+    // preview. The original archive remains available for apply parity below.
+    let config_path = path.join("pack_config.json");
+    let mut authored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    authored["agents"] = json!([{"agent_slot": "fresh-worker", "context_id": "fresh-context", "inference_profile_id": "fresh-profile"}]);
+    std::fs::write(&config_path, serde_json::to_vec(&authored).unwrap()).unwrap();
+    let (fresh_bytes, _) = gents_pack::pack::archive::pack_dir(&path).unwrap();
+    let fresh_archive = PackArchive::from_bytes(&fresh_bytes).unwrap();
+    let mut fresh_request: serde_json::Value =
+        serde_json::from_slice(&body(&fresh_archive, &[], &owner)).unwrap();
+    fresh_request["preview"] = true.into();
+    fresh_request["wire"] = json!([binding.agent_did]);
+    let received = decode_request(&serde_json::to_vec(&fresh_request).unwrap(), &owner).unwrap();
+    let skipped = install_owned(
+        &owner,
+        plugin_home.path().to_owned(),
+        received,
+        home.access.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(skipped["wired"][0]["slot"], "fresh-worker", "{skipped}");
+    assert_eq!(skipped["wired"][0]["skipped"], true);
+    assert_eq!(
+        skipped["wired"][0]["reason"],
+        "needs runtime identity provisioning"
+    );
+    assert!(skipped["wired"][0]["next"]
+        .as_str()
+        .unwrap()
+        .contains("Install"));
+    assert_eq!(home.access.execute(query).await.unwrap(), before);
+    assert_eq!(
+        relative_files(plugin_home.path(), plugin_home.path()),
+        vec![std::path::PathBuf::from("plugins/.store.lock")]
     );
     request["preview"] = false.into();
     let received = decode_request(&serde_json::to_vec(&request).unwrap(), &owner).unwrap();

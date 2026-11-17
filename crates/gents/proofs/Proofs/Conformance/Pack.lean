@@ -154,7 +154,7 @@ private def twoPluginPolicyScripts : List WiringScript :=
     [.off, .check, .run].flatMap fun incomingMode =>
       [false, true].flatMap fun firstExists =>
         [false, true].flatMap fun secondExists =>
-          [false, true].map fun consent =>
+          [false, true].map fun enable =>
             let existing := block ["a", "b"] existingMode ["b", "a"]
             let incoming := block ["a", "b"] incomingMode ["a"]
             let start : Surface := { fresh with
@@ -164,9 +164,9 @@ private def twoPluginPolicyScripts : List WiringScript :=
                  { plugin := other.coordinate, digest := other.digest, toolCalls := false,
                    job := if secondExists then some existing else none }]
               targets := ["a", "b"] }
-            let first := wireStep runner (reviewed := some incoming) (operatorEnable := consent)
-            let second := wireStep other (reviewed := some incoming) (operatorEnable := consent)
-            ⟨s!"two plugin grid {repr existingMode}/{repr incomingMode}/{firstExists}/{secondExists}/{consent}",
+            let first := wireStep runner (reviewed := some incoming) (operatorEnable := enable)
+            let second := wireStep other (reviewed := some incoming) (operatorEnable := enable)
+            ⟨s!"two plugin grid {repr existingMode}/{repr incomingMode}/{firstExists}/{secondExists}/{enable}",
               start, [first, second, first, second]⟩
 
 @[conformance_family]
@@ -176,9 +176,9 @@ def pluginWiring : Family WiringScript (List (Option Outcome)) where
         [wireStep runner]⟩
     , ⟨"packs wired in without a reviewed block get the default block", fresh,
         [wireStep (runner (some "acme/engine")) (sources := [single])]⟩
-    , ⟨"the owner's consent raises check to run", fresh,
+    , ⟨"explicit operator enable raises check to run", fresh,
         [wireStep (runner (some "acme/engine")) (sources := [single]) (operatorEnable := true)]⟩
-    , ⟨"consent leaves a block that is off off", fresh,
+    , ⟨"explicit operator enable raises off to run", fresh,
         [wireStep runner (reviewed := some (block ["wf-a"] .off)) (operatorEnable := true)]⟩
     , ⟨"the owner's consent lets the plugin call the Agent's tools", fresh,
         [wireStep (runner (runsJobs := false)) (consentToolCalls := true)]⟩

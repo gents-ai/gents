@@ -454,4 +454,11 @@ fn serialized_policy_receipt_renders_native_config_remedy() {
     assert!(!remedy.contains("gents config"));
     assert_eq!(warning["tools_id"], "operator-tools");
     assert_eq!(warning["kept"]["dynamic"], "off");
+    super::render_wire_receipt(&mut receipt, super::PolicyWarningSurface::Desktop).unwrap();
+    let remedy = receipt["report"]["policy_warnings"][0]["remedy"]
+        .as_str()
+        .unwrap();
+    assert!(remedy.contains("gents config tools show 'operator-tools'"));
+    assert!(remedy.contains("gents config tools set"));
+    assert!(!remedy.contains("argv:"));
 }

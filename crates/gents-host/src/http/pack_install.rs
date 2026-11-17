@@ -469,7 +469,7 @@ async fn install_owned(
             &args.wire,
             gents_pack::pack::plugin_wire::WireBatchOptions {
                 preview: args.preview,
-                warning_surface: gents_pack::pack::PolicyWarningSurface::ConfigTool,
+                warning_surface: gents_pack::pack::PolicyWarningSurface::Desktop,
                 ..Default::default()
             },
             gents_service::home_state::load_held_user_identity,

@@ -267,6 +267,24 @@ pub async fn wire_pack_batch(
     if agents.is_empty() || pack.manifest().metadata.plugins.is_empty() {
         return Ok(Vec::new());
     }
+    if preview {
+        let pending = crate::pack::pending_agent_slots(access, pack.manifest(), owner, &|path| {
+            Ok(pack.asset(path)?.to_vec())
+        })
+        .await?;
+        if !pending.is_empty() {
+            return Ok(pending
+                .into_iter()
+                .map(|slot| {
+                    json!({
+                        "slot": slot, "preview": true, "skipped": true,
+                        "reason": "needs runtime identity provisioning",
+                        "next": "Install this pack, then wire it to the selected agent(s)."
+                    })
+                })
+                .collect());
+        }
+    }
     let namespace = &pack.manifest().metadata.namespace;
     let lock_home = home.to_owned();
     let _guard =
@@ -399,6 +417,11 @@ pub async fn wire_pack_batch(
             failure.error.context("batch wiring commit was not confirmed; inspect all targets before retrying")
         } else { failure.error })?
     } else {
+        let caller = access.client_held_signer_did();
+        anyhow::ensure!(
+            caller.is_some() && access.actor_did().as_deref() == caller,
+            "pack wire requires the caller identity selected by the hosted transaction"
+        );
         // Hosted installs carry the caller's delegated signing endpoint, not
         // a local held User key. Keep the entire batch in that one caller-
         // authorized transaction, just as the single-plugin wire does.

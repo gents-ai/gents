@@ -280,6 +280,8 @@ pub(crate) enum PackState {
     Missing,
     /// Not installed, and this build carries no archive of it.
     Unavailable,
+    /// Installed but observation failed; reason preserves the diagnostic.
+    Unknown,
 }
 
 /// The Engineer of `home`'s node: its default agent, when that agent is the
@@ -419,7 +421,7 @@ async fn enable_dynamic_workflows(
                 .find(|p| p.plugin == coordinate)
                 .and_then(|p| p.job.as_ref())
                 .with_context(|| format!("{coordinate} has no pack job targets"))?;
-            Ok((coordinate, job.agent_targets.clone()))
+            Ok((coordinate, job.policy.dynamic_targets.clone()))
         })
         .collect::<Result<_>>()?;
     anyhow::ensure!(!jobs.is_empty(), "Dynamic Workflows has no dynamic plugins");
@@ -456,7 +458,7 @@ async fn enable_dynamic_workflows(
 }
 
 /// An installed core pack's record and what it leaves on the Engineer.
-type Installed = (gents_pack::pack::HomePackInstall, Wiring);
+type Installed = (gents_pack::pack::HomePackInstall, Result<Wiring, String>);
 
 /// Each core pack as `home`'s Engineer has it: its install record and what
 /// it leaves on the Engineer, or `None` when it is not installed. Read
@@ -482,8 +484,9 @@ async fn engineer_packs(home: &Path) -> Result<Option<Vec<(CorePack, Option<Inst
         for pack in CorePack::ALL {
             let installed = match gents_pack::pack::read_home_install(home, pack.coordinate())? {
                 Some(record) => {
-                    let wiring =
-                        observed_wiring(home, &access, &owner, &record, &context, &tools).await?;
+                    let wiring = observed_wiring(home, &access, &owner, &record, &context, &tools)
+                        .await
+                        .map_err(|error| format!("{error:#}"));
                     Some((record, wiring))
                 }
                 None => None,
@@ -507,15 +510,18 @@ pub(crate) async fn status(home: &Path, archives: Archives<'_>) -> Result<Vec<Pa
         .into_iter()
         .map(|(pack, installed)| {
             let (state, version, reason) = match installed {
-                Some((record, observed)) => (
+                Some((record, Ok(observed))) => (
                     if core_packs::observed_enabled(pack, observed) {
                         PackState::Installed
                     } else {
                         PackState::NotEnabled
                     },
                     Some(record.version),
-                    None,
+                    (!observed.agents_active).then(|| "installed, agent disabled".to_owned()),
                 ),
+                Some((record, Err(reason))) => {
+                    (PackState::Unknown, Some(record.version), Some(reason))
+                }
                 None => match release_archive(archives, pack).map(|bytes| {
                     gents_pack::pack::archive::peek_header(
                         bytes,
@@ -713,8 +719,7 @@ async fn apply(
                 );
             }
         }
-        let wired = if wiring.wired && !source.manifest().metadata.plugins.is_empty() {
-            let wire_access = match &access {
+        let wire_access = match &access {
                 gents_store::config_client::ConfigAccess::Graphql(endpoint) => {
                     gents_store::config_client::ConfigAccess::Graphql(runtime_operator_endpoint(
                         home,
@@ -724,6 +729,7 @@ async fn apply(
                 }
                 local => local.clone(),
             };
+        let wired = if wiring.wired && !source.manifest().metadata.plugins.is_empty() {
             gents_pack::pack::plugin_wire::wire_pack_batch(
                 &wire_access,
                 &owner,
@@ -744,7 +750,8 @@ async fn apply(
             Vec::new()
         };
         let dynamic_enable = if consent == Consent::Explicit && pack == CorePack::DynamicWorkflows {
-            Some(enable_dynamic_workflows(&access, &owner, engineer, &source).await?)
+            Some(enable_dynamic_workflows(&wire_access, &owner, engineer, &source).await
+                .with_context(|| format!("{coordinate} wiring completed, but enabling run policy failed in a second transaction; retryable: run {} again", enable_command(home, pack)))?)
         } else {
             None
         };
@@ -1138,7 +1145,7 @@ mod tests {
                             {"tools_id": "workflow-caller", "display_name": "Workflow caller",
                                 "integrations": {"plugins": [{"plugin": "gents/workflow",
                                     "job": {"agent_targets": ["wf-read-only"],
-                                        "policy": {"dynamic": "check"}}}]}},
+                                        "policy": {"dynamic": "check", "dynamic_targets": ["wf-read-only"]}}}]}},
                         ]);
                         config["agent_targets"] = json!([{
                             "agent_did": "gents:agent-slot:wf-read-only",
@@ -1168,12 +1175,19 @@ mod tests {
                     let plugins = config["tools"][1]["integrations"]["plugins"]
                         .as_array_mut()
                         .unwrap();
+                    // A pack may grant a static target outside the dynamic
+                    // allowlist. Explicit enable must not copy that superset.
+                    plugins[0]["job"]["agent_targets"] = json!(["wf-read-only", "static-only"]);
                     plugins[0]["job"]["policy"]["dynamic"] = "check".into();
                     plugins[0]["job"]["policy"]["dynamic_targets"] = json!(["wf-read-only"]);
                     let mut second = plugins[0].clone();
                     second["plugin"] = "gents/workflow_check".into();
                     second["job"]["policy"]["dynamic"] = "check".into();
                     plugins.push(second);
+                    config["agent_targets"].as_array_mut().unwrap().push(json!({
+                        "target_id": "static-only", "name": "static-only",
+                        "target_node_did": "did:key:zForeignFixture", "agent_did": "did:key:zStaticWorker"
+                    }));
                 }
                 files.push((
                     "pack_config.json".to_owned(),
@@ -1224,6 +1238,7 @@ mod tests {
             .map(|(pack, installed)| {
                 let (_, wiring) =
                     installed.unwrap_or_else(|| panic!("{} is not installed", pack.coordinate()));
+                let wiring = wiring.expect("installed wiring is readable");
                 let report = reports
                     .as_array()
                     .into_iter()
@@ -1866,6 +1881,36 @@ mod tests {
                 .state,
             PackState::Installed
         );
+    }
+
+    #[tokio::test]
+    async fn status_explains_disabled_agents_and_unreadable_plugins() {
+        let owned = fixture_archives().await;
+        let archives = borrowed(&owned);
+        let home = tempfile::tempdir().unwrap();
+        crate::commands::init::init_home_with_core_packs(init_args(home.path(), &[]), &archives)
+            .await
+            .unwrap();
+        let listed = status(home.path(), &archives).await.unwrap();
+        let workflow = listed
+            .iter()
+            .find(|p| p.pack == CorePack::DynamicWorkflows.coordinate())
+            .unwrap();
+        assert_eq!(
+            workflow.reason.as_deref(),
+            Some("installed, agent disabled")
+        );
+        let record = home.path().join("plugins/installed/gents/workflow.json");
+        assert!(record.exists(), "{}", record.display());
+        std::fs::write(record, "invalid plugin record").unwrap();
+        let listed = status(home.path(), &archives).await.unwrap();
+        let workflow = listed
+            .iter()
+            .find(|p| p.pack == CorePack::DynamicWorkflows.coordinate())
+            .unwrap();
+        assert_eq!(workflow.state, PackState::Unknown);
+        assert!(!workflow.reason.as_deref().unwrap().is_empty());
+        assert!(listed.iter().any(|p| p.state == PackState::Installed));
     }
 
     /// A home set up before any inference provider exists, as the desktop

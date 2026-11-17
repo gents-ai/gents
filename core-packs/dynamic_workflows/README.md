@@ -32,14 +32,15 @@ The wired job block copies `Tools/workflow-caller`: `agent_targets` and
 `dynamic_targets` are `wf-read-only`. A pack may ship `policy.dynamic` only as
 `off` or `check` (gents `job_block_admissible`), and `check` refuses every
 dynamic spawn and message, so no workflow runs until the agent's Tools say
-`run`. The operator sets it on the agent's Tools document, whose ID
-`gents config tools list` shows:
+`run`. Enable it explicitly for this home's Engineer:
 
 ```sh
-gents config tools show <tools-id> --home ./.gents \
-  | jq 'del(._docID) | (.integrations.plugins[] | select(.plugin == "gents/workflow") | .job.policy.dynamic) = "run"' > tools.json
-gents config tools set --home ./.gents --file tools.json
+gents init --home ./.gents --enable dynamic_workflows
 ```
+
+This operator action sets the pack's dynamic policy to `run` and reports the
+before/after policy. Install, wire, and an ordinary init re-run preserve the
+operator's existing policy and never widen it.
 
 ## Authoring
 

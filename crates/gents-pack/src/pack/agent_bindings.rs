@@ -225,6 +225,29 @@ pub(super) fn bind_authored_agents(value: &mut Value, bindings: &PackAgentBindin
     rewrite_references(value, bindings)
 }
 
+/// Slots that a read-only wiring preview cannot bind until installation.
+/// This is structured planning data, not an error-text classification.
+pub async fn pending_agent_slots(
+    access: &ConfigAccess,
+    manifest: &PackManifest,
+    owner: &str,
+    read_asset: &(dyn Fn(&str) -> Result<Vec<u8>> + Sync),
+) -> Result<Vec<String>> {
+    let value = match manifest.config.as_deref() {
+        Some(path) => serde_json::from_slice(&read_asset(path)?)?,
+        None => serde_json::json!({"node": {}}),
+    };
+    let slots = authored_slots(&value)?;
+    let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let (_, recorded) =
+        super::installation::read_agent_bindings(access, owner, &coordinate).await?;
+    validate_bindings(&recorded)?;
+    Ok(slots
+        .into_iter()
+        .filter(|slot| !recorded.contains_key(slot))
+        .collect())
+}
+
 /// Resolve authored configuration using recorded identities only. Reviewing or
 /// enabling a pack must never provision an identity as a side effect. A fresh
 /// pack with new agent slots must first complete its identity-binding install.

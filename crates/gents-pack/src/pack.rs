@@ -11,7 +11,8 @@ pub mod archive;
 pub use agent_bindings::{
     agent_binding_variable, agent_did_variable, agent_slot_reference, is_agent_binding_variable,
     load_pack_authoring_config, load_pack_install_config, load_pack_recorded_config,
-    AuthoredPackConfig, BoundPackConfig, PackAgentBindings, AGENT_SLOT_REFERENCE_PREFIX,
+    pending_agent_slots, AuthoredPackConfig, BoundPackConfig, PackAgentBindings,
+    AGENT_SLOT_REFERENCE_PREFIX,
 };
 pub mod authoring;
 pub mod core_packs;

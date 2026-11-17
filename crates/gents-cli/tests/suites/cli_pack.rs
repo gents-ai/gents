@@ -1627,6 +1627,38 @@ fn pack_install_wire_previews_a_not_yet_installed_pack() -> Result<()> {
 }
 
 #[test]
+fn pack_install_wire_previews_fresh_authored_slot_as_skipped() -> Result<()> {
+    let fixture = wire_fixture_installing(true, &[], false)?;
+    let before = fixture.agent_tools()?;
+    edit_pack_config(
+        &fixture.tempdir.path().join("job_plugin_fixture"),
+        |config| {
+            config["agents"] = serde_json::json!([{"agent_slot": "fresh-worker",
+            "context_id": "fresh-context", "inference_profile_id": "fresh-profile"}]);
+        },
+    )?;
+    let preview = fixture.install_job_pack(&["--preview", "--wire", &fixture.agent])?;
+    assert_eq!(preview["wired"][0]["slot"], "fresh-worker", "{preview}");
+    assert_eq!(preview["wired"][0]["skipped"], true);
+    assert_eq!(
+        preview["wired"][0]["reason"],
+        "needs runtime identity provisioning"
+    );
+    assert!(preview["wired"][0]["next"]
+        .as_str()
+        .unwrap()
+        .contains("Install"));
+    assert_eq!(before, fixture.agent_tools()?);
+    assert!(
+        gents_pack::plugin::store::read_record(&fixture.home, "fixture", "job_fixture").is_err()
+    );
+    assert!(
+        gents_pack::pack::read_home_install(&fixture.home, "fixture/job_plugin_fixture")?.is_none()
+    );
+    Ok(())
+}
+
+#[test]
 fn pack_install_wire_wires_the_agent() -> Result<()> {
     let fixture = wire_fixture(true)?;
     let reviewed = wired_plugin(&fixture.tools("job-fixture-caller")?)
@@ -1988,9 +2020,9 @@ fn release_starter_fixture(
     });
     if job {
         let target = format!("wf-{name}");
-        selection["job"] =
-            serde_json::json!({"agent_targets": [target], "policy": {"dynamic": "check"}});
-        config["agent_targets"] = serde_json::json!([wire_target(&target)]);
+        selection["job"] = serde_json::json!({"agent_targets": [target, "static-only"], "policy": {"dynamic": "check", "dynamic_targets": [target]}});
+        config["agent_targets"] =
+            serde_json::json!([wire_target(&target), wire_target("static-only")]);
         config["tools"] = serde_json::json!([{
             "tools_id": format!("{name}-caller"),
             "display_name": "Starter fixture caller",
@@ -2218,6 +2250,14 @@ async fn core_packs_are_enabled_around_a_running_runtime() -> Result<()> {
         workflow.len() == 1 && workflow[0]["job"]["policy"]["dynamic"] == "run",
         "enabling gents/dynamic_workflows did not set its job block to run, once: {tools}"
     );
+    assert_eq!(
+        workflow[0]["job"]["policy"]["dynamic_targets"],
+        serde_json::json!(["wf-dynamic_workflows"])
+    );
+    assert!(workflow[0]["job"]["agent_targets"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("static-only")));
     let script = selected("gents/script");
     anyhow::ensure!(
         script.len() == 1 && script[0]["tool_calls"] == true,
