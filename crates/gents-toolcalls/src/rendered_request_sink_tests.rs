@@ -1056,7 +1056,8 @@ fn agent_loop_turn(fixture: &CaptureFixture, turn: usize) -> RenderedCompletionR
     );
     rendered.provenance_payload_json = json!({
         "build_path": "budgeted",
-        "context_accounting": {"accounting_version": 2, "attempt": 0, "compaction_reason": "below_threshold",
+        "context_accounting": {"history_stubbing": {"stubbed_results":0,"original_bytes":0,"stub_bytes":0},
+            "accounting_version": gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION, "attempt": 0, "compaction_reason": "below_threshold",
             "compaction_threshold_tokens": 786_432, "context_window": 1_048_576,
             "configured_max_output_tokens": 32_768, "estimated_input_tokens": 6000 + 900 * turn,
             "components": {"additional_parameters": 82, "documents": 0, "messages": 5000 + 900 * turn,
