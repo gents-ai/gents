@@ -133,12 +133,15 @@ async fn cancelled_shutdown_waiter_claim_observations() -> Vec<bool> {
     observed
 }
 
-/// `tla/StoreHandoff.tla`: BeginStop, Start, TryLock, Read. A client that
-/// opens the store while its predecessor is between native shutdown and the
-/// release of its claim (the seam below holds it there) found it held and was
-/// refused with "already using"; it now finds the release declared, waits,
-/// and starts once the predecessor's shutdown has released the store, and
-/// that shutdown reports done only then.
+/// `tla/StoreHandoff.tla` `SuccessorOpensStore`: a client that opens the store
+/// while its predecessor is between native shutdown and the release of its
+/// claim (the seam below holds it there) finds the release declared and
+/// waits. It used to take the store as soon as the shutdown released its
+/// claim and then fail to open it, the predecessor's storage engine still
+/// holding the data directory ("already locked for read-write access",
+/// `MCStoreHandoffSuccessorCurrent`); the store is now released only once the
+/// predecessor's last handle has dropped that engine, and the store's release
+/// notice resolves only then.
 #[tokio::test]
 async fn a_client_opened_while_its_predecessor_closes_waits_for_the_release() {
     let temp = tempfile::tempdir().expect("temporary desktop home");
@@ -173,20 +176,33 @@ async fn a_client_opened_while_its_predecessor_closes_waits_for_the_release() {
     ));
 
     pause.allow_access_release.notify_one();
+    let outgoing_released = outgoing.store_release().expect("a claimed client");
     shutdown
         .await
         .expect("shutdown owner")
         .expect("outgoing shutdown");
+    assert!(
+        matches!(
+            gents_store::local::home::try_store(paths.root(), paths.node_data_dir())
+                .expect("inspect the store"),
+            gents_store::local::home::StoreAttempt::Wait(_)
+        ),
+        "the store stays held, declared, while the outgoing node's engine lives"
+    );
+    drop(outgoing);
+    outgoing_released.released().await;
     let incoming = Arc::new(
         incoming
             .await
             .expect("incoming start task")
             .expect("the incoming client starts once the store is released"),
     );
-    drop(outgoing);
+    let incoming_released = incoming.store_release().expect("a claimed client");
     incoming.shutdown().await.expect("incoming shutdown");
+    drop(incoming);
+    incoming_released.released().await;
     let reopened = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir())
-        .expect("a finished shutdown has released the store");
+        .expect("a released store is free");
     drop(reopened);
 }
 
@@ -211,7 +227,8 @@ async fn quit_and_reopen_a_hundred_times_is_never_refused() {
             allow_access_release: Notify::new(),
         });
         *current.shutdown_test_pause.lock().await = Some(Arc::clone(&pause));
-        let quitting = Arc::clone(&current);
+        // The quit owns the outgoing client, so its last handle goes with it.
+        let quitting = current;
         let quit = tokio::spawn(async move { quitting.shutdown().await });
         pause.node_shutdown_started.notified().await;
         pause.allow_node_shutdown.notify_one();

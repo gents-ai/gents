@@ -109,6 +109,9 @@ GROUPS = [
     ], nocapture=True, isolate_target=True, timeout=150),
 ]
 NATIVE = "native"
+# The `native` group's second job: the macOS-only tests of portable crates and
+# the native client journey, beside the job that tests the `native` crates.
+MACOS_ONLY = "macos-only"
 # Crates whose change selects the native client journey, which runs in `native`.
 JOURNEY = {"gents-cli", "gents-client-host", "gents-media-host"}
 # Portable crates whose tests need the Afterburner compilers (Go, Javy, Binaryen).
@@ -618,14 +621,15 @@ def plan(files, members, everything=False, only=None, tier="full", mirrors=False
     matrix = []
     for group in GROUPS:
         selected = [package for package in group.packages if package in tested]
-        native = {}
+        if selected:
+            matrix.append(test_entry(group, group.name, group.runner, selected, bool(AFTERBURNER & set(selected))))
         if group.name == NATIVE:
-            native = {"macos_tests": [package for package in portable_tested if macos_only_tests(package)],
-                      "journey": bool(JOURNEY & set(tested))}
-        if not (selected or native.get("macos_tests") or native.get("journey")):
-            continue
-        go = bool(AFTERBURNER & set(selected + native.get("macos_tests", [])))
-        matrix.append(test_entry(group, group.name, group.runner, selected, go, **native))
+            # A second macOS job, so the native crates and the ported tests build and run side by side.
+            macos = [package for package in portable_tested if macos_only_tests(package)]
+            journey = bool(JOURNEY & set(tested))
+            if macos or journey:
+                matrix.append(test_entry(group, MACOS_ONLY, group.runner, [], bool(AFTERBURNER & set(macos)),
+                                         macos_tests=macos, journey=journey))
     for group in portable:
         selected = [package for package in group.packages if package in tested]
         if mirrors and group.macos and selected:
@@ -942,23 +946,124 @@ def run_test(selection, name):
     if group is None or entry is None:
         fail(f"test group {name} is not selected by this plan")
     packages = entry["packages"].split()
+    if group.name == NATIVE:
+        run_native(entry, packages)
+        return
     options = group_options(group)
     # One crate per build: a crate that compiles only through the features
     # another selected crate turns on must fail here.
     for package in packages:
         cargo_test(package, ["-p", package, *feature_flags(package)], expect_tests=package not in NO_TESTS,
                    **options)
-    if group.name != NATIVE:
-        return
-    if sys.platform != "darwin":
-        fail(f"test:{NATIVE} runs the tests that compile only on macOS; this host is {sys.platform}")
-    for package in entry.get("macos_tests", []):
-        owner = next(group for group in GROUPS if package in group.packages)
+
+
+def target_arguments(package):
+    """Cargo's target flags for each lib, bin and test target of a package."""
+    info = next(entry for entry in workspace_metadata()["packages"] if entry["name"] == package)
+    found = set()
+    for target in info["targets"]:
+        kinds = set(target["kind"])
+        if "lib" in kinds:
+            found.add(("--lib",))
+        elif "bin" in kinds:
+            found.add(("--bin", target["name"]))
+        elif "test" in kinds:
+            found.add(("--test", target["name"]))
+    return found
+
+
+def macos_invocations(packages):
+    """The macOS-only test targets as few `cargo nextest run` invocations as select
+    no other target: Cargo applies an invocation's target flags to every package
+    in it, so `gents --lib` and `gents-toolcalls --test integration` together
+    would also build gents' own integration tests. Each item is (packages, flags)."""
+    invocations = []
+    for package in packages:
+        wanted = set(macos_only_tests(package))
+        for invocation in invocations:
+            flags = invocation[1] | wanted
+            if all(target_arguments(member) & flags == set(macos_only_tests(member))
+                   for member in [*invocation[0], package]):
+                invocation[0].append(package)
+                invocation[1] = flags
+                break
+        else:
+            invocations.append([[package], wanted])
+    return [(members, sorted(flags)) for members, flags in invocations]
+
+
+def binary_id(package, target):
+    """nextest's binary id for a package's target flags."""
+    if target == ("--lib",):
+        return package
+    if target[0] == "--bin":
+        return f"{package}::bin/{target[1]}"
+    return f"{package}::{target[1]}"
+
+
+def macos_filterset(packages):
+    """A nextest filterset for the macOS-only tests: libtest's name filters are substrings, as `test(~...)` is."""
+    terms = []
+    for package in packages:
         for target, filters in sorted(macos_only_tests(package).items()):
-            options = group_options(owner)
-            options["harness"] = [*filters, *options["harness"]]
-            cargo_test(f"{package} {' '.join(target)} (macOS only)", ["-p", package, *feature_flags(package), *target],
-                       **options)
+            selected = f"binary_id(={binary_id(package, target)})"
+            if filters:
+                selected += " & (" + " | ".join(f"test(~{name})" for name in filters) + ")"
+            terms.append(f"({selected})")
+    return " | ".join(terms)
+
+
+def native_tests(label, packages, flags, filterset, expected):
+    """One `cargo nextest run`: one build, one parallel pool across its crates and binaries.
+
+    Its JUnit report then fails a crate, or a macOS-only target, that ran no
+    test, as `cargo_test` did. (A separate `nextest list` first would rebuild:
+    the core packs' build script reruns once a build has written beside them.)
+    `expected` holds binary ids, or packages for every binary of one.
+    """
+    arguments = [*[flag for package in packages for flag in ("-p", package)], *flags]
+    features = sorted({feature for package in packages for feature in feature_flags(package)[1:]})
+    if features:
+        arguments += ["--features", ",".join(features)]
+    if os.environ.get("PROFILE"):
+        arguments += ["--cargo-profile", os.environ["PROFILE"]]
+    # Tests that spawn Cargo for plugin builds must not inherit the job's target directory.
+    drop = ()
+    if os.environ.get("CARGO_TARGET_DIR"):
+        arguments += ["--target-dir", os.environ["CARGO_TARGET_DIR"]]
+        drop = ("CARGO_TARGET_DIR",)
+    if filterset:
+        arguments += ["-E", filterset]
+    arguments += ["--profile", "ci", "--no-tests", "fail"]
+    if os.environ.get("RUST_TEST_THREADS"):
+        arguments += ["--test-threads", os.environ["RUST_TEST_THREADS"]]
+    junit = ROOT / "target" / "nextest" / "ci" / "junit.xml"
+    junit.unlink(missing_ok=True)
+    nextest(["run", *arguments], label=label, drop_env=drop)
+    if not junit.exists():
+        return
+    ran = test_cache.junit_outcomes(junit)
+    problems = []
+    for key in sorted(expected):
+        count = sum(1 for binary, _ in ran if binary == key or binary.startswith(key + "::"))
+        if key in NO_TESTS and count:
+            problems.append(f"{key} ran tests but is listed in NO_TESTS; remove it from the list")
+        elif key not in NO_TESTS and not count:
+            problems.append(f"{key} selected zero tests")
+    for problem in problems:
+        print(f"::error::{label}: {problem}", flush=True)
+    results.append((f"{label}: selection", "ok" if not problems else "; ".join(problems), f"{len(ran)} ran", 0))
+
+
+def run_native(entry, packages):
+    if sys.platform != "darwin":
+        fail(f"test:{entry['job']} runs tests that compile only on macOS; this host is {sys.platform}")
+    if packages:
+        native_tests(" ".join(packages), packages, [], None, set(packages))
+    for members, flags in macos_invocations(entry.get("macos_tests", [])):
+        expected = {binary_id(package, target) for package in members for target in macos_only_tests(package)}
+        native_tests(f"{' '.join(members)} {' '.join(flag for pair in flags for flag in pair)} (macOS only)",
+                     members, [flag for pair in flags for flag in pair], macos_filterset(members), expected)
     if entry.get("journey"):
         if os.environ.get("GITHUB_ACTIONS") and os.environ.get("CARGO_TARGET_DIR"):
             sh(["python3", ".github/scripts/ensure-rust-build-space.py", os.environ["CARGO_TARGET_DIR"]])
@@ -1011,10 +1116,13 @@ def reproducible_paths(source):
             "CFLAGS_x86_64_unknown_linux_gnu": c, "CXXFLAGS_x86_64_unknown_linux_gnu": c}
 
 
-def nextest(arguments, cwd=ROOT, label=None, expect=None, prefix=(), path_prefix=None, extra_env=None):
+def nextest(arguments, cwd=ROOT, label=None, expect=None, prefix=(), path_prefix=None, extra_env=None,
+            drop_env=()):
     """`cargo nextest`, recording the summary's counts; `expect` checks the listed tests per package."""
     command = [*prefix, "cargo", "nextest", *arguments]
     env = {**os.environ, **(extra_env or {})}
+    for name in drop_env:
+        env.pop(name, None)
     if path_prefix:
         env["PATH"] = path_prefix + os.pathsep + env.get("PATH", "")
     env.setdefault("RUST_MIN_STACK", "16777216")

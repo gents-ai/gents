@@ -127,7 +127,10 @@ async fn shutdown_then_reacquire_store_lock(
     .expect("the Gents-owned native operation drops its claimed gate");
     node.shutdown().await.expect("node shutdown");
     drop(node);
-    crate::local::home::lock_store(home, data)
+    // The dropped claim declared its release and frees the store once the
+    // node's engine has gone with its last handle (Lean `StoreHandoff.mayRelease`).
+    crate::local::home::acquire_store(home, data, Duration::from_secs(15))
+        .await
         .expect("the store lock is reacquirable after the owned node shuts down")
 }
 
