@@ -38,6 +38,7 @@ fn account(
             read_at: None,
             read_error: None,
         }),
+        refusal: None,
     }
 }
 
@@ -118,4 +119,65 @@ fn no_reads_say_so_under_refresh() {
 
     let none = text(" No account limits have been reported.", Label);
     assert_eq!(rows, [refresh(), none]);
+}
+
+/// The desktop banner's `/usage` counterpart: an exhausted account says so
+/// above its bars, with only the fields the provider stated, and no percentage.
+#[test]
+fn a_refused_account_says_out_of_quota_above_its_windows() {
+    let now = Utc.with_ymd_and_hms(2026, 11, 8, 12, 0, 0).unwrap();
+    let mut refused = account("Grok", "xai-grok", UsageRead::Read, None);
+    refused.refusal = Some(gents_inference::usage_observation::UsageRefusalView {
+        at: now.to_rfc3339(),
+        window: Some("rolling 24-hour".into()),
+        used: Some(691_791),
+        cap: Some(600_000),
+        resets_at: None,
+        consumed_by_node: Some(1200),
+        detail: "you have used all the included free usage".into(),
+    });
+    let lines = shown(rows(&[refused], now));
+    let text: Vec<&str> = lines.iter().map(|(text, _, _)| text.as_str()).collect();
+    assert!(
+        text.iter()
+            .any(|line| line.contains("Out of quota") && line.contains("691791 of 600000")),
+        "{text:?}"
+    );
+    assert!(
+        text.iter()
+            .any(|line| line.contains("rolling 24-hour window")),
+        "{text:?}"
+    );
+    assert!(
+        text.iter().any(|line| line.contains("included free usage")),
+        "{text:?}"
+    );
+    assert!(
+        !text.iter().any(|line| line.contains("100%")),
+        "a refusal is not a percentage: {text:?}"
+    );
+}
+
+/// No reset stated is no reset shown: the line says only what the provider said.
+#[test]
+fn a_refusal_without_a_stated_reset_shows_no_reset() {
+    let now = Utc.with_ymd_and_hms(2026, 11, 8, 12, 0, 0).unwrap();
+    let mut refused = account("Grok", "xai-grok", UsageRead::Read, None);
+    refused.refusal = Some(gents_inference::usage_observation::UsageRefusalView {
+        at: now.to_rfc3339(),
+        window: None,
+        used: None,
+        cap: None,
+        resets_at: None,
+        consumed_by_node: None,
+        detail: "free usage exhausted".into(),
+    });
+    let lines = shown(rows(&[refused], now));
+    let headline = lines
+        .iter()
+        .map(|(text, _, _)| text.as_str())
+        .find(|line| line.contains("Out of quota"))
+        .expect("the headline");
+    assert_eq!(headline.trim(), "Out of quota");
+    assert!(!headline.contains("resets"), "{headline}");
 }

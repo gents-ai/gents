@@ -72,6 +72,18 @@ pub(super) fn rows(reads: &[AccountUsageRead], now: DateTime<Utc>) -> Vec<MenuRo
             rows.push(row("   Disabled".to_string(), Tone::Label));
             continue;
         }
+        // The provider's own refusal goes above the bars, as the desktop banner
+        // does: an exhausted account can have no window to fill, so the
+        // percentages may say nothing at all.
+        if let Some(refusal) = &read.refusal {
+            let stated = refusal_statement(refusal);
+            let when = match &refusal.resets_at {
+                Some(at) => format!(" · resets {at}"),
+                None => String::new(),
+            };
+            rows.push(row(format!("   Out of quota{when}{stated}"), Tone::Warn));
+            rows.push(row(format!("   {}", refusal.detail), Tone::Label));
+        }
         let windows = read.usage.iter().flat_map(|usage| &usage.windows);
         let mut groups: Vec<(&str, Vec<&WindowView>)> = Vec::new();
         for window in windows {
@@ -102,6 +114,22 @@ pub(super) fn rows(reads: &[AccountUsageRead], now: DateTime<Utc>) -> Vec<MenuRo
         rows.extend(why.map(|why| row(format!("   {why}"), Tone::Label)));
     }
     rows
+}
+
+/// What the refusal stated, field by field: `691,791 of 600,000 · rolling 24-hour
+/// window`. A field the provider left unstated is left out, never filled in.
+fn refusal_statement(refusal: &gents_inference::usage_observation::UsageRefusalView) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    match (refusal.used, refusal.cap) {
+        (Some(used), Some(cap)) => parts.push(format!(" · {used} of {cap}")),
+        (None, Some(cap)) => parts.push(format!(" · cap {cap}")),
+        (Some(used), None) => parts.push(format!(" · {used} consumed")),
+        (None, None) => {}
+    }
+    if let Some(window) = &refusal.window {
+        parts.push(format!(" · {window} window"));
+    }
+    parts.concat()
 }
 
 /// `WindowRow` (`ProviderUsage.tsx:136-155`): its name, how full it is and when it empties,
