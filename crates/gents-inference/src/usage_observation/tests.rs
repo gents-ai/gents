@@ -925,6 +925,9 @@ struct SeedCall<'a> {
     call_id: &'a str,
     queued_at: &'a str,
     call_state: &'a str,
+    /// The model the call ran on. Production always writes it, and a refusal is
+    /// model-scoped, so a seed without it would be evidence about no model.
+    model_name: &'a str,
     failure_reason: Option<&'a str>,
     provider_total_tokens: Option<u64>,
 }
@@ -939,9 +942,11 @@ async fn seed_refused_call(
         call_id,
         queued_at,
         call_state,
+        model_name,
         failure_reason,
         provider_total_tokens,
     } = call;
+    let model = gents_store::graphql::escape_graphql_string(model_name);
     let escape = gents_store::graphql::escape_graphql_string;
     let failure = failure_reason
         .map(|text| format!(r#", failure_reason: "{}""#, escape(text)))
@@ -969,7 +974,8 @@ async fn seed_refused_call(
                 request_id: "{request_id}", request_doc_id: "{request_doc}",
                 call_seq: 1, backend_id: "{backend_id}", agent_did: "{node_did}",
                 node_did: "{node_did}", call_kind: "inference", attempt: 1,
-                call_state: "{call_state}", queued_at: "{queued_at}", priority: 0,
+                call_state: "{call_state}", model_name: "{model}",
+                queued_at: "{queued_at}", priority: 0,
                 queue_depth_at_enqueue: 0, controller_generation: 0,
                 backend_config_fingerprint: "usage-refusal"{failure}{tokens}
             }}) {{ _docID }} }}"#,
@@ -1025,6 +1031,10 @@ async fn seed_session_chain(
 const GROK_REFUSAL: &str = "you have used all the included free usage for this account; \
                              your rolling 24-hour window will refresh later; tokens 691791/600000";
 
+/// The model the refusal names. xAI says "for model grok-4.7", and evidence is
+/// scoped by model, so a call seeded without one is evidence about no model.
+const GROK_MODEL: &str = "grok-4.7";
+
 /// The item's whole point, at the read path: an account the provider refused is
 /// reported as exhausted from the node's own durable record, with the fields
 /// the provider stated and nothing invented for the fields it did not — and the
@@ -1054,6 +1064,8 @@ async fn a_refused_account_is_exhausted_from_evidence_and_says_so_everywhere() {
             call_id: "usage-refusal-call",
             queued_at: &(now - Duration::minutes(30)).to_rfc3339(),
             call_state: "failed",
+            // The model xAI's refusal names: evidence is scoped by it.
+            model_name: GROK_MODEL,
             failure_reason: Some(GROK_REFUSAL),
             provider_total_tokens: Some(1200),
         },
@@ -1150,6 +1162,8 @@ async fn a_restart_with_an_empty_cache_still_shows_the_refusal() {
             call_id: "usage-refusal-call",
             queued_at: &(now - Duration::minutes(30)).to_rfc3339(),
             call_state: "failed",
+            // The model xAI's refusal names: evidence is scoped by it.
+            model_name: GROK_MODEL,
             failure_reason: Some(GROK_REFUSAL),
             provider_total_tokens: None,
         },
@@ -1200,6 +1214,8 @@ async fn a_later_completed_call_clears_the_refusal_at_the_read_path() {
             call_id: "usage-refusal-call",
             queued_at: &(now - Duration::minutes(40)).to_rfc3339(),
             call_state: "failed",
+            // The model xAI's refusal names: evidence is scoped by it.
+            model_name: GROK_MODEL,
             failure_reason: Some(GROK_REFUSAL),
             provider_total_tokens: None,
         },
@@ -1213,6 +1229,9 @@ async fn a_later_completed_call_clears_the_refusal_at_the_read_path() {
             call_id: "usage-clearing-call",
             queued_at: &(now - Duration::minutes(10)).to_rfc3339(),
             call_state: "completed",
+            // Same model as the refusal: a sibling model's success must not
+            // clear it, so this fixture proves the same-model clear.
+            model_name: GROK_MODEL,
             failure_reason: None,
             provider_total_tokens: None,
         },
@@ -1259,6 +1278,7 @@ async fn evidence_older_than_the_window_is_not_a_standing_refusal() {
             call_id: "usage-stale-call",
             queued_at: &(now - Duration::hours(30)).to_rfc3339(),
             call_state: "failed",
+            model_name: GROK_MODEL,
             failure_reason: Some("you have used all the included free usage"),
             provider_total_tokens: None,
         },

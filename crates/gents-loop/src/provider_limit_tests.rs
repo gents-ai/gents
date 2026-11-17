@@ -509,6 +509,159 @@ fn a_free_usage_refusal_is_exhaustion_with_its_window_and_counter() {
     );
 }
 
+/// A sub-day rate outranks quota wording beside it. "free usage ... 20
+/// requests/minute" is a wait, not a spent account: classifying it as exhaustion
+/// blocks a goal until a reset the provider never stated.
+#[test]
+fn a_per_minute_rate_is_a_throttle_even_beside_free_usage_words() {
+    let body = "Free usage limit: 20 requests/minute. Try again in 30 seconds.";
+    let classified = classify_provider_limit(body, now()).expect("it classifies");
+    assert!(
+        matches!(classified, ProviderLimit::Throttled { .. }),
+        "a per-minute rate is a throttle, not exhaustion: {classified:?}"
+    );
+    for rate in [
+        "free usage: 20 requests/minute",
+        "free usage: 5 requests/second",
+        "included free usage, 100 requests/hour",
+        "free usage 60 rpm",
+    ] {
+        let classified = classify_provider_limit(rate, now()).expect(rate);
+        assert!(
+            matches!(classified, ProviderLimit::Throttled { .. }),
+            "{rate} is a throttle: {classified:?}"
+        );
+    }
+}
+
+/// The provider-reported window is what the body names as the limit window. A
+/// bare "daily" beside an exhaustion is not the enforced period, so it stays
+/// unstated rather than being reported as the provider's window.
+#[test]
+fn a_period_is_the_window_only_when_the_body_names_it_as_one() {
+    let window_of = |body: &str| {
+        let limit = classify_provider_limit(body, now()).expect(body);
+        let ProviderLimit::UsageExhausted(usage) = limit else {
+            panic!("expected exhaustion: {limit:?}");
+        };
+        usage.window
+    };
+    // Named as the window or the limit: reported.
+    assert_eq!(
+        window_of("usage limit reached; daily window exhausted").as_deref(),
+        Some("daily")
+    );
+    assert_eq!(
+        window_of("usage limit reached; window: weekly").as_deref(),
+        Some("weekly")
+    );
+    assert_eq!(
+        window_of("usage limit reached; monthly quota exhausted").as_deref(),
+        Some("monthly")
+    );
+    // Named only in passing: unstated.
+    assert_eq!(
+        window_of("usage limit reached; your daily allowance is spent"),
+        None
+    );
+    assert_eq!(
+        window_of("usage limit reached; daily credits used up"),
+        None
+    );
+}
+
+/// The counter pair is read only where the body anchors it on `tokens`: a date
+/// or a ratio is not a counter and a cap.
+#[test]
+fn a_counter_pair_is_read_only_after_the_word_tokens() {
+    let pair_of = |body: &str| {
+        let limit = classify_provider_limit(body, now()).expect(body);
+        let ProviderLimit::UsageExhausted(usage) = limit else {
+            panic!("expected exhaustion: {limit:?}");
+        };
+        (usage.used, usage.cap)
+    };
+    // A date and a ratio are not the counter.
+    assert_eq!(pair_of("usage limit reached on 4/5/2026"), (None, None));
+    assert_eq!(
+        pair_of("usage limit reached; you used 3/4 of it"),
+        (None, None)
+    );
+    // Anchored: read, with the separators a body uses.
+    assert_eq!(
+        pair_of("usage limit reached; tokens 691791/600000"),
+        (Some(691_791), Some(600_000))
+    );
+    assert_eq!(
+        pair_of("usage limit reached; tokens: 1,200 / 2,400"),
+        (Some(1_200), Some(2_400))
+    );
+    // A zero cap establishes nothing, matching Lean's cap > 0.
+    assert_eq!(pair_of("usage limit reached; tokens 0/0"), (None, None));
+}
+
+/// A JSON `limit: 0` is unstated, not a spent allowance. Lean `establishes`
+/// requires cap > 0.
+#[test]
+fn a_zero_json_cap_is_unstated() {
+    let body = r#"{"error": {"message": "usage limit reached", "used": 0, "limit": 0}}"#;
+    let limit = classify_provider_limit(body, now()).expect("it classifies");
+    let ProviderLimit::UsageExhausted(usage) = limit else {
+        panic!("expected exhaustion: {limit:?}");
+    };
+    assert_eq!(usage.used, Some(0), "a stated counter of zero is stated");
+    assert_eq!(usage.cap, None, "a cap of zero is not a cap");
+}
+
+/// The parsed statement survives persistence: the `Display` text carries it in
+/// a marker ahead of the bounded detail, so re-classifying the stored row reads
+/// the provider's own numbers rather than 300 characters of prose.
+#[test]
+fn the_persisted_row_carries_the_parsed_statement() {
+    let body = "You have used all the included free usage for this account. \
+                tokens 691791/600000";
+    let first = classify_provider_limit(body, now()).expect("it classifies");
+    let ProviderLimit::UsageExhausted(usage) = first else {
+        panic!("expected exhaustion: {first:?}");
+    };
+    let persisted = persisted_failure_reason(body, now());
+    assert!(
+        persisted.contains("[usage-limit used=691791 cap=600000"),
+        "the marker is written from the parsed fields: {persisted}"
+    );
+    assert!(
+        persisted.find("[usage-limit").unwrap() < persisted.find(": ").unwrap_or(usize::MAX),
+        "the marker precedes the detail, so a long detail cannot truncate it: {persisted}"
+    );
+
+    // A detail far longer than the bound still re-reads the exact pair.
+    let long_body = format!("usage limit reached: {} tokens 691791/600000", "x".repeat(4000));
+    let stored = persisted_failure_reason(&long_body, now());
+    let reread = classify_provider_limit(&stored, now()).expect("the stored row re-classifies");
+    let ProviderLimit::UsageExhausted(reread) = reread else {
+        panic!("expected exhaustion: {reread:?}");
+    };
+    assert_eq!(
+        (reread.used, reread.cap),
+        (Some(691_791), Some(600_000)),
+        "the pair survives a detail longer than the bound: {stored}"
+    );
+    assert!(stored.chars().count() < 500, "the detail is still bounded");
+}
+
+/// A row persisted before the marker existed still reads its statement from the
+/// prose it kept.
+#[test]
+fn a_row_written_before_the_marker_still_reads_its_prose() {
+    let legacy = "provider usage limit reached (reset time not reported): \
+                  used all the included free usage tokens 691791/600000";
+    let limit = classify_provider_limit(legacy, now()).expect("the legacy row re-classifies");
+    let ProviderLimit::UsageExhausted(usage) = limit else {
+        panic!("expected exhaustion: {limit:?}");
+    };
+    assert_eq!((usage.used, usage.cap), (Some(691_791), Some(600_000)));
+}
+
 /// A plain "free usage exhausted" establishes the refusal and nothing else: no
 /// cap, no counter, no reset. Inventing any of them is the bug B8 exists to fix.
 #[test]

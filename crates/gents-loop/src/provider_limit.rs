@@ -27,10 +27,15 @@ const USAGE_NEEDLES: &[&str] = &[
     // A free tier's own wording. xAI/Grok says "used all the included free
     // usage", which matched none of the needles above, so that refusal used to
     // classify as neither exhausted nor throttled and no read path could see it.
+    //
+    // Narrow on purpose: a bare "free usage" matched any free-tier mention,
+    // including "free usage ... 20 requests/minute", which is a throttle and was
+    // becoming a permanent exhaustion. These three are the shapes that state
+    // exhaustion, and each is unreachable from the others.
     "included free usage",
-    "free usage",
     "used all the included",
     "exhausted your free",
+    "free usage exhausted",
 ];
 
 const THROTTLE_NEEDLES: &[&str] = &["rate_limit", "rate limit", "too many requests"];
@@ -214,17 +219,80 @@ pub struct UsageLimit {
     pub cap: Option<u64>,
 }
 
+/// What the provider stated, as a marker beside the human sentence.
+///
+/// The parsed fields are what every read path needs (window, counter, cap), and
+/// the persisted `failure_reason` is the only place they can survive: it holds
+/// this `Display` text whole, while `detail` inside it is bounded to
+/// `DETAIL_MAX_CHARS`. The marker is therefore written from the parsed fields,
+/// not re-read out of the prose, and it is written **first** so a long detail
+/// cannot truncate it away. A row persisted before this change has no marker and
+/// still parses from the prose it kept.
+const LIMIT_OPEN: &str = "[usage-limit";
+
 impl fmt::Display for UsageLimit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.resets_at {
             Some(at) => write!(f, "{USAGE_LIMIT_PREFIX} (resets at {})", rfc3339(at))?,
             None => write!(f, "{USAGE_LIMIT_PREFIX} (reset time not reported)")?,
         }
+        let marker = self.statement_marker();
+        if !marker.is_empty() {
+            write!(f, " {marker}")?;
+        }
         if !self.detail.is_empty() {
             write!(f, ": {}", self.detail)?;
         }
         Ok(())
     }
+}
+
+impl UsageLimit {
+    /// `[used=691791 cap=600000 window=rolling+24-hour]`, or empty when the
+    /// provider stated nothing beyond the refusal.
+    fn statement_marker(&self) -> String {
+        if self.used.is_none() && self.cap.is_none() && self.window.is_none() {
+            return String::new();
+        }
+        let mut marker = String::from(LIMIT_OPEN);
+        if let Some(used) = self.used {
+            marker.push_str(&format!(" used={used}"));
+        }
+        if let Some(cap) = self.cap {
+            marker.push_str(&format!(" cap={cap}"));
+        }
+        if let Some(window) = &self.window {
+            // A space would split the token, so it is encoded as '+' — reversible,
+            // unlike replacing every hyphen in a label like "rolling 24-hour".
+            marker.push_str(&format!(" window={}", window.replace(' ', "+")));
+        }
+        marker.push(']');
+        marker
+    }
+}
+
+/// The statement a persisted `failure_reason` carries, if it carries one.
+///
+/// Read before the prose, so the counter and cap are exactly what the provider
+/// stated at the time of the refusal rather than a re-parse of 300 characters.
+fn stored_statement(text: &str) -> UsageStatement {
+    let Some(start) = text.find(LIMIT_OPEN) else {
+        return UsageStatement::default();
+    };
+    let rest = &text[start + LIMIT_OPEN.len()..];
+    let Some(end) = rest.find(']') else {
+        return UsageStatement::default();
+    };
+    let mut statement = UsageStatement::default();
+    for field in rest[..end].split_whitespace() {
+        match field.split_once('=') {
+            Some(("used", value)) => statement.used = value.parse::<u64>().ok(),
+            Some(("cap", value)) => statement.cap = value.parse::<u64>().ok().filter(|cap| *cap > 0),
+            Some(("window", value)) => statement.window = Some(value.replace('+', " ")),
+            _ => {}
+        }
+    }
+    statement
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,9 +307,16 @@ pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<Provide
     let lower = body.to_ascii_lowercase();
     let body_json = embedded_json(body);
     let payment = openrouter_payment_required(&lower, body_json.as_ref());
-    let usage_text = USAGE_NEEDLES.iter().any(|needle| lower.contains(needle))
-        || payment == Some(PaymentRequired::Exhausted);
-    let throttle = THROTTLE_NEEDLES.iter().any(|needle| lower.contains(needle))
+    // A sub-day rate is a throttle however much quota wording rides along with
+    // it: "free usage ... 20 requests/minute" is a wait, not a spent account, and
+    // treating it as exhaustion blocks a goal until a reset it never stated.
+    // This is decided first, so a per-minute rate outranks the usage needles.
+    let sub_day_rate = sub_day_rate_window(&lower);
+    let usage_text = !sub_day_rate
+        && (USAGE_NEEDLES.iter().any(|needle| lower.contains(needle))
+            || payment == Some(PaymentRequired::Exhausted));
+    let throttle = sub_day_rate
+        || THROTTLE_NEEDLES.iter().any(|needle| lower.contains(needle))
         || has_status(&lower, Some("429"))
         || (payment == Some(PaymentRequired::InFlight) && headers.retry_at.is_some());
     if !(usage_text || throttle) {
@@ -259,7 +334,7 @@ pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<Provide
             })
             .or(headers.reset_at)
             .or(headers.retry_at);
-        let statement = UsageStatement::parse(&lower, body_json.as_ref());
+        let statement = statement_of(body, &lower, body_json.as_ref());
         return Some(ProviderLimit::UsageExhausted(UsageLimit {
             resets_at,
             detail: provider_detail(body, body_json.as_ref()),
@@ -274,7 +349,7 @@ pub fn classify_provider_limit(text: &str, now: DateTime<Utc>) -> Option<Provide
         .or_else(|| try_again_in(&lower).and_then(|wait| delay_after(now, wait.as_secs_f64())));
     let retry_after = retry_at.map(|at| (at - now).to_std().unwrap_or(Duration::ZERO));
     if retry_after.is_some_and(|wait| wait > LONG_RATE_LIMIT_WAIT) {
-        let statement = UsageStatement::parse(&lower, body_json.as_ref());
+        let statement = statement_of(body, &lower, body_json.as_ref());
         return Some(ProviderLimit::UsageExhausted(UsageLimit {
             resets_at: retry_at,
             detail: provider_detail(body, body_json.as_ref()),
@@ -297,6 +372,32 @@ struct UsageStatement {
     cap: Option<u64>,
 }
 
+/// The statement a body states: the marker this node persisted when it first
+/// classified the refusal, or — for a row written before the marker existed —
+/// a parse of the prose it kept.
+///
+/// The marker wins field by field, so a provider's exact counter and cap survive
+/// both the bounded `detail` and any later change to the needle set. A marker
+/// that states nothing falls through to the prose.
+fn statement_of(
+    body: &str,
+    lower: &str,
+    body_json: Option<&serde_json::Value>,
+) -> UsageStatement {
+    let stored = stored_statement(body);
+    let mut statement = UsageStatement::parse(lower, body_json);
+    if stored.window.is_some() {
+        statement.window = stored.window;
+    }
+    if stored.used.is_some() {
+        statement.used = stored.used;
+    }
+    if stored.cap.is_some() {
+        statement.cap = stored.cap;
+    }
+    statement
+}
+
 impl UsageStatement {
     /// Parse the statement out of a lowercased body and, when there is one, a
     /// structured JSON body. The JSON wins where it speaks, since it is the
@@ -311,7 +412,10 @@ impl UsageStatement {
                 .window
                 .or_else(|| json_str(json, &["window", "period", "quota_window"]));
             statement.used = json_u64(json, &["used", "usage", "tokens_used", "consumed"]);
-            statement.cap = json_u64(json, &["cap", "limit", "tokens_limit", "quota"]);
+            // A JSON `limit: 0` is not a cap either; Lean `establishes` requires
+            // cap > 0, so zero is unstated rather than a spent allowance.
+            statement.cap = json_u64(json, &["cap", "limit", "tokens_limit", "quota"])
+                .filter(|cap| *cap > 0);
         }
         // `tokens 691791/600000` — the pair is only read when both sides parse,
         // so a malformed pair leaves used and cap unstated together rather than
@@ -326,52 +430,138 @@ impl UsageStatement {
     }
 }
 
-/// A window named in prose: "rolling 24-hour window", "24h window", "daily".
+/// A window named in prose.
+///
+/// The hour-shaped spellings name the window themselves, so finding them is
+/// enough. A bare `daily`/`weekly`/`monthly` does not: an exhaustion body can
+/// say "your daily allowance" or "daily credits" without the provider meaning
+/// that period as the enforced limit, and reporting it as the provider's window
+/// would assert something it never said. Those count only beside the word
+/// `window`, or in a "limit"/"quota" phrase.
 fn named_window(lower: &str) -> Option<String> {
     for (needle, label) in [
         ("rolling 24-hour", "rolling 24-hour"),
         ("rolling 24 hour", "rolling 24-hour"),
         ("24-hour window", "24-hour"),
         ("24 hour window", "24-hour"),
-        ("daily", "daily"),
-        ("weekly", "weekly"),
-        ("monthly", "monthly"),
     ] {
         if lower.contains(needle) {
             return Some(label.to_owned());
         }
     }
-    None
-}
-
-/// `tokens 691791/600000`, or `691791 / 600000`. Both sides must parse and the
-/// cap must be non-zero; anything else is unstated.
-fn token_pair(lower: &str) -> Option<(u64, u64)> {
-    let bytes = lower.as_bytes();
-    let mut start = None;
-    for (index, byte) in bytes.iter().enumerate() {
-        if byte.is_ascii_digit() {
-            start.get_or_insert(index);
-        } else if *byte == b'/' && start.is_some() {
-            let left = &lower[start.take().expect("a digit was seen")..index];
-            let rest = &lower[index + 1..];
-            let right = rest
-                .chars()
-                .take_while(char::is_ascii_digit)
-                .collect::<String>();
-            if right.is_empty() {
-                return None;
-            }
-            let (used, cap) = (left.trim().parse::<u64>().ok()?, right.parse::<u64>().ok()?);
-            if cap == 0 {
-                return None;
-            }
-            return Some((used, cap));
-        } else if !byte.is_ascii_whitespace() && *byte != b',' && *byte != b':' {
-            start = None;
+    for period in ["daily", "weekly", "monthly"] {
+        if period_window_stated(lower, period) {
+            return Some(period.to_owned());
         }
     }
     None
+}
+
+/// Whether `period` appears in the body as the stated limit window: "daily
+/// window", "window: daily", "daily limit", "daily quota". A bare mention is
+/// not enough.
+fn period_window_stated(lower: &str, period: &str) -> bool {
+    let mut from = 0;
+    while let Some(found) = lower[from..].find(period) {
+        let at = from + found;
+        let before = &lower[..at];
+        let after = &lower[at + period.len()..];
+        let next_word = after.trim_start().split_whitespace().next().unwrap_or("");
+        let prev_word = before.split_whitespace().next_back().unwrap_or("");
+        let names_window = matches!(next_word, "window" | "limit" | "quota" | "period")
+            || matches!(prev_word, "window" | "window:" | "limit" | "quota");
+        if names_window {
+            return true;
+        }
+        from = at + period.len();
+    }
+    false
+}
+
+/// Whether the body names a rate faster than a day — per minute, second or hour.
+/// Such a rate is a throttle's window, and outranks quota wording beside it.
+fn sub_day_rate_window(lower: &str) -> bool {
+    const SUB_DAY: &[&str] = &[
+        "per minute",
+        "per-minute",
+        "/minute",
+        "/min",
+        "per second",
+        "per-second",
+        "/second",
+        "/sec",
+        "per hour",
+        "per-hour",
+        "/hour",
+        "/hr",
+        "requests/min",
+        "req/min",
+        "requests/min",
+        "rpm",
+        "tpm",
+    ];
+    SUB_DAY.iter().any(|needle| lower.contains(needle))
+}
+
+/// `tokens 691791/600000`, anchored on the word `tokens`.
+///
+/// Anchoring matters: taking the first `digits/digits` anywhere read dates
+/// (`4/5/2026`) and ratios as a counter and a cap. Both sides must parse and the
+/// cap must be non-zero — Lean `Refusal.establishes` requires `cap > 0`, so a
+/// `tokens 0/0` is a pair that establishes nothing rather than a cap of zero.
+fn token_pair(lower: &str) -> Option<(u64, u64)> {
+    let mut from = 0;
+    while let Some(found) = lower[from..].find("tokens") {
+        let after = &lower[from + found + "tokens".len()..];
+        if let Some(pair) = pair_after_anchor(after) {
+            return Some(pair);
+        }
+        from = from + found + "tokens".len();
+    }
+    None
+}
+
+/// The first `used/cap` at the start of `text`, allowing a separator word
+/// ("used", "remaining", ":") and whitespace between it and the digits.
+fn pair_after_anchor(text: &str) -> Option<(u64, u64)> {
+    let mut rest = text.trim_start();
+    // One optional lead-in word, then optional punctuation and space.
+    for lead in [":", "used", "remaining", "of", "=", "-"] {
+        if let Some(tail) = rest.strip_prefix(lead) {
+            rest = tail.trim_start();
+            break;
+        }
+    }
+    let rest = rest.trim_start_matches([':', ' ', '=']);
+    let mut chars = rest.char_indices();
+    let (_, first) = chars.next()?;
+    if !first.is_ascii_digit() {
+        return None;
+    }
+    let left_len = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == ',' || *c == '_')
+        .map(char::len_utf8)
+        .sum::<usize>();
+    let left = rest[..left_len].replace([',', '_'], "");
+    let after_left = &rest[left_len..];
+    let after_left = after_left.trim_start();
+    let after_left = after_left.strip_prefix('/')?.trim_start();
+    let right_len = after_left
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == ',' || *c == '_')
+        .map(char::len_utf8)
+        .sum::<usize>();
+    if right_len == 0 {
+        return None;
+    }
+    let right = after_left[..right_len].replace([',', '_'], "");
+    let used = left.parse::<u64>().ok()?;
+    let cap = right.parse::<u64>().ok()?;
+    if cap == 0 {
+        return None;
+    }
+    Some((used, cap))
 }
 
 /// The first of `keys` present as a string anywhere the JSON reaches.

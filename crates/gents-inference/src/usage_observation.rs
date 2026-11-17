@@ -184,6 +184,20 @@ pub struct UsageCache {
     /// these; the runtime key alone sees nothing. Empty means the runtime holds
     /// no agent yet, and then no refusal is evidenced — never a wrong one.
     agent_signers: Vec<gents_store::identity::ManagedAgentSigner>,
+    /// Standing refusals, keyed by backend and the evidence window's start.
+    ///
+    /// A usage read asks about every account, and each refusal costs one query
+    /// per Agent, so an uncached read re-queried the same rows on every call.
+    /// The key includes the window's start, so an entry expires by the clock
+    /// rather than by an invalidation that could be missed.
+    refusals: tokio::sync::Mutex<rapidhash::RapidHashMap<RefusalKey, Option<UsageRefusalView>>>,
+}
+
+/// One backend's refusal in one evidence window.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct RefusalKey {
+    backend_id: String,
+    since: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -203,6 +217,37 @@ impl UsageCache {
 
     pub fn endpoints(&self) -> &UsageEndpoints {
         &self.endpoints
+    }
+
+    /// The standing refusal for one backend, cached for the evidence window.
+    ///
+    /// Each refusal costs one `InferenceCall` query per Agent the runtime holds,
+    /// which is the expensive part of a usage read; the cache makes the second
+    /// read in the same window free. The window's own start is part of the key,
+    /// so the entry turns over with the clock.
+    pub async fn refusal_for_backend(
+        &self,
+        node: &std::sync::Arc<defra_node::Node>,
+        backend: &InferenceBackend,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<UsageRefusalView> {
+        let since = crate::usage_refusal::evidence_since(now);
+        let key = RefusalKey {
+            backend_id: backend.backend_id.clone(),
+            since: since.to_rfc3339(),
+        };
+        if let Some(cached) = self.refusals.lock().await.get(&key).cloned() {
+            return cached;
+        }
+        let read = crate::usage_refusal::refusal_for_backend_across_agents(
+            node,
+            &self.agent_signers,
+            backend,
+            now,
+        )
+        .await;
+        self.refusals.lock().await.insert(key, read.clone());
+        read
     }
 
     /// Give the cache the Agent signers whose inference calls this runtime may
@@ -664,8 +709,15 @@ pub struct UsageRefusalView {
     /// RFC 3339, absolute only. A relative "refreshes in 24 hours" leaves this
     /// `None`: a reset derived from the failure time is a guess.
     pub resets_at: Option<String>,
-    /// How much this node has itself observed in the window, always an estimate.
+    /// The model the refusal is about. A provider refuses per model ("for model
+    /// grok-4.7"), so a refusal marks this model out, not the whole account.
+    pub model: Option<String>,
+    /// How much this node has itself observed in the window. Always an estimate:
+    /// [`Self::consumed_basis`] says so wherever it is shown.
     pub consumed_by_node: Option<u64>,
+    /// Whose count [`Self::consumed_by_node`] is. It is this node's arithmetic
+    /// over its own calls, so it is `LocallyEstimated` and never the provider's.
+    pub consumed_basis: WindowBasis,
     /// A bounded excerpt of what the provider said. Operator-facing only: the
     /// CLI and the desktop show it, and [`Self::for_model`] leaves it out.
     pub detail: String,
@@ -698,18 +750,38 @@ pub enum WindowBasis {
 }
 
 impl UsageRefusalView {
-    /// This refusal as a model sees it: the fields the provider stated and
-    /// nothing quoted from its body. The excerpt is operator-only, because a
-    /// refusal body can carry account details that are not this Agent's.
+    /// The fields a model sees, named one by one.
+    ///
+    /// An **allowlist**, not a denylist: a field added to the view later cannot
+    /// reach a model by default. What a model gets is what the provider stated
+    /// (window, basis, used, cap, reset, the model it is about) plus this node's
+    /// own count *labelled as the node's*. The provider's bounded excerpt and
+    /// this node's look-back length stay with the operator, because a refusal
+    /// body can carry account details that are not this Agent's.
+    pub const MODEL_FIELDS: &'static [&'static str] = &[
+        "at",
+        "model",
+        "window",
+        "window_basis",
+        "used",
+        "cap",
+        "resets_at",
+        "consumed_by_node",
+        "consumed_basis",
+    ];
+
     pub fn for_model(&self) -> serde_json::Value {
-        let mut view = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
-        if let Some(object) = view.as_object_mut() {
-            object.remove("detail");
-            // The node's own look-back length is an operator reading; the
-            // window it used to judge is stated in `window`/`window_basis`.
-            object.remove("evidence_window_hours");
+        let full = serde_json::to_value(self).unwrap_or(serde_json::Value::Null);
+        let Some(object) = full.as_object() else {
+            return serde_json::Value::Null;
+        };
+        let mut view = serde_json::Map::with_capacity(Self::MODEL_FIELDS.len());
+        for field in Self::MODEL_FIELDS {
+            if let Some(value) = object.get(*field) {
+                view.insert((*field).to_owned(), value.clone());
+            }
         }
-        view
+        serde_json::Value::Object(view)
     }
 }
 
@@ -827,13 +899,7 @@ pub async fn read_node_usage(
             // calls. Diagnostics only: it never changes the outcome or a route.
             // The evidence is read as each Agent this runtime holds, because
             // `InferenceCall` admits only the Agent that worked the call.
-            let refusal = crate::usage_refusal::refusal_for_backend_across_agents(
-                &node,
-                cache.agent_signers(),
-                &backend,
-                now,
-            )
-            .await;
+            let refusal = cache.refusal_for_backend(&node, &backend, now).await;
             AccountUsageRead {
                 outcome,
                 usage: Some(usage_view(stored.as_ref(), backend.provider_kind, now)),
