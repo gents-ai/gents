@@ -318,26 +318,50 @@ pub async fn load_tool_call_read(
 }
 
 /// What reading a tool call's result or receipt failed on, told apart by its
-/// owner: an error the store owns (a `ConfigClientError` on its chain, asked
-/// through `TransactionFailure`) is a query the database could not answer,
-/// and anything else is a row that was read but is corrupt or invalid.
+/// owner (`StoreRead::of`). The wrapped error stays on the `source()` chain, so
+/// a store conflict still reaches `TransactionFailure`.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadFailure {
     /// The database could not answer; retrying may succeed.
-    #[error(transparent)]
-    QueryFailed(anyhow::Error),
-    /// A row was read but could not be decoded or is invalid.
-    #[error(transparent)]
-    Unreadable(anyhow::Error),
+    #[error("the database could not answer the tool call read")]
+    QueryFailed(#[source] anyhow::Error),
+    /// A row was read but could not be decoded or is invalid, or the reader
+    /// may not read it.
+    #[error("the tool call's result or receipt could not be read")]
+    Unreadable(#[source] anyhow::Error),
 }
 
 impl ReadFailure {
     fn of(error: anyhow::Error) -> Self {
+        match StoreRead::of(&error) {
+            StoreRead::QueryFailed => Self::QueryFailed(error),
+            StoreRead::Denied | StoreRead::NotStore => Self::Unreadable(error),
+        }
+    }
+}
+
+/// Whose error a failed read is, asked of the store's own classifier
+/// (`TransactionFailure`), never of the text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoreRead {
+    /// The store could not answer; retrying may succeed.
+    QueryFailed,
+    /// The store refused the reader. Permanent: a retry gets the same answer,
+    /// so it is a row the reader cannot read, not a retry.
+    Denied,
+    /// Not a store error: the row was read and is corrupt or invalid.
+    NotStore,
+}
+
+impl StoreRead {
+    fn of(error: &anyhow::Error) -> Self {
         use gents_store::config_client::TransactionFailure;
-        if error.config_client_error().is_some() {
-            Self::QueryFailed(error)
+        if error.permission_denied() {
+            Self::Denied
+        } else if error.config_client_error().is_some() {
+            Self::QueryFailed
         } else {
-            Self::Unreadable(error)
+            Self::NotStore
         }
     }
 }
@@ -895,14 +919,15 @@ pub enum ToolCallLoadError {
     Missing(String),
     /// The database could not answer a query of the walk; retrying may
     /// succeed.
-    #[error(transparent)]
-    QueryFailed(anyhow::Error),
-    /// The row was read but could not be decoded.
-    #[error(transparent)]
-    Unreadable(anyhow::Error),
+    #[error("the database could not answer a tool call query")]
+    QueryFailed(#[source] anyhow::Error),
+    /// The row was read but could not be decoded, or the reader may not read
+    /// it.
+    #[error("the tool call row could not be read")]
+    Unreadable(#[source] anyhow::Error),
     /// The row was read but its identity, ancestry or admission is invalid.
-    #[error(transparent)]
-    Invalid(anyhow::Error),
+    #[error("the tool call's identity, ancestry or admission is invalid")]
+    Invalid(#[source] anyhow::Error),
     /// The parent (plugin effect or spawn owner) of the call failed to load.
     #[error(transparent)]
     Parent(Box<ParentLoadError>),
@@ -919,13 +944,23 @@ pub struct ParentLoadError {
 
 impl ToolCallLoadError {
     /// A walk step's error: a query the database could not answer when the
-    /// store owns it, otherwise an invalid row.
+    /// store owns it, a row the reader cannot read when the store refused
+    /// it, otherwise an invalid row.
     fn of_step(error: anyhow::Error) -> Self {
-        use gents_store::config_client::TransactionFailure;
-        if error.config_client_error().is_some() {
-            Self::QueryFailed(error)
-        } else {
-            Self::Invalid(error)
+        match StoreRead::of(&error) {
+            StoreRead::QueryFailed => Self::QueryFailed(error),
+            StoreRead::Denied => Self::Unreadable(error),
+            StoreRead::NotStore => Self::Invalid(error),
+        }
+    }
+
+    /// A failed read of the tool call row itself: a store refusal is a row
+    /// the reader cannot read; any other failure is a query the database
+    /// could not answer.
+    pub fn of_row_read(error: anyhow::Error) -> Self {
+        match StoreRead::of(&error) {
+            StoreRead::Denied => Self::Unreadable(error),
+            StoreRead::QueryFailed | StoreRead::NotStore => Self::QueryFailed(error),
         }
     }
 
@@ -1351,7 +1386,7 @@ async fn load_tool_call_identity(
     let resp = source
         .run(&rendered)
         .await
-        .map_err(ToolCallLoadError::QueryFailed)?;
+        .map_err(ToolCallLoadError::of_row_read)?;
     if resp
         .get("errors")
         .is_some_and(|errors| !errors.is_null() && !errors.as_array().is_some_and(Vec::is_empty))
@@ -1519,6 +1554,18 @@ mod failure_class_test {
             ReadFailure::of(anyhow::anyhow!("plugin receipt has invalid ownership")),
             ReadFailure::Unreadable(_)
         ));
+        // The converted error keeps the store error on its `source()` chain,
+        // with no `.context` to carry it.
+        let bare =
+            || anyhow::Error::new(gents_store::config_client::ConfigClientError::BearerRequired);
+        for converted in [
+            anyhow::Error::new(ToolCallLoadError::of_step(bare())),
+            anyhow::Error::new(ToolCallLoadError::of_row_read(bare())),
+            anyhow::Error::new(ReadFailure::of(bare())),
+        ] {
+            use gents_store::config_client::TransactionFailure;
+            assert!(converted.config_client_error().is_some(), "{converted:#}");
+        }
         let nested = |error| {
             ToolCallLoadError::Parent(Box::new(ParentLoadError {
                 doc_id: "grandparent".into(),
@@ -1530,5 +1577,31 @@ mod failure_class_test {
         };
         assert!(nested(ToolCallLoadError::of_step(store_failure())).query_failed());
         assert!(!nested(ToolCallLoadError::Missing("parent".into())).query_failed());
+    }
+
+    /// A permission denial is permanent, so it is a row the reader cannot
+    /// read, never a failed query to retry, at every read.
+    #[test]
+    fn a_permission_denial_is_unreadable_not_a_retry() {
+        let denied = || {
+            anyhow::Error::new(gents_store::config_client::ConfigClientError::Query(
+                Box::new(query::error::QueryError::PermissionDenied(
+                    "not the reader's".into(),
+                )),
+            ))
+        };
+        assert!(matches!(
+            ToolCallLoadError::of_row_read(denied()),
+            ToolCallLoadError::Unreadable(_)
+        ));
+        assert!(matches!(
+            ToolCallLoadError::of_step(denied()),
+            ToolCallLoadError::Unreadable(_)
+        ));
+        assert!(matches!(
+            ReadFailure::of(denied()),
+            ReadFailure::Unreadable(_)
+        ));
+        assert!(!ToolCallLoadError::of_row_read(denied()).query_failed());
     }
 }

@@ -502,6 +502,14 @@ theorem job_message_cannot_create_authority (signedParent jobRow rootSlotAttempt
 theorem exact_job_spawn_creates_authority : verifiedJobCreation true true true true = true := by
   decide
 
+theorem altered_creation_cannot_grant (scopeMatches openingMatches causeMatches : Bool) :
+    verifiedCreation false scopeMatches openingMatches causeMatches = false := by
+  simp [verifiedCreation]
+
+theorem later_trigger_cannot_grant (signatureValid scopeMatches causeMatches : Bool) :
+    verifiedCreation signatureValid scopeMatches false causeMatches = false := by
+  simp [verifiedCreation]
+
 /-! ### The starter's cause call
 
 Once the opening request, the parent request and the cause call row are

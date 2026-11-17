@@ -558,6 +558,8 @@ enum Fault {
     Unreadable,
     /// The database did not answer.
     QueryFailed,
+    /// The store refused the reader: permanent, not a failed query.
+    PermissionDenied,
     /// Answer with another accepted call (this document) instead.
     Substitute(String),
 }
@@ -599,6 +601,13 @@ impl gents_session::tool_call::query::result::ToolCallLoader for FaultyParent {
             Fault::QueryFailed => Err(ToolCallLoadError::QueryFailed(anyhow::anyhow!(
                 "the database did not answer"
             ))),
+            // Classified by the production row-read classifier, as the
+            // identity read classifies a refusal from the store.
+            Fault::PermissionDenied => Err(ToolCallLoadError::of_row_read(anyhow::Error::new(
+                gents_store::config_client::ConfigClientError::Query(Box::new(
+                    query::error::QueryError::PermissionDenied("not the reader's".into()),
+                )),
+            ))),
             Fault::Substitute(other) => {
                 load_accepted_tool_call_with(
                     &ProductionToolCallLoader,
@@ -615,7 +624,8 @@ impl gents_session::tool_call::query::result::ToolCallLoader for FaultyParent {
 
 /// With a valid creation receipt, a fault at the effect's parent decides the
 /// starter check as the Lean `creationVerdict` does:
-/// - a missing parent is `ParentMissing`, and a corrupt one `ParentUnreadable`;
+/// - a missing parent is `ParentMissing`; a corrupt one, or one the store
+///   refuses the reader (permanent, so not a retry), `ParentUnreadable`;
 /// - a loader answering with another call than the parent it was asked for is
 ///   refused (`CauseCallInvalid`);
 /// - a query the database could not answer is not a denial: the check fails
@@ -639,6 +649,7 @@ async fn assert_withheld_parent_is_denied(
     for (fault, denial) in [
         (Fault::Missing, CreationDenial::ParentMissing),
         (Fault::Unreadable, CreationDenial::ParentUnreadable),
+        (Fault::PermissionDenied, CreationDenial::ParentUnreadable),
         (
             Fault::Substitute(effect_doc.to_owned()),
             CreationDenial::CauseCallInvalid,
@@ -670,6 +681,39 @@ async fn assert_withheld_parent_is_denied(
             "the parent was never asked for"
         );
     }
+    // The substitution is refused by the walk's own identity check, not by
+    // another invalid-row path: loading the effect through the substituting
+    // loader names the parent asked for and the call returned.
+    let substituting = loader(Fault::Substitute(effect_doc.to_owned()));
+    let scope = gents_session::tool_call::query::result::ToolCallScope {
+        node_did: &parent.node_did,
+        session_id: &parent.session_id,
+        requester_did: parent.requester_did.as_deref(),
+    };
+    let Err(error) = gents_session::tool_call::query::result::load_accepted_tool_call_with(
+        &substituting,
+        gents_session::tool_call::query::result::ReadSource::Access(&fixture.access),
+        effect_doc,
+        scope,
+        &mut Default::default(),
+    )
+    .await
+    else {
+        panic!("a substituted parent is refused");
+    };
+    let invalid = matches!(
+        error,
+        gents_session::tool_call::query::result::ToolCallLoadError::Invalid(_)
+    );
+    // The whole `source()` chain: the variant's message, then the check's.
+    let message = format!("{:#}", anyhow::Error::new(error));
+    assert!(invalid, "{message}");
+    assert!(
+        message.contains(&format!(
+            "the loader returned tool call {effect_doc} for parent {parent_doc}"
+        )),
+        "{message}"
+    );
     // A failed query is a retryable error, not "you are not the starter".
     let loader = loader(Fault::QueryFailed);
     let error = gents_session::session::origin::verified_agent_new_creation_with(
