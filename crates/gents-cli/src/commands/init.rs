@@ -188,8 +188,16 @@ pub(crate) async fn init_home(args: InitArgs) -> Result<Value> {
 /// claim; aborting background tasks without awaiting them can retain the
 /// database.
 pub(crate) async fn init_home_with_core_packs(
+    args: InitArgs,
+    core_packs: default_packs::Archives<'_>,
+) -> Result<Value> {
+    init_home_for_entry(args, core_packs, default_packs::InitEntryPoint::Cli).await
+}
+
+pub(crate) async fn init_home_for_entry(
     mut args: InitArgs,
     core_packs: default_packs::Archives<'_>,
+    entry: default_packs::InitEntryPoint,
 ) -> Result<Value> {
     let started = Instant::now();
     let stage = |name: &'static str| {
@@ -295,10 +303,19 @@ pub(crate) async fn init_home_with_core_packs(
         None
     };
 
+    let installs_core_packs = args.engineer && fresh_store && !args.no_default_packs;
+    let missing_archives = default_packs::missing_archives(core_packs);
+    if gents_pack::pack::core_packs::refuse_init(
+        fresh_store,
+        args.engineer,
+        !args.no_default_packs,
+        missing_archives.is_empty(),
+    ) {
+        default_packs::require_archives(&missing_archives, entry)?;
+    }
     if fresh_store {
         reserve_fresh_bootstrap(&home_dir).await?;
     }
-    let installs_core_packs = args.engineer && fresh_store && !args.no_default_packs;
     if installs_core_packs {
         default_packs::record_installing(&home_dir)?;
     }
@@ -1590,7 +1607,7 @@ fn wide_open_tools_document(node_did: &str) -> Tools {
     Tools {
         tools_id: wide_open_tools_id_for_node(node_did),
         node_did: node_did.to_string(),
-        display_name: Some("Wide-open (permissive preset)".to_string()),
+        display_name: Some("Database queries and context budget".to_string()),
         built_ins: Some(BuiltInTools {
             enable_context_budget: Some(true),
             ..Default::default()
@@ -1917,6 +1934,28 @@ mod inference_seed_tests;
 mod tests {
     use super::*;
     use gents::runtime::embedded::EmbeddedHome;
+
+    #[test]
+    fn wide_open_preset_label_and_grants_are_exact() {
+        let node_did = "did:key:example";
+        assert_eq!(
+            wide_open_tools_document(node_did),
+            Tools {
+                tools_id: "did:key:example:wide-open".to_string(),
+                node_did: node_did.to_string(),
+                display_name: Some("Database queries and context budget".to_string()),
+                built_ins: Some(BuiltInTools {
+                    enable_context_budget: Some(true),
+                    ..Default::default()
+                }),
+                datastore: Some(DatastoreTools {
+                    enable_defra_query: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        );
+    }
 
     #[tokio::test]
     async fn an_identity_only_home_protects_its_fresh_store_for_later_openers() {
