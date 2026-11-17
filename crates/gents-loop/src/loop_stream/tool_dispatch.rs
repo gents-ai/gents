@@ -794,7 +794,6 @@ mod tests {
 
     #[tokio::test]
     async fn hidden_tool_admission_precedes_hooks_and_preserves_composition() {
-        use crate::tool_effects::ToolEffectDispatcher;
         use crate::tool_policy::presentation::{
             admit, AdmissionRefusal, InvocationOrigin, PresentedTool,
         };
@@ -850,15 +849,24 @@ mod tests {
         assert!(hook.rejected.load(Ordering::SeqCst));
         let dispatcher = tool_effect_dispatcher(tools, hook.clone(), "parent".into());
         assert_eq!(dispatcher.definitions().await[0].name, "parse");
-        let outcome = dispatcher.call(1, "parse", args).await.unwrap();
+        let outcome = scope_request_tool_execution(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            dispatcher.call(1, "parse", args),
+        )
+        .await
+        .unwrap();
         assert_eq!(outcome.model_facing_text(), "specialized side effect");
         assert!(hook.invoked.load(Ordering::SeqCst));
-        assert!(dispatcher
-            .call(2, "ungranted", "{}")
-            .await
-            .unwrap()
-            .model_facing_text()
-            .contains("not in this request"));
+        assert!(scope_request_tool_execution(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            dispatcher.call(2, "ungranted", "{}"),
+        )
+        .await
+        .unwrap()
+        .model_facing_text()
+        .contains("not in this request"));
     }
 
     struct ReadyAfterWallDeadline {
