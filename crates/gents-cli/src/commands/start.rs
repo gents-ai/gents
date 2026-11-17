@@ -180,7 +180,7 @@ pub(crate) async fn shell(args: ShellArgs, runtime: Handle) -> Result<()> {
     let (home, config, graphql, _) = ready_node(
         args.home,
         args.store_key_custody,
-        None,
+        args.registry.as_deref(),
         true,
         RepairOperation::Run,
     )
