@@ -864,6 +864,7 @@ async fn agent_apply_in_txn(
     let doc: Agent;
     let mut root_access = None;
     let mut not_copied = Vec::new();
+    let mut overridden_on_request = Vec::new();
     let mut prompt_warning = None;
     match &op {
         agent::AgentOperation::Create(input) if args.context_id.is_present() => {
@@ -925,6 +926,41 @@ async fn agent_apply_in_txn(
                 )?)?),
                 None => None,
             };
+            if operation == "clone" {
+                if let Some(source) = tools.as_ref() {
+                    let mut report = |name: &str, value: Value| {
+                        overridden_on_request.push(format!(
+                            "{name}: overridden on request (source value: {value})"
+                        ));
+                    };
+                    if args.root.is_present() {
+                        report(
+                            "host.root",
+                            json!(source.host.as_ref().and_then(|host| host.root.as_ref())),
+                        );
+                    }
+                    if args.network_mode.is_some() {
+                        report(
+                            "host.bash.network_mode",
+                            json!(source
+                                .host
+                                .as_ref()
+                                .and_then(|host| host.bash.as_ref())
+                                .and_then(|bash| bash.network_mode)),
+                        );
+                    }
+                    if args.enable_lsp.is_some() {
+                        report(
+                            "integrations.lsp.enabled",
+                            json!(source
+                                .integrations
+                                .as_ref()
+                                .and_then(|i| i.lsp.as_ref())
+                                .is_some()),
+                        );
+                    }
+                }
+            }
             let dropped_self_config = if clone_omitted_self_config(
                 operation == "clone",
                 tools
@@ -1021,7 +1057,7 @@ async fn agent_apply_in_txn(
                     not_copied.push(AgentOmittedCapability {
                         capability: name.to_owned(),
                         target_note: home.is_none().then(|| "No home is available here; select the intended node with --home or --graphql before running this command.".to_owned()),
-                        grant_command: format!("( f=$(mktemp) && printf '%s' {quoted} > \"$f\" && gents config tools set{home_arg} --no-keychain-prompts --file \"$f\"; status=$?; rm -f \"$f\"; exit $status )"),
+                        grant_command: format!("( f=$(mktemp) && printf '%s' {quoted} > \"$f\" && gents config tools set{home_arg} --file \"$f\"; status=$?; rm -f \"$f\"; exit $status )"),
                     });
                     if context
                         .system_prompt
@@ -1225,6 +1261,7 @@ async fn agent_apply_in_txn(
         agent_did: id,
         host_root_access: root_access,
         not_copied,
+        overridden_on_request,
         prompt_warning,
         agent: doc,
         make_default: args.make_default,

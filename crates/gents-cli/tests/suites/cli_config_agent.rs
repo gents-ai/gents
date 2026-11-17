@@ -132,6 +132,10 @@ async fn agent_create_clone_disable_round_trip_and_enriched_show() -> Result<()>
         .as_array()
         .context("missing omission list")?;
     assert_eq!(omissions.len(), 1);
+    assert_eq!(cloned["overridden_on_request"].as_array().unwrap().len(), 1);
+    let override_note = cloned["overridden_on_request"][0].as_str().unwrap();
+    assert!(override_note.contains("host.root: overridden on request (source value:"));
+    assert!(!override_note.contains("gents config"));
     let warning = cloned["prompt_warning"].as_str().unwrap();
     assert_eq!(warning.lines().count(), 1);
     assert!(!warning.contains("host root"));

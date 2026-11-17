@@ -235,10 +235,10 @@ async fn profile_model_line_changes_on_the_next_request_in_the_same_session() {
     .unwrap();
     let profile = serde_json::json!({
         "node_did":turn.node_did, "profile_id":format!("{}:profile", turn.agent.did()),
-        "backend_id":BACKEND_ID, "model_name":next_model,
+        "backend_id":"profile-next-backend", "model_name":next_model,
     });
     let backend_doc = serde_json::json!({
-        "node_did":turn.node_did, "backend_id":BACKEND_ID, "name":BACKEND_ID,
+        "node_did":turn.node_did, "backend_id":"profile-next-backend", "name":"profile-next-backend",
         "provider_kind":"OpenAiCompatible", "openai_wire_api":"chat_completions",
         "auth":{"kind":"unauthenticated"}, "endpoint":backend.endpoint(),
         "max_concurrent":1, "max_queue_depth":100, "enabled":true,

@@ -119,6 +119,8 @@ pub struct AgentReceipt<A> {
     pub host_root_access: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub not_copied: Vec<AgentOmittedCapability>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub overridden_on_request: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_warning: Option<String>,
     pub agent: A,
@@ -546,6 +548,7 @@ mod tests {
             agent_did: "did:key:new".to_owned(),
             host_root_access: None,
             not_copied: vec![],
+            overridden_on_request: vec![],
             prompt_warning: None,
             agent: serde_json::json!({"agent_did": "did:key:new"}),
             make_default: false,
