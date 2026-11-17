@@ -1169,11 +1169,34 @@ async fn verified_agent_new_creation_matching(
     else {
         return Ok(false);
     };
+    let direct_match =
+        agent_receipt_matches(&read, &request, &receipt.opening_request_doc_id, call_id);
+    let effect_match = if direct_match {
+        false
+    } else {
+        match crate::tool_call::query::result::load_effect_creation_receipt(
+            access,
+            call_doc,
+            &caller.node_did,
+            &caller.session_id,
+            caller.requester_did.as_deref(),
+        )
+        .await
+        {
+            Ok(Some(text)) => agent_receipt_text_matches(
+                &text,
+                &request,
+                &receipt.opening_request_doc_id,
+                call_id,
+            ),
+            _ => false,
+        }
+    };
     Ok(deferred_creation_allowed(
         true,
         true,
         true,
-        agent_receipt_matches(&read, &request, &receipt.opening_request_doc_id, call_id),
+        direct_match || effect_match,
     ))
 }
 
@@ -1223,7 +1246,16 @@ fn agent_receipt_matches(
     let Ok(text) = crate::tool_call::query::result::render_tool_result(result) else {
         return false;
     };
-    let Ok(receipt) = serde_json::from_str::<crate::session::message::SessionMessageReceipt>(&text)
+    agent_receipt_text_matches(&text, request, opening, call_id)
+}
+
+fn agent_receipt_text_matches(
+    text: &str,
+    request: &AgentRequestRow,
+    opening: &str,
+    call_id: &str,
+) -> bool {
+    let Ok(receipt) = serde_json::from_str::<crate::session::message::SessionMessageReceipt>(text)
     else {
         return false;
     };

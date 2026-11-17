@@ -317,6 +317,47 @@ pub async fn load_tool_call_read(
     .await
 }
 
+/// Load the immutable acceptance receipt of an authenticated plugin effect,
+/// independently of its later terminal presentation.
+pub(crate) async fn load_effect_creation_receipt(
+    access: &ConfigAccess,
+    tool_call_doc_id: &str,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<Option<String>> {
+    let source = ReadSource::Access(access);
+    let (call, _, _, _, _) = load_accepted_tool_call(
+        source,
+        tool_call_doc_id,
+        node_did,
+        session_id,
+        requester_did,
+    )
+    .await?;
+    if call.plugin_parent_tool_call_doc_id.is_none() {
+        return Ok(None);
+    }
+    let request = call
+        .request_doc_id
+        .as_deref()
+        .context("plugin effect lacks request identity")?;
+    let response = source
+        .execute(&gents_protocol::output::rows::request_output_segments_query(request))
+        .await?;
+    let rows = response["data"]["AgentOutputSegment"]
+        .as_array()
+        .context("plugin receipt omitted segments")?;
+    crate::session::plugin_effect_rows::receipt_from_rows(
+        rows,
+        node_did,
+        session_id,
+        requester_did,
+        request,
+        tool_call_doc_id,
+    )
+}
+
 pub async fn load_tool_call_arguments_in_txn(
     txn: &ConfigApplyTxn<'_>,
     tool_call_doc_id: &str,
