@@ -35,14 +35,14 @@ pub(super) struct StoreClaim {
 /// Embedded access plus a node-scoped store claim held across Gents-owned native operations.
 #[derive(Clone)]
 pub struct LocalConfigAccess {
-    pub(super) node: Arc<EmbeddedNode>,
+    pub(crate) node: Arc<EmbeddedNode>,
     pub(super) gate: Arc<MutationWriteGate>,
     pub(super) identity: Option<identity::Did>,
     pub(super) agent_signer: Option<crate::identity::ManagedAgentSigner>,
     pub(super) client_signed_writes: bool,
     /// The client-signed endpoint served by this same node; writes that
     /// require client signing travel through it as the endpoint's principal.
-    pub(super) client_endpoint: Option<crate::config_client::GraphqlEndpoint>,
+    pub(crate) client_endpoint: Option<crate::config_client::GraphqlEndpoint>,
     /// The runtime key's derivation proof, held only by an access its host
     /// built with that key; staging as an Agent requires it.
     pub(super) agent_proof: Option<crate::identity::RuntimeAgentProof>,

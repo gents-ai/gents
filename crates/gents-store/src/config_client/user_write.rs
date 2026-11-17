@@ -273,6 +273,63 @@ pub(crate) fn signer_credential(
     }
 }
 
+/// A create a stored command carries for its User, with the request-bound
+/// credentials it carries for the policy commands it sends.
+pub struct StoredCreate {
+    commands: super::StoredCreateCommands,
+    credentials: Vec<String>,
+}
+
+impl StoredCreate {
+    pub fn new(commands: super::StoredCreateCommands, credentials: Vec<String>) -> Self {
+        Self {
+            commands,
+            credentials,
+        }
+    }
+
+    /// The credential the relationship at `index` of the create's
+    /// relationships is sent under, once the create was admitted forwarded.
+    pub(crate) fn relationship_credential(&self, index: usize) -> Option<&str> {
+        self.credentials.get(index + 1).map(String::as_str)
+    }
+}
+
+/// The credential a stored create for `signer` carries to DefraDB, or the
+/// refusal that stops it before anything is written
+/// (`Identity.UserDelegation.admit`).
+pub(crate) fn stored_create_credential(
+    node: &defra_node::Node,
+    signer: &str,
+    create: &StoredCreate,
+) -> Result<defra_node::SignerCredential, UserWriteRefusal> {
+    let author = author_of(node, signer, false);
+    let provider = crate::local::document_acp::provider_of(node);
+    let (carried, scope, verdict) = match (provider, author) {
+        (DocumentAcp::Vera, Author::User) => {
+            create.commands.judge(node, signer, &create.credentials)
+        }
+        _ => (Carried::Absent, Scope::General, Verdict::Refused),
+    };
+    match admit(
+        provider,
+        author,
+        Carrier::Stored,
+        WriteKind::Create,
+        carried,
+        scope,
+        verdict,
+    ) {
+        Admission::Unchanged | Admission::ProviderDecides => Ok(defra_node::SignerCredential::None),
+        Admission::Forwarded => create
+            .credentials
+            .first()
+            .map(|token| defra_node::SignerCredential::RequestBound(token.clone()))
+            .ok_or(UserWriteRefusal::DelegationRequired),
+        Admission::Refused(refusal) => Err(refusal),
+    }
+}
+
 pub(crate) fn verdict(node: &defra_node::Node, signer: &str, token: &str) -> Verdict {
     let acp = node.document_acp();
     match acp.caller_of_delegation(token) {

@@ -158,6 +158,9 @@ pub(super) fn delegation_audience(
     Some(gents_protocol::delegation_audience::DelegationAudience {
         worker: audience.worker,
         deployment: audience.deployment,
+        genesis_id: audience
+            .genesis_id
+            .map(|genesis| format!("0x{}", hex::encode(genesis))),
     })
 }
 

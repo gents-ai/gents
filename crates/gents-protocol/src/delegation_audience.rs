@@ -8,12 +8,16 @@ pub const STATUS_DELEGATION_AUDIENCE_FIELD: &str = "delegation_audience";
 pub const DELEGATION_REQUIRED_CODE: &str = "delegationRequired";
 
 /// The worker and deployment a Vera delegation must name for a node to act
-/// under it.
+/// under it, with the deployment's genesis identity once the node has proven
+/// it (`Identity.UserDelegation.Audience`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DelegationAudience {
     pub worker: String,
     pub deployment: u64,
+    /// `0x` and 64 hexadecimal digits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genesis_id: Option<String>,
 }
 
 /// What a node's public status says of its delegation audience
@@ -80,6 +84,12 @@ impl HeldAudienceChange {
             Self::Forgotten => None,
         }
     }
+}
+
+/// Whether a client reads its home's status again before it mints a
+/// request-bound delegation (`Identity.HeldAudience.rereadForGenesis`).
+pub fn reread_for_genesis(held: Option<&DelegationAudience>) -> bool {
+    held.is_some_and(|audience| audience.genesis_id.is_none())
 }
 
 /// Why a node refused a client's request, as far as its credential goes

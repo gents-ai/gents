@@ -459,6 +459,7 @@ async fn a_user_writes_over_http_under_a_delegation_its_client_minted() -> anyho
     let elsewhere = ReportedDelegationAudience::Named(DelegationAudience {
         worker: stranger.did().to_owned(),
         deployment: audience.deployment,
+        genesis_id: None,
     });
     assert!(
         create_task(&as_user(&url, &user, elsewhere)?, "other-worker")
@@ -469,6 +470,7 @@ async fn a_user_writes_over_http_under_a_delegation_its_client_minted() -> anyho
     let another_deployment = ReportedDelegationAudience::Named(DelegationAudience {
         worker: audience.worker.clone(),
         deployment: audience.deployment + 1,
+        genesis_id: None,
     });
     assert!(create_task(
         &as_user(&url, &user, another_deployment)?,
@@ -647,6 +649,7 @@ async fn a_client_signed_create_in_the_runtime_process_is_owned_by_its_user_on_v
     let elsewhere = DelegationAudience {
         worker: stranger.did().to_owned(),
         deployment: audience.deployment,
+        genesis_id: None,
     };
     let foreign =
         gents_store::config_client::mint_with_lifetime_for_test(&user, &elsewhere, lifetime)?;
@@ -740,3 +743,4 @@ mod learned_audience;
 mod owed;
 mod publication;
 mod restart;
+mod stored_create;

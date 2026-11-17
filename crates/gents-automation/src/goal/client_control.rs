@@ -73,18 +73,12 @@ pub(crate) async fn attach_client_goal_graphs(
     let Some(evidence) = command.native_evidence.as_ref() else {
         return Ok(Err("goal creation has no native graph evidence".into()));
     };
-    let writes = [
-        replacement
-            .is_some()
-            .then_some(gents_store::config_client::user_write::WriteKind::Delete),
-        Some(gents_store::config_client::user_write::WriteKind::Create),
-    ];
-    for write in writes.into_iter().flatten() {
-        if let Err(refusal) = txn.admit_stored_user_write(&command.requester_did, write) {
-            tracing::info!(%refusal, "goal control refused before any write");
-            return Ok(Err(
-                gents_store::config_client::user_write::REFUSED_FOR_A_PERSON.into(),
-            ));
+    if replacement.is_some() {
+        if let Err(refusal) = txn.admit_stored_user_write(
+            &command.requester_did,
+            gents_store::config_client::user_write::WriteKind::Delete,
+        ) {
+            return Ok(Err(refused(refusal)));
         }
     }
     if txn.managed_agent_signer().is_none()
@@ -110,6 +104,11 @@ pub(crate) async fn attach_client_goal_graphs(
             ) => return Ok(Err("invalid native goal request evidence".into())),
             Err(error) => return Err(error.into()),
         };
+    if let Err(refusal) =
+        txn.admit_stored_user_create(request, graph.doc_id(), &evidence.request_credentials)?
+    {
+        return Ok(Err(refused(refusal)));
+    }
     let deletion = match (replacement, evidence.replacement_delete.as_ref()) {
         (None, None) => None,
         (Some((prior, _)), Some(evidence)) => {
@@ -165,6 +164,11 @@ pub(crate) async fn attach_client_goal_graphs(
         replacement_delete: deletion,
     });
     Ok(Ok(()))
+}
+
+fn refused(refusal: gents_store::config_client::user_write::UserWriteRefusal) -> String {
+    tracing::info!(%refusal, "goal control refused before any write");
+    gents_store::config_client::user_write::REFUSED_FOR_A_PERSON.into()
 }
 
 /// Preflight performs no document writes. Once staging begins, every error

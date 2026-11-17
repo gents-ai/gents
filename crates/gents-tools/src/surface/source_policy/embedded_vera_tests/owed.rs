@@ -17,10 +17,20 @@ use super::{client_key, home, owner_on_vera, presented, start, tasks, Home};
 /// The client's settlement passes, asked in this process of the store owner
 /// the runtime's route calls, each under a delegation the client's endpoint
 /// mints at its one minting point.
-struct InProcessPass {
+pub(super) struct InProcessPass {
     node: Arc<defra_node::Node>,
     endpoint: GraphqlEndpoint,
     passes: std::sync::atomic::AtomicUsize,
+}
+
+impl InProcessPass {
+    pub(super) fn new(node: Arc<defra_node::Node>, endpoint: GraphqlEndpoint) -> Self {
+        Self {
+            node,
+            endpoint,
+            passes: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -52,7 +62,7 @@ impl OwedPass for InProcessPass {
     }
 }
 
-fn endpoint_for(
+pub(super) fn endpoint_for(
     node: &defra_node::Node,
     user: &ClientSigningCapability,
 ) -> anyhow::Result<GraphqlEndpoint> {
@@ -229,11 +239,7 @@ async fn a_lapsed_delegation_leaves_an_owed_registration_its_client_settles_unas
     assert_eq!(owed.len(), 1, "{owed:?}");
     assert_eq!(owed[0].state, acp::OwedState::AwaitingAuthority);
 
-    let pass = InProcessPass {
-        node: node.clone(),
-        endpoint,
-        passes: std::sync::atomic::AtomicUsize::new(0),
-    };
+    let pass = InProcessPass::new(node.clone(), endpoint);
     settle_owed_while_online(&pass).await?;
     assert_eq!(
         owner_on_vera(&node, &created[0]).await?,

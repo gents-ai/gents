@@ -817,6 +817,7 @@ mod conformance {
         let audience = DelegationAudience {
             worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
             deployment: 1,
+            genesis_id: None,
         };
         families::identity_held_audience_resend_unit::replay::<Change, Mode, Refusal, UnitStage>(
             |i| {

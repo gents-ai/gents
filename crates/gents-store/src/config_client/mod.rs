@@ -75,6 +75,7 @@ pub mod schema_introspection;
 mod schema_management;
 mod self_config_permission;
 pub mod session_children;
+mod stored_create;
 mod subscription;
 pub mod transport_publication;
 mod txn;
@@ -168,7 +169,7 @@ pub use txn::{
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 pub use delegation::mint_with_lifetime_for_test;
-pub use delegation::{DelegationError, VERA_DELEGATION_LIFETIME};
+pub use delegation::{DelegationError, VERA_DELEGATION_LIFETIME, VERA_REQUEST_BOUND_LIFETIME};
 pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
 pub use error::{ConfigClientError, RerunNote, RerunRequest, TransactionConflict};
 pub use held_audience::ResolveAudience;
@@ -176,6 +177,7 @@ pub use relationships::ConfigRelationshipGrant;
 pub(crate) use retry::access_owner;
 pub use retry::TransactionFailure;
 pub use self_config_permission::{AgentSelfConfigPermission, AgentSelfConfigPermissionError};
+pub use stored_create::StoredCreateCommands;
 pub use write_telemetry::WriteTelemetryError;
 
 use std::collections::BTreeSet;

@@ -53,6 +53,26 @@ fn answer(
     })
 }
 
+/// Whether each replacement the command creates for its User may be made with
+/// the credentials the command carries for it, asked before anything is
+/// written.
+async fn admit_replacements(
+    txn: &ConfigApplyTxn<'_>,
+    command: &SessionInputEdit,
+    graphs: &[Arc<db::block::builder::VerifiedClientCreate>],
+) -> Result<Result<(), gents_store::config_client::user_write::UserWriteRefusal>> {
+    for (index, (create, graph)) in command.replacements.iter().zip(graphs).enumerate() {
+        let credentials = command
+            .replacement_credentials
+            .get(index)
+            .map_or(&[][..], Vec::as_slice);
+        if let Err(refusal) = txn.admit_stored_user_create(create, graph.doc_id(), credentials)? {
+            return Ok(Err(refusal));
+        }
+    }
+    Ok(Ok(()))
+}
+
 async fn intrinsic_rejection(
     identity: &dyn NodeIdentity,
     command: &SessionInputEdit,
@@ -461,10 +481,7 @@ pub(crate) async fn process_command(
                             Some("edit intent has expired".into())
                         } else { authority_rejection(txn, &command).await? };
                         let rejection = match rejection {
-                            None if !command.replacements.is_empty() => answer(txn.admit_stored_user_write(
-                                &command.requester_did,
-                                gents_store::config_client::user_write::WriteKind::Create,
-                            )),
+                            None => answer(admit_replacements(txn, &command, graphs).await?),
                             other => other,
                         };
                         match rejection {

@@ -402,6 +402,7 @@ impl EndpointEdits {
             edit,
             replacements: native,
             replacement_evidence,
+            replacement_credentials: Vec::new(),
             signature: Vec::new(),
         };
         command.signature = self.user.sign(&command.signing_payload()).await.unwrap();
@@ -949,6 +950,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         edit,
         replacements,
         replacement_evidence,
+        replacement_credentials: Vec::new(),
         signature: vec![],
     };
     command.signature = user.sign(&command.signing_payload()).await.unwrap();

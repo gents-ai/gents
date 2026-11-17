@@ -285,6 +285,7 @@ pub(super) async fn run(case: &Value) {
             .await
             .unwrap(),
         ),
+        request_credentials: Vec::new(),
     });
     command.signature = fixture
         .user

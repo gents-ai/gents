@@ -70,6 +70,7 @@ async fn a_client_that_learns_its_audience_from_the_status_writes_as_its_user() 
     let earlier_runtime = ReportedDelegationAudience::Named(DelegationAudience {
         worker: audience.worker.clone(),
         deployment: audience.deployment + 1,
+        genesis_id: None,
     });
     let stale = desktop_client(&url, &user, earlier_runtime, status)?;
     let recovered = create_task(&ConfigAccess::Graphql(stale), "recovered").await?;

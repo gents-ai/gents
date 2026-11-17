@@ -177,6 +177,7 @@ fn the_reported_delegation_audience_matches_the_lean_model() {
             let audience = input.node_reports_audience.then(|| DelegationAudience {
                 worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
                 deployment: 7,
+                genesis_id: None,
             });
             match super::status_reports(document_acp(input.provider), audience.clone()) {
                 ReportedDelegationAudience::Absent => Reported::Absent,

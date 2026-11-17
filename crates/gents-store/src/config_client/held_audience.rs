@@ -128,6 +128,36 @@ impl GraphqlEndpoint {
         Some((refusal, change))
     }
 
+    /// The audience this endpoint mints request-bound delegations for, with
+    /// the deployment's genesis identity; the home's status is read again
+    /// first when the held audience names none
+    /// (`Identity.HeldAudience.rereadForGenesis`). `None` when the endpoint
+    /// mints no delegations.
+    pub(super) async fn request_bound_audience(
+        &self,
+    ) -> Result<Option<DelegationAudience>, ConfigClientError> {
+        if !self.mints_delegations() {
+            return Ok(None);
+        }
+        let held = self.delegation_audience.get();
+        if gents_protocol::delegation_audience::reread_for_genesis(held.as_ref()) {
+            if let Some(resolver) = self.delegation_audience.0.resolver.clone() {
+                let reported = tokio::spawn(async move { resolver.resolve().await })
+                    .await
+                    .ok()
+                    .flatten();
+                if let Some(reported) = reported {
+                    let change = reported.change_for(held.as_ref());
+                    self.delegation_audience.set(change.held_after(held));
+                }
+            }
+        }
+        match self.delegation_audience.get() {
+            Some(audience) if audience.genesis_id.is_some() => Ok(Some(audience)),
+            _ => Err(super::DelegationError::AudienceUnavailable.into()),
+        }
+    }
+
     /// Whether a request this endpoint sent and its node answered with
     /// `status` is to be sent once more, after the home's status was read
     /// again and the audience it reports kept.
@@ -187,6 +217,7 @@ mod tests {
         DelegationAudience {
             worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
             deployment,
+            genesis_id: None,
         }
     }
 

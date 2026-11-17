@@ -104,6 +104,7 @@ mod tests {
         DelegationAudience {
             worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
             deployment,
+            genesis_id: None,
         }
     }
 

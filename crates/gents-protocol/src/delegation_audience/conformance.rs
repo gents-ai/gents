@@ -41,6 +41,7 @@ fn audience(deployment: u64) -> DelegationAudience {
     DelegationAudience {
         worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
         deployment,
+        genesis_id: None,
     }
 }
 
@@ -80,6 +81,25 @@ fn a_status_read_changes_the_held_audience_as_the_lean_model_does() {
                 "the record changes exactly when the change says so"
             );
             token(&change)
+        },
+    );
+}
+
+#[test]
+fn a_client_reads_the_status_again_for_the_genesis_as_the_lean_model_says() {
+    gents_lean_vocab::families::identity_held_audience_reread_for_genesis::replay::<Held>(
+        |input| {
+            let named = DelegationAudience {
+                genesis_id: input
+                    .genesis_known
+                    .then(|| format!("0x{}", "ab".repeat(32))),
+                ..audience(1)
+            };
+            let held = match input.held {
+                Held::Unknown => None,
+                Held::Known => Some(named),
+            };
+            super::reread_for_genesis(held.as_ref())
         },
     );
 }

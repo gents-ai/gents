@@ -9,6 +9,9 @@ use super::ClientSigningCapability;
 /// `Identity.UserDelegation.lifetimeSeconds`.
 pub const VERA_DELEGATION_LIFETIME: Duration = Duration::from_secs(120);
 
+/// `Identity.UserDelegation.requestBoundLifetimeSeconds`.
+pub const VERA_REQUEST_BOUND_LIFETIME: Duration = Duration::from_secs(570);
+
 #[derive(Debug, thiserror::Error)]
 pub enum DelegationError {
     #[error("this device's key cannot be used to connect to this home")]
@@ -21,6 +24,8 @@ pub enum DelegationError {
     Pending,
     #[error("this home's runtime is still starting; try again in a moment")]
     AudienceUnavailable,
+    #[error("preparing this change for the home")]
+    Command(#[source] vera::vera_rs::BearerError),
 }
 
 pub(super) fn mint(
@@ -45,6 +50,38 @@ fn mint_for(
     audience: &DelegationAudience,
     lifetime: Duration,
 ) -> Result<String, DelegationError> {
+    let signer = signer_of(capability)?;
+    vera::vera_rs::caller_delegation(&signer, &provider_audience(audience)?, lifetime)
+        .now_or_never()
+        .ok_or(DelegationError::Pending)?
+        .map_err(DelegationError::Mint)
+}
+
+/// The delegation `capability`'s User binds to the one policy command
+/// `command` on `audience`'s deployment, at the one minting point
+/// (`Identity.UserDelegation.mint`). Refused while `audience` names no
+/// genesis identity.
+pub(crate) fn mint_request_bound(
+    capability: &ClientSigningCapability,
+    audience: &DelegationAudience,
+    command: &vera::PolicyCommand<'_>,
+    lifetime: Duration,
+) -> Result<String, DelegationError> {
+    let signer = signer_of(capability)?;
+    let audience = provider_audience(audience)?;
+    if audience.genesis_id.is_none() {
+        return Err(DelegationError::AudienceUnavailable);
+    }
+    let binding =
+        vera::vera_rs::RequestBinding::for_command(&audience, command, rand::random::<[u8; 24]>())
+            .map_err(DelegationError::Command)?;
+    vera::vera_rs::request_delegation(&signer, &audience, &binding, lifetime)
+        .now_or_never()
+        .ok_or(DelegationError::Pending)?
+        .map_err(DelegationError::Mint)
+}
+
+fn signer_of(capability: &ClientSigningCapability) -> Result<Ed25519Signer, DelegationError> {
     let signer = Ed25519Signer::from_slice(&capability.config.private_key_bytes)
         .map_err(DelegationError::Signer)?;
     if signer.did() != capability.did() {
@@ -53,13 +90,24 @@ fn mint_for(
             actor: capability.did().to_owned(),
         });
     }
-    let audience = acp::DelegationAudience {
+    Ok(signer)
+}
+
+pub(crate) fn provider_audience(
+    audience: &DelegationAudience,
+) -> Result<acp::DelegationAudience, DelegationError> {
+    let genesis_id = match &audience.genesis_id {
+        None => None,
+        Some(text) => {
+            let mut bytes = [0_u8; 32];
+            hex::decode_to_slice(text.strip_prefix("0x").unwrap_or(text), &mut bytes)
+                .map_err(|_| DelegationError::AudienceUnavailable)?;
+            Some(bytes)
+        }
+    };
+    Ok(acp::DelegationAudience {
         worker: audience.worker.clone(),
         deployment: audience.deployment,
-        genesis_id: None,
-    };
-    vera::vera_rs::caller_delegation(&signer, &audience, lifetime)
-        .now_or_never()
-        .ok_or(DelegationError::Pending)?
-        .map_err(DelegationError::Mint)
+        genesis_id,
+    })
 }

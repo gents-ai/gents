@@ -52,6 +52,7 @@ fn audience() -> DelegationAudience {
     DelegationAudience {
         worker: "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".into(),
         deployment: 4_503_599_627_370_495,
+        genesis_id: None,
     }
 }
 
