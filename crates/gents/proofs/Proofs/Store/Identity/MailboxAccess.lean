@@ -104,4 +104,50 @@ theorem claimed_runtime_notice_reaches_admitted_signer :
 theorem missing_request_runtime_notice_has_no_publication :
     runtimeNotice none true true = ⟨false, false⟩ := by rfl
 
+/-! ## What a client lists -/
+
+/-- A stored item as a client reads it: its document and the requester it was
+filed for, the DID its `recipient` relation names. -/
+structure ItemRow where
+  item : String
+  requester : String
+  deriving BEq, DecidableEq, Repr
+
+/-- The items a client lists for `reader`: those filed for it, selected from
+whatever its read observes.
+
+Decision (gents#3747): a reader holding `bypass-dac` (the hosting node key, a
+native admin such as the init User, `Household.readObserved`) observes every
+item on the node, including items filed for another requester. Document ACP no
+longer narrows that reader's rows, so the client selects by requester itself;
+for a reader under document ACP the selection changes nothing. -/
+def clientItems (reader : String) (observed : List ItemRow) : List ItemRow :=
+  observed.filter (·.requester == reader)
+
+def itemRows : List ItemRow := [⟨"item", "user"⟩, ⟨"foreign", "other"⟩]
+
+/-- The rows `actor` observes from `itemRows`, each item carrying its
+`recipient` relation as in `fixture`, with or without the bypass. -/
+def observedRows (bypass : Bool) (actor : String) : List ItemRow :=
+  itemRows.filter fun row =>
+    Household.readObserved bypass
+      (Household.allowedIn candidatePolicy 5
+        { objects := [⟨"mailbox_items", row.item, "agent"⟩],
+          relations := [⟨"mailbox_items", row.item, "recipient", .actor row.requester⟩],
+          enrolled := [] }
+        actor "mailbox_items" row.item "read")
+
+theorem bypass_observes_foreign_items :
+    observedRows true "user" = itemRows ∧ observedRows false "user" = [⟨"item", "user"⟩] := by
+  native_decide
+
+/-- The client lists the same items for its reader whether or not that reader
+bypasses document ACP: only the ones filed for it. -/
+theorem client_items_do_not_depend_on_bypass :
+    ["user", "other", "stranger"].all (fun reader =>
+      clientItems reader (observedRows true reader) ==
+        clientItems reader (observedRows false reader)) = true ∧
+    clientItems "user" (observedRows true "user") = [⟨"item", "user"⟩] := by
+  native_decide
+
 end Identity.MailboxAccess

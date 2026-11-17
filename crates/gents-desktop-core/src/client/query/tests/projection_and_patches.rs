@@ -332,12 +332,15 @@ async fn fetch_doc_patch_hydrates_mailbox_live_updates() {
         .await
         .expect("schemas");
 
+    // The client lists only items filed for its reader
+    // (`Identity.MailboxAccess.clientItems`).
+    let reader = node.node_identity_did().expect("fixture reader identity");
     let response = node
-        .execute(
-            r#"mutation {
-                create_MailboxItem(input: {
+        .execute(&format!(
+            r#"mutation {{
+                create_MailboxItem(input: {{
                     item_key: "session:wait-live:ask:1",
-                    requester_did: "did:test:owner",
+                    requester_did: "{}",
                     node_did: "did:test:agent",
                     status: "open",
                     kind: "ask",
@@ -349,9 +352,10 @@ async fn fetch_doc_patch_hydrates_mailbox_live_updates() {
                     target_agent_did: "operator",
                     created_at: "2026-08-25T00:00:00Z",
                     updated_at: "2026-08-25T00:00:00Z"
-                }) { _docID }
-            }"#,
-        )
+                }}) {{ _docID }}
+            }}"#,
+            gents_protocol::graphql::escape_graphql_string(reader)
+        ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let lookup = node
@@ -377,8 +381,7 @@ async fn fetch_doc_patch_hydrates_mailbox_live_updates() {
     let patch = fetch_doc_patch(
         &gents_store::config_client::ConfigAccess::local_as(
             node.clone(),
-            identity::Did::new(node.node_identity_did().expect("fixture reader identity"))
-                .expect("fixture DID"),
+            identity::Did::new(reader).expect("fixture DID"),
         ),
         "did:test:agent",
         MAILBOX_ITEM_NAME,
