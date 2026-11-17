@@ -387,6 +387,16 @@ pub fn graphql_endpoint_for_desktop_access(
     Some(graphql_url.to_string())
 }
 
+/// What a home's public status reports of its delegation audience, read
+/// with no credential: the edge of a Vera home judges only presented ones.
+pub async fn public_delegation_audience(
+    record: &crate::client::PeerRecord,
+) -> Result<Option<gents_protocol::delegation_audience::ReportedDelegationAudience>> {
+    Ok(http::peer_status(record).await?.map(|status| {
+        gents_protocol::delegation_audience::ReportedDelegationAudience::observe(&status)
+    }))
+}
+
 pub fn augment_peer_status_payload_for_desktop(mut payload: Value, status_url: &str) -> Value {
     let desktop_graphql = graphql_endpoint_for_desktop_access(&payload, status_url);
     if let (Some(map), Some(desktop_graphql)) = (payload.as_object_mut(), desktop_graphql) {

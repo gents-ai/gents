@@ -178,6 +178,8 @@ impl ClientRouteManager {
         sync_state: &ClientSyncStateOwner,
         saved: &PeerRecord,
     ) -> PeerRecord {
+        let (_, saved) =
+            &super::held_audience::refresh_delegation_audience(sync_state, saved).await;
         if is_enrollment_peer(saved) {
             return saved.clone();
         }

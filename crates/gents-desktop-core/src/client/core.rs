@@ -4,6 +4,7 @@ mod enrollment;
 mod file_inventory;
 mod file_review;
 mod goal;
+mod held_audience;
 mod inference_observation;
 mod p2p_ops;
 mod route_manager;

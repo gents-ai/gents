@@ -311,6 +311,32 @@ impl ClientSyncStateOwner {
         Ok(replaced)
     }
 
+    /// Apply what a status read reports to the audience `expected` holds
+    /// (`Identity.HeldAudience.change`), returning the change and the record
+    /// as it now stands; a record another writer moved first is left to it.
+    pub(in crate::client) async fn observe_delegation_audience(
+        &self,
+        expected: &PeerRecord,
+        reported: &gents_protocol::delegation_audience::ReportedDelegationAudience,
+    ) -> anyhow::Result<(
+        gents_protocol::delegation_audience::HeldAudienceChange,
+        PeerRecord,
+    )> {
+        use gents_protocol::delegation_audience::HeldAudienceChange;
+        let change = reported.change_for(expected.delegation_audience.as_ref());
+        if change == HeldAudienceChange::Unchanged {
+            return Ok((change, expected.clone()));
+        }
+        let mut replacement = expected.clone();
+        replacement.delegation_audience = change
+            .clone()
+            .held_after(expected.delegation_audience.clone());
+        Ok(match self.replace_record(expected, replacement).await? {
+            Some(updated) => (change, updated),
+            None => (HeldAudienceChange::Unchanged, expected.clone()),
+        })
+    }
+
     pub(super) async fn set_pairing_ready(
         &self,
         expected: &PeerRecord,

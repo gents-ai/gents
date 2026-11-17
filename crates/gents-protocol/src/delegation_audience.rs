@@ -40,3 +40,63 @@ impl ReportedDelegationAudience {
         }
     }
 }
+
+/// What reading a status does to the audience a client keeps with its record
+/// of a home (`Identity.HeldAudience.change`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HeldAudienceChange {
+    Unchanged,
+    Learned(DelegationAudience),
+    Changed(DelegationAudience),
+    Forgotten,
+}
+
+impl ReportedDelegationAudience {
+    pub fn change_for(&self, held: Option<&DelegationAudience>) -> HeldAudienceChange {
+        match (held, self) {
+            (None, Self::Named(audience)) => HeldAudienceChange::Learned(audience.clone()),
+            (Some(kept), Self::Named(audience)) if kept == audience => {
+                HeldAudienceChange::Unchanged
+            }
+            (Some(_), Self::Named(audience)) => HeldAudienceChange::Changed(audience.clone()),
+            (Some(_), Self::Absent) => HeldAudienceChange::Forgotten,
+            (None, Self::Absent | Self::Unavailable) | (Some(_), Self::Unavailable) => {
+                HeldAudienceChange::Unchanged
+            }
+        }
+    }
+}
+
+impl HeldAudienceChange {
+    /// The record after the read (`Identity.HeldAudience.observe`).
+    pub fn held_after(self, held: Option<DelegationAudience>) -> Option<DelegationAudience> {
+        match self {
+            Self::Unchanged => held,
+            Self::Learned(audience) | Self::Changed(audience) => Some(audience),
+            Self::Forgotten => None,
+        }
+    }
+}
+
+/// Why a node refused a client's request, as far as its credential goes
+/// (`Identity.HeldAudience.Refusal`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialRefusal {
+    DelegationRequired,
+    DelegationRefused,
+    Other,
+}
+
+/// Whether a request refused for its credential is sent again after reading
+/// the status (`Identity.HeldAudience.resend`).
+pub fn resend(resent: bool, refusal: CredentialRefusal, record: &HeldAudienceChange) -> bool {
+    !resent
+        && refusal != CredentialRefusal::Other
+        && matches!(
+            record,
+            HeldAudienceChange::Learned(_) | HeldAudienceChange::Changed(_)
+        )
+}
+
+#[cfg(test)]
+mod conformance;
