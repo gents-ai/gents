@@ -621,9 +621,10 @@ fn the_persisted_row_carries_the_parsed_statement() {
     let body = "You have used all the included free usage for this account. \
                 tokens 691791/600000";
     let first = classify_provider_limit(body, now()).expect("it classifies");
-    let ProviderLimit::UsageExhausted(usage) = first else {
-        panic!("expected exhaustion: {first:?}");
-    };
+    assert!(
+        matches!(first, ProviderLimit::UsageExhausted(_)),
+        "expected exhaustion: {first:?}"
+    );
     let persisted = persisted_failure_reason(body, now());
     assert!(
         persisted.contains("[usage-limit used=691791 cap=600000"),
@@ -635,7 +636,10 @@ fn the_persisted_row_carries_the_parsed_statement() {
     );
 
     // A detail far longer than the bound still re-reads the exact pair.
-    let long_body = format!("usage limit reached: {} tokens 691791/600000", "x".repeat(4000));
+    let long_body = format!(
+        "usage limit reached: {} tokens 691791/600000",
+        "x".repeat(4000)
+    );
     let stored = persisted_failure_reason(&long_body, now());
     let reread = classify_provider_limit(&stored, now()).expect("the stored row re-classifies");
     let ProviderLimit::UsageExhausted(reread) = reread else {

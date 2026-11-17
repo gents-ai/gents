@@ -8,6 +8,11 @@
  */
 export type UsageRefusalView = { at: string,
 /**
+ * The model the refusal is about. A provider refuses per model, so this is
+ * what the screen says is out, not the whole account.
+ */
+model: string | null,
+/**
  * The window the provider named, e.g. "rolling 24-hour".
  */
 window: string | null, used: number | null, cap: number | null,
@@ -16,20 +21,29 @@ window: string | null, used: number | null, cap: number | null,
  */
 resetsAt: string | null,
 /**
- * What this node itself observed in the window: an estimate, always.
+ * What this node itself observed in the window: an estimate, always, and
+ * `consumed_basis` says so.
  */
 consumedByNode: number | null,
+/**
+ * Whose count `consumed_by_node` is: `locally_estimated` always, because it
+ * is this node's arithmetic over its own calls.
+ */
+consumedBasis: string,
 /**
  * A bounded excerpt of the provider's words, never the whole body.
  */
 detail: string,
 /**
- * Whose window `window` names: the provider's own, or — when it named
- * none — this node's analytical bound, which is never reported as fact.
+ * Whose window `window` names: `provider_reported` when the provider
+ * stated one, `unknown` when it named none and this node asserts none (`window`
+ * is then null),
+ * `locally_estimated` for a window this node chose, which is never
+ * reported as the provider's.
  */
 windowProvenance: string,
 /**
- * How far back this node looked in its own recorded calls. Analytical:
- * the provider never said its evidence window is this one.
+ * How far back this node looked in its own recorded calls. Always this
+ * node's choice: the provider never said its evidence window is this one.
  */
 evidenceWindowHours: number, };

@@ -112,10 +112,7 @@ pub fn standing_refusal_for_model(
     consumed_by_node: Option<u64>,
     detail_limit: usize,
 ) -> Option<UsageRefusalView> {
-    let scoped: Vec<&CallEvidence> = calls
-        .iter()
-        .filter(|call| call.is_model(model))
-        .collect();
+    let scoped: Vec<&CallEvidence> = calls.iter().filter(|call| call.is_model(model)).collect();
     // The latest refusal on this model.
     let refusal = scoped
         .iter()
@@ -273,7 +270,7 @@ pub async fn refusal_for_backend(
     // that times it. `queued_at` is written once at admission and never revised,
     // so it is the column a window can be taken over; `started_at`/`ended_at`
     // are stamped later and a queued call has neither.
-    let (calls, saw_usage, consumed) = read_evidence(&access, &backend_id, &since).await?;
+    let (calls, saw_usage, consumed) = read_evidence(access, &backend_id, &since).await?;
     // The classifier's detail is already bounded (`DETAIL_MAX_CHARS`), so the
     // view takes it as it is rather than truncating a second time: the agent
     // JSON, the account inventory and the desktop show the same excerpt.
@@ -289,7 +286,9 @@ pub async fn refusal_for_backend_as_agent(
     now: DateTime<Utc>,
 ) -> Option<UsageRefusalView> {
     let calls = evidence_as_agent(node, signer, backend, now).await?;
-    let saw_usage = calls.iter().any(|call| call.provider_total_tokens.is_some());
+    let saw_usage = calls
+        .iter()
+        .any(|call| call.provider_total_tokens.is_some());
     let consumed: u64 = calls
         .iter()
         .filter_map(|call| call.provider_total_tokens)
@@ -356,7 +355,9 @@ pub async fn refusal_for_backend_across_agents(
             }
         }
     }
-    let saw_usage = union.iter().any(|call| call.provider_total_tokens.is_some());
+    let saw_usage = union
+        .iter()
+        .any(|call| call.provider_total_tokens.is_some());
     let consumed: u64 = union
         .iter()
         .filter_map(|call| call.provider_total_tokens)

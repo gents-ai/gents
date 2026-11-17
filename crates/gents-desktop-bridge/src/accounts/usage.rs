@@ -35,14 +35,21 @@ pub struct AccountUsageView {
 #[serde(rename_all = "camelCase")]
 pub struct UsageRefusalView {
     pub at: String,
+    /// The model the refusal is about. A provider refuses per model, so this is
+    /// what the screen says is out, not the whole account.
+    pub model: Option<String>,
     /// The window the provider named, e.g. "rolling 24-hour".
     pub window: Option<String>,
     pub used: Option<u64>,
     pub cap: Option<u64>,
     /// Absolute only; a relative "refreshes in 24 hours" leaves this null.
     pub resets_at: Option<String>,
-    /// What this node itself observed in the window: an estimate, always.
+    /// What this node itself observed in the window: an estimate, always, and
+    /// `consumed_basis` says so.
     pub consumed_by_node: Option<u64>,
+    /// Whose count `consumed_by_node` is: `locally_estimated` always, because it
+    /// is this node's arithmetic over its own calls.
+    pub consumed_basis: String,
     /// A bounded excerpt of the provider's words, never the whole body.
     pub detail: String,
     /// Whose window `window` names: `provider_reported` when the provider
@@ -90,11 +97,21 @@ pub(crate) async fn account_usage_views(
     let refusal_view =
         |refusal: &gents_inference::usage_observation::UsageRefusalView| UsageRefusalView {
             at: refusal.at.clone(),
+            model: refusal.model.clone(),
             window: refusal.window.clone(),
             used: refusal.used,
             cap: refusal.cap,
             resets_at: refusal.resets_at.clone(),
             consumed_by_node: refusal.consumed_by_node,
+            consumed_basis: match refusal.consumed_basis {
+                gents_inference::usage_observation::WindowBasis::ProviderReported => {
+                    "provider_reported".into()
+                }
+                gents_inference::usage_observation::WindowBasis::Unknown => "unknown".into(),
+                gents_inference::usage_observation::WindowBasis::LocallyEstimated => {
+                    "locally_estimated".into()
+                }
+            },
             detail: refusal.detail.clone(),
             // Stated by the view, not inferred from `window.is_some()`: a
             // provider that named no window leaves `window` null rather than
@@ -103,7 +120,8 @@ pub(crate) async fn account_usage_views(
                 gents_inference::usage_observation::WindowBasis::ProviderReported => {
                     "provider_reported".into()
                 }
-                gents_inference::usage_observation::WindowBasis::Unknown => "unstated".into(),
+                // The same word Lean and Rust use: `unknown`, never "unstated".
+                gents_inference::usage_observation::WindowBasis::Unknown => "unknown".into(),
                 gents_inference::usage_observation::WindowBasis::LocallyEstimated => {
                     "locally_estimated".into()
                 }

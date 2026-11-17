@@ -480,7 +480,14 @@ fn refusal_lines(row: &AccountRow) -> Vec<String> {
             }
         }
     }
-    let mut lines = vec![format!("  out of quota: {}", stated.join(" · "))];
+    // The model the provider named comes first: it is what is out, not the
+    // whole account.
+    let scope = refusal
+        .model
+        .as_deref()
+        .map(|model| format!(" {model}"))
+        .unwrap_or_default();
+    let mut lines = vec![format!("  out of quota{scope}: {}", stated.join(" · "))];
     if !refusal.detail.trim().is_empty() {
         lines.push(format!("    provider said: {}", refusal.detail));
     }

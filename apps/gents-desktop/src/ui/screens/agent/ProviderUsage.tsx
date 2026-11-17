@@ -296,19 +296,31 @@ export function nodeEstimate(refusal: UsageRefusalView): string | null {
     : `${refusal.consumedByNode.toLocaleString()} counted on this node, last ${refusal.evidenceWindowHours}h`;
 }
 
-/** How a refusal reads in one line: the provider said the account is out, and
-    when it says capacity returns. */
+/** How a refusal reads in one line: what the provider stated — the model it is
+    about, its counter and cap, its window — plus when it said capacity returns.
+
+    A stated reset ADDS to the statement rather than replacing it: the counter
+    and cap are what the provider reported, and a reset time does not make them
+    unstated. */
 export function refusalNote(refusal: UsageRefusalView) {
+  const parts: string[] = [];
+  if (refusal.model) parts.push(refusal.model);
   const stated = refusalDetail(refusal);
-  if (refusal.resetsAt)
-    return `Resets ${new Date(refusal.resetsAt).toLocaleString([], {
-      weekday: "short",
-      hour: "numeric",
-      minute: "2-digit",
-    })}`;
-  /* a provider that gave no reset time has not said when it ends; the node's
-     own evidence window is the query's bound, not the provider's answer */
-  return stated ? stated : "No reset stated";
+  if (stated) parts.push(stated);
+  if (refusal.resetsAt) {
+    parts.push(
+      `Resets ${new Date(refusal.resetsAt).toLocaleString([], {
+        weekday: "short",
+        hour: "numeric",
+        minute: "2-digit",
+      })}`,
+    );
+  } else if (!stated) {
+    /* a provider that gave no reset time has not said when it ends; the node's
+       own evidence window is the query's bound, not the provider's answer */
+    parts.push("No reset stated");
+  }
+  return parts.join(" · ");
 }
 
 /** A provider's refusal, above the meters: the account is out of quota, which

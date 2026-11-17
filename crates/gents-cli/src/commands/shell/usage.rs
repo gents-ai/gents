@@ -81,7 +81,15 @@ pub(super) fn rows(reads: &[AccountUsageRead], now: DateTime<Utc>) -> Vec<MenuRo
                 Some(at) => format!(" · resets {at}"),
                 None => String::new(),
             };
-            rows.push(row(format!("   Out of quota{when}{stated}"), Tone::Warn));
+            let scope = refusal
+                .model
+                .as_deref()
+                .map(|model| format!(" · {model}"))
+                .unwrap_or_default();
+            rows.push(row(
+                format!("   Out of quota{scope}{when}{stated}"),
+                Tone::Warn,
+            ));
             rows.push(row(format!("   {}", refusal.detail), Tone::Label));
             // This node's own count, labelled: it is this node's estimate over
             // its own look-back, never the provider's counter and never a
@@ -89,7 +97,7 @@ pub(super) fn rows(reads: &[AccountUsageRead], now: DateTime<Utc>) -> Vec<MenuRo
             if let Some(consumed) = refusal.consumed_by_node {
                 rows.push(row(
                     format!(
-                        "   {consumed} counted on this node, last {}h",
+                        "   {consumed} counted on this node, last {}h (locally estimated)",
                         refusal.evidence_window_hours
                     ),
                     Tone::Label,

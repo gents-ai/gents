@@ -114,11 +114,13 @@ it("holds the panel's shape while the first read is out, not saying none were re
 it("shows a provider refusal above the meters, with only the fields it stated", () => {
   const refusal = {
     at: new Date().toISOString(),
+    model: "grok-4.7",
     window: "rolling 24-hour",
     used: 691_791,
     cap: 600_000,
     resetsAt: null,
     consumedByNode: 1200,
+    consumedBasis: "locally_estimated",
     detail: "you have used all the included free usage for this account",
     windowProvenance: "provider_reported",
     evidenceWindowHours: 24,
@@ -156,11 +158,13 @@ it("never shows a window the provider did not state as its own", () => {
      node's, labelled "locally estimated". */
   const refusal = (provenance: string) => ({
     at: new Date().toISOString(),
+    model: "grok-4.7",
     window: provenance === "provider_reported" ? "rolling 24-hour" : null,
     used: 691_791,
     cap: 600_000,
     resetsAt: null,
     consumedByNode: 1200,
+    consumedBasis: "locally_estimated",
     detail: "usage limit reached",
     windowProvenance: provenance,
     evidenceWindowHours: 24,
@@ -198,14 +202,57 @@ it("never shows a window the provider did not state as its own", () => {
   unknown.unmount();
 });
 
+it("keeps the counter and cap even when the provider stated a reset", () => {
+  /* The review's nit: a reset time used to replace the statement, so a refusal
+     that said both "691791 of 600000" and "resets Thursday" showed only the
+     reset. The counter is what the provider reported; a reset does not make it
+     unstated. The model the provider named is stated too. */
+  const refusal = {
+    at: new Date().toISOString(),
+    model: "grok-4.7",
+    window: "rolling 24-hour",
+    used: 691_791,
+    cap: 600_000,
+    resetsAt: new Date(Date.now() + 3_600_000).toISOString(),
+    consumedByNode: null,
+    consumedBasis: "locally_estimated",
+    detail: "you have used all the included free usage for this account",
+    windowProvenance: "provider_reported",
+    evidenceWindowHours: 24,
+  };
+  const views = [
+    {
+      label: "Grok",
+      provider: "XaiGrokOAuth",
+      backendIds: ["grok"],
+      windows: [],
+      plan: null,
+      note: null,
+      readAt: null,
+      readError: null,
+      read: "read",
+      refusal,
+    },
+  ];
+  const rendered = render(
+    <AllProviderLimits views={views} onRefresh={async () => {}} />,
+  );
+  expect(screen.getByText(/691,791 of 600,000/)).toBeTruthy();
+  expect(screen.getByText(/grok-4.7/)).toBeTruthy();
+  expect(screen.getByText(/Resets/)).toBeTruthy();
+  rendered.unmount();
+});
+
 it("says the reset when the provider stated one, and that none was stated otherwise", () => {
   const refusal = (resetsAt: string | null) => ({
     at: new Date().toISOString(),
+    model: "grok-4.7",
     window: null,
     used: null,
     cap: null,
     resetsAt,
     consumedByNode: null,
+    consumedBasis: "locally_estimated",
     detail: "free usage exhausted",
     windowProvenance: "unknown",
     evidenceWindowHours: 24,

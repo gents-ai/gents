@@ -287,7 +287,9 @@ fn stored_statement(text: &str) -> UsageStatement {
     for field in rest[..end].split_whitespace() {
         match field.split_once('=') {
             Some(("used", value)) => statement.used = value.parse::<u64>().ok(),
-            Some(("cap", value)) => statement.cap = value.parse::<u64>().ok().filter(|cap| *cap > 0),
+            Some(("cap", value)) => {
+                statement.cap = value.parse::<u64>().ok().filter(|cap| *cap > 0)
+            }
             Some(("window", value)) => statement.window = Some(value.replace('+', " ")),
             _ => {}
         }
@@ -379,11 +381,7 @@ struct UsageStatement {
 /// The marker wins field by field, so a provider's exact counter and cap survive
 /// both the bounded `detail` and any later change to the needle set. A marker
 /// that states nothing falls through to the prose.
-fn statement_of(
-    body: &str,
-    lower: &str,
-    body_json: Option<&serde_json::Value>,
-) -> UsageStatement {
+fn statement_of(body: &str, lower: &str, body_json: Option<&serde_json::Value>) -> UsageStatement {
     let stored = stored_statement(body);
     let mut statement = UsageStatement::parse(lower, body_json);
     if stored.window.is_some() {
@@ -414,8 +412,8 @@ impl UsageStatement {
             statement.used = json_u64(json, &["used", "usage", "tokens_used", "consumed"]);
             // A JSON `limit: 0` is not a cap either; Lean `establishes` requires
             // cap > 0, so zero is unstated rather than a spent allowance.
-            statement.cap = json_u64(json, &["cap", "limit", "tokens_limit", "quota"])
-                .filter(|cap| *cap > 0);
+            statement.cap =
+                json_u64(json, &["cap", "limit", "tokens_limit", "quota"]).filter(|cap| *cap > 0);
         }
         // `tokens 691791/600000` — the pair is only read when both sides parse,
         // so a malformed pair leaves used and cap unstated together rather than
@@ -466,7 +464,8 @@ fn period_window_stated(lower: &str, period: &str) -> bool {
         let at = from + found;
         let before = &lower[..at];
         let after = &lower[at + period.len()..];
-        let next_word = after.trim_start().split_whitespace().next().unwrap_or("");
+        // `split_whitespace` already skips the leading space.
+        let next_word = after.split_whitespace().next().unwrap_or("");
         let prev_word = before.split_whitespace().next_back().unwrap_or("");
         let names_window = matches!(next_word, "window" | "limit" | "quota" | "period")
             || matches!(prev_word, "window" | "window:" | "limit" | "quota");

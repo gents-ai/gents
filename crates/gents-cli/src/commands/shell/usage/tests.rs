@@ -135,6 +135,8 @@ fn a_refused_account_says_out_of_quota_above_its_windows() {
         resets_at: None,
         consumed_by_node: Some(1200),
         detail: "you have used all the included free usage".into(),
+        model: Some("grok-4.7".to_owned()),
+        consumed_basis: gents_inference::usage_observation::WindowBasis::LocallyEstimated,
         window_basis: gents_inference::usage_observation::WindowBasis::ProviderReported,
         evidence_window_hours: 24,
     });
@@ -174,6 +176,8 @@ fn a_window_the_node_chose_is_labelled_locally_estimated() {
         resets_at: None,
         consumed_by_node: Some(1200),
         detail: "usage limit reached".into(),
+        model: Some("grok-4.7".to_owned()),
+        consumed_basis: gents_inference::usage_observation::WindowBasis::LocallyEstimated,
         window_basis: gents_inference::usage_observation::WindowBasis::Unknown,
         evidence_window_hours: 24,
     });
@@ -205,6 +209,8 @@ fn a_refusal_without_a_stated_reset_shows_no_reset() {
         resets_at: None,
         consumed_by_node: None,
         detail: "free usage exhausted".into(),
+        model: Some("grok-4.7".to_owned()),
+        consumed_basis: gents_inference::usage_observation::WindowBasis::LocallyEstimated,
         window_basis: gents_inference::usage_observation::WindowBasis::Unknown,
         evidence_window_hours: 24,
     });
@@ -214,6 +220,8 @@ fn a_refusal_without_a_stated_reset_shows_no_reset() {
         .map(|(text, _, _)| text.as_str())
         .find(|line| line.contains("Out of quota"))
         .expect("the headline");
-    assert_eq!(headline.trim(), "Out of quota");
+    // The model the provider named is part of what is out; a reset it never
+    // stated is not.
+    assert_eq!(headline.trim(), "Out of quota · grok-4.7");
     assert!(!headline.contains("resets"), "{headline}");
 }
