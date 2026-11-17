@@ -203,3 +203,71 @@ fn retryable_graphql_conflicts_are_the_responses_defradb_reports() {
         "conflict wording without DefraDB's code is not a retryable conflict"
     );
 }
+
+#[tokio::test]
+async fn a_refused_credential_keeps_the_delegation_audience_edge_code() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap());
+    let app = Router::new()
+        .route(
+            "/",
+            post(|| async {
+                (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({
+                        "code": crate::delegation_audience::DELEGATION_REQUIRED_CODE,
+                        "error": "refused",
+                    })),
+                )
+            }),
+        )
+        .route(
+            "/plain",
+            post(|| async { (axum::http::StatusCode::FORBIDDEN, "no") }),
+        )
+        .route(
+            "/long",
+            post(|| async {
+                (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    format!(
+                        r#"{{"code":"delegationRequired","pad":"{}"}}"#,
+                        "x".repeat(8192)
+                    ),
+                )
+            }),
+        );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let options = GraphqlRequestOptions {
+        timeout: Duration::from_secs(2),
+        max_attempts: 1,
+        retry_backoff: Duration::from_millis(10),
+    };
+    let refused = execute_graphql_async(&endpoint, Some("Bearer t"), "{ __typename }", options)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.refusal_code(),
+        Some((
+            reqwest::StatusCode::UNAUTHORIZED,
+            crate::delegation_audience::DELEGATION_REQUIRED_CODE
+        ))
+    );
+    assert_eq!(
+        refused.transport_error().and_then(reqwest::Error::status),
+        Some(reqwest::StatusCode::UNAUTHORIZED),
+        "the refusal keeps its status for every classifier that reads it"
+    );
+    for path in ["plain", "long"] {
+        let refused = execute_graphql_async(
+            &format!("{endpoint}{path}"),
+            Some("Bearer t"),
+            "{ __typename }",
+            options,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(refused.refusal_code(), None, "{path}");
+        assert!(refused.transport_error().is_some(), "{path}");
+    }
+}

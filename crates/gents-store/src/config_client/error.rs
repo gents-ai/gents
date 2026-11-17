@@ -236,7 +236,7 @@ pub enum ConfigClientError {
     PermissionObservationMissing,
     #[error("runtime identity cannot act for agent document work")]
     RuntimeDocumentActor,
-    #[error("{source}\n{}", super::graphql_diagnostic_hint(endpoint, source.refused_by_runtime()))]
+    #[error("{}", super::graphql_query_failure(endpoint, source))]
     HttpQuery {
         endpoint: String,
         #[source]
@@ -539,6 +539,38 @@ impl ConfigClientError {
                     reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
                 )
             })
+    }
+
+    /// Whether the edge of a Vera home refused this request's identity token
+    /// and asked for a delegation, which is told as an update of Gents
+    /// (`Identity.HeldAudience.told`). External premise: only that edge
+    /// answers 401 with `DELEGATION_REQUIRED_CODE`.
+    pub fn edge_requires_delegation(&self) -> bool {
+        use gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE;
+        let named = |status: &reqwest::StatusCode, body: &str| {
+            *status == reqwest::StatusCode::UNAUTHORIZED
+                && serde_json::from_str::<serde_json::Value>(body).is_ok_and(|body| {
+                    body.get("code").and_then(serde_json::Value::as_str)
+                        == Some(DELEGATION_REQUIRED_CODE)
+                })
+        };
+        match self.access() {
+            Self::Protocol(error) => error.refusal_code().is_some_and(|(status, code)| {
+                status == reqwest::StatusCode::UNAUTHORIZED && code == DELEGATION_REQUIRED_CODE
+            }),
+            Self::StorageFailure(error) | Self::HttpQuery { source: error, .. } => {
+                error.edge_requires_delegation()
+            }
+            Self::NodePermissionStatus { status, body }
+            | Self::RelationshipStatus { status, body }
+            | Self::OwnerStagedRouteStatus { status, body }
+            | Self::DocumentRelationshipStatus { status, body }
+            | Self::SchemaStatus { status, body, .. }
+            | Self::SchemaOperationStatus { status, body }
+            | Self::TxBeginStatus { status, body, .. }
+            | Self::TxCommitStatus { status, body, .. } => named(status, body),
+            _ => false,
+        }
     }
 
     /// The 401 or 403 a node answered this request with, which may refuse

@@ -165,12 +165,14 @@ impl BridgeError {
                 body.get("code").and_then(serde_json::Value::as_str)
                     == Some(gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE)
             });
-        edge_requires_delegation.then(|| {
-            Self::new(
-                BridgeErrorCode::UpdateRequired,
-                gents_store::local::document_acp::DocumentAcpError::DelegationRequired.to_string(),
-            )
-        })
+        edge_requires_delegation.then(Self::update_required)
+    }
+
+    fn update_required() -> Self {
+        Self::new(
+            BridgeErrorCode::UpdateRequired,
+            gents_store::local::document_acp::DocumentAcpError::DelegationRequired.to_string(),
+        )
     }
 
     pub fn new(code: BridgeErrorCode, message: impl Into<String>) -> Self {
@@ -244,6 +246,11 @@ impl BridgeError {
             .or_else(|| error.chain().find_map(|cause| cause.downcast_ref::<Self>()))
         {
             return classified.clone();
+        }
+        if gents_store::config_client::TransactionFailure::config_client_error(&error)
+            .is_some_and(gents_store::config_client::ConfigClientError::edge_requires_delegation)
+        {
+            return Self::update_required();
         }
         if gents_store::config_client::TransactionFailure::permission_denied(&error) {
             return Self::new(

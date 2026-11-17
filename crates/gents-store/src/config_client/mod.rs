@@ -1030,6 +1030,20 @@ fn is_probably_local_graphql_endpoint(graphql: &str) -> bool {
 }
 
 /// Operator guidance appended to HTTP GraphQL errors; CLI-flavored and stripped by non-CLI consumers.
+/// What a person reads of a failed query: an update of Gents when the edge
+/// of a Vera home asked for a delegation this client cannot present
+/// (`Identity.HeldAudience.told`), otherwise the failure and its next steps.
+fn graphql_query_failure(graphql: &str, source: &ConfigClientError) -> String {
+    if source.edge_requires_delegation() {
+        crate::local::document_acp::DocumentAcpError::DelegationRequired.to_string()
+    } else {
+        format!(
+            "{source}\n{}",
+            graphql_diagnostic_hint(graphql, source.refused_by_runtime())
+        )
+    }
+}
+
 pub fn graphql_diagnostic_hint(graphql: &str, refused: bool) -> String {
     if refused {
         format!(

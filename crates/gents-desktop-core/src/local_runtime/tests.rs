@@ -860,3 +860,47 @@ async fn a_status_read_refused_at_a_vera_edge_asks_for_an_update() {
     );
     assert!(format!("{error:#}").contains("update Gents"));
 }
+
+/// A GraphQL request whose identity token the edge of a Vera home refuses is
+/// told as the same update of Gents, not as a raw HTTP 401; any other 401
+/// stays the refusal it was.
+#[tokio::test]
+async fn a_graphql_request_refused_at_a_vera_edge_asks_for_an_update() {
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    for (body, update) in [
+        (
+            json!({
+                "code": gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE,
+                "error": "refused",
+            }),
+            true,
+        ),
+        (json!({ "error": "refused" }), false),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(body))
+            .mount(&server)
+            .await;
+        let user = gents_store::test_support::test_identity("graphql-update-user");
+        let capability =
+            gents_store::identity::NodeIdentity::client_signing_capability(&user).unwrap();
+        let endpoint = crate::client::home_endpoint::user_at(
+            &format!("{}/api/v0/graphql", server.uri()),
+            &capability,
+            None,
+        )
+        .unwrap();
+        let error =
+            gents_store::config_client::post_graphql(&endpoint, "query { Node { _docID } }")
+                .await
+                .unwrap_err();
+        let bridge = crate::error::BridgeError::classify_transport_error(error.into());
+        assert_eq!(
+            bridge.code == crate::error::BridgeErrorCode::UpdateRequired,
+            update,
+            "{bridge:?}"
+        );
+    }
+}

@@ -432,6 +432,49 @@ mod tests {
         assert_eq!(transact(endpoint).await, (false, 2));
     }
 
+    async fn edge_answering(body: serde_json::Value) -> String {
+        let router = axum::Router::new().fallback(move || {
+            let body = body.clone();
+            async move { (StatusCode::UNAUTHORIZED, axum::Json(body)) }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, router).await });
+        format!("http://{address}/api/v0/graphql")
+    }
+
+    #[tokio::test]
+    async fn an_identity_token_the_edge_refuses_is_told_as_an_update_of_gents() {
+        for (body, update) in [
+            (
+                serde_json::json!({
+                    "code": gents_protocol::delegation_audience::DELEGATION_REQUIRED_CODE,
+                    "error": "refused",
+                }),
+                true,
+            ),
+            (serde_json::json!({ "error": "refused" }), false),
+        ] {
+            let server = Node {
+                url: edge_answering(body).await,
+                presented: Arc::default(),
+            };
+            let status = status(ReportedDelegationAudience::Absent);
+            let endpoint = endpoint(&server, ReportedDelegationAudience::Absent, &status).await;
+            let told = crate::config_client::post_graphql(&endpoint, "query { Node { _docID } }")
+                .await
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                told == crate::local::document_acp::DocumentAcpError::DelegationRequired
+                    .to_string(),
+                update,
+                "{told}"
+            );
+            assert_eq!(told.contains("Next:"), !update, "{told}");
+        }
+    }
+
     #[tokio::test]
     async fn a_second_refusal_is_told() {
         let server = node_taking(3).await;
