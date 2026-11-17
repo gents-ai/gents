@@ -6,3 +6,4 @@ import Proofs.ToolCalls.PluginJob.Adoption
 import Proofs.ToolCalls.PluginJob.Step
 import Proofs.ToolCalls.PluginJob.Authority
 import Proofs.ToolCalls.PluginJob.ExecutionIdentity
+import Proofs.ToolCalls.PluginJob.TargetGrant
