@@ -299,6 +299,14 @@ pub(super) async fn resolve_startup_until(
                 };
                 guard
             }
+            Err(gents_pack::plugin::store::PublishedPluginReadError::StoreAbsent(
+                gents_pack::plugin::store::StoreAbsent::Missing,
+            )) if tool_runtime
+                .plugin_store_pin()
+                .is_some_and(|pin| !pin.is_captured()) =>
+            {
+                None
+            }
             Err(gents_pack::plugin::store::PublishedPluginReadError::Busy) => {
                 runtime_status.request_publication_recovery();
                 None

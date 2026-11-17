@@ -75,13 +75,7 @@ fn absent_or_io(error: std::io::Error) -> PublishedPluginReadError {
         error.kind(),
         std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
     ) {
-        admit(Observation {
-            same_home: true,
-            store_present: false,
-            lock_present: false,
-            contended: false,
-        })
-        .expect_err("missing read is absent")
+        StoreAbsent::Missing.into()
     } else {
         PublishedPluginReadError::Read(error.into())
     }
@@ -198,51 +192,70 @@ pub struct StoreReadPin(Arc<std::sync::Mutex<PinState>>);
 #[derive(Debug)]
 struct PinState {
     home: PathBuf,
-    home_identity: Option<same_file::Handle>,
+    home_identity: Option<Arc<same_file::Handle>>,
     store: Option<Arc<StoreReadIdentity>>,
 }
 impl StoreReadPin {
     pub fn capture(home: &Path) -> Self {
         let pin = Self(Arc::new(std::sync::Mutex::new(PinState {
             home: home.to_owned(),
-            home_identity: same_file::Handle::from_path(home).ok(),
+            home_identity: same_file::Handle::from_path(home).ok().map(Arc::new),
             store: None,
         })));
         let _ = pin.identity();
         pin
     }
     fn identity(&self) -> std::result::Result<Arc<StoreReadIdentity>, PublishedPluginReadError> {
+        // Snapshot only retained state under the synchronous mutex. All path
+        // opens, handle cloning and capture/validation run outside it.
+        let (home, home_identity) = {
+            let state = self.0.lock().map_err(|_| {
+                PublishedPluginReadError::Read(anyhow::anyhow!("store identity mutex poisoned"))
+            })?;
+            if let Some(identity) = &state.store {
+                return Ok(identity.clone());
+            }
+            (state.home.clone(), state.home_identity.clone())
+        };
+        let current = Arc::new(same_file::Handle::from_path(&home).map_err(absent_or_io)?);
+        if home_identity
+            .as_ref()
+            .is_some_and(|home| **home != *current)
+        {
+            return Err(StoreAbsent::Replaced.into());
+        }
+        let captured = StoreReadIdentity::capture(&home).and_then(|identity| {
+            let captured_home =
+                same_file::Handle::from_file(identity.home_dir.try_clone().map_err(absent_or_io)?)
+                    .map_err(absent_or_io)?;
+            if captured_home != *current {
+                return Err(StoreAbsent::Replaced.into());
+            }
+            Ok(Arc::new(identity))
+        });
+        // Compare-and-set: a concurrent successful capture always wins. Never
+        // refresh it, nor accept a candidate from a different original home.
         let mut state = self.0.lock().map_err(|_| {
             PublishedPluginReadError::Read(anyhow::anyhow!("store identity mutex poisoned"))
         })?;
         if let Some(identity) = &state.store {
             return Ok(identity.clone());
         }
-        let current = same_file::Handle::from_path(&state.home).map_err(absent_or_io)?;
         if state
             .home_identity
             .as_ref()
-            .is_some_and(|home| *home != current)
+            .is_some_and(|home| **home != *current)
         {
             return Err(StoreAbsent::Replaced.into());
         }
-        if state.home_identity.is_none() {
-            state.home_identity = Some(current);
-        }
-        let identity = Arc::new(StoreReadIdentity::capture(&state.home)?);
-        let captured_home =
-            same_file::Handle::from_file(identity.home_dir.try_clone().map_err(absent_or_io)?)
-                .map_err(absent_or_io)?;
-        if state
-            .home_identity
-            .as_ref()
-            .is_some_and(|home| *home != captured_home)
-        {
-            return Err(StoreAbsent::Replaced.into());
-        }
+        // Retain the first observed home even when its store is not ready.
+        // An initially absent home may bind once, not on each retry.
+        state.home_identity = Some(current);
+        let identity = captured?;
         state.store = Some(identity.clone());
         Ok(identity)
     }
+
     pub fn is_captured(&self) -> bool {
         self.0
             .lock()

@@ -355,7 +355,7 @@ pub(in crate::runtime::agent::runtime) async fn build_slot_surface_fenced(
     let _guard = if needs_publication_fence(tool_surface.has_plugin_tools()) {
         surface::pinned_publication_guard_until(
             runtime.plugin_store_pin(),
-            tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+            tokio::time::Instant::now() + surface::PUBLICATION_WAIT,
         )
         .await?
     } else {

@@ -212,7 +212,10 @@ fn pinned_reader_refuses_a_replaced_store_and_does_not_recreate_a_removed_home()
     let pin = StoreReadPin::capture(&home);
     std::fs::remove_dir_all(&home).unwrap();
     let error = pin.try_shared().err().unwrap();
-    assert!(PublishedPluginReadError::error_chain_is_absent(&error));
+    assert!(matches!(
+        error,
+        PublishedPluginReadError::StoreAbsent(StoreAbsent::Missing)
+    ));
     assert!(!home.exists());
 }
 
@@ -227,4 +230,58 @@ fn existing_shared_lock_needs_no_write_permission() {
     let pin = StoreReadIdentity::capture(home.path()).unwrap();
     assert!(pin.try_shared().is_ok());
     std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+#[test]
+fn concurrent_first_store_captures_share_one_immutable_identity() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let pin = StoreReadPin::capture(&home);
+    bootstrap_store(&home).unwrap();
+    let barrier = Arc::new(std::sync::Barrier::new(16));
+    let captures = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..16)
+            .map(|_| {
+                let pin = pin.clone();
+                let barrier = barrier.clone();
+                scope.spawn(move || {
+                    barrier.wait();
+                    pin.identity().unwrap()
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert!(captures
+        .iter()
+        .all(|identity| Arc::ptr_eq(identity, &captures[0])));
+    std::fs::rename(&home, root.path().join("retired")).unwrap();
+    bootstrap_store(&home).unwrap();
+    assert!(matches!(
+        pin.try_shared(),
+        Err(PublishedPluginReadError::StoreAbsent(StoreAbsent::Replaced))
+    ));
+    assert!(Arc::ptr_eq(&pin.identity().unwrap(), &captures[0]));
+}
+
+#[test]
+fn initially_absent_home_is_retained_even_when_first_store_capture_fails() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let pin = StoreReadPin::capture(&home);
+    std::fs::create_dir(&home).unwrap();
+    assert!(matches!(
+        pin.try_shared(),
+        Err(PublishedPluginReadError::StoreAbsent(StoreAbsent::Missing))
+    ));
+    std::fs::rename(&home, root.path().join("retired")).unwrap();
+    bootstrap_store(&home).unwrap();
+    assert!(matches!(
+        pin.try_shared(),
+        Err(PublishedPluginReadError::StoreAbsent(StoreAbsent::Replaced))
+    ));
+    assert!(!pin.is_captured());
 }

@@ -359,10 +359,6 @@ pub enum PublishedPluginReadError {
 }
 
 impl PublishedPluginReadError {
-    pub fn error_chain_is_absent(error: &(dyn std::error::Error + 'static)) -> bool {
-        any_error::<Self>(error, |error| matches!(error, Self::StoreAbsent(_)))
-    }
-
     pub fn is_busy(&self) -> bool {
         matches!(self, Self::Busy)
     }
