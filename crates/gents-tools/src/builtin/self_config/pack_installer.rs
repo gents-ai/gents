@@ -432,7 +432,9 @@ mod review_tests {
                 .collect::<Vec<_>>();
             assert_eq!(argv[1], operation.as_str());
             let names = argv[3..]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| {
                     assert_eq!(pair[0], "--move-pin-tools");
                     pair[1].clone()

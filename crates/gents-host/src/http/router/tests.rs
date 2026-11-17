@@ -1153,7 +1153,9 @@ async fn hosted_move_pin_tools_is_client_signed_and_preserves_unnamed_tools() {
     );
     assert_eq!(next["argv"][1], "update");
     let ids = next["argv"].as_array().unwrap()[3..]
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             assert_eq!(pair[0], "--move-pin-tools");
             pair[1].as_str().unwrap().to_owned()
