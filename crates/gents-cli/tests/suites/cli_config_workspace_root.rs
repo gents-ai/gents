@@ -161,6 +161,34 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
         Some("Disabled Root")
     );
     assert_eq!(show.get("enabled").and_then(Value::as_bool), Some(false));
+    // `show` states who may run host tools under the root: a root no Agent
+    // reads is the `workspace_root_reader_missing` cause, so an operator sees
+    // the empty set here rather than a failed request later.
+    assert_eq!(
+        show.pointer("/readers/state").and_then(Value::as_str),
+        Some("known"),
+        "show carries the root's readers: {show}"
+    );
+    assert!(
+        show.pointer("/readers/agents")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty),
+        "no Agent has been granted this root: {show}"
+    );
+
+    // The table is the shape a person reads: the root, whether it is enabled,
+    // and its readers — with the empty set said in words.
+    let table = run_cli_text(
+        &home_dir,
+        &["config", "workspace-root", "list", "--graphql", &graphql],
+    )?;
+    assert!(table.contains("ROOT"), "{table}");
+    assert!(table.contains("ENABLED"), "{table}");
+    assert!(table.contains("READERS"), "{table}");
+    assert!(
+        table.contains("(no reader: host tools cannot start)"),
+        "the table says what an empty reader set means: {table}"
+    );
 
     let enabled_paths = enabled_root_paths(&graphql)
         .await?

@@ -39,7 +39,7 @@ async fn operator_access(graphql: &str) -> Result<ConfigAccess> {
 
 pub(super) async fn workspace_root_list(args: ConfigListArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let roots = gents_tools::surface::list_workspace_roots(&access)
+    let roots = gents_tools::surface::list_workspace_roots_with_readers(&access)
         .await
         .map_err(refused(WorkspaceRootVerb::Show))?;
     let rows = roots
@@ -54,7 +54,29 @@ pub(super) async fn workspace_root_list(args: ConfigListArgs) -> Result<()> {
             print_json(&json!({"collection":"WorkspaceRoot","count":rows.len(),"items":rows}))
         }
         OutputFormat::Table => {
-            super::crud::print_document_table("root_path", &rows);
+            super::crud::print_workspace_root_readers_table(
+                &roots
+                    .iter()
+                    .map(|listed| super::crud::WorkspaceRootReadership {
+                        root_path: listed.root.root_path.clone(),
+                        enabled: listed.root.enabled,
+                        readers: match &listed.readers {
+                            gents_protocol::operations::workspace_root::WorkspaceRootReaders::Known {
+                                agents,
+                            } => {
+                                if agents.is_empty() {
+                                    "(no reader: host tools cannot start)".to_owned()
+                                } else {
+                                    agents.join(", ")
+                                }
+                            }
+                            gents_protocol::operations::workspace_root::WorkspaceRootReaders::Unknown {
+                                reason,
+                            } => format!("unknown ({reason})"),
+                        },
+                    })
+                    .collect::<Vec<_>>(),
+            );
             Ok(())
         }
         _ => unreachable!("validated output"),
@@ -71,7 +93,7 @@ pub(super) async fn workspace_root_show(args: ConfigShowArgs) -> Result<()> {
     args.output
         .ensure_supported("config workspace-root show", &[OutputFormat::Json])?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let root = gents_tools::surface::show_workspace_root(&access, &id)
+    let root = gents_tools::surface::show_workspace_root_with_readers(&access, &id)
         .await
         .map_err(refused(WorkspaceRootVerb::Show))?;
     print_json(&root)

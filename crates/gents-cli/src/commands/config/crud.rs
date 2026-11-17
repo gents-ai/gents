@@ -476,6 +476,53 @@ fn print_list_table(spec: ConfigDocumentSpec, rows: &[Value]) {
     print_document_table(spec.collection.unique_field(), rows);
 }
 
+/// A root listing as the operator reads it: each root's path with the Agents
+/// granted `reader` on it. An Agent with host tools and no reader cannot start,
+/// so the list states who can rather than leaving it to be discovered from a
+/// failed request.
+pub(super) fn print_workspace_root_readers_table(rows: &[WorkspaceRootReadership]) {
+    let headers = ["ROOT", "ENABLED", "READERS"];
+    let rendered = rows
+        .iter()
+        .map(|row| {
+            [
+                Some(row.root_path.clone()),
+                Some(if row.enabled { "true" } else { "false" }.to_owned()),
+                Some(row.readers.clone()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let widths = column_widths(&headers, &rendered);
+    print_table_row(&headers, &widths);
+    let separators = widths.map(|width| "-".repeat(width));
+    let separator_cells = [
+        separators[0].as_str(),
+        separators[1].as_str(),
+        separators[2].as_str(),
+    ];
+    print_table_row(&separator_cells, &widths);
+    for row in rendered {
+        print_table_row(
+            &[
+                row[0].as_deref().unwrap_or(""),
+                row[1].as_deref().unwrap_or(""),
+                row[2].as_deref().unwrap_or(""),
+            ],
+            &widths,
+        );
+    }
+}
+
+/// One root as a listing row: the facts a person needs to tell whether an
+/// Agent can run under it.
+pub(super) struct WorkspaceRootReadership {
+    pub root_path: String,
+    pub enabled: bool,
+    /// The readers as the table shows them: the Agents, `(no reader: …)` when
+    /// the set is empty, or `unknown (<reason>)` when the read failed.
+    pub readers: String,
+}
+
 pub(super) fn print_document_table(id_field: &str, rows: &[Value]) {
     let headers = ["ID", "ENABLED", "NAME"];
     let rendered = rows

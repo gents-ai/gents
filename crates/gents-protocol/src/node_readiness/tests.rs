@@ -223,9 +223,13 @@ fn agent_unavailable_rejections_are_exactly_routing_messages() {
         Reason::InferenceProfileInvalid => 7,
         Reason::ToolConfigurationInvalid => 8,
         Reason::ToolSurfaceUnavailable => 9,
-        Reason::ExecutorStartFailed => 10,
+        Reason::WorkspaceRootReaderMissing => 10,
+        Reason::ExecutorStartFailed => 11,
     };
-    assert_eq!(Reason::ALL.map(ordinal), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    assert_eq!(
+        Reason::ALL.map(ordinal),
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    );
     for reason in Reason::ALL {
         assert!(is_behavior_unavailable_rejection(reason.public_message()));
     }
@@ -398,4 +402,85 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
             runtime_admissible,
         }
     });
+}
+
+/// A rejection for an Agent whose host tools read a published root it holds no
+/// reader on names that cause and the grant, including this node's `--home`:
+/// several nodes run on one machine, and a grant applied to another node's
+/// home leaves this one exactly as it was.
+#[test]
+fn a_missing_root_reader_rejection_names_the_grant_and_this_nodes_home() {
+    let text = workspace_root_reader_missing_message(
+        "did:key:agent",
+        "/Users/someone/work",
+        "/Users/someone/.gents-other",
+    );
+    assert!(
+        text.contains("not a reader of"),
+        "the cause is the reader, not the tool surface: {text}"
+    );
+    assert_eq!(
+        unavailable_rejection_reason(&text),
+        Some(AgentReadinessUnavailableReason::WorkspaceRootReaderMissing),
+        "a served rejection carrying the full text reads back as its reason"
+    );
+    assert!(is_behavior_unavailable_rejection(&text));
+    assert!(text.contains(
+        "--path /Users/someone/work --agent-did did:key:agent --home /Users/someone/.gents-other"
+    ));
+    for (root, home) in [
+        ("/one/root", "/one/home"),
+        ("/two/root with space", "/two/home"),
+    ] {
+        let served = workspace_root_reader_missing_message("did:key:agent", root, home);
+        assert_eq!(
+            unavailable_rejection_reason(&served),
+            Some(AgentReadinessUnavailableReason::WorkspaceRootReaderMissing),
+            "a grant run against another node's home is still the reader cause: {served}"
+        );
+    }
+}
+
+/// The reason's own wording, served where the runtime knows no root or home,
+/// is the same cause and the same call.
+#[test]
+fn the_reader_reasons_own_wording_names_the_cause_and_the_grant() {
+    let message = AgentReadinessUnavailableReason::WorkspaceRootReaderMissing.public_message();
+    assert!(message.contains("not a reader of"), "{message}");
+    assert!(
+        message.contains("gents config workspace-root list"),
+        "the fix starts with the call that shows the roots and their readers: {message}"
+    );
+    assert!(message.contains("grant the reader it names"), "{message}");
+    assert!(
+        message.contains("adding `--home` with this node's home"),
+        "the fix says what a bare `gents` would miss, without a placeholder in the call: {message}"
+    );
+    assert!(
+        !message.contains("<this node's home>"),
+        "no placeholder sits inside a copy-pasteable command: {message}"
+    );
+    assert_eq!(
+        unavailable_rejection_reason(message),
+        Some(AgentReadinessUnavailableReason::WorkspaceRootReaderMissing)
+    );
+    assert!(matches!(
+        unavailable_rejection_reason(WORKSPACE_ROOT_READER_MISSING_PREFIX),
+        Some(AgentReadinessUnavailableReason::WorkspaceRootReaderMissing)
+    ));
+    assert!(AgentReadinessUnavailableReason::WorkspaceRootReaderMissing.degrades_node());
+}
+
+/// The generic wording still means the generic cause, so the split hides
+/// nothing that already worked.
+#[test]
+fn the_generic_tool_surface_wording_keeps_its_own_reason() {
+    assert_eq!(
+        unavailable_rejection_reason("tool surface is unavailable"),
+        Some(AgentReadinessUnavailableReason::ToolSurfaceUnavailable)
+    );
+    assert_ne!(
+        AgentReadinessUnavailableReason::WorkspaceRootReaderMissing.public_message(),
+        AgentReadinessUnavailableReason::ToolSurfaceUnavailable.public_message()
+    );
 }
