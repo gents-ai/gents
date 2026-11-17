@@ -124,6 +124,7 @@ const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Clone)]
 pub struct ToolSurface {
+    pub(crate) hidden_tool_names: Vec<String>,
     host_tools: ToolSet,
     root_execution_guard: Option<RootExecutionGuard>,
     include_meta_tools: bool,
@@ -310,16 +311,30 @@ impl ToolSurface {
         });
     }
 
+    pub fn advertised_tool_names(&self) -> Vec<String> {
+        self.tool_names()
+            .into_iter()
+            .filter(|name| {
+                gents_loop::tool_policy::presentation::advertised(
+                    true,
+                    self.hidden_tool_names.contains(name),
+                )
+            })
+            .collect()
+    }
+
     pub fn tool_names(&self) -> Vec<String> {
         let mut names = self.host_tools.tool_names();
         if self.self_config.enabled {
             names.push("provider_limits".into());
         }
         if self.include_meta_tools {
-            names.extend(crate::mcp::meta::presented_tool_names(
-                self.remote_tools.as_ref().unwrap_or(&Default::default()),
-                &self.allowed_mcp_service_ids,
-            ));
+            names.extend(
+                self.remote_tools
+                    .as_ref()
+                    .unwrap_or(&Default::default())
+                    .invocation_names(&self.allowed_mcp_service_ids),
+            );
         }
         names.extend(agent_tool_names(&self.agent_tools));
         names.extend(background_tool_names(&self.background_tools));
@@ -735,7 +750,21 @@ impl ToolSurface {
             }
             tools.push(tool);
         }
-        Ok(tools)
+        if self.hidden_tool_names.is_empty() {
+            return Ok(tools);
+        }
+        let script_ready = self.plugin_resolutions.iter().any(|(plugin, record)| {
+            plugin.tool_name() == "script"
+                && plugin.tool_calls
+                && record
+                    .as_ref()
+                    .is_some_and(|record| record.declaration.imports_host_call())
+        });
+        Ok(gents_loop::tool_policy::presentation::present_tools(
+            tools,
+            &self.hidden_tool_names,
+            script_ready,
+        )?)
     }
 }
 
@@ -743,6 +772,7 @@ impl std::fmt::Debug for ToolSurface {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolSurface")
             .field("host_tools", &self.host_tools)
+            .field("hidden_tool_names", &self.hidden_tool_names)
             .field("include_meta_tools", &self.include_meta_tools)
             .field("include_goal_tools", &self.include_goal_tools)
             .field("include_goal_creation", &self.include_goal_creation)

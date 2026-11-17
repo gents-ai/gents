@@ -1,3 +1,4 @@
+import Proofs.Shared.ToolPolicy.Presentation
 import Proofs.Shared.AccountRotation.Policy
 import Proofs.Shared.CompletionRetry.OutputObligation
 import Proofs.Conformance.Family
@@ -24,3 +25,20 @@ def loopTerminal : Conformance.Family GateConfiguration TerminalAnswer where
   model := fun configuration => terminalAnswer configuration.obligations
 
 end CompletionRetry.OutputObligation
+
+deriving instance Lean.ToJson for ToolPresentation.AdmissionDecision
+
+attribute [conformance_function]
+  ToolPresentation.advertised
+  ToolPresentation.admissionDecision
+  ToolPresentation.configurationValid
+  ToolPresentation.effectiveHidden
+
+namespace ToolPresentation
+
+@[conformance_family]
+def gateways : Conformance.Family String Bool where
+  inputs := ["script", "config", "load_skill", "spawn_process", "schema", "workflow", "query", "Script", "spawn_process_extra", ""]
+  model := isGateway
+
+end ToolPresentation

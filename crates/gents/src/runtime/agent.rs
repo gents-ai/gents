@@ -71,14 +71,15 @@ where
 {
     let allowed_targets =
         gents_tools::surface::resolve_agent_target_descriptions(tool_surface.as_ref());
+    let tool_runtime = tool_runtime.for_agent(&agent_config);
+    let loop_tools = Arc::new(tool_surface.build_tools(&tool_runtime).await?);
     let prompt_builder = crate::turn::prompt::LayeredPromptBuilder::new(
         agent_config.as_ref(),
         &tool_surface,
         &allowed_targets,
+        &loop_tools,
     );
     let preamble = prompt_builder.preamble().to_string();
-    let tool_runtime = tool_runtime.for_agent(&agent_config);
-    let loop_tools = Arc::new(tool_surface.build_tools(&tool_runtime).await?);
     let runtime_status = crate::runtime::status::RuntimeStatusHandle::new(
         node.clone(),
         agent_config.node_did().to_string(),

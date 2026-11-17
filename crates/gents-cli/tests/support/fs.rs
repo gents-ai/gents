@@ -217,7 +217,7 @@ pub async fn assert_runtime_init_state(
                 max_output_tokens
             }}
             Tools(filter: {{ node_did: {{ _eq: "{}" }}, tools_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                tools_id node_did host remote agents built_ins datastore integrations self_config tags
+                tools_id node_did host remote agents built_ins datastore integrations self_config tags hidden_tool_names
             }}
         }}"#,
         escape_graphql_string(node_did),

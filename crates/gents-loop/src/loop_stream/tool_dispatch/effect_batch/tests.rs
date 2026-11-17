@@ -10,6 +10,9 @@ type Events = Arc<Mutex<Vec<String>>>;
 
 struct Probe(Events);
 impl ToolDyn for Probe {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "probe".into()
     }

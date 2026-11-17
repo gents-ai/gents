@@ -229,6 +229,7 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
     let config = AgentToolSurfaceConfig::from_selection(
         "classifier",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::ReadOnly,
@@ -286,6 +287,7 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
     let config = AgentToolSurfaceConfig::from_selection(
         "classifier",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::ReadOnly,
@@ -342,6 +344,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadOnly,
             file_tool_root: Some(stale_root),
             bash: BashMode::ReadOnly,
@@ -392,6 +395,7 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadWrite,
             file_tool_root: None,
             bash: BashMode::Unrestricted,
@@ -446,6 +450,7 @@ fn selection_cli_tools_require_ceiling_entries() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::Off,
@@ -507,6 +512,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::Off,
@@ -567,6 +573,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::Off,
@@ -718,6 +725,7 @@ fn background_tool_allowlist_registers_r6_tools() {
     let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadOnly,
             file_tool_root: None,
             bash: BashMode::Unrestricted,
@@ -773,6 +781,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
     let error = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadOnly,
             file_tool_root: None,
             bash: BashMode::ReadOnly,
@@ -833,6 +842,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
     let error = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
+            hidden_tool_names: Vec::new(),
             file_tools: FileToolMode::ReadWrite,
             file_tool_root: Some(symlink_path.join("workspace")),
             bash: BashMode::Unrestricted,
@@ -2646,7 +2656,7 @@ fn flat_presentation_explanation_matches_selected_names_and_ceiling() {
     .unwrap();
     let explanation =
         config.explain_with_runtime(true, "did:test:test", &rapidhash::RapidHashSet::default());
-    let name = crate::mcp::meta::flat_tool_name("selected", "read");
+    let name = gents_documents::RemoteTools::flat_tool_name("selected", "read");
     assert_eq!(
         explanation.tool_names,
         vec![
@@ -2657,7 +2667,9 @@ fn flat_presentation_explanation_matches_selected_names_and_ceiling() {
     assert_eq!(explanation.included["meta_mcp"], vec![name]);
     assert!(!explanation
         .tool_names
-        .contains(&crate::mcp::meta::flat_tool_name("denied", "write")));
+        .contains(&gents_documents::RemoteTools::flat_tool_name(
+            "denied", "write"
+        )));
     assert!(!explanation.tool_names.contains(&"call_tool".to_string()));
 }
 
@@ -3486,4 +3498,390 @@ async fn a_published_root_nested_under_a_broader_tool_root_does_not_cover_it() {
     );
     assert!(!refusal.is_reader_missing());
     node.shutdown().await.unwrap();
+}
+
+#[test]
+fn hidden_tool_names_change_presentation_not_effective_grants_or_ceiling() {
+    let original = tools_document(serde_json::json!({
+        "built_ins":{"enable_schema_tool":true},
+        "integrations":{"plugins":[{"plugin":"script/script","tool_calls":true}]}
+    }));
+    let config = |document: &gents_documents::Tools, ceiling: &ToolCeiling| {
+        AgentToolSurfaceConfig::from_tools_document("hidden", document, ceiling, Vec::new())
+            .unwrap()
+    };
+    let ceiling = ToolCeiling::meta_only();
+    let mut hidden = original.clone();
+    hidden.hidden_tool_names = vec!["schema".into()];
+    let plain_config = config(&original, &ceiling);
+    let hidden_config = config(&hidden, &ceiling);
+    let plain_surface =
+        plain_config.resolve_with_agent_tools_for_mcp_presence(false, Default::default());
+    let surface =
+        hidden_config.resolve_with_agent_tools_for_mcp_presence(false, Default::default());
+    assert_eq!(plain_surface.tool_names(), surface.tool_names());
+    assert!(surface.tool_names().contains(&"schema".into()));
+    assert!(!surface.advertised_tool_names().contains(&"schema".into()));
+    assert_ne!(format!("{plain_surface:?}"), format!("{surface:?}"));
+    assert_ne!(format!("{plain_config:?}"), format!("{hidden_config:?}"));
+    let mut policy = ceiling.policy().clone();
+    policy.schema_management = false;
+    let narrowed = config(&hidden, &ceiling.clone().with_policy(policy));
+    let narrowed = narrowed.explain_with_runtime(false, "owner", &Default::default());
+    assert!(!narrowed.tool_names.contains(&"schema".into()));
+    assert!(!narrowed.advertised_tool_names.contains(&"schema".into()));
+    assert!(narrowed
+        .warnings
+        .iter()
+        .any(|warning| warning.code == "hidden_tool_unavailable"));
+    assert!(narrowed.tool_names.contains(&"script".into()));
+}
+
+#[test]
+fn hidden_invocation_selection_matches_tool_surface_names() {
+    // Check positive AND negative membership across a union of distinct selections.
+    // No custom factory is supplied: those are process-owned, not Tools selections.
+    let root = tempfile::tempdir().unwrap();
+    let ceiling = ToolCeiling::readwrite(root.path()).with_cli_tool(cli_tool(
+        "custom_cli",
+        "/usr/bin/true",
+        "probe",
+    ));
+    let surfaces = vec![serde_json::from_value::<gents_documents::DatastoreToolSurfaceDocument>(serde_json::json!({
+        "surface_id":"parity-data", "node_did":"did:test:test", "entries":[
+            {"tool_name":"record_example", "collection":"Example", "description":"Record", "fields":[{"name":"name","required":true}]},
+            {"kind":"query", "tool_name":"find_example", "collection":"Example", "description":"Find", "fields":["name"], "filter_fields":[]}
+        ]
+    })).unwrap()];
+    let targets = vec![
+        serde_json::from_value::<gents_documents::AgentTargetDocument>(serde_json::json!({
+            "target_id":"worker", "node_did":"did:test:test", "target_node_did":"did:test:test",
+            "agent_did":"did:test:worker", "name":"worker"
+        }))
+        .unwrap(),
+    ];
+    let fixtures = [
+        serde_json::json!({"agents":{"enabled":true,"target_ids":["worker"]},"integrations":{"lsp":{}}}),
+        serde_json::json!({"datastore":{"datastore_tool_surface_ids":["parity-data"]}}),
+        serde_json::json!({}),
+        serde_json::json!({"built_ins":{"enable_session_history_tool":false,"enable_context_budget":false,"enable_goal_tools":false}}),
+        serde_json::json!({"host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"ReadOnly"}}}),
+        serde_json::json!({"host":{"files":{"mode":"ReadWrite"},"bash":{"mode":"Unrestricted","background_enabled":true},"cli":[{"name":"custom_cli"}]}}),
+        serde_json::json!({"built_ins":{"enable_schema_tool":true,"enable_p2p_tool":true,"enable_goal_tools":true,"enable_goal_creation":true},"self_config":{"enable_self_config":true},"datastore":{"enable_defra_query":true,"write_collections":["Example"]},"agents":{"enabled":true}}),
+        // Background process wrappers for plugins require resolved host_call
+        // imports. This pre-publication parity check supplies native background
+        // availability independently, so it compares selection, not readiness.
+        serde_json::json!({"host":{"bash":{"mode":"ReadOnly","background_enabled":true}},"integrations":{"plugins":[{"plugin":"script/script","tool_calls":true},{"plugin":"pack/worker"}]}}),
+        serde_json::json!({"remote":{"services":[{"mcp_service_id":"discovery","tool_names":["search"]},{"mcp_service_id":"flat","style":"flat","tool_names":["fetch"],"background_tool_names":["fetch"]}]}}),
+    ];
+    let mut cases = Vec::new();
+    let mut universe = std::collections::BTreeSet::from([
+        "unselected".to_string(),
+        "agent_new".into(),
+        "load_skill".into(),
+    ]);
+    for fixture in fixtures {
+        let mut document = tools_document(fixture);
+        document.host.get_or_insert_with(Default::default).root =
+            Some(root.path().to_string_lossy().into_owned());
+        let merged = gents_documents::merge_datastore_tool_surfaces(&document, &surfaces).unwrap();
+        let config = AgentToolSurfaceConfig::from_tools_documents(
+            "parity",
+            &document,
+            &surfaces,
+            &targets,
+            &ceiling,
+            Vec::new(),
+        )
+        .unwrap();
+        let surface =
+            config.resolve_with_agent_tools_for_mcp_presence(true, config.agent_tools().clone());
+        let names = surface.tool_names();
+        universe.extend(names.iter().cloned());
+        cases.push((document, merged, names));
+    }
+    for (document, merged, names) in cases {
+        for name in &universe {
+            assert_eq!(
+                document.selects_invocation(name, &merged),
+                names.contains(name),
+                "name={name} Tools={document:?} surface={names:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn hidden_unresolved_script_fails_construction_but_ceiling_removed_script_advertises_all() {
+    let (_db, runtime) = selected_surface_runtime().await;
+    for hidden in [false, true] {
+        let document = tools_document(serde_json::json!({
+            "built_ins":{"enable_context_budget":true},
+            "hidden_tool_names": if hidden { vec!["context_budget"] } else { Vec::<&str>::new() },
+            "integrations":{"plugins":[{"plugin":"not_installed/script","tool_calls":true}]}
+        }));
+        for remove_script in [false, true] {
+            let mut policy = ToolCeiling::meta_only().policy().clone();
+            if remove_script {
+                policy.plugin_tools = EndpointScope::none();
+            }
+            let config = AgentToolSurfaceConfig::from_tools_document(
+                "recovery",
+                &document,
+                &ToolCeiling::meta_only().with_policy(policy),
+                Vec::new(),
+            )
+            .unwrap();
+            let surface = config
+                .resolve(&runtime.node, &runtime.node_did, runtime.plugins.as_ref())
+                .await
+                .expect("missing plugin records retain ordinary resolution semantics");
+            let result = surface.build_tools(&runtime).await;
+            if !remove_script {
+                let error = result.err().expect(
+                    "missing selected script must fail construction regardless of hidden list",
+                );
+                assert!(format!("{error:#}").contains("no plugin runtime is attached"));
+            } else {
+                let tools = result.expect("ceiling-removed script leaves presentation inactive");
+                assert!(tools.iter().any(|tool| tool.name() == "context_budget"));
+                assert!(tools.iter().all(|tool| !tool.hidden()));
+                assert!(!tools.iter().any(|tool| tool.name() == "script"));
+            }
+        }
+    }
+}
+
+/// Record-only fixture: no artifact is executed. Construction still uses the
+/// ordinary failing NoPluginHost to verify hidden lists do not forgive errors.
+struct AdmissionFixturePluginHost {
+    record: InstalledPlugin,
+    busy: std::sync::atomic::AtomicBool,
+    resolves: std::sync::atomic::AtomicUsize,
+    busy_after_resolution: bool,
+    construct_script: bool,
+}
+
+impl AdmissionFixturePluginHost {
+    fn script(busy: bool) -> Self {
+        Self {
+            busy: std::sync::atomic::AtomicBool::new(busy),
+            resolves: std::sync::atomic::AtomicUsize::new(0),
+            busy_after_resolution: false,
+            construct_script: false,
+            record: serde_json::from_value(serde_json::json!({
+                "namespace":"fixture", "name":"script", "version":"1.0.0",
+                "digest":"a".repeat(64), "language":"rust",
+                "declaration":{"name":"script", "description":"fixture", "artifact":"script.afb", "language":"rust", "input_schema":{}, "host_imports":["host_call"]}
+            })).unwrap(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl PluginHost for AdmissionFixturePluginHost {
+    fn home(&self) -> Option<&std::path::Path> {
+        None
+    }
+    fn installed(&self) -> anyhow::Result<Vec<InstalledPlugin>> {
+        PluginHost::installed(&NoPluginHost)
+    }
+    fn installed_record(&self, coordinate: &str) -> anyhow::Result<InstalledPlugin> {
+        PluginHost::installed_record(&NoPluginHost, coordinate)
+    }
+    fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> anyhow::Result<InstalledPlugin> {
+        let _ = pinned;
+        anyhow::ensure!(coordinate == "fixture/script", "unexpected plugin");
+        let previous = self
+            .resolves
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if (self.busy_after_resolution && previous > 0)
+            || self.busy.swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(gents_pack::plugin::store::PublishedPluginReadError::Busy.into());
+        }
+        Ok(self.record.clone())
+    }
+    async fn call_outcome(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+    ) -> anyhow::Result<PluginOutcome> {
+        PluginHost::call_outcome(&NoPluginHost, record, input).await
+    }
+    async fn run_plugin_once(
+        self: std::sync::Arc<Self>,
+        coordinate: &str,
+        selected: &[PluginToolRef],
+        node: std::sync::Arc<defra_node::Node>,
+        node_did: &str,
+        agent_did: Option<&str>,
+        input: serde_json::Value,
+    ) -> anyhow::Result<(serde_json::Value, Option<String>, Option<String>)> {
+        std::sync::Arc::new(NoPluginHost)
+            .run_plugin_once(coordinate, selected, node, node_did, agent_did, input)
+            .await
+    }
+    fn application_write_tool(
+        &self,
+        access: gents_store::config_client::ConfigAccess,
+        collections: std::collections::BTreeSet<String>,
+        actor: Option<Did>,
+    ) -> anyhow::Result<Box<dyn ToolDyn>> {
+        PluginHost::application_write_tool(&NoPluginHost, access, collections, actor)
+    }
+    fn plugin_tool(
+        self: std::sync::Arc<Self>,
+        plugin: &PluginToolRef,
+        read_root: Option<std::path::PathBuf>,
+        node: std::sync::Arc<defra_node::Node>,
+        node_did: &str,
+        agent_did: Option<&str>,
+    ) -> anyhow::Result<Box<dyn ToolDyn>> {
+        if self.construct_script {
+            assert_eq!(plugin.tool_name(), "script");
+            return Ok(Box::new(ReadinessScript));
+        }
+        std::sync::Arc::new(NoPluginHost).plugin_tool(plugin, read_root, node, node_did, agent_did)
+    }
+}
+
+#[tokio::test]
+async fn hidden_script_only_background_parity_and_busy_resolution_preserve_retry() {
+    let (_db, runtime) = selected_surface_runtime().await;
+    for hidden in [false, true] {
+        let document = tools_document(serde_json::json!({
+            "built_ins":{"enable_context_budget":true},
+            "hidden_tool_names": if hidden { vec!["context_budget"] } else { Vec::<&str>::new() },
+            "integrations":{"plugins":[{"plugin":"fixture/script","tool_calls":true}]}
+        }));
+        let config = AgentToolSurfaceConfig::from_tools_document(
+            "script-only",
+            &document,
+            &ToolCeiling::meta_only(),
+            Vec::new(),
+        )
+        .unwrap();
+        let plugins = AdmissionFixturePluginHost::script(true);
+        let busy = config
+            .resolve(&runtime.node, &runtime.node_did, &plugins)
+            .await
+            .expect_err("Busy must propagate so the existing owner can retry");
+        assert!(
+            gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(busy.as_ref())
+        );
+        let surface = config
+            .resolve(&runtime.node, &runtime.node_did, &plugins)
+            .await
+            .unwrap();
+        let names = surface.tool_names();
+        assert!(names.contains(&"spawn_process".into()));
+        assert!(names.contains(&"script".into()));
+        assert!(!names
+            .iter()
+            .any(|name| name == "bash" || name == "bash_unrestricted"));
+        for name in names.iter().map(String::as_str).chain([
+            "unselected",
+            "bash",
+            "bash_unrestricted",
+            "agent_new",
+            "lsp",
+        ]) {
+            assert_eq!(
+                document.selects_invocation(name, &Default::default()),
+                names.iter().any(|selected| selected == name),
+                "{name}"
+            );
+        }
+        let mut construction = runtime.clone();
+        construction.plugins = std::sync::Arc::new(plugins);
+        let error = surface
+            .build_tools(&construction)
+            .await
+            .err()
+            .expect("construction failure must propagate identically for empty/hidden lists");
+        assert!(format!("{error:#}").contains("no plugin runtime is attached"));
+    }
+}
+
+/// Construction-only gateway; the readiness test never executes a plugin.
+struct ReadinessScript;
+impl ToolDyn for ReadinessScript {
+    fn hidden(&self) -> bool {
+        false
+    }
+    fn name(&self) -> String {
+        "script".into()
+    }
+    fn definition<'a>(
+        &'a self,
+        _: String,
+    ) -> gents_loop::tool::BoxFuture<'a, gents_loop::tool::ToolDefinition> {
+        Box::pin(async {
+            gents_loop::tool::ToolDefinition {
+                name: "script".into(),
+                description: "readiness fixture".into(),
+                parameters: serde_json::json!({"type":"object"}),
+            }
+        })
+    }
+    fn call<'a>(
+        &'a self,
+        _: String,
+    ) -> gents_loop::tool::BoxFuture<'a, Result<String, gents_loop::tool::ToolError>> {
+        Box::pin(async { panic!("readiness must not execute the script") })
+    }
+}
+
+#[tokio::test]
+async fn hidden_script_readiness_reuses_resolved_record_despite_later_busy() {
+    let (_db, mut runtime) = selected_surface_runtime().await;
+    let document = tools_document(serde_json::json!({
+        "built_ins":{"enable_context_budget":true},
+        "hidden_tool_names":["context_budget"],
+        "integrations":{"plugins":[{"plugin":"fixture/script","tool_calls":true}]}
+    }));
+    let config = AgentToolSurfaceConfig::from_tools_document(
+        "cached-readiness",
+        &document,
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap();
+    let mut plugins = AdmissionFixturePluginHost::script(false);
+    plugins.busy_after_resolution = true;
+    plugins.construct_script = true;
+    let plugins = std::sync::Arc::new(plugins);
+    let surface = config
+        .resolve(&runtime.node, &runtime.node_did, plugins.as_ref())
+        .await
+        .unwrap();
+    assert_eq!(surface.plugin_resolutions().len(), 1);
+    assert!(surface.plugin_resolutions()[0]
+        .1
+        .as_ref()
+        .unwrap()
+        .declaration
+        .imports_host_call());
+    runtime.plugins = plugins.clone();
+    let tools = surface.build_tools(&runtime).await.unwrap();
+    assert!(tools
+        .iter()
+        .find(|tool| tool.name() == "context_budget")
+        .unwrap()
+        .hidden());
+    assert!(!tools
+        .iter()
+        .find(|tool| tool.name() == "script")
+        .unwrap()
+        .hidden());
+    assert_eq!(
+        plugins.resolves.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "readiness must not perform another plugin lookup"
+    );
+    let later = plugins.resolve("fixture/script", None).unwrap_err();
+    assert!(
+        gents_pack::plugin::store::PublishedPluginReadError::error_chain_is_busy(later.as_ref())
+    );
 }

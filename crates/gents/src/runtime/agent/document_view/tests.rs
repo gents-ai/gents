@@ -316,9 +316,10 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
         .tool_surfaces
         .get(&default_agent_did)
         .expect("tool surface");
-    let preamble = LayeredPromptBuilder::new(agent_config.as_ref(), tool_surface.as_ref(), &[])
-        .preamble()
-        .to_string();
+    let preamble =
+        LayeredPromptBuilder::new(agent_config.as_ref(), tool_surface.as_ref(), &[], &[])
+            .preamble()
+            .to_string();
     assert!(
         preamble.contains("Research"),
         "catalog lists the skill name: {preamble}"

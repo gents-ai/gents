@@ -460,7 +460,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
             ToolRuntimeContext::oneshot_with_node_did(node.clone(), behavior.agent.node_did())
                 .for_agent(&behavior.agent);
         let tools = Arc::new(surface.build_tools(&runtime).await.unwrap());
-        let prompt = LayeredPromptBuilder::new(&behavior.agent, &surface, &[]);
+        let prompt = LayeredPromptBuilder::new(&behavior.agent, &surface, &[], &tools);
         let mut config = loop_config(
             &behavior.agent,
             prompt.preamble().to_owned(),

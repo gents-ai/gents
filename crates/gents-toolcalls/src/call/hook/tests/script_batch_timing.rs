@@ -5,6 +5,9 @@ use std::time::{Duration, Instant};
 
 struct SleepingRead;
 impl ToolDyn for SleepingRead {
+    fn hidden(&self) -> bool {
+        false
+    }
     fn name(&self) -> String {
         "query".into()
     }
